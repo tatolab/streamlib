@@ -1351,17 +1351,18 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   at load by the runtime — on Apple behind the OS prompt, on Linux by the runtime's own grant —
   and remembered; a control client reads the same list and never has to predict it.
   [one-runtime-per-machine]
-- **OPEN** — Failure isolation when one runtime holds several streams. A native crash in a
-  built-in — camera, codec, display, the mesh's copy path — ends every stream on the machine;
-  a hang is bounded per node by the existing abandon budget and ends only that stream; Python
-  crashes and hangs stay in their own process. "Restart the runtime and the streams come back"
-  means re-loading from persisted graphs, never re-attaching — processor interpreters die with
-  their parent by construction and surfaces cannot outlive the device's owner — so it needs a
-  runtime state directory holding each loaded graph and the last stream map (the runtime
-  directory is deliberately ephemeral today). Owner decision needed: whether a native crash in
-  one stream must leave the others running; if it must, each stream becomes its own engine
-  process behind the same router, and this section's other pivot entries change shape.
-  [one-runtime-per-machine]
+- **DECIDED** — Failure isolation: one engine for every stream on the machine. A native crash
+  in a built-in — camera, codec, display, the mesh's copy path — ends every stream on the
+  machine, and the runtime restarts and re-loads them from persisted graphs; a hang is bounded
+  per node by the existing abandon budget and ends only that stream; Python crashes and hangs
+  stay in their own process. "Restart the runtime and the streams come back" means re-loading
+  from persisted graphs, never re-attaching — processor interpreters die with their parent by
+  construction and surfaces cannot outlive the device's owner — so the runtime keeps a state
+  directory holding each loaded graph and the last stream map (the runtime directory is
+  deliberately ephemeral today). Owner, 2026-09-30: a driver-level fault taking every stream
+  down for a few seconds is the equivalent of a fundamental Docker issue crashing everything;
+  one engine is easier to run and to get bug reports for, and an engine per stream multiplies
+  the ways things can fail. An engine per stream is not a fallback. [one-runtime-per-machine]
 
 ## Graphics (RHI / GPU) — SHIPPED
 

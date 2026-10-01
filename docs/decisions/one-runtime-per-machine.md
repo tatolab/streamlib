@@ -104,6 +104,11 @@ The owner's later clarifications, the same day:
   `run` only ever loads a stream into it; pip distributes the stream package and packs, never
   the runtime.
 - **Accelerators are optional.** A stream that needs no GPU runs on a machine without one.
+- **One engine for every stream.** A native crash in a built-in ends every stream on the
+  machine and the runtime re-loads them from persisted graphs; a hang ends one stream; Python
+  faults stay in their own process. Owner, 2026-09-30: the equivalent of a fundamental Docker
+  issue crashing everything — easier to run and to get bug reports for than an engine per
+  stream, which multiplies the ways things can fail.
 - **An extension point for an external control client.** The runtime runs complete without one.
 - **The vocabulary** in the glossary, with its register markers.
 
@@ -128,7 +133,6 @@ that is the 2026-09-30 review's recommendation, kept apart from what the owner s
 - Several streams in one runtime process: what must stop being process-wide, and how streams
   reach each other.
 - Resources across streams.
-- Failure isolation: whether a native crash in one stream must leave the others running.
 - What optional accelerators mean for the engine.
 - Camera and microphone permission on Apple when the product starts the runtime.
 - Whether addresses gain a stream level.
@@ -188,8 +192,11 @@ Checked against the tree on 2026-09-30:
   and a second engine-linking distribution reverses "no process ever holds two streamlib
   engines" and the deleted bridge traits. Optional accelerators are a runtime property.
 
-Kept as the fallback, not rejected: **one engine process per stream behind the same router**,
-if the owner rules that a native crash in one stream must never end the others.
+- **One engine process per stream behind the same router.** Weighed as the fallback for native
+  crash isolation and rejected by the owner on 2026-09-30: a GPU context per stream, a
+  cross-process path for every frame between streams, and a multiplied set of failure modes,
+  for a fault class that today already ends the whole app and that the re-load bounds to a few
+  seconds.
 
 ## Consequences
 
