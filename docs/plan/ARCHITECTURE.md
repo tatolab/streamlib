@@ -4265,9 +4265,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   destination that connects later. `exchange` stays an observation verb because a read
   that costs the node a bounded copy is still a read. MCP is
   served by the node's control plane at `POST /mcp`, mounted with the node and sharing
-  its lifecycle; it has exactly one transport, and no CLI verb, stdio server, or bridge
+  its lifecycle; ~~it has exactly one transport, and no CLI verb, stdio server, or bridge
   process stands between a host and that endpoint — an MCP host is configured with a
-  running node's URL. Beside its tools the node serves two resources, each rendered at
+  running node's URL~~ (superseded 2026-10-01: an MCP host launches the CLI's `mcp` verb,
+  the local-API entries below). Beside its tools the node serves two resources, each rendered at
   the moment it is read: `streamlib://processor-catalog`, every processor type it can
   add with its description, derived config schema and ports — `/api/registry`'s
   document — and `streamlib://graph`, the `graph` tool's. It also serves four prompts,
@@ -4296,10 +4297,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_processor_catalog_and_the_live_graph -->
   <!-- verify: cargo test -p streamlib-api-server every_step_of_every_prompt_calls_a_tool_the_node_serves -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth -->
-- **DECIDED** — `dev` and `run` bind the control plane identically: all interfaces
+- **DECIDED** — ~~`dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
-  reachability is not the lever that scopes exposure. [control-plane-bind-posture; reopened by one-runtime-per-machine: the local API]
+  reachability is not the lever that scopes exposure.~~ Superseded 2026-10-01 by the local
+  API: control binds no network address (the local-API entries below).
+  [control-plane-bind-posture; superseded by local-api]
 - **DECIDED** — The api-server is engine-side infrastructure and relocates into the
   `runtime/` tree: it is a host — statically linked, never dlopen'd. Its new host is
   the wheel (and the `streamlib` crate for Rust apps); the relocation is a sequencing
@@ -4320,7 +4323,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
-  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself]
+  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself; amended by local-api: the `mcp` verb joins]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
@@ -4420,7 +4423,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stay deferred until something needs them. The REST spelling joins the bearer-gated set
   beside the tap WebSocket and MCP inherits the gate the whole dispatch already has:
   whatever the auth entry below decides later, it decides for this verb the same as the
-  rest. [control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; reopened by one-runtime-per-machine: the local API]
+  rest. [control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; amended by local-api:
+  the auth entry decided that control carries no token, so the bearer gate retires with the
+  network listener]
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route -->
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_rejects_a_missing_token_with_401_when_auth_on -->
@@ -4430,15 +4435,34 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the window is genuinely the subject — the present and swapchain path.
   [control-plane-surface-pixel-exchange — SHIPPED #1972, #1976]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-26-control-plane-surface-pixel-exchange.md -->
-- **OPEN** — Auth and remote-access posture: how a node authenticates and authorizes
-  control-plane callers, and what it exposes to a mesh. Scoping exposure down is decided
-  here and only here — it is a question of who may call, never of what the node listens
-  on, so no narrower bind default is set ahead of it. [control-plane-bind-posture; amended by one-runtime-per-machine: exposure beyond the machine is the stream map's, decided in §Networking]
-- **OPEN** — The local API. Direction (owner): one local API per machine, which a UI reaches
-  over a local socket. Direction (review, not decided): the socket is the authority for control
-  — today's router served over it, peer credentials checked on accept, no token, which is also
-  the no-account loop — and the URL forms are a separate HTTP listener, loopback by default and
-  a LAN or tailnet address on request, because browsers and ffmpeg cannot dial a socket; `graph`
-  returns the runtime's streams, and `load`, `unload`, `streams` and `expose` join the
-  graph-mutation verbs, which stay. Undecided: how MCP hosts reach it; whether an agent on one
-  machine can change a stream on another; and the multi-user case. [one-runtime-per-machine]
+- **DECIDED** — Auth and remote-access posture: whoever can open the local API's socket may
+  call it — the owning user, by file permission — and nothing off the machine can call it at
+  all, so control carries no token and no account. What a runtime offers other machines is
+  exposure, decided in §Networking. Owner, 2026-10-01.
+  [control-plane-bind-posture; local-api]
+- **DECIDED** — The local API is reachable only on its own machine. Each machine's runtime
+  serves one local API on a socket in its runtime directory that only the owning user can
+  open, carrying today's router and control vocabulary unchanged; no network address serves
+  control. The URL forms are a separate listener that serves only exposed ports and changes
+  nothing — loopback by default, a LAN or tailnet address when the user asks — because
+  browsers and ffmpeg cannot dial a socket. A runtime is never driven from another machine
+  through its local API: changing a stream on another machine means running the CLI or an
+  agent on that machine, over ssh for example, and a fleet-wide path is the external control
+  client's. Owner, 2026-10-01. [local-api; one-runtime-per-machine]
+- **DECIDED** — An MCP host reaches the local API by launching the CLI's `mcp` verb as a
+  stdio server — `claude mcp add streamlib -- <cli> mcp`. The verb forwards each message
+  from its stdin to the runtime's MCP endpoint over the socket, unchanged, and writes the
+  runtime's messages to its stdout; it interprets nothing, so the tools, resources, prompts
+  and protocol revision stay the runtime's alone, and it exits when the host closes it. Run
+  over ssh — `ssh <machine> <cli> mcp` — it is how an agent changes a stream on another
+  machine. No network listener serves MCP. The runtime serves only the current MCP revision,
+  2026-07-28 (stateless: no `initialize` handshake and no session); a host that speaks only an
+  earlier revision is refused with the protocol's own unsupported-version error naming
+  2026-07-28. Agents
+  hosted in a cloud, which can neither launch a command nor reach a machine's loopback, are
+  not served by the local API. Owner, 2026-10-01. [local-api]
+- **OPEN** — The rest of the local API. Direction (review, not decided): `graph` returns the
+  runtime's streams, and `load`, `unload`, `streams` and `expose` join the graph-mutation
+  verbs, which stay; their spelling follows §Product's OPEN on how a stream is loaded and
+  kept. Whether the socket is one per machine or one per user follows the same OPEN's
+  machine-or-user question. [one-runtime-per-machine]
