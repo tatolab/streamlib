@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.3.2...streamlib-webrtc-v0.3.3) (2026-10-01)
+
+
+### Features
+
+* **packages:** the MoQ and WebRTC extension wheels build, test and release on macOS, on the engine's clock ([#2555](https://github.com/tatolab/streamlib/issues/2555)) ([417d368](https://github.com/tatolab/streamlib/commit/417d368b54568aca782a8995aa6700664babb0d1))
+
 ## [0.3.2](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.3.1...streamlib-webrtc-v0.3.2) (2026-09-20)
 
 
