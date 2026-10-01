@@ -102,6 +102,8 @@ The owner's later clarifications, the same day:
   leaves a machine, and many streams on one runtime are streamlib's.
 - **Every exposed port is a URL** from any tool, in the form that tool wants; a user with no
   account can see and use their own streams locally, and inside a private network.
+- **The address is `<machine>/<stream>/<node>/<port>`,** the stream taking the place of today's
+  runtime name; one string on every surface. Owner, 2026-09-30.
 - **Nothing leaves the machine until it is exposed.** With no map pushed, no port is offered to
   another machine; `expose` opens one to any peer that can reach the machine, and a pushed map
   narrows who. Streams on one machine link to each other freely. Owner, 2026-09-30: closed by
@@ -143,7 +145,8 @@ that is the 2026-09-30 review's recommendation, kept apart from what the owner s
 - Resources across streams.
 - What optional accelerators mean for the engine.
 - Camera and microphone permission on Apple when the product starts the runtime.
-- Whether addresses gain a stream level.
+- The collision rules behind the address: machine names unique per mesh, stream names per
+  machine, typed node names refused when duplicated.
 - The stream map's details: who pushes it, how long it stays valid offline, how a peer
   authenticates.
 - Discovery: on one machine, on one network, across networks through a relay, and through a

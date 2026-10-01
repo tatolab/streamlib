@@ -1299,7 +1299,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_catalog.py::test_a_class_the_app_imported_and_never_added_is_in_the_catalog -->
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
-  the class's short name and the engine disambiguates duplicates within one graph. It is
+  the class's short name and the engine disambiguates duplicates within one graph (amended by
+  one-runtime-per-machine: a duplicate the author typed is refused by name; only a defaulted
+  duplicate is still disambiguated). It is
   also the processor's part of its address on the runtime mesh (§Networking), so renaming a
   processor re-addresses its ports. Being part of that address is what bounds it: `add`
   refuses a requested display name that is empty, contains `/`, `*`, `$`, `#` or `?`, or
@@ -3950,11 +3952,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and many streams on one runtime, and that must be super simple inside a private network
   (owner, 2026-09-30). Known: Zenoh does no NAT traversal — one side must be reachable, or both
   dial a router. [one-runtime-per-machine]
-- **OPEN** — Whether mesh addresses gain a stream level. Direction (review, not decided): the
-  stream *is* today's runtime name — `<machine>/<stream>/<node>/<port>`, the runtime named by
-  its machine (default the hostname), every existing address mapping across with one segment
-  prefixed, names unique per stream, and the Zenoh key grammar gaining the same segment in one
-  place. [one-runtime-per-machine]
+- **DECIDED** — The address is `<machine>/<stream>/<node>/<port>`: the stream takes the place
+  of today's runtime name, the runtime is addressed by its machine (default the hostname),
+  every existing address maps across with one segment prefixed, and the same string is the
+  address in Python, the CLI, the URL path and the graph; the Zenoh key grammar gains the same
+  segment in one place (owner, 2026-09-30). Collisions, as direction (review, not decided): a
+  **machine** name is unique per mesh and never auto-suffixed — a second live runtime claiming
+  it is refused at start naming the holder, the one exception being a dead runtime on the same
+  machine, and the rule holds through a relay — so two machines sharing a hostname name the
+  second; a **stream** name is unique per machine, defaults to its function's, and a second
+  load of a name is refused naming where the first came from, with `--name` the way out, which
+  covers two packs that each define a `main`; a **node** name is unique per stream — a
+  defaulted duplicate (two unnamed `CameraSource`) is auto-suffixed as today, while a duplicate
+  the author *typed* is refused by name, because a typed name is an address (this amends
+  today's disambiguation of requested display names); a **port** is a method name on its
+  class, unique by Python's own rules. A name is one URL segment — letters, digits, `-`, `_`,
+  `.` — and case-sensitive, with two names differing only by case refused as duplicates.
+  [one-runtime-per-machine]
 - **DECIDED** — Nothing leaves the machine until it is exposed. With no stream map pushed, a
   runtime offers no port to another machine; `expose` on a port makes it readable by any peer
   that can reach the machine — directly on a LAN or a tailnet, or through a relay — and a

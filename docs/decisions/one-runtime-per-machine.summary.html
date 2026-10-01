@@ -78,8 +78,8 @@ it: what is decided in your words, what is open with the review's direction, and
 </p>
 
 <div class="verdict">
-<p><strong>Decided:</strong> 15 plan entries, all traceable to your five sentences and your rulings on 30 September.
-<strong>Open:</strong> 16 entries, each carrying the review's direction marked as such, never as a decision.
+<p><strong>Decided:</strong> 16 plan entries, all traceable to your five sentences and your rulings on 30 September.
+<strong>Open:</strong> 15 entries, each carrying the review's direction marked as such, never as a decision.
 <strong>Vocabulary:</strong> settled in the glossary — stream, node, name, port, link, address, exposed port, form, graph, runtime, machine, relay — with engine-only words kept behind them.
 <strong>One assumption you may reverse:</strong> the per-machine program is called the <em>runtime</em>, not the <em>host</em>.</p>
 </div>
@@ -156,7 +156,7 @@ $ tatolab expose demo/invert/video_to_downstream     # lets it leave the machine
 <tr><td>Several streams in one runtime process</td><td>Make per-stream: the event topic, the registry, the interpreter, logs, signals, the watchdog, process groups; exactly one GPU context.</td><td>—</td></tr>
 <tr><td>Stream and runtime packages staying independent</td><td>A stream's venv installs only the stream package; the runtime lends its native portion to the stream's interpreters via <code>PYTHONPATH</code>; the build handshake stays.</td><td>Accept that a stream's own pinned runtime package is ignored, and Python ≥ 3.10?</td></tr>
 <tr><td>What the graph holds — <span class="ok">emitted-only decided 30 Sep</span></td><td>Needs derived from the nodes; the environment is the project's venv path. The graph is emitted by the stream's function and exported live by the runtime, never hand-written; the function wins over live edits on the next start.</td><td>Answered. Environment provisioning moved to the packs entry: standard toolchain only.</td></tr>
-<tr><td>Addresses gain a stream level</td><td><code>&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;</code>; the stream replaces today's runtime name.</td><td>Confirm.</td></tr>
+<tr><td>Addresses — <span class="ok">decided 30 Sep</span></td><td><code>&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;</code>; the stream replaces today's runtime name; one string on every surface. Collisions (direction): machine names unique per mesh and never auto-suffixed; stream names unique per machine, a second load refused with <code>--name</code> as the way out; a typed duplicate node name refused, a defaulted one auto-suffixed as today; ports unique per class by Python's rules.</td><td>Answered.</td></tr>
 <tr><td>The stream map's details</td><td>Compiled into Zenoh ACL once plus engine checks at three sites; wall-clock exception for expiry.</td><td><span class="ok">Answered 30 Sep:</span> nothing leaves the machine until <code>expose</code>; after it, any peer that can reach the machine may read, and a pushed map narrows who. Streams on one machine link freely.</td></tr>
 <tr><td>Discovery</td><td>One machine: the local API and the listable URL namespace. One network: Zenoh scouting, each runtime announcing what it exposes (<code>machines</code>, <code>streams --machine</code>). Across networks: the relay lists every machine that dials it. With the product: the pushed map carries the peers a machine may see — Tailscale's coordination-server job.</td><td>—</td></tr>
 <tr><td>URL grammar, forms, certificates, MoQ server, E2E</td><td>Form as a child path; first slice ndjson/png/ts, then fMP4/HLS, then WHEP, MoQ last; certs per reach tier; <code>moq-relay-ietf</code> external.</td><td>Is end-to-end encryption through a relay a launch requirement? Is the MoQ server permanently external?</td></tr>
@@ -324,7 +324,7 @@ https://relay.example/&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;/&
 <li><strong>With no stream map, what may reach a stream from another machine?</strong> <span class="ok">Answered 30 Sep: nothing until <code>expose</code>; then any peer that can reach the machine, narrowed by a pushed map when there is one.</span></li>
 <li><strong>When the terminal that started a foreground runtime closes, do joined streams end with it?</strong> Proposed: yes.</li>
 <li><strong>Does a stream's venv install only <code>tatolab-stream</code>, with the runtime lending <code>tatolab.runtime</code>?</strong></li>
-<li><strong>Is the address <code>&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;</code>, the stream replacing today's runtime name?</strong></li>
+<li><strong>Is the address <code>&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;</code>, the stream replacing today's runtime name?</strong> <span class="ok">Answered 30 Sep: yes, with collision rules recorded as the direction.</span></li>
 <li><strong>Is a graph only ever written out by the engine, or may people write one by hand?</strong> <span class="ok">Answered 30 Sep: emitted only; the stream's function wins over live edits on the next start.</span> Environments are provisioned by the standard toolchain (uv, <code>pyproject.toml</code>, a package index, git), never by machinery of ours.</li>
 <li><strong>Is the MoQ server permanently external?</strong> And are ndjson, ts/fmp4 and WHEP the first forms?</li>
 <li><strong>Is end-to-end encryption through a public relay a launch requirement?</strong></li>
@@ -335,6 +335,7 @@ https://relay.example/&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;/&
 <p>Four things settled while you read the first version of this page; they are in the plan now.</p>
 <table>
 <tr><th>Topic</th><th>Status</th><th>What it says</th></tr>
+<tr><td>The address</td><td class="ok">decided (your words)</td><td><code>&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;</code>, one string on every surface. Collision rules recorded as the direction: machine names unique per mesh, stream names per machine, a typed duplicate node name refused.</td></tr>
 <tr><td>Nothing leaves the machine until exposed</td><td class="ok">decided (your words)</td><td>With no map pushed, no port is offered to another machine; <code>expose</code> opens one to any peer that can reach the machine (LAN, tailnet, relay); a pushed map narrows who. Streams on one machine link freely. Discovery still shows machines and the names of what they expose, never the data.</td></tr>
 <tr><td>One engine for every stream</td><td class="ok">decided (your words)</td><td>A native crash in a built-in ends every stream on the machine and the runtime re-loads them from saved graphs — "the equivalent of a fundamental Docker issue crashing everything"; easier to run and to get bug reports for. An engine per stream was weighed and rejected: it multiplies the ways things fail.</td></tr>
 <tr><td>The runtime is required, like Docker's</td><td class="ok">decided (your words)</td><td>An installer — the desktop app, <code>brew</code>, <code>curl | sh</code>, a distro package — puts the runtime, the CLI and the native piece on the machine as one version-matched unit and registers it as a per-user service. <code>run</code> never starts a runtime; it loads into the one that is running. pip distributes <code>tatolab-stream</code> and packs, never the runtime. "Never daemonise" only forbids the runtime detaching <em>itself</em>; being started by launchd or systemd is fine.</td></tr>
@@ -348,7 +349,7 @@ https://relay.example/&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;/&
 <h2>13 · What PR #2557 changes</h2>
 <table>
 <tr><th>File</th><th>What</th></tr>
-<tr><td><code>docs/plan/ARCHITECTURE.md</code></td><td>A reading rule under the legend. 15 DECIDED and 16 OPEN entries tagged <code>[one-runtime-per-machine]</code>, each OPEN carrying "direction (review, not decided)" where the review has one. 34 older entries annotated — superseded, amended or reopened, in the settled words.</td></tr>
+<tr><td><code>docs/plan/ARCHITECTURE.md</code></td><td>A reading rule under the legend. 16 DECIDED and 15 OPEN entries tagged <code>[one-runtime-per-machine]</code>, each OPEN carrying "direction (review, not decided)" where the review has one. 34 older entries annotated — superseded, amended or reopened, in the settled words.</td></tr>
 <tr><td><code>docs/plan/GLOSSARY.md</code></td><td>The settled vocabulary with register markers <em>(user)</em>, <em>(engine)</em>, <em>(crosses)</em>; a retired block for app, display name, "node" as a live runtime, control plane, processor catalog, "helper". "Host" stays retired.</td></tr>
 <tr><td><code>docs/plan/diagrams/system.mmd</code></td><td>Every DECIDED entry represented; the mesh node restated so it no longer contradicts itself.</td></tr>
 <tr><td><code>docs/decisions/one-runtime-per-machine.md</code></td><td>The record: your five sentences verbatim, your clarifications, what is decided, what is open, the constraints, a corrected "Why" (the clock claim withdrawn; import collisions restated as a requirement), rejected alternatives, and the fallback kept.</td></tr>
