@@ -3968,8 +3968,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   address, or a relay is the meeting point, listing every machine that dials it with a URL
   namespace that is the union of theirs; with a control client, the pushed map carries the
   peers a machine may see — the coordination server's job in Tailscale; a runtime on a tailnet
-  may read its peers from Tailscale's own status as a convenience. Undecided: the verbs'
-  spelling, and whether multicast discovery stays on by default. [one-runtime-per-machine]
+  may read its peers from Tailscale's own status as a convenience. Presence is separate from
+  exposure: a machine that exposes nothing still announces itself, still appears to whoever
+  shares its mesh name and can reach it, and still reads others' exposed ports; what peers
+  learn is its presence and the names of what it exposes, never data. With no map, reach plus
+  the mesh name is the visibility rule, and a runtime hides by using another mesh name or by
+  dialing out only; with a map, the peer list is the map's, filtered per machine the way
+  Tailscale filters each node's netmap by its ACLs, a team being a key prefix the relay's
+  router scopes. Undecided: the verbs' spelling, whether multicast discovery stays on by
+  default, and whether a map may hide exposed-port names per peer. [one-runtime-per-machine]
 - **OPEN** — The stream map's details: who pushes it (the local API's `expose`, an external
   control client — two pushers of one object); how long a map stays valid when its source is
   unreachable, which needs a wall-clock exception to the monotonic-only rule; and how a peer
