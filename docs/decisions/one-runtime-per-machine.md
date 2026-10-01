@@ -97,6 +97,10 @@ The owner's later clarifications, the same day:
   leaves a machine, and many streams on one runtime are streamlib's.
 - **Every exposed port is a URL** from any tool, in the form that tool wants; a user with no
   account can see and use their own streams locally, and inside a private network.
+- **Nothing leaves the machine until it is exposed.** With no map pushed, no port is offered to
+  another machine; `expose` opens one to any peer that can reach the machine, and a pushed map
+  narrows who. Streams on one machine link to each other freely. Owner, 2026-09-30: closed by
+  default, as long as peer to peer still works — which it does, after `expose`.
 - **Packaging.** A `tatolab.*` namespace: a pure-Python stream package and a native runtime
   package; Linux and Apple Silicon macOS; no streamlib-owned service.
 - **The runtime is required and always on,** installed once per machine by an installer that
@@ -136,7 +140,10 @@ that is the 2026-09-30 review's recommendation, kept apart from what the owner s
 - What optional accelerators mean for the engine.
 - Camera and microphone permission on Apple when the product starts the runtime.
 - Whether addresses gain a stream level.
-- The stream map's details, including what a runtime with no map exposes.
+- The stream map's details: who pushes it, how long it stays valid offline, how a peer
+  authenticates.
+- Discovery: on one machine, on one network, across networks through a relay, and through a
+  pushed map — the Tailscale analogy applied.
 - The URL grammar, the forms and their order, certificates per reach tier, where the MoQ server
   lives, and whether end-to-end encryption through a relay is a launch requirement.
 - The local API's protocol, MCP reach, remote reach and the multi-user case.

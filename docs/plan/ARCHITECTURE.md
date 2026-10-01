@@ -3952,12 +3952,28 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   its machine (default the hostname), every existing address mapping across with one segment
   prefixed, names unique per stream, and the Zenoh key grammar gaining the same segment in one
   place. [one-runtime-per-machine]
-- **OPEN** — The stream map's details: who pushes it (the local API, an external control client
-  — two pushers of one object); what a runtime with no map exposes (nothing leaves the machine,
-  reading sentence 3 literally, which makes two runtimes on a LAN exchange nothing until
-  `expose` runs — or same-mesh peers read by default as today, the map only narrowing); how
-  long a map stays valid when its source is unreachable, which needs a wall-clock exception to
-  the monotonic-only rule; and how a peer authenticates. Known: Zenoh's own access control
+- **DECIDED** — Nothing leaves the machine until it is exposed. With no stream map pushed, a
+  runtime offers no port to another machine; `expose` on a port makes it readable by any peer
+  that can reach the machine — directly on a LAN or a tailnet, or through a relay — and a
+  pushed map, when there is one, narrows who. Exposure is about leaving the machine (sentence
+  3), so streams on one machine may link to each other's ports without exposing them.
+  Discovery is unaffected: a runtime still announces itself and lists the ports it exposes to
+  whoever can reach it. Owner, 2026-09-30: closed by default, "as long as we can still do peer
+  to peer". [one-runtime-per-machine]
+- **OPEN** — Discovery, the Tailscale analogy applied. Direction (review, not decided): on one
+  machine the local API lists streams and exposed ports, and the URL namespace is listable; on
+  one network, Zenoh scouting finds the other runtimes' routers with nothing configured and
+  each announcement carries the ports it exposes, so `machines` lists runtimes and `streams
+  --machine <name>` lists what one exposes; where multicast does not cross, a peer is named by
+  address, or a relay is the meeting point, listing every machine that dials it with a URL
+  namespace that is the union of theirs; with a control client, the pushed map carries the
+  peers a machine may see — the coordination server's job in Tailscale; a runtime on a tailnet
+  may read its peers from Tailscale's own status as a convenience. Undecided: the verbs'
+  spelling, and whether multicast discovery stays on by default. [one-runtime-per-machine]
+- **OPEN** — The stream map's details: who pushes it (the local API's `expose`, an external
+  control client — two pushers of one object); how long a map stays valid when its source is
+  unreachable, which needs a wall-clock exception to the monotonic-only rule; and how a peer
+  authenticates. Known: Zenoh's own access control
   cannot change without restarting the session and sees only the adjacent hop's identity, so a
   pushed map compiles into it once and the per-stream checks live in the engine at the offer
   answer, egress creation and link-request application — a check in the link layer alone is
