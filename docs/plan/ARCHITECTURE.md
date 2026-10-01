@@ -3131,7 +3131,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and only the runtime process opens devices, so only it needs the entitlements, never a
   processor interpreter. [one-runtime-per-machine]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ stream-graph)
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ stream-graph, local-api)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -4227,7 +4227,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   portion of a PEP 420 namespace beside a pure one, in wheels and editable installs alike, so no
   custom module system is needed. [one-runtime-per-machine]
 
-## Control plane & observability — SHIPPED
+## Control plane & observability — IN-FLIGHT (→ local-api)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
