@@ -78,22 +78,24 @@ it: what is decided in your words, what is open with the review's direction, and
 </p>
 
 <div class="verdict">
-<p><strong>Decided:</strong> 13 plan entries, all traceable to your five sentences and your rulings on 30 September.
-<strong>Open:</strong> 17 entries, each carrying the review's direction marked as such, never as a decision.
+<p><strong>Decided:</strong> 15 plan entries, all traceable to your five sentences and your rulings on 30 September.
+<strong>Open:</strong> 16 entries, each carrying the review's direction marked as such, never as a decision.
 <strong>Vocabulary:</strong> settled in the glossary — stream, node, name, port, link, address, exposed port, form, graph, runtime, machine, relay — with engine-only words kept behind them.
 <strong>One assumption you may reverse:</strong> the per-machine program is called the <em>runtime</em>, not the <em>host</em>.</p>
 </div>
 
 <h2>1 · What changes for a person using streamlib</h2>
 <p>Almost nothing in the calls, and a lot in what they are called on. The class you write is a
-<code>@node</code>, the file is <code>stream.py</code>, and <code>setup</code> receives a <code>Stream</code>
-builder rather than the runtime — because a stream is being built, not a runtime modified.</p>
+<code>@node</code>, a stream is a function decorated <code>@stream</code> (as many per file or package as you like),
+and it receives a <code>Stream</code> builder rather than the runtime — because a stream is being built, not a runtime modified.</p>
 
-<pre><b># stream.py — the directory name is the stream's name</b>
+<pre><b># stream.py — one or more @stream functions; the function's name is the stream's</b>
 from nodes.inverting_effect import InvertingEffect
-from tatolab.stream import CameraSource, DisplayWindow, Stream
+from tatolab.stream import CameraSource, DisplayWindow, Stream, stream
 
-def setup(stream: Stream) -&gt; None:
+@stream
+def demo(stream: Stream) -&gt; None:
+    """Camera, inverted, in a window."""
     camera = stream.add(CameraSource, name="camera")
     invert = stream.add(InvertingEffect, name="invert")
     window = stream.add(DisplayWindow, name="window", config={"title": "Demo"})
@@ -135,7 +137,7 @@ $ tatolab expose demo/invert/video_to_downstream     # lets it leave the machine
 <tr><th>Entry</th><th>What it commits to</th><th>Source</th></tr>
 <tr><td>A stream is the unit</td><td>Today's app: a directory whose <code>stream.py</code> builds the graph from <code>@node</code> classes, plus <code>pyproject.toml</code> and one venv; it may expose ports.</td><td>your clarification</td></tr>
 <tr><td>One runtime per machine</td><td>It runs many streams behind the machine's single Zenoh session, owns the accelerator when present, serves the local API, schedules across streams. Every Python node keeps its own process; agents keep changing live graphs.</td><td>sentence 2, restated</td></tr>
-<tr><td>A graph is data</td><td><code>setup(stream)</code> compiles to the stream's graph, one shape with what the runtime renders live — the existing snapshot extended, never a second format.</td><td>sentence 1 + doctrine</td></tr>
+<tr><td>A graph is data</td><td>A stream's <code>@stream</code> function compiles to its graph, one shape with what the runtime renders live — the existing snapshot extended, never a second format. Emitted, never hand-written; the function wins over live edits on the next start.</td><td>sentence 1 + doctrine; emitted-only is your ruling of 30 Sep</td></tr>
 <tr><td>The runtime decides what leaves</td><td>Its own Zenoh configuration, dials routers, enforces a pushed stream map that refuses links to unexposed ports and authenticates peers. Its session is the machine's router.</td><td>sentence 3 + "singular router"</td></tr>
 <tr><td>Zenoh between machines; MoQ only for browsers</td><td>MoQ is a WebTransport form at a relay or on a machine that serves it; never a link between runtimes. The MoQ-gateway change is dead.</td><td>sentence 4 + clarification</td></tr>
 <tr><td>The relay is a role</td><td>The same runtime software on a public VM, in a private network, or on the machine itself. Peer to peer where reachable, through a relay where not.</td><td>your clarification</td></tr>
@@ -153,7 +155,7 @@ $ tatolab expose demo/invert/video_to_downstream     # lets it leave the machine
 <tr><td>Failure isolation — <span class="ok">decided 30 Sep</span></td><td>One engine for every stream. A native crash in a built-in ends every stream on the machine and the runtime re-loads them from persisted graphs; a hang ends one; Python faults stay in their own process.</td><td>Answered: "the equivalent of a fundamental Docker issue crashing everything" — easier to run and to get bug reports for; an engine per stream multiplies the ways things fail. Not a fallback.</td></tr>
 <tr><td>Several streams in one runtime process</td><td>Make per-stream: the event topic, the registry, the interpreter, logs, signals, the watchdog, process groups; exactly one GPU context.</td><td>—</td></tr>
 <tr><td>Stream and runtime packages staying independent</td><td>A stream's venv installs only the stream package; the runtime lends its native portion to the stream's interpreters via <code>PYTHONPATH</code>; the build handshake stays.</td><td>Accept that a stream's own pinned runtime package is ignored, and Python ≥ 3.10?</td></tr>
-<tr><td>What the graph holds; authored or emitted</td><td>Emitted only; the app stays the unit of distribution; no environment provisioning.</td><td>May people write a graph by hand? Does "load a zip into any runtime" include installing its environment?</td></tr>
+<tr><td>What the graph holds — <span class="ok">emitted-only decided 30 Sep</span></td><td>Needs derived from the nodes; the environment is the project's venv path. The graph is emitted by the stream's function and exported live by the runtime, never hand-written; the function wins over live edits on the next start.</td><td>Answered. Environment provisioning moved to the packs entry: standard toolchain only.</td></tr>
 <tr><td>Addresses gain a stream level</td><td><code>&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;</code>; the stream replaces today's runtime name.</td><td>Confirm.</td></tr>
 <tr><td>The stream map's details</td><td>Compiled into Zenoh ACL once plus engine checks at three sites; wall-clock exception for expiry.</td><td><span class="ok">Answered 30 Sep:</span> nothing leaves the machine until <code>expose</code>; after it, any peer that can reach the machine may read, and a pushed map narrows who. Streams on one machine link freely.</td></tr>
 <tr><td>Discovery</td><td>One machine: the local API and the listable URL namespace. One network: Zenoh scouting, each runtime announcing what it exposes (<code>machines</code>, <code>streams --machine</code>). Across networks: the relay lists every machine that dials it. With the product: the pushed map carries the peers a machine may see — Tailscale's coordination-server job.</td><td>—</td></tr>
@@ -170,7 +172,7 @@ $ tatolab expose demo/invert/video_to_downstream     # lets it leave the machine
   <g font-size="13" fill="#e6e9ef">
     <rect x="20" y="16" width="820" height="70" rx="8" fill="none" stroke="#9aa4b2" stroke-width="1.25"/>
     <text x="36" y="40" font-weight="600">tatolab-stream — pure Python, what every venv installs</text>
-    <text x="36" y="58" font-size="11.5">setup(stream) builds the graph; @node is metadata; the local-API client; the tatolab CLI</text>
+    <text x="36" y="58" font-size="11.5">@stream functions build graphs; @node is metadata; the local-API client; the tatolab CLI</text>
     <text x="36" y="74" font-size="11.5" fill="#9aa4b2">never: native code, a network session, a listener, a GPU type</text>
     <path d="M430 120V86" fill="none" stroke="#9aa4b2" stroke-width="1.25" marker-end="url(#a)"/>
     <text x="440" y="108" font-size="11.5" fill="#9aa4b2">depends on</text>
@@ -295,7 +297,7 @@ https://relay.example/&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;/&
 <h2>9 · Migration order — each step ships alone</h2>
 <table>
 <tr><th>Step</th><th>Lands</th><th>Supersedes</th><th>Blast</th></tr>
-<tr><td>1 · The stream's graph</td><td><code>GraphSnapshot</code> extended; <code>setup(stream)</code> compiles to it; decoration registers nothing native</td><td>registration at decoration</td><td>4 files, ~12 tests</td></tr>
+<tr><td>1 · The stream's graph</td><td><code>GraphSnapshot</code> extended; a <code>@stream</code> function compiles to it; decoration registers nothing native</td><td>registration at decoration</td><td>4 files, ~12 tests</td></tr>
 <tr><td>2 · Local API socket</td><td>the rip-out change: control over a Unix socket, plus the loopback URL front</td><td>bind posture; URL-configured MCP</td><td>~12 files, ~15 tests, 8 skills in their own PR</td></tr>
 <tr><td>3 · One runtime, many streams</td><td>per-stream topics, registry, logs, watchdog, process groups; <code>load/unload/streams</code>; <code>run</code> loads or starts a foreground runtime; <code>dev</code> = <code>run --watch</code></td><td><code>rt.run()</code> as the app's loop; the process-ending watchdog</td><td>largest: runtime, compiler, pubsub, signals, CLI; ~40 tests</td></tr>
 <tr><td>4 · Per-stream interpreter environment</td><td>interpreter and project from the graph; the lent runtime portion</td><td>"exec of <code>sys.executable</code> from the app's venv"; the handshake clause</td><td>3 files, ~8 tests</td></tr>
@@ -323,7 +325,7 @@ https://relay.example/&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;/&
 <li><strong>When the terminal that started a foreground runtime closes, do joined streams end with it?</strong> Proposed: yes.</li>
 <li><strong>Does a stream's venv install only <code>tatolab-stream</code>, with the runtime lending <code>tatolab.runtime</code>?</strong></li>
 <li><strong>Is the address <code>&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;</code>, the stream replacing today's runtime name?</strong></li>
-<li><strong>Is a graph only ever written out by the engine, or may people write one by hand?</strong> And does "load into any runtime" include installing the environment?</li>
+<li><strong>Is a graph only ever written out by the engine, or may people write one by hand?</strong> <span class="ok">Answered 30 Sep: emitted only; the stream's function wins over live edits on the next start.</span> Environments are provisioned by the standard toolchain (uv, <code>pyproject.toml</code>, a package index, git), never by machinery of ours.</li>
 <li><strong>Is the MoQ server permanently external?</strong> And are ndjson, ts/fmp4 and WHEP the first forms?</li>
 <li><strong>Is end-to-end encryption through a public relay a launch requirement?</strong></li>
 <li><strong>"runtime" or "host" for the per-machine program?</strong> The branch says runtime; one substitution reverses it.</li>
@@ -337,14 +339,16 @@ https://relay.example/&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;/&
 <tr><td>One engine for every stream</td><td class="ok">decided (your words)</td><td>A native crash in a built-in ends every stream on the machine and the runtime re-loads them from saved graphs — "the equivalent of a fundamental Docker issue crashing everything"; easier to run and to get bug reports for. An engine per stream was weighed and rejected: it multiplies the ways things fail.</td></tr>
 <tr><td>The runtime is required, like Docker's</td><td class="ok">decided (your words)</td><td>An installer — the desktop app, <code>brew</code>, <code>curl | sh</code>, a distro package — puts the runtime, the CLI and the native piece on the machine as one version-matched unit and registers it as a per-user service. <code>run</code> never starts a runtime; it loads into the one that is running. pip distributes <code>tatolab-stream</code> and packs, never the runtime. "Never daemonise" only forbids the runtime detaching <em>itself</em>; being started by launchd or systemd is fine.</td></tr>
 <tr><td>Streams persist like containers</td><td class="mid">open, with a direction</td><td><code>run demo</code> is attached (Ctrl-C unloads); <code>run -d demo</code> is detached and re-loaded on every restart until <code>stop</code> / <code>rm</code>. A stream references its project's venv rather than carrying an image.</td></tr>
-<tr><td>Several streams per project; composition</td><td class="mid">open, with a direction</td><td><code>@stream def camera_rig(stream: Stream)</code>, several per file or package, run by import path; the bare <code>setup</code> retires. Inside a stream, composition is plain Python and the graph stays flat; nested subgraphs are deferred.</td></tr>
+<tr><td>Several streams per project</td><td class="ok">decided (your words)</td><td><code>@stream def camera_rig(stream: Stream)</code>, as many per file or package as you like; the bare <code>setup</code> retires; a pack ships runnable streams and composable nodes. How <code>run</code> picks one is the review's direction.</td></tr>
+<tr><td>The graph is emitted, never authored</td><td class="ok">decided (your words)</td><td>A stream's function produces its graph and the runtime exports the live one in the same shape; nobody hand-writes one as a source. On the next start the function wins over live edits.</td></tr>
+<tr><td>Composition inside a stream</td><td class="mid">open, with a direction</td><td>Plain Python; the graph stays flat; a group label for display; nested subgraphs deferred.</td></tr>
 <tr><td>Packs, a registry, adding hardware support, "nothing into the runtime"</td><td class="mid">open, with a direction</td><td>A pack is an ordinary Python distribution of nodes and streams with <code>pyproject.toml</code> as its only metadata (an optional <code>[tool.tatolab]</code> table for a registry; never required to run). <code>add</code> installs into a project — or a default project the runtime manages — never beside the runtime. <code>run &lt;url-or-zip&gt;</code> fetches, runs <code>uv sync</code>, loads. ComfyUI imports every pack into its own server process and one environment; we don't: pack code runs only in processor interpreters started from that venv, and the runtime process imports nothing from it. Permissions are derived from the graph and requested at load, never enumerated up front; the app bundle declares device classes once, the OS still prompts lazily per class.</td></tr>
 </table>
 
 <h2>13 · What PR #2557 changes</h2>
 <table>
 <tr><th>File</th><th>What</th></tr>
-<tr><td><code>docs/plan/ARCHITECTURE.md</code></td><td>A reading rule under the legend. 13 DECIDED and 17 OPEN entries tagged <code>[one-runtime-per-machine]</code>, each OPEN carrying "direction (review, not decided)" where the review has one. 34 older entries annotated — superseded, amended or reopened, in the settled words.</td></tr>
+<tr><td><code>docs/plan/ARCHITECTURE.md</code></td><td>A reading rule under the legend. 15 DECIDED and 16 OPEN entries tagged <code>[one-runtime-per-machine]</code>, each OPEN carrying "direction (review, not decided)" where the review has one. 34 older entries annotated — superseded, amended or reopened, in the settled words.</td></tr>
 <tr><td><code>docs/plan/GLOSSARY.md</code></td><td>The settled vocabulary with register markers <em>(user)</em>, <em>(engine)</em>, <em>(crosses)</em>; a retired block for app, display name, "node" as a live runtime, control plane, processor catalog, "helper". "Host" stays retired.</td></tr>
 <tr><td><code>docs/plan/diagrams/system.mmd</code></td><td>Every DECIDED entry represented; the mesh node restated so it no longer contradicts itself.</td></tr>
 <tr><td><code>docs/decisions/one-runtime-per-machine.md</code></td><td>The record: your five sentences verbatim, your clarifications, what is decided, what is open, the constraints, a corrected "Why" (the clock claim withdrawn; import collisions restated as a requirement), rejected alternatives, and the fallback kept.</td></tr>

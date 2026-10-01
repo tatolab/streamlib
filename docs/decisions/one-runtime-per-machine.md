@@ -74,8 +74,10 @@ The owner's later clarifications, the same day:
   lacks: a pack is pip-installed into a project's venv and runs in processor interpreters; the
   runtime process imports nothing from it. The owner will distribute what they build the same
   way, and update the app separately.
-- **Several streams per project**, and permissions derived from what a stream's graph needs
-  rather than enumerated up front: directions recorded as OPEN.
+- **Several streams per project**, each a function decorated `@stream`, so a hardware pack can
+  ship more than one; the graph each one produces is emitted, never hand-written, and the
+  function wins over live edits on the next start. Permissions derived from what a stream's
+  graph needs, rather than enumerated up front: a direction recorded as OPEN.
 
 ## Decided
 
@@ -83,8 +85,11 @@ The owner's later clarifications, the same day:
   of them behind the machine's single Zenoh session, owning the accelerator when present, the
   local API and the scheduler. Every Python node keeps its own process; agents keep changing
   live graphs.
-- **A graph is data.** `setup(stream)` compiles to the stream's graph, one shape with what the
-  runtime renders live; the existing snapshot extended, never a second format.
+- **A graph is data.** A stream's `@stream` function compiles to its graph, one shape with what
+  the runtime renders live; the existing snapshot extended, never a second format.
+- **The graph is emitted, never authored,** and the function wins over live edits on the next
+  start.
+- **Several streams per project or package,** each a decorated function; `setup` retires.
 - **The runtime decides what leaves the machine.** It builds its Zenoh session from its own
   configuration, dials routers, and enforces a pushed stream map that refuses links to
   unexposed ports and authenticates peers. Its session is the machine's router.
@@ -123,7 +128,7 @@ that is the 2026-09-30 review's recommendation, kept apart from what the owner s
 
 - How a stream is loaded and kept: attached or detached, persistent across runtime restarts,
   and the verbs.
-- Several streams in one project or package (`@stream`), and composition inside a stream.
+- Composition inside a stream, and how `run` selects among several streams.
 - Packs, a registry, and loading a stream from a URL or a zip, with environments provisioned
   by the standard toolchain only.
 - How the stream package and the runtime package stay independent, and how the runtime and a
@@ -131,9 +136,8 @@ that is the 2026-09-30 review's recommendation, kept apart from what the owner s
 - How an external control client plugs in.
 - The remaining names: distributions, imports, the CLI command, the Rust crate, the extensions'
   entry-point group.
-- What the graph holds beyond nodes, links and exposures; whether it is only emitted or may be
-  authored; whether loading a stream provisions its environment; what is authoritative after a
-  live edit.
+- What the graph holds beyond nodes, links and exposures — needs derived from the nodes, the
+  environment.
 - Several streams in one runtime process: what must stop being process-wide, and how streams
   reach each other.
 - Resources across streams.

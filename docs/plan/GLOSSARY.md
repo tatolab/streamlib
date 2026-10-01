@@ -14,9 +14,9 @@ types; _(engine)_ is what the runtime's code, the plan and the decision records 
 never a user surface; _(crosses)_ means one meaning on both sides. An unmarked entry
 predates the markers.
 
-**Stream** _(user)_: the unit a person writes and runs — today's app: a directory whose
-`stream.py` defines `setup(stream)`, plus `pyproject.toml` and one venv; named by its
-directory; it may expose ports. _Avoid_: "app", "pipeline", "dataflow", "workflow", "graph"
+**Stream** _(user)_: the unit a person writes and runs — today's app: a function decorated
+`@stream` that builds a graph, in a directory with `pyproject.toml` and one venv that may hold
+several; named by its function; it may expose ports. _Avoid_: "app", "pipeline", "dataflow", "workflow", "graph"
 for the unit.
 
 **Pack** _(user)_: one ordinary Python distribution carrying nodes and streams for others to
@@ -159,8 +159,8 @@ _Avoid_: "the instance" for the handle.
 `_`, `.`; a node's defaults to its class's short name; never an identity. _Avoid_: "display
 name" (retired), "id", "label".
 
-**Graph** _(crosses)_: a stream's nodes, links and exposures as one JSON shape — what `setup`
-compiles to, and what the runtime renders live. _Avoid_: "graph description", "stream
+**Graph** _(crosses)_: a stream's nodes, links and exposures as one JSON shape — what a
+stream's function compiles to, and what the runtime renders live; emitted, never authored. _Avoid_: "graph description", "stream
 description", "snapshot", "manifest", "pipeline file".
 
 **Processor** _(engine)_: the engine's word for a node — its trait, its id, its interpreter;

@@ -97,9 +97,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_every_scaffolded_python_file_passes_ruff -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py::test_the_scaffold_binds_to_no_floor -->
 - **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
-  `stream.py` defines `setup(stream)`, which builds the stream's graph of nodes and links from
-  the classes it imports (`@node`), plus `pyproject.toml` and one venv; a stream may expose
-  ports. Each machine runs one runtime, which runs many streams — written by different people
+  `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
+  stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
+  and one venv; a stream may expose ports. Each machine runs one runtime, which runs many streams — written by different people
   or teams — behind that machine's single Zenoh session, owns the accelerator when one is
   present, serves the machine's local API, and schedules across streams. Every Python node
   keeps its own process, and agents keep changing live graphs. Owner, 2026-09-30: sentence 2
@@ -123,14 +123,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runs on very low-power devices; a stream that exposes devices stays long-running. Testing a
   stream without a full runtime is separate work, deliberately outside this pivot (owner).
   [one-runtime-per-machine]
-- **OPEN** — Several streams in one project or package. Direction (review, not decided; the
-  owner asked for it): a stream is a decorated function — `@stream def camera_rig(stream:
-  Stream)` — its name defaulting to the function's and its docstring the description an agent
+- **DECIDED** — Several streams in one project or package: a stream is a decorated function,
+  `@stream def camera_rig(stream: Stream)`, and a file or a package may define as many as it
+  likes; the bare `setup(stream)` retires rather than living beside it, and a package may ship
+  both runnable streams and composable nodes (owner, 2026-09-30). Direction (review, not
+  decided): the name defaults to the function's and its docstring is the description an agent
   reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
   there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one, a
-  package declaring its streams under an entry-point group; the bare `setup(stream)` retires
-  rather than living beside it. A package may ship both runnable streams and composable nodes.
-  [one-runtime-per-machine]
+  package declaring its streams under an entry-point group. [one-runtime-per-machine]
 - **OPEN** — Composition inside a stream. Direction (review, not decided): plain Python — a
   function that takes the builder, adds nodes, connects them and returns port references is a
   reusable fragment; the graph stays flat and addresses stay `<stream>/<node>/<port>`; a
@@ -1317,23 +1317,26 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
-- **DECIDED** — A graph is data: `setup(stream)` compiles to the stream's graph, a serializable
-  description a runtime runs — nodes by class import path with their config and name, the
-  links, and what the stream exposes. It is one shape with what `graph` renders: the engine's
-  existing round-trippable snapshot extended, rendered live with state and counters beside the
-  spec, never a second format (sentence 1; the one-shape reading follows engine doctrine).
+- **DECIDED** — A graph is data: a stream's `@stream` function compiles to the stream's graph, a
+  serializable description a runtime runs — nodes by class import path with their config and
+  name, the links, and what the stream exposes. It is one shape with what `graph` renders: the
+  engine's existing round-trippable snapshot extended, rendered live with state and counters
+  beside the spec, never a second format (sentence 1; the one-shape reading follows engine
+  doctrine). [one-runtime-per-machine]
+- **DECIDED** — The graph is emitted, never authored. A stream's function produces it, the
+  runtime exports the live one in the same shape, and nobody writes one by hand as the source
+  of a stream — a stream's source is its Python, which keeps the retired manifest retired. On
+  the next start the function wins: an agent that edits a running stream over the local API
+  changes the live graph, and keeps the change only by changing the code (owner, 2026-09-30).
   [one-runtime-per-machine]
-- **OPEN** — What the graph holds beyond nodes, links and exposures, and how it is written.
-  Direction (review, not decided): a stream's needs — a camera, a microphone, a display, the
-  accelerator, network exposure — are derived from its nodes' declarations (built-ins carry
-  theirs; a user node that opens a device directly says so on `@node`) and carried in the graph,
-  never authored; the runtime requests exactly those at load and refuses by name what the
-  machine cannot grant, so nothing enumerates every possible device up front. The stream's
-  environment is its project's venv path. Undecided: whether the graph is only ever emitted by
-  `setup` and the runtime (a build artifact, which the zero-ceremony bar allows) or may also be
-  authored by hand (the retired manifest again); and which is authoritative on the next start
-  after an agent edited the live graph — `setup`, or the last exported graph. Provisioning an
-  environment is the packs OPEN in §Packages. [one-runtime-per-machine]
+- **OPEN** — What the graph holds beyond nodes, links and exposures. Direction (review, not
+  decided): a stream's needs — a camera, a microphone, a display, the accelerator, network
+  exposure — are derived from its nodes' declarations (built-ins carry theirs; a user node that
+  opens a device directly says so on `@node`) and carried in the graph, never authored; the
+  runtime requests exactly those at load and refuses by name what the machine cannot grant, so
+  nothing enumerates every possible device up front. The stream's environment is its project's
+  venv path. Provisioning an environment is the packs OPEN in §Packages.
+  [one-runtime-per-machine]
 - **OPEN** — Several streams in one runtime process: what must become per-stream before it
   works. Known from the tree: the one global event topic (a second runtime today commits on
   the other's graph change and stops on its shutdown); the processor registry keyed by import
