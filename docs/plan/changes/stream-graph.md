@@ -106,6 +106,10 @@ the rest as direction. This change has to pick one spelling to build.
 
 **Recommendation: (a).**
 
+**RESOLVED — (a), owner, 2026-10-01.** Reversible later at low cost: the graph carries the name
+either way, so moving to (b) is the decorator taking a required name and `run` refusing without
+one, with no change to the graph, the loader or `graph`.
+
 ---
 
 ## ADDED: §Product — the stream, as proposed
