@@ -217,7 +217,26 @@ ship gate runs, since the gate searches `.claude/`.
 - **S3 — MCP 2026-07-28.** The revision on `POST /mcp`, the CLI client's headers and `_meta`,
   the tests. Independent of S1 (it runs over TCP until S1 lands).
 - **S4 — the `mcp` verb.** `/mcp/stdio`, the verb, its live test, README's MCP setup. Blocked by
-  S1 and S3.
+  S1's socket (the expand ticket) and S3; it needs the socket to exist, not the port to be gone.
+
+## Tickets
+
+Derived 2026-10-01; milestone #60, *Local API*. S1 split expand–migrate–contract so CI stays green
+while the fixtures move.
+
+1. #2578 — a runtime stops announcing control-plane URLs on the mesh (S2) — independent; carries
+   the six announcement bullets.
+2. #2572 — the runtime speaks MCP 2026-07-28 and nothing earlier (S3) — independent; carries
+   `2025-06-18`, `initialize_result`, `notifications/initialized`.
+3. #2573 — the local API is served on a user-only socket, and the CLI talks through it (S1
+   expand) — independent.
+4. #2574 — rigs, fixtures and the wheels' live tests reach a node through its socket (S1 migrate)
+   — blocked by 3 and #2568; needs the rig.
+5. #2575 — the TCP port, `--host`/`--port`/`--url` and the bearer gate are gone (S1 contract) —
+   blocked by 4; carries the listener, flag, registry and auth bullets.
+6. #2576 — MCP hosts connect by launching `streamlib mcp` (S4) — blocked by 2 and 3; carries
+   `claude mcp add --transport http`, `test_the_wheel_serves_no_mcp_verb`.
+7. #2577 — the live-ops skills follow (the companion operating-model PR) — blocked by 5 and 6.
 
 ## REMOVED
 
