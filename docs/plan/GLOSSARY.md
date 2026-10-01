@@ -19,6 +19,11 @@ predates the markers.
 directory; it may expose ports. _Avoid_: "app", "pipeline", "dataflow", "workflow", "graph"
 for the unit.
 
+**Pack** _(user)_: one ordinary Python distribution carrying nodes and streams for others to
+use — the unit a registry lists and `add` installs into a project, never beside the runtime.
+_Avoid_: "plugin", "module", "custom node" (ComfyUI's word); an extension wheel is a pack that
+also brings a capability.
+
 **Package**: an ordinary PyPI or cargo package. A processor package's native internals
 expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 "module" (pre-pivot module-system terms).

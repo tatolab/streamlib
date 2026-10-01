@@ -78,8 +78,8 @@ it: what is decided in your words, what is open with the review's direction, and
 </p>
 
 <div class="verdict">
-<p><strong>Decided:</strong> 10 plan entries, all traceable to your five sentences and your clarifications on 30 September.
-<strong>Open:</strong> 14 entries, each carrying the review's direction marked as such, never as a decision.
+<p><strong>Decided:</strong> 11 plan entries, all traceable to your five sentences and your rulings on 30 September.
+<strong>Open:</strong> 17 entries, each carrying the review's direction marked as such, never as a decision.
 <strong>Vocabulary:</strong> settled in the glossary — stream, node, name, port, link, address, exposed port, form, graph, runtime, machine, relay — with engine-only words kept behind them.
 <strong>One assumption you may reverse:</strong> the per-machine program is called the <em>runtime</em>, not the <em>host</em>.</p>
 </div>
@@ -328,10 +328,20 @@ https://relay.example/&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;/&
 <li><strong>"runtime" or "host" for the per-machine program?</strong> The branch says runtime; one substitution reverses it.</li>
 </ol>
 
-<h2>12 · What PR #2557 changes</h2>
+<h2>12 · Rulings after the review, 30 September</h2>
+<p>Four things settled while you read the first version of this page; they are in the plan now.</p>
+<table>
+<tr><th>Topic</th><th>Status</th><th>What it says</th></tr>
+<tr><td>The runtime is required, like Docker's</td><td class="ok">decided (your words)</td><td>An installer — the desktop app, <code>brew</code>, <code>curl | sh</code>, a distro package — puts the runtime, the CLI and the native piece on the machine as one version-matched unit and registers it as a per-user service. <code>run</code> never starts a runtime; it loads into the one that is running. pip distributes <code>tatolab-stream</code> and packs, never the runtime. "Never daemonise" only forbids the runtime detaching <em>itself</em>; being started by launchd or systemd is fine.</td></tr>
+<tr><td>Streams persist like containers</td><td class="mid">open, with a direction</td><td><code>run demo</code> is attached (Ctrl-C unloads); <code>run -d demo</code> is detached and re-loaded on every restart until <code>stop</code> / <code>rm</code>. A stream references its project's venv rather than carrying an image.</td></tr>
+<tr><td>Several streams per project; composition</td><td class="mid">open, with a direction</td><td><code>@stream def camera_rig(stream: Stream)</code>, several per file or package, run by import path; the bare <code>setup</code> retires. Inside a stream, composition is plain Python and the graph stays flat; nested subgraphs are deferred.</td></tr>
+<tr><td>Packs, a registry, adding hardware support, "nothing into the runtime"</td><td class="mid">open, with a direction</td><td>A pack is an ordinary Python distribution of nodes and streams with <code>pyproject.toml</code> as its only metadata (an optional <code>[tool.tatolab]</code> table for a registry; never required to run). <code>add</code> installs into a project — or a default project the runtime manages — never beside the runtime. <code>run &lt;url-or-zip&gt;</code> fetches, runs <code>uv sync</code>, loads. ComfyUI imports every pack into its own server process and one environment; we don't: pack code runs only in processor interpreters started from that venv, and the runtime process imports nothing from it. Permissions are derived from the graph and requested at load, never enumerated up front; the app bundle declares device classes once, the OS still prompts lazily per class.</td></tr>
+</table>
+
+<h2>13 · What PR #2557 changes</h2>
 <table>
 <tr><th>File</th><th>What</th></tr>
-<tr><td><code>docs/plan/ARCHITECTURE.md</code></td><td>A reading rule under the legend. 10 DECIDED and 14 OPEN entries tagged <code>[one-runtime-per-machine]</code>, each OPEN carrying "direction (review, not decided)" where the review has one. 34 older entries annotated — superseded, amended or reopened, in the settled words.</td></tr>
+<tr><td><code>docs/plan/ARCHITECTURE.md</code></td><td>A reading rule under the legend. 11 DECIDED and 17 OPEN entries tagged <code>[one-runtime-per-machine]</code>, each OPEN carrying "direction (review, not decided)" where the review has one. 34 older entries annotated — superseded, amended or reopened, in the settled words.</td></tr>
 <tr><td><code>docs/plan/GLOSSARY.md</code></td><td>The settled vocabulary with register markers <em>(user)</em>, <em>(engine)</em>, <em>(crosses)</em>; a retired block for app, display name, "node" as a live runtime, control plane, processor catalog, "helper". "Host" stays retired.</td></tr>
 <tr><td><code>docs/plan/diagrams/system.mmd</code></td><td>Every DECIDED entry represented; the mesh node restated so it no longer contradicts itself.</td></tr>
 <tr><td><code>docs/decisions/one-runtime-per-machine.md</code></td><td>The record: your five sentences verbatim, your clarifications, what is decided, what is open, the constraints, a corrected "Why" (the clock claim withdrawn; import collisions restated as a requirement), rejected alternatives, and the fallback kept.</td></tr>

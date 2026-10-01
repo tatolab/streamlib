@@ -104,17 +104,40 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   present, serves the machine's local API, and schedules across streams. Every Python node
   keeps its own process, and agents keep changing live graphs. Owner, 2026-09-30: sentence 2
   restated after its "daemon" wording was reopened. [one-runtime-per-machine]
-- **OPEN** — How the runtime is started and kept alive, and what `run` does when no runtime is
-  running. Direction (review, not decided): one command with two entry paths — `run` loads the
-  stream into the machine's runtime when one answers, and otherwise starts one in the
-  foreground of that terminal holding this stream, never daemonised; `dev` is `run` with logs
-  in the foreground and reload on edit. Undecided: whether a runtime may outlive the terminal
-  that started it without a service streamlib does not ship, and whether it serves a machine
-  or a user (on Apple it is per user, by the permission model). Constraints (owner): streams
-  get their own compute; every stream is addressable by URL, somewhat in the manner of Plan 9;
-  no second mode unless it solves a real problem; it runs on very low-power devices. Testing a
+- **DECIDED** — The runtime is required and always on, installed once per machine by an
+  installer — the desktop app, a package manager, a `curl | sh` script or a distro package —
+  which ships the runtime, the CLI and the native portion processor interpreters borrow as one
+  version-matched unit and registers the runtime as a per-user service. `run` never starts a
+  runtime; it loads a stream into the one that is running. pip distributes the pure-Python
+  stream package and packs of nodes and streams, never the runtime. Owner, 2026-09-30: "treat
+  it like Docker"; "pip is just for distributing the packaged streams". [one-runtime-per-machine]
+- **OPEN** — How a stream is loaded and kept. Direction (review, not decided): `run <stream>`
+  loads it attached — logs in the terminal, Ctrl-C unloads; `run -d` loads it detached and
+  persistent — the runtime records the graph, the project's venv path and the exposures in its
+  state directory and re-loads it on every restart until `stop` or `rm`; `streams` lists both;
+  `dev` is `run` with reload on edit; `up` runs a runtime in a terminal where no installer put
+  one, the pip-only fallback, and `down` stops it. Undecided: the verbs' final spelling, and
+  whether a runtime serves a machine or a user (on Apple it is per user, by the permission
+  model). Constraints (owner): streams get their own compute; every stream is addressable by
+  URL, somewhat in the manner of Plan 9; no second mode unless it solves a real problem; it
+  runs on very low-power devices; a stream that exposes devices stays long-running. Testing a
   stream without a full runtime is separate work, deliberately outside this pivot (owner).
   [one-runtime-per-machine]
+- **OPEN** — Several streams in one project or package. Direction (review, not decided; the
+  owner asked for it): a stream is a decorated function — `@stream def camera_rig(stream:
+  Stream)` — its name defaulting to the function's and its docstring the description an agent
+  reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
+  there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one, a
+  package declaring its streams under an entry-point group; the bare `setup(stream)` retires
+  rather than living beside it. A package may ship both runnable streams and composable nodes.
+  [one-runtime-per-machine]
+- **OPEN** — Composition inside a stream. Direction (review, not decided): plain Python — a
+  function that takes the builder, adds nodes, connects them and returns port references is a
+  reusable fragment; the graph stays flat and addresses stay `<stream>/<node>/<port>`; a
+  `group` label per node in the graph lets an agent or an editor show the grouping. A nested
+  subgraph with its own exposed ports, ComfyUI's shape, is deferred until an editor or an agent
+  needs to see a fragment as one thing. Across streams, a link to another stream's exposed port
+  is the composition. [one-runtime-per-machine]
 
 ## Packages & extension model — SHIPPED
 
@@ -501,6 +524,22 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   distributions and imports, the CLI's command, and the Rust crate. Assumed until decided:
   `tatolab-stream` importing as `tatolab.stream`, `tatolab-runtime` importing as
   `tatolab.runtime`, and the CLI `tatolab`. [one-runtime-per-machine]
+- **OPEN** — Packs, a registry, and loading a stream from a source. Direction (review, not
+  decided; the owner wants to distribute what they build and update the app separately): the
+  unit of distribution is a pack — one ordinary Python distribution carrying nodes and streams,
+  published to a registry with globally unique names and immutable versions, its only metadata
+  `pyproject.toml` plus an optional `[tool.tatolab]` table (publisher, display name, icon, the
+  runtime range it needs) that is never required to run a stream; `add <pack>` installs it into
+  a project, or into a default project the runtime manages when there is none, and never beside
+  the runtime; `run <url-or-zip>` fetches the project into the runtime's state directory, runs
+  `uv sync` there (uv creating the venv and fetching a missing Python), and loads it like any
+  project, and a project with no venv gets `uv sync` first. Environments are provisioned by the
+  standard toolchain only — `pyproject.toml`, uv, a package index, git — never by machinery of
+  streamlib's, which is what importable-python-library deleted. The runtime process imports
+  nothing from a pack or a project; their code runs only in processor interpreters started from
+  that venv, and the one door into the runtime process — a capability extension's hook — opens
+  only to what the installer put beside the runtime. Undecided: the registry's owner and
+  standards, a manager UI, and what the app's own catalog does. [one-runtime-per-machine]
 
 ## Consumers — examples & packages — SHIPPED
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
@@ -1284,14 +1323,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   existing round-trippable snapshot extended, rendered live with state and counters beside the
   spec, never a second format (sentence 1; the one-shape reading follows engine doctrine).
   [one-runtime-per-machine]
-- **OPEN** — What the graph holds beyond nodes, links and exposures — resource needs, the
-  stream's environment, descriptions an agent reads — and how it is written. Undecided:
-  whether it is only ever emitted by `setup` and the runtime (a build artifact, which the
-  zero-ceremony bar allows) or may also be authored by hand (the retired manifest again);
-  whether "load a stream into any runtime" includes provisioning its Python environment from a
-  zip, a package index or a repository (which would reverse importable-python-library's "the
-  pain was environments"); and which is authoritative on the next start after an agent edited
-  the live graph — `setup`, or the last exported graph. [one-runtime-per-machine]
+- **OPEN** — What the graph holds beyond nodes, links and exposures, and how it is written.
+  Direction (review, not decided): a stream's needs — a camera, a microphone, a display, the
+  accelerator, network exposure — are derived from its nodes' declarations (built-ins carry
+  theirs; a user node that opens a device directly says so on `@node`) and carried in the graph,
+  never authored; the runtime requests exactly those at load and refuses by name what the
+  machine cannot grant, so nothing enumerates every possible device up front. The stream's
+  environment is its project's venv path. Undecided: whether the graph is only ever emitted by
+  `setup` and the runtime (a build artifact, which the zero-ceremony bar allows) or may also be
+  authored by hand (the retired manifest again); and which is authoritative on the next start
+  after an agent edited the live graph — `setup`, or the last exported graph. Provisioning an
+  environment is the packs OPEN in §Packages. [one-runtime-per-machine]
 - **OPEN** — Several streams in one runtime process: what must become per-stream before it
   works. Known from the tree: the one global event topic (a second runtime today commits on
   the other's graph change and stops on its shutdown); the processor registry keyed by import
@@ -1304,7 +1346,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   independence OPEN in §Packages); and whether surface sharing on Apple carries beyond a
   stream's own processor interpreters. [one-runtime-per-machine]
 - **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
-  admission control, and how a stream states what it needs. [one-runtime-per-machine]
+  admission control, and how a stream states what it needs. Direction (review, not decided):
+  what a stream needs is read from its graph (the derived needs above) and granted per stream
+  at load by the runtime — on Apple behind the OS prompt, on Linux by the runtime's own grant —
+  and remembered; a control client reads the same list and never has to predict it.
+  [one-runtime-per-machine]
 - **OPEN** — Failure isolation when one runtime holds several streams. A native crash in a
   built-in — camera, codec, display, the mesh's copy path — ends every stream on the machine;
   a hang is bounded per node by the existing abandon budget and ends only that stream; Python
@@ -3072,7 +3118,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   own application starts the runtime, such as the product's launch agent: which application
   the permission is attributed to, and what a refusal names. Known: grants are per user and
   credited to the process's GUI ancestor, so a runtime started from a terminal credits that
-  terminal until it restarts. [one-runtime-per-machine]
+  terminal until it restarts; an app bundle declares the device classes it may ever open —
+  usage strings for the camera, the microphone and the local network (multicast discovery
+  trips that prompt on recent macOS) and the hardened-runtime entitlements notarization
+  requires — once, as a fixed list, while the OS still prompts lazily per class at first use;
+  and only the runtime process opens devices, so only it needs the entitlements, never a
+  processor interpreter. [one-runtime-per-machine]
 
 ## Networking — transport, runtime mesh, moq, webrtc — SHIPPED
 
@@ -4104,9 +4155,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: grep -n "p streamlib-adapter-skia" .github/workflows/test.yml -->
 - **DECIDED** — streamlib ships under a `tatolab.*` namespace, as a pure-Python stream package
   and a native runtime package, with support for Linux and Apple Silicon macOS and no
-  streamlib-owned service (sentence 5, its "host" read as the runtime). Known: maturin ships a
-  native portion of a PEP 420 namespace beside a pure one, in wheels and editable installs
-  alike, so no custom module system is needed. [one-runtime-per-machine]
+  streamlib-owned service (sentence 5, its "host" read as the runtime). The stream package and
+  packs go through the package index; the runtime package ships inside the installer with the
+  CLI and the desktop app, never through pip (owner, 2026-09-30). Known: maturin ships a native
+  portion of a PEP 420 namespace beside a pure one, in wheels and editable installs alike, so no
+  custom module system is needed. [one-runtime-per-machine]
 
 ## Control plane & observability — SHIPPED
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->

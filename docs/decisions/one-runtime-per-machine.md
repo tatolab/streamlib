@@ -65,6 +65,17 @@ The owner's later clarifications, the same day:
   as part of a stream. The user's words are the glossary's `(user)` entries: stream, node, name,
   port, link, address, exposed port, form, graph, runtime, machine, relay. A word for an exposed
   output ("feed") is a later addition if the double meaning of "stream" bites.
+- **The runtime is required, like Docker's.** People never install anything into the runtime;
+  an installer puts the runtime, the CLI and the app on the machine as a service, and `run` just
+  works. pip is for libraries — the stream package and packs of nodes and streams — never the
+  runtime. Streams that expose devices are long-running, so a loaded stream can persist like a
+  container.
+- **Adding support for hardware someone bought** is the ComfyUI use, with the isolation ComfyUI
+  lacks: a pack is pip-installed into a project's venv and runs in processor interpreters; the
+  runtime process imports nothing from it. The owner will distribute what they build the same
+  way, and update the app separately.
+- **Several streams per project**, and permissions derived from what a stream's graph needs
+  rather than enumerated up front: directions recorded as OPEN.
 
 ## Decided
 
@@ -88,6 +99,10 @@ The owner's later clarifications, the same day:
   account can see and use their own streams locally, and inside a private network.
 - **Packaging.** A `tatolab.*` namespace: a pure-Python stream package and a native runtime
   package; Linux and Apple Silicon macOS; no streamlib-owned service.
+- **The runtime is required and always on,** installed once per machine by an installer that
+  ships the runtime, the CLI and the native portion as one unit and registers the service;
+  `run` only ever loads a stream into it; pip distributes the stream package and packs, never
+  the runtime.
 - **Accelerators are optional.** A stream that needs no GPU runs on a machine without one.
 - **An extension point for an external control client.** The runtime runs complete without one.
 - **The vocabulary** in the glossary, with its register markers.
@@ -97,7 +112,11 @@ The owner's later clarifications, the same day:
 Each is an OPEN entry in the plan. Where the plan records a *direction (review, not decided)*,
 that is the 2026-09-30 review's recommendation, kept apart from what the owner said.
 
-- How the runtime is started and kept alive, and what `run` does with none running.
+- How a stream is loaded and kept: attached or detached, persistent across runtime restarts,
+  and the verbs.
+- Several streams in one project or package (`@stream`), and composition inside a stream.
+- Packs, a registry, and loading a stream from a URL or a zip, with environments provisioned
+  by the standard toolchain only.
 - How the stream package and the runtime package stay independent, and how the runtime and a
   stream's processor interpreters agree on a build.
 - How an external control client plugs in.
