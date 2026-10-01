@@ -271,7 +271,7 @@ three-part `MeshPortAddress` to this change; it moves to the hosting change for 
 - `Runtime.load` refuses a second load; one stream per `run` until `:1342-1352` is decided.
 - Exposure gates the mesh in this change rather than being recorded and inert: closed by default
   is decided, and a recorded `expose` that gated nothing would be the no-op surface the doctrine
-  forbids. If the owner prefers the gate to ride the stream-map change, S4 below splits off whole.
+  forbids. Owner, 2026-10-01: keep it here; S4 stays in this change.
 - The extension wheels' four processors move to `@node` inside S1, as the canary §Consumers
   reserves and as the config-class change did; the thirteen examples are filed as backlog at
   ship, never fixed in-stream.
