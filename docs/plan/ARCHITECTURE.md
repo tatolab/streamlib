@@ -4030,11 +4030,22 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   sample, or both (it stays documentation, never a contract at the port); certificates per
   reach tier (a token URL on loopback; a short-lived self-minted certificate whose hash the
   page is given, on a LAN; Tailscale's per-machine certificate on a tailnet; a real one at a
-  relay); and whether end-to-end encryption through a relay is a launch
-  requirement — if so, the runtime encrypts payloads itself with keys held on the team's
-  devices, and every server-side form comes from the machine. Known: Tailscale Funnel carries
-  no UDP, so MoQ and WebRTC media from a private node go over the tailnet directly or through
-  a relay; the HTTP forms pass. [one-runtime-per-machine]
+  relay). Known: Tailscale Funnel carries no UDP, so MoQ and WebRTC media from a private node
+  go over the tailnet directly or through a relay; the HTTP forms pass. [one-runtime-per-machine]
+- **DECIDED** — End-to-end encryption through a relay is not a launch requirement; it is a
+  later change, and the design keeps it possible. A hosted relay's operator can see the
+  streams passing through it until that change lands, and that is said plainly; a bundled
+  relay on a private network or a self-hosted VM is the user's own and exposes nothing. What
+  stays true so the door stays open: a relay never parses the payloads it forwards; the engine
+  never reads a bag's payload; a frame's sequence, stamp and keyframe flag stay readable so
+  delivery and drop counting work; and no key ever lives on a relay. When it lands it is the
+  WebRTC insertable-streams and MoQ secure-objects shape — encrypt each frame at the source
+  inside the transport encryption, decrypt in the player, relays untouched — with a pre-shared
+  key per team first (carried to a browser in a URL fragment, which never reaches a server),
+  per-stream keys through the control client later, and the team's devices signing the key
+  set the way Tailnet Lock does. Its cost, accepted for later: every server-side form
+  (snapshots, HLS, transcoding) then comes from the machine, and stock ffmpeg and curl work
+  only through a TLS tunnel ending on the machine. Owner, 2026-09-30. [one-runtime-per-machine]
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->

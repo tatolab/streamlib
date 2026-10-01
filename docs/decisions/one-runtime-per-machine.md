@@ -103,6 +103,11 @@ The owner's later clarifications, the same day:
   relay-VM role; hosted relays are opt-in with the user's own credentials. Owner, 2026-09-30,
   after the research: no MoQ server of our own; a home lab must never cost anyone a hosted
   relay by accident.
+- **End-to-end encryption through a relay is a later change, not a launch requirement.** A
+  hosted relay sees content until it lands, said plainly; private and self-hosted relays are
+  the user's own. The door stays open by construction: relays never parse payloads, the engine
+  never reads a bag's payload, frame metadata stays readable, no key lives on a relay. Owner,
+  2026-09-30.
 - **streamlib does not solve every networking problem.** NAT, peer identity and wire
   encryption between machines are Tailscale's, a VPN's, or a relay's; streams as URLs, what
   leaves a machine, and many streams on one runtime are streamlib's.
@@ -157,8 +162,7 @@ that is the 2026-09-30 review's recommendation, kept apart from what the owner s
   authenticates.
 - Discovery: on one machine, on one network, across networks through a relay, and through a
   pushed map — the Tailscale analogy applied.
-- The URL grammar, the forms and their order, certificates per reach tier, and whether
-  end-to-end encryption through a relay is a launch requirement.
+- The URL grammar, the forms and their order, and certificates per reach tier.
 - The local API's protocol, MCP reach, remote reach and the multi-user case.
 
 The owner's constraints on these: streams get their own compute; every stream is addressable
