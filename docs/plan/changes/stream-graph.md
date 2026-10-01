@@ -1,5 +1,8 @@
 # stream-graph
 
+> **Approved by the owner, 2026-10-01**, with decision 1 resolved (a) and the exposure gate kept
+> in this change. Next: `/derive-tickets`.
+
 The first build step of the one-runtime-per-machine pivot: a stream is a `@stream` function, the
 function compiles to the stream's graph, the graph is the engine's snapshot extended into the one
 shape `graph` renders, the runtime loads it, and what the stream exposes is in it and is all the
