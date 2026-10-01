@@ -1,5 +1,8 @@
 # local-api
 
+> **Approved by the owner, 2026-10-01**, as written, with its stated assumptions. Next:
+> `/derive-tickets`.
+
 Step 2 of the one-runtime-per-machine pivot: control leaves the network, and MCP hosts reach it by
 launching a command. After this change:
 - a runtime that hosts its local API serves today's router — REST, both WebSockets, the OpenAPI
