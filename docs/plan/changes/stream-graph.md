@@ -296,6 +296,23 @@ three-part `MeshPortAddress` to this change; it moves to the hosting change for 
 
 Restart time stays an acceptance criterion of the hosting change, not this one (#2559's record).
 
+## Tickets
+
+Derived 2026-10-01; milestone #59, *Streams as data*. Blockers first. S3 split expand–contract so
+CI stays green through the forty-fixture migration.
+
+1. #2564 — `@node` declares a node where `@processor` did — independent; carries the `@processor`
+   bullet.
+2. #2565 — the graph is one shape: the snapshot the runtime loads is what `graph` renders —
+   independent; carries `ProcessorDefinition`, `ConnectionDefinition`, `save_graph_snapshot`,
+   `pipeline_name`.
+3. #2566 — nothing leaves the machine until a stream exposes it — blocked by 2.
+4. #2567 — a stream is a `@stream` function that compiles to its graph (expand) — blocked by 1, 2.
+5. #2568 — the wheel's fixtures and tests build streams with `@stream` and `Stream` (migrate) —
+   blocked by 4.
+6. #2569 — `rt.add`, `rt.connect` and the `setup(rt)` harness are gone (contract) — blocked by 5;
+   carries every remaining `REMOVED:` bullet.
+
 ## REMOVED
 
 - REMOVED: def setup(rt
