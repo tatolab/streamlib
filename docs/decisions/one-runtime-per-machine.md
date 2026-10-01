@@ -236,3 +236,37 @@ Checked against the tree on 2026-09-30:
   them; the records annotated in place change only where a confirmed sentence changes them.
 - **The rip-out change** (`docs/plan/changes/one-runtime-per-machine-ripout.md`) is on hold
   until the local-API entries are decided.
+
+### Sequence and priority (owner, 2026-10-01)
+
+This program comes before every other feature — kernel work, codecs, capture, plugins — until it
+is done; it is what the product rolls out on. The order below is a record of which OPENs each
+step needs decided first, so that `/plan` and every session read one sequence. Each step is an
+`/align` over the named OPENs, then one `/propose-change`, then its tickets.
+
+1. **Streams as data** — `stream-graph`, proposed 2026-10-01, milestone #59. Done when `@stream`
+   functions compile to the one graph shape the runtime loads and the mesh exposes only what a
+   stream says.
+2. **The local API** — align the local-API OPEN; the rip-out change comes off hold: control on a
+   socket reachable only on its machine, the forms listener, how MCP hosts reach it.
+3. **Runtime hosting** — align several streams in one runtime process, how a stream is loaded and
+   kept, composition, and Apple permission under a service (research #2558, #2560 feed it): one
+   runtime loads many streams, `run` loads into it, attached and detached, the state directory and
+   re-load after a crash, the `<machine>/` address segment. Milestone #58.
+4. **Per-stream environments** — align package independence (the lend), what the graph holds
+   beyond nodes and links, and packs (research #2561 feeds it): one venv per stream, needs derived
+   from nodes and requested at load, packs installed into projects, `run <url-or-zip>`.
+5. **Accelerators optional** — align what optional accelerators mean for the engine.
+6. **Resources across streams** — align the resources OPEN.
+7. **The runtime's own session and the stream map** — align discovery, the stream map's details
+   and the control-client seam: own Zenoh configuration, router mode, dialing relays, the pushed
+   map compiled into Zenoh and checked in the engine, peer authentication, `machines` and
+   `streams`.
+8. **Streams as URLs** — align the URL grammar and the forms: listing, `ndjson`, `png`, raw H.264
+   and MPEG-TS, then HLS, then `moq` through the bundled relay, the relay role.
+9. **The `tatolab` namespace rename, with the installer and the service** — align the remaining
+   names; last by construction.
+10. **End-to-end encryption through a relay** — decided as not at launch; a later change with
+    nothing to align now.
+
+Hardening of what already ships and bug fixes are the only work that may interleave.
