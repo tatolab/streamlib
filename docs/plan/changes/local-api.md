@@ -217,7 +217,7 @@ ship gate runs, since the gate searches `.claude/`.
 - **S3 — MCP 2026-07-28.** The revision on `POST /mcp`, the CLI client's headers and `_meta`,
   the tests. Independent of S1 (it runs over TCP until S1 lands).
 - **S4 — the `mcp` verb.** `/mcp/stdio`, the verb, its live test, README's MCP setup. Blocked by
-  S1 and S3.
+  S1's socket (the expand ticket) and S3; it needs the socket to exist, not the port to be gone.
 
 ## Tickets
 
