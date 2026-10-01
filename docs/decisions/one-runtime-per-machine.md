@@ -234,8 +234,9 @@ Checked against the tree on 2026-09-30:
   `tatolab-stream` and `tatolab-runtime` the stated assumption.
 - **Older entries are read through the plan's reading rule** until the rename change re-spells
   them; the records annotated in place change only where a confirmed sentence changes them.
-- **The rip-out change** (`docs/plan/changes/one-runtime-per-machine-ripout.md`) is on hold
-  until the local-API entries are decided.
+- > ~~**The rip-out change** (`docs/plan/changes/one-runtime-per-machine-ripout.md`) is on hold
+  > until the local-API entries are decided.~~ — Superseded 2026-10-01: the entries were decided
+  > (`local-api.md`), and the rip-out was rewritten as `docs/plan/changes/local-api.md`.
 
 ### Sequence and priority (owner, 2026-10-01)
 
