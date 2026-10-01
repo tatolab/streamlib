@@ -135,8 +135,11 @@ type need not be a frame).
 
 **Local API** _(engine)_: the runtime's per-machine control surface over a local socket — for
 observing, inspecting and changing the live graphs of its streams — which the CLI, MCP hosts
-and an external control client call. Embedding happens by importing the runtime package, never
-through the local API. _Avoid_: "control plane" (retired), "API server" as the concept.
+and an external control client call, reachable only on its own machine. An MCP host reaches it
+by launching the CLI's `mcp` verb, which forwards messages to the socket unchanged. Embedding
+happens by importing the runtime package, never through the local API. _Avoid_: "control
+plane" (retired), "API server" as the concept; "relay" or "bridge" for the `mcp` verb
+("relay" is the runtime's role for other machines).
 
 **Node catalog** _(user)_: what a runtime reports it can add — every registered node class
 with its description, config schema and ports — served over the local API. _Avoid_:

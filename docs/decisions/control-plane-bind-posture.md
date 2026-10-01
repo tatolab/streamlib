@@ -11,6 +11,10 @@ that protects a node.
 
 ## Decision
 
+> Superseded 2026-10-01 by `local-api.md`: control is served on a socket reachable only on its
+> own machine and binds no network address, so the bind question below no longer exists. What
+> other machines may read is exposure, decided under §Networking.
+
 `dev` and `run` bind the control plane identically — all interfaces (`0.0.0.0`) by
 default, narrowed per invocation by `--host`. There is no dev-only exposure posture.
 
