@@ -37,6 +37,15 @@ macOS floor to Intel, or before treating macOS as a best-effort target.
 > Rosetta. No `.app` bundle, no launchd service, no installer, under any justification. macOS
 > security prompts are part of the experience; needing a *bundle* to obtain them is not.
 
+> Amended 2026-09-30 by `one-runtime-per-machine.md`. The platform floor stands whole: Apple Silicon
+> only, Vulkan through MoltenVK, no Intel, no Rosetta, and the engine never detaches itself. The
+> distribution clause above is superseded for the runtime: the runtime is no longer a pip-installed
+> wheel but arrives from an installer — the product's app, a package manager, a script — that
+> registers it as a per-user launch agent, so a launchd service does exist, owned by the installer
+> rather than by a streamlib package; the pure-Python stream package stays an ordinary wheel with
+> no bundle, service or installer. Which application a camera or microphone prompt is attributed
+> to when that agent starts the runtime is OPEN in the plan.
+
 ## Why
 
 The evidence is `docs/research/2026-09-19-macos-camera-display-revival.md`, measured on an M1 Max.

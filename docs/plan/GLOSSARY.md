@@ -5,11 +5,24 @@ The shared language. Terms only — zero implementation detail. Maintained by th
 
 **The wheel**: the single distributed artifact for Python — Python API + CLI + engine
 in one PyO3 package. _Avoid_: "the binary" (pre-pivot), "the SDK" (that is its API
-surface).
+surface). _Amended 2026-09-30 by the one-runtime-per-machine pivot: it becomes two
+distributions, a pure-Python stream package and a native runtime package; until the rename,
+"the wheel" names what ships today._
 
-**App**: a normal Python codebase — an entry file (`app.py` defining `setup(rt)`) plus
-`pyproject.toml` and one venv; no manifest, no streamlib-specific files. _Avoid_:
-"project", "consumer app" (redundant).
+Register markers, since the 2026-09-30 pivot: _(user)_ is what a Tatolab user reads and
+types; _(engine)_ is what the runtime's code, the plan and the decision records say, and
+never a user surface; _(crosses)_ means one meaning on both sides. An unmarked entry
+predates the markers.
+
+**Stream** _(user)_: the unit a person writes and runs — today's app: a function decorated
+`@stream` that builds a graph, in a directory with `pyproject.toml` and one venv that may hold
+several; named by its function; it may expose ports. _Avoid_: "app", "pipeline", "dataflow", "workflow", "graph"
+for the unit.
+
+**Pack** _(user)_: one ordinary Python distribution carrying nodes and streams for others to
+use — the unit a registry lists and `add` installs into a project, never beside the runtime.
+_Avoid_: "plugin", "module", "custom node" (ComfyUI's word); an extension wheel is a pack that
+also brings a capability.
 
 **Package**: an ordinary PyPI or cargo package. A processor package's native internals
 expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
@@ -19,7 +32,7 @@ expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 audio, the seven codec blocks, the virtual camera) — instantiated and configured from
 Python; its per-frame path never enters the interpreter. Since the 2026-09-04
 extension-model pivot, not the default home for a first-party capability: a new built-in
-must meet the criterion in §Packages & extension model — a deadline the helper hop cannot
+must meet the criterion in §Packages & extension model — a deadline the interpreter hop cannot
 meet, an engine-only primitive, or an OS-facing device the wheel must present to other
 applications, and a named consumer. _Avoid_: "built-in" for an optional capability (that is an
 **extension wheel**).
@@ -31,8 +44,8 @@ _Avoid_: "plugin" (pre-pivot ABI), "integration package" (retired), "built-in" (
 wheel).
 
 **Processor extension**: an extension wheel's Python processor class whose per-frame work
-runs in native code the same wheel carries and which it calls directly; `rt.add(TheClass)`
-is its registration and it runs in its own helper like any Python processor.
+runs in native code the same wheel carries and which it calls directly; `stream.add(TheClass)`
+is its registration and it runs in its own processor interpreter like any Python node.
 
 **Support hook**: the one callable a capability extension exports (`load(host)`) that the
 engine runs once in every process taking an engine role. _Avoid_: "plugin init",
@@ -48,11 +61,15 @@ name, carrying remote links as engine transport beside iceoryx2 — always on, n
 processor or an extension. _Avoid_: "fabric" (retired for this term), "gateway", "cluster",
 "federation".
 
-**Runtime name**: the name a runtime is addressed by on its mesh — its own, never its
-control plane's; one Zenoh key chunk, defaulting to `<hostname>-<app directory name>-<id>`
-with the id hashed from the directory's path, never auto-suffixed, and unique among live
-runtimes on one mesh. Set by constructor, environment or CLI only. _Avoid_: "node name"
-(retired), "runtime id" (that is the per-run id, never an address), "hostname".
+**Runtime** _(crosses)_: the one program per machine that runs streams — the engine, the
+accelerator when one is present, the transports, the local API; installed once, never
+constructed by a stream. Runtime mesh, mesh name and cross-runtime links keep their meaning
+with one runtime per machine. _Avoid_: "host", "daemon", "server", "node", "engine" on a user
+surface (the engine is the library inside it).
+
+**Machine** _(user)_: what a runtime is addressed as — the first chunk of an address,
+defaulting to the hostname; a containerised runtime is its own machine. _Avoid_: "host",
+"device", "runtime name" (retired).
 
 **Mesh name**: the name of one runtime mesh — one chunk of the channel-name grammar,
 `default` unless a runtime names another. Everything a runtime announces lives under it, and
@@ -60,13 +77,24 @@ naming a different one is how groups sharing a network separate what they announ
 never what dials whom. _Avoid_: "namespace" (Zenoh's own config key, which this is not),
 "cluster", "domain" (that is the iceoryx2 one).
 
-**Remote link**: a link whose output and input ports belong to different runtimes on the
-runtime mesh, addressed by runtime name, display name and port. _Avoid_: "network link",
-"bridge", "export".
+**Address** _(crosses)_: the right-anchored path `<machine>/<stream>/<node>/<port>`, leading
+chunks omitted to mean "here"; the same string on every surface, so a link whose ends are on
+two machines is spelled by two addresses. _Avoid_: "channel name", "mesh address", "service
+name", "remote link" (retired).
 
-**Mesh peer**: another runtime on the same runtime mesh, whether or not it hosts a control
-plane. _Avoid_: "node" for a peer merely seen on the mesh (a node is reachable over its
-control plane).
+**Exposed port** _(crosses)_: an output a stream lets leave the machine, readable at its URL by
+peers and relays under the stream map. `expose` is the verb — in `setup` as the author's
+suggestion, at the CLI as the owner's decision. _Avoid_: "export", "publish", "endpoint".
+
+**Form** _(user)_: the shape an exposed port is served in — the URL's child chunk (`ndjson`,
+`png`, `ts`, `hls`, `whep`, `moq`, `page`). _Avoid_: "format" (a pixel format), "transport".
+
+**Relay** _(crosses)_: a runtime in the relay role — the same software, whose router other
+runtimes dial and whose URL browsers reach; a role, not a place. _Avoid_: "gateway", "tower",
+"router" unqualified (Zenoh's component inside it).
+
+**Mesh peer**: another runtime on the same runtime mesh. _Avoid_: "node" for a peer (a node is
+a step in a stream).
 
 **Capability extension**: an extension wheel's support code — declared by a standard entry
 point in its `pyproject.toml` that pip records and the engine runs once at startup, like
@@ -105,28 +133,55 @@ consumer's view of a payload. A cast type that claims its surface is also the
 tensor-protocol producer for that frame. _Avoid_: "typed bag", "frame object" (a cast
 type need not be a frame).
 
-**Control plane**: the HTTP/WebSocket/MCP surface a runtime hosts for observing,
-inspecting and changing the live graph of running nodes; the CLI is its client.
-Embedding happens by importing the wheel, never through the control plane. _Avoid_:
-"API server" as the concept (that is the component hosting it).
+**Local API** _(engine)_: the runtime's per-machine control surface over a local socket — for
+observing, inspecting and changing the live graphs of its streams — which the CLI, MCP hosts
+and an external control client call. Embedding happens by importing the runtime package, never
+through the local API. _Avoid_: "control plane" (retired), "API server" as the concept.
 
-**Processor catalog**: what a node reports it can add — every registered processor type
-with its description, config schema and ports — served over the control plane. _Avoid_:
-"registry" for the served view (the registry is the process-global table behind it).
+**Node catalog** _(user)_: what a runtime reports it can add — every registered node class
+with its description, config schema and ports — served over the local API. _Avoid_:
+"registry" for the served view (the registry is the process-global table behind it),
+"processor catalog" (retired).
 
-**Node**: a live runtime reachable over its control plane; discovered via the per-user
-on-disk registry. A runtime on the mesh without a control plane is a **mesh peer**, not a
-node. _Avoid_: "instance", "server".
+**Node** _(user)_: a step in a stream — the class a person writes (`@node` in Python,
+`#[node]` in Rust) and each placement of it under a name; "node instance" when the
+distinction matters, as for any class. The class is identified by its fully-qualified import
+path, so it must live in an importable, side-effect-safe module — a class defined in
+`stream.py` (`__main__:<Type>`) is a wiring error. A placed node is what a log line, a crash
+and a process id belong to. _Avoid_: "processor" on a user surface, "operator", "element",
+"stage", "step", "instance" alone; the live-runtime sense of "node" is retired.
 
-**Processor**: the unit of pipeline computation — a Python class (`@processor`) or a
-Rust type (`#[processor]`) — wired by ports. Its identity is the class itself, named by
-its fully-qualified import path, which requires the class to live in an importable,
-side-effect-safe module; a class defined in the entry file (`__main__:<Type>`) is a
-wiring error. _Avoid_: an authored `@org/package/Type` name.
+**Node reference** _(user)_: what `stream.add` hands back — a handle carrying the node's name
+and its `output()` / `input()` port references; the node itself exists once the stream runs.
+_Avoid_: "the instance" for the handle.
 
-**Display name**: an instance's human-facing label — passed at `add`, prefixing its log
-records, defaulting to the class's short name, and the processor's part of its address on
-the runtime mesh. Never an identity. _Avoid_: "processor name", "id".
+**Name** _(crosses)_: a node's or a stream's one-chunk address part — letters, digits, `-`,
+`_`, `.`; a node's defaults to its class's short name; never an identity. _Avoid_: "display
+name" (retired), "id", "label".
+
+**Graph** _(crosses)_: a stream's nodes, links and exposures as one JSON shape — what a
+stream's function compiles to, and what the runtime renders live; emitted, never authored. _Avoid_: "graph description", "stream
+description", "snapshot", "manifest", "pipeline file".
+
+**Processor** _(engine)_: the engine's word for a node — its trait, its id, its interpreter;
+kept in Rust identifiers until the rename. _Avoid_: on any user surface.
+
+**Processor interpreter** _(engine)_: the interpreter process the runtime execs from the
+stream's venv for one Python node. _Avoid_: "helper", "helper process", "worker", "child
+interpreter", "sandbox".
+
+**Runtime process** _(engine)_: the runtime's own OS process — engine, local API, built-ins;
+it hosts no Python node. _Avoid_: "app-process" (retired), "daemon".
+
+**Stream map** _(engine)_: the policy the runtime enforces on what leaves its machine — which
+ports may be linked from outside it, and by which authenticated peers; links to unexposed
+ports are refused. It is pushed to the runtime; by whom, and its other details, are OPEN.
+_Avoid_: "ACL", "firewall".
+
+**Control client** _(engine)_: an external component that plugs into the runtime through the
+pivot's extension point, for example to enrol a machine with a coordination service; the
+runtime runs complete without one, and how it plugs in is OPEN. _Avoid_: "connector",
+"sidecar", "agent".
 
 **Port**: a processor's named attachment point for a link. Declares name, description,
 and — on an input — delivery profile; never a type. _Avoid_: "channel" for the port
@@ -271,3 +326,14 @@ placement, so these name nothing. For the surviving in-that-process Rust senses
 Retired by the 2026-09-04 extension-model pivot (see `docs/decisions/extension-model.md`):
 **Integration package** — say **extension wheel**; and "built-in" as the default home for
 a first-party capability — a built-in is now the exception the criterion admits.
+
+Retired by the 2026-09-30 one-runtime-per-machine pivot (see
+`docs/decisions/one-runtime-per-machine.md`): **App** — say **stream**; **Node** in its
+live-runtime sense — say **runtime**; **Display name** — say **name**; **Runtime name** — a
+runtime is addressed by its **machine**; **Remote link** — a link spelled by two addresses;
+**Control plane** — say **local API**; **Processor catalog** — say **node catalog**; **Graph
+description** — say **graph**; "helper" and "helper process" — say **processor interpreter**;
+"processor" on a user surface — say **node**. **Host** stays retired: the pivot's sentences
+said "host" for what the glossary calls the **runtime**. The older entries that still use the
+retired words are facts about the shipped tree, read through the plan's reading rule until the
+rename change re-spells them.
