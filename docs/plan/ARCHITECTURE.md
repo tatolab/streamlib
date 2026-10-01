@@ -3946,6 +3946,20 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a Zenoh router that other runtimes dial and a fast translation of exposed ports into the
   forms browsers and tools want. Machines link peer to peer where they can reach each other,
   and through a relay where they cannot (owner, 2026-09-30). [one-runtime-per-machine]
+- **DECIDED** — The runtime bundles its own MoQ relay: `moq-relay-ietf`, the relay from the
+  repository the vendored `moq-transport` comes from, at the same draft. The runtime publishes
+  its exposed ports into it over loopback the way it publishes to a hosted relay today, and
+  browsers connect to the bundled relay, so a private network terminates MoQ with nothing
+  external and at no cost. The same bundled relay serves the relay-VM role behind a real
+  certificate. A hosted relay — Cloudflare's, or a self-hosted copy on a VM — is opt-in with
+  the user's own credentials, never a default and never a fallback. No MoQ server of
+  streamlib's own is written. `moq` is the first browser form; `whep` stays a client-side form
+  until a user proves the Safari-on-a-LAN gap bites; `hls` is the fallback every browser plays
+  (owner, 2026-09-30). Known: the server half of a session is already in the vendored crate;
+  the relay crate ships as a library and a binary; Safari accepts no self-signed certificate
+  hash, so on a bare LAN it needs a tailnet certificate or `hls`; the one maintained draft-16
+  browser player is young. To verify in the build: the relay crate linking against the
+  vendored `moq-transport`. [one-runtime-per-machine]
 - **DECIDED** — streamlib does not solve every networking problem. Reaching a machine behind
   NAT, a peer machine's identity, and encryption between machines are left to Tailscale, a VPN,
   or a relay the machine dials out to. streamlib owns what leaves a machine, streams as URLs,
@@ -4010,14 +4024,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   one namespace, `/<stream>/<node>/<port>/<form>`, every level listable, a relay prefixing
   `/<machine>/`, an unexposed port simply absent from it; the form a child segment (`ndjson`,
   `png`, `ts`, `hls`, `whep`, `moq`, `page`), never a query parameter; the first slice being
-  listing, `ndjson`, `png`, raw H.264 and MPEG-TS for ffmpeg, then fMP4 and HLS, then WebRTC
-  for browsers, MoQ last. Undecided: whether a stream's description is written by its author,
-  generated from the nodes' descriptions and a live sample, or both (it stays documentation,
-  never a contract at the port); certificates per reach tier (a token URL on loopback; a
-  short-lived self-minted certificate whose hash the page is given, on a LAN; Tailscale's
-  per-machine certificate on a tailnet; a real one at a relay); whether the MoQ server is
-  external (Cloudflare's open-source `moq-relay-ietf` shares the vendored client's crate line
-  and draft) or embedded; and whether end-to-end encryption through a relay is a launch
+  listing, `ndjson`, `png`, raw H.264 and MPEG-TS for ffmpeg, then fMP4 and HLS, then `moq`
+  through the bundled relay, `whep` a client-side form only. Undecided: whether a stream's
+  description is written by its author, generated from the nodes' descriptions and a live
+  sample, or both (it stays documentation, never a contract at the port); certificates per
+  reach tier (a token URL on loopback; a short-lived self-minted certificate whose hash the
+  page is given, on a LAN; Tailscale's per-machine certificate on a tailnet; a real one at a
+  relay); and whether end-to-end encryption through a relay is a launch
   requirement — if so, the runtime encrypts payloads itself with keys held on the team's
   devices, and every server-side form comes from the machine. Known: Tailscale Funnel carries
   no UDP, so MoQ and WebRTC media from a private node go over the tailnet directly or through

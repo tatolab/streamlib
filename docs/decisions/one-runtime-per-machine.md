@@ -97,6 +97,12 @@ The owner's later clarifications, the same day:
   runtimes, and the MoQ-gateway transport change is not happening.
 - **The relay is a role** of the same runtime software; machines link peer to peer where they
   can reach each other and through a relay where they cannot.
+- **The runtime bundles its own MoQ relay** (`moq-relay-ietf`, the relay from the repository
+  the vendored client comes from, at the same draft), publishing into it over loopback; a
+  private network terminates MoQ free and with nothing external; the same relay serves the
+  relay-VM role; hosted relays are opt-in with the user's own credentials. Owner, 2026-09-30,
+  after the research: no MoQ server of our own; a home lab must never cost anyone a hosted
+  relay by accident.
 - **streamlib does not solve every networking problem.** NAT, peer identity and wire
   encryption between machines are Tailscale's, a VPN's, or a relay's; streams as URLs, what
   leaves a machine, and many streams on one runtime are streamlib's.
@@ -151,8 +157,8 @@ that is the 2026-09-30 review's recommendation, kept apart from what the owner s
   authenticates.
 - Discovery: on one machine, on one network, across networks through a relay, and through a
   pushed map — the Tailscale analogy applied.
-- The URL grammar, the forms and their order, certificates per reach tier, where the MoQ server
-  lives, and whether end-to-end encryption through a relay is a launch requirement.
+- The URL grammar, the forms and their order, certificates per reach tier, and whether
+  end-to-end encryption through a relay is a launch requirement.
 - The local API's protocol, MCP reach, remote reach and the multi-user case.
 
 The owner's constraints on these: streams get their own compute; every stream is addressable
@@ -202,6 +208,11 @@ Checked against the tree on 2026-09-30:
 - **"Host" as the name of the per-machine program.** Retired once already, carried about
   ninety other senses in the plan (host-visible memory, host pointers, host identity, `--host`),
   and users never say it; "runtime" keeps every mesh term with one runtime per machine.
+- **A MoQ server of streamlib's own, or a WebTransport framing of our own instead of MoQ.**
+  The listener, the certificates and the browser player cost the same either way; our own
+  framing would re-invent groups, priorities and late-join and lose every relay and every
+  third-party player, and the server half of a MoQ session already exists in the vendored
+  crate. Bundling the relay from the same repository costs about a week and nothing to run.
 - **A separate accelerated distribution.** An extra cannot change the runtime's native module,
   and a second engine-linking distribution reverses "no process ever holds two streamlib
   engines" and the deleted bridge traits. Optional accelerators are a runtime property.
