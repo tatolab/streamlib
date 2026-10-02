@@ -21,7 +21,7 @@ ones it was told to keep, is addressed by its machine, and arrives from an insta
 spawn become per stream), the Python API's public contract (the builder's remote references), the
 wire (the mesh keys gain a chunk, the announcement a machine id) and the local API's tool set all
 move. The rationale is `docs/decisions/runtime-hosting.md` (#2580, #2600), which this PR extends
-with decision 1 and the assumptions' rejected alternatives once decided.
+with decision 1.
 
 **Precondition.** Every entry built is DECIDED: §Product `ARCHITECTURE.md:107-113` (required,
 installer-shipped), `:114-121` (who starts it), `:122-143` (loaded and kept; stop, start, rm; one
@@ -88,22 +88,15 @@ client. **Sequencing:** after #2592 and #2593 (native `tatolabd` and `tatolab`) 
 
 ---
 
-## [NEEDS DECISION] 1 — what happens to the `shutdown` tool
+## Decision 1 — RESOLVED: the runtime has no shutdown verb
 
-Today any caller of the local API can end the runtime. With one runtime holding many people's
-streams, that ends all of them; under the Linux service a clean exit stays down until the next
-login, and on a Mac until someone restarts the terminal. Neither Docker nor Tailscale has a client
-command that stops its daemon (`tailscale down` disconnects; `tailscaled` keeps running).
-
-- **(a) Retire it.** The `shutdown` tool and `POST /api/runtime/shutdown` go; `stop <stream>` is
-  how a client ends work. The runtime stops by its service manager (`systemctl --user stop`), the
-  app, or a signal in its terminal.
-- **(b) Keep it, machine-wide.** Any caller ends every stream; the service does not restart it.
-- **(c) Keep it as a restart.** The runtime exits and the service manager restarts it, re-loading
-  kept streams; attached ones end. On a Mac with no app, nothing restarts it.
-
-**Recommendation: (a).** It leaves no client able to end other people's streams, and the
-vocabulary still covers every stream action.
+Owner, 2026-10-02: "shutdown doesn't feel like it makes sense in this context" — the runtime stays
+on as `tailscaled` does; quitting the app (later) quits the app, never the runtime. So the
+`shutdown` tool, `POST /api/runtime/shutdown` and the runtime process's own Quit menu item (Apple's
+application menu, `E/apple/application_menu.rs:42`, which today ends every stream) are deleted;
+`stop <stream>` is how a client ends work. The runtime stops only by its service manager
+(`systemctl --user stop`) or a signal in the terminal that runs it. Options were (a) retire it,
+(b) keep it machine-wide, (c) keep it as a restart.
 
 ---
 
@@ -245,7 +238,7 @@ installer/homebrew/tatolab.rb          the formula, published to tatolab/homebre
   `:1434-1446` "persisted graphs" → the state directory. §Networking `:3588-3610` (session config
   from `machine.json`, flags, environment), `:3644-3691` (the runtime name superseded by the machine
   name), `:3765-3790` (the builder's address string; MCP ends). §Control plane `:4345-4398` (the
-  tools; `shutdown` per decision 1), `:4446-4466` (registry gone; the state directory beside the
+  tools; `shutdown` gone, decision 1), `:4446-4466` (registry gone; the state directory beside the
   runtime directory; logs moved). `docs/architecture/` and README's install and quickstart in the
   shipping tickets.
 
@@ -335,3 +328,7 @@ installer/homebrew/tatolab.rb          the formula, published to tatolab/homebre
 - REMOVED: to_runtime_name
 - REMOVED: --stream-graph
 - REMOVED: tatolab nodes
+- REMOVED: RUNTIME_SHUTDOWN_REQUESTED_STATUS
+- REMOVED: api/runtime/shutdown
+- REMOVED: call_shutdown
+- REMOVED: QuitMenuItemRequestsRuntimeShutdown
