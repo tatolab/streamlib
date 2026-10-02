@@ -7,7 +7,8 @@ The shared language. Terms only — zero implementation detail. Maintained by th
 in one PyO3 package. _Avoid_: "the binary" (pre-pivot), "the SDK" (that is its API
 surface). _Amended 2026-09-30 by the one-runtime-per-machine pivot: it becomes two
 distributions, a pure-Python stream package and a native runtime package; until the rename,
-"the wheel" names what ships today._
+"the wheel" names what ships today. Named 2026-10-01: the stream package is the `tatolab-stream`
+distribution (`tatolab.stream`), the runtime package is `tatolab.runtime`, lent by `tatolabd`._
 
 Register markers, since the 2026-09-30 pivot: _(user)_ is what a Tatolab user reads and
 types; _(engine)_ is what the runtime's code, the plan and the decision records say, and
@@ -63,7 +64,8 @@ processor or an extension. _Avoid_: "fabric" (retired for this term), "gateway",
 
 **Runtime** _(crosses)_: the one program per machine that runs streams — the engine, the
 accelerator when one is present, the transports, the local API; installed once, never
-constructed by a stream. Runtime mesh, mesh name and cross-runtime links keep their meaning
+constructed by a stream. Its program is `tatolabd`, as Tailscale's is `tailscaled`; the word
+users read stays "runtime". Runtime mesh, mesh name and cross-runtime links keep their meaning
 with one runtime per machine. _Avoid_: "host", "daemon", "server", "node", "engine" on a user
 surface (the engine is the library inside it).
 

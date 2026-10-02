@@ -251,7 +251,7 @@ step needs decided first, so that `/plan` and every session read one sequence. E
 2. **The local API** — align the local-API OPEN; the rip-out change comes off hold: control on a
    socket reachable only on its machine, the forms listener, how MCP hosts reach it.
 3. **Runtime hosting** — align several streams in one runtime process, how a stream is loaded and
-   kept, composition, and Apple permission under a service (research #2558, #2560 feed it): one
+   kept, composition, and Apple permission under a service (#2560 answered it; #2558 closed): one
    runtime loads many streams, `run` loads into it, attached and detached, the state directory and
    re-load after a crash, the `<machine>/` address segment. Milestone #58.
 4. **Per-stream environments** — align package independence (the lend), what the graph holds

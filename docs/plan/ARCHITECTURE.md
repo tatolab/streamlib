@@ -111,18 +111,22 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime; it loads a stream into the one that is running. pip distributes the pure-Python
   stream package and packs of nodes and streams, never the runtime. Owner, 2026-09-30: "treat
   it like Docker"; "pip is just for distributing the packaged streams". [one-runtime-per-machine]
-- **OPEN** — How a stream is loaded and kept. Direction (review, not decided): `run <stream>`
-  loads it attached — logs in the terminal, Ctrl-C unloads; `run -d` loads it detached and
-  persistent — the runtime records the graph, the project's venv path and the exposures in its
-  state directory and re-loads it on every restart until `stop` or `rm`; `streams` lists both;
-  `dev` is `run` with reload on edit; `up` runs a runtime in a terminal where no installer put
-  one, the pip-only fallback, and `down` stops it. Undecided: the verbs' final spelling, and
-  whether a runtime serves a machine or a user (on Apple it is per user, by the permission
-  model). Constraints (owner): streams get their own compute; every stream is addressable by
-  URL, somewhat in the manner of Plan 9; no second mode unless it solves a real problem; it
-  runs on very low-power devices; a stream that exposes devices stays long-running. Testing a
-  stream without a full runtime is separate work, deliberately outside this pivot (owner).
-  [one-runtime-per-machine]
+- **DECIDED** — How a stream is loaded and kept. `tatolab run <stream>` loads it attached — its
+  logs in the terminal, Ctrl-C unloads it; `tatolab run -d` loads it to keep — the runtime
+  records the graph its function compiled to at that load, the project's venv path and the
+  exposures in its state directory, and re-loads that recorded graph on every start until
+  `tatolab stop`, which unloads a stream and forgets it. Live edits are never recorded, so the
+  function wins on the next start, and picking up a changed source is another `run -d`;
+  `tatolab streams` lists both; `tatolab dev` is `run` reloading on edit. Where no installer
+  put a runtime, `tatolabd` runs in a terminal or as a container's entrypoint; there is no
+  `up` or `down`. One runtime per machine, owned by one user — whoever installed or started
+  it; another user's runtime on the same machine is refused at start naming the holder, and a
+  server or robot runs it as one service account. A shared, system-wide runtime is not built
+  until a real shared-machine need appears. Constraints kept (owner): streams get their own
+  compute; every stream is addressable by URL, somewhat in the manner of Plan 9; no second
+  mode unless it solves a real problem; it runs on very low-power devices; a stream that
+  exposes devices stays long-running. Testing a stream without a full runtime is separate
+  work, outside this pivot. Owner, 2026-10-01. [runtime-hosting; one-runtime-per-machine]
 - **DECIDED** — Several streams in one project or package: a stream is a decorated function,
   `@stream def camera_rig(stream: Stream)`, and a file or a package may define as many as it
   likes; the bare `setup(stream)` retires rather than living beside it, and a package may ship
@@ -131,13 +135,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
   there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one, a
   package declaring its streams under an entry-point group. [one-runtime-per-machine; stream-graph]
-- **OPEN** — Composition inside a stream. Direction (review, not decided): plain Python — a
-  function that takes the builder, adds nodes, connects them and returns port references is a
-  reusable fragment; the graph stays flat and addresses stay `<stream>/<node>/<port>`; a
-  `group` label per node in the graph lets an agent or an editor show the grouping. A nested
-  subgraph with its own exposed ports, ComfyUI's shape, is deferred until an editor or an agent
-  needs to see a fragment as one thing. Across streams, a link to another stream's exposed port
-  is the composition. [one-runtime-per-machine]
+- **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
+  adds nodes, connects them and returns port references is a reusable fragment. The graph
+  stays flat and addresses stay `<stream>/<node>/<port>`; no group label and no nested
+  subgraph is built until an editor or an agent needs to see a fragment as one thing. Across
+  streams, linking to another stream's port is the composition. Owner, 2026-10-01.
+  [runtime-hosting; one-runtime-per-machine]
 
 ## Packages & extension model — SHIPPED
 
@@ -283,7 +286,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   own CI lane — stubtest over its own `.pyi`, pyright, the portability gate — since the
   engine workspace's gates do not walk a non-member. A Rust-side extension SDK is not
   owed by the first two extensions, whose Rust handles bytes and no engine object; it
-  lands with the first extension that needs one. [extension-model; the naming clause reopened by one-runtime-per-machine]
+  lands with the first extension that needs one. [extension-model; the naming clause
+  superseded 2026-10-01 by tatolab-names: `tatolab-<name>` importing as `tatolab.<name>`]
 - **OPEN** — How an engine-grade capability an extension introduces — a specialised
   graphics pass, a device class — is reached by processors and by the engine. Undecided
   until an extension brings one: the first two register a name and bring up a network
@@ -520,10 +524,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **OPEN** — How an external control client plugs in: an entry point with a role of its own
   beside today's two, handed a door for pushing the stream map, router credentials and peer
   identity — or another seam. [one-runtime-per-machine]
-- **OPEN** — The remaining names under the namespace: the extensions' entry-point group,
-  distributions and imports, the CLI's command, and the Rust crate. Assumed until decided:
-  `tatolab-stream` importing as `tatolab.stream`, `tatolab-runtime` importing as
-  `tatolab.runtime`, and the CLI `tatolab`. [one-runtime-per-machine]
+- **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
+  `tatolab`; the desktop app is Tatolab (`Tatolab.app`); the installer ships all three as one
+  unit, and users still call the program "the runtime"; the bare name `tatolab` is the
+  product's and no pip distribution takes it. The one distribution pip installs to write
+  streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP 420 namespace
+  shared by Tatolab's own distributions only: `tatolab.stream`; `tatolab.runtime`, the native
+  portion `tatolabd` lends and no user installs; and optional first-party extensions, each
+  `tatolab-<name>` importing as `tatolab.<name>` (`tatolab-moq` → `tatolab.moq`). No
+  distribution ships `tatolab/__init__.py`. A third party's pack uses its own name, never the
+  `tatolab` namespace. Which built-ins, extensions and packs ship inside the app or through pip
+  is §Packages' packs OPEN. The extensions' entry-point group is `tatolab.extensions`, and the
+  Rust crate for writing streams is `tatolab-stream`. Owner, 2026-10-01. [tatolab-names;
+  one-runtime-per-machine]
 - **OPEN** — Packs, a registry, and loading a stream from a source. Direction (review, not
   decided; the owner wants to distribute what they build and update the app separately): the
   unit of distribution is a pack — one ordinary Python distribution carrying nodes and streams,
@@ -1339,17 +1352,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   nothing enumerates every possible device up front. The stream's environment is its project's
   venv path. Provisioning an environment is the packs OPEN in §Packages.
   [one-runtime-per-machine]
-- **OPEN** — Several streams in one runtime process: what must become per-stream before it
-  works. Known from the tree: the one global event topic (a second runtime today commits on
-  the other's graph change and stops on its shutdown); the processor registry keyed by import
-  path and filled at decoration; the interpreter captured once from `sys.executable`; one log
-  file named by runtime id; process-wide signal ownership and shutdown escalation; the
-  teardown watchdog that ends the process; the flat process-group table of processor
-  interpreters; and exactly one `GpuContext`, because two Vulkan devices in one process crash
-  on NVIDIA. Undecided: how streams are named and linked to each other; what one may reach of
-  another's ports and surfaces; how streams that need conflicting Python packages coexist (the
-  independence OPEN in §Packages); and whether surface sharing on Apple carries beyond a
-  stream's own processor interpreters. [one-runtime-per-machine]
+- **DECIDED** — Several streams in one runtime process. The runtime keeps, once for the
+  machine: the one `GpuContext` every stream shares, signal ownership, the Zenoh session, the
+  local API and the bundled relay. Everything else the tree keeps once per process today
+  becomes per stream: the event topic, the processor registry, the interpreter a stream's
+  nodes start from, the log file, shutdown and its escalation, the teardown watchdog, and the
+  process-group table of its processor interpreters — so one stream's shutdown, crash budget
+  or graph change never touches another's. A stream links to any port of another stream on
+  the same machine without exposing it, over the local transport, and surfaces are shared
+  across every stream's processor interpreters on both floors, all being the runtime's
+  children. Streams needing conflicting Python packages each start from their own venv (the
+  independence OPEN in §Packages). Owner, 2026-10-01. [runtime-hosting; one-runtime-per-machine]
 - **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
   admission control, and how a stream states what it needs. Direction (review, not decided):
   what a stream needs is read from its graph (the derived needs above) and granted per stream
@@ -3120,16 +3133,18 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   by the app's own project, the shader precedent — never discovered from
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
-- **OPEN** — Camera and microphone permission on Apple when something other than the user's
-  own application starts the runtime, such as the product's launch agent: which application
-  the permission is attributed to, and what a refusal names. Known: grants are per user and
-  credited to the process's GUI ancestor, so a runtime started from a terminal credits that
-  terminal until it restarts; an app bundle declares the device classes it may ever open —
-  usage strings for the camera, the microphone and the local network (multicast discovery
-  trips that prompt on recent macOS) and the hardened-runtime entitlements notarization
-  requires — once, as a fixed list, while the OS still prompts lazily per class at first use;
-  and only the runtime process opens devices, so only it needs the entitlements, never a
-  processor interpreter. [one-runtime-per-machine]
+- **DECIDED** — Camera, microphone and local-network permission on Apple. `tatolabd` ships
+  inside `Tatolab.app` as a launch agent the app registers with `SMAppService`, so macOS
+  credits the app — its prompts name Tatolab, and grants are per user and persist across
+  restarts and updates while the signing identity and bundle id hold. The app's `Info.plist`
+  carries the camera, microphone and local-network usage strings; the app and `tatolabd`
+  carry the hardened-runtime device entitlements; only the runtime process opens devices,
+  never a processor interpreter. The runtime checks authorization before opening a device and
+  refuses by name, because a denied microphone delivers silence, and discovery retries after
+  a local-network denial. A runtime started from a terminal credits that terminal — the
+  responsible code — and only Apple's Terminal is exempt from the local-network check. The
+  prompt's exact wording under `SMAppService` is an acceptance check of the installer change.
+  Owner, 2026-10-01, on #2560's research. [runtime-hosting; one-runtime-per-machine]
 
 ## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ stream-graph, local-api)
 
@@ -4461,8 +4476,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   2026-07-28. Agents
   hosted in a cloud, which can neither launch a command nor reach a machine's loopback, are
   not served by the local API. Owner, 2026-10-01. [local-api]
-- **OPEN** — The rest of the local API. Direction (review, not decided): `graph` returns the
-  runtime's streams, and `load`, `unload`, `streams` and `expose` join the graph-mutation
-  verbs, which stay; their spelling follows §Product's OPEN on how a stream is loaded and
-  kept. Whether the socket is one per machine or one per user follows the same OPEN's
-  machine-or-user question. [one-runtime-per-machine]
+- **DECIDED** — `graph` returns the runtime's streams, and the stream actions — load, load to
+  keep, unload, list, expose — join the graph-mutation verbs as tools, which stay; the change
+  that builds them spells them. One runtime per machine owned by one user (§Product) means
+  one socket per machine. Owner, 2026-10-01. [runtime-hosting; local-api]
