@@ -14,9 +14,9 @@ ones it was told to keep, is addressed by its machine, and arrives from an insta
   restart included; an attached one lives as long as its terminal command;
 - an address is `<machine>/<stream>/<node>/<port>`, right-anchored; the runtime name is gone; a
   machine name clash on the mesh takes the next unused `-2`, `-3`… once and keeps it;
-- the release attaches a runtime unit per platform. On Linux `curl | sh` installs it and registers
-  `tatolabd` as a systemd user service; on macOS a signed, notarised `Tatolab.app` carries it,
-  starts it if it is not running and offers the login item, as Docker Desktop does.
+- on Linux the release's runtime tarball installs by `curl | sh`, which registers `tatolabd` as a
+  systemd user service; on macOS a signed, notarised `Tatolab.app` carries the runtime, starts it
+  if it is not running and offers the login item, as Docker Desktop does.
 
 **Scale gate — this skill, plus the existing ADR.** The processor model (registries, shutdown and
 spawn become per stream), the Python API's public contract (the builder's remote references), the
@@ -29,8 +29,8 @@ installer-shipped), `:114-121` (who starts it), `:122-143` (loaded and kept; sto
 user), `:152-157` (composition, flat graph); §Processor model `:1389-1402` (graph is data, emitted),
 `:1403-1407` (environment beside the graph), `:1415-1425` (several streams, the split),
 `:1434-1446` (failure isolation, the state directory); §Media I/O `:3202-3213` (Apple: the app's
-agent, prompts named Tatolab — built here by decision 2); §Networking `:4018-4022` (the runtime decides what leaves), `:4052-4071` (the
-address and its collisions), `:4072-4079` (exposure); §Distribution `:4209-4219` (one version);
+agent, prompts named Tatolab — built here by decision 2); §Networking `:4018-4022` (the runtime
+decides what leaves), `:4052-4071` (the address and its collisions), `:4072-4079` (exposure); §Distribution `:4209-4219` (one version);
 §Control plane `:4399-4415` (the graph's words), `:4559-4567` (one socket), `:4580-4585` (`graph`
 and the stream tools). Not built against: needs `:1408-1414`, resources `:1428-1433`, accelerators
 optional `:1882-1892` (the GPU still initialises at start), packs `:578-597`, discovery `:4080-4096`,
@@ -82,21 +82,22 @@ client. **Sequencing:** after #2592 and #2593 (native `tatolabd` and `tatolab`) 
 ## Decision 1 — RESOLVED: the runtime has no shutdown verb
 
 Owner, 2026-10-02: "shutdown doesn't feel like it makes sense in this context" — the runtime stays
-on as `tailscaled` does; quitting the app (later) quits the app, never the runtime. So the
+on as `tailscaled` does; quitting the app quits the app, never the runtime. So the
 `shutdown` tool, `POST /api/runtime/shutdown` and the runtime process's own Quit menu item (Apple's
 application menu, `E/apple/application_menu.rs:42`, which today ends every stream) are deleted;
-`stop <stream>` is how a client ends work. The runtime stops only by its service manager
-(`systemctl --user stop`) or a signal in the terminal that runs it. Options were (a) retire it,
+`stop <stream>` is how a client ends work. The runtime stops only as a service does —
+`systemctl --user stop` on Linux, the app's runtime switch on macOS — or by a signal in the
+terminal that runs it. Options were (a) retire it,
 (b) keep it machine-wide, (c) keep it as a restart.
 
 ## Decision 2 — RESOLVED (a): a minimal `Tatolab.app` ships in this change
 
 Owner, 2026-10-02: on a Mac "most people would open the app and it starts the service if not
 started just like docker as well as set up a login item if allowed"; the owner holds the Apple
-Developer ID. Options were (a) the app now, (b) a terminal until step 10. This amends §Product
-`:114-121`'s "until the app ships, `tatolabd` runs in a terminal there" — the terminal stays a
-developer's path, crediting the terminal — and builds §Media I/O `:3202-3213` here. Step 10 grows
-the same app; nothing here is rebuilt there.
+Developer ID. Options were (a) the app now, (b) a terminal until step 10. §Product `:114-121`
+holds as written — the app simply ships now, and the terminal stays a developer's path, crediting
+the terminal; §Media I/O `:3202-3213` is built here. Step 10 grows the same app; nothing here is
+rebuilt there.
 
 ---
 
@@ -131,7 +132,8 @@ apps/tatolab-macos/                    Tatolab.app: a menu-bar app carrying the 
   `RuntimeContext` sharing the engine's GPU, node and tokio handle whose `runtime_ops` is the
   stream. Events carry their stream: the topic is per stream, so a listener hears only its own
   stream's graph change and shutdown. The registry: built-ins once for the machine; Python
-  descriptors per stream, described in that stream's interpreter (step 3's describe). The
+  descriptors per stream, described in that stream's interpreter (step 3's describe); the node
+  catalog lists the built-ins and, per stream, its described types. The
   interpreter, project and working directory are the stream's environment. Logs: one subscriber
   for the process, records routed by stream to that stream's file. Shutdown: a per-stream funnel
   and escalation; the machine's ladder walks every stream at once. The teardown watchdog is per
@@ -151,9 +153,9 @@ apps/tatolab-macos/                    Tatolab.app: a menu-bar app carrying the 
   resolve the machine name (§Networking below); join the mesh; serve the local API at
   `<runtime dir>/local-api.sock`; re-load every kept, not-stopped stream. A kept stream whose
   project or interpreter is gone is reported by name and kept, never deleted. It never detaches.
-  On macOS it finds its Vulkan loader and MoltenVK manifest relative to its executable, in the
-  lend, and names the manifest in `VK_ADD_DRIVER_FILES` before the first instance, unless the user
-  chose drivers.
+  On macOS it searches the lend's Vulkan loader first, relative to its executable — a hardened
+  binary refuses another team's loader — and names the lend's MoltenVK manifest in
+  `VK_ADD_DRIVER_FILES` before the first instance, unless the user chose drivers.
 - **The machine lock** is `/tmp/tatolab-runtime.lock`, `flock`ed for life, holding the owner's uid
   and pid. A second `tatolabd` — another user's or the same user's — is refused naming the holder.
   A CLI that finds no socket but a held lock says whose runtime this machine runs.
@@ -163,7 +165,8 @@ apps/tatolab-macos/                    Tatolab.app: a menu-bar app carrying the 
   graph compiled at its load, the environment, `stopped`, the owner's exposure rulings) and
   `logs/` (one JSONL per stream per load, and the runtime's own). Logs leave the project's
   `.streamlib/`; its shader cache stays.
-- **Loading.** `run_stream {project_directory, stream, name, keep}`: the runtime finds
+- **Loading.** `run_stream {project_directory, stream_function, name, keep}` — `stream_function`
+  as `run` takes it (`stream.py:main`, or none for the sole one): the runtime finds
   `<project>/.venv/bin/python` (absent → refused, pointing at `uv sync`), runs `tatolab.stream`'s
   compile entry in it — compiling stays in the project's interpreter, never the runtime process —
   describes the Python types, and loads. A name already loaded is refused naming the project it
@@ -234,7 +237,8 @@ apps/tatolab-macos/                    Tatolab.app: a menu-bar app carrying the 
   `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit). Opening the app registers and
   starts the agent when it is not running and offers it as a login item when the user allows;
   the menu shows whether the runtime is up and how many streams it holds (`list_streams`),
-  toggles start at login, and Quit quits the app, never the runtime (decision 1). On first launch
+  toggles start at login, and a runtime switch whose off unregisters the agent and stops it — as
+  `systemctl --user disable --now` does; Quit quits the app, never the runtime. On first launch
   it links `tatolab` into `/usr/local/bin` behind the administrator prompt, or says where it is.
   The camera, microphone and local-network usage strings sit in its `Info.plist`; the app and
   `tatolabd` carry the hardened-runtime device entitlements; every Mach-O in the bundle, the lend
@@ -245,24 +249,22 @@ apps/tatolab-macos/                    Tatolab.app: a menu-bar app carrying the 
 ## MODIFIED: records re-spelled at the fold
 
 - §Product `:122-143` gains the verbs' tools; §Processor model `:1415-1425` the per-stream table;
-  `:1434-1446` "persisted graphs" → the state directory; `:114-121` per decision 2. §Networking `:3588-3610` (session config
-  from `machine.json`, flags, environment), `:3644-3691` (the runtime name superseded by the machine
+  `:1434-1446` "persisted graphs" → the state directory. §Networking `:3588-3610` (session
+  config from `machine.json`, flags, environment), `:3644-3691` (the runtime name superseded by the machine
   name), `:3765-3790` (the builder's address string; MCP ends). §Control plane `:4345-4398` (the
   tools; `shutdown` gone, decision 1), `:4446-4466` (registry gone; the state directory beside the
-  runtime directory; logs moved). `docs/architecture/` and README's install and quickstart in the
+  runtime directory; logs moved). `docs/decisions/one-runtime-per-machine.md`'s steps 4 and 10:
+  the minimal app moves to step 4. `docs/architecture/` and README's install and quickstart in the
   shipping tickets.
 
 ## Inventory — what the old shape leaves, and the slice that ends it
 
 | Old shape | Ends | Slice |
 |---|---|---|
-| `PUBSUB`'s id-less runtime events, `RUNTIME_GLOBAL` | per-stream topic | S1 |
-| `PROCESSOR_REGISTRY` per process; the global shutdown funnel and escalation; the watchdog's process end; `REGISTERED_HELPER_PROCESS_GROUP_IDS`; `APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST`; first-wins logging | per stream, or deleted | S1 |
-| `GpuContext` per `start()`; one surface service per `Runner` | once per engine | S1 |
-| The `ApiServer` processor, `control_plane_host.rs`, `AppState`'s one `RuntimeOperations` | the engine hosts the local API | S1 |
+| `PUBSUB`'s id-less events, `RUNTIME_GLOBAL`; `PROCESSOR_REGISTRY` per process; the global shutdown funnel and escalation; the watchdog's process end; `REGISTERED_HELPER_PROCESS_GROUP_IDS`; `APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST`; first-wins logging | per stream, or deleted | S1 |
+| `GpuContext` per `start()`; a surface service per `Runner`; the `ApiServer` processor, `control_plane_host.rs`, `AppState`'s one `RuntimeOperations` | once per engine, which hosts the local API | S1 |
 | `tatolabd --stream-graph --project --interpreter`; the CLI's own compile and spawn (#2592) | `run_stream`, the held connection | S2 |
-| `node_registry.rs`, `nodes`, `--node`, `local-api-<runtime_id>.sock` | one fixed socket | S2 |
-| Logs under `.streamlib/logs` | the state directory | S2 |
+| `node_registry.rs`, `nodes`, `--node`, `local-api-<runtime_id>.sock`; logs under `.streamlib/logs` | one fixed socket; the state directory | S2 |
 | `runtime_name.rs`, `STREAMLIB_RUNTIME_NAME`, `--runtime-name`, the default from the app directory, `duplicate_runtime_name_on_the_mesh.rs` | `machine_name.rs`, `machine.json` | S3 |
 | Three-part `MeshPortAddress`, every `@runtime` key, `*_runtime_name` in `graph`, MCP, link requests, ingress and egress; `remote_output(runtime_name, node, port)` | four parts, right-anchored | S3 |
 | `meshlink-` ingress per reader | one per machine | S3 |
@@ -279,7 +281,6 @@ apps/tatolab-macos/                    Tatolab.app: a menu-bar app carrying the 
 | `run <url-or-zip>`; registries | packs OPEN | step 7 |
 | The relay role; the URL forms | their OPENs | steps 8 and 9 |
 | A Linux aarch64 unit (Jetson, robots) | no aarch64 Linux build exists | its own change |
-| A shared, system-wide runtime | not built until needed (`:122-143`) | — |
 
 ## Assumptions stated, not asked
 
@@ -294,7 +295,6 @@ apps/tatolab-macos/                    Tatolab.app: a menu-bar app carrying the 
   `tatolabd --machine-root <dir>`, which moves lock, state and runtime directories under `<dir>`,
   as `dockerd --data-root --exec-root` does; where it bites: a forgotten flag in a test hits the
   machine lock, refused by name.
-- **The state directory and the lock path** follow XDG and Apple conventions.
 - **The machine id** is random and per state directory, not `/etc/machine-id`, so a container is
   its own machine.
 - **`machine.json` settings apply at the next start**; changing a machine's name renames every
