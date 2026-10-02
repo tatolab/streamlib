@@ -48,13 +48,16 @@ extension-model pivot, not the default home for a first-party capability: a new 
 must meet the criterion in §Packages & extension model — a deadline the interpreter hop cannot
 meet, an engine-only primitive, or an OS-facing device the wheel must present to other
 applications, and a named consumer. _Avoid_: "built-in" for an optional capability (that is an
-**extension wheel**).
+**extension wheel**). _Amended by package-split-and-lend: built-ins ship inside the runtime,
+never on pip, and `tatolab.stream` carries a class generated for each._
 
 **Extension wheel**: a separate PyPI package — Rust inside for speed, a Python processor as
 the binding — that depends on the `streamlib` wheel as a binary and never builds it from
 source. First-party optional capabilities and third-party native code both ship this way.
 _Avoid_: "plugin" (pre-pivot ABI), "integration package" (retired), "built-in" (inside the
-wheel).
+wheel). _Amended by tatolab-names and package-split-and-lend: `tatolab-<name>` importing as
+`tatolab.<name>`, depending on `tatolab-stream`; its nodes run in processor interpreters where
+`tatolab.runtime` is lent._
 
 **Processor extension**: an extension wheel's Python processor class whose per-frame work
 runs in native code the same wheel carries and which it calls directly; `stream.add(TheClass)`
@@ -62,7 +65,9 @@ is its registration and it runs in its own processor interpreter like any Python
 
 **Support hook**: the one callable a capability extension exports (`load(host)`) that the
 engine runs once in every process taking an engine role. _Avoid_: "plugin init",
-"entry point" for the callable (that is how it is declared, not what it is).
+"entry point" for the callable (that is how it is declared, not what it is). _Deleted by
+package-split-and-lend (its decision 2): no package extends the engine; the entry retires when
+that change ships._
 
 **Edge I/O processor**: a source or sink processor that ingests or egresses an
 external-world stream at a runtime boundary — WebRTC, MoQ, raw UDP. Not the runtime mesh.
@@ -115,7 +120,9 @@ point in its `pyproject.toml` that pip records and the engine runs once at start
 loading a driver — which may bring up a device or network stack, or introduce an
 engine-grade capability the engine does not provide (graphics processing, a transport, a
 device class; the Unreal-module shape). Sandboxed so two packages cannot unsafely alter
-engine features; extends rather than rewrites. _Avoid_: "plugin" unqualified.
+engine features; extends rather than rewrites. _Avoid_: "plugin" unqualified. _Deleted by
+package-split-and-lend (its decision 2): a package sets itself up where its nodes run, and an
+engine-grade capability enters as a built-in; the entry retires when that change ships._
 
 **Codec block**: one of the seven codec built-ins that shipped — encoder, decoder, or
 muxer inside the wheel (`H264Encoder`, `Mp4Sink`, ...), configured like any built-in; its
@@ -134,10 +141,14 @@ in-process hosting of a Python processor does not exist. Native built-ins runnin
 the app process ("app-process" code) are not a placement decision. _Avoid_:
 "in-process placement", "both placements", "placement policy", "placement heuristic",
 "transparent move".
+_Amended by package-split-and-lend: the exec is the stream's own venv interpreter, with the
+runtime's lend directory first on `PYTHONPATH`._
 
 **App-process**: the process that runs the entry file, the engine, the control plane,
 and the native built-ins — and hosts no Python processor. Use this word for the
-legitimate in-that-process senses so "in-process" stops doing double duty.
+legitimate in-that-process senses so "in-process" stops doing double duty. _Amended by
+one-runtime-per-machine: the pivot's word is **runtime process**; this one names the shipped
+tree until the rename re-spells it._
 
 **Bag**: the self-describing msgpack named map a link carries — the schema-free view of
 a payload; consumers cast it to a type at read time. _Avoid_: "message", "envelope".

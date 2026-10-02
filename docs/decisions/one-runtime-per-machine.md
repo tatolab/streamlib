@@ -136,26 +136,33 @@ The owner's later clarifications, the same day:
 
 ## Open
 
-Each is an OPEN entry in the plan. Where the plan records a *direction (review, not decided)*,
-that is the 2026-09-30 review's recommendation, kept apart from what the owner said.
+Each was an OPEN entry in the plan when this record was written. Where the plan records a
+*direction (review, not decided)*, that is the 2026-09-30 review's recommendation, kept apart
+from what the owner said. A struck item has since been decided, and the plan holds it as DECIDED.
 
-- How a stream is loaded and kept: attached or detached, persistent across runtime restarts,
-  and the verbs.
-- Composition inside a stream, and how `run` selects among several streams.
+- ~~How a stream is loaded and kept: attached or detached, persistent across runtime restarts,
+  and the verbs.~~ — Decided 2026-10-01 (runtime-hosting, #2580).
+- ~~Composition inside a stream, and how `run` selects among several streams.~~ — Composition
+  decided 2026-10-01 (#2580); `run`'s selection resolved by stream-graph's decision 1 (#2563),
+  folded into the plan when that change ships.
 - Packs, a registry, and loading a stream from a URL or a zip, with environments provisioned
   by the standard toolchain only.
-- How the stream package and the runtime package stay independent, and how the runtime and a
-  stream's processor interpreters agree on a build.
+- ~~How the stream package and the runtime package stay independent, and how the runtime and a
+  stream's processor interpreters agree on a build.~~ — Decided 2026-10-02
+  (package-split-and-lend, #2583).
 - How an external control client plugs in.
-- The remaining names: distributions, imports, the CLI command, the Rust crate, the extensions'
-  entry-point group.
+- ~~The remaining names: distributions, imports, the CLI command, the Rust crate, the extensions'
+  entry-point group.~~ — Decided 2026-10-01 (tatolab-names, #2580); the entry-point group goes
+  with the capability-extension hook (package-split-and-lend's decision 2, #2584).
 - What the graph holds beyond nodes, links and exposures — needs derived from the nodes, the
-  environment.
-- Several streams in one runtime process: what must stop being process-wide, and how streams
-  reach each other.
+  environment. The environment was decided 2026-10-02 (#2583: recorded beside the graph, never
+  in it); needs stay open.
+- ~~Several streams in one runtime process: what must stop being process-wide, and how streams
+  reach each other.~~ — Decided 2026-10-01 (runtime-hosting, #2580).
 - Resources across streams.
 - What optional accelerators mean for the engine.
-- Camera and microphone permission on Apple when the product starts the runtime.
+- ~~Camera and microphone permission on Apple when the product starts the runtime.~~ — Decided
+  2026-10-01 (#2580, on #2560's research).
 - The collision rules behind the address: machine names unique per mesh, stream names per
   machine, typed node names refused when duplicated.
 - The stream map's details: who pushes it, how long it stays valid offline, how a peer
@@ -163,7 +170,8 @@ that is the 2026-09-30 review's recommendation, kept apart from what the owner s
 - Discovery: on one machine, on one network, across networks through a relay, and through a
   pushed map — the Tailscale analogy applied.
 - The URL grammar, the forms and their order, and certificates per reach tier.
-- The local API's protocol, MCP reach, remote reach and the multi-user case.
+- ~~The local API's protocol, MCP reach, remote reach and the multi-user case.~~ — Decided
+  2026-10-01 (local-api, #2570; one runtime per machine owned by one user, #2580).
 
 The owner's constraints on these: streams get their own compute; every stream is addressable
 by URL, somewhat in the manner of Plan 9; no second mode unless it solves a real problem; it
@@ -230,8 +238,12 @@ Checked against the tree on 2026-09-30:
 ## Consequences
 
 - **No change proposal builds against an OPEN entry** until it is decided.
-- **The rename follows sentence 5** and comes last; the exact names are OPEN, with
-  `tatolab-stream` and `tatolab-runtime` the stated assumption.
+- > ~~**The rename follows sentence 5** and comes last; the exact names are OPEN, with
+  > `tatolab-stream` and `tatolab-runtime` the stated assumption.~~ — Superseded 2026-10-01 by
+  > tatolab-names (#2580) and the reorder (#2582). The names are decided: `tatolab-stream`
+  > imports as `tatolab.stream`, and `tatolab.runtime` is lent by `tatolabd`, never a pip
+  > distribution. The Python rename is step 3, the package split; the remaining Rust names come
+  > with the app, step 10.
 - **Older entries are read through the plan's reading rule** until the rename change re-spells
   them; the records annotated in place change only where a confirmed sentence changes them.
 - > ~~**The rip-out change** (`docs/plan/changes/one-runtime-per-machine-ripout.md`) is on hold

@@ -1,8 +1,8 @@
 # Runtime hosting: one runtime per machine, owned by one user
 
 Rationale for the `[runtime-hosting]` entries in `docs/plan/ARCHITECTURE.md` (§Product, §Processor
-model & scheduling, §Media I/O, §Control plane & observability), decided 2026-10-01 — step 3 of the
-one-runtime-per-machine pivot.
+model & scheduling, §Media I/O, §Control plane & observability), decided 2026-10-01 as step 3 of the
+one-runtime-per-machine pivot — step 4 since the reorder the same day (#2582).
 
 ## Trigger
 

@@ -43,3 +43,5 @@ place it reads as pending work forever, and `/ship-change` has nothing to fold.
   retired 2026-08-24 (owner). It packaged a standalone binary; the shipped artifact is
   the PyO3 wheel served from a repo-hosted PEP 503 simple index, which is §Distribution
   plan text, SHIPPED #1691, #1692, #1694, #1711.
+- **`one-runtime-per-machine-ripout.md`** — not retired but rewritten: on 2026-10-01 it became
+  `local-api.md` (#2571), once the local-API align (#2570) settled both of its decision blocks.
