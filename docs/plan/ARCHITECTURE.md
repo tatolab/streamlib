@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend)
+## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
@@ -717,7 +717,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ stream-graph, package-split-and-lend)
+## Processor model & scheduling — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -3212,7 +3212,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   prompt's exact wording under `SMAppService` is an acceptance check of the installer change.
   Owner, 2026-10-01, on #2560's research. [runtime-hosting; one-runtime-per-machine]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ stream-graph, local-api)
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ stream-graph, local-api, runtime-hosting)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -4194,7 +4194,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sighup_tears_the_graph_down_gracefully -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
-## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend)
+## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend, runtime-hosting)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
 
 - **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
@@ -4325,7 +4325,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   custom module system is needed. [one-runtime-per-machine; the two packages and the lend
   decided 2026-10-02 — package-split-and-lend, §Packages]
 
-## Control plane & observability — IN-FLIGHT (→ local-api, stream-graph)
+## Control plane & observability — IN-FLIGHT (→ local-api, stream-graph, runtime-hosting)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
