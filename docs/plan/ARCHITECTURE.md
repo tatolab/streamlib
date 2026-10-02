@@ -291,7 +291,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   lands with the first extension that needs one. [extension-model; the naming clause
   superseded 2026-10-01 by tatolab-names: `tatolab-<name>` importing as `tatolab.<name>`; the
   dependency clause amended by package-split-and-lend: an extension depends on
-  `tatolab-stream`, and its nodes run in processor interpreters where `tatolab.runtime` is lent]
+  `tatolab-stream`, and its nodes run in processor interpreters where `tatolab.runtime` is lent;
+  the versioning clause amended by package-split-and-lend: while released from this repository
+  an extension carries Tatolab's one version number (§Distribution & versioning)]
 - **OPEN** — How an engine-grade capability an extension introduces — a specialised
   graphics pass, a device class — is reached by processors and by the engine. Undecided
   until an extension brings one: the first two register a name and bring up a network
@@ -548,6 +550,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   is §Packages' packs OPEN. The extensions' entry-point group is `tatolab.extensions`, and the
   Rust crate for writing streams is `tatolab-stream`. Owner, 2026-10-01. [tatolab-names;
   one-runtime-per-machine]
+- **DECIDED** — No public Python name Tatolab publishes says "processor". The move from
+  `streamlib` to `tatolab.*` re-spells every one still standing, at once:
+  `ProcessorOwnedWindow` → `NodeOwnedWindow`, `ProcessorOwnedWindowEvents` →
+  `NodeOwnedWindowEvents`, `ProcessorOutputTextureRing` → `NodeOutputTextureRing` (its module
+  `node_output_texture_ring`), `ProcessorLinkDataAccess` → `NodeLinkDataAccess`, the GPU
+  capabilities' `acquire_texture_from_processor_output_pool` and
+  `acquire_storage_buffer_from_processor_output_pool` → `…_from_node_output_pool`, and the
+  contexts' `processor_id` → `node_id`, the id `graph` renders on the node. A name an earlier
+  change deletes is deleted, never renamed. The engine's Rust identifiers and the wire keep
+  "processor" until the rename step. Owner, 2026-10-02. [tatolab-names; package-split-and-lend]
 - **OPEN** — Packs, a registry, and loading a stream from a source. Direction (review, not
   decided; the owner wants to distribute what they build and update the app separately): the
   unit of distribution is a pack — one ordinary Python distribution carrying nodes and streams,
@@ -1298,11 +1310,22 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   untouched: it is a compile-time guarantee about who may mint an in-process
   `RuntimeContextFullAccess`, never a placement question.
   [processor-class-identity — SHIPPED #1837, #1839, #1840, #1841; `__main__` clause
-  reversed by helper-process-placement-only]
+  reversed by helper-process-placement-only; amended by built-in-node-type: a built-in is
+  named by its class's import path in `tatolab.stream`, never by its Rust type path]
   <!-- verify: cargo test -p streamlib-engine --test processor_class_import_path_test -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_identity.py::test_the_launch_arrangement_never_changes_the_identity -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_identity.py::test_a_processor_declared_in_the_entry_file_is_refused -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-12-processor-class-identity.md -->
+- **DECIDED** — A built-in node's type is the import path of its class in `tatolab.stream` —
+  `tatolab.stream:CameraSource` — the same string in the runtime's registry, on the stream
+  library's class, in every graph and over the local API, from Python and from Rust alike. The
+  runtime registers each built-in under that string; no table translates it to another name,
+  and a built-in's Rust module path never reaches a graph. Every node's type is thus the
+  import path of the class a stream names: a type under `tatolab.stream` is one of the
+  runtime's built-ins, and any other is imported in the stream's own interpreter. A type
+  changes only when its class's public name does — renaming or moving the runtime's crates
+  and modules never changes one — and the first golden graph a runtime is held to already
+  carries it. Owner, 2026-10-02. [built-in-node-type; package-split-and-lend]
 - **DECIDED** — A Python processor class registers its descriptor — identity,
   description, ports, config schema — when `@processor` runs, so it is in the processor
   catalog before its first add; the constructor arrives at first add exactly as today.
@@ -1770,7 +1793,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the compute path's entry scope does, so it waits on the one queue for a display's in-flight
   compose of that slot. Owner, 2026-09-22, over a wheel ring asking a "still held?" op per
   rotation, which would be a second system deciding slot reuse.
-  [engine-steps — SHIPPED #2427, #2429, #2503; the draw barrier — SHIPPED #2546]
+  [engine-steps — SHIPPED #2427, #2429, #2503; the draw barrier — SHIPPED #2546; amended by
+  tatolab-names: on the Python surface the two acquire methods become
+  `…_from_node_output_pool` and the ring `NodeOutputTextureRing` (§Packages, no public Python
+  name says "processor")]
   <!-- verify: cargo test -p streamlib-engine every_slot_held_grows_the_pool_until_its_cap_then_refuses_by_name -->
   <!-- verify: cargo test -p streamlib-engine a_slot_a_consumer_has_checked_out_is_skipped_until_released -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds -->
@@ -3386,7 +3412,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `release-please-config.json` carries a package entry per wheel (independent versions and
   tags); the release workflow builds and attaches each wheel on its own tag;
   `build_simple_index.py` is multi-project — a set of published names, one PEP 503 directory
-  each — with its tests. [networking-extension-wheels — SHIPPED #2152]
+  each — with its tests. [networking-extension-wheels — SHIPPED #2152; the independent
+  versions and tags amended by package-split-and-lend: one version for everything released
+  from this repository (§Distribution & versioning)]
 - **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by each wheel:
   the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
   cases), SDP offer construction and answer parsing, MoQ catalog and object encoding, and
@@ -3735,7 +3763,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `link_request_id` alone to cancel a request still waiting. A runtime name equal to one's own
   is a local reference, resolved by display name.
   [cross-runtime-links — SHIPPED #2292 for the Rust address and #2287 for the Python and MCP
-  spellings; the `to_*` pair with #2289; reopened by one-runtime-per-machine: whether addresses gain a stream level]
+  spellings; the `to_*` pair with #2289; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by local-api: each end is `<end>_node` and `<end>_port`, with `<end>_runtime_name` for a port on another runtime — a node by its name, never its id (§Control plane, the local API speaks the graph's words)]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_names_a_source_on_another_runtime_by_its_mesh_address -->
@@ -3954,7 +3982,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   node has not had applied, each `awaiting_runtime` while its runtime is absent, `unanswered`
   while it is not replying, or `refused` with that runtime's own words.
   [runtime-mesh — SHIPPED #2283, #2285; the link shape and the two request keys —
-  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by local-api: peers and the `nodes` table drop `control_plane_urls`]
+  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by local-api: peers and the `nodes` table drop `control_plane_urls`; a link end renders `{node, port}` or `{runtime_name, node, port}`, and an egress port `{node, port, reader_runtime_names}` (§Control plane, the local API speaks the graph's words)]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_port_another_runtime_reads_renders_with_the_runtimes_reading_it -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is -->
@@ -4153,8 +4181,19 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   publication waits for the project rename; the artifact is identical either way.
   Positioning is "realtime engine, Python authoring" — the Rust engine is named as
   material; never marketed as "a Python library" even though the shape is one.
-  [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; amended by one-runtime-per-machine: two distributions, a stream package and a runtime package; the crate name and versioning are OPEN]
+  [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; amended by one-runtime-per-machine: two distributions, a stream package and a runtime package; the crate name settled by tatolab-names (`tatolab-stream`) and the versioning by package-split-and-lend (the entry below)]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_pins_streamlib_to_its_own_index -->
+- **DECIDED** — One version number for everything Tatolab releases from this repository:
+  `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
+  ships — `tatolabd`, the `tatolab` CLI, the desktop app and `tatolab.runtime` — and the
+  first-party extensions (`tatolab-moq`, `tatolab-webrtc`) carry one version and are released
+  together, every piece at every release, whether or not it changed. An extension still depends
+  on `tatolab-stream` by a minimum version, as a third party's package does, and an extension
+  that leaves this repository takes its own number. The number is for people, never a
+  dependency of a stream: nothing in a stream, its `pyproject.toml` or its graph names a
+  runtime version, and nothing compares versions to admit a stream. A runtime at least as new
+  as a stream's `tatolab-stream` runs it; an older one refuses what it lacks by name, and the
+  refusal names the runtime's own version. Owner, 2026-10-02. [package-split-and-lend]
 - **DECIDED** — Wheel portability model: what the host may supply is stated per platform,
   and nothing else is linked. On Linux, system libraries (Vulkan loader, window system,
   libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape.
@@ -4263,7 +4302,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   custom module system is needed. [one-runtime-per-machine; the two packages and the lend
   decided 2026-10-02 — package-split-and-lend, §Packages]
 
-## Control plane & observability — IN-FLIGHT (→ local-api)
+## Control plane & observability — IN-FLIGHT (→ local-api, stream-graph)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
@@ -4326,13 +4365,31 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   local-transport-hardening — SHIPPED #2263, #2265 made the late-joiner sizing clause true
   in the tree and gave a helper's link the `pending` state the instructions now explain;
   cross-runtime-links — SHIPPED #2287, #2289 for the mesh arguments and the states the
-  instructions explain; reopened by one-runtime-per-machine: the local API]
+  instructions explain; reopened by one-runtime-per-machine: the local API; amended by
+  local-api: the tools, resources and prompts speak the graph's words (the entry below)]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
   <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_processor_catalog_and_the_live_graph -->
   <!-- verify: cargo test -p streamlib-api-server every_step_of_every_prompt_calls_a_tool_the_node_serves -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth -->
+- **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
+  renders the same thing, and no tool, result, resource or prompt says "processor" or "display
+  name". `graph` renders a node's `name`, and each link end as `{node, port}`, or
+  `{runtime_name, node, port}` for a port on another runtime, with no `processor_id` beside
+  it; `mesh.egress_ports` entries are `{node, port, reader_runtime_names}`. The graph-mutation
+  tools are `add_node(type, config, name)`, answering the name the node received;
+  `remove_node(name)`; `connect`, each end given as `<end>_node` and `<end>_port`, with
+  `<end>_runtime_name` for a port on another runtime; and `disconnect` as it stands. Every tool
+  addresses a node by its name within its stream, never by an id; `graph` still renders a
+  node's `id` as a live key. While a runtime holds one stream, the name alone is the node; once
+  one runtime hosts several, every tool that names or adds a node also names its stream, as the
+  address does, spelled with the stream actions by the change that builds them. `tap`'s channel is `<runtime_name>/<node>/<port>`; the catalog resource is
+  `node-catalog`, listing `nodes`, each under the `type` `add_node` takes; the instructions and
+  the prompts say node — `insert_node_between_linked_nodes` among them. `runtime_name` stays
+  until one runtime hosts several streams and the address gains its machine and stream. The
+  engine's Rust identifiers keep "processor" until the rename. It ships with the graph's one
+  shape. Owner, 2026-10-02. [local-api; stream-graph]
 - **DECIDED** — ~~`dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so

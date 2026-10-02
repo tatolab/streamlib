@@ -117,6 +117,11 @@ would build one: its own workspace root, its own lockfile, a dependency on the p
 and it needs its own CI lane and its own stub gate — is the cost every third party already
 pays, and paying it first-party is how those lanes get built.
 
+> ~~Sharing the engine's release cadence makes a first-party extension special.~~ — Superseded
+> 2026-10-02 by the one-version decision (`package-split-and-lend.md`): while released from this
+> repository an extension carries Tatolab's one version number and ships with every release. Its
+> own workspace root, lockfile, CI lane and dependency on the published stream library stay.
+
 ## Why the control plane carries nothing optional
 
 The api-server grew a `moq` feature and a catalog route because the old MoQ package needed

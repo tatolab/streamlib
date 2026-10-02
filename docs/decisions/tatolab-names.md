@@ -40,3 +40,25 @@ streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP
 - Whether the MoQ and WebRTC nodes become pip extensions or ship inside the app is the packs
   decision, not a naming one; their names hold either way.
 - The repo, `streamlib` and the internal crate names stay until the rename step builds this.
+
+## Decided 2026-10-02: no public Python name says "processor"
+
+The stream vocabulary retired "processor" on every user surface, and the change that re-spelled
+the stream-building names left the per-node classes — the windows a node owns, its output
+texture ring, its link access — for a rename no change owned. The move from `streamlib` to
+`tatolab.*` makes every user re-import everything, so it re-spells every public Python name
+still saying "processor" in the same break: the four classes, the module holding the ring, the
+two output-pool methods on the GPU capabilities, and the contexts' `processor_id`, which becomes
+`node_id`, the id `graph` renders on the node. Owner, 2026-10-02.
+
+Rejected:
+- *A rename change of its own after the move.* A second break for every author, and every
+  ticket between the two writes the old names into new code.
+- *Renaming only the four classes first named.* Leaves the rest to be found and orphaned the
+  same way.
+
+Consequences:
+- The engine's Rust identifiers and the wire between runtime and processor interpreter keep
+  "processor" until the rename step; a Python-visible name can differ from the Rust type behind it.
+- Names an earlier change deletes — `@processor`, the added-processor handle, the port
+  references — are removed, not renamed.
