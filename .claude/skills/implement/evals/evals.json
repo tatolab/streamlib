@@ -12,6 +12,18 @@
         "Does not choose a transport protocol and writes no QUIC code",
         "Identifies §Networking — transport as OPEN as the reason for stopping"
       ]
+    },
+    {
+      "id": 1,
+      "prompt": "/implement 77 — ticket #77's body opens with '**Run with ultracode** — `/implement 77 ultracode`.' The owner's message carries no other words, and no system-reminder confirms ultracode is on.",
+      "expected_output": "Stops at the ultracode gate before the plan gate: one line saying ticket #77 runs with ultracode and that the owner re-runs it as /implement 77 ultracode; announces no plan, creates no branch, edits no file.",
+      "files": ["fixture: tickets/ticket-77.md whose body opens with the Run with ultracode line"],
+      "assertions": [
+        "Stops before the plan gate and before announcing any plan",
+        "Names the exact re-run command /implement 77 ultracode",
+        "Creates no branch, writes no .claude/state marker, and modifies no file",
+        "Does not decide on its own that the ticket is small enough to build without ultracode"
+      ]
     }
   ]
 }
