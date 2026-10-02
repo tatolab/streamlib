@@ -137,7 +137,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   package declaring its streams under an entry-point group. [one-runtime-per-machine; stream-graph]
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
   adds nodes, connects them and returns port references is a reusable fragment. The graph
-  stays flat and addresses stay `<stream>/<node>/<port>`; no group label and no nested
+  stays flat and addresses stay `<machine>/<stream>/<node>/<port>`; no group label and no nested
   subgraph is built until an editor or an agent needs to see a fragment as one thing. Across
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [runtime-hosting; one-runtime-per-machine]
@@ -1267,7 +1267,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   subprocess protocol version number, its minimum, its validator and its environment
   variable retire with it: one check per invariant, and a hand-bumped integer never caught a
   helper built against a different iceoryx2 patch or a stale wheel on the helper's
-  `sys.path`. [local-transport-hardening — SHIPPED #2262; reopened by one-runtime-per-machine: how the packages agree on a build]
+  `sys.path`. [local-transport-hardening — SHIPPED #2262; reopened by one-runtime-per-machine: how the packages agree on a build; settled by package-split-and-lend: the lend gives both sides one build by construction, and this check stays as the backstop]
   <!-- verify: cargo test -p streamlib-engine --lib core::engine_build_id_composition -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_helper_that_imported_another_engine_build_is_refused_naming_both_builds -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_a_helper_handed_no_engine_build_id_refuses_rather_than_passing -->
@@ -1357,7 +1357,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   of a stream — a stream's source is its Python, which keeps the retired manifest retired. On
   the next start the function wins: an agent that edits a running stream over the local API
   changes the live graph, and keeps the change only by changing the code (owner, 2026-09-30).
-  [one-runtime-per-machine; stream-graph]
+  "The function" is the graph it compiled to at its last load: a kept stream re-loads that
+  recorded graph, and picking up a changed source is another `run -d` (§Product, how a
+  stream is loaded and kept). [one-runtime-per-machine; stream-graph]
 - **DECIDED** — A stream's environment is its project directory and that directory's venv
   interpreter. It is recorded beside the graph when the stream is loaded — never inside it, so
   the same graph loads from another checkout — and every processor interpreter of the stream
@@ -1380,7 +1382,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the same machine without exposing it, over the local transport, and surfaces are shared
   across every stream's processor interpreters on both floors, all being the runtime's
   children. Streams needing conflicting Python packages each start from their own venv (the
-  independence OPEN in §Packages). Owner, 2026-10-01. [runtime-hosting; one-runtime-per-machine]
+  package split and the lend, §Packages). Owner, 2026-10-01. [runtime-hosting; one-runtime-per-machine]
 - **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
   admission control, and how a stream states what it needs. Direction (review, not decided):
   what a stream needs is read from its graph (the derived needs above) and granted per stream
@@ -3576,7 +3578,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and never waits. Multicast discovery is proven by the two-process fixture's multicast arm,
   run beside its explicit-peer arms with scouting pinned to loopback — a local end-to-end
   tier, compiled on both CI lanes and never a merge gate.
-  [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the runtime dials routers from its own configuration; what a runtime with no stream map discovers on a LAN is OPEN]
+  [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the runtime dials routers from its own configuration; what a runtime with no stream map discovers on a LAN is OPEN; amended by local-api: the description drops `control_plane_urls`]
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes two_runtimes_discovering_by_multicast_each_list_the_other -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has -->
 - **DECIDED** — Everything a runtime puts on the mesh lives under a mesh name, `default`
@@ -3833,7 +3835,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   nothing a caller could spell.
   [runtime-mesh; cross-runtime-links — SHIPPED #2292, #2287; the offer's split #2345, the
   Python-authored source #2344, the forgotten egress #2346, and the stopped-sending reason
-  #2379; reopened by one-runtime-per-machine: how a runtime and a stream's processor interpreters agree on a build]
+  #2379; reopened by one-runtime-per-machine: how a runtime and a stream's processor interpreters agree on a build; settled by package-split-and-lend: the lend gives both one build by construction]
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_links_two_processes -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::output_ports_offered_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_port_egress -->
@@ -3952,7 +3954,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   node has not had applied, each `awaiting_runtime` while its runtime is absent, `unanswered`
   while it is not replying, or `refused` with that runtime's own words.
   [runtime-mesh — SHIPPED #2283, #2285; the link shape and the two request keys —
-  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API]
+  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by local-api: peers and the `nodes` table drop `control_plane_urls`]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_port_another_runtime_reads_renders_with_the_runtimes_reading_it -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is -->
@@ -4357,7 +4359,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
-  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself; amended by local-api: the `mcp` verb joins]
+  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself; amended by local-api: the `mcp` verb joins; amended by tatolab-names and package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the installer and never in a pip wheel]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->

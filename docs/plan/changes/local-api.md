@@ -1,7 +1,7 @@
 # local-api
 
-> **Approved by the owner, 2026-10-01**, as written, with its stated assumptions. Next:
-> `/derive-tickets`.
+> **Approved by the owner, 2026-10-01**, as written, with its stated assumptions. Tickets
+> derived 2026-10-01 (below).
 
 Step 2 of the one-runtime-per-machine pivot: control leaves the network, and MCP hosts reach it by
 launching a command. After this change:
@@ -32,7 +32,8 @@ its machine), `:4452-4463` (the `mcp` verb; 2026-07-28 only), `:4247-4296` (one 
 removes). Not built against: the rest of the local API `:4464-4468` (stream verbs, machine or
 user — §Product `:114-125`), and the URL forms' listener, whose grammar and forms are §Networking's
 OPEN `:4023-4034` and step 8's. This change serves today's runtimes, one per `run`, each with its
-own socket; the one-per-machine runtime inherits the mechanism.
+own socket; the one-per-machine runtime inherits the mechanism. Since approval, the stream verbs
+and one runtime per machine owned by one user were DECIDED (#2580); runtime hosting builds them.
 
 **Verified against the tree 2026-10-01 (HEAD 21d3cc51f).** Two read-only sweeps: the control
 plane (no control-plane code changed since the on-hold recon at 30fbef3; anchors corrected below)
@@ -191,10 +192,10 @@ ship gate runs, since the gate searches `.claude/`.
 
 | Legacy | Change | Waits on |
 |---|---|---|
-| One runtime and one socket per `run`; `nodes` as a registry of runtimes | runtime hosting | §Product's loading OPEN, machine or user |
-| `load`, `unload`, `streams`, `expose` as verbs | runtime hosting | the rest of the local API `:4464` |
+| One runtime and one socket per `run`; `nodes` as a registry of runtimes | runtime hosting | §Product's loading OPEN, machine or user — decided 2026-10-01 (#2580); built in step 4 |
+| `load`, `unload`, `streams`, `expose` as verbs | runtime hosting | the rest of the local API `:4464` — decided 2026-10-01 (#2580); built in step 4 |
 | The URL forms' listener | streams as URLs | §Networking's URL-grammar OPEN |
-| `host_control_plane`, `_control_plane_client`, "control plane" in names | the namespace rename | its OPEN |
+| `host_control_plane`, `_control_plane_client`, "control plane" in names | the namespace rename — since the reorder, the package split deletes the first two (#2592, #2593); the Rust names come with the app | its OPEN — the names decided 2026-10-01 (#2580) |
 
 ## Assumptions stated, not asked
 

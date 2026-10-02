@@ -1,7 +1,7 @@
 # stream-graph
 
 > **Approved by the owner, 2026-10-01**, with decision 1 resolved (a) and the exposure gate kept
-> in this change. Next: `/derive-tickets`.
+> in this change. Tickets derived 2026-10-01 (below).
 
 The first build step of the one-runtime-per-machine pivot: a stream is a `@stream` function, the
 function compiles to the stream's graph, the graph is the engine's snapshot extended into the one
@@ -37,7 +37,9 @@ against: loading and keeping a stream `:114-125`, composition `:134-140`, what t
 beyond nodes, links and exposures `:1334-1341`, several streams in one runtime process
 `:1342-1352`, resources `:1353-1358`, discovery `:3994-4010`, the stream map `:4011-4018`, the
 URL grammar `:4023-4034`, the local API `:4437-4444`. The address entry `:3969-3985` is DECIDED
-and deliberately untouched here; "Left to later changes" says why.
+and deliberately untouched here; "Left to later changes" says why. Since approval, loading and
+keeping a stream, composition, several streams in one runtime process and the local API were
+DECIDED (#2570, #2580) and the environment by the package split (#2583); none is built here.
 
 **Verified against the tree 2026-10-01 (HEAD 4c2f22761).** Three read-only recon sweeps.
 
@@ -258,20 +260,22 @@ one, with no change to the graph, the loader or `graph`.
 |---|---|---|
 | The `<machine>/` address segment and the stream in the Zenoh key (`:3969-3985`) | With one engine per `run` process there is no machine to name but today's runtime name; adding the segment now would refuse the second stream on a machine | the change that makes one runtime host several streams |
 | The name grammar (URL-segment characters, case) in the same entry | It is address grammar | the same change |
-| `graph` returning several streams; `load`, `unload`, `streams`, `expose` as verbs; MCP argument spellings (`display_name` and friends) | the local API OPEN | the local-API change, after its align |
-| The stream's environment (venv path) in the graph; needs derived from nodes | OPEN `:1334-1341` | per-stream environments |
-| Persisting loaded graphs in a state directory; re-load on restart | OPEN `:114-125`; the one-engine entry's state directory | runtime startup |
-| `@stream` declarations readable without an engine; `@node` registering nothing when no engine is present | the independence OPEN `:508-519` | per-stream environments |
-| `ProcessorLinkDataAccess`, `ProcessorOwnedWindow`, `ProcessorOwnedWindowEvents`, `ProcessorOutputTextureRing` | per-node capability classes, not the stream-building surface | the namespace rename, which re-spells every public name at once |
+| `graph` returning several streams; `load`, `unload`, `streams`, `expose` as verbs; MCP argument spellings (`display_name` and friends) | the local API OPEN at approval | the verbs: runtime hosting, step 4 (decided 2026-10-01); the MCP argument spellings: the local-API change did not take them — to `/align`, 2026-10-02 (#2565's comment) |
+| The stream's environment (venv path) in the graph; needs derived from nodes | OPEN `:1334-1341` at approval | the environment: the package split (#2590), recorded beside the graph, never in it (decided 2026-10-02); needs: resources, step 6 |
+| Persisting loaded graphs in a state directory; re-load on restart | OPEN `:114-125` at approval; the one-engine entry's state directory | runtime hosting, step 4 (decided 2026-10-01) |
+| `@stream` declarations readable without an engine; `@node` registering nothing when no engine is present | the independence OPEN `:508-519` at approval | the package split: #2587, #2588 (decided 2026-10-02) |
+| `ProcessorLinkDataAccess`, `ProcessorOwnedWindow`, `ProcessorOwnedWindowEvents`, `ProcessorOutputTextureRing` | per-node capability classes, not the stream-building surface | the namespace rename, which re-spells every public name at once — no change owns these names yet: the package split moves import paths only; to `/align`, 2026-10-02 |
 
-The ripout change's inventory table (`one-runtime-per-machine-ripout.md:236-246`) mapped the
-three-part `MeshPortAddress` to this change; it moves to the hosting change for the reason above.
+The ripout change's inventory table (`one-runtime-per-machine-ripout.md:236-246`, a file that became
+`local-api.md` on 2026-10-01) mapped the three-part `MeshPortAddress` to this change; it moves to
+the hosting change for the reason above.
 
 ## Assumptions stated, not asked
 
 - The entry file is `stream.py`, as `:99-106` spells it; `-f` still overrides, and `app.py` is
   not looked for.
-- `Runtime.load` refuses a second load; one stream per `run` until `:1342-1352` is decided.
+- `Runtime.load` refuses a second load; one stream per `run` until `:1342-1352` is decided
+  (decided 2026-10-01, #2580; runtime hosting builds it).
 - Exposure gates the mesh in this change rather than being recorded and inert: closed by default
   is decided, and a recorded `expose` that gated nothing would be the no-op surface the doctrine
   forbids. Owner, 2026-10-01: keep it here; S4 stays in this change.
@@ -302,7 +306,7 @@ Derived 2026-10-01; milestone #59, *Streams as data*. Blockers first. S3 split e
 CI stays green through the forty-fixture migration.
 
 1. #2564 — `@node` declares a node where `@processor` did — independent; carries the `@processor`
-   bullet.
+   bullet and the scaffold's `processors/inverting_effect.py` path (its 2026-10-02 comment).
 2. #2565 — the graph is one shape: the snapshot the runtime loads is what `graph` renders —
    independent; carries `ProcessorDefinition`, `ConnectionDefinition`, `save_graph_snapshot`,
    `pipeline_name`.
@@ -311,12 +315,13 @@ CI stays green through the forty-fixture migration.
 5. #2568 — the wheel's fixtures and tests build streams with `@stream` and `Stream` (migrate) —
    blocked by 4.
 6. #2569 — `rt.add`, `rt.connect` and the `setup(rt)` harness are gone (contract) — blocked by 5;
-   carries every remaining `REMOVED:` bullet.
+   carries every remaining `REMOVED:` bullet, `runtime.add(` included.
 
 ## REMOVED
 
 - REMOVED: def setup(rt
 - REMOVED: rt.add(
+- REMOVED: runtime.add(
 - REMOVED: @processor
 - REMOVED: APP_SETUP_FUNCTION_NAME
 - REMOVED: read_app_setup_function
