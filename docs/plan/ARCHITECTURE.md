@@ -113,8 +113,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   it like Docker"; "pip is just for distributing the packaged streams". [one-runtime-per-machine]
 - **DECIDED** — How a stream is loaded and kept. `tatolab run <stream>` loads it attached — its
   logs in the terminal, Ctrl-C unloads it; `tatolab run -d` loads it to keep — the runtime
-  records the graph, the project's venv path and the exposures in its state directory and
-  re-loads it on every start until `tatolab stop`, which unloads a stream and forgets it;
+  records the graph its function compiled to at that load, the project's venv path and the
+  exposures in its state directory, and re-loads that recorded graph on every start until
+  `tatolab stop`, which unloads a stream and forgets it. Live edits are never recorded, so the
+  function wins on the next start, and picking up a changed source is another `run -d`;
   `tatolab streams` lists both; `tatolab dev` is `run` reloading on edit. Where no installer
   put a runtime, `tatolabd` runs in a terminal or as a container's entrypoint; there is no
   `up` or `down`. One runtime per machine, owned by one user — whoever installed or started
