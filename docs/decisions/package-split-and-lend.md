@@ -48,3 +48,35 @@ is recorded beside its graph, never inside it.
   the bundled Vulkan driver — so a processor interpreter finds it from the lend.
 - The graph is a durable contract read by newer runtimes; a field a runtime does not know is a
   refusal by name, never silently ignored.
+
+## Decided at the proposal (owner, 2026-10-02)
+
+Two forks the change proposal (`docs/plan/changes/package-split-and-lend.md`) surfaced, ruled
+before approval.
+
+**The runtime process is native `tatolabd` from this step on.** Once a stream's venv holds no
+engine, something else has to host it, and the native `tatolabd` of step 4 did not exist yet.
+`tatolabd` is built now, hosting one stream, started in the foreground by `tatolab run`; the
+`tatolab` CLI is native beside it, since the installer ships no Python for a Python CLI to run
+on. Nothing registers a service: long term, installing and managing the runtime moves into the
+app, and a service now would cause chaos. Step 4 grows this binary to many streams; it does not
+replace it. Rejected:
+- *A launcher and an empty environment of the runtime's own until step 4.* A bridge built to be
+  thrown away. Bridges are never retired: the next session builds on them and reads them as the
+  model, and the tree sprawls with an old way beside the new one.
+- *The stream's venv interpreter, lent the runtime portion, as the runtime process.* One runtime
+  process cannot run from many venvs, so step 4 would delete it.
+
+**No package extends the engine; the capability-extension hook is deleted.** A native runtime
+process runs no Python, so the hook's runtime-process call site could not stand. The runtime is
+the host and streams are its guests: one shared runtime serves every stream on the machine, from
+different people and teams, and code inside it could crash, read or send out every stream's
+data. Daemons extend the same way: Docker's plugins are separate processes behind a socket, and
+Tailscale's CLI and apps drive `tailscaled` over its LocalAPI. A package sets itself up where its
+nodes run, at import or on first use; a node's lifecycle methods are unchanged; an outside
+program watches the local API's events; a capability the engine needs enters as a built-in.
+Rejected:
+- *Hooks in processor interpreters only.* What the shipped hooks do there (a TLS provider, a
+  network thread pool) a package does at import, so the mechanism carries nothing.
+- *An interpreter embedded in `tatolabd` for hooks.* It puts back the Python environment beside
+  the runtime that the first ruling declined, to serve capabilities nobody has designed.

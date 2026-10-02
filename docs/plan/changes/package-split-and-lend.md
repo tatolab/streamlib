@@ -24,9 +24,8 @@ crate names of the engine, the `STREAMLIB_*` engine variables.
 
 **Scale gate — this skill, plus the existing ADR.** The Python API's public contract, the
 processor model and distribution all move. The rationale is
-`docs/decisions/package-split-and-lend.md` (#2583); decision 1's ruling amends its
-Consequences ("until the installer exists, developers and CI run the runtime from a local
-build" — the local build is `tatolabd` itself).
+`docs/decisions/package-split-and-lend.md` (#2583), which this PR extends with decisions 1
+and 2 and their rejected alternatives.
 
 **Decision 1 — RESOLVED (c), owner, 2026-10-02:** the runtime process is native `tatolabd` now,
 "especially for agent development": no launcher and no runtime-side Python environment are
