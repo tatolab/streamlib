@@ -305,22 +305,22 @@ its subject; no test runs against a path its slice deleted.
 - `cargo xtask build-runtime` and `generate-built-in-node-classes` are permanent builds, not
   bridges; each has one caller set (CI, developers, later the installer) and nothing imports them.
 
-## Expected slices — each deletes what it replaces, tests included
+## Slices, as ticketed — each deletes what it replaces, tests included
 
-- **S1 — the namespace.** `streamlib` → `tatolab.stream` + `tatolab.runtime`, one maturin
-  project, imports moved everywhere in the engine tree. Blocked by #2569, #2575.
-- **S2 — the stream package stands alone.** Generated built-ins, Protocols with the conformance
-  gate, `@node` registering nothing, the stream suite carved out and run with no runtime.
-  Blocked by S1.
-- **S3 — spawn, describe and the lend in the engine.** Environment per stream, bootstrap by path
-  and its refusal, the resolver and the `OnceLock` deleted, `build-runtime`. Blocked by S2.
-- **S4 — `tatolabd` and the integration suite.** The binary; the Python `Runtime`, its lifecycle
-  code and the in-process tests deleted; integration tests drive `tatolabd`. Blocked by S3.
-- **S5 — `tatolab`.** The native CLI; `cli.py` deleted; the release, the index and the macOS
-  done-proof. Blocked by S4.
-- **S6 — refusal by name** and the golden graph. Blocked by #2565.
-- **S7 — the extensions and the hook.** `tatolab-moq`, `tatolab-webrtc`, their setup moved into
-  their own code, the hook deleted whole. Blocked by S3.
+Derived 2026-10-02, milestone #61; "(ultracode)": `/implement` builds it only with ultracode on.
+- **S6 — refusal by name** and the golden graph: #2585. Blocked by #2565.
+- **S1 — the namespace:** #2586 (ultracode). Blocked by #2569, #2575.
+- **S2 — the stream package stands alone**, as two: the generated built-ins, #2587 (blocked by
+  #2586 and by #2585, which moves the macOS refusal off the marker); then the Protocols, the
+  gate, `@node` registering nothing and the stream suite, #2588 (ultracode; blocked by #2587).
+- **S3 — spawn, describe and the lend in the engine:** #2590 (ultracode). Blocked by #2588.
+- **S7 — the extensions and the hook:** #2591. Blocked by #2590; it lands before S4, so
+  `tatolabd` is never built around the hook.
+- **S4 — `tatolabd`, with S5's `new`, `run` and `dev`** (today's `run` builds the Python `Runtime`
+  in its own process, `cli.py:262`): #2592 (ultracode). Blocked by #2590, #2591.
+- **S5 — the rest of `tatolab`**, pip ships no engine: #2593 (ultracode). Blocked by #2592 and
+  #2576, whose `streamlib mcp` stays as filed and is ported here.
+- Operating-model PRs: #2589, CLAUDE.md (after #2588); #2594, skills and hooks (after #2593, #2577).
 
 ## REMOVED
 
