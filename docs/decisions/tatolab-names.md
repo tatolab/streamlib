@@ -23,8 +23,9 @@ streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP
 - **`tatolab` as the pip name for the stream library** (briefly recorded, reversed the same day
   by the owner). The bare name means the whole product everywhere else — the app, brew, the CLI —
   so a pip `tatolab` holding only the stream-building part reads as the product and is not; the
-  spelled `tatolab-stream` matches every extension (`tatolab-moq`). The bare PyPI name may be
-  held as a placeholder.
+  spelled `tatolab-stream` matches every extension (`tatolab-moq`). The bare PyPI name is
+  held by a placeholder that installs nothing (`tatolab` 0.0.0, published 2026-10-02), so a
+  guessed `pip install tatolab` meets a pointer instead of a stranger's package.
 - **`tatolab-streams` (plural).** Reads as a collection of streams, which is what a pack is.
 - **One `tatolab` package owning `tatolab/__init__.py`.** A regular package shadows every
   namespace portion on the path (PEP 420), hiding the runtime's lent portion and every extension
@@ -35,8 +36,13 @@ streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP
 ## Consequences
 
 - `import tatolab` alone gives nothing useful; code imports `tatolab.stream` or an extension.
-- The names were free on PyPI, crates.io, Homebrew and npm on 2026-10-01; registering them is the
-  owner's call.
+- The names were free on PyPI, crates.io, Homebrew and npm on 2026-10-01. PyPI reserves no name
+  before an upload, and this repository names them in public, so on 2026-10-02 the owner held all
+  four PyPI names with 0.0.0 placeholders that install nothing: the bare `tatolab` for good, and
+  `tatolab-stream`, `tatolab-moq` and `tatolab-webrtc` until their first real release supersedes
+  the placeholder, which is then yanked. crates.io holds `tatolab-stream` the same way, a 0.0.0
+  crate with nothing in it; the bare `tatolab` crate is not held, since crates.io forbids holding a
+  name nothing will ever use.
 - Whether the MoQ and WebRTC nodes become pip extensions or ship inside the app is the packs
   decision, not a naming one; their names hold either way.
 - The repo, `streamlib` and the internal crate names stay until the rename step builds this.

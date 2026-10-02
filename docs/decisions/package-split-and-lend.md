@@ -24,13 +24,6 @@ is recorded beside its graph, never inside it.
 
 - **Every stream venv pins the exact runtime** (today's shape). Every runtime update reinstalls
   every stream, and the heaviest artifact lands in every venv on low-power devices.
-- **An "API level"** a runtime declares and a stream library requires. A second version number
-  beside the real ones, carried by streams, for a check the runtime already makes by refusing
-  what it does not understand. Owner, 2026-10-02: a stream loads into whatever runtime is on the
-  machine; there is no version dependency to declare.
-- **Guarding against a stale runtime copy in a stream's venv.** Residue of the pre-pivot shape:
-  the runtime is never a pip package, and the old all-in-one wheel is named `streamlib`, which
-  does not share the namespace. The exact-build handshake stays as the backstop; nothing new.
 - **A versioned wire or a stable C ABI between runtime and interpreter.** The deleted plugin
   ABI returning; the lend keeps one build on both sides by construction.
 - **The runtime process importing project code to learn a node's ports.** It would bind the

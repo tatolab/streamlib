@@ -290,7 +290,7 @@ https://relay.example/&lt;machine&gt;/&lt;stream&gt;/&lt;node&gt;/&lt;port&gt;/&
 <tr><td>Every stream venv pins the exact runtime</td><td class="no">Inverts the constraint: every runtime upgrade reinstalls every stream, and puts the heaviest artifact in every venv on low-power devices.</td></tr>
 <tr><td>A versioned wire protocol</td><td class="no">The retired integer on a bigger surface; the iceoryx2 memory layout is a third-party contract nobody can version.</td></tr>
 <tr><td>A stable C ABI between runtime and interpreter</td><td class="no">The deleted plugin ABI, rejected already.</td></tr>
-<tr><td>The runtime lends its native portion to the stream's Python</td><td class="ok">The interpreter runs the stream venv's Python with the runtime's <code>tatolab/runtime</code> first on <code>PYTHONPATH</code>. The handshake passes by construction, and still catches a venv whose own stale runtime shadowed the lend. "Never reinstall" holds within an authoring API level the runtime declares.</td></tr>
+<tr><td>The runtime lends its native portion to the stream's Python</td><td class="ok">The interpreter runs the stream venv's Python with the runtime's <code>tatolab/runtime</code> first on <code>PYTHONPATH</code>. The handshake passes by construction and stays as the backstop. A stream never names a runtime version.</td></tr>
 </table>
 <p><strong>Accelerators optional</strong> is a runtime property, not a package: an extra cannot change the runtime's native module, and a second engine-linking distribution reverses two decided entries. The smallest shape is the one you preferred on 26 September: one artifact, a bundled software Vulkan last in device selection, absent tiers refused by name.</p>
 

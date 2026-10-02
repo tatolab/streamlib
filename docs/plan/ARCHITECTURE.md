@@ -539,8 +539,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   identity — or another seam. [one-runtime-per-machine]
 - **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
   `tatolab`; the desktop app is Tatolab (`Tatolab.app`); the installer ships all three as one
-  unit, and users still call the program "the runtime"; the bare name `tatolab` is the
-  product's and no pip distribution takes it. The one distribution pip installs to write
+  unit, and users still call the program "the runtime" (owner, 2026-10-02); the bare name `tatolab` is the
+  product's and no pip distribution takes it — PyPI holds it with a placeholder that installs
+  nothing (owner, 2026-10-02). The one distribution pip installs to write
   streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP 420 namespace
   shared by Tatolab's own distributions only: `tatolab.stream`; `tatolab.runtime`, the native
   portion `tatolabd` lends and no user installs; and optional first-party extensions, each
@@ -1425,7 +1426,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   one engine is easier to run and to get bug reports for, and an engine per stream multiplies
   the ways things can fail. An engine per stream is not a fallback. [one-runtime-per-machine]
 
-## Graphics (RHI / GPU) — SHIPPED
+## Graphics (RHI / GPU) — DECIDED (unbuilt: accelerators optional, pivot step 5)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only. Vulkan is the
@@ -1870,7 +1871,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   every stream. Undecided: whether the adapter crates move anywhere, and what the
   software-Vulkan bundle costs the Linux wheel. [one-runtime-per-machine]
 
-## Media I/O — camera, display, audio, codecs — SHIPPED
+## Media I/O — camera, display, audio, codecs — DECIDED (unbuilt: Apple permissions through Tatolab.app, pivot steps 4 and 10)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
