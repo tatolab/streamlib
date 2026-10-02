@@ -10,6 +10,18 @@ distributions, a pure-Python stream package and a native runtime package; until 
 "the wheel" names what ships today. Named 2026-10-01: the stream package is the `tatolab-stream`
 distribution (`tatolab.stream`), the runtime package is `tatolab.runtime`, lent by `tatolabd`._
 
+**Stream package** _(crosses)_: `tatolab-stream`, the pure-Python distribution a stream's
+venv installs — everything a stream module imports; a stream compiles with no runtime
+present. _Avoid_: "the SDK", "the wheel" (what ships today).
+
+**Runtime portion** _(engine)_: `tatolab.runtime`, the engine's native part — ships only with
+the runtime, never through pip. _Avoid_: "the runtime package" on a user surface (users never
+install it), "the engine wheel".
+
+**The lend** _(engine)_: how a processor interpreter sees the runtime portion — the runtime
+prepends its own `tatolab/runtime/` directory to the interpreter's `PYTHONPATH`, merged by
+PEP 420 with the venv's `tatolab/stream/`. _Avoid_: "injection", "shim", "vendoring".
+
 Register markers, since the 2026-09-30 pivot: _(user)_ is what a Tatolab user reads and
 types; _(engine)_ is what the runtime's code, the plan and the decision records say, and
 never a user surface; _(crosses)_ means one meaning on both sides. An unmarked entry

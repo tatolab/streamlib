@@ -165,7 +165,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   package: Rust inside, loaded across the CPython ABI, never dlopen'd by the engine
   (extension-model, 2026-09-04).
   [importable-python-library; importable-python-library-ripout — SHIPPED #1715; the clause
-  scoped to the ABI by local-transport-hardening — SHIPPED #2262; the handshake clause reopened by one-runtime-per-machine]
+  scoped to the ABI by local-transport-hardening — SHIPPED #2262; the handshake clause re-read
+  by package-split-and-lend: a processor interpreter imports the lent `tatolab.runtime` and
+  checks it is its parent's build, true by construction and kept as the backstop]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — Third-party native code (closed-source included) ships as an ordinary
   Python package whose native internals expose capabilities to Python as handles —
@@ -287,7 +289,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   engine workspace's gates do not walk a non-member. A Rust-side extension SDK is not
   owed by the first two extensions, whose Rust handles bytes and no engine object; it
   lands with the first extension that needs one. [extension-model; the naming clause
-  superseded 2026-10-01 by tatolab-names: `tatolab-<name>` importing as `tatolab.<name>`]
+  superseded 2026-10-01 by tatolab-names: `tatolab-<name>` importing as `tatolab.<name>`; the
+  dependency clause amended by package-split-and-lend: an extension depends on
+  `tatolab-stream`, and its nodes run in processor interpreters where `tatolab.runtime` is lent]
 - **OPEN** — How an engine-grade capability an extension introduces — a specialised
   graphics pass, a device class — is reached by processors and by the engine. Undecided
   until an extension brings one: the first two register a name and bring up a network
@@ -509,18 +513,24 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway -->
 - **DECIDED** — streamlib offers an extension point for an external control client, and runs
   complete without one. [one-runtime-per-machine]
-- **OPEN** — How the stream package and the runtime package stay independent. Constraint
-  (owner): a change to a stream, or to the stream package, never requires reinstalling the
-  runtime to run it, and each package, and each stream, is testable on its own as an atomic
-  unit. Direction (review, not decided): a stream's venv installs only the pure-Python stream
-  package, and the runtime lends its own native portion to each of the stream's processor
-  interpreters by prepending one directory to their `PYTHONPATH`, which PEP 420 merges with
-  the venv's portion — so the exact-build handshake passes by construction and still catches
-  a venv whose own stale runtime package shadowed the lend. "Never reinstall" then holds
-  within an authoring API level the runtime declares; a stream needing a new engine capability
-  needs a newer runtime and is refused by name at load. Undecided: the API level's spelling,
-  and whether a stream's own pinned runtime package is ignored or refused.
-  [one-runtime-per-machine]
+- **DECIDED** — The package split and the lend. `tatolab-stream`, importing as
+  `tatolab.stream`, is pure Python and is everything a stream module imports: `@stream`,
+  `@node`, `@input`, `@output`, the `Stream` builder and its references, the built-in node
+  classes with their config shapes, and the data types; a stream is written, type-checked and
+  compiled with no runtime installed. `tatolab.runtime` is the engine's native part — the
+  engine, the bindings a node's calls go through while it runs, the processor-interpreter
+  bootstrap, and on macOS the bundled Vulkan driver — and ships only with the runtime, never
+  through pip. A stream's venv installs `tatolab-stream` and holds no engine; the runtime
+  starts each of the stream's processor interpreters from that venv's interpreter with one
+  directory prepended to its `PYTHONPATH`, the runtime's own `tatolab/runtime/`, which PEP 420
+  merges with the venv's `tatolab/stream/`. No distribution ships `tatolab/__init__.py`, and
+  `tatolab/runtime` is a regular subpackage. The bootstrap is the runtime's own entry, never
+  `-m` from the project directory, and the exact-build handshake stays as the backstop. A
+  stream never names a runtime version and nothing of the runtime enters its `pyproject.toml`:
+  the runtime loads what it understands and refuses by name anything in a graph it does not —
+  a node type it lacks, a setting it does not know — and a newer runtime loads every graph an
+  older stream recorded. Compiling happens in the project's interpreter, never in the
+  runtime process. Owner, 2026-10-02. [package-split-and-lend; one-runtime-per-machine]
 - **OPEN** — How an external control client plugs in: an entry point with a role of its own
   beside today's two, handed a door for pushing the stream map, router credentials and peer
   identity — or another seam. [one-runtime-per-machine]
@@ -1063,7 +1073,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Helper children import the wheel itself — one native artifact. Every processor class
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
-  placement. [helper-process-placement-only — SHIPPED #1714; reopened by one-runtime-per-machine: environments for streams that share a process, and how the runtime lends its native portion to a stream's processor interpreters]
+  placement. [helper-process-placement-only — SHIPPED #1714; amended by package-split-and-lend: the exec
+  is the stream's own venv interpreter with the runtime's `tatolab/runtime/` lent on its
+  `PYTHONPATH`, so a child imports the lent portion, not a wheel in its venv; per-stream
+  environments in one runtime process are runtime-hosting's]
 - **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
   service above the transport does not change: its verbs, its per-slot-not-per-frame shape,
   the checkout lease and the retired-frame refusal are one platform-neutral core both arms
@@ -1344,13 +1357,17 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the next start the function wins: an agent that edits a running stream over the local API
   changes the live graph, and keeps the change only by changing the code (owner, 2026-09-30).
   [one-runtime-per-machine; stream-graph]
-- **OPEN** — What the graph holds beyond nodes, links and exposures. Direction (review, not
-  decided): a stream's needs — a camera, a microphone, a display, the accelerator, network
-  exposure — are derived from its nodes' declarations (built-ins carry theirs; a user node that
+- **DECIDED** — A stream's environment is its project directory and that directory's venv
+  interpreter. It is recorded beside the graph when the stream is loaded — never inside it, so
+  the same graph loads from another checkout — and every processor interpreter of the stream
+  starts from it. Provisioning an environment is the packs OPEN in §Packages. Owner,
+  2026-10-02. [package-split-and-lend]
+- **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
+  Direction (review, not decided): a camera, a microphone, a display, the accelerator, network
+  exposure — derived from its nodes' declarations (built-ins carry theirs; a user node that
   opens a device directly says so on `@node`) and carried in the graph, never authored; the
   runtime requests exactly those at load and refuses by name what the machine cannot grant, so
-  nothing enumerates every possible device up front. The stream's environment is its project's
-  venv path. Provisioning an environment is the packs OPEN in §Packages.
+  nothing enumerates every possible device up front. Decided with the resources entry below.
   [one-runtime-per-machine]
 - **DECIDED** — Several streams in one runtime process. The runtime keeps, once for the
   machine: the one `GpuContext` every stream shares, signal ownership, the Zenoh session, the
@@ -4240,7 +4257,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   package and packs go through the package index; the runtime package ships inside the installer
   with the CLI and the desktop app, never through pip (owner, 2026-09-30). Known: maturin ships a native
   portion of a PEP 420 namespace beside a pure one, in wheels and editable installs alike, so no
-  custom module system is needed. [one-runtime-per-machine]
+  custom module system is needed. [one-runtime-per-machine; the two packages and the lend
+  decided 2026-10-02 — package-split-and-lend, §Packages]
 
 ## Control plane & observability — IN-FLIGHT (→ local-api)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
