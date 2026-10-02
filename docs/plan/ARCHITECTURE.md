@@ -111,13 +111,27 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime; it loads a stream into the one that is running. pip distributes the pure-Python
   stream package and packs of nodes and streams, never the runtime. Owner, 2026-09-30: "treat
   it like Docker"; "pip is just for distributing the packaged streams". [one-runtime-per-machine]
+- **DECIDED** — Who starts the runtime. With no runtime running, every `tatolab` verb that needs
+  one fails at once, unable to reach the local API's socket, naming the socket and how to start
+  the runtime — Docker's shape when its daemon is down; nothing a verb does starts a runtime. On
+  Apple, `Tatolab.app` registers `tatolabd` as its login service, as Docker Desktop does, and a
+  `run` against a running runtime connects as usual; until the app ships, `tatolabd` runs in a
+  terminal there. On Linux the installer — `curl | sh` or a distro package — registers
+  `tatolabd` as a systemd user service, the service being the end state on Linux, not a stand-in
+  for the app. Owner, 2026-10-02. [runtime-hosting]
 - **DECIDED** — How a stream is loaded and kept. `tatolab run <stream>` loads it attached — its
   logs in the terminal, Ctrl-C unloads it; `tatolab run -d` loads it to keep — the runtime
   records the graph its function compiled to at that load, the project's venv path and the
-  exposures in its state directory, and re-loads that recorded graph on every start until
-  `tatolab stop`, which unloads a stream and forgets it. Live edits are never recorded, so the
+  exposures in its state directory, and re-loads that recorded graph on every start, a crash's
+  restart included. There are no restart policies: a kept stream always comes back. `tatolab
+  stop` unloads a kept stream and remembers it as stopped, across restarts too; `tatolab start`
+  re-loads a stopped stream from its record; `tatolab rm` forgets a stream, the only verb that
+  loses one (owner, 2026-10-02, amending the 2026-10-01 stop-forgets reading). An attached
+  stream is never recorded: a runtime crash ends it, and its `run` exits with an error naming
+  the crash and the runtime's log. Live edits are never recorded, so the
   function wins on the next start, and picking up a changed source is another `run -d`;
-  `tatolab streams` lists both; `tatolab dev` is `run` reloading on edit. Where no installer
+  `tatolab streams` lists all three — attached, kept, stopped; `tatolab dev` is `run` reloading
+  on edit, and after a crash it waits for the runtime and loads again. Where no installer
   put a runtime, `tatolabd` runs in a terminal or as a container's entrypoint; there is no
   `up` or `down`. One runtime per machine, owned by one user — whoever installed or started
   it; another user's runtime on the same machine is refused at start naming the holder, and a
@@ -570,7 +584,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a project, or into a default project the runtime manages when there is none, and never beside
   the runtime; `run <url-or-zip>` fetches the project into the runtime's state directory, runs
   `uv sync` there (uv creating the venv and fetching a missing Python), and loads it like any
-  project, and a project with no venv gets `uv sync` first. Environments are provisioned by the
+  project — kept, the `run -d` way, since a stream from a URL, a zip or an index is one the
+  runtime should keep running (owner, 2026-10-02) — and a project with no venv gets `uv sync`
+  first. Environments are provisioned by the
   standard toolchain only — `pyproject.toml`, uv, a package index, git — never by machinery of
   streamlib's, which is what importable-python-library deleted. The runtime process imports
   nothing from a pack or a project; their code runs only in processor interpreters started from
@@ -1405,8 +1421,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   or graph change never touches another's. A stream links to any port of another stream on
   the same machine without exposing it, over the local transport, and surfaces are shared
   across every stream's processor interpreters on both floors, all being the runtime's
-  children. Streams needing conflicting Python packages each start from their own venv (the
-  package split and the lend, §Packages). Owner, 2026-10-01. [runtime-hosting; one-runtime-per-machine]
+  children, so a link between two streams on one machine copies no pixels. Streams needing
+  conflicting Python packages each start from their own venv (the package split and the lend,
+  §Packages). Owner, 2026-10-01; the surface clause confirmed 2026-10-02. [runtime-hosting;
+  one-runtime-per-machine]
 - **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
   admission control, and how a stream states what it needs. Direction (review, not decided):
   what a stream needs is read from its graph (the derived needs above) and granted per stream
@@ -1415,7 +1433,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [one-runtime-per-machine]
 - **DECIDED** — Failure isolation: one engine for every stream on the machine. A native crash
   in a built-in — camera, codec, display, the mesh's copy path — ends every stream on the
-  machine, and the runtime restarts and re-loads them from persisted graphs; a hang is bounded
+  machine, and the runtime restarts and re-loads every kept stream not stopped from its
+  persisted graph, while an attached stream ends with its `run` (§Product); a hang is bounded
   per node by the existing abandon budget and ends only that stream; Python crashes and hangs
   stay in their own process. "Restart the runtime and the streams come back" means re-loading
   from persisted graphs, never re-attaching — processor interpreters die with their parent by
@@ -3664,7 +3683,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the link is `error` naming both hosts and carries from neither until one leaves, because a
   link that picked one could feed the wrong machine.
   [runtime-mesh — SHIPPED #2282, #2284; the residual settled by cross-runtime-links #2292;
-  the Apple host identity and native liveness — macos-platform-floor, SHIPPED #2363; reopened by one-runtime-per-machine: whether addresses gain a stream level]
+  the Apple host identity and native liveness — macos-platform-floor, SHIPPED #2363; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by runtime-hosting: the runtime name gives way to the machine name, which takes a recorded suffix on a clash rather than refusing the start]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::duplicate_runtime_name_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
@@ -4034,11 +4053,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   of today's runtime name, the runtime is addressed by its machine (default the hostname),
   every existing address maps across with one segment prefixed, and the same string is the
   address in Python, the CLI, the URL path and the graph; the Zenoh key grammar gains the same
-  segment in one place (owner, 2026-09-30). Collisions, as direction (review, not decided): a
-  **machine** name is unique per mesh and never auto-suffixed — a second live runtime claiming
-  it is refused at start naming the holder, the one exception being a dead runtime on the same
-  machine, and the rule holds through a relay — so two machines sharing a hostname name the
-  second; a **stream** name is unique per machine, defaults to its function's, and a second
+  segment in one place (owner, 2026-09-30). Collisions (owner, 2026-10-02): a **machine** name
+  is unique per mesh, settled the way Bonjour (RFC 6762 §9) and Tailscale settle a hostname — the
+  first runtime to claim a name keeps it; one that finds its name live on the mesh takes the
+  next free `<name>-2`, `<name>-3`…, records it in its state directory, says once what happened
+  and how to rename, and keeps it for good, even after the other machine leaves; a runtime
+  restarting on its own machine reclaims its recorded name, and the rule holds through a relay.
+  A second user's runtime on one machine is refused, not suffixed (§Product). A **stream** name
+  is unique per machine, defaults to its function's, and a second
   load of a name is refused naming where the first came from, with `--name` the way out, which
   covers two packs that each define a `main`; a **node** name is unique per stream — a
   defaulted duplicate (two unnamed `CameraSource`) is auto-suffixed as today, while a duplicate
@@ -4555,7 +4577,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   2026-07-28. Agents
   hosted in a cloud, which can neither launch a command nor reach a machine's loopback, are
   not served by the local API. Owner, 2026-10-01. [local-api]
-- **DECIDED** — `graph` returns the runtime's streams, and the stream actions — load, load to
-  keep, unload, list, expose — join the graph-mutation verbs as tools, which stay; the change
-  that builds them spells them. One runtime per machine owned by one user (§Product) means
-  one socket per machine. Owner, 2026-10-01. [runtime-hosting; local-api]
+- **DECIDED** — `graph` returns every stream the runtime holds, and every stream action the CLI
+  has — `run` attached, `run -d`, `stop`, `start`, `rm`, `streams`, `expose` — is also a tool,
+  beside the graph-mutation tools, which stay, so an agent can do whatever the CLI can; the
+  change that builds them spells them. One runtime per machine owned by one user (§Product)
+  means one socket per machine. Owner, 2026-10-01; confirmed 2026-10-02. [runtime-hosting;
+  local-api]
