@@ -16,6 +16,7 @@ runtime becoming a program of its own. After it:
   graph an older stream recorded;
 - the tests divide as the code does — a stream suite with no runtime, a runtime suite with no
   Python node, an integration suite where running both is the point;
+- no package extends the engine: the capability-extension hook is deleted (decision 2);
 - pip publishes `tatolab-stream`, `tatolab-moq`, `tatolab-webrtc`, and no engine.
 
 Unchanged, mapped below: one stream per runtime process, no service and no installer, the Rust
@@ -78,21 +79,22 @@ be rewritten by S5 — re-pointing it at the native CLI is a tracker call for `/
 
 ---
 
-## [NEEDS DECISION] 2 — where a capability extension's hook runs once the runtime process is native
+## Decision 2 — RESOLVED (c): the capability-extension hook is deleted
 
-§Packages `:239-275` (DECIDED) runs every installed hook in the app process at `Runtime()` and in
-each helper; a registration in the app process renders in `graph`'s `extensions` key. A native
-`tatolabd` runs no Python, so the first call site cannot exist as written.
-
-- **(a) Processor interpreters only.** A hook runs where its nodes run, which is where the two
-  shipped extensions need their stacks. Each processor interpreter reports its registrations
-  over the existing bridge, and `graph`'s `extensions` lists them per stream. The engine-grade
-  capability OPEN (`:295-298`) and the control-client OPEN (`:535-537`) stay open and will need
-  a native door when they are decided.
-- **(b) `tatolabd` embeds an interpreter for hooks alone.** Python returns to the runtime process,
-  run from an environment that must live beside the runtime — the piece decision 1 declined.
-
-**Recommendation: (a).**
+Owner, 2026-10-02. A native `tatolabd` runs no Python, so the hook's runtime-process call site
+(§Packages `:239-275`) could not stand; options were (a) processor interpreters only, (b) an
+interpreter embedded in `tatolabd` for hooks alone, (c) no hook. The owner chose (c): the
+runtime is the host and streams are its guests, so no package extends the engine — one shared
+runtime serves every stream on the machine, and code inside it could crash, read or send out
+every stream's data. A package does its own setup where its nodes run, at import or on first
+use (the shipped two install a TLS provider and a network thread pool); a node's lifecycle
+methods are unchanged; an outside program watches the local API's events. An engine-grade
+capability enters as a built-in under `:211-225`. Superseded at the fold: `:192-210` (two
+mechanisms), `:239-258`, `:259-275`, `:276-280`, the hook half of `:281-294`, and `graph`'s
+`extensions` key. Retired as residue, the questions they asked having no subject left: the
+OPENs `:295-298` (how an extension's engine-grade capability is reached) and `:299-304`
+(extension native code in the app process). The control-client entry `:514-515` stands; how a
+client plugs in stays OPEN `:535-537`, its "role beside today's two" wording residue.
 
 ## Target layout
 
@@ -136,8 +138,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   ```
 - **Runtime-backed names are declared once, here**: the contexts, `LinkInputDataReader`,
   `LinkOutputDataWriter`, `ProcessorLinkDataAccess`, `GpuContext*`, `GpuSurfaceHandle`, the
-  kernels, `MonotonicTimer`, the texture exports, `ProcessorOwnedWindow*`,
-  `CapabilityExtensionHost`, the bag codec pair, `monotonic_now_ns`,
+  kernels, `MonotonicTimer`, the texture exports, `ProcessorOwnedWindow*`, the bag codec pair, `monotonic_now_ns`,
   `this_machines_stamp_clock_identity`. A class is a `typing.Protocol` carrying today's stub
   signatures; a function resolves the runtime's on first call and, with nothing lent, raises
   `RuntimeError` naming itself and saying it runs in a processor interpreter. `_engine.pyi`
@@ -152,7 +153,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
 - `tatolab/runtime/`, a regular package: `__init__.py` naming the bundled ICD before `_engine`
   loads (today's `streamlib/__init__.py:18-21`); `_engine` (`module-name =
   "tatolab.runtime._engine"`), the bindings only; `_processor_interpreter_bootstrap.py`
-  (today's `_helper.py`); `_capability_extensions`; on macOS `_vulkan_driver/`. No `Runtime`,
+  (today's `_helper.py`); on macOS `_vulkan_driver/`. No `Runtime`,
   no CLI, no `testing`, no control-plane client: the Python-hosted engine is deleted.
 - maturin builds it as a wheel that `cargo xtask build-runtime` unpacks into
   `target/tatolab-runtime/lib/tatolab/lend/` beside the two binaries — the runtime unit's one
@@ -226,7 +227,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
 
 ## MODIFIED: records re-spelled at the fold
 
-- §Packages `:184-191`, `:226-237`, `:239-275` (per decision 2), `:281-294` — `tatolab-moq`
+- §Packages `:184-191`, `:226-237`, decision 2's entries, `:281-294` — `tatolab-moq`
   (`tatolab.moq`), `tatolab-webrtc`, depending on `tatolab-stream`; directories unchanged, since
   CLAUDE.md's licensing rule cites `packages/streamlib-moq/vendor/moq-transport`.
 - §Product `:21-31`, `:39-46`, `:60-82` (one suite on both floors → three; the closed list
@@ -253,7 +254,7 @@ its PR. Paths under `sdk/streamlib-python-wheel/` unless rooted. One file per ro
 | `src/python_native_builtin_blocks.rs`, `src/python_processor_registration.rs`, `src/python_processor_import_path.rs` (identity checked at `add`) | deleted; identity is checked by the builder and by describe | S2, S3 |
 | `src/python_helper_process_spawn_host.rs` (2074 lines), `src/helper_process_shutdown_ladder.rs` (798) | moved into the engine, Python-free | S3 |
 | `src/python_logging.rs:162-186` and `core/logging/mod.rs:31` (app-process Python log records) | deleted; the helper drain stays | S4 |
-| `src/python_capability_extension_host.rs:83` (app-process host) | deleted, per decision 2 | S7 |
+| The hook: `src/python_capability_extension_host.rs`, `python/streamlib/_capability_extensions.py`, its two call sites (`Runtime.__init__`, `_helper.py`), `graph`'s `extensions` key in `GraphResponse`, OpenAPI and MCP, `generate_third_party_notices.rs:1277-1312`'s entry-point discovery, `test_capability_extensions`, `extension_fixtures/` | deleted; the notices find `packages/*` by path | S7 |
 | `src/python_runtime_mesh_observation.rs`, `cli.py`, `_control_plane_client.py`, `_node_registry.py`, `_runtime_log_reader.py`, `_surface_image_exchange.py` | rewritten in `tatolab`, then deleted | S5 |
 | `runtime/streamlib-engine/src/core/signals.rs:9-12` (names CPython), the hand-back bookkeeping | the doc and the dead arm deleted; the ladder is reused as-is through `start_and_wait_for_shutdown` | S4 |
 | `_engine.pyi` beyond the bootstrap's surface | replaced by the Protocols and the conformance gate | S2 |
@@ -279,7 +280,7 @@ its subject; no test runs against a path its slice deleted.
 - **Split (22):** pure halves to the stream suite, the running halves to integration, named-device
   refusals of native built-ins to the runtime suite, and the in-process halves deleted —
   `interpreter_lifecycle:53-319`, `graph_building:42-80`, `:187`, `cli:150-413`,
-  `cli_observation_verbs:1222-1238`, `capability_extensions:80-130`. S2–S5.
+  `cli_observation_verbs:1222-1238`. S2–S5; `capability_extensions` dies whole with the hook, S7.
 
 ## Left to later changes
 
@@ -318,7 +319,8 @@ its subject; no test runs against a path its slice deleted.
 - **S5 — `tatolab`.** The native CLI; `cli.py` deleted; the release, the index and the macOS
   done-proof. Blocked by S4.
 - **S6 — refusal by name** and the golden graph. Blocked by #2565.
-- **S7 — the extensions**, with decision 2. Blocked by S3.
+- **S7 — the extensions and the hook.** `tatolab-moq`, `tatolab-webrtc`, their setup moved into
+  their own code, the hook deleted whole. Blocked by S3.
 
 ## REMOVED
 
@@ -329,6 +331,9 @@ its subject; no test runs against a path its slice deleted.
 - REMOVED: from streamlib import
 - REMOVED: pip install streamlib
 - REMOVED: streamlib.extensions
+- REMOVED: CapabilityExtensionHost
+- REMOVED: register_capability
+- REMOVED: _capability_extensions
 - REMOVED: register_declared_processor_class
 - REMOVED: register_processor_class_by_import_path
 - REMOVED: install_unregistered_processor_type_resolver_once
