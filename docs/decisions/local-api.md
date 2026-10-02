@@ -101,6 +101,10 @@ Consequences:
 - `add_node` answers the name the node received, since a defaulted duplicate gains a suffix;
   that name is what every later call uses.
 - `graph` renders no `processor_id` beside a link end; a node's own `id` stays as a live key.
+- A name is unique only within its stream. While a runtime holds one stream the name alone is
+  the node; once one runtime hosts several, every tool that names or adds a node also names its
+  stream, as the address `<machine>/<stream>/<node>/<port>` does, spelled with the stream
+  actions by the change that builds them.
 - `runtime_name` stays the remote half of an end until one runtime hosts several streams and the
   address gains its machine and stream.
 - The engine's Rust identifiers keep "processor" until the rename step.

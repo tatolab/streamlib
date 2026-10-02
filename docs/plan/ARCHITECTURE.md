@@ -4381,8 +4381,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   tools are `add_node(type, config, name)`, answering the name the node received;
   `remove_node(name)`; `connect`, each end given as `<end>_node` and `<end>_port`, with
   `<end>_runtime_name` for a port on another runtime; and `disconnect` as it stands. Every tool
-  addresses a node by its name, never by an id; `graph` still renders a node's `id` as a live
-  key. `tap`'s channel is `<runtime_name>/<node>/<port>`; the catalog resource is
+  addresses a node by its name within its stream, never by an id; `graph` still renders a
+  node's `id` as a live key. While a runtime holds one stream, the name alone is the node; once
+  one runtime hosts several, every tool that names or adds a node also names its stream, as the
+  address does, spelled with the stream actions by the change that builds them. `tap`'s channel is `<runtime_name>/<node>/<port>`; the catalog resource is
   `node-catalog`, listing `nodes`, each under the `type` `add_node` takes; the instructions and
   the prompts say node — `insert_node_between_linked_nodes` among them. `runtime_name` stays
   until one runtime hosts several streams and the address gains its machine and stream. The
