@@ -4080,7 +4080,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   (snapshots, HLS, transcoding) then comes from the machine, and stock ffmpeg and curl work
   only through a TLS tunnel ending on the machine. Owner, 2026-09-30. [one-runtime-per-machine]
 
-## Language SDKs & parity — SHIPPED
+## Language SDKs & parity — IN-FLIGHT (→ package-split-and-lend)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
 
 - **DECIDED** — Python is the sole focus runtime: the importable PyO3 wheel is the
