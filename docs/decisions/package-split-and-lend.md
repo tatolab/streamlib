@@ -81,3 +81,32 @@ Rejected:
   network thread pool) a package does at import, so the mechanism carries nothing.
 - *An interpreter embedded in `tatolabd` for hooks.* It puts back the Python environment beside
   the runtime that the first ruling declined, to serve capabilities nobody has designed.
+
+## Decided 2026-10-02: one version number
+
+After the split, the stream library and the runtime are installed apart — the library into each
+project's venv, the runtime once per machine — and nothing ties their versions, by the ruling
+above. What remains is what the numbers tell a person. The guarantee a person can act on is "a
+runtime at least as new as the stream library runs the stream", and that comparison only
+exists if both carry one number. So everything Tatolab releases from this repository — the
+stream library, its Rust crate, the runtime unit and the first-party extensions — carries one
+version and is released together, every piece at every release. Tailscale ships the same way:
+`tailscaled`, the CLI, every platform's app and the Go library developers embed carry one
+number, and the CLI only warns when it differs from the daemon. Owner, 2026-10-02.
+
+Rejected:
+- *Separate numbers per piece.* Nobody can tell which runtime is newer than which library
+  without a table, and the table becomes a thing to maintain.
+- *One number line, publishing only the pieces that changed.* A project then shows a library
+  and a runtime at different numbers with no way to tell whether the pair is fine, and a
+  library-only release names a runtime version that never shipped.
+- *Extensions on their own numbers while they live here.* The number is not what makes an
+  extension third-party-shaped — its standalone build, its own lockfile and CI lane, and its
+  dependency on the published `tatolab-stream` by a minimum version are, and all of them stay.
+  A separate number only adds bookkeeping; an extension takes one when it leaves this repository.
+
+Consequences:
+- Some releases publish a piece with nothing new in it; installing it changes nothing.
+- A runtime's refusal of something it lacks names its own version, so a person can compare it
+  with the stream library's.
+- release-please carries one version for the repository, the extensions included.

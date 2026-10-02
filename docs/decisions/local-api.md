@@ -76,3 +76,31 @@ The MCP transports spec says clients SHOULD support stdio whenever possible.
   `server/discover` to stdio servers before `initialize`, and defaults to 2026-07-28 negotiation);
   Codex had the revision behind a feature flag at the end of August; Claude Desktop, Cursor and
   VS Code had nothing documented.
+
+## Decided 2026-10-02: the local API speaks the graph's words
+
+The graph's one shape re-spelled what `graph` renders in the stream vocabulary — node, name,
+port — and left the tools' arguments to the local API, whose change carried the protocol and not
+the words. Shipped as it stood, one conversation would mix two vocabularies: an agent reads
+`node: "camera"` in `graph` and types `from_processor_display_name: "camera"` to wire it.
+
+Decision: every argument is spelled as `graph` renders the same thing, so whatever an agent reads
+it can type back. The mutation tools are `add_node`, `remove_node`, `connect` and `disconnect`;
+a link end is a node and a port, with a runtime name for a port on another runtime, in a tool
+and in `graph` alike; the catalog, the prompts and the instructions say node. The re-spelling
+ships with the graph's one shape, so `graph` and the tools change together. Owner, 2026-10-02.
+
+Rejected:
+- *Keep the tools' spellings until runtime hosting re-spells the verbs.* Ships the mixed
+  vocabulary for a whole step of the pivot, with agents written against it in the meantime.
+- *Re-spell the words but keep addressing a node by its processor id.* The id is the engine's
+  word, and the address a person and an agent use is the name; a node's name is unique in its
+  stream, so the id adds nothing a tool needs.
+
+Consequences:
+- `add_node` answers the name the node received, since a defaulted duplicate gains a suffix;
+  that name is what every later call uses.
+- `graph` renders no `processor_id` beside a link end; a node's own `id` stays as a live key.
+- `runtime_name` stays the remote half of an end until one runtime hosts several streams and the
+  address gains its machine and stream.
+- The engine's Rust identifiers keep "processor" until the rename step.

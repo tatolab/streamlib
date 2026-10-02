@@ -49,7 +49,9 @@ must meet the criterion in §Packages & extension model — a deadline the inter
 meet, an engine-only primitive, or an OS-facing device the wheel must present to other
 applications, and a named consumer. _Avoid_: "built-in" for an optional capability (that is an
 **extension wheel**). _Amended by package-split-and-lend: built-ins ship inside the runtime,
-never on pip, and `tatolab.stream` carries a class generated for each._
+never on pip, and `tatolab.stream` carries a class generated for each. Amended by
+built-in-node-type: a built-in's type is that class's import path (`tatolab.stream:CameraSource`),
+never where its native code lives._
 
 **Extension wheel**: a separate PyPI package — Rust inside for speed, a Python processor as
 the binding — that depends on the `streamlib` wheel as a binary and never builds it from
@@ -174,7 +176,8 @@ with its description, config schema and ports — served over the local API. _Av
 **Node** _(user)_: a step in a stream — the class a person writes (`@node` in Python,
 `#[node]` in Rust) and each placement of it under a name; "node instance" when the
 distinction matters, as for any class. The class is identified by its fully-qualified import
-path, so it must live in an importable, side-effect-safe module — a class defined in
+path (a built-in by its class's path in `tatolab.stream`), so a class the project writes must
+live in an importable, side-effect-safe module — a class defined in
 `stream.py` (`__main__:<Type>`) is a wiring error. A placed node is what a log line, a crash
 and a process id belong to. _Avoid_: "processor" on a user surface, "operator", "element",
 "stage", "step", "instance" alone; the live-runtime sense of "node" is retired.
@@ -280,10 +283,11 @@ unqualified where the allocation-vs-frame distinction matters.
 **Present target**: the engine-owned presentation surface minted from a raw window
 handle; the only way frames reach a window.
 
-**Processor-owned window**: a window a processor requested from the engine and owns the
+**Node-owned window** _(user)_: a window a node requested from the engine and owns the
 policy of — title, extent, which frame it shows, what close means. For an owner outside
-the app process, the engine runs the window's native present loop, fed by surface ids
-the owner names. _Avoid_: "debug window" as the concept (a use, not the capability).
+the runtime process, the engine runs the window's native present loop, fed by surface ids
+the owner names. _Avoid_: "processor-owned window" (retired 2026-10-02), "debug window" as the
+concept (a use, not the capability).
 
 **Kernel**: a GPU program the engine compiles and runs on its device — compute,
 graphics, or ray-tracing. _Avoid_: "shader" for the whole object (that is its source
