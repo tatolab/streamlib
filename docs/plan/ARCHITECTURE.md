@@ -522,8 +522,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   bootstrap, and on macOS the bundled Vulkan driver — and ships only with the runtime, never
   through pip. A stream's venv installs `tatolab-stream` and holds no engine; the runtime
   starts each of the stream's processor interpreters from that venv's interpreter with one
-  directory prepended to its `PYTHONPATH`, the runtime's own `tatolab/runtime/`, which PEP 420
-  merges with the venv's `tatolab/stream/`. No distribution ships `tatolab/__init__.py`, and
+  directory prepended to its `PYTHONPATH` — the runtime's lend directory, which holds
+  `tatolab/runtime/` — so PEP 420 merges that `tatolab/runtime/` with the venv's
+  `tatolab/stream/`. No distribution ships `tatolab/__init__.py`, and
   `tatolab/runtime` is a regular subpackage. The bootstrap is the runtime's own entry, never
   `-m` from the project directory, and the exact-build handshake stays as the backstop. A
   stream never names a runtime version and nothing of the runtime enters its `pyproject.toml`:
@@ -1074,8 +1075,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
   placement. [helper-process-placement-only — SHIPPED #1714; amended by package-split-and-lend: the exec
-  is the stream's own venv interpreter with the runtime's `tatolab/runtime/` lent on its
-  `PYTHONPATH`, so a child imports the lent portion, not a wheel in its venv; per-stream
+  is the stream's own venv interpreter with the runtime's lend directory, which holds
+  `tatolab/runtime/`, prepended to its `PYTHONPATH`, so a child imports the lent portion, not a wheel in its venv; per-stream
   environments in one runtime process are runtime-hosting's]
 - **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
   service above the transport does not change: its verbs, its per-slot-not-per-frame shape,

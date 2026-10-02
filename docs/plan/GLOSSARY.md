@@ -19,8 +19,8 @@ the runtime, never through pip. _Avoid_: "the runtime package" on a user surface
 install it), "the engine wheel".
 
 **The lend** _(engine)_: how a processor interpreter sees the runtime portion — the runtime
-prepends its own `tatolab/runtime/` directory to the interpreter's `PYTHONPATH`, merged by
-PEP 420 with the venv's `tatolab/stream/`. _Avoid_: "injection", "shim", "vendoring".
+prepends its lend directory, the one holding `tatolab/runtime/`, to the interpreter's
+`PYTHONPATH`, so PEP 420 merges that `tatolab/runtime/` with the venv's `tatolab/stream/`. _Avoid_: "injection", "shim", "vendoring".
 
 Register markers, since the 2026-09-30 pivot: _(user)_ is what a Tatolab user reads and
 types; _(engine)_ is what the runtime's code, the plan and the decision records say, and

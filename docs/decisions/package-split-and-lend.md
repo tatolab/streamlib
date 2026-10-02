@@ -15,8 +15,8 @@ shipping a `tatolab/__init__.py`.
 Two packages under one PEP 420 namespace. `tatolab-stream` (`tatolab.stream`) is pure Python and
 is everything a stream module imports, so a stream compiles with no runtime present.
 `tatolab.runtime` is the engine's native part and ships only with the runtime. The runtime lends
-its `tatolab/runtime/` directory to each processor interpreter it starts from the stream's venv,
-on `PYTHONPATH`. A stream never names a runtime version; the runtime refuses by name what it does
+its lend directory — the one holding `tatolab/runtime/` — to each processor interpreter it starts
+from the stream's venv, prepended to `PYTHONPATH`. A stream never names a runtime version; the runtime refuses by name what it does
 not understand in a graph, and a newer runtime loads every older graph. A stream's environment
 is recorded beside its graph, never inside it.
 
