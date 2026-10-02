@@ -35,6 +35,9 @@ packaged on Apple.
   recorded and kept for good —
   the first claimant keeps the bare name (2026-10-02).
 
+- A minimal `Tatolab.app` ships with runtime hosting, not at step 10 (2026-10-02, runtime-hosting
+  decision 2): opening it starts the runtime if it is not running and offers the login item, as
+  Docker Desktop does; Developer ID signed and notarised. The terminal stays a developer's path.
 - No shutdown verb (2026-10-02, runtime-hosting decision 1): the runtime stays on, as `tailscaled`
   does; quitting the app quits the app. It stops only by its service manager or a signal in the
   terminal running it; a client ends its own work with `stop <stream>`.
@@ -52,6 +55,8 @@ packaged on Apple.
   §9: suffix, persist, tell the user) and Tailscale (`<hostname>-1`, kept after the other leaves)
   were checked live 2026-10-02; the suffix being recorded once is what keeps addresses stable,
   the worry "never auto-suffixed" guarded.
+- **A terminal on Apple until step 10.** Decided at the align, reversed at the proposal: most Mac
+  users open an app, and the owner already holds the Developer ID the app needs.
 - **`run` starting a runtime when none is running.** Hides which build is serving the machine and
   makes the runtime's lifetime a side effect of whichever command ran first.
 

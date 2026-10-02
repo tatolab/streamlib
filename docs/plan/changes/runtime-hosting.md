@@ -14,21 +14,22 @@ ones it was told to keep, is addressed by its machine, and arrives from an insta
   restart included; an attached one lives as long as its terminal command;
 - an address is `<machine>/<stream>/<node>/<port>`, right-anchored; the runtime name is gone; a
   machine name clash on the mesh takes the next unused `-2`, `-3`… once and keeps it;
-- the release attaches a runtime unit per platform; `curl | sh` and a brew tap install it, and on
-  Linux the installer registers `tatolabd` as a systemd user service.
+- the release attaches a runtime unit per platform. On Linux `curl | sh` installs it and registers
+  `tatolabd` as a systemd user service; on macOS a signed, notarised `Tatolab.app` carries it,
+  starts it if it is not running and offers the login item, as Docker Desktop does.
 
 **Scale gate — this skill, plus the existing ADR.** The processor model (registries, shutdown and
 spawn become per stream), the Python API's public contract (the builder's remote references), the
 wire (the mesh keys gain a chunk, the announcement a machine id) and the local API's tool set all
 move. The rationale is `docs/decisions/runtime-hosting.md` (#2580, #2600), which this PR extends
-with decision 1.
+with decisions 1 and 2.
 
 **Precondition.** Every entry built is DECIDED: §Product `ARCHITECTURE.md:107-113` (required,
 installer-shipped), `:114-121` (who starts it), `:122-143` (loaded and kept; stop, start, rm; one
 user), `:152-157` (composition, flat graph); §Processor model `:1389-1402` (graph is data, emitted),
 `:1403-1407` (environment beside the graph), `:1415-1425` (several streams, the split),
-`:1434-1446` (failure isolation, the state directory); §Media I/O `:3202-3213` (Apple: terminal
-until the app); §Networking `:4018-4022` (the runtime decides what leaves), `:4052-4071` (the
+`:1434-1446` (failure isolation, the state directory); §Media I/O `:3202-3213` (Apple: the app's
+agent, prompts named Tatolab — built here by decision 2); §Networking `:4018-4022` (the runtime decides what leaves), `:4052-4071` (the
 address and its collisions), `:4072-4079` (exposure); §Distribution `:4209-4219` (one version);
 §Control plane `:4399-4415` (the graph's words), `:4559-4567` (one socket), `:4580-4585` (`graph`
 and the stream tools). Not built against: needs `:1408-1414`, resources `:1428-1433`, accelerators
@@ -49,8 +50,7 @@ client. **Sequencing:** after #2592 and #2593 (native `tatolabd` and `tatolab`) 
   ends the process with 124 (`engine_teardown_watchdog.rs:22-94`, `end_the_process_at_once.rs:40-51`);
   `REGISTERED_HELPER_PROCESS_GROUP_IDS` (`helper_process_group_registry.rs:37`);
   `APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST` (`core/app_directory.rs:19`); the logging
-  install, first caller wins, a second getting no file (`logging/init.rs:48-56`, `:102`) and
-  records stamped with the first id (`worker.rs:77-98`). A `GpuContext` is made per `start()`
+  install, first caller wins (`logging/init.rs:48-56`, `:102`; `worker.rs:77-98`). A `GpuContext` is made per `start()`
   (`runtime.rs:565`) and `VULKAN_DEVICE_FOR_IMPORT` is first-wins (`vulkan/rhi/vulkan_buffer.rs:27`)
   — the NVIDIA dual-device crash (`docs/learnings/nvidia-dual-vulkan-device-crash.md`). Signals,
   init hooks, the window pump, device probes and the clock identity are correctly machine-wide.
@@ -61,30 +61,21 @@ client. **Sequencing:** after #2592 and #2593 (native `tatolabd` and `tatolab`) 
   (`runtime.rs:391-393`, `:452-456`), and the local API, which is an `ApiServer` processor inside
   the graph holding one `RuntimeOperations` (`A/src/control_plane_host.rs:24-47`, `state.rs:14`),
   implemented by `Runner` itself.
-- **Channels.** Local channels are `{processor_id}/{port}` on cuid2 ids, unique across graphs
-  (`E/iceoryx2/channel_name.rs:198-215`). A mesh ingress is `meshlink-<fnv64 of the address>/bags`
-  (`:242-248`) with one publisher per channel (`iceoryx2/node.rs:321`): two streams reading one
-  remote port would collide. The surface service already tags surfaces by owner and releases by
-  owner (`E/linux/surface_share/state.rs:26`, `:450-493`).
-- **Names.** The runtime name is defined, defaulted from `<host>-<app dir>-<id>` and validated in
-  `E/core/runtime/runtime_name.rs:25-180`; ~800 lines across engine, api-server, wheel, tests and
-  docs name it. Every Zenoh key is built in `runtime_mesh_key.rs:28-326`, parsed by fixed chunk
-  position (`:164-184`, `:304-319`). Host identity is boot-scoped (`host_identity.rs:20-107`); no
-  persistent machine id exists. The duplicate check queries before declaring, 2 s ceiling, a
-  failed query read as no holder, takeover on same host and gone pid
-  (`duplicate_runtime_name_on_the_mesh.rs:34-161`).
-- **Disk.** Nothing persistent per user exists. Logs go to `<home>/.streamlib/logs/<runtime_id>-<ms>.jsonl`
-  (`E/core/logging/paths.rs:16-23`; the comments at `init.rs:120` and `event.rs:5` naming
-  `XDG_STATE_HOME` are wrong). The registry is one JSON per live runtime under `<runtime dir>/nodes/`
-  (`A/src/node_registry.rs:28-64`), written by the `ApiServer` processor (`A/processors/api_server.rs:164-216`).
-- **Tools.** `graph`, `tap`, `logs`, `exchange`, `shutdown`, `add_processor`, `remove_processor`,
-  `connect`, `disconnect` (`A/src/mcp.rs:275-427`); `shutdown` reaches the global funnel
-  (`:590-604`, `A/src/handlers.rs:179-215`). stream-graph and local-api re-spell them (#2565,
-  `ARCHITECTURE.md:4399-4415`).
-- **Release.** Wheels only, built in `manylinux_2_28` and on `macos-15`, ad hoc signed, uploaded to
-  the GitHub release (`release-wheel.yml:61-269`, `macos-wheel.yml:37-198`); the Pages index
-  reads `.whl` only (`scripts/build_simple_index.py:31-86`). No install script, formula, unit or
-  plist exists anywhere.
+- **Channels.** Local channels ride cuid2 ids, unique across graphs (`E/iceoryx2/channel_name.rs:198-215`);
+  a mesh ingress `meshlink-<fnv64>/bags` (`:242-248`) allows one publisher (`iceoryx2/node.rs:321`),
+  so two streams reading one remote port collide. Surfaces are tagged and released by owner
+  (`E/linux/surface_share/state.rs:26`, `:450-493`).
+- **Names.** The runtime name (`E/core/runtime/runtime_name.rs:25-180`) is named on ~800 lines;
+  every Zenoh key is built in `runtime_mesh_key.rs:28-326`, parsed by chunk position (`:164-184`,
+  `:304-319`). Host identity is boot-scoped (`host_identity.rs:20-107`); no persistent machine id
+  exists. The duplicate check reads a failed query as no holder and takes over a same-host, gone
+  pid (`duplicate_runtime_name_on_the_mesh.rs:34-161`).
+- **Disk.** Nothing persistent per user exists; logs go to the project's `.streamlib/logs/`
+  (`E/core/logging/paths.rs:16-23`; `init.rs:120`, `event.rs:5` wrongly say `XDG_STATE_HOME`); the
+  registry is one JSON per runtime (`A/src/node_registry.rs:28-64`, `A/processors/api_server.rs:164-216`).
+- **Tools** (`A/src/mcp.rs:275-427`): `shutdown` reaches the global funnel (`:590-604`,
+  `A/src/handlers.rs:179-215`). **Release:** wheels only, ad hoc signed (`release-wheel.yml:61-269`,
+  `macos-wheel.yml:37-198`); no install script, formula, unit, plist or Developer ID anywhere.
 
 ---
 
@@ -97,6 +88,15 @@ application menu, `E/apple/application_menu.rs:42`, which today ends every strea
 `stop <stream>` is how a client ends work. The runtime stops only by its service manager
 (`systemctl --user stop`) or a signal in the terminal that runs it. Options were (a) retire it,
 (b) keep it machine-wide, (c) keep it as a restart.
+
+## Decision 2 — RESOLVED (a): a minimal `Tatolab.app` ships in this change
+
+Owner, 2026-10-02: on a Mac "most people would open the app and it starts the service if not
+started just like docker as well as set up a login item if allowed"; the owner holds the Apple
+Developer ID. Options were (a) the app now, (b) a terminal until step 10. This amends §Product
+`:114-121`'s "until the app ships, `tatolabd` runs in a terminal there" — the terminal stays a
+developer's path, crediting the terminal — and builds §Media I/O `:3202-3213` here. Step 10 grows
+the same app; nothing here is rebuilt there.
 
 ---
 
@@ -115,7 +115,8 @@ runtime/streamlib-engine/src/core/runtime/
 runtime/streamlib-api-server/          hosted by the Runner beside the streams, never a node in one
 installer/install.sh                   curl | sh, served from the Pages site
 installer/tatolabd.service             the systemd user unit the script installs
-installer/homebrew/tatolab.rb          the formula, published to tatolab/homebrew-tap per release
+installer/homebrew/tatolab.rb          the cask, published to tatolab/homebrew-tap per release
+apps/tatolab-macos/                    Tatolab.app: a menu-bar app carrying the runtime unit
 ```
 
 ## ADDED: §Processor model — one engine, many streams
@@ -215,27 +216,36 @@ installer/homebrew/tatolab.rb          the formula, published to tatolab/homebre
   string, right-anchored — `"main/camera/video"` is another stream here, `"rig/main/camera/video"`
   another machine — and refuse a chunk the grammar refuses where the author wrote it.
 
-## ADDED: §Distribution — the runtime unit and the minimal installer
+## ADDED: §Distribution — the runtime unit, the Linux installer, the Mac app
 
 - **The unit.** Each release attaches `tatolab-runtime-<version>-x86_64-linux.tar.gz` (built in
-  `manylinux_2_28`, the wheel's glibc floor) and `…-aarch64-darwin.tar.gz` (`macos-15`, 15.0,
-  ad hoc signed, signatures checked in the tarball) — `cargo xtask build-runtime`'s prefix, at the
+  `manylinux_2_28`, the wheel's glibc floor) — `cargo xtask build-runtime`'s prefix, at the
   repository's one version. The portability gate runs over the unit.
-- **`curl -fsSL https://tatolab.github.io/streamlib/install.sh | sh`** installs the newest
-  release's unit into `~/.local/share/tatolab/<version>/` and links `tatolab`, `tatolabd` into
-  `~/.local/bin`, keeping `bin/` and `lib/` siblings. On Linux it writes
-  `~/.config/systemd/user/tatolabd.service` (`Restart=on-failure`, `WantedBy=default.target`,
-  after `graphical-session.target` so windows find the display), runs `systemctl --user enable
-  --now`, and prints `loginctl enable-linger` for a machine with no login. On macOS it prints
-  "run `tatolabd` in a terminal" — the app registers the service later (§Media I/O). `--uninstall`
-  stops and removes the unit and the unit files, never the state directory.
-- **`brew install tatolab/tap/tatolab`** installs the same tarball (keg in `libexec`, `bin/`
-  linked); its `post_install` and caveats do on each platform what the script does.
+- **Linux: `curl -fsSL https://tatolab.github.io/streamlib/install.sh | sh`** installs the newest
+  unit into `~/.local/share/tatolab/<version>/`, links `tatolab` and `tatolabd` into
+  `~/.local/bin` (`bin/` and `lib/` stay siblings), writes `~/.config/systemd/user/tatolabd.service`
+  (`Restart=on-failure`, after `graphical-session.target` so windows find the display), runs
+  `systemctl --user enable --now`, and prints `loginctl enable-linger` for a machine with no
+  login. `--uninstall` removes the unit and the files, never the state directory. On macOS the
+  script refuses, pointing at the app.
+- **macOS: `Tatolab.app`**, a menu-bar app, from a notarised `.dmg` on the release and `brew install
+  --cask tatolab/tap/tatolab`. `tatolabd` is `Contents/MacOS/tatolabd` and the lend
+  `Contents/Resources/lend/`; it registers with `SMAppService.agent` (plist in
+  `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit). Opening the app registers and
+  starts the agent when it is not running and offers it as a login item when the user allows;
+  the menu shows whether the runtime is up and how many streams it holds (`list_streams`),
+  toggles start at login, and Quit quits the app, never the runtime (decision 1). On first launch
+  it links `tatolab` into `/usr/local/bin` behind the administrator prompt, or says where it is.
+  The camera, microphone and local-network usage strings sit in its `Info.plist`; the app and
+  `tatolabd` carry the hardened-runtime device entitlements; every Mach-O in the bundle, the lend
+  included, is signed with the Developer ID, and the `.dmg` is notarised and stapled — the
+  control-tower desktop workflow's steps and its six `APPLE_*` secrets, copied to this repository.
+  The prompt's wording under `SMAppService` is the acceptance check §Media I/O names.
 
 ## MODIFIED: records re-spelled at the fold
 
 - §Product `:122-143` gains the verbs' tools; §Processor model `:1415-1425` the per-stream table;
-  `:1434-1446` "persisted graphs" → the state directory. §Networking `:3588-3610` (session config
+  `:1434-1446` "persisted graphs" → the state directory; `:114-121` per decision 2. §Networking `:3588-3610` (session config
   from `machine.json`, flags, environment), `:3644-3691` (the runtime name superseded by the machine
   name), `:3765-3790` (the builder's address string; MCP ends). §Control plane `:4345-4398` (the
   tools; `shutdown` gone, decision 1), `:4446-4466` (registry gone; the state directory beside the
@@ -263,7 +273,7 @@ installer/homebrew/tatolab.rb          the formula, published to tatolab/homebre
 
 | Not here | Because | Lands with |
 |---|---|---|
-| The app registering the Apple service; Apple permissions credited to Tatolab | the app | step 10 |
+| The rest of the app: stream views, updates in place, the remaining Rust names | the app | step 10 |
 | Starting with no GPU | accelerators OPEN | step 5 |
 | `machines`, `streams --machine`; router mode and dialing relays (today's five mesh settings only move to `machine.json`) | discovery and stream-map OPENs | step 8 |
 | `run <url-or-zip>`; registries | packs OPEN | step 7 |
@@ -289,8 +299,11 @@ installer/homebrew/tatolab.rb          the formula, published to tatolab/homebre
   its own machine.
 - **`machine.json` settings apply at the next start**; changing a machine's name renames every
   address it serves, so it never happens live.
-- **The installer lives in this repository; the tap is `tatolab/homebrew-tap`**, created by the
-  owner and bumped per release by the release workflow.
+- **The installer and the app live in this repository; the tap is `tatolab/homebrew-tap`**,
+  created by the owner and bumped per release by the release workflow.
+- **The app is Tauri**, as control-tower's desktop app is, so step 10's views can reuse a web UI;
+  the agent is registered through `objc2-service-management` from its Rust side. Where it bites:
+  a native AppKit app would be smaller, and switching later rewrites only the menu.
 - **`dev`'s watch** polls the project's `.py` files with no new dependency.
 
 ## Slices, each deleting what it replaces, tests included
@@ -303,8 +316,11 @@ installer/homebrew/tatolab.rb          the formula, published to tatolab/homebre
 - **S3 — the machine segment**: four-part addresses and keys, the machine id and name, the suffix,
   `set`, cross-stream links, one ingress per machine, the builder's address string, the mesh
   fixtures. Blocked by S2, #2566.
-- **S4 — the unit and the installer**: release tarballs, `install.sh`, the unit, the formula, the
-  restart criterion on the rig. Blocked by S2.
+- **S4 — Linux**: the release tarball, `install.sh`, the unit, the restart criterion on the rig.
+  Blocked by S2.
+- **S5 — `Tatolab.app`**: the bundle, the agent, the menu, the CLI link, Developer ID signing and
+  notarisation, the `.dmg` and the cask, the prompt check and the restart criterion on a Mac.
+  Blocked by S2; the owner copies the six `APPLE_*` secrets first.
 
 ## REMOVED
 
