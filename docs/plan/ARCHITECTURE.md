@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph)
+## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
@@ -142,7 +142,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [runtime-hosting; one-runtime-per-machine]
 
-## Packages & extension model — SHIPPED
+## Packages & extension model — IN-FLIGHT (→ package-split-and-lend)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -688,7 +688,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ stream-graph)
+## Processor model & scheduling — IN-FLIGHT (→ stream-graph, package-split-and-lend)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -4141,7 +4141,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sighup_tears_the_graph_down_gracefully -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
-## Distribution & versioning — SHIPPED
+## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
 
 - **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
