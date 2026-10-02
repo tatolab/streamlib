@@ -37,8 +37,10 @@ streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP
 
 - `import tatolab` alone gives nothing useful; code imports `tatolab.stream` or an extension.
 - The names were free on PyPI, crates.io, Homebrew and npm on 2026-10-01. PyPI reserves no name
-  before an upload, so `tatolab-stream` and the extensions are claimed by their first real release;
-  the owner held the bare PyPI name with the placeholder on 2026-10-02.
+  before an upload, and this repository names them in public, so on 2026-10-02 the owner held all
+  four PyPI names with 0.0.0 placeholders that install nothing: the bare `tatolab` for good, and
+  `tatolab-stream`, `tatolab-moq` and `tatolab-webrtc` until their first real release supersedes
+  the placeholder, which is then yanked.
 - Whether the MoQ and WebRTC nodes become pip extensions or ship inside the app is the packs
   decision, not a naming one; their names hold either way.
 - The repo, `streamlib` and the internal crate names stay until the rename step builds this.
