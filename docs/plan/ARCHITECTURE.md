@@ -524,15 +524,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   identity — or another seam. [one-runtime-per-machine]
 - **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
   `tatolab`; the desktop app is Tatolab (`Tatolab.app`); the installer ships all three as one
-  unit, and users still call the program "the runtime". The one distribution pip installs to
-  write streams is `tatolab`, importing as `tatolab.stream`. `tatolab.*` is a PEP 420 namespace
+  unit, and users still call the program "the runtime"; the bare name `tatolab` is the
+  product's and no pip distribution takes it. The one distribution pip installs to write
+  streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP 420 namespace
   shared by Tatolab's own distributions only: `tatolab.stream`; `tatolab.runtime`, the native
   portion `tatolabd` lends and no user installs; and optional first-party extensions, each
   `tatolab-<name>` importing as `tatolab.<name>` (`tatolab-moq` → `tatolab.moq`). No
   distribution ships `tatolab/__init__.py`. A third party's pack uses its own name, never the
   `tatolab` namespace. Which built-ins, extensions and packs ship inside the app or through pip
   is §Packages' packs OPEN. The extensions' entry-point group is `tatolab.extensions`, and the
-  Rust crate for writing streams is `tatolab`. Owner, 2026-10-01. [tatolab-names;
+  Rust crate for writing streams is `tatolab-stream`. Owner, 2026-10-01. [tatolab-names;
   one-runtime-per-machine]
 - **OPEN** — Packs, a registry, and loading a stream from a source. Direction (review, not
   decided; the owner wants to distribute what they build and update the app separately): the

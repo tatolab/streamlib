@@ -11,17 +11,20 @@ package under `tatolab.*`, and before adding a `tatolab/__init__.py` anywhere.
 ## Decision
 
 Tailscale's shape: the always-on program is `tatolabd` (as `tailscaled`), the CLI `tatolab` (as
-`tailscale`), the app Tatolab. The one thing pip ships for writing streams is the `tatolab`
-distribution, importing as `tatolab.stream`. `tatolab.*` is a PEP 420 namespace — Google's
+`tailscale`), the app Tatolab. "Tatolab" names the product; every pip distribution names
+what it is, `tatolab-<what>` importing as `tatolab.<what>`, so the one pip ships for writing
+streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP 420 namespace — Google's
 `google-cloud-*` pattern — shared only by Tatolab's own distributions: `tatolab.stream`,
 `tatolab.runtime` (lent by `tatolabd`, never pip-installed), and optional first-party extensions
 `tatolab-<name>` → `tatolab.<name>`. Third-party packs keep their own names.
 
 ## Rejected alternatives
 
-- **`tatolab-stream` as the pip name.** It spells its import path, Google's convention, but pip
-  only ever ships one Tatolab thing for authoring, so the brand name alone is unambiguous and
-  matches the app, the CLI and brew; extensions keep the spelled form.
+- **`tatolab` as the pip name for the stream library** (briefly recorded, reversed the same day
+  by the owner). The bare name means the whole product everywhere else — the app, brew, the CLI —
+  so a pip `tatolab` holding only the stream-building part reads as the product and is not; the
+  spelled `tatolab-stream` matches every extension (`tatolab-moq`). The bare PyPI name may be
+  held as a placeholder.
 - **`tatolab-streams` (plural).** Reads as a collection of streams, which is what a pack is.
 - **One `tatolab` package owning `tatolab/__init__.py`.** A regular package shadows every
   namespace portion on the path (PEP 420), hiding the runtime's lent portion and every extension

@@ -7,7 +7,7 @@ The shared language. Terms only — zero implementation detail. Maintained by th
 in one PyO3 package. _Avoid_: "the binary" (pre-pivot), "the SDK" (that is its API
 surface). _Amended 2026-09-30 by the one-runtime-per-machine pivot: it becomes two
 distributions, a pure-Python stream package and a native runtime package; until the rename,
-"the wheel" names what ships today. Named 2026-10-01: the stream package is the `tatolab`
+"the wheel" names what ships today. Named 2026-10-01: the stream package is the `tatolab-stream`
 distribution (`tatolab.stream`), the runtime package is `tatolab.runtime`, lent by `tatolabd`._
 
 Register markers, since the 2026-09-30 pivot: _(user)_ is what a Tatolab user reads and
