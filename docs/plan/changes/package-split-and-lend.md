@@ -276,16 +276,17 @@ its subject; no test runs against a path its slice deleted.
   `bundled_vulkan_driver` — following the native artifacts. S3–S5.
 - **Deleted (3 whole):** `graph_readiness`, `runtime_mesh_configuration`, `runtime_name` — the
   Python `Runtime`'s own surface; their environment-variable arms return as `tatolabd` tests. S4.
-- **Split (22):** pure halves to the stream suite, the running halves to integration, named-device
-  refusals of native built-ins to the runtime suite, and the in-process halves deleted —
-  `interpreter_lifecycle:53-319`, `graph_building:42-80`, `:187`, `cli:150-413`,
-  `cli_observation_verbs:1222-1238`. S2–S5; `capability_extensions` dies whole with the hook, S7.
+- **Split or deleted (22):** pure halves to the stream suite, the running halves to integration,
+  named-device refusals of native built-ins to the runtime suite, and the in-process halves
+  deleted — `interpreter_lifecycle:53-319`, `graph_building:42-80`, `:187`, `cli:150-413`,
+  `cli_observation_verbs:1222-1238`. S2–S5. `test_capability_extensions`, counted here, is
+  deleted whole with the hook, S7.
 
 ## Left to later changes
 
 | Not here | Because | Lands with |
 |---|---|---|
-| Several streams per `tatolabd`, the state directory, `run -d`, the `<machine>/` segment | step 4 | runtime hosting |
+| `run` loading into the running `tatolabd` instead of starting its own; several streams per `tatolabd`; the state directory; `run -d`; the `<machine>/` segment | step 4 (`:107-129`) | runtime hosting |
 | Installing and managing the runtime | owner: the app, long term | step 4's align and the app |
 | The engine's Rust crate names, `STREAMLIB_*` | step 10 | the app |
 | Publishing `tatolab-stream` to PyPI | outward-facing; names unregistered | the owner's call |

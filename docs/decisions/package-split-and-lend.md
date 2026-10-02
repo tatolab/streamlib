@@ -69,9 +69,10 @@ replace it. Rejected:
 
 **No package extends the engine; the capability-extension hook is deleted.** A native runtime
 process runs no Python, so the hook's runtime-process call site could not stand. The runtime is
-the host and streams are its guests: one shared runtime serves every stream on the machine, from
-different people and teams, and code inside it could crash, read or send out every stream's
-data. Daemons extend the same way: Docker's plugins are separate processes behind a socket, and
+the host and streams are its guests. The decided runtime serves every stream on the machine, from
+different people and teams; this step hosts one stream per `tatolabd` and step 4 builds the
+sharing, but a door into the engine built now would carry into it, where code inside the runtime
+could crash, read or send out every stream's data. Daemons extend the same way: Docker's plugins are separate processes behind a socket, and
 Tailscale's CLI and apps drive `tailscaled` over its LocalAPI. A package sets itself up where its
 nodes run, at import or on first use; a node's lifecycle methods are unchanged; an outside
 program watches the local API's events; a capability the engine needs enters as a built-in.
