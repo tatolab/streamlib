@@ -31,7 +31,8 @@ packaged on Apple.
 - Every CLI stream action is also a tool and `graph` returns every stream, because the CLI is a
   pure client of the runtime's tools; surfaces cross between streams on one machine with no
   copy (both confirmed 2026-10-02).
-- A machine-name clash on the mesh takes the next free `<name>-2`, recorded and kept for good —
+- A machine-name clash on the mesh takes the next unused suffix (`<name>-2`, then `-3`…),
+  recorded and kept for good —
   the first claimant keeps the bare name (2026-10-02).
 
 ## Rejected alternatives

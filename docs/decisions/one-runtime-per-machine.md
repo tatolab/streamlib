@@ -165,7 +165,8 @@ from what the owner said. A struck item has since been decided, and the plan hol
   2026-10-01 (#2580, on #2560's research).
 - ~~The collision rules behind the address: machine names unique per mesh, stream names per
   machine, typed node names refused when duplicated.~~ — Decided 2026-10-02 (runtime-hosting):
-  a machine name clash takes a recorded `-2` suffix, Bonjour- and Tailscale-style.
+  a machine name clash takes the next unused numeric suffix (`-2`, then `-3`…) and records it,
+  Bonjour- and Tailscale-style.
 - The stream map's details: who pushes it, how long it stays valid offline, how a peer
   authenticates.
 - Discovery: on one machine, on one network, across networks through a relay, and through a

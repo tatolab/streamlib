@@ -90,7 +90,8 @@ surface (the engine is the library inside it).
 
 **Machine** _(user)_: what a runtime is addressed as — the first chunk of an address,
 defaulting to the hostname; a containerised runtime is its own machine. Unique per mesh: a
-runtime finding its name taken takes `<name>-2` once and keeps it. _Avoid_: "host",
+runtime finding its name taken takes the next unused suffix (`<name>-2`, then `-3`…) once,
+records it and keeps it. _Avoid_: "host",
 "device", "runtime name" (retired).
 
 **Mesh name**: the name of one runtime mesh — one chunk of the channel-name grammar,
