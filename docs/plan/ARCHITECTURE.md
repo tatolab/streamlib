@@ -1379,7 +1379,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the class's short name as its own validated field rather than the engine splitting one
   out of the import path, because splitting re-invents the grammar this change deleted.
   [processor-class-identity — SHIPPED #1838, #1841; the address-chunk refusal —
-  runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment]
+  runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment; amended by runtime-hosting decision 3: a name is cast to the address grammar (§Networking, the address) and a defaulted duplicate takes `-2`, superseding spaces, unicode and ` 2`]
   <!-- verify: cargo test -p streamlib-engine --test display_name_disambiguation_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_disambiguated_too -->
@@ -4063,12 +4063,18 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   is unique per machine, defaults to its function's, and a second
   load of a name is refused naming where the first came from, with `--name` the way out, which
   covers two packs that each define a `main`; a **node** name is unique per stream — a
-  defaulted duplicate (two unnamed `CameraSource`) is auto-suffixed as today, while a duplicate
+  defaulted duplicate (two unnamed `CameraSource`) is suffixed `-2`, `-3` …, while a duplicate
   the author *typed* is refused by name, because a typed name is an address (this amends
   today's disambiguation of requested display names); a **port** is a method name on its
-  class, unique by Python's own rules. A name is one URL segment — letters, digits, `-`, `_`,
-  `.` — and case-sensitive, with two names differing only by case refused as duplicates.
-  [one-runtime-per-machine]
+  class, unique by Python's own rules. Every exposed name — machine, stream, node, port — is
+  cast, never refused for its spelling: lowercased, accents dropped, every character outside RFC
+  3986's unreserved set (`a-z 0-9 - . _ ~`) turned into `-`, runs of `-` collapsed, leading
+  and trailing ones trimmed, at most 63 characters; one that casts to empty, `.` or `..` is
+  refused by name. So `CameraSource` is `camerasource`, `name="Front Camera"` is `front-camera`,
+  a hostname `Jonathans-MacBook` is `jonathans-macbook`. What a person writes — class names,
+  files, imports, the string passed — is never constrained; a node's `type` stays its import
+  path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
+  Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting]
 - **DECIDED** — Nothing leaves the machine until it is exposed. With no stream map pushed, a
   runtime offers no port to another machine; `expose` on a port makes it readable by any peer
   that can reach the machine — directly on a LAN or a tailnet, or through a relay — and a

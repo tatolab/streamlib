@@ -77,18 +77,15 @@ started just like docker"; the owner holds the Developer ID. Options were (a) th
 terminal until step 10. §Product `:114-121` holds as written — the app simply ships now; the
 terminal stays a developer's path. Step 10 grows the same app.
 
-## [NEEDS DECISION] 3 — one name grammar, and the defaulted suffix
+## Decision 3 — RESOLVED: every exposed name is cast to lowercase URL-safe
 
-The address entry (`:4052-4071`) makes every name one URL segment — letters, digits, `-`, `_`, `.`
-— and refuses two names differing only by case. The older name entry (`:1367-1377`) keeps spaces
-and unicode legal and suffixes a defaulted duplicate ` 2`, which that grammar refuses; the
-builder (#2567) is about to emit ` 2`. One must give.
-- **(a) One grammar everywhere; the suffix becomes `-2`**, as a machine's does. `CameraSource-2`;
-  a typed name with a space is refused naming the character. #2567 takes `-2` before it ships.
-- **(b) Names stay free text; an address percent-encodes them** — two spellings of one name,
-  against `:4052`'s "the same string … in Python, the CLI, the URL path".
-**Recommendation: (a)**, amending `:1367-1377`; #2565's live add and #2567's builder both emit
-` 2` today, so both tickets take `-2` before either ships.
+Owner, 2026-10-02: only URL-safe names, "always cast to lowercase … don't force people to write it
+like that or change imports". Every exposed name is cast — lowercased, accents dropped, anything
+outside RFC 3986's unreserved set turned into `-`, ≤63 characters; empty, `.` or `..` refused —
+and a defaulted duplicate takes `-2` (`camerasource-2`). Written into §Networking's address entry
+and amending `:1367-1377`. The engine casts a live add and the pure-Python builder casts where the
+author writes; a pure package cannot call the engine, so the two read one fixture of cases. #2565's
+live add and #2567's builder build it, not ` 2`.
 
 ## [NEEDS DECISION] 4 — environment variables for a stream under a service
 

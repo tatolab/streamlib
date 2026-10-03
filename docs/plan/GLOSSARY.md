@@ -188,8 +188,9 @@ and a process id belong to. _Avoid_: "processor" on a user surface, "operator", 
 and its `output()` / `input()` port references; the node itself exists once the stream runs.
 _Avoid_: "the instance" for the handle.
 
-**Name** _(crosses)_: a node's or a stream's one-chunk address part — letters, digits, `-`,
-`_`, `.`; a node's defaults to its class's short name; never an identity. _Avoid_: "display
+**Name** _(crosses)_: a machine's, stream's, node's or port's one-chunk address part, cast to
+lowercase RFC 3986 unreserved characters (`Front Camera` → `front-camera`) whatever the author
+wrote; a node's defaults to its class's short name (`camerasource`); never an identity. _Avoid_: "display
 name" (retired), "id", "label".
 
 **Graph** _(crosses)_: a stream's nodes, links and exposures as one JSON shape — what a

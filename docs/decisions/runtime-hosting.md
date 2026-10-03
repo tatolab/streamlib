@@ -38,6 +38,9 @@ packaged on Apple.
 - A minimal `Tatolab.app` ships with runtime hosting, not at step 10 (2026-10-02, runtime-hosting
   decision 2): opening it starts the runtime if it is not running and offers the login item, as
   Docker Desktop does; Developer ID signed and notarised. The terminal stays a developer's path.
+- Names are cast, never refused for spelling (2026-10-02, runtime-hosting decision 3): every
+  exposed name is lowercased into RFC 3986's unreserved characters, a defaulted duplicate takes
+  `-2`; what a person writes in code is never constrained.
 - No shutdown verb (2026-10-02, runtime-hosting decision 1): the runtime stays on, as `tailscaled`
   does; quitting the app quits the app. It stops only by its service manager or a signal in the
   terminal running it; a client ends its own work with `stop <stream>`.
@@ -80,6 +83,12 @@ packaged on Apple.
 - **A `group` label or nested subgraphs.** No consumer needs to see a fragment as one thing yet.
 - **A bare launchd binary on Apple.** Its prompts name the executable file and key the grant by
   path; an agent inside the signed app is credited to the app (TN3179, DTS guidance; #2560).
+- **Free-text names, percent-encoded in URLs.** Two spellings of every name, against "the same
+  string in Python, the CLI and the URL path"; spaces need quoting in every shell.
+- **A URL-safe name plus a free-text label.** A second identity concept on every node; the app can
+  add labels later without breaking an address.
+- **Refusing names that are not already lowercase URL-safe.** Owner: "don't force people to write
+  it like that or change imports" — the cast exposes the safe form whatever was typed.
 - **A `shutdown` tool, machine-wide or as a restart.** One caller would end every person's streams;
   owner: "shutdown doesn't feel like it makes sense in this context". The runtime process's own
   Quit menu item goes for the same reason — Cmd+Q in one stream's window ended them all.
