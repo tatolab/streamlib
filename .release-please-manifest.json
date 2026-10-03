@@ -1,5 +1,5 @@
 {
-  ".": "0.26.48",
-  "packages/streamlib-moq": "0.3.5",
-  "packages/streamlib-webrtc": "0.3.3"
+  ".": "0.27.0",
+  "packages/streamlib-moq": "0.4.0",
+  "packages/streamlib-webrtc": "0.4.0"
 }
