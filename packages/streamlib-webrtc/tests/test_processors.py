@@ -54,7 +54,7 @@ def test_an_installed_extensions_processor_is_added_like_any_other(
 ):
     added = runtime.add(processor_class, config={"url": "https://example.invalid/x"})
 
-    assert added.display_name == processor_class.__name__
+    assert added.display_name == processor_class.__name__.lower()
 
 
 def test_the_publisher_wires_to_both_encoders_without_an_adapter(runtime):

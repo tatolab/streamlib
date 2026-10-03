@@ -134,7 +134,7 @@ def test_an_installed_extensions_processor_is_added_like_any_other(
 ):
     added = runtime.add(processor_class, config=config)
 
-    assert added.display_name == processor_class.__name__
+    assert added.display_name == processor_class.__name__.lower()
 
 
 def test_the_publisher_wires_to_both_encoders_without_an_adapter(runtime):
@@ -188,7 +188,7 @@ def test_both_container_formats_are_addable(runtime, container_format):
         config={**PUBLISHER_CONFIG, "container_format": container_format},
     )
 
-    assert added.display_name == "MoqBroadcastPublisher"
+    assert added.display_name == "moqbroadcastpublisher"
 
 
 def test_a_container_format_this_wheel_does_not_write_is_refused_by_name():
@@ -266,7 +266,7 @@ def test_a_subscriber_may_name_one_track_and_leave_the_other_ports_silent():
 def test_a_subscriber_naming_only_a_data_track_is_added_like_any_other(runtime):
     added = runtime.add(MoqBroadcastSubscriber, config=A_DATA_TRACK_SUBSCRIBER_CONFIG)
 
-    assert added.display_name == "MoqBroadcastSubscriber"
+    assert added.display_name == "moqbroadcastsubscriber"
 
 
 def test_the_subscribers_data_bags_port_wires_to_a_processor_that_reads_it(runtime):
@@ -695,7 +695,7 @@ def test_a_publisher_carrying_a_delivery_deadline_is_added_like_any_other(runtim
         config={**PUBLISHER_CONFIG, "delivery_deadline_ms": 250},
     )
 
-    assert added.display_name == "MoqBroadcastPublisher"
+    assert added.display_name == "moqbroadcastpublisher"
 
 
 @pytest.mark.parametrize("not_a_deadline", ["250", 2.5, True, -1])
