@@ -1,0 +1,350 @@
+# runtime-hosting
+
+Step 4 of the one-runtime-per-machine pivot: one runtime per machine runs many streams, keeps the
+ones it was told to keep, is addressed by its machine, and arrives from an installer. After it:
+- `tatolabd` takes no stream. It is the machine's one runtime process — one engine, one GPU
+  context, one Zenoh session, one local API on one socket — and streams load into it and leave it
+  without touching each other; each has its own graph, events, registry of node types,
+  interpreter, logs, shutdown, watchdog and exposures;
+- every stream action the CLI has — `run`, `run -d`, `stop`, `start`, `rm`, `streams`, `expose` —
+  is a local-API tool (`dev` is `run` plus a watch); with no runtime running each fails at the
+  socket; `graph` returns every stream;
+- a kept stream is recorded in the state directory and comes back on every start, a crash's
+  restart included; an attached one lives as long as the connection that loaded it;
+- an address is `<machine>/<stream>/<node>/<port>`, right-anchored; the runtime name is gone;
+- Linux installs by `curl | sh`, which registers a systemd user service; macOS installs a signed,
+  notarised `Tatolab.app` that starts the runtime if it is not running, as Docker Desktop does.
+
+**Scale gate — this skill, plus the existing ADR.** The processor model, the Python API's public
+contract (the builder's remote references), the wire (mesh keys, the announcement) and the local
+API's tools move. The rationale is `docs/decisions/runtime-hosting.md` (#2580, #2600), extended
+here with decisions 1 and 2 and, once resolved, 3 to 5.
+
+**Precondition.** Every entry built is DECIDED: §Product `ARCHITECTURE.md:107-113`, `:114-121`
+(who starts it), `:122-143` (loaded and kept; one user), `:152-157`; §Processor model
+`:1389-1407` (graph is data, emitted; environment beside it), `:1415-1425` (the split),
+`:1434-1446` (failure isolation); §Media I/O `:3202-3213` (built here, decision 2); §Networking
+`:4018-4022` (own configuration — router mode is step 8's), `:4052-4071` (address, collisions),
+`:4072-4079` (exposure); §Distribution `:4209-4219`; §Control plane `:4399-4415`, `:4559-4567`,
+`:4580-4585`. Not built against: needs `:1408`, resources `:1428`, accelerators optional `:1882`
+(the GPU still initialises at start), packs `:578`, discovery `:4080`, the stream map `:4097`,
+URLs `:4109`, the relay role, the control client. **Sequencing:** after #2592, #2593 and #2566.
+
+**Verified against the tree 2026-10-02 (HEAD 65e6c53a7)**, three sweeps; `E` =
+`runtime/streamlib-engine/src`, `A` = `runtime/streamlib-api-server`.
+- **Collides between two streams in one process:** `PUBSUB` (`E/core/pubsub/bus.rs:13`) with
+  id-less runtime events (`events.rs:15`, `:55-69`, `:170`, `:317`) — every listener commits on
+  any change (`graph_change_listener.rs:38-63`) and one shutdown stops every loop
+  (`runtime.rs:1209-1226`, `:1558-1561`, `:1304`); `PROCESSOR_REGISTRY` and its resolver
+  (`processor_instance_factory.rs:232-247`, `:461`); the shutdown escalation
+  (`runtime_shutdown_request.rs:62`, `:76-85`); the watchdog's exit 124
+  (`engine_teardown_watchdog.rs:22-94`, `end_the_process_at_once.rs:40-51`);
+  `APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST` (`core/app_directory.rs:19`), which also
+  names virtual cameras (`runtime/streamlib-media-builtins/src/virtual_camera_sink.rs:34`, `:501`);
+  `get_streamlib_home()`, the process's cwd (`E/core/streamlib_home.rs:18`), holding logs and the
+  pipeline cache; first-wins logging (`logging/init.rs:48-56`, `:102`). A `GpuContext` per
+  `start()` (`runtime.rs:565`) with a first-wins `VULKAN_DEVICE_FOR_IMPORT`
+  (`vulkan/rhi/vulkan_buffer.rs:27`) is the NVIDIA dual-device crash. The helper-group table is
+  lock-free by design, read from the signal thread (`helper_process_group_registry.rs:4-9`, `:37`).
+- **The seam:** `Runner` (`runtime.rs:140-230`) owns one `Compiler`, which owns the graph,
+  transaction and commit lock (`compiler.rs:29-40`); `commit` takes its context (`:93`). Wired to
+  one graph: the offer and link-request answers (`runtime.rs:391-393`, `:452-456`) and the local
+  API, an `ApiServer` processor holding one `RuntimeOperations` (`A/src/control_plane_host.rs:24-47`,
+  `state.rs:14`). Test binaries build many `Runner`s each (86 calls across 24 files).
+- **Channels:** cuid2-named locally (`E/iceoryx2/channel_name.rs:198-215`); a mesh ingress
+  (`:242-248`) allows one publisher (`iceoryx2/node.rs:321`). **Names:** `runtime_name.rs:25-180`, ~800 lines; every Zenoh key in `runtime_mesh_key.rs:28-326`,
+  parsed by position (`:164-184`, `:304-319`); host identity is boot-scoped
+  (`host_identity.rs:20-107`); the duplicate check reads a failed query as free
+  (`duplicate_runtime_name_on_the_mesh.rs:34-161`). Nothing persistent per user exists.
+- **Tools:** `shutdown` reaches the global funnel (`A/src/mcp.rs:590-604`, `handlers.rs:179-215`);
+  Quit in Apple's menu does too (`E/apple/application_menu.rs:42`). **Release:** wheels only, ad
+  hoc signed (`release-wheel.yml:61-269`, `macos-wheel.yml:37-190`); no installer anywhere.
+
+---
+
+## Decision 1 — RESOLVED: the runtime has no shutdown verb
+
+Owner, 2026-10-02: "shutdown doesn't feel like it makes sense in this context" — the runtime stays
+on as `tailscaled` does; quitting the app quits the app. The `shutdown` tool, `POST
+/api/runtime/shutdown` and the runtime's Quit menu item are deleted; `stop <stream>` ends a
+client's work. The runtime stops as a service does — `systemctl --user stop`, the app's runtime
+switch — or by a signal in the terminal that runs it.
+
+## Decision 2 — RESOLVED (a): a minimal `Tatolab.app` ships in this change
+
+Owner, 2026-10-02: on a Mac "most people would open the app and it starts the service if not
+started just like docker"; the owner holds the Developer ID. Options were (a) the app now, (b) a
+terminal until step 10. §Product `:114-121` holds as written — the app simply ships now; the
+terminal stays a developer's path. Step 10 grows the same app.
+
+## [NEEDS DECISION] 3 — one name grammar, and the defaulted suffix
+
+The address entry (`:4052-4071`) makes every name one URL segment — letters, digits, `-`, `_`, `.`
+— and refuses two names differing only by case. The older name entry (`:1367-1377`) keeps spaces
+and unicode legal and suffixes a defaulted duplicate ` 2`, which that grammar refuses; the
+builder (#2567) is about to emit ` 2`. One must give.
+- **(a) One grammar everywhere; the suffix becomes `-2`**, as a machine's does. `CameraSource-2`;
+  a typed name with a space is refused naming the character. #2567 takes `-2` before it ships.
+- **(b) Names stay free text; an address percent-encodes them** — two spellings of one name,
+  against `:4052`'s "the same string … in Python, the CLI, the URL path".
+**Recommendation: (a)**, amending `:1367-1377`; #2565's live add and #2567's builder both emit
+` 2` today, so both tickets take `-2` before either ships.
+
+## [NEEDS DECISION] 4 — environment variables for a stream under a service
+
+A terminal-run app inherited its shell; a stream loaded into a service does not, and credentials
+such as `WhipPublisher`'s come from the environment today. This extends `:1403-1407` (a stream's
+environment is its project directory and venv).
+- **(a) The project's `.env`**, read at every load and handed to the stream's processor
+  interpreters; nothing copied, so no secret is stored twice.
+- **(b) Docker's `-e NAME[=VALUE]` and `--env-file`**, recorded for a kept stream in its 0600
+  record — credentials at rest in the state directory.
+- **(c) An attached stream inherits the caller's shell**, a kept one takes `-e`: two behaviours.
+**Recommendation: (a)** — it is the decided environment, read where it already lives.
+
+## [NEEDS DECISION] 5 — a kept stream that crashes the runtime
+
+A kept stream whose built-in crashes the runtime comes back on every start and crashes it again;
+with every verb failing at the socket, nothing can stop it short of editing the state directory.
+There are no restart policies (`:122-143`).
+- **(a) Park it:** a stream loaded when the runtime died twice running is recorded `stopped`,
+  named in `streams` — a guard, but a policy in effect.
+- **(b) `stop` and `rm` work with the runtime down:** with no lock held they edit the record —
+  the one exception to failing at the socket; systemd's start limit and launchd's throttle bound
+  the loop meanwhile.
+**Recommendation: (b)** — the owner's words decide what runs; nothing is parked behind their back.
+
+## Target layout
+
+```
+runtime/tatolabd/, runtime/tatolab-cli/       the runtime process and the CLI
+runtime/streamlib-engine/src/core/runtime/    runtime.rs (Runner, the one engine), loaded_stream.rs
+                                              (LoadedStreamInThisRuntime), machine_state_directory.rs,
+                                              machine_name.rs (replaces runtime_name.rs)
+installer/                                    install.sh, tatolabd.service, homebrew/tatolab.rb (the cask)
+apps/tatolab-macos/                           Tatolab.app, a menu-bar app carrying the runtime
+```
+
+## ADDED: §Processor model — one engine, many streams
+
+- **`Runner` is the engine.** `tatolabd` builds one; the library type stays constructible so the
+  runtime suite runs many per test binary. It makes the `GpuContext` once (so
+  `VULKAN_DEVICE_FOR_IMPORT` names the only device), the iceoryx2 node, one tokio runtime, the
+  mesh membership, one surface service keyed by stream, signal ownership, and hosts the local API
+  itself — the `ApiServer` processor and `control_plane_host.rs` go.
+- **`LoadedStreamInThisRuntime`**, keyed by stream name: its `Compiler`, `RuntimeStatus`,
+  listener, and a `RuntimeContext` sharing the engine's GPU, node and tokio whose `runtime_ops` is
+  the stream. Events carry their stream, on a per-stream topic. Node types: built-ins once for the
+  machine; Python descriptors per stream, described in its interpreter; the node catalog lists
+  both. Logs: one subscriber, records routed per stream. Shutdown: per-stream funnel and
+  escalation; the machine's ladder walks every stream at once. The helper-group table stays one
+  lock-free machine table, each slot tagged with its stream. Exposures, the offer and link-request
+  answers (`*ThisRuntimesGraph` → `*ThisStreamsGraph`) and the virtual camera's stable id (the
+  stream's project directory, its name and the node's) are per stream; a pipeline cache per stream.
+- **The watchdog is per stream:** on expiry it kills that stream's groups, abandons its threads and
+  marks it failed. Past an engine-chosen bound of abandoned threads in one process, the runtime
+  exits 124 and its service restarts it, kept streams returning.
+- **Links between streams on one machine** ride iceoryx2 with no exposure; the input's stream owns
+  the link; a source stream not loaded leaves it `awaiting_remote`, reason naming it.
+- **A remote port read by several streams** has one ingress per machine that each subscribes to.
+
+## ADDED: §Product — `tatolabd`, the state directory, the verbs
+
+- **`tatolabd`** takes the machine lock, opens the state directory, resolves the machine name,
+  joins the mesh, serves `<runtime dir>/local-api.sock`, and re-loads every kept, not-stopped
+  stream; one whose project or interpreter is gone is reported by name, never deleted; one that
+  crashes the runtime is decision 5. It never detaches. Signed on macOS, it loads only its
+  bundled Vulkan loader and MoltenVK, named in `VK_ADD_DRIVER_FILES` before the first instance.
+- **The machine lock**: on Linux the abstract socket `@tatolab-runtime` (a container sharing the
+  host's network is this machine to it); on macOS an `fcntl` lock on a root-owned 0666 regular
+  file in root-owned `/Library/Application Support/Tatolab/`, made at the app's first-launch
+  administrator prompt — any other type, owner or mode refused by name. A second `tatolabd`, or
+  any squatter, is refused naming its user, pid and executable (peer credentials, `F_GETLK`); any
+  user may take the one runtime first, the decided "whoever started it"; the CLI names it too.
+- **The state directory**: `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or
+  `~/Library/Application Support/Tatolab/`: `machine.json` (machine id, name, mesh settings),
+  `streams/<stream>.json` per kept stream (the graph compiled at load, the environment, `stopped`,
+  exposure rulings; mode 0600) and the runtime's own log, which belongs to no project. A stream's
+  logs and pipeline cache stay under its project's `.streamlib/`, as `:4446-4466` decides.
+- **Loading.** `run_stream {project_directory, stream_function, name, keep}` — `stream_function`
+  as `run` takes it (`stream.py:main`, none for the sole one): the runtime finds
+  `<project>/.venv/bin/python` (absent → refused, pointing at `uv sync`), runs `tatolab.stream`'s
+  compile entry in it, describes the Python types, and loads. A name loaded or kept, stopped
+  included, is refused naming its project, `--name` the way out; a `keep` load of the same project
+  and function replaces the record — how a changed source is picked up.
+- **Attached is the connection's lifetime.** `keep: false` binds the stream to the connection
+  carrying the call — `/mcp/stdio`, which `tatolab run` and `tatolab mcp` both hold; it unloads
+  when that connection closes (Ctrl-C, a closed terminal, a killed CLI, an MCP host exiting). `run`
+  follows the stream's records with `logs {stream, after}`, `after` a record sequence number; a
+  runtime crash closes the connection and `run` exits 1 naming it. A one-shot `POST /mcp` can only keep.
+- **The tools**: `stop_stream` (unload; record `stopped` for a kept stream, end an attached one's
+  `run`), `start_stream`, `remove_stream` (unload, forget), `list_streams` (name, attached / kept
+  / stopped, project, node count), `expose_port {stream, node, port, exposed}` (the owner's ruling,
+  recorded for a kept stream; the function's `exposed` is the default for a port without one).
+  `dev` is `run` plus a watch re-loading on save and, after a crash, waiting and loading again.
+  `set --machine-name | --mesh-name | --mesh-peer | --mesh-listen | --no-mesh-multicast-discovery`
+  writes `machine.json`, applied at the next start, said so; `tatolabd` flags, then `STREAMLIB_MESH_*`,
+  override it — the flags `run` and `dev` carried today leave them.
+- **Restart.** The service restarts `tatolabd` on failure and kept streams return; criterion
+  (#2559's record): `kill -9` on the rig, the kept scaffold stream shows frames again within 10 s.
+
+## ADDED: §Control plane — every tool names its stream
+
+- `graph {stream?}`: one stream's one-shape graph, loadable, or `{machine, streams: […], mesh}`.
+  `add_node`, `remove_node`, `connect`, `disconnect`, `tap` and `logs` take `stream`; `exchange`
+  takes a surface id, unique on the machine. A link end renders right-anchored — `{node, port}`,
+  `{stream, node, port}`, `{machine, stream, node, port}` — and `connect` takes `<end>_machine`,
+  `<end>_stream`, `<end>_node`, `<end>_port`, leading parts omitted meaning here; `tap`'s channel
+  is an address. Renamed on the wire: `created_by_machine`, `mesh.machine`, `peers[].machine`,
+  `egress_ports[].readers: [{machine, stream}]`, `link_requests_awaiting_machine` and
+  `awaiting_machine`, `disconnect`'s `input_machine` and `input_stream`, `connect`'s answer
+  `input_machine`, a link request's `requester_machine` and `requester_stream`. The `graph`
+  resource, the catalog, instructions and prompts follow. `nodes`, `--node` and the registry go:
+  one socket at a fixed path; `graph.mesh` lists peers.
+
+## MODIFIED: §Networking — the machine segment
+
+- **Addresses and keys.** `MeshPortAddress` gains the stream; the grammar and
+  `runtime_mesh_key.rs` change in one place each; the token is
+  `streamlib/<mesh>/@machine/<machine>/<machine id>/<host identity>/<pid>`; offered ports, readers,
+  link requests, egress and data keys gain the stream; `InboundLinkName` and the ingress hash follow.
+- **The machine id** — 128 random bits minted once into `machine.json` — rides the token. **The
+  name**: the recorded one, else the hostname with refused characters replaced by `-`. The claim
+  reads every `@machine` token and compares case-folded: a live holder with another id moves this
+  machine to the next unused `<name>-2`, `-3`…, recorded and said once with `tatolab set
+  --machine-name`; a token with this id from another boot, or a gone pid, is taken over. A failed
+  query is never read as free: the runtime stays off the mesh, `graph.mesh` renders it
+  `claiming`, and it retries on an engine-chosen backoff. Two claims inside one discovery window keep today's residual: both say so, links error.
+- **The builder.** `stream.remote_output(address)` and `remote_input(address)` take the address
+  string, right-anchored — `"main/camera/video"` another stream here, `"rig/main/camera/video"`
+  another machine — refusing a chunk the grammar refuses where it is written.
+
+## ADDED: §Distribution — the Linux installer and the Mac app
+
+- **Linux.** Each release attaches `tatolab-runtime-<version>-x86_64-linux.tar.gz` (built in
+  `manylinux_2_28`; the portability gate runs over it). `curl -fsSL
+  https://tatolab.github.io/streamlib/install.sh | sh` unpacks it to
+  `~/.local/share/tatolab/<version>/`, points `current` at it, links `tatolab` and `tatolabd` into
+  `~/.local/bin`, and writes `~/.config/systemd/user/tatolabd.service` (`Restart=on-failure`,
+  `WantedBy=default.target`, `After=graphical-session.target`) — always on, across logouts with
+  `loginctl enable-linger`, which it offers. A display node opened with no display in the
+  runtime's environment takes `DISPLAY` and `WAYLAND_DISPLAY` from the user manager's, which
+  desktop sessions import at login, and is refused by name when there is none. Re-running upgrades in place
+  and restarts the service; `--uninstall` removes the service and files, never the state directory.
+  On macOS the script refuses, pointing at the app.
+- **macOS.** `Tatolab.app`, from a notarised `.dmg` on the release and `brew install --cask
+  tatolab/tap/tatolab`: `Contents/MacOS/tatolabd`, an `SMAppService.agent` (plist in
+  `Contents/Library/LaunchAgents/`, `KeepAlive` on a failed exit), and the lend laid out by Apple's
+  code rules — native code under `Contents/Frameworks/`, the rest under `Contents/Resources/`,
+  linked into one `tatolab/runtime/` tree, PyInstaller's layout, `dladdr` proved to find
+  `_vulkan_driver/` through the link. Registration is the login item, so one switch, "Run
+  Tatolab", covers both; opening the app registers the agent unless the user turned the switch
+  off, which it remembers, and on `.requiresApproval` opens Login Items for the user. The menu shows whether
+  the runtime is up and its stream count (`list_streams`); Quit quits the app. First launch links
+  `tatolab` into `/usr/local/bin` and creates the lock's directory behind one administrator prompt. `Info.plist`
+  carries the camera, microphone, local-network and Documents, Desktop and Downloads usage
+  strings; the app and `tatolabd` carry the hardened-runtime device entitlements; every Mach-O is
+  signed with the Developer ID and the `.dmg` notarised and stapled, with control-tower's desktop
+  workflow steps and six `APPLE_*` secrets copied here. Discovery retries after a local-network
+  denial. The prompt's wording under `SMAppService` is §Media I/O's acceptance check.
+
+## MODIFIED: in-flight change files
+
+- package-split-and-lend: `tatolabd` finds the lend at `../lib/tatolab/lend` or, inside the
+  bundle, through the layout above. stream-graph: the builder's remote references take an address
+  string; its defaulted suffix follows decision 3.
+
+## MODIFIED: records re-spelled at the fold
+
+§Product `:122-143` (the tools); §Processor model `:1367-1377` (decision 3), `:1415-1425`,
+`:1434-1446`; §Media I/O's header, `:1905-1920` (the camera id); §Networking `:3556-3587`
+(claiming), `:3588-3610`, `:3611-3631`, `:3644-3691`, `:3765-3890`, `:3973-4010` (`nodes` gone),
+`:4052-4071`; §Control plane `:4345-4398` (no
+`shutdown`), `:4426-4445` (the verbs), `:4446-4466` (registry gone; the state directory holds the
+runtime's own log); the pivot ADR's steps 4 and 10.
+`docs/architecture/` and the README in the shipping tickets.
+
+## Inventory — what the old shape leaves, and the slice that ends it
+
+| Old shape | Ends | Slice |
+|---|---|---|
+| `PUBSUB`'s id-less events, `RUNTIME_GLOBAL`; `PROCESSOR_REGISTRY` per process; the global shutdown funnel; the watchdog's process end; untagged group slots; first-wins logging | per stream | S1 |
+| `APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST`, `STREAMLIB_APP_DIRECTORY`, the virtual camera's app-directory id; `get_streamlib_home()`'s cwd | the stream's project directory | S1 |
+| `GpuContext` per `start()`; a surface service per `Runner`; the `ApiServer` processor, `control_plane_host.rs`, one `RuntimeOperations` | once per engine | S1 |
+| `*ThisRuntimesGraph` | `*ThisStreamsGraph` | S1 |
+| `tatolabd --stream-graph`; the CLI's compile and spawn; #2592's harness, fixtures and macOS done-proof starting `tatolabd` through `run` | `run_stream`; the harness starts `tatolabd` | S2 |
+| `node_registry.rs`, `nodes`, `--node`, `local-api-<runtime_id>.sock`; `shutdown`; the Quit item; `run`/`dev` mesh flags | one socket; `set` | S2 |
+| `runtime_name.rs`, `STREAMLIB_RUNTIME_NAME`, `--runtime-name`, the duplicate check | `machine_name.rs`, `machine.json` | S3 |
+| Three-part `MeshPortAddress`, `@runtime` keys, every `*runtime_name*` key in `graph`, MCP, requests, ingress, egress; `remote_output(runtime_name, node, port)` | four parts | S3 |
+| A `meshlink-` ingress per reader; the mesh fixtures and rigs naming runtimes | one per machine; two machines or two streams | S3 |
+| `.claude/` skills naming `nodes`, `--node`, runtime names | one operating-model PR | after S3 |
+
+## Left to later changes
+
+| Not here | Because | Lands with |
+|---|---|---|
+| The app's stream views, in-place updates, the remaining Rust names | the app | step 10 |
+| Starting with no GPU | accelerators OPEN | step 5 |
+| `machines`, `streams --machine`, router mode, dialing relays | discovery, stream-map OPENs | step 8 |
+| `run <url-or-zip>`, registries | packs OPEN | step 7 |
+| The relay role, the URL forms | their OPENs | steps 8, 9 |
+
+## Assumptions stated, not asked
+
+- **One engine, a table of streams**, not a stream id on every graph node.
+- **The runtime compiles**, in the project's interpreter, so an agent loads exactly as the CLI does.
+- **Attached is a connection's lifetime**: an agent's attached stream ends when its host restarts `mcp`.
+- **The owner's `expose` wins** over the function's `exposed` (the glossary's suggestion/decision).
+- **The integration suite's `tatolabd` is built with a test-only feature** moving lock, state and
+  runtime directories under a short `/tmp` root (socket paths stay under 104 bytes); the release
+  build has none — no second mode.
+- **A machine id per state directory**, not `/etc/machine-id`, so a container is its own machine.
+- **Machine settings apply at the next start**: a rename re-addresses everything, so never live.
+- **The app is Tauri**, as control-tower's desktop app is, registering its agent through
+  `objc2-service-management`; a native AppKit menu would be smaller, and switching rewrites the menu.
+  The cask's tap is `tatolab/homebrew-tap`, created by the owner, bumped per release.
+
+## Slices, each deleting what it replaces, tests included
+
+- **S1 — one engine, many streams.** Runtime suite: two streams in one `Runner`; one's shutdown,
+  watchdog and graph change leave the other alone; one `VkDevice`. After #2592.
+- **S2 — the stream actions**: `tatolabd` without a stream, the lock, the state directory, the
+  tools and verbs, attached connections, decisions 4 and 5, re-load and restart, `nodes` and
+  `shutdown` gone. Blocked by S1, #2593.
+- **S3 — the machine segment**: addresses, keys, the machine id and name, `set`, cross-stream
+  links, one ingress per machine, the builder, the mesh fixtures, decision 3. Blocked by S2, #2566.
+- **S4 — Linux**: the tarball, `install.sh`, the service, the restart criterion. Blocked by S2.
+- **S5 — `Tatolab.app`**: bundle, agent, menu, CLI link, signing, notarisation, `.dmg`, cask, the
+  prompt check, the restart criterion on a Mac. Blocked by S2; the owner copies the secrets first.
+
+## REMOVED
+
+- REMOVED: runtime/streamlib-engine/src/core/runtime/runtime_name.rs
+- REMOVED: STREAMLIB_RUNTIME_NAME
+- REMOVED: --runtime-name
+- REMOVED: duplicate_runtime_name_on_the_mesh
+- REMOVED: this_runtimes_name_on_the_mesh
+- REMOVED: RUNTIME_GLOBAL
+- REMOVED: APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST
+- REMOVED: STREAMLIB_APP_DIRECTORY
+- REMOVED: runtime/streamlib-api-server/src/node_registry.rs
+- REMOVED: runtime/streamlib-api-server/src/control_plane_host.rs
+- REMOVED: NODE_REGISTRY_SCHEMA_VERSION
+- REMOVED: AnnouncedRuntimeIdentity
+- REMOVED: OutputPortsInThisRuntimesGraph
+- REMOVED: LinkRequestsAppliedIntoThisRuntimesGraph
+- REMOVED: runtime/streamlib-engine/src/core/runtime/output_ports_in_this_runtimes_graph.rs
+- REMOVED: runtime/streamlib-engine/src/core/runtime/link_requests_applied_into_this_runtimes_graph.rs
+- REMOVED: input_runtime_name
+- REMOVED: created_by_runtime_name
+- REMOVED: requester_runtime_name
+- REMOVED: reader_runtime_names
+- REMOVED: link_requests_awaiting_runtime
+- REMOVED: from_runtime_name
+- REMOVED: to_runtime_name
+- REMOVED: --stream-graph
+- REMOVED: tatolab nodes
+- REMOVED: RUNTIME_SHUTDOWN_REQUESTED_STATUS
+- REMOVED: api/runtime/shutdown
+- REMOVED: call_shutdown
+- REMOVED: QuitMenuItemRequestsRuntimeShutdown
