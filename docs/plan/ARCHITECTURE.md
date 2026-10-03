@@ -130,7 +130,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stream is never recorded: a runtime crash ends it, and its `run` exits with an error naming
   the crash and the runtime's log. Live edits are never recorded, so the
   function wins on the next start, and picking up a changed source is another `run -d`;
-  `tatolab streams` lists all three — attached, kept, stopped; `tatolab dev` is `run` reloading
+  a kept stream implicated in the runtime's last two crashes in a row — a clean stop or manual
+  restart is no crash and resets the count — or one that cannot load is `failed`, shown with its
+  reason, skipped at start until `tatolab start` retries it (runtime-hosting decision 5);
+  `tatolab streams` lists all four — attached, kept, stopped, failed; `tatolab dev` is `run` reloading
   on edit, and after a crash it waits for the runtime and loads again. Where no installer
   put a runtime, `tatolabd` runs in a terminal or as a container's entrypoint; there is no
   `up` or `down`. One runtime per machine, owned by one user — whoever installed or started
@@ -1435,7 +1438,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [one-runtime-per-machine]
 - **DECIDED** — Failure isolation: one engine for every stream on the machine. A native crash
   in a built-in — camera, codec, display, the mesh's copy path — ends every stream on the
-  machine, and the runtime restarts and re-loads every kept stream not stopped from its
+  machine, and the runtime restarts and re-loads every kept stream neither stopped nor failed from its
   persisted graph, while an attached stream ends with its `run` (§Product); a hang is bounded
   per node by the existing abandon budget and ends only that stream; Python crashes and hangs
   stay in their own process. "Restart the runtime and the streams come back" means re-loading

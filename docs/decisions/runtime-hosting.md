@@ -44,6 +44,9 @@ packaged on Apple.
 - No environment variables are built in (2026-10-02, runtime-hosting decision 4): a stream's
   processes start in its project directory with none of the user's variables; a stream that wants
   a `.env` loads it itself.
+- A stream that keeps crashing the runtime is `failed` (2026-10-02, runtime-hosting decision 5):
+  implicated in the runtime's last two crashes in a row, or unable to load; shown with its
+  reason, skipped at start, retried by `start`. Restarting is not failing.
 - No shutdown verb (2026-10-02, runtime-hosting decision 1): the runtime stays on, as `tailscaled`
   does; quitting the app quits the app. It stops only by its service manager or a signal in the
   terminal running it; a client ends its own work with `stop <stream>`.
@@ -96,6 +99,10 @@ packaged on Apple.
   caller's shell.** Each makes the runtime carry a user's values — the last stores credentials in
   the state directory or behaves differently once a stream is kept. Owner: a stream can include a
   library that reads `.env` itself.
+- **`stop` and `rm` editing the state directory while the runtime is down.** A second, offline
+  path through every record for the rarest case — permutations and bugs; Docker's CLI does
+  nothing with its daemon down either.
+- **A time window on crashes.** Owner: two in a row, regardless of time.
 - **A `shutdown` tool, machine-wide or as a restart.** One caller would end every person's streams;
   owner: "shutdown doesn't feel like it makes sense in this context". The runtime process's own
   Quit menu item goes for the same reason — Cmd+Q in one stream's window ended them all.

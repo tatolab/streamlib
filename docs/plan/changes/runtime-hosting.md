@@ -18,7 +18,7 @@ ones it was told to keep, is addressed by its machine, and arrives from an insta
 **Scale gate — this skill, plus the existing ADR.** The processor model, the Python API's public
 contract (the builder's remote references), the wire (mesh keys, the announcement) and the local
 API's tools move. The rationale is `docs/decisions/runtime-hosting.md` (#2580, #2600), extended
-here with decisions 1 and 2 and, once resolved, 3 to 5.
+here with decisions 1 to 5, all resolved by the owner.
 
 **Precondition.** Every entry built is DECIDED: §Product `ARCHITECTURE.md:107-113`, `:114-121`
 (who starts it), `:122-143` (loaded and kept; one user), `:152-157`; §Processor model
@@ -95,17 +95,18 @@ its processor interpreters no user variables — no `.env`, no `-e`, no shell fo
 in the project directory, so a stream reads its own settings as any program does. The extensions
 read none (they never did); the examples' `os.environ` reads go with their conversion backlog.
 
-## [NEEDS DECISION] 5 — a kept stream that crashes the runtime
+## Decision 5 — RESOLVED: a stream that keeps crashing the runtime is `failed`
 
-A kept stream whose built-in crashes the runtime comes back on every start and crashes it again;
-with every verb failing at the socket, nothing can stop it short of editing the state directory.
-There are no restart policies (`:122-143`).
-- **(a) Park it:** a stream loaded when the runtime died twice running is recorded `stopped`,
-  named in `streams` — a guard, but a policy in effect.
-- **(b) `stop` and `rm` work with the runtime down:** with no lock held they edit the record —
-  the one exception to failing at the socket; systemd's start limit and launchd's throttle bound
-  the loop meanwhile.
-**Recommendation: (b)** — the owner's words decide what runs; nothing is parked behind their back.
+Owner, 2026-10-02: "restarting is not the same as failing … I'd want it in a failed state … and
+basically just make the user aware". A kept stream always restarts; one implicated in the
+runtime's last two crashes in a row — no time window; a clean stop or a manual restart is no
+crash and resets the count — is recorded `failed`, its reason shown by `streams` and the app, and
+skipped at start; `start` retries it, `rm` forgets it. A crash is pinned on the stream owning the
+crashing thread (each node runs on its own thread; a crash recorder, installed at start, writes
+that stream through a file it opened beforehand), or on the stream being loaded. A stream that
+cannot load — a failed compile, a missing venv, a refused type — is `failed` too, with that
+reason. A crash on an engine thread implicates no stream: it restarts, and is a bug to file.
+Options were (a) a failed state, (b) `stop` and `rm` editing records with the runtime down, (c) both.
 
 ## Target layout
 
@@ -144,9 +145,9 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 ## ADDED: §Product — `tatolabd`, the state directory, the verbs
 
 - **`tatolabd`** takes the machine lock, opens the state directory, resolves the machine name,
-  joins the mesh, serves `<runtime dir>/local-api.sock`, and re-loads every kept, not-stopped
-  stream; one whose project or interpreter is gone is reported by name, never deleted; one that
-  crashes the runtime is decision 5. It never detaches. Signed on macOS, it loads only its
+  joins the mesh, serves `<runtime dir>/local-api.sock`, and re-loads every kept stream neither
+  stopped nor failed (decision 5); one that cannot load is `failed`, never deleted. It never
+  detaches. Signed on macOS, it loads only its
   bundled Vulkan loader and MoltenVK, named in `VK_ADD_DRIVER_FILES` before the first instance.
 - **The machine lock**: on Linux the abstract socket `@tatolab-runtime` (a container sharing the
   host's network is this machine to it); on macOS an `fcntl` lock on a root-owned 0666 regular
@@ -171,8 +172,8 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   follows the stream's records with `logs {stream, after}`, `after` a record sequence number; a
   runtime crash closes the connection and `run` exits 1 naming it. A one-shot `POST /mcp` can only keep.
 - **The tools**: `stop_stream` (unload; record `stopped` for a kept stream, end an attached one's
-  `run`), `start_stream`, `remove_stream` (unload, forget), `list_streams` (name, attached / kept
-  / stopped, project, node count), `expose_port {stream, node, port, exposed}` (the owner's ruling,
+  `run`), `start_stream` (a stopped or failed one), `remove_stream` (unload, forget), `list_streams` (name, attached / kept
+  / stopped / failed and why, project, node count), `expose_port {stream, node, port, exposed}` (the owner's ruling,
   recorded for a kept stream; the function's `exposed` is the default for a port without one).
   `dev` is `run` plus a watch re-loading on save and, after a crash, waiting and loading again.
   `set --machine-name | --mesh-name | --mesh-peer | --mesh-listen | --no-mesh-multicast-discovery`
@@ -302,7 +303,7 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 - **S1 — one engine, many streams.** Runtime suite: two streams in one `Runner`; one's shutdown,
   watchdog and graph change leave the other alone; one `VkDevice`. After #2592.
 - **S2 — the stream actions**: `tatolabd` without a stream, the lock, the state directory, the
-  tools and verbs, attached connections, decision 5, re-load and restart, `nodes` and
+  tools and verbs, attached connections, the failed state and crash recorder, re-load and restart, `nodes` and
   `shutdown` gone. Blocked by S1, #2593.
 - **S3 — the machine segment**: addresses, keys, the machine id and name, `set`, cross-stream
   links, one ingress per machine, the builder, the mesh fixtures, decision 3. Blocked by S2, #2566.
