@@ -10,7 +10,8 @@ ones it was told to keep, is addressed by its machine, and arrives from an insta
   is a local-API tool (`dev` is `run` plus a watch); with no runtime running each fails at the
   socket; `graph` returns every stream;
 - a kept stream is recorded in the state directory and comes back on every start, a crash's
-  restart included; an attached one lives as long as the connection that loaded it;
+  restart included, unless it has `failed`; an attached one lives as long as its connection;
+- every exposed name is cast to lowercase URL-safe; the runtime hands a stream no variables;
 - an address is `<machine>/<stream>/<node>/<port>`, right-anchored; the runtime name is gone;
 - Linux installs by `curl | sh`, which registers a systemd user service; macOS installs a signed,
   notarised `Tatolab.app` that starts the runtime if it is not running, as Docker Desktop does.
