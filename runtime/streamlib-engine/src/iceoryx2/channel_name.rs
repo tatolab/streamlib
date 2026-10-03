@@ -149,14 +149,13 @@ fn validate_channel_chunk_charset(s: &str) -> Result<()> {
 /// is named. Every character the cast keeps is one iceoryx2 and a Zenoh key
 /// chunk carry, so a port is never refused at wiring for its spelling.
 fn validate_channel_chunk(chunk: &str) -> Result<()> {
-    let strict = validate_channel_chunk_charset(chunk);
-    if strict.is_ok() {
-        return strict;
-    }
-    match crate::core::graph::cast_exposed_name_to_url_safe(chunk) {
-        Ok(std::borrow::Cow::Borrowed(_)) => Ok(()),
-        _ => strict,
-    }
+    validate_channel_chunk_charset(chunk).or_else(|strict| {
+        if crate::core::graph::is_in_exposed_name_cast_form(chunk) {
+            Ok(())
+        } else {
+            Err(strict)
+        }
+    })
 }
 
 /// Validate every `/`-separated chunk of `s` with [`validate_channel_chunk`].

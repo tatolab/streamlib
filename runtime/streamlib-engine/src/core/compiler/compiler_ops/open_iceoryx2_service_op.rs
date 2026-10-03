@@ -884,7 +884,7 @@ fn the_id_a_mesh_egress_holds_a_helper_placed_output_port_open_under(
 ///
 /// [`Error::TapChannelNotFound`]: crate::core::error::Error::TapChannelNotFound
 pub(crate) fn find_the_source_a_caller_named(
-    graph: &mut Graph,
+    graph: &Graph,
     this_runtimes_name: &str,
     port_address: &str,
 ) -> Option<OutputLinkPortRef> {
@@ -892,7 +892,7 @@ pub(crate) fn find_the_source_a_caller_named(
     let source = if address.names_the_runtime(this_runtimes_name) {
         let processor_id = graph
             .traversal()
-            .v_with_display_name(address.processor_display_name())
+            .v_with_node_name(address.processor_display_name())
             .first()?
             .id
             .clone();
@@ -901,7 +901,7 @@ pub(crate) fn find_the_source_a_caller_named(
         OutputLinkPortRef::on_another_runtime(address)
     };
     graph
-        .traversal_mut()
+        .traversal()
         .e(())
         .iter()
         .any(|link| *link.from_port() == source)
@@ -4573,7 +4573,7 @@ mod tests {
             .clone();
 
         let resolved = find_the_source_a_caller_named(
-            &mut graph,
+            &graph,
             "bench-cam-a1b2",
             &format!("bench-cam-a1b2/{source_node_name}/out1"),
         )
@@ -4594,8 +4594,7 @@ mod tests {
             format!("bench-cam-a1b2/{source_node_name}/out2"),
         ] {
             assert!(
-                find_the_source_a_caller_named(&mut graph, "bench-cam-a1b2", &unresolvable)
-                    .is_none(),
+                find_the_source_a_caller_named(&graph, "bench-cam-a1b2", &unresolvable).is_none(),
                 "{unresolvable:?} must not resolve to any source port",
             );
         }
@@ -4616,13 +4615,13 @@ mod tests {
             .add_link_from_another_runtime(address.clone(), InputLinkPortRef::new(&dest_id, "in1"));
 
         let resolved =
-            find_the_source_a_caller_named(&mut graph, "studio-display", &address.to_string())
+            find_the_source_a_caller_named(&graph, "studio-display", &address.to_string())
                 .expect("a remote link's address resolves");
         assert_eq!(resolved.mesh_port_address(), Some(&address));
 
         let its_channel = crate::iceoryx2::mesh_ingress_channel_name(&address.to_string());
         assert!(
-            find_the_source_a_caller_named(&mut graph, "studio-display", its_channel.as_str())
+            find_the_source_a_caller_named(&graph, "studio-display", its_channel.as_str())
                 .is_none(),
             "the hashed ingress channel is not what a caller names a remote port by"
         );

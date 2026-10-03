@@ -11,12 +11,12 @@
 //! [`Runner::load_graph_snapshot`](crate::core::runtime::Runner::load_graph_snapshot);
 //! there is no saver, because the render is the export.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::graph::cast_exposed_name_to_url_safe;
+use crate::core::graph::{cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal};
 use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
 use crate::core::processors::PROCESSOR_REGISTRY;
 use crate::core::{Error, Result};
@@ -87,35 +87,57 @@ impl GraphSnapshot {
 
     /// Check the graph without loading it: names unique once cast, every
     /// local link end on a node the graph holds, every exposure an output
-    /// port a node has, and every `type` registered.
+    /// port a node has and named once, and every `type` registered.
     pub fn validate(&self) -> Result<()> {
-        let mut node_names: HashSet<String> = HashSet::new();
+        let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
-            let cast = cast_exposed_name_to_url_safe(&node.name)?;
-            if !node_names.insert(cast.to_string()) {
+            let cast = cast_exposed_name_to_url_safe(&node.name)?.into_owned();
+            if nodes_by_cast_name.contains_key(&cast) {
                 return Err(Error::NodeNameTaken {
                     name: node.name.clone(),
-                    cast: cast.into_owned(),
+                    cast,
                 });
             }
+            nodes_by_cast_name.insert(cast, node);
         }
+        let the_names_the_graph_holds =
+            || node_names_listed_for_a_refusal(nodes_by_cast_name.keys().map(String::as_str));
 
         for link in &self.links {
             for end in [&link.source, &link.target] {
                 if let Some(node) = end.node_on_this_runtime()
-                    && !node_names.contains(cast_exposed_name_to_url_safe(node)?.as_ref())
+                    && !nodes_by_cast_name
+                        .contains_key(cast_exposed_name_to_url_safe(node)?.as_ref())
                 {
                     return Err(Error::GraphError(format!(
                         "a link names node `{node}`, which the graph does not hold. The graph \
                          holds: {}",
-                        names_listed(&node_names)
+                        the_names_the_graph_holds()
                     )));
                 }
             }
         }
 
+        let mut exposures_seen: HashSet<(String, String)> = HashSet::new();
         for exposed in &self.exposed {
-            self.refuse_an_exposure_naming_no_output_port(exposed, &node_names)?;
+            let node_cast = cast_exposed_name_to_url_safe(&exposed.node)?.into_owned();
+            let port_cast = cast_exposed_name_to_url_safe(&exposed.port)?.into_owned();
+            let Some(node) = nodes_by_cast_name.get(&node_cast) else {
+                return Err(Error::GraphError(format!(
+                    "the graph exposes `{}/{}`, and holds no node `{}`. The graph holds: {}",
+                    exposed.node,
+                    exposed.port,
+                    exposed.node,
+                    the_names_the_graph_holds()
+                )));
+            };
+            refuse_an_exposure_naming_no_output_port(exposed, node, &port_cast)?;
+            if !exposures_seen.insert((node_cast, port_cast)) {
+                return Err(Error::GraphError(format!(
+                    "the graph exposes `{}/{}` twice",
+                    exposed.node, exposed.port
+                )));
+            }
         }
 
         for node in &self.nodes {
@@ -128,56 +150,33 @@ impl GraphSnapshot {
 
         Ok(())
     }
-
-    fn refuse_an_exposure_naming_no_output_port(
-        &self,
-        exposed: &ExposedOutputPortOutput,
-        node_names: &HashSet<String>,
-    ) -> Result<()> {
-        let node_cast = cast_exposed_name_to_url_safe(&exposed.node)?;
-        let Some(node) = self.nodes.iter().find(|node| {
-            cast_exposed_name_to_url_safe(&node.name).is_ok_and(|cast| cast == node_cast)
-        }) else {
-            return Err(Error::GraphError(format!(
-                "the graph exposes `{}/{}`, and holds no node `{}`. The graph holds: {}",
-                exposed.node,
-                exposed.port,
-                exposed.node,
-                names_listed(node_names)
-            )));
-        };
-        let port_cast = cast_exposed_name_to_url_safe(&exposed.port)?;
-        let output_port_names: Vec<String> = PROCESSOR_REGISTRY
-            .port_info(&node.processor_type)
-            .map(|(_, outputs)| outputs.into_iter().map(|port| port.name).collect())
-            .unwrap_or_default();
-        if output_port_names.iter().any(|name| *name == port_cast) {
-            return Ok(());
-        }
-        Err(Error::GraphError(format!(
-            "the graph exposes `{}/{}`, and node `{}` has no output port `{}`. Its output ports \
-             are: {}",
-            exposed.node,
-            exposed.port,
-            exposed.node,
-            exposed.port,
-            if output_port_names.is_empty() {
-                "none".to_string()
-            } else {
-                output_port_names.join(", ")
-            }
-        )))
-    }
 }
 
-fn names_listed(node_names: &HashSet<String>) -> String {
-    let mut sorted: Vec<&str> = node_names.iter().map(String::as_str).collect();
-    sorted.sort_unstable();
-    if sorted.is_empty() {
-        "no node".to_string()
-    } else {
-        sorted.join(", ")
+fn refuse_an_exposure_naming_no_output_port(
+    exposed: &ExposedOutputPortOutput,
+    node: &GraphSnapshotNode,
+    port_cast: &str,
+) -> Result<()> {
+    let output_port_names: Vec<String> = PROCESSOR_REGISTRY
+        .port_info(&node.processor_type)
+        .map(|(_, outputs)| outputs.into_iter().map(|port| port.name).collect())
+        .unwrap_or_default();
+    if output_port_names.iter().any(|name| name == port_cast) {
+        return Ok(());
     }
+    Err(Error::GraphError(format!(
+        "the graph exposes `{}/{}`, and node `{}` has no output port `{}`. Its output ports \
+         are: {}",
+        exposed.node,
+        exposed.port,
+        exposed.node,
+        exposed.port,
+        if output_port_names.is_empty() {
+            "none".to_string()
+        } else {
+            output_port_names.join(", ")
+        }
+    )))
 }
 
 #[cfg(test)]

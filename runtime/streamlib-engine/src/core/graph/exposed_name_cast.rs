@@ -26,7 +26,7 @@ const EXPOSED_NAME_REPLACEMENT_CHARACTER: char = '-';
 /// [`Error::ExposedNameCastsToNothing`]. A name already in cast form comes back
 /// borrowed, so a lookup on the per-bag path allocates nothing.
 pub fn cast_exposed_name_to_url_safe(name: &str) -> Result<Cow<'_, str>> {
-    if is_already_cast(name) {
+    if is_in_exposed_name_cast_form(name) {
         return Ok(Cow::Borrowed(name));
     }
     // Every character pushed is ASCII, so a byte truncate cuts on a character.
@@ -56,7 +56,8 @@ pub fn cast_exposed_name_to_url_safe(name: &str) -> Result<Cow<'_, str>> {
     Ok(Cow::Owned(cast))
 }
 
-fn is_already_cast(name: &str) -> bool {
+/// Whether `name` is already what the cast makes of it.
+pub(crate) fn is_in_exposed_name_cast_form(name: &str) -> bool {
     name.len() <= EXPOSED_NAME_MAXIMUM_LENGTH
         && !cast_names_nothing(name)
         && name.chars().all(is_rfc_3986_unreserved)

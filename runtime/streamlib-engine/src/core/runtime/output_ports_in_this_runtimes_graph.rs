@@ -50,7 +50,7 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
         self.compiler.scope(|graph, _tx| {
             let node = graph
                 .traversal()
-                .v_with_display_name(processor_display_name)
+                .v_with_node_name(processor_display_name)
                 .first()?;
             if !node.has_output(port_name) {
                 return None;

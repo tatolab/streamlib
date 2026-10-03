@@ -73,7 +73,7 @@ impl<'a> TraversalSource<'a> {
     /// A node's name is unique within a graph and is its part of its mesh
     /// address, which is what a peer names a port by — so this is how an
     /// address is turned back into one of this runtime's own nodes.
-    pub fn v_with_display_name(self, node_name: &str) -> ProcessorTraversal<'a> {
+    pub fn v_with_node_name(self, node_name: &str) -> ProcessorTraversal<'a> {
         let ids = crate::core::graph::cast_exposed_name_to_url_safe(node_name)
             .ok()
             .and_then(|cast| {

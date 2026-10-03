@@ -396,12 +396,12 @@ impl PythonRuntimeHandle {
         let mut spec = ProcessorSpec::new(processor_class_import_path, configuration);
         spec.display_name = display_name;
 
-        let (processor_id, assigned_display_name) = python
-            .detach(|| engine.add_processor_reporting_assigned_display_name(spec))
+        let added = python
+            .detach(|| engine.add_processor_reporting_its_name(spec))
             .map_err(|add_failure| PyRuntimeError::new_err(add_failure.to_string()))?;
         Ok(PythonAddedProcessor::new(
-            processor_id.as_str().to_string(),
-            assigned_display_name,
+            added.processor_id.as_str().to_string(),
+            added.name,
         ))
     }
 

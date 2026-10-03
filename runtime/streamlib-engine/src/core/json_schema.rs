@@ -377,6 +377,25 @@ impl LinkPortRefOutput {
         }
     }
 
+    /// The mesh address a port on another runtime is named by, and `None` for
+    /// a port in this graph.
+    pub fn mesh_port_address(
+        &self,
+    ) -> Option<crate::core::Result<crate::core::graph::MeshPortAddress>> {
+        match self {
+            Self::OnAnotherRuntime {
+                runtime_name,
+                node,
+                port,
+            } => Some(crate::core::graph::MeshPortAddress::new(
+                runtime_name.as_str(),
+                node.as_str(),
+                port.as_str(),
+            )),
+            Self::OnThisRuntime { .. } => None,
+        }
+    }
+
     /// The port's own name, wherever the port lives.
     pub fn port(&self) -> &str {
         match self {

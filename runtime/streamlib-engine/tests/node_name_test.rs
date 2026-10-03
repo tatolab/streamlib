@@ -82,11 +82,12 @@ fn the_read_back_name_is_the_cast_of_the_typed_one() {
     let camera = register_test_type("ReadBackCamera");
 
     let runtime = Runner::new().unwrap();
-    let (_id, name) = runtime
-        .add_processor_reporting_assigned_display_name(
+    let name = runtime
+        .add_processor_reporting_its_name(
             ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("Front Camera"),
         )
-        .unwrap();
+        .unwrap()
+        .name;
 
     assert_eq!(name, "front-camera");
     assert_eq!(node_names_in_the_graph_json(&runtime), vec!["front-camera"]);

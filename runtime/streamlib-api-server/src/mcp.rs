@@ -53,7 +53,6 @@ use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{
     InputLinkPortRef, LinkRequestUniqueId, LinkUniqueId, MeshPortAddress, OutputLinkPortRef,
-    cast_exposed_name_to_url_safe,
 };
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
@@ -643,15 +642,12 @@ async fn call_remove_node(runtime: &Arc<dyn RuntimeOperations>, arguments: Value
         Ok(arguments) => arguments,
         Err(e) => return tool_error(format!("remove_node arguments: {e}")),
     };
-    let processor_id = match runtime.processor_id_of_the_node_named(&arguments.name) {
-        Ok(processor_id) => processor_id,
+    let node = match runtime.the_node_named(&arguments.name) {
+        Ok(node) => node,
         Err(e) => return tool_error(format!("remove_node failed: {e}")),
     };
-    let removed_name = cast_exposed_name_to_url_safe(&arguments.name)
-        .map(|cast| cast.into_owned())
-        .unwrap_or(arguments.name);
-    match runtime.remove_processor_async(processor_id).await {
-        Ok(()) => tool_ok(json!({ "removed_name": removed_name })),
+    match runtime.remove_processor_async(node.processor_id).await {
+        Ok(()) => tool_ok(json!({ "removed_name": node.name })),
         Err(e) => tool_error(format!("remove_node failed: {e}")),
     }
 }

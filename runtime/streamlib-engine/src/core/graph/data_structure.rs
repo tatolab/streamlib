@@ -198,3 +198,17 @@ impl Graph {
         }
     }
 }
+
+/// Node names, sorted and comma-joined for a refusal that lists what a graph
+/// holds — `no node` when it holds none.
+pub(crate) fn node_names_listed_for_a_refusal<'name>(
+    node_names: impl IntoIterator<Item = &'name str>,
+) -> String {
+    let mut sorted: Vec<&str> = node_names.into_iter().collect();
+    sorted.sort_unstable();
+    if sorted.is_empty() {
+        "no node".to_string()
+    } else {
+        sorted.join(", ")
+    }
+}

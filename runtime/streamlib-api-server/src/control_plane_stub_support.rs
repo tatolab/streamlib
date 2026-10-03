@@ -21,17 +21,17 @@ macro_rules! graph_mutation_ops_are_unreachable {
             _spec: ::streamlib::sdk::processors::ProcessorSpec,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
-            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProcessorAddedToTheGraph>,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::NodeInTheGraph>,
         > {
             unreachable!(concat!(
                 "the control plane serves no processor-creation ",
                 $surface
             ))
         }
-        fn processor_id_of_the_node_named(
+        fn the_node_named(
             &self,
             _node_name: &str,
-        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId> {
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::NodeInTheGraph> {
             unreachable!(concat!(
                 "the control plane serves no node lookup ",
                 $surface
@@ -188,7 +188,7 @@ macro_rules! graph_mutation_ops_record_the_call {
             spec: ::streamlib::sdk::processors::ProcessorSpec,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
-            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProcessorAddedToTheGraph>,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::NodeInTheGraph>,
         > {
             let name = match spec.display_name.as_deref() {
                 Some(requested_name) => {
@@ -204,7 +204,7 @@ macro_rules! graph_mutation_ops_record_the_call {
             Box::pin(async move {
                 match armed_refusal {
                     Some(refusal) => Err(::streamlib::sdk::error::Error::Configuration(refusal)),
-                    None => Ok(::streamlib::sdk::runtime::ProcessorAddedToTheGraph {
+                    None => Ok(::streamlib::sdk::runtime::NodeInTheGraph {
                         processor_id: ::streamlib::sdk::graph::ProcessorUniqueId::from(
                             $crate::control_plane_stub_support::STUB_ADDED_PROCESSOR_ID,
                         ),
@@ -213,20 +213,23 @@ macro_rules! graph_mutation_ops_record_the_call {
                 }
             })
         }
-        fn processor_id_of_the_node_named(
+        fn the_node_named(
             &self,
             node_name: &str,
-        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId> {
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::NodeInTheGraph> {
             let cast = ::streamlib::sdk::graph::cast_exposed_name_to_url_safe(node_name)?;
             if cast == $crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME {
                 return Err(::streamlib::sdk::error::Error::ProcessorNotFound(format!(
                     "no node on this runtime is named {node_name:?}"
                 )));
             }
-            Ok(::streamlib::sdk::graph::ProcessorUniqueId::from(format!(
-                "{cast}{}",
-                $crate::control_plane_stub_support::STUB_NODE_ID_SUFFIX
-            )))
+            Ok(::streamlib::sdk::runtime::NodeInTheGraph {
+                processor_id: ::streamlib::sdk::graph::ProcessorUniqueId::from(format!(
+                    "{cast}{}",
+                    $crate::control_plane_stub_support::STUB_NODE_ID_SUFFIX
+                )),
+                name: cast.into_owned(),
+            })
         }
         fn remove_processor_async(
             &self,

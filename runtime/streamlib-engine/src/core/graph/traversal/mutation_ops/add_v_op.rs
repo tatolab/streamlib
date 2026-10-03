@@ -12,7 +12,7 @@ use crate::core::graph::{
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 
 impl<'a> TraversalSourceMut<'a> {
-    /// Add a new processor node to the graph, named by [`the_name_a_new_node_takes`].
+    /// Add a new processor node to the graph, named by `the_name_a_new_node_takes`.
     ///
     /// The node carries a [`StateComponent`] from here on — `Pending`, or
     /// `Error` on a registry miss.
@@ -117,13 +117,15 @@ pub(crate) fn the_name_a_new_node_takes(
     if !is_taken(&cast) {
         return Ok(cast.into_owned());
     }
-    (2usize..)
-        .map(|ordinal| {
-            let suffix = format!("-{ordinal}");
-            let room_before_the_suffix = EXPOSED_NAME_MAXIMUM_LENGTH - suffix.len();
-            let stem = cast[..cast.len().min(room_before_the_suffix)].trim_end_matches('-');
-            format!("{stem}{suffix}")
-        })
-        .find(|candidate| !is_taken(candidate))
-        .ok_or_else(|| Error::GraphError(format!("no free suffix is left for `{cast}`")))
+    let mut ordinal = 2usize;
+    loop {
+        let suffix = format!("-{ordinal}");
+        let room_before_the_suffix = EXPOSED_NAME_MAXIMUM_LENGTH - suffix.len();
+        let stem = cast[..cast.len().min(room_before_the_suffix)].trim_end_matches('-');
+        let candidate = format!("{stem}{suffix}");
+        if !is_taken(&candidate) {
+            return Ok(candidate);
+        }
+        ordinal += 1;
+    }
 }

@@ -9,7 +9,7 @@ use streamlib::sdk::descriptors::{
     PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
 };
 use streamlib::sdk::error::Error;
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
@@ -195,6 +195,59 @@ fn an_exposure_naming_an_input_port_is_refused_naming_the_outputs() {
         the_graph_document_of(&runtime)["nodes"],
         serde_json::json!([]),
         "a refused graph adds nothing"
+    );
+}
+
+#[test]
+#[serial]
+fn an_exposure_named_twice_is_refused() {
+    let camera = register_test_type("TwiceExposedCamera", "_unused_in", "video");
+
+    let refusal = Runner::new()
+        .unwrap()
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [{"name": "camera", "type": camera.as_str()}],
+            "exposed": [{"node": "camera", "port": "video"}, {"node": "Camera", "port": "Video"}]
+        })))
+        .expect_err("one port is exposed once")
+        .to_string();
+
+    assert!(refusal.contains("twice"), "{refusal}");
+}
+
+/// A link from a port on another runtime renders `{runtime_name, node, port}`
+/// and loads back as that same remote end, waiting on its runtime.
+#[test]
+#[serial]
+fn a_link_from_another_runtime_loads_back_as_the_same_remote_end() {
+    let display = register_test_type("RemoteFedDisplay", "video_in", "_unused_out");
+
+    let first = Runner::new().unwrap();
+    let display_id = first
+        .add_processor(ProcessorSpec::new(display, serde_json::json!({})))
+        .unwrap();
+    first
+        .connect(
+            OutputLinkPortRef::on_another_runtime(
+                MeshPortAddress::new("bench-cam-a1b2", "Camera Source", "Video").unwrap(),
+            ),
+            InputLinkPortRef::new(&display_id, "video_in"),
+        )
+        .unwrap();
+    let rendered_first = the_graph_document_of(&first);
+    assert_eq!(
+        rendered_first["links"][0]["source"],
+        serde_json::json!({"runtime_name": "bench-cam-a1b2", "node": "camera-source", "port": "video"})
+    );
+
+    let second = Runner::new().unwrap();
+    second
+        .load_graph_snapshot(&the_spec_in(rendered_first.clone()))
+        .expect("a graph with a remote end loads");
+
+    assert_eq!(
+        the_spec_in(the_graph_document_of(&second)),
+        the_spec_in(rendered_first)
     );
 }
 

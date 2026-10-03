@@ -1335,22 +1335,22 @@ impl Runner {
         use std::collections::HashMap;
 
         use crate::core::graph::{
-            ExposedOutputPortsComponent, GraphNodeWithComponents, MeshPortAddress,
+            ExposedOutputPortsComponent, GraphNodeWithComponents, cast_exposed_name_to_url_safe,
         };
-        use crate::core::json_schema::LinkPortRefOutput;
 
         graph.validate()?;
+        self.refuse_a_node_name_this_graph_already_holds(graph)?;
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
-            let (processor_id, name) = self.add_processor_reporting_assigned_display_name(
+            let added = self.add_processor_reporting_its_name(
                 ProcessorSpec::new(node.processor_type.clone(), node.config.clone())
                     .with_display_name(node.name.clone()),
             )?;
-            processor_id_by_node_name.insert(name, processor_id);
+            processor_id_by_node_name.insert(added.name, added.processor_id);
         }
         let processor_id_of = |node: &str| -> Result<ProcessorUniqueId> {
-            let cast = crate::core::graph::cast_exposed_name_to_url_safe(node)?;
+            let cast = cast_exposed_name_to_url_safe(node)?;
             processor_id_by_node_name
                 .get(cast.as_ref())
                 .cloned()
@@ -1358,36 +1358,23 @@ impl Runner {
         };
 
         for link in &graph.links {
-            let from = match &link.source {
-                LinkPortRefOutput::OnThisRuntime { node, port } => {
-                    OutputLinkPortRef::new(processor_id_of(node)?, port.as_str())
+            let from = match link.source.mesh_port_address() {
+                Some(address) => OutputLinkPortRef::on_another_runtime(address?),
+                None => {
+                    OutputLinkPortRef::new(processor_id_of(link.source.node())?, link.source.port())
                 }
-                LinkPortRefOutput::OnAnotherRuntime {
-                    runtime_name,
-                    node,
-                    port,
-                } => OutputLinkPortRef::on_another_runtime(MeshPortAddress::new(
-                    runtime_name.as_str(),
-                    node.as_str(),
-                    port.as_str(),
-                )?),
             };
-            match &link.target {
-                LinkPortRefOutput::OnThisRuntime { node, port } => {
+            match link.target.mesh_port_address() {
+                Some(address) => {
+                    RuntimeOperations::request_link_on_remote_input_runtime(self, from, address?)?;
+                }
+                None => {
                     self.connect(
                         from,
-                        InputLinkPortRef::new(processor_id_of(node)?, port.as_str()),
-                    )?;
-                }
-                LinkPortRefOutput::OnAnotherRuntime {
-                    runtime_name,
-                    node,
-                    port,
-                } => {
-                    RuntimeOperations::request_link_on_remote_input_runtime(
-                        self,
-                        from,
-                        MeshPortAddress::new(runtime_name.as_str(), node.as_str(), port.as_str())?,
+                        InputLinkPortRef::new(
+                            processor_id_of(link.target.node())?,
+                            link.target.port(),
+                        ),
                     )?;
                 }
             }
@@ -1399,9 +1386,7 @@ impl Runner {
             exposed_ports_by_processor_id
                 .entry(processor_id_of(&exposed.node)?)
                 .or_default()
-                .push(
-                    crate::core::graph::cast_exposed_name_to_url_safe(&exposed.port)?.into_owned(),
-                );
+                .push(cast_exposed_name_to_url_safe(&exposed.port)?.into_owned());
         }
         self.compiler.scope(|live_graph, _tx| {
             for (processor_id, exposed_ports) in exposed_ports_by_processor_id {
@@ -1417,6 +1402,26 @@ impl Runner {
         });
 
         Ok(())
+    }
+
+    /// Refuse, before anything is added, a node `graph` names that this
+    /// runtime's graph already holds — so a refused load adds nothing.
+    fn refuse_a_node_name_this_graph_already_holds(
+        &self,
+        graph: &crate::core::graph_snapshot::GraphSnapshot,
+    ) -> Result<()> {
+        self.compiler.scope(|live_graph, _tx| {
+            for node in &graph.nodes {
+                let cast = crate::core::graph::cast_exposed_name_to_url_safe(&node.name)?;
+                if live_graph.traversal().v_with_node_name(&cast).exists() {
+                    return Err(Error::NodeNameTaken {
+                        name: node.name.clone(),
+                        cast: cast.into_owned(),
+                    });
+                }
+            }
+            Ok(())
+        })
     }
 }
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::Runner;
 use super::RuntimeStatus;
 use super::mesh::{ALinkRequestOnTheMesh, RuntimeMeshMembership};
-use super::operations::{BoxFuture, ProcessorAddedToTheGraph, RuntimeOperations};
+use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
 use crate::core::RuntimeContext;
@@ -14,6 +14,7 @@ use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkRequestUniqueId, LinkUniqueId,
     MeshPortAddress, PendingDeletionComponent, ProcessorUniqueId, StateComponent,
+    node_names_listed_for_a_refusal,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
@@ -78,7 +79,7 @@ async fn add_processor_impl(
     compiler: Arc<Compiler>,
     live: LiveCommitContext,
     spec: ProcessorSpec,
-) -> Result<(ProcessorUniqueId, String)> {
+) -> Result<NodeInTheGraph> {
     let emit_will_add = |id: &ProcessorUniqueId| {
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
@@ -107,7 +108,7 @@ async fn add_processor_impl(
     // `spec` is moved into `add_v`.
     let ident_for_err = spec.name.clone();
 
-    let added = compiler.scope(|graph, tx| -> Result<(ProcessorUniqueId, String)> {
+    let added = compiler.scope(|graph, tx| -> Result<NodeInTheGraph> {
         let (node_id, assigned_display_name) = graph
             .traversal_mut()
             .add_v(spec)?
@@ -139,7 +140,10 @@ async fn add_processor_impl(
         emit_will_add(&node_id);
         tx.log(PendingOperation::AddProcessor(node_id.clone()));
         emit_did_add(&node_id);
-        Ok((node_id, assigned_display_name))
+        Ok(NodeInTheGraph {
+            processor_id: node_id,
+            name: assigned_display_name,
+        })
     })?;
 
     commit_live_graph_change(&compiler, live).await?;
@@ -310,9 +314,11 @@ fn resolve_a_source_addressing_this_runtimes_own_port(
     if !address.names_the_runtime(runtime_mesh.runtime_name()) {
         return Ok(from);
     }
-    let processor_id =
-        the_processor_this_runtime_names(compiler, address.processor_display_name())?;
-    Ok(OutputLinkPortRef::new(processor_id, address.port_name()))
+    let node = the_node_this_runtime_names(compiler, address.processor_display_name())?;
+    Ok(OutputLinkPortRef::new(
+        node.processor_id,
+        address.port_name(),
+    ))
 }
 
 /// Turn a mesh address naming this runtime's own name into the local reference
@@ -332,37 +338,37 @@ fn resolve_a_destination_addressing_this_runtimes_own_port(
     if !address.names_the_runtime(runtime_mesh.runtime_name()) {
         return Ok(to);
     }
-    let processor_id =
-        the_processor_this_runtime_names(compiler, address.processor_display_name())?;
-    Ok(InputLinkPortRef::new(processor_id, address.port_name()))
+    let node = the_node_this_runtime_names(compiler, address.processor_display_name())?;
+    Ok(InputLinkPortRef::new(
+        node.processor_id,
+        address.port_name(),
+    ))
 }
 
-/// The processor `node_name` names on this runtime once cast.
+/// The node `node_name` names on this runtime once cast.
 ///
 /// Refused by name when this runtime holds no node by that name, listing the
 /// ones it does — the local half of the offered-port refusal a peer gets.
-fn the_processor_this_runtime_names(
+fn the_node_this_runtime_names(
     compiler: &Arc<Compiler>,
     node_name: &str,
-) -> Result<ProcessorUniqueId> {
+) -> Result<NodeInTheGraph> {
     compiler.scope(|graph, _tx| {
-        if let Some(named) = graph.traversal().v_with_display_name(node_name).first() {
-            return Ok(named.id.clone());
+        if let Some(named) = graph.traversal().v_with_node_name(node_name).first() {
+            return Ok(NodeInTheGraph {
+                processor_id: named.id.clone(),
+                name: named.display_name.clone(),
+            });
         }
-        let mut node_names: Vec<String> = graph
+        let node_names: Vec<String> = graph
             .traversal()
             .v(())
             .iter()
             .map(|node| node.display_name.clone())
             .collect();
-        node_names.sort();
         Err(Error::ProcessorNotFound(format!(
             "no node on this runtime is named {node_name:?}. This runtime holds: {}",
-            if node_names.is_empty() {
-                "no node".to_string()
-            } else {
-                node_names.join(", ")
-            }
+            node_names_listed_for_a_refusal(node_names.iter().map(String::as_str))
         )))
     })
 }
@@ -617,10 +623,7 @@ impl Runner {
 
     /// Add a processor and report the display name the graph assigned it, which
     /// is the requested one only when no other node already answered to it.
-    pub fn add_processor_reporting_assigned_display_name(
-        &self,
-        spec: ProcessorSpec,
-    ) -> Result<(ProcessorUniqueId, String)> {
+    pub fn add_processor_reporting_its_name(&self, spec: ProcessorSpec) -> Result<NodeInTheGraph> {
         let live = self.live_commit_context();
         match &self.tokio_runtime_variant {
             TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
@@ -650,21 +653,14 @@ impl RuntimeOperations for Runner {
     // Async Methods (delegate to _impl functions)
     // =========================================================================
 
-    fn add_processor_async(
-        &self,
-        spec: ProcessorSpec,
-    ) -> BoxFuture<'_, Result<ProcessorAddedToTheGraph>> {
+    fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<NodeInTheGraph>> {
         let compiler = Arc::clone(&self.compiler);
         let live = self.live_commit_context();
-        Box::pin(async move {
-            add_processor_impl(compiler, live, spec)
-                .await
-                .map(|(processor_id, name)| ProcessorAddedToTheGraph { processor_id, name })
-        })
+        Box::pin(add_processor_impl(compiler, live, spec))
     }
 
-    fn processor_id_of_the_node_named(&self, node_name: &str) -> Result<ProcessorUniqueId> {
-        the_processor_this_runtime_names(&self.compiler, node_name)
+    fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph> {
+        the_node_this_runtime_names(&self.compiler, node_name)
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -815,8 +811,8 @@ impl RuntimeOperations for Runner {
     // =========================================================================
 
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-        self.add_processor_reporting_assigned_display_name(spec)
-            .map(|(processor_id, _assigned_display_name)| processor_id)
+        self.add_processor_reporting_its_name(spec)
+            .map(|added| added.processor_id)
     }
 
     fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {

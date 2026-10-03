@@ -12,13 +12,14 @@ use std::pin::Pin;
 /// Boxed future type for async trait methods (required for dyn compatibility).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// A node an add put in the graph: its per-run id, and the name it received —
-/// the one asked for, cast, or the class's short name with any `-2` suffix.
+/// A node in the graph: its per-run id and its name — for an added node, the
+/// name it received: the one asked for, cast, or the class's short name with
+/// any `-2` suffix.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProcessorAddedToTheGraph {
+pub struct NodeInTheGraph {
     /// The node's per-run id.
     pub processor_id: ProcessorUniqueId,
-    /// The name the node received.
+    /// The node's name.
     pub name: String,
 }
 
@@ -51,14 +52,11 @@ pub trait RuntimeOperations: Send + Sync {
     /// name it received.
     ///
     /// Note: No `#[must_use]` - callers may intentionally ignore the ID in fire-and-forget scenarios.
-    fn add_processor_async(
-        &self,
-        spec: ProcessorSpec,
-    ) -> BoxFuture<'_, Result<ProcessorAddedToTheGraph>>;
+    fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<NodeInTheGraph>>;
 
-    /// The id of the node `node_name` names once cast, refused by name —
-    /// listing the names the graph holds — when no node has it.
-    fn processor_id_of_the_node_named(&self, node_name: &str) -> Result<ProcessorUniqueId>;
+    /// The node `node_name` names once cast, refused by name — listing the
+    /// names the graph holds — when no node has it.
+    fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph>;
 
     /// Remove a processor from the graph asynchronously.
     ///

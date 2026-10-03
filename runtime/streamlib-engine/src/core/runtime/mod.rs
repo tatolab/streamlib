@@ -49,7 +49,7 @@ pub use mesh::{
     observe_a_runtime_mesh,
 };
 pub use mesh_address_chunk::what_one_mesh_address_chunk_may_be;
-pub use operations::{BoxFuture, ProcessorAddedToTheGraph, RuntimeOperations};
+pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub(crate) use output_ports_in_this_runtimes_graph::OutputPortsInThisRuntimesGraph;
 pub use runtime::Runner;
 pub use runtime_mesh_configuration::RuntimeMeshConfiguration;
