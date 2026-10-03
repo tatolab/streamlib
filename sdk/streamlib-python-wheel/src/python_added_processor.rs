@@ -211,7 +211,10 @@ mod tests {
 
         assert_eq!(added_processor.output("Video").unwrap().port_name, "video");
         assert_eq!(
-            added_processor.input("Frames From Upstream").unwrap().port_name,
+            added_processor
+                .input("Frames From Upstream")
+                .unwrap()
+                .port_name,
             "frames-from-upstream"
         );
         assert!(added_processor.output("..").is_err());

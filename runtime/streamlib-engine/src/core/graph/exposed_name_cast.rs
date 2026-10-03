@@ -8,8 +8,8 @@
 
 use std::borrow::Cow;
 
-use unicode_normalization::char::is_combining_mark;
 use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::char::is_combining_mark;
 
 use crate::core::error::{Error, Result};
 
