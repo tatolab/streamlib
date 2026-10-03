@@ -1403,8 +1403,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A stream's environment is its project directory and that directory's venv
   interpreter. It is recorded beside the graph when the stream is loaded — never inside it, so
   the same graph loads from another checkout — and every processor interpreter of the stream
-  starts from it. Provisioning an environment is the packs OPEN in §Packages. Owner,
-  2026-10-02. [package-split-and-lend]
+  starts from it, its working directory the project. The runtime hands a stream no variables of
+  the user's — no `.env`, no `-e`, no caller's shell — and a stream reads its own settings from
+  its project as any program does (runtime-hosting decision 4). Provisioning an environment is
+  the packs OPEN in §Packages. Owner, 2026-10-02. [package-split-and-lend; runtime-hosting]
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
   Direction (review, not decided): a camera, a microphone, a display, the accelerator, network
   exposure — derived from its nodes' declarations (built-ins carry theirs; a user node that

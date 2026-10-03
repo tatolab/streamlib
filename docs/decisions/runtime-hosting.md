@@ -41,6 +41,9 @@ packaged on Apple.
 - Names are cast, never refused for spelling (2026-10-02, runtime-hosting decision 3): every
   exposed name is lowercased into RFC 3986's unreserved characters, a defaulted duplicate takes
   `-2`; what a person writes in code is never constrained.
+- No environment variables are built in (2026-10-02, runtime-hosting decision 4): a stream's
+  processes start in its project directory with none of the user's variables; a stream that wants
+  a `.env` loads it itself.
 - No shutdown verb (2026-10-02, runtime-hosting decision 1): the runtime stays on, as `tailscaled`
   does; quitting the app quits the app. It stops only by its service manager or a signal in the
   terminal running it; a client ends its own work with `stop <stream>`.
@@ -89,6 +92,10 @@ packaged on Apple.
   add labels later without breaking an address.
 - **Refusing names that are not already lowercase URL-safe.** Owner: "don't force people to write
   it like that or change imports" — the cast exposes the safe form whatever was typed.
+- **The runtime reading the project's `.env`, Docker's `-e` and `--env-file`, or forwarding the
+  caller's shell.** Each makes the runtime carry a user's values — the last stores credentials in
+  the state directory or behaves differently once a stream is kept. Owner: a stream can include a
+  library that reads `.env` itself.
 - **A `shutdown` tool, machine-wide or as a restart.** One caller would end every person's streams;
   owner: "shutdown doesn't feel like it makes sense in this context". The runtime process's own
   Quit menu item goes for the same reason — Cmd+Q in one stream's window ended them all.

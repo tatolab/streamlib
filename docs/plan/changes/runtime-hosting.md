@@ -87,17 +87,13 @@ and amending `:1367-1377`. The engine casts a live add and the pure-Python build
 author writes; a pure package cannot call the engine, so the two read one fixture of cases. #2565's
 live add and #2567's builder build it, not ` 2`.
 
-## [NEEDS DECISION] 4 — environment variables for a stream under a service
+## Decision 4 — RESOLVED: no environment variables are built in
 
-A terminal-run app inherited its shell; a stream loaded into a service does not, and credentials
-such as `WhipPublisher`'s come from the environment today. This extends `:1403-1407` (a stream's
-environment is its project directory and venv).
-- **(a) The project's `.env`**, read at every load and handed to the stream's processor
-  interpreters; nothing copied, so no secret is stored twice.
-- **(b) Docker's `-e NAME[=VALUE]` and `--env-file`**, recorded for a kept stream in its 0600
-  record — credentials at rest in the state directory.
-- **(c) An attached stream inherits the caller's shell**, a kept one takes `-e`: two behaviours.
-**Recommendation: (a)** — it is the decided environment, read where it already lives.
+Owner, 2026-10-02: a stream that wants a `.env` "could just include a python library that reads
+.env files on their own … why do we need to do that?" The runtime passes a stream's compile and
+its processor interpreters no user variables — no `.env`, no `-e`, no shell forwarding; they start
+in the project directory, so a stream reads its own settings as any program does. The extensions
+read none (they never did); the examples' `os.environ` reads go with their conversion backlog.
 
 ## [NEEDS DECISION] 5 — a kept stream that crashes the runtime
 
@@ -306,7 +302,7 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 - **S1 — one engine, many streams.** Runtime suite: two streams in one `Runner`; one's shutdown,
   watchdog and graph change leave the other alone; one `VkDevice`. After #2592.
 - **S2 — the stream actions**: `tatolabd` without a stream, the lock, the state directory, the
-  tools and verbs, attached connections, decisions 4 and 5, re-load and restart, `nodes` and
+  tools and verbs, attached connections, decision 5, re-load and restart, `nodes` and
   `shutdown` gone. Blocked by S1, #2593.
 - **S3 — the machine segment**: addresses, keys, the machine id and name, `set`, cross-stream
   links, one ingress per machine, the builder, the mesh fixtures, decision 3. Blocked by S2, #2566.
