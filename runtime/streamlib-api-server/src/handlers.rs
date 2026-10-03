@@ -480,7 +480,7 @@ pub(crate) struct TapQuery {
     path = "/ws/tap/{channel}",
     tag = "events",
     params(
-        ("channel" = String, Path, description = "Name of the channel to observe"),
+        ("channel" = String, Path, description = "The output port's address, `<runtime_name>/<node>/<port>`, percent-encoded as one path segment"),
         ("count" = Option<usize>, Query, description = "Stream exactly this many bags then close; absent streams live until the client disconnects")
     ),
     responses(
