@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.3.3...streamlib-webrtc-v0.4.0) (2026-10-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** `streamlib.processor` is gone; decorate node classes with `streamlib.node`. A scaffolded app's node modules live under `nodes/`.
+
+### Features
+
+* **sdk:** `[@node](https://github.com/node)` declares a node where `[@processor](https://github.com/processor)` did ([#2612](https://github.com/tatolab/streamlib/issues/2612)) ([8f411f2](https://github.com/tatolab/streamlib/commit/8f411f2f3705f1678c01a8facd7b6ce298d1749d))
+
 ## [0.3.3](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.3.2...streamlib-webrtc-v0.3.3) (2026-10-01)
 
 

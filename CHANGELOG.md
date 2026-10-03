@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.27.0](https://github.com/tatolab/streamlib/compare/v0.26.48...v0.27.0) (2026-10-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** `streamlib.processor` is gone; decorate node classes with `streamlib.node`. A scaffolded app's node modules live under `nodes/`.
+
+### Features
+
+* **sdk:** `[@node](https://github.com/node)` declares a node where `[@processor](https://github.com/processor)` did ([#2612](https://github.com/tatolab/streamlib/issues/2612)) ([8f411f2](https://github.com/tatolab/streamlib/commit/8f411f2f3705f1678c01a8facd7b6ce298d1749d))
+
 ## [0.26.48](https://github.com/tatolab/streamlib/compare/v0.26.47...v0.26.48) (2026-10-01)
 
 
