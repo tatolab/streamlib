@@ -198,6 +198,72 @@ fn an_exposure_naming_an_input_port_is_refused_naming_the_outputs() {
     );
 }
 
+/// Every name is checked against the live graph before the first node is
+/// added, so a refused load leaves the graph as it found it.
+#[test]
+#[serial]
+fn a_load_refused_for_a_taken_name_adds_none_of_its_nodes() {
+    let camera = register_test_type("PartlyTakenCamera", "_unused_in", "video");
+
+    let runtime = Runner::new().unwrap();
+    runtime
+        .add_processor(
+            ProcessorSpec::new(camera.clone(), serde_json::json!({})).with_display_name("camera"),
+        )
+        .unwrap();
+
+    let refusal = runtime.load_graph_snapshot(&the_spec_in(serde_json::json!({
+        "nodes": [
+            {"name": "other", "type": camera.as_str()},
+            {"name": "Camera", "type": camera.as_str()}
+        ]
+    })));
+
+    assert!(
+        matches!(refusal, Err(Error::NodeNameTaken { .. })),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        the_graph_document_of(&runtime)["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["camera"]
+    );
+}
+
+/// A link naming a port its node does not have, in that direction, is
+/// refused before any node is added.
+#[test]
+#[serial]
+fn a_load_refused_for_a_missing_link_port_adds_none_of_its_nodes() {
+    let camera = register_test_type("MissingPortCamera", "frames_in", "video");
+
+    let runtime = Runner::new().unwrap();
+    let refusal = runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [
+                {"name": "front", "type": camera.as_str()},
+                {"name": "back", "type": camera.as_str()}
+            ],
+            "links": [{"source": {"node": "front", "port": "video"},
+                       "target": {"node": "back", "port": "no_such_input"}}]
+        })))
+        .expect_err("the link names an input `back` does not have")
+        .to_string();
+
+    assert!(
+        refusal.contains("no input port `no_such_input`"),
+        "{refusal}"
+    );
+    assert_eq!(
+        the_graph_document_of(&runtime)["nodes"],
+        serde_json::json!([])
+    );
+}
+
 #[test]
 #[serial]
 fn an_exposure_named_twice_is_refused() {
