@@ -1890,7 +1890,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   every stream. Undecided: whether the adapter crates move anywhere, and what the
   software-Vulkan bundle costs the Linux wheel. [one-runtime-per-machine]
 
-## Media I/O — camera, display, audio, codecs — DECIDED (unbuilt: Apple permissions through Tatolab.app, pivot steps 4 and 10)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ runtime-hosting: Apple permissions through Tatolab.app)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
