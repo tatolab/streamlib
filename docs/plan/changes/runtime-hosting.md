@@ -308,8 +308,8 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 - **S1 — one engine, many streams.** Runtime suite: two streams in one `Runner`; one's shutdown,
   watchdog and graph change leave the other alone; one `VkDevice`. After #2592.
 - **S2 — the stream actions**: `tatolabd` without a stream, the lock, the state directory, the
-  tools and verbs, attached connections, the failed state, the crash recorder, re-load and restart, `nodes` and
-  `shutdown` gone. Blocked by S1, #2593.
+  tools, attached connections, the failed state, the crash recorder, the children's environment,
+  re-load and restart, `nodes` and `shutdown` gone. Blocked by S1, #2593.
 - **S3 — the machine segment**: addresses, keys, the machine id and name, `set`, cross-stream
   links, one ingress per machine, the builder, the mesh fixtures, the machine, stream and address
   cast. Blocked by S2, #2566.
