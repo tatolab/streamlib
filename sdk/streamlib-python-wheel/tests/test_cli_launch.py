@@ -703,7 +703,7 @@ def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
     """
     app_directory = tmp_path / "app"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
-    effect_module = app_directory / "processors" / "inverting_effect.py"
+    effect_module = app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH
     last_good_effect_source = effect_module.read_text()
 
     surviving_node = launch_node("dev", app_directory, free_port(), capture_output=True)
