@@ -13,7 +13,8 @@ machine offers. After this change:
 - one graph shape, loadable from `graph`'s own output — `stream`, `nodes`, `links`, `exposed`, the
   live keys beside them; `Runtime.load` runs it; `rt.add`, `rt.connect` and the remote references
   on `Runtime` are gone;
-- a typed duplicate node name is refused where it is written; a defaulted one is suffixed as today;
+- a typed duplicate node name is refused where it is written; a defaulted one takes `-2`, every
+  name cast to lowercase URL-safe (runtime-hosting decision 3);
 - nothing leaves the machine until exposed: the mesh offers and sends exposed ports only.
 
 Unchanged and left to later changes, each mapped below: one engine per `run` process, today's
@@ -140,11 +141,12 @@ one, with no change to the graph, the loader or `graph`.
   built-in's marker and a `@node` class answer alike), its config as a JSON object, and its name.
   `connect` records a link; `expose` records an output. Nothing runs: the builder holds data.
 - **Names are resolved by the builder**, because only it knows a typed name from a defaulted one:
-  a defaulted name is the class's short name, a defaulted duplicate takes ` 2`, ` 3` … exactly as
-  the engine spells it today, and a typed duplicate raises at the `add` that typed it, naming
-  both — the error lands on the author's own line. The emitted graph therefore carries resolved,
+  a name is cast to lowercase URL-safe and a defaulted one is the class's short name, cast; a
+  defaulted duplicate takes the next unused `-2`, `-3` … (runtime-hosting decision 3, amending
+  ` 2`); a typed duplicate — two typed names casting alike — raises at the `add` that typed it,
+  naming both, on the author's own line; `@node` refuses two ports casting alike. The emitted graph therefore carries resolved,
   unique names, and a link names its ends by them. The engine keeps its own defaulting for a live
-  `add_processor` that names nothing, and gains the same typed-duplicate refusal; one rule, two
+  `add_processor` that names nothing, and gains the same cast, `-2` and typed-duplicate refusal; one rule, two
   seams, each proven on the same inputs.
 - **`compile_stream_to_graph(stream_function, *, name=None) -> dict`** runs the function once
   over a fresh `Stream` and returns the graph. A function that raises propagates; a function
@@ -259,7 +261,7 @@ one, with no change to the graph, the loader or `graph`.
 | Not here | Because | Lands with |
 |---|---|---|
 | The `<machine>/` address segment and the stream in the Zenoh key (`:3969-3985`) | With one engine per `run` process there is no machine to name but today's runtime name; adding the segment now would refuse the second stream on a machine | the change that makes one runtime host several streams |
-| The name grammar (URL-segment characters, case) in the same entry | It is address grammar | the same change |
+| ~~The name grammar in the same entry~~ | built here since runtime-hosting decision 3: the cast and `-2` for node names | this change; machine and stream names and remote addresses with runtime hosting |
 | `graph` returning several streams; `load`, `unload`, `streams`, `expose` as verbs; MCP argument spellings (`display_name` and friends) | the local API OPEN at approval | the verbs: runtime hosting, step 4 (decided 2026-10-01); the MCP argument spellings: the local-API change did not take them — to `/align`, 2026-10-02 (#2565's comment) |
 | The stream's environment (venv path) in the graph; needs derived from nodes | OPEN `:1334-1341` at approval | the environment: the package split (#2590), recorded beside the graph, never in it (decided 2026-10-02); needs: resources, step 6 |
 | Persisting loaded graphs in a state directory; re-load on restart | OPEN `:114-125` at approval; the one-engine entry's state directory | runtime hosting, step 4 (decided 2026-10-01) |

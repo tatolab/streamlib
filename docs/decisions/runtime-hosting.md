@@ -14,9 +14,9 @@ packaged on Apple.
 
 - One runtime per machine, owned by whoever installed or started it; another user's runtime is
   refused naming the holder. A server or robot runs it as one service account.
-- `run` attached, `run -d` kept and re-loaded on every start, `stop` unloads and remembers,
-  `start` resumes, `rm` forgets (amended 2026-10-02), `streams` lists, `dev` reloads on edit; no `up`/`down` — `tatolabd` runs in a terminal or a
-  container where no installer put it.
+- `run` attached, `run -d` kept and re-loaded on every start unless stopped or failed, `stop` unloads and
+  remembers, `start` resumes, `rm` forgets (amended 2026-10-02), `streams` lists, `dev` reloads
+  on edit; no `up`/`down` — `tatolabd` runs in a terminal or a container where no installer put it.
 - Composition is plain Python over a flat graph.
 - The runtime keeps the GPU context, signals, Zenoh session, local API and relay once per machine;
   every other per-process table becomes per stream. Streams on one machine link without exposing;
@@ -26,7 +26,7 @@ packaged on Apple.
   cannot reach the socket, as `docker` does with its daemon down. `Tatolab.app` registers the
   login service on Apple (Docker Desktop's shape), a terminal runs `tatolabd` there until the app
   ships, and on Linux the installer registers a systemd user service, Docker Engine's shape.
-- Kept streams always come back; `stop` remembers, `start` resumes, `rm` forgets; an attached
+- Kept streams always come back unless stopped or failed; `stop` remembers, `start` resumes, `rm` forgets; an attached
   stream ends with its terminal command (2026-10-02).
 - Every CLI stream action is also a tool and `graph` returns every stream, because the CLI is a
   pure client of the runtime's tools; surfaces cross between streams on one machine with no
@@ -38,6 +38,16 @@ packaged on Apple.
 - A minimal `Tatolab.app` ships with runtime hosting, not at step 10 (2026-10-02, runtime-hosting
   decision 2): opening it starts the runtime if it is not running and offers the login item, as
   Docker Desktop does; Developer ID signed and notarised. The terminal stays a developer's path.
+- Names are cast, never refused for spelling (2026-10-02, runtime-hosting decision 3): every
+  exposed name is lowercased into RFC 3986's unreserved characters — one casting to empty, `.` or
+  `..` is refused — a defaulted node duplicate takes `-2` while a duplicate stream name is
+  refused (`--name`); what a person writes is never constrained.
+- No environment variables are built in (2026-10-02, runtime-hosting decision 4): a stream's
+  processes start in its project directory with nothing added per stream or from the caller; a
+  stream that wants a `.env` loads it itself.
+- A stream that keeps crashing the runtime is `failed` (2026-10-02, runtime-hosting decision 5):
+  implicated in the runtime's last two crashes in a row, or unable to load; shown with its
+  reason, skipped at start, retried by `start`. Restarting is not failing.
 - No shutdown verb (2026-10-02, runtime-hosting decision 1): the runtime stays on, as `tailscaled`
   does; quitting the app quits the app. It stops only by its service manager or a signal in the
   terminal running it; a client ends its own work with `stop <stream>`.
@@ -80,6 +90,20 @@ packaged on Apple.
 - **A `group` label or nested subgraphs.** No consumer needs to see a fragment as one thing yet.
 - **A bare launchd binary on Apple.** Its prompts name the executable file and key the grant by
   path; an agent inside the signed app is credited to the app (TN3179, DTS guidance; #2560).
+- **Free-text names, percent-encoded in URLs.** Two spellings of every name, against "the same
+  string in Python, the CLI and the URL path"; spaces need quoting in every shell.
+- **A URL-safe name plus a free-text label.** A second identity concept on every node; the app can
+  add labels later without breaking an address.
+- **Refusing names that are not already lowercase URL-safe.** Owner: "don't force people to write
+  it like that or change imports" — the cast exposes the safe form whatever was typed.
+- **The runtime reading the project's `.env`, Docker's `-e` and `--env-file`, or forwarding the
+  caller's shell.** Each makes the runtime carry a user's values; `-e` would store credentials in
+  the state directory, and forwarding a shell would behave differently once a stream is kept.
+  Owner: a stream can include a library that reads `.env` itself.
+- **`stop` and `rm` editing the state directory while the runtime is down.** A second, offline
+  path through every record for the rarest case — permutations and bugs; Docker's CLI does
+  nothing with its daemon down either.
+- **A time window on crashes.** Owner: two in a row, regardless of time.
 - **A `shutdown` tool, machine-wide or as a restart.** One caller would end every person's streams;
   owner: "shutdown doesn't feel like it makes sense in this context". The runtime process's own
   Quit menu item goes for the same reason — Cmd+Q in one stream's window ended them all.
