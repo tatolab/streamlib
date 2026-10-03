@@ -25,7 +25,6 @@ use crate::core::graph::{
     GraphEdgeWithComponents, InputLinkPortRef, LinkUniqueId, OutputLinkPortRef,
     TheRequestThatAppliedThisLinkComponent,
 };
-use crate::core::json_schema::LinkOutput;
 use crate::core::runtime::Runner;
 use crate::core::runtime::mesh::{
     ALinkRequestOnTheMesh, WhatALinkRequestAsksFor, WhatALinkRequestWasAnswered,
@@ -173,10 +172,11 @@ fn how_this_runtime_reads_one_link(
     runtime
         .compiler
         .scope(|graph, _tx| {
-            graph.traversal().e(link_id).first().map(|link| {
-                LinkOutput::of_a_link_on_the_runtime_named(link, runtime.runtime_name.as_str())
-                    .state
-            })
+            graph
+                .traversal()
+                .e(link_id)
+                .first()
+                .map(crate::core::json_schema::LinkStateOutput::of_a_link_as_graph_renders_it)
         })
         .unwrap_or(crate::core::json_schema::LinkStateOutput::Disconnected)
 }
@@ -193,7 +193,7 @@ mod tests {
     use serial_test::serial;
 
     const THE_TEST_TYPE: &str = "link_requests_applied_tests:ADestination";
-    const THE_DESTINATIONS_DISPLAY_NAME: &str = "DisplayWindow";
+    const THE_DESTINATIONS_DISPLAY_NAME: &str = "displaywindow";
     const THE_INPUT_PORT: &str = "frames_from_upstream";
 
     fn register_the_destination_type() -> ProcessorClassImportPath {
@@ -241,7 +241,7 @@ mod tests {
     fn a_request_from(link_request_id: &str) -> ALinkRequestOnTheMesh {
         ALinkRequestOnTheMesh::asking_for_a_link(
             LinkRequestUniqueId::from(link_request_id),
-            MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video")
+            MeshPortAddress::new("bench-cam-a1b2", "camerasource", "video")
                 .expect("a legal address"),
             MeshPortAddress::new(
                 "link-request-apply-under-test",
@@ -392,13 +392,14 @@ mod tests {
             .expect("the request applies");
 
         let rendered = runtime.compiler.scope(|graph, _tx| {
-            LinkOutput::of_a_link_on_the_runtime_named(
+            crate::core::json_schema::LinkOutput::of_a_link_on_the_runtime_named(
                 graph
                     .traversal()
                     .e(&applied.link_id)
                     .first()
                     .expect("the link is in the graph"),
                 runtime.runtime_name.as_str(),
+                &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
             )
         });
         assert_eq!(rendered.created_by_runtime_name, "bench-cam-a1b2");

@@ -46,8 +46,8 @@ impl OutputPortsOtherRuntimesAreReading {
             .read()
             .iter()
             .map(|(port, reader_runtime_names)| MeshEgressPortOutput {
-                processor_display_name: port.processor_display_name.clone(),
-                port_name: port.port_name.clone(),
+                node: port.processor_display_name.clone(),
+                port: port.port_name.clone(),
                 reader_runtime_names: reader_runtime_names.iter().cloned().collect(),
             })
             .collect()
@@ -82,11 +82,11 @@ mod tests {
         let table = OutputPortsOtherRuntimesAreReading::default();
         table.record_what_is_being_sent(BTreeMap::from([
             (
-                a_port("CameraSource", "video"),
+                a_port("camerasource", "video"),
                 BTreeSet::from(["bench-fx-c3d4".to_string(), "bench-rec-e5f6".to_string()]),
             ),
             (
-                a_port("MicrophoneSource", "audio"),
+                a_port("microphonesource", "audio"),
                 BTreeSet::from(["bench-rec-e5f6".to_string()]),
             ),
         ]));
@@ -95,12 +95,9 @@ mod tests {
         assert_eq!(
             rendered
                 .iter()
-                .map(|entry| (
-                    entry.processor_display_name.as_str(),
-                    entry.port_name.as_str()
-                ))
+                .map(|entry| (entry.node.as_str(), entry.port.as_str()))
                 .collect::<Vec<_>>(),
-            vec![("CameraSource", "video"), ("MicrophoneSource", "audio")]
+            vec![("camerasource", "video"), ("microphonesource", "audio")]
         );
         assert_eq!(
             rendered[0].reader_runtime_names,
@@ -118,7 +115,7 @@ mod tests {
     fn a_port_whose_egress_stopped_is_gone_rather_than_rendered_with_no_readers() {
         let table = OutputPortsOtherRuntimesAreReading::default();
         table.record_what_is_being_sent(BTreeMap::from([(
-            a_port("CameraSource", "video"),
+            a_port("camerasource", "video"),
             BTreeSet::from(["bench-fx-c3d4".to_string()]),
         )]));
         assert_eq!(table.render_for_graph().len(), 1);

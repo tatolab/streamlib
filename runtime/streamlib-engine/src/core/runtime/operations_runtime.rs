@@ -6,10 +6,7 @@ use std::sync::Arc;
 use super::Runner;
 use super::RuntimeStatus;
 use super::mesh::{ALinkRequestOnTheMesh, RuntimeMeshMembership};
-use super::mesh_address_chunk::{
-    first_reason_this_is_not_one_mesh_address_chunk, what_one_mesh_address_chunk_may_be,
-};
-use super::operations::{BoxFuture, RuntimeOperations};
+use super::operations::{BoxFuture, ProcessorAddedToTheGraph, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
 use crate::core::RuntimeContext;
@@ -71,24 +68,6 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
         })?
 }
 
-/// Refuse `requested_display_name` unless it is one legal mesh address chunk.
-///
-/// Beside the add path rather than in the grammar module: the grammar knows
-/// nothing about processors, and the remedy this names is the add's own.
-fn refuse_a_display_name_that_is_not_one_mesh_address_chunk(
-    requested_display_name: &str,
-) -> Result<()> {
-    match first_reason_this_is_not_one_mesh_address_chunk(requested_display_name) {
-        None => Ok(()),
-        Some(what_is_wrong) => Err(Error::Configuration(format!(
-            "display name {requested_display_name:?} cannot be one chunk of a processor's mesh \
-             address: {what_is_wrong}. {}. Rename the processor, or leave `display_name` out to \
-             take the class's own short name",
-            what_one_mesh_address_chunk_may_be()
-        ))),
-    }
-}
-
 /// Core implementation for add_processor - takes owned Arcs for 'static lifetime.
 ///
 /// Reports the display name the graph assigned alongside the id. Both come out
@@ -118,14 +97,6 @@ async fn add_processor_impl(
         );
     };
 
-    // Before anything else: the display name is the processor's part of its
-    // mesh address, so a name that cannot be one address chunk is a wiring
-    // error whatever door the add came through — `rt.add`, Rust, or the
-    // control plane's `add_processor`.
-    if let Some(requested_display_name) = spec.display_name.as_deref() {
-        refuse_a_display_name_that_is_not_one_mesh_address_chunk(requested_display_name)?;
-    }
-
     // A type nobody registered may still be resolvable by name — the wheel
     // resolves a Python class import path the way `rt.add` would. A resolver
     // that fails names why; one that is absent leaves the registry miss below
@@ -139,7 +110,7 @@ async fn add_processor_impl(
     let added = compiler.scope(|graph, tx| -> Result<(ProcessorUniqueId, String)> {
         let (node_id, assigned_display_name) = graph
             .traversal_mut()
-            .add_v(spec)
+            .add_v(spec)?
             .first()
             .map(|node| (node.id.clone(), node.display_name.clone()))
             .ok_or_else(|| Error::GraphError("Could not create node".into()))?;
@@ -278,10 +249,12 @@ async fn connect_impl(
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
     // An address naming this runtime's own name is a local reference, resolved
-    // by display name — so an app can spell one of its own ports the way a peer
+    // by node name — so an app can spell one of its own ports the way a peer
     // spells it and get the ordinary local link.
-    let from = resolve_a_source_addressing_this_runtimes_own_port(&compiler, &runtime_mesh, from)?;
-    let to = resolve_a_destination_addressing_this_runtimes_own_port(&compiler, &runtime_mesh, to)?;
+    let from = resolve_a_source_addressing_this_runtimes_own_port(&compiler, &runtime_mesh, from)?
+        .with_its_port_name_cast()?;
+    let to = resolve_a_destination_addressing_this_runtimes_own_port(&compiler, &runtime_mesh, to)?
+        .with_its_port_name_cast()?;
 
     PUBSUB.publish(
         topics::RUNTIME_GLOBAL,
@@ -337,7 +310,8 @@ fn resolve_a_source_addressing_this_runtimes_own_port(
     if !address.names_the_runtime(runtime_mesh.runtime_name()) {
         return Ok(from);
     }
-    let processor_id = the_processor_this_runtime_displays_as(compiler, address)?;
+    let processor_id =
+        the_processor_this_runtime_names(compiler, address.processor_display_name())?;
     Ok(OutputLinkPortRef::new(processor_id, address.port_name()))
 }
 
@@ -358,41 +332,36 @@ fn resolve_a_destination_addressing_this_runtimes_own_port(
     if !address.names_the_runtime(runtime_mesh.runtime_name()) {
         return Ok(to);
     }
-    let processor_id = the_processor_this_runtime_displays_as(compiler, address)?;
+    let processor_id =
+        the_processor_this_runtime_names(compiler, address.processor_display_name())?;
     Ok(InputLinkPortRef::new(processor_id, address.port_name()))
 }
 
-/// The processor this runtime displays under `address`'s display name.
+/// The processor `node_name` names on this runtime once cast.
 ///
-/// Refused by name when this runtime holds no processor under it, listing the
+/// Refused by name when this runtime holds no node by that name, listing the
 /// ones it does — the local half of the offered-port refusal a peer gets.
-fn the_processor_this_runtime_displays_as(
+fn the_processor_this_runtime_names(
     compiler: &Arc<Compiler>,
-    address: &MeshPortAddress,
+    node_name: &str,
 ) -> Result<ProcessorUniqueId> {
     compiler.scope(|graph, _tx| {
-        if let Some(named) = graph
-            .traversal()
-            .v_with_display_name(address.processor_display_name())
-            .first()
-        {
+        if let Some(named) = graph.traversal().v_with_display_name(node_name).first() {
             return Ok(named.id.clone());
         }
-        let mut display_names: Vec<String> = graph
+        let mut node_names: Vec<String> = graph
             .traversal()
             .v(())
             .iter()
             .map(|node| node.display_name.clone())
             .collect();
-        display_names.sort();
+        node_names.sort();
         Err(Error::ProcessorNotFound(format!(
-            "no processor on this runtime is displayed as {:?}, which {address} names. This \
-             runtime is displaying: {}",
-            address.processor_display_name(),
-            if display_names.is_empty() {
-                "nothing".to_string()
+            "no node on this runtime is named {node_name:?}. This runtime holds: {}",
+            if node_names.is_empty() {
+                "no node".to_string()
             } else {
-                display_names.join(", ")
+                node_names.join(", ")
             }
         )))
     })
@@ -681,14 +650,21 @@ impl RuntimeOperations for Runner {
     // Async Methods (delegate to _impl functions)
     // =========================================================================
 
-    fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
+    fn add_processor_async(
+        &self,
+        spec: ProcessorSpec,
+    ) -> BoxFuture<'_, Result<ProcessorAddedToTheGraph>> {
         let compiler = Arc::clone(&self.compiler);
         let live = self.live_commit_context();
         Box::pin(async move {
             add_processor_impl(compiler, live, spec)
                 .await
-                .map(|(processor_id, _assigned_display_name)| processor_id)
+                .map(|(processor_id, name)| ProcessorAddedToTheGraph { processor_id, name })
         })
+    }
+
+    fn processor_id_of_the_node_named(&self, node_name: &str) -> Result<ProcessorUniqueId> {
+        the_processor_this_runtime_names(&self.compiler, node_name)
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -724,18 +700,19 @@ impl RuntimeOperations for Runner {
         channel: String,
         count: Option<usize>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::TapSubscription>> {
-        // Resolve what the caller named to the source that publishes to it,
-        // and that source's iceoryx2 sizing, from the live graph BEFORE
+        // Resolve the address the caller named to the source that publishes to
+        // it, and that source's iceoryx2 sizing, from the live graph BEFORE
         // spawning: the same derivation the compiler op used to open the
         // service, so the tap's publisher-free reopen requests identical,
-        // iceoryx2-verified parameters. A port on another runtime is named by
-        // its mesh address and tapped on the channel its ingress writes — the
-        // channel name is hashed from that address and is nothing a caller
-        // could be expected to spell.
+        // iceoryx2-verified parameters. Neither channel name — a source's
+        // processor id, or the hash of a remote port's address — is anything a
+        // caller could be expected to spell.
         let resolved = self.compiler.scope(
             |graph, _tx| -> Result<(String, crate::iceoryx2::ChannelSizing)> {
                 let source = crate::core::compiler::compiler_ops::find_the_source_a_caller_named(
-                    graph, &channel,
+                    graph,
+                    self.this_runtimes_name_on_the_mesh(),
+                    &channel,
                 )
                 .ok_or_else(|| Error::TapChannelNotFound(channel.clone()))?;
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
@@ -743,12 +720,17 @@ impl RuntimeOperations for Runner {
                     &self.iceoryx2_node,
                     &source,
                 )?;
-                let channel_service_name = match source.mesh_port_address() {
-                    Some(address) => {
-                        let addressed: String = address.to_string();
-                        crate::iceoryx2::mesh_ingress_channel_name(&addressed).into_string()
+                let channel_service_name = match &source {
+                    OutputLinkPortRef::OnAnotherRuntime(address) => {
+                        crate::iceoryx2::mesh_ingress_channel_name(&address.to_string())
+                            .into_string()
                     }
-                    None => channel.clone(),
+                    OutputLinkPortRef::OnThisRuntime {
+                        processor_id,
+                        port_name,
+                    } => {
+                        crate::iceoryx2::source_channel_name(processor_id, port_name)?.into_string()
+                    }
                 };
                 Ok((channel_service_name, sizing))
             },
@@ -892,7 +874,14 @@ impl RuntimeOperations for Runner {
         }
         // A processor id never appears on the mesh, so a source on this runtime
         // becomes the address a peer can read it at: this runtime's name, the
-        // processor's display name, and the port.
+        // node's name, and the port — checked against the graph whichever way
+        // the caller named it.
+        let from = resolve_a_source_addressing_this_runtimes_own_port(
+            &self.compiler,
+            &self.runtime_mesh,
+            from,
+        )?
+        .with_its_port_name_cast()?;
         let source_address = match from {
             OutputLinkPortRef::OnAnotherRuntime(address) => address,
             OutputLinkPortRef::OnThisRuntime {
@@ -1110,6 +1099,7 @@ mod connect_wires_without_inspecting_a_port_tests {
                 let from = graph
                     .traversal_mut()
                     .add_v(ProcessorSpec::new(producer_class_path(), Value::Null))
+                    .expect("the node is named")
                     .first()
                     .expect("producer node must be created")
                     .id
@@ -1117,6 +1107,7 @@ mod connect_wires_without_inspecting_a_port_tests {
                 let to = graph
                     .traversal_mut()
                     .add_v(ProcessorSpec::new(consumer_class_path(), Value::Null))
+                    .expect("the node is named")
                     .first()
                     .expect("consumer node must be created")
                     .id
@@ -1304,10 +1295,10 @@ mod connect_wires_without_inspecting_a_port_tests {
         );
     }
 
-    /// A display name this runtime does not hold is refused by name, listing
-    /// what it is displaying — the local half of the offered-port refusal.
+    /// A node name this runtime does not hold is refused by name, listing the
+    /// names it holds — the local half of the offered-port refusal.
     #[test]
-    fn a_display_name_this_runtime_does_not_hold_is_refused_listing_what_it_displays() {
+    fn a_node_name_this_runtime_does_not_hold_is_refused_listing_what_it_holds() {
         register_producer_and_consumer_descriptors();
         let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
         let displayed = the_display_name_the_graph_gave(
@@ -1326,10 +1317,10 @@ mod connect_wires_without_inspecting_a_port_tests {
             ),
             to,
         )
-        .expect_err("a display name this runtime does not hold is refused")
+        .expect_err("a node name this runtime does not hold is refused")
         .to_string();
 
-        assert!(refusal.contains("NoSuchProcessor"), "{refusal}");
+        assert!(refusal.contains("nosuchprocessor"), "{refusal}");
         assert!(refusal.contains(&displayed), "{refusal}");
     }
 
@@ -1369,10 +1360,10 @@ mod connect_wires_without_inspecting_a_port_tests {
         });
     }
 
-    /// A destination display name this runtime does not hold is refused the
-    /// same way a source one is, listing what it is displaying.
+    /// A destination node name this runtime does not hold is refused the same
+    /// way a source one is, listing the names it holds.
     #[test]
-    fn a_destination_display_name_this_runtime_does_not_hold_is_refused_listing_what_it_displays() {
+    fn a_destination_node_name_this_runtime_does_not_hold_is_refused_listing_what_it_holds() {
         register_producer_and_consumer_descriptors();
         let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
         let displayed = the_display_name_the_graph_gave(
@@ -1390,10 +1381,10 @@ mod connect_wires_without_inspecting_a_port_tests {
                     .expect("a legal address"),
             ),
         )
-        .expect_err("a display name this runtime does not hold is refused")
+        .expect_err("a node name this runtime does not hold is refused")
         .to_string();
 
-        assert!(refusal.contains("NoSuchProcessor"), "{refusal}");
+        assert!(refusal.contains("nosuchprocessor"), "{refusal}");
         assert!(refusal.contains(&displayed), "{refusal}");
     }
 
@@ -1421,7 +1412,7 @@ mod connect_wires_without_inspecting_a_port_tests {
         .to_string();
 
         assert!(
-            refusal.contains("studio-display-9f3c/DisplayWindow/video"),
+            refusal.contains("studio-display-9f3c/displaywindow/video"),
             "{refusal}"
         );
         assert!(
@@ -1523,6 +1514,7 @@ mod connect_wires_without_inspecting_a_port_tests {
                     .first()
                     .expect("the link is in the graph"),
                 THIS_RUNTIMES_NAME,
+                &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
             )
         });
         assert_eq!(
@@ -1544,8 +1536,8 @@ mod connect_wires_without_inspecting_a_port_tests {
             serde_json::to_value(&rendered.source).expect("the source renders"),
             serde_json::json!({
                 "runtime_name": "bench-cam-a1b2",
-                "processor_display_name": "CameraSource",
-                "port_name": "video",
+                "node": "camerasource",
+                "port": "video",
             })
         );
         assert!(

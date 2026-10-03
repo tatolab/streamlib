@@ -283,9 +283,9 @@ fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
     }
 }
 
-/// The handle `App::add` returns reports the name the engine assigned, not the
-/// one the caller asked for: the second processor of one type is decorated, and
-/// the caller learns that from the handle rather than by asking the graph.
+/// The handle `App::add` returns reports the name the engine assigned: the
+/// class's short name cast, the second of one type suffixed `-2` — learnt from
+/// the handle rather than by asking the graph.
 #[test]
 fn the_handle_reports_the_display_name_the_engine_assigned() {
     let reference = register_ported_type("AppDisplayNameDefault", "_unused_in", "_unused_out");
@@ -298,14 +298,14 @@ fn the_handle_reports_the_display_name_the_engine_assigned() {
         .add(reference, serde_json::json!({}), None)
         .expect("app add second");
 
-    assert_eq!(first.display_name(), "AppDisplayNameDefault");
-    assert_eq!(second.display_name(), "AppDisplayNameDefault 2");
+    assert_eq!(first.display_name(), "appdisplaynamedefault");
+    assert_eq!(second.display_name(), "appdisplaynamedefault-2");
 }
 
-/// A requested name reaches the graph, and a requested name that collides is
-/// disambiguated exactly like a default — the handle reports the decorated one.
+/// A requested name reaches the graph cast, and a requested name that collides
+/// is refused by name rather than suffixed — a typed name is an address.
 #[test]
-fn a_requested_display_name_is_honoured_and_a_duplicate_is_disambiguated() {
+fn a_requested_display_name_is_cast_and_a_duplicate_is_refused() {
     let reference = register_ported_type("AppDisplayNameRequested", "_unused_in", "_unused_out");
 
     let app = App::new().expect("App::new");
@@ -316,12 +316,16 @@ fn a_requested_display_name_is_honoured_and_a_duplicate_is_disambiguated() {
             Some("Front Camera"),
         )
         .expect("app add first");
-    let second = app
-        .add(reference, serde_json::json!({}), Some("Front Camera"))
-        .expect("app add second");
+    let second = app.add(reference, serde_json::json!({}), Some("front camera"));
 
-    assert_eq!(first.display_name(), "Front Camera");
-    assert_eq!(second.display_name(), "Front Camera 2");
+    assert_eq!(first.display_name(), "front-camera");
+    match second {
+        Err(streamlib::sdk::error::Error::NodeNameTaken { name, cast }) => {
+            assert_eq!(name, "front camera");
+            assert_eq!(cast, "front-camera");
+        }
+        other => panic!("expected NodeNameTaken, got {:?}", other.map(|_| ())),
+    }
 }
 
 /// `add_local` reaches the same surface — the hello-world path can name its
@@ -334,5 +338,5 @@ fn add_local_reaches_the_display_name_surface_too() {
         .add_local::<DisplayNamedNode::Processor>(serde_json::json!({}), Some("Blur"))
         .expect("add_local materializes a node");
 
-    assert_eq!(node.display_name(), "Blur");
+    assert_eq!(node.display_name(), "blur");
 }

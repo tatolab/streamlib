@@ -21,10 +21,19 @@ macro_rules! graph_mutation_ops_are_unreachable {
             _spec: ::streamlib::sdk::processors::ProcessorSpec,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
-            ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId>,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProcessorAddedToTheGraph>,
         > {
             unreachable!(concat!(
                 "the control plane serves no processor-creation ",
+                $surface
+            ))
+        }
+        fn processor_id_of_the_node_named(
+            &self,
+            _node_name: &str,
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId> {
+            unreachable!(concat!(
+                "the control plane serves no node lookup ",
                 $surface
             ))
         }
@@ -137,8 +146,18 @@ pub(crate) enum RecordedGraphMutation {
 pub(crate) type RecordedGraphMutations =
     ::std::sync::Arc<::parking_lot::Mutex<Vec<RecordedGraphMutation>>>;
 
-/// The id the stub answers every `add_processor` with.
+/// The id the stub answers every `add_node` with.
 pub(crate) const STUB_ADDED_PROCESSOR_ID: &str = "stub-added-processor";
+
+/// The name the stub answers an `add_node` that named none with.
+pub(crate) const STUB_ADDED_NODE_NAME: &str = "stub-added-node";
+
+/// The one node name the stub's lookup refuses; every other resolves to its
+/// cast followed by [`STUB_NODE_ID_SUFFIX`].
+pub(crate) const STUB_ABSENT_NODE_NAME: &str = "absent";
+
+/// What the stub's lookup appends to a node's name to make its id.
+pub(crate) const STUB_NODE_ID_SUFFIX: &str = "-id";
 
 /// The id the stub answers every `connect` with.
 pub(crate) const STUB_CREATED_LINK_ID: &str = "stub-created-link";
@@ -150,9 +169,9 @@ pub(crate) const STUB_MADE_LINK_REQUEST_ID: &str = "stub-made-link-request";
 /// reports as the runtime a link's input is on.
 pub(crate) const STUB_RUNTIME_NAME: &str = "stub-runtime";
 
-/// What a stub runtime answers an `add_processor` with when the test has armed
-/// a refusal, standing in for an engine-side one — a display name that cannot
-/// be a mesh address chunk, an unknown class.
+/// What a stub runtime answers an `add_node` with when the test has armed a
+/// refusal, standing in for an engine-side one — a name already taken, an
+/// unknown class.
 pub(crate) type ArmedAddProcessorRefusal = ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
 
 /// Implement the four async graph-mutating [`RuntimeOperations`] methods by
@@ -169,8 +188,15 @@ macro_rules! graph_mutation_ops_record_the_call {
             spec: ::streamlib::sdk::processors::ProcessorSpec,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
-            ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId>,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::ProcessorAddedToTheGraph>,
         > {
+            let name = match spec.display_name.as_deref() {
+                Some(requested_name) => {
+                    ::streamlib::sdk::graph::cast_exposed_name_to_url_safe(requested_name)
+                        .map(|cast| cast.into_owned())
+                }
+                None => Ok($crate::control_plane_stub_support::STUB_ADDED_NODE_NAME.to_string()),
+            };
             self.recorded_graph_mutations.lock().push(
                 $crate::control_plane_stub_support::RecordedGraphMutation::AddProcessor(spec),
             );
@@ -178,11 +204,29 @@ macro_rules! graph_mutation_ops_record_the_call {
             Box::pin(async move {
                 match armed_refusal {
                     Some(refusal) => Err(::streamlib::sdk::error::Error::Configuration(refusal)),
-                    None => Ok(::streamlib::sdk::graph::ProcessorUniqueId::from(
-                        $crate::control_plane_stub_support::STUB_ADDED_PROCESSOR_ID,
-                    )),
+                    None => Ok(::streamlib::sdk::runtime::ProcessorAddedToTheGraph {
+                        processor_id: ::streamlib::sdk::graph::ProcessorUniqueId::from(
+                            $crate::control_plane_stub_support::STUB_ADDED_PROCESSOR_ID,
+                        ),
+                        name: name?,
+                    }),
                 }
             })
+        }
+        fn processor_id_of_the_node_named(
+            &self,
+            node_name: &str,
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId> {
+            let cast = ::streamlib::sdk::graph::cast_exposed_name_to_url_safe(node_name)?;
+            if cast == $crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME {
+                return Err(::streamlib::sdk::error::Error::ProcessorNotFound(format!(
+                    "no node on this runtime is named {node_name:?}"
+                )));
+            }
+            Ok(::streamlib::sdk::graph::ProcessorUniqueId::from(format!(
+                "{cast}{}",
+                $crate::control_plane_stub_support::STUB_NODE_ID_SUFFIX
+            )))
         }
         fn remove_processor_async(
             &self,

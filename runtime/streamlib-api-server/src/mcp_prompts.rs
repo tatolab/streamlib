@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The MCP prompts a node serves: recipes an agent follows with the tools the
-//! node already serves, rendered against the live graph and the processor
-//! catalog at the moment one is requested.
+//! node already serves, rendered against the live graph and the node catalog
+//! at the moment one is requested.
 //!
 //! A prompt is text, never a mutation path — every step it lists is a call to
 //! a served tool, so the tool set stays the whole of the control vocabulary.
@@ -14,9 +14,10 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
+use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
     FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE,
-    MAX_PORT_KEY_SIZE, source_channel_name,
+    MAX_PORT_KEY_SIZE,
 };
 use streamlib::sdk::json_schema::{
     GraphResponse, PortDescriptorOutput, PortInfoOutput, ProcessorDescriptorOutput,
@@ -56,19 +57,19 @@ const LINK_ID_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
     description: "The id of the link to splice into, as `graph` lists it under `links`.",
     required: true,
 };
-const PROCESSOR_TYPE_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
-    name: "processor_type",
-    description: "The import path of the processor class to add — a type the `streamlib://processor-catalog` resource lists, or a Python class's `module:QualifiedClassName`.",
+const TYPE_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
+    name: "type",
+    description: "The import path of the node class to add — a type the `streamlib://node-catalog` resource lists, or a Python class's `module:QualifiedClassName`.",
     required: true,
 };
-const FROM_PROCESSOR_ID_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
-    name: "from_processor_id",
-    description: "The id of the processor whose output this is about, as `graph` reports it.",
+const FROM_NODE_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
+    name: "from_node",
+    description: "The name of the node whose output this is about, as `graph` lists it.",
     required: true,
 };
 const FROM_PORT_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
     name: "from_port",
-    description: "The name of that processor's output port, as `graph` lists it under `ports.outputs`.",
+    description: "The name of that node's output port, as `graph` lists it under `ports.outputs`.",
     required: true,
 };
 const CAMERA_NAME_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
@@ -79,39 +80,31 @@ const CAMERA_NAME_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgumen
 
 const GRAPH_RECIPE_PROMPT_DEFINITIONS: &[GraphRecipePromptDefinition] = &[
     GraphRecipePromptDefinition {
-        name: "insert_processor_between_linked_processors",
-        title: "Insert a processor into a link",
-        description: "Splice a new processor into an existing link, so what the link carried passes through it.",
-        arguments: &[LINK_ID_ARGUMENT, PROCESSOR_TYPE_ARGUMENT],
-        render_recipe_against_live_graph: insert_processor_between_linked_processors_recipe,
+        name: "insert_node_between_linked_nodes",
+        title: "Insert a node into a link",
+        description: "Splice a new node into an existing link, so what the link carried passes through it.",
+        arguments: &[LINK_ID_ARGUMENT, TYPE_ARGUMENT],
+        render_recipe_against_live_graph: insert_node_between_linked_nodes_recipe,
     },
     GraphRecipePromptDefinition {
         name: "fan_output_to_another_consumer",
         title: "Fan an output to another consumer",
-        description: "Add a processor as one more consumer of an output port, leaving the consumers it already feeds as they are.",
-        arguments: &[
-            FROM_PROCESSOR_ID_ARGUMENT,
-            FROM_PORT_ARGUMENT,
-            PROCESSOR_TYPE_ARGUMENT,
-        ],
+        description: "Add a node as one more consumer of an output port, leaving the consumers it already feeds as they are.",
+        arguments: &[FROM_NODE_ARGUMENT, FROM_PORT_ARGUMENT, TYPE_ARGUMENT],
         render_recipe_against_live_graph: fan_output_to_another_consumer_recipe,
     },
     GraphRecipePromptDefinition {
         name: "show_channel_on_virtual_camera",
         title: "Show a channel on a virtual camera",
         description: "Present an output's video frames as a camera every other application on the machine can select.",
-        arguments: &[
-            FROM_PROCESSOR_ID_ARGUMENT,
-            FROM_PORT_ARGUMENT,
-            CAMERA_NAME_ARGUMENT,
-        ],
+        arguments: &[FROM_NODE_ARGUMENT, FROM_PORT_ARGUMENT, CAMERA_NAME_ARGUMENT],
         render_recipe_against_live_graph: show_channel_on_virtual_camera_recipe,
     },
     GraphRecipePromptDefinition {
         name: "look_at_what_a_channel_carries",
         title: "Look at what a channel carries",
         description: "Sample one bag an output port publishes, decode it, and see the frame it names when it names one.",
-        arguments: &[FROM_PROCESSOR_ID_ARGUMENT, FROM_PORT_ARGUMENT],
+        arguments: &[FROM_NODE_ARGUMENT, FROM_PORT_ARGUMENT],
         render_recipe_against_live_graph: look_at_what_a_channel_carries_recipe,
     },
 ];
@@ -275,17 +268,20 @@ impl GraphRecipePromptArguments {
     }
 }
 
-fn node_with_id<'graph>(
+/// The node `node_name` names once cast.
+fn node_named<'graph>(
     graph: &'graph GraphResponse,
-    processor_id: &str,
+    node_name: &str,
 ) -> RpcResult<&'graph ProcessorNodeOutput> {
+    let cast = cast_exposed_name_to_url_safe(node_name)
+        .map_err(|names_nothing| RpcError::invalid_params(names_nothing.to_string()))?;
     graph
         .nodes
         .iter()
-        .find(|node| node.id == processor_id)
+        .find(|node| node.name == cast)
         .ok_or_else(|| {
             RpcError::invalid_params(format!(
-                "no processor with id `{processor_id}` is in the graph; `graph` lists the ids"
+                "no node named `{node_name}` is in the graph; `graph` lists the names"
             ))
         })
 }
@@ -297,16 +293,13 @@ fn input_port_of<'graph>(
     node.ports.inputs.iter().find(|port| port.name == port_name)
 }
 
-/// The processor `from_processor_id` names and the `from_port` the arguments
-/// name, having checked that port is one of its outputs.
+/// The node `from_node` names and the `from_port` the arguments name, having
+/// checked that port is one of its outputs.
 fn output_port_named_by_arguments<'graph, 'arguments>(
     graph: &'graph GraphResponse,
     prompt_arguments: &'arguments GraphRecipePromptArguments,
 ) -> RpcResult<(&'graph ProcessorNodeOutput, &'arguments str)> {
-    let node = node_with_id(
-        graph,
-        prompt_arguments.required(&FROM_PROCESSOR_ID_ARGUMENT)?,
-    )?;
+    let node = node_named(graph, prompt_arguments.required(&FROM_NODE_ARGUMENT)?)?;
     let from_port = prompt_arguments.required(&FROM_PORT_ARGUMENT)?;
     if !node.ports.outputs.iter().any(|port| port.name == from_port) {
         let output_port_names: Vec<&str> = node
@@ -316,15 +309,11 @@ fn output_port_named_by_arguments<'graph, 'arguments>(
             .map(|port| port.name.as_str())
             .collect();
         return Err(RpcError::invalid_params(format!(
-            "processor `{}` has no output port `{from_port}`; its outputs are {output_port_names:?}",
-            node.id
+            "node `{}` has no output port `{from_port}`; its outputs are {output_port_names:?}",
+            node.name
         )));
     }
     Ok((node, from_port))
-}
-
-fn processor_node_display_name_and_id_label(node: &ProcessorNodeOutput) -> String {
-    format!("`{}` (id `{}`)", node.display_name, node.id)
 }
 
 /// A registered type's input, when it has exactly one for a recipe to wire.
@@ -353,29 +342,29 @@ fn catalog_entry_json_block(entry: &ProcessorDescriptorOutput) -> RpcResult<Stri
 /// What the catalog says about a type an agent is about to add, or why it says
 /// nothing yet.
 fn catalog_introduction_for(
-    processor_type: &str,
+    node_type: &str,
     entry: Option<&ProcessorDescriptorOutput>,
 ) -> RpcResult<String> {
     match entry {
         Some(entry) => Ok(format!(
-            "This node's catalog entry for `{processor_type}`, read now — `config_schema` is \
-             what `add_processor`'s `config` takes, and `inputs` and `outputs` are its ports:\n{}",
+            "This node's catalog entry for `{node_type}`, read now — `config_schema` is what \
+             `add_node`'s `config` takes, and `inputs` and `outputs` are its ports:\n{}",
             catalog_entry_json_block(entry)?
         )),
         None => Ok(format!(
-            "`{processor_type}` is not in this node's catalog yet. A Python class enters it when \
-             its module is imported, which `add_processor` does; its ports then show in `graph`, \
-             and its config takes the keys its `__init__`'s config class declares."
+            "`{node_type}` is not in this node's catalog yet. A Python class enters it when its \
+             module is imported, which `add_node` does; its ports then show in `graph`, and its \
+             config takes the keys its `__init__`'s config class declares."
         )),
     }
 }
 
-fn add_processor_step(processor_type: &str) -> GraphRecipeStep {
+fn add_node_step(node_type: &str) -> GraphRecipeStep {
     graph_recipe_step_calling_tool(
-        "add_processor",
+        "add_node",
         format!(
-            "`type`: `{processor_type}`; `config`: an object of the keys its config schema \
-             declares, or omit it when there are none. Keep the `processor_id` it returns."
+            "`type`: `{node_type}`; `config`: an object of the keys its config schema declares, \
+             or omit it when there are none. Keep the `name` it returns."
         ),
     )
 }
@@ -383,19 +372,16 @@ fn add_processor_step(processor_type: &str) -> GraphRecipeStep {
 fn find_the_added_node_step(port_directions: &str) -> GraphRecipeStep {
     graph_recipe_step_calling_tool(
         "graph",
-        format!(
-            "find the node whose `id` is that `processor_id`; {port_directions} name the ports to \
-             wire."
-        ),
+        format!("find the node with that `name`; {port_directions} name the ports to wire."),
     )
 }
 
-fn insert_processor_between_linked_processors_recipe(
+fn insert_node_between_linked_nodes_recipe(
     graph: &GraphResponse,
     prompt_arguments: &GraphRecipePromptArguments,
 ) -> RpcResult<GraphRecipe> {
     let link_id = prompt_arguments.required(&LINK_ID_ARGUMENT)?;
-    let processor_type = prompt_arguments.required(&PROCESSOR_TYPE_ARGUMENT)?;
+    let node_type = prompt_arguments.required(&TYPE_ARGUMENT)?;
     let link = graph
         .links
         .iter()
@@ -405,50 +391,48 @@ fn insert_processor_between_linked_processors_recipe(
                 "no link with id `{link_id}` is in the graph; `graph` lists the links"
             ))
         })?;
-    // The recipe re-wires the link's source into the inserted processor, which
-    // needs a source this node can name in `connect`. A link carrying from
-    // another runtime has none, so it is refused rather than rendered against
-    // whichever local processor happens to sit nearby.
-    let source_processor_id = link.source.processor_id_on_this_runtime().ok_or_else(|| {
+    // The recipe re-wires the link's source into the inserted node, which needs
+    // a source this node can name in `connect` without a runtime name. A link
+    // carrying from another runtime has none, so it is refused rather than
+    // rendered against whichever local node happens to sit nearby.
+    let source_node_name = link.source.node_on_this_runtime().ok_or_else(|| {
         RpcError::invalid_params(format!(
-            "link `{link_id}` carries from a port on another runtime, and a processor cannot be \
+            "link `{link_id}` carries from a port on another runtime, and a node cannot be \
              inserted into one from here"
         ))
     })?;
-    let source = node_with_id(graph, source_processor_id)?;
+    let source = node_named(graph, source_node_name)?;
     // The engine only ever renders a target on this node, so this is defence
     // against a graph document that came from somewhere else rather than a
     // shape this runtime produces.
-    let target_processor_id = link.target.processor_id_on_this_runtime().ok_or_else(|| {
+    let target_node_name = link.target.node_on_this_runtime().ok_or_else(|| {
         RpcError::invalid_params(format!(
-            "link `{link_id}` carries into a port on another runtime, and a processor cannot be \
+            "link `{link_id}` carries into a port on another runtime, and a node cannot be \
              inserted into one from here"
         ))
     })?;
-    let target = node_with_id(graph, target_processor_id)?;
-    let source_port = link.source.port_name();
-    let target_port = link.target.port_name();
-    let source_label = processor_node_display_name_and_id_label(source);
-    let target_label = processor_node_display_name_and_id_label(target);
+    let target = node_named(graph, target_node_name)?;
+    let source_port = link.source.port();
+    let target_port = link.target.port();
+    let source_name = source.name.as_str();
+    let target_name = target.name.as_str();
 
-    let inserted_type_entry = catalog_entry_for(processor_type);
+    let inserted_type_entry = catalog_entry_for(node_type);
     let target_port_takes_one_inbound_link =
         input_port_of(target, target_port).is_some_and(|port| port.audio_window.is_some());
 
     let connect_source_to_inserted = graph_recipe_step_calling_tool(
         "connect",
         format!(
-            "`from_processor_id`: `{}`, `from_port`: `{source_port}`, `to_processor_id`: the new \
-             `processor_id`, `to_port`: its input port.",
-            source.id
+            "`from_node`: `{source_name}`, `from_port`: `{source_port}`, `to_node`: the new \
+             node's `name`, `to_port`: its input port."
         ),
     );
     let connect_inserted_to_target = graph_recipe_step_calling_tool(
         "connect",
         format!(
-            "`from_processor_id`: the new `processor_id`, `from_port`: its output port, \
-             `to_processor_id`: `{}`, `to_port`: `{target_port}`.",
-            target.id
+            "`from_node`: the new node's `name`, `from_port`: its output port, `to_node`: \
+             `{target_name}`, `to_port`: `{target_port}`."
         ),
     );
     let disconnect_the_replaced_link =
@@ -467,7 +451,7 @@ fn insert_processor_between_linked_processors_recipe(
         ]
     };
     let mut steps = vec![
-        add_processor_step(processor_type),
+        add_node_step(node_type),
         find_the_added_node_step("its `ports.inputs` and `ports.outputs`"),
     ];
     steps.extend(wiring_steps);
@@ -475,8 +459,8 @@ fn insert_processor_between_linked_processors_recipe(
         "graph",
         format!(
             "confirm the links both `connect` calls returned have `state` `wired`, the new node's \
-             `components.state` is `Running`, and link `{link_id}` is gone. The new processor \
-             runs in a helper process, so each link reads `pending` until that helper has opened \
+             `components.state` is `Running`, and link `{link_id}` is gone. A Python node runs in \
+             a helper process, so each link onto it reads `pending` until that helper has opened \
              its port — read `graph` again. A link that reads `error` carries the helper's own \
              reason in `error_reason` and will never carry a bag: `disconnect` it and fix what \
              the reason names."
@@ -485,20 +469,20 @@ fn insert_processor_between_linked_processors_recipe(
 
     let closing_note = target_port_takes_one_inbound_link.then(|| {
         format!(
-            "The link goes before the new processor is wired because {target_label} port \
+            "The link goes before the new node is wired because `{target_name}` port \
              `{target_port}` declares an audio window contract, so it takes a single inbound \
-             link; {target_label} receives nothing between the `disconnect` and the second \
+             link; `{target_name}` receives nothing between the `disconnect` and the second \
              `connect`. If a `connect` after the `disconnect` is refused, `connect` \
-             {source_label} port `{source_port}` to {target_label} port `{target_port}` again to \
-             restore what the link carried."
+             `{source_name}` port `{source_port}` to `{target_name}` port `{target_port}` again \
+             to restore what the link carried."
         )
     });
 
     Ok(GraphRecipe {
         introduction_text: format!(
-            "Insert a `{processor_type}` processor into link `{link_id}`, which carries \
-             {source_label} port `{source_port}` to {target_label} port `{target_port}`.\n\n{}",
-            catalog_introduction_for(processor_type, inserted_type_entry.as_ref())?
+            "Insert a `{node_type}` node into link `{link_id}`, which carries `{source_name}` \
+             port `{source_port}` to `{target_name}` port `{target_port}`.\n\n{}",
+            catalog_introduction_for(node_type, inserted_type_entry.as_ref())?
         ),
         steps,
         closing_note,
@@ -510,36 +494,35 @@ fn fan_output_to_another_consumer_recipe(
     prompt_arguments: &GraphRecipePromptArguments,
 ) -> RpcResult<GraphRecipe> {
     let (source, from_port) = output_port_named_by_arguments(graph, prompt_arguments)?;
-    let processor_type = prompt_arguments.required(&PROCESSOR_TYPE_ARGUMENT)?;
-    let source_label = processor_node_display_name_and_id_label(source);
-    let consumer_type_entry = catalog_entry_for(processor_type);
+    let node_type = prompt_arguments.required(&TYPE_ARGUMENT)?;
+    let source_name = source.name.as_str();
+    let consumer_type_entry = catalog_entry_for(node_type);
 
     Ok(GraphRecipe {
         introduction_text: format!(
-            "Add a `{processor_type}` processor as another consumer of {source_label} port \
-             `{from_port}`. The links that port already feeds stay as they are.\n\n{}",
-            catalog_introduction_for(processor_type, consumer_type_entry.as_ref())?
+            "Add a `{node_type}` node as another consumer of `{source_name}` port `{from_port}`. \
+             The links that port already feeds stay as they are.\n\n{}",
+            catalog_introduction_for(node_type, consumer_type_entry.as_ref())?
         ),
         steps: vec![
-            add_processor_step(processor_type),
+            add_node_step(node_type),
             find_the_added_node_step("its `ports.inputs`"),
             graph_recipe_step_calling_tool(
                 "connect",
                 format!(
-                    "`from_processor_id`: `{}`, `from_port`: `{from_port}`, `to_processor_id`: \
-                     the new `processor_id`, `to_port`: its input port.",
-                    source.id
+                    "`from_node`: `{source_name}`, `from_port`: `{from_port}`, `to_node`: the new \
+                     node's `name`, `to_port`: its input port."
                 ),
             ),
             graph_recipe_step_calling_tool(
                 "graph",
                 format!(
                     "confirm the link `connect` returned has `state` `wired`, the new node's \
-                     `components.state` is `Running`, and {source_label}'s other links are still \
-                     there. The new processor runs in a helper process, so the link reads \
-                     `pending` until that helper has opened its port — read `graph` again. A link \
-                     that reads `error` carries the helper's own reason in `error_reason` and \
-                     will never carry a bag: `disconnect` it and fix what the reason names."
+                     `components.state` is `Running`, and `{source_name}`'s other links are still \
+                     there. A Python node runs in a helper process, so the link reads `pending` \
+                     until that helper has opened its port — read `graph` again. A link that \
+                     reads `error` carries the helper's own reason in `error_reason` and will \
+                     never carry a bag: `disconnect` it and fix what the reason names."
                 ),
             ),
         ],
@@ -572,44 +555,41 @@ fn show_channel_on_virtual_camera_recipe(
         Some(camera_name) => format!("`config`: `{}`", json!({ "name": camera_name })),
         None => "`config`: `{}`, which takes the default camera name".to_string(),
     };
+    let source_name = source.name.as_str();
 
     Ok(GraphRecipe {
         introduction_text: format!(
-            "Present {} port `{from_port}` as a virtual camera: one camera every other \
-             application on this machine can select, there while its processor runs and gone \
+            "Present `{source_name}` port `{from_port}` as a virtual camera: one camera every \
+             other application on this machine can select, there while its node runs and gone \
              when it is removed.\n\nThis node's catalog entry for it, read now:\n{}",
-            processor_node_display_name_and_id_label(source),
             catalog_entry_json_block(&virtual_camera_sink)?
         ),
         steps: vec![
             graph_recipe_step_calling_tool(
-                "add_processor",
+                "add_node",
                 format!(
                     "`type`: `{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}`; \
-                     {config_instruction}. Keep the `processor_id` it returns."
+                     {config_instruction}. Keep the `name` it returns."
                 ),
             ),
             graph_recipe_step_calling_tool(
                 "connect",
                 format!(
-                    "`from_processor_id`: `{}`, `from_port`: `{from_port}`, `to_processor_id`: \
-                     that `processor_id`, `to_port`: `{video_input_port}`.",
-                    source.id
+                    "`from_node`: `{source_name}`, `from_port`: `{from_port}`, `to_node`: that \
+                     `name`, `to_port`: `{video_input_port}`."
                 ),
             ),
             graph_recipe_step_calling_tool(
                 "graph",
                 "confirm the link `connect` returned has `state` `wired` and the camera's node's \
                  `components.state` is `Running`. `VirtualCameraSink` is a native built-in, so \
-                 its link is wired as soon as `connect` returns; a link onto a processor in a \
-                 helper process instead reads `pending` until that helper answers, and `error` \
-                 with the helper's own reason in `error_reason` where it could not open its port.",
+                 its link is wired as soon as `connect` returns; a link onto a node in a helper \
+                 process instead reads `pending` until that helper answers, and `error` with the \
+                 helper's own reason in `error_reason` where it could not open its port.",
             ),
         ],
         closing_note: Some(
-            "The camera goes away with its processor: `remove_processor` with that \
-             `processor_id`."
-                .to_string(),
+            "The camera goes away with its node: `remove_node` with that `name`.".to_string(),
         ),
     })
 }
@@ -619,31 +599,25 @@ fn look_at_what_a_channel_carries_recipe(
     prompt_arguments: &GraphRecipePromptArguments,
 ) -> RpcResult<GraphRecipe> {
     let (source, from_port) = output_port_named_by_arguments(graph, prompt_arguments)?;
-    let channel = source_channel_name(&source.id, from_port).map_err(|e| {
-        RpcError::invalid_params(format!(
-            "processor `{}` port `{from_port}` names no channel: {e}",
-            source.id
-        ))
-    })?;
+    let channel = format!("{}/{}/{from_port}", graph.mesh.runtime_name, source.name);
 
     Ok(GraphRecipe {
         introduction_text: format!(
-            "Look at what {} publishes on port `{from_port}`, the channel `{}`.",
-            processor_node_display_name_and_id_label(source),
-            channel.as_str()
+            "Look at what `{}` publishes on port `{from_port}`, the channel `{channel}`.",
+            source.name
         ),
         steps: vec![
             graph_recipe_step_calling_tool(
                 "tap",
                 format!(
-                    "`channel`: `{}`, `count`: 1. A bag's `hex_preview` is the channel's wire \
-                     bytes: a {FRAME_HEADER_SIZE}-byte frame header — a {MAX_PORT_KEY_SIZE}-byte \
-                     port key, the producer's timestamp as {FRAME_HEADER_TIMESTAMP_NS_SIZE} \
-                     little-endian bytes of monotonic nanoseconds, then the payload length as \
-                     {FRAME_HEADER_PAYLOAD_LEN_SIZE} little-endian bytes — followed by that many \
-                     bytes of one msgpack map, the bag. `received` of 0 means nothing was \
-                     published inside the sample window; tap again.",
-                    channel.as_str()
+                    "`channel`: `{channel}`, `count`: 1. A bag's `hex_preview` is the channel's \
+                     wire bytes: a {FRAME_HEADER_SIZE}-byte frame header — a \
+                     {MAX_PORT_KEY_SIZE}-byte port key, the producer's timestamp as \
+                     {FRAME_HEADER_TIMESTAMP_NS_SIZE} little-endian bytes of monotonic \
+                     nanoseconds, then the payload length as {FRAME_HEADER_PAYLOAD_LEN_SIZE} \
+                     little-endian bytes — followed by that many bytes of one msgpack map, the \
+                     bag. `received` of 0 means nothing was published inside the sample window; \
+                     tap again."
                 ),
             ),
             graph_recipe_step_calling_tool(

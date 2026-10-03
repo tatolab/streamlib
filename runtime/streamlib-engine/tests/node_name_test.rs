@@ -1,21 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Duplicate display names are disambiguated by the graph, and the assigned
-//! name is the one every surface shows.
+//! A node's name is cast to lowercase URL-safe, a defaulted duplicate takes
+//! the next free `-2`, and a typed duplicate is refused — and the name the add
+//! reports is the one `graph` renders.
 //!
-//! The unit coverage of the counter itself lives beside `add_v`; what this
-//! locks is the whole path an author actually meets: the add reports the
-//! assigned name a handle must carry, and the
-//! graph JSON — the exact payload `streamlib graph` and `GET /api/graph` serve
-//! (`to_json_async` in both) — carries the assigned names, not the requested
-//! ones.
+//! The unit coverage of the rule lives beside `add_v`; what this locks is the
+//! path an author meets: the add reports the assigned name a handle carries,
+//! and the graph JSON — the payload `streamlib graph` and `GET /api/graph`
+//! serve — carries the assigned names, not the requested ones.
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
     PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
 };
-use streamlib::sdk::graph_snapshot::GraphSnapshot;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
@@ -34,7 +33,7 @@ fn register_test_type_named(path_tail: &str, short_name: &str) -> ProcessorClass
     let descriptor = ProcessorDescriptor::new(
         ProcessorClassShortName::new(short_name).unwrap(),
         import_path.clone(),
-        "display-name disambiguation test",
+        "node name test",
     )
     .with_input(PortDescriptor::new("_unused_in", "", false))
     .with_output(PortDescriptor::new("_unused_out", "", false));
@@ -42,17 +41,16 @@ fn register_test_type_named(path_tail: &str, short_name: &str) -> ProcessorClass
     import_path
 }
 
-/// Every node's display name, in node-iteration order, as the graph JSON
-/// renders it.
-fn display_names_in_the_graph_json(runtime: &Runner) -> Vec<String> {
+/// Every node's name, in node-iteration order, as the graph JSON renders it.
+fn node_names_in_the_graph_json(runtime: &Runner) -> Vec<String> {
     runtime.to_json().expect("graph json")["nodes"]
         .as_array()
         .expect("nodes array")
         .iter()
         .map(|node| {
-            node["display_name"]
+            node["name"]
                 .as_str()
-                .expect("every node renders a display name")
+                .expect("every node renders a name")
                 .to_string()
         })
         .collect()
@@ -60,8 +58,8 @@ fn display_names_in_the_graph_json(runtime: &Runner) -> Vec<String> {
 
 #[test]
 #[serial]
-fn the_graph_json_carries_distinct_names_for_two_nodes_of_one_type() {
-    let camera = register_test_type("DisambiguatedCamera");
+fn the_graph_json_carries_distinct_names_for_two_defaulted_nodes_of_one_type() {
+    let camera = register_test_type("SuffixedCamera");
 
     let runtime = Runner::new().unwrap();
     runtime
@@ -72,41 +70,58 @@ fn the_graph_json_carries_distinct_names_for_two_nodes_of_one_type() {
         .unwrap();
 
     assert_eq!(
-        display_names_in_the_graph_json(&runtime),
-        vec!["DisambiguatedCamera", "DisambiguatedCamera 2"],
+        node_names_in_the_graph_json(&runtime),
+        vec!["suffixedcamera", "suffixedcamera-2"],
         "`streamlib graph` must name the two instances apart"
     );
 }
 
 #[test]
 #[serial]
-fn the_read_back_name_is_the_assigned_one_not_the_requested_one() {
+fn the_read_back_name_is_the_cast_of_the_typed_one() {
     let camera = register_test_type("ReadBackCamera");
 
     let runtime = Runner::new().unwrap();
-    let (_first_id, first_name) = runtime
+    let (_id, name) = runtime
         .add_processor_reporting_assigned_display_name(
-            ProcessorSpec::new(camera.clone(), serde_json::json!({})).with_display_name("Front"),
-        )
-        .unwrap();
-    let (_second_id, second_name) = runtime
-        .add_processor_reporting_assigned_display_name(
-            ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("Front"),
+            ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("Front Camera"),
         )
         .unwrap();
 
-    assert_eq!(first_name, "Front");
-    assert_eq!(
-        second_name, "Front 2",
-        "the second add asked for `Front` and must be told it got `Front 2`"
-    );
+    assert_eq!(name, "front-camera");
+    assert_eq!(node_names_in_the_graph_json(&runtime), vec!["front-camera"]);
 }
 
-/// The counter reaches the label and nothing else: identity is never derived
-/// from the display name, so the two nodes stay one type.
 #[test]
 #[serial]
-fn the_counter_never_reaches_the_processor_type() {
+fn a_typed_duplicate_is_refused_by_name_and_adds_nothing() {
+    let camera = register_test_type("TypedTwiceCamera");
+
+    let runtime = Runner::new().unwrap();
+    runtime
+        .add_processor(
+            ProcessorSpec::new(camera.clone(), serde_json::json!({})).with_display_name("FrontCam"),
+        )
+        .unwrap();
+    let refusal = runtime.add_processor(
+        ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("frontcam"),
+    );
+
+    match refusal {
+        Err(Error::NodeNameTaken { name, cast }) => {
+            assert_eq!(name, "frontcam");
+            assert_eq!(cast, "frontcam");
+        }
+        other => panic!("expected NodeNameTaken, got {other:?}"),
+    }
+    assert_eq!(node_names_in_the_graph_json(&runtime), vec!["frontcam"]);
+}
+
+/// The suffix reaches the name and nothing else: identity is never derived
+/// from the name, so the two nodes stay one type.
+#[test]
+#[serial]
+fn the_suffix_never_reaches_the_processor_type() {
     let camera = register_test_type("TypeUntouchedCamera");
 
     let runtime = Runner::new().unwrap();
@@ -123,44 +138,8 @@ fn the_counter_never_reaches_the_processor_type() {
     }
 }
 
-/// Save → load → save stays byte-equivalent with duplicates in the graph: the
-/// disambiguated name serializes (it is no longer the type's short name), and
-/// reloading it collides with nothing, so the counter does not climb on every
-/// round trip.
-#[test]
-#[serial]
-fn a_graph_with_duplicates_round_trips_without_the_counter_climbing() {
-    let camera = register_test_type("RoundTripCamera");
-
-    let first_runtime = Runner::new().unwrap();
-    for _ in 0..3 {
-        first_runtime
-            .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
-            .unwrap();
-    }
-    let first_snapshot = first_runtime.save_graph_snapshot().unwrap();
-
-    let second_runtime = Runner::new().unwrap();
-    second_runtime
-        .load_graph_snapshot(
-            &GraphSnapshot::from_json_str(&first_snapshot.to_json_string().unwrap()).unwrap(),
-        )
-        .unwrap();
-
-    assert_eq!(
-        display_names_in_the_graph_json(&second_runtime),
-        vec!["RoundTripCamera", "RoundTripCamera 2", "RoundTripCamera 3"],
-        "a reloaded graph must carry the same names, not re-decorated ones"
-    );
-    assert_eq!(
-        second_runtime.save_graph_snapshot().unwrap(),
-        first_snapshot,
-        "save → load → save must be byte-equivalent"
-    );
-}
-
-/// The default display name is read off the registered descriptor, never
-/// recovered from the import path.
+/// The default name is read off the registered descriptor, never recovered
+/// from the import path.
 ///
 /// The two are deliberately different here: the path ends `WidgetronImpl`, the
 /// descriptor says `Widgetron`. Any implementation that splits the path on `::`
@@ -169,7 +148,7 @@ fn a_graph_with_duplicates_round_trips_without_the_counter_climbing() {
 /// prove nothing.
 #[test]
 #[serial]
-fn the_default_display_name_comes_from_the_descriptor_not_the_import_path() {
+fn the_default_name_comes_from_the_descriptor_not_the_import_path() {
     let widgetron = register_test_type_named("WidgetronImpl", "Widgetron");
 
     let runtime = Runner::new().unwrap();
@@ -178,9 +157,9 @@ fn the_default_display_name_comes_from_the_descriptor_not_the_import_path() {
         .expect("the fixture type is registered");
 
     assert_eq!(
-        display_names_in_the_graph_json(&runtime),
-        vec!["Widgetron".to_string()],
-        "the label must be the descriptor's short name, not the path's tail"
+        node_names_in_the_graph_json(&runtime),
+        vec!["widgetron".to_string()],
+        "the name must be the descriptor's short name cast, not the path's tail"
     );
     assert!(
         widgetron.as_str().ends_with("::WidgetronImpl"),

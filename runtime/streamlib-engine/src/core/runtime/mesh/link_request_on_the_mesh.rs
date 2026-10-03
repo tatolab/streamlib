@@ -272,11 +272,11 @@ mod tests {
     use super::*;
 
     fn a_source() -> MeshPortAddress {
-        MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
+        MeshPortAddress::new("bench-cam-a1b2", "camerasource", "video").expect("a legal address")
     }
 
     fn a_destination() -> MeshPortAddress {
-        MeshPortAddress::new("studio-display-9f3c", "DisplayWindow", "video")
+        MeshPortAddress::new("studio-display-9f3c", "displaywindow", "video")
             .expect("a legal address")
     }
 
@@ -322,12 +322,12 @@ mod tests {
                 "link_request_id": "LRabc123",
                 "source_address": {
                     "runtime_name": "bench-cam-a1b2",
-                    "processor_display_name": "CameraSource",
+                    "processor_display_name": "camerasource",
                     "port_name": "video",
                 },
                 "destination_address": {
                     "runtime_name": "studio-display-9f3c",
-                    "processor_display_name": "DisplayWindow",
+                    "processor_display_name": "displaywindow",
                     "port_name": "video",
                 },
                 "requester_runtime_name": "bench-cam-a1b2",

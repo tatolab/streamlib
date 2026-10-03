@@ -374,6 +374,7 @@ mod tests {
         let processor_id = graph
             .traversal_mut()
             .add_v(spec)
+            .expect("the node is named")
             .first()
             .expect("the node is added")
             .id

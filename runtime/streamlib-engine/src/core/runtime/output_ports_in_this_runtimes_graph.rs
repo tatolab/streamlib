@@ -189,7 +189,7 @@ mod tests {
                 .add_v(ProcessorSpec::new(
                     MockOutputOnlyProcessor::Processor::processor_class_import_path(),
                     serde_json::Value::Null,
-                ))
+                )).expect("the node is named")
                 .first()
                 .expect("the mock is in the registry");
             let (processor_id, display_name) = (node.id.to_string(), node.display_name.clone());
@@ -291,7 +291,7 @@ mod tests {
                 .add_v(ProcessorSpec::new(
                     MockProcessorWhoseOutputPortTheChannelGrammarCannotName::Processor::processor_class_import_path(),
                     serde_json::Value::Null,
-                ))
+                )).expect("the node is named")
                 .first()
                 .expect("the mock is in the registry")
                 .display_name

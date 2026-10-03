@@ -483,7 +483,7 @@ mod tests {
         let key_space = a_key_space("lab");
         let key = key_space.reader_token_key(
             "bench-cam-a1b2",
-            "Camera Source 2",
+            "camera-source-2",
             "video",
             "desk-viewer-c3d4",
         );
@@ -491,7 +491,7 @@ mod tests {
             key_space.read_a_reader_token_key(&key),
             Some(ReaderOfAnOutputPort {
                 source_runtime_name: "bench-cam-a1b2".to_string(),
-                processor_display_name: "Camera Source 2".to_string(),
+                processor_display_name: "camera-source-2".to_string(),
                 port_name: "video".to_string(),
                 reading_runtime_name: "desk-viewer-c3d4".to_string(),
             })
@@ -508,9 +508,9 @@ mod tests {
             .to_owned();
 
         for (display, port, reader) in [
-            ("CameraSource", "video", "desk-one"),
-            ("CameraSource", "video", "desk-two"),
-            ("MicrophoneSource", "audio", "desk-one"),
+            ("camerasource", "video", "desk-one"),
+            ("camerasource", "video", "desk-two"),
+            ("microphonesource", "audio", "desk-one"),
         ] {
             let held = key_space.reader_token_key("bench-cam-a1b2", display, port, reader);
             assert!(
@@ -520,7 +520,7 @@ mod tests {
         }
 
         let anothers =
-            key_space.reader_token_key("bench-cam-c3d4", "CameraSource", "video", "desk-one");
+            key_space.reader_token_key("bench-cam-c3d4", "camerasource", "video", "desk-one");
         assert!(
             !ours.includes(keyexpr::new(anothers.as_str()).expect("a key expression")),
             "{ours} must not reach {anothers}"
@@ -538,8 +538,8 @@ mod tests {
             .to_owned();
 
         for out_of_reach in [
-            key_space.reader_token_key("bench", "CameraSource", "video", "desk"),
-            key_space.egress_token_key("bench", "CameraSource", "video"),
+            key_space.reader_token_key("bench", "camerasource", "video", "desk"),
+            key_space.egress_token_key("bench", "camerasource", "video"),
             key_space.offered_output_ports_key_of("bench"),
             key_space.link_requests_key_of("bench"),
         ] {
@@ -604,16 +604,16 @@ mod tests {
     #[test]
     fn a_ports_bags_ride_at_the_address_the_port_is_named_by() {
         let key_space = a_key_space("lab");
-        let data_key = key_space.data_key("bench-cam-a1b2", "Camera Source 2", "video");
+        let data_key = key_space.data_key("bench-cam-a1b2", "camera-source-2", "video");
         assert_eq!(
             data_key,
-            "streamlib/lab/bench-cam-a1b2/Camera Source 2/video"
+            "streamlib/lab/bench-cam-a1b2/camera-source-2/video"
         );
         keyexpr::new(data_key.as_str()).expect("the data key is a key expression");
 
         assert_eq!(
-            a_key_space("other").data_key("bench-cam-a1b2", "Camera Source 2", "video"),
-            "streamlib/other/bench-cam-a1b2/Camera Source 2/video",
+            a_key_space("other").data_key("bench-cam-a1b2", "camera-source-2", "video"),
+            "streamlib/other/bench-cam-a1b2/camera-source-2/video",
             "two meshes never share a port's data key"
         );
     }
@@ -625,11 +625,11 @@ mod tests {
         let key_space = a_key_space("lab");
         for foreign in [
             "streamlib/lab/@runtime/bench/@readers",
-            "streamlib/lab/@runtime/bench/@readers/CameraSource",
-            "streamlib/lab/@runtime/bench/@readers/CameraSource/video",
-            "streamlib/lab/@runtime/bench/@readers/CameraSource/video/desk/extra",
-            "streamlib/lab/@runtime/bench/@egress/CameraSource/video",
-            "ros2/lab/@runtime/bench/@readers/CameraSource/video/desk",
+            "streamlib/lab/@runtime/bench/@readers/camerasource",
+            "streamlib/lab/@runtime/bench/@readers/camerasource/video",
+            "streamlib/lab/@runtime/bench/@readers/camerasource/video/desk/extra",
+            "streamlib/lab/@runtime/bench/@egress/camerasource/video",
+            "ros2/lab/@runtime/bench/@readers/camerasource/video/desk",
         ] {
             assert_eq!(
                 key_space.read_a_reader_token_key(foreign),

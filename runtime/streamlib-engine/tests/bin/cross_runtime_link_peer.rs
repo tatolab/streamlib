@@ -626,7 +626,7 @@ impl HowToRunThisPeer {
     fn read_from_the_command_line() -> Self {
         let mut role = WhatThisPeerIs::TheSourceOfTheLink;
         let mut mesh = RuntimeMeshConfiguration::default();
-        let mut display_name = "CameraSource".to_string();
+        let mut display_name = "camerasource".to_string();
         let mut link_from = None;
         let mut iceoryx2_domain_root = std::path::PathBuf::from("/tmp");
         let mut burst_once_a_reader_arrives = None;

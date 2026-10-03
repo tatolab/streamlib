@@ -392,7 +392,7 @@ impl PythonRuntimeHandle {
         };
 
         // An absent `display_name` stays absent — the graph is the only place
-        // that defaults a name, and the only place that disambiguates one.
+        // that defaults a name, casts one, or suffixes one.
         let mut spec = ProcessorSpec::new(processor_class_import_path, configuration);
         spec.display_name = display_name;
 

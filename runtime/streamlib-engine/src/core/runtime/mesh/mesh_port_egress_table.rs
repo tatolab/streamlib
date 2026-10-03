@@ -540,17 +540,17 @@ mod tests {
     #[test]
     fn a_port_with_readers_and_no_egress_is_not_being_sent() {
         let who_is_reading = BTreeMap::from([
-            (a_port("CameraSource", "video"), reading(&["bench-fx-c3d4"])),
+            (a_port("camerasource", "video"), reading(&["bench-fx-c3d4"])),
             (
                 a_port("NoSuchProcessor", "video"),
                 reading(&["bench-rec-e5f6"]),
             ),
         ]);
-        let sending = BTreeMap::from([(a_port("CameraSource", "video"), ())]);
+        let sending = BTreeMap::from([(a_port("camerasource", "video"), ())]);
 
         assert_eq!(
             what_this_runtime_is_sending(&who_is_reading, &sending),
-            BTreeMap::from([(a_port("CameraSource", "video"), reading(&["bench-fx-c3d4"]))]),
+            BTreeMap::from([(a_port("camerasource", "video"), reading(&["bench-fx-c3d4"]))]),
         );
     }
 
@@ -681,12 +681,12 @@ mod tests {
     fn a_port_whose_channel_will_not_open_answers_why_rather_than_saying_nothing() {
         // A registry whose graph offers the port and answers no way to read it,
         // which is exactly what a channel that will not open leaves behind.
-        let offered = a_registry_whose_graph_offers(&[("CameraSource", "video")]);
+        let offered = a_registry_whose_graph_offers(&[("camerasource", "video")]);
 
         let why_it_cannot_be_sent = how_this_runtime_would_send(
             &offered,
             "bench-cam-a1b2",
-            &a_port("CameraSource", "video"),
+            &a_port("camerasource", "video"),
         )
         .err()
         .expect("a port with no way to read it is one this runtime cannot send");
@@ -705,12 +705,12 @@ mod tests {
     /// A port whose names make no mesh address says that instead.
     #[test]
     fn a_port_with_no_mesh_address_says_so_rather_than_naming_its_channel() {
-        let offered = a_registry_whose_graph_offers(&[("CameraSource", "video")]);
+        let offered = a_registry_whose_graph_offers(&[("camerasource", "video")]);
 
         let why_it_cannot_be_sent = how_this_runtime_would_send(
             &offered,
             "a runtime/named illegally",
-            &a_port("CameraSource", "video"),
+            &a_port("camerasource", "video"),
         )
         .err()
         .expect("a name that is not one key chunk is no mesh address");
@@ -764,18 +764,18 @@ mod tests {
     /// window between the last reader leaving and the egress being dropped.
     #[test]
     fn an_egress_whose_readers_have_gone_renders_with_no_readers() {
-        let sending = BTreeMap::from([(a_port("CameraSource", "video"), ())]);
+        let sending = BTreeMap::from([(a_port("camerasource", "video"), ())]);
 
         assert_eq!(
             what_this_runtime_is_sending(&BTreeMap::new(), &sending),
-            BTreeMap::from([(a_port("CameraSource", "video"), BTreeSet::new())]),
+            BTreeMap::from([(a_port("camerasource", "video"), BTreeSet::new())]),
         );
     }
 
     /// Every reader of one port arrives together, so `graph` names all of them.
     #[test]
     fn a_port_two_runtimes_read_names_both() {
-        let port = a_port("CameraSource", "video");
+        let port = a_port("camerasource", "video");
         let who_is_reading =
             BTreeMap::from([(port.clone(), reading(&["bench-fx-c3d4", "bench-rec-e5f6"]))]);
         let sending = BTreeMap::from([(port.clone(), ())]);

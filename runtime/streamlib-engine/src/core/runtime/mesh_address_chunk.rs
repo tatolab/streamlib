@@ -104,12 +104,13 @@ mod tests {
         }
     }
 
-    /// The engine's own disambiguation suffix never produces a refused name.
+    /// A defaulted node name and its `-2`, `-3` … suffix never produce a
+    /// refused chunk.
     #[test]
-    fn the_engines_disambiguation_suffix_always_passes() {
+    fn the_engines_defaulted_names_always_pass() {
         for ordinal in 2..=11 {
             assert!(is_one_legal_mesh_address_chunk(&format!(
-                "CameraSource {ordinal}"
+                "camerasource-{ordinal}"
             )));
         }
     }

@@ -99,7 +99,6 @@ pub use streamlib_macros::processor;
 pub struct ProcessorAttributeAcceptsNoIdentity;
 
 pub use core::{
-    ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
     Error,
@@ -111,7 +110,6 @@ pub use core::{
     OutputPortMarker,
     PROCESSOR_REGISTRY,
     PooledTextureHandle,
-    ProcessorDefinition,
     ProcessorSpec,
     ReactiveProcessor,
     Result,

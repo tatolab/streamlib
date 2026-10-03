@@ -95,9 +95,9 @@ fn graph_snapshot_validate_rejects_unknown_processor_type() {
     use streamlib_engine::core::graph_snapshot::GraphSnapshot;
 
     let json = r#"{
-        "processors": [
+        "nodes": [
             {
-                "alias": "ghost",
+                "name": "ghost",
                 "type": "ghost_package:DefinitelyNotARegisteredProcessor",
                 "config": {}
             }

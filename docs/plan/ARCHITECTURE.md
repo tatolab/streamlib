@@ -1386,7 +1386,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   out of the import path, because splitting re-invents the grammar this change deleted.
   [processor-class-identity — SHIPPED #1838, #1841; the address-chunk refusal —
   runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment; amended by runtime-hosting decision 3: a name is cast to the address grammar (§Networking, the address) and a defaulted duplicate takes `-2`, superseding spaces, unicode, ` 2` and the character refusals]
-  <!-- verify: cargo test -p streamlib-engine --test display_name_disambiguation_test -->
+  <!-- verify: cargo test -p streamlib-engine --test node_name_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_disambiguated_too -->
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /

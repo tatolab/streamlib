@@ -359,23 +359,23 @@ fn surface_exchange_failure_response(failure: &Error) -> Response {
     path = "/api/registry",
     tag = "registry",
     responses(
-        (status = 200, description = "Available processor types", body = RegistryResponse)
+        (status = 200, description = "Available node types", body = RegistryResponse)
     )
 )]
 pub(crate) async fn get_registry() -> Json<RegistryResponse> {
     Json(processor_catalog_of_this_process())
 }
 
-/// Every processor type this process has registered, rendered as the catalog
-/// `/api/registry` and the MCP catalog resource both serve.
+/// Every node type this process has registered, rendered as the catalog
+/// `/api/registry` and the MCP node catalog resource both serve.
 pub(crate) fn processor_catalog_of_this_process() -> RegistryResponse {
-    let processors: Vec<ProcessorDescriptorOutput> = PROCESSOR_REGISTRY
+    let nodes: Vec<ProcessorDescriptorOutput> = PROCESSOR_REGISTRY
         .list_registered()
         .into_iter()
         .map(|d| ProcessorDescriptorOutput::from(&d))
         .collect();
 
-    RegistryResponse { processors }
+    RegistryResponse { nodes }
 }
 
 pub(crate) async fn get_openapi_spec(
@@ -775,12 +775,12 @@ mod router_surface_and_auth_gate_tests {
     /// There is no teardown: a registration is for the life of the process, and
     /// the registry refuses a second one of the same path.
     ///
-    /// `/api/registry` is where an agent learns which keys a processor's
+    /// `/api/registry` is where an agent learns which keys a node type's
     /// config takes, so it serves the descriptor's schema document itself —
     /// each field's type, its description and its default — rather than a
     /// name the agent would have to look up somewhere the node does not serve.
     #[tokio::test]
-    async fn the_registry_serves_a_registered_processors_config_schema_document() {
+    async fn the_registry_serves_a_registered_node_types_config_schema_document() {
         let config_schema = serde_json::json!({
             "type": "object",
             "properties": {
@@ -808,11 +808,11 @@ mod router_surface_and_auth_gate_tests {
             .unwrap();
         let served = json_body_on(auth_enabled_router(), request).await;
 
-        let probe = served["processors"]
+        let probe = served["nodes"]
             .as_array()
-            .expect("a processor list")
+            .expect("a node type list")
             .iter()
-            .find(|entry| entry["processor_class_import_path"] == class_import_path)
+            .find(|entry| entry["type"] == class_import_path)
             .expect("the probe the test registered");
         assert_eq!(probe["config_schema"], config_schema);
     }

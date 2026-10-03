@@ -53,10 +53,11 @@ const MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_MESH_MULT
 /// Where scouting is pinned to.
 const LOOPBACK_INTERFACE: &str = "127.0.0.1";
 
-/// The display name the source gives its processor, and the reader addresses.
-/// A space in it on purpose: a display name is legal on the mesh and illegal in
-/// a channel name, which is why the ingress channel is hashed from the address.
-const THE_DISPLAY_NAME: &str = "Camera Source 2";
+/// The name the source gives its node, and the reader addresses. A `-` and a
+/// digit in it on purpose: a cast name is legal on the mesh and is not a
+/// processor id's channel chunk, which is why the ingress channel is hashed
+/// from the address.
+const THE_DISPLAY_NAME: &str = "camera-source-2";
 
 /// The output port the source peer publishes, spelled here too because the
 /// peer binary is a separate crate and this is what the source's own `graph`
@@ -451,8 +452,8 @@ fn the_egress_ports_one_report_names(
                 .iter()
                 .map(|port| {
                     (
-                        port["processor_display_name"].as_str().unwrap().to_string(),
-                        port["port_name"].as_str().unwrap().to_string(),
+                        port["node"].as_str().unwrap().to_string(),
+                        port["port"].as_str().unwrap().to_string(),
                         port["reader_runtime_names"]
                             .as_array()
                             .unwrap()

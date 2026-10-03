@@ -78,6 +78,14 @@ pub enum Error {
     )]
     ExposedNameCastsToNothing { name: String, cast: String },
 
+    #[error(
+        "the node name `{name}` casts to `{cast}`, which node `{cast}` in this graph already \
+         has — a name the author gives is an address, so it is never suffixed. Give one of \
+         them another name, or leave the name out to take the class's short name with the \
+         next free `-2`, `-3` …"
+    )]
+    NodeNameTaken { name: String, cast: String },
+
     #[error("Invalid graph: {0}")]
     InvalidGraph(String),
 
