@@ -14,9 +14,9 @@ packaged on Apple.
 
 - One runtime per machine, owned by whoever installed or started it; another user's runtime is
   refused naming the holder. A server or robot runs it as one service account.
-- `run` attached, `run -d` kept and re-loaded on every start, `stop` unloads and remembers,
-  `start` resumes, `rm` forgets (amended 2026-10-02), `streams` lists, `dev` reloads on edit; no `up`/`down` — `tatolabd` runs in a terminal or a
-  container where no installer put it.
+- `run` attached, `run -d` kept and re-loaded on every start unless failed, `stop` unloads and
+  remembers, `start` resumes, `rm` forgets (amended 2026-10-02), `streams` lists, `dev` reloads
+  on edit; no `up`/`down` — `tatolabd` runs in a terminal or a container where no installer put it.
 - Composition is plain Python over a flat graph.
 - The runtime keeps the GPU context, signals, Zenoh session, local API and relay once per machine;
   every other per-process table becomes per stream. Streams on one machine link without exposing;
@@ -26,7 +26,7 @@ packaged on Apple.
   cannot reach the socket, as `docker` does with its daemon down. `Tatolab.app` registers the
   login service on Apple (Docker Desktop's shape), a terminal runs `tatolabd` there until the app
   ships, and on Linux the installer registers a systemd user service, Docker Engine's shape.
-- Kept streams always come back; `stop` remembers, `start` resumes, `rm` forgets; an attached
+- Kept streams always come back unless failed; `stop` remembers, `start` resumes, `rm` forgets; an attached
   stream ends with its terminal command (2026-10-02).
 - Every CLI stream action is also a tool and `graph` returns every stream, because the CLI is a
   pure client of the runtime's tools; surfaces cross between streams on one machine with no
@@ -39,8 +39,8 @@ packaged on Apple.
   decision 2): opening it starts the runtime if it is not running and offers the login item, as
   Docker Desktop does; Developer ID signed and notarised. The terminal stays a developer's path.
 - Names are cast, never refused for spelling (2026-10-02, runtime-hosting decision 3): every
-  exposed name is lowercased into RFC 3986's unreserved characters, a defaulted duplicate takes
-  `-2`; what a person writes in code is never constrained.
+  exposed name is lowercased into RFC 3986's unreserved characters — one casting to empty, `.` or
+  `..` is refused — a defaulted duplicate takes `-2`; what a person writes is never constrained.
 - No environment variables are built in (2026-10-02, runtime-hosting decision 4): a stream's
   processes start in its project directory with none of the user's variables; a stream that wants
   a `.env` loads it itself.
@@ -96,9 +96,9 @@ packaged on Apple.
 - **Refusing names that are not already lowercase URL-safe.** Owner: "don't force people to write
   it like that or change imports" — the cast exposes the safe form whatever was typed.
 - **The runtime reading the project's `.env`, Docker's `-e` and `--env-file`, or forwarding the
-  caller's shell.** Each makes the runtime carry a user's values — the last stores credentials in
-  the state directory or behaves differently once a stream is kept. Owner: a stream can include a
-  library that reads `.env` itself.
+  caller's shell.** Each makes the runtime carry a user's values; `-e` would store credentials in
+  the state directory, and forwarding a shell would behave differently once a stream is kept.
+  Owner: a stream can include a library that reads `.env` itself.
 - **`stop` and `rm` editing the state directory while the runtime is down.** A second, offline
   path through every record for the rarest case — permutations and bugs; Docker's CLI does
   nothing with its daemon down either.

@@ -123,18 +123,21 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   logs in the terminal, Ctrl-C unloads it; `tatolab run -d` loads it to keep — the runtime
   records the graph its function compiled to at that load, the project's venv path and the
   exposures in its state directory, and re-loads that recorded graph on every start, a crash's
-  restart included. There are no restart policies: a kept stream always comes back. `tatolab
+  restart included. There are no restart policies: a kept stream always comes back unless it has
+  failed. `tatolab
   stop` unloads a kept stream and remembers it as stopped, across restarts too; `tatolab start`
   re-loads a stopped stream from its record; `tatolab rm` forgets a stream, the only verb that
   loses one (owner, 2026-10-02, amending the 2026-10-01 stop-forgets reading). An attached
   stream is never recorded: a runtime crash ends it, and its `run` exits with an error naming
   the crash and the runtime's log. Live edits are never recorded, so the
   function wins on the next start, and picking up a changed source is another `run -d`;
-  a kept stream implicated in the runtime's last two crashes in a row — a clean stop or manual
-  restart is no crash and resets the count — or one that cannot load is `failed`, shown with its
-  reason, skipped at start until `tatolab start` retries it (runtime-hosting decision 5);
-  `tatolab streams` lists all four — attached, kept, stopped, failed; `tatolab dev` is `run` reloading
-  on edit, and after a crash it waits for the runtime and loads again. Where no installer
+  a kept stream implicated in the runtime's last two crashes in a row — a clean stop of the
+  runtime or a manual restart is no crash and resets the count — or one that cannot re-load at
+  start (a missing venv, a type that will not describe) is `failed`, shown with its reason and
+  skipped at start until `tatolab start` retries it; a first load that fails is refused, as
+  before (runtime-hosting decision 5). `tatolab streams` lists all four — attached, kept,
+  stopped, failed; `tatolab dev` is `run` reloading on edit, and after a crash it waits for the
+  runtime and loads again. Where no installer
   put a runtime, `tatolabd` runs in a terminal or as a container's entrypoint; there is no
   `up` or `down`. One runtime per machine, owned by one user — whoever installed or started
   it; another user's runtime on the same machine is refused at start naming the holder, and a
@@ -1382,7 +1385,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the class's short name as its own validated field rather than the engine splitting one
   out of the import path, because splitting re-invents the grammar this change deleted.
   [processor-class-identity — SHIPPED #1838, #1841; the address-chunk refusal —
-  runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment; amended by runtime-hosting decision 3: a name is cast to the address grammar (§Networking, the address) and a defaulted duplicate takes `-2`, superseding spaces, unicode and ` 2`]
+  runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment; amended by runtime-hosting decision 3: a name is cast to the address grammar (§Networking, the address) and a defaulted duplicate takes `-2`, superseding spaces, unicode, ` 2` and the character refusals]
   <!-- verify: cargo test -p streamlib-engine --test display_name_disambiguation_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_disambiguated_too -->
@@ -1406,9 +1409,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A stream's environment is its project directory and that directory's venv
   interpreter. It is recorded beside the graph when the stream is loaded — never inside it, so
   the same graph loads from another checkout — and every processor interpreter of the stream
-  starts from it, its working directory the project. The runtime hands a stream no variables of
-  the user's — no `.env`, no `-e`, no caller's shell — and a stream reads its own settings from
-  its project as any program does (runtime-hosting decision 4). Provisioning an environment is
+  starts from it, its working directory the project. The runtime hands a stream's compile and
+  its processor interpreters none of the user's variables — no `.env`, no `-e`, no caller's
+  shell — and a stream reads its own settings from its project as any program does
+  (runtime-hosting decision 4). Provisioning an environment is
   the packs OPEN in §Packages. Owner, 2026-10-02. [package-split-and-lend; runtime-hosting]
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
   Direction (review, not decided): a camera, a microphone, a display, the accelerator, network
@@ -1438,9 +1442,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [one-runtime-per-machine]
 - **DECIDED** — Failure isolation: one engine for every stream on the machine. A native crash
   in a built-in — camera, codec, display, the mesh's copy path — ends every stream on the
-  machine, and the runtime restarts and re-loads every kept stream neither stopped nor failed from its
-  persisted graph, while an attached stream ends with its `run` (§Product); a hang is bounded
-  per node by the existing abandon budget and ends only that stream; Python crashes and hangs
+  machine, and the runtime restarts and re-loads every kept stream neither stopped nor failed
+  from its persisted graph, while an attached stream ends with its `run` (§Product); a hang is
+  bounded per node by the existing abandon budget and ends only that stream; Python crashes and hangs
   stay in their own process. "Restart the runtime and the streams come back" means re-loading
   from persisted graphs, never re-attaching — processor interpreters die with their parent by
   construction and surfaces cannot outlive the device's owner — so the runtime keeps a state
@@ -4070,12 +4074,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   covers two packs that each define a `main`; a **node** name is unique per stream — a
   defaulted duplicate (two unnamed `CameraSource`) is suffixed `-2`, `-3` …, while a duplicate
   the author *typed* is refused by name, because a typed name is an address (this amends
-  today's disambiguation of requested display names); a **port** is a method name on its
-  class, unique by Python's own rules. Every exposed name — machine, stream, node, port — is
-  cast, never refused for its spelling: lowercased, accents dropped, every character outside RFC
-  3986's unreserved set (`a-z 0-9 - . _ ~`) turned into `-`, runs of `-` collapsed, leading
-  and trailing ones trimmed, at most 63 characters; one that casts to empty, `.` or `..` is
-  refused by name. So `CameraSource` is `camerasource`, `name="Front Camera"` is `front-camera`,
+  today's disambiguation of requested display names); a **port** is a method name on its class,
+  and two casting alike are refused at `@node` naming both. Every exposed name — machine,
+  stream, node, port — is cast, never refused for its spelling: lowercased, accents dropped,
+  every character outside RFC 3986's unreserved set (`a-z 0-9 - . _ ~`) turned into `-` (the
+  cast's detail: runs collapsed, ends trimmed), at most 63 characters; one that casts to empty,
+  `.` or `..` is refused by name; a suffix is the next unused one, the name truncated to fit; a
+  lookup casts its argument, so `read("Video")` finds `video`. So `CameraSource` is `camerasource`, `name="Front Camera"` is `front-camera`,
   a hostname `Jonathans-MacBook` is `jonathans-macbook`. What a person writes — class names,
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.

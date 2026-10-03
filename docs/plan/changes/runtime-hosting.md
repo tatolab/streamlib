@@ -11,7 +11,7 @@ ones it was told to keep, is addressed by its machine, and arrives from an insta
   socket; `graph` returns every stream;
 - a kept stream is recorded in the state directory and comes back on every start, a crash's
   restart included, unless it has `failed`; an attached one lives as long as its connection;
-- every exposed name is cast to lowercase URL-safe; the runtime hands a stream no variables;
+- every exposed name is cast to lowercase URL-safe; a stream gets none of the user's variables;
 - an address is `<machine>/<stream>/<node>/<port>`, right-anchored; the runtime name is gone;
 - Linux installs by `curl | sh`, which registers a systemd user service; macOS installs a signed,
   notarised `Tatolab.app` that starts the runtime if it is not running, as Docker Desktop does.
@@ -22,14 +22,14 @@ API's tools move. The rationale is `docs/decisions/runtime-hosting.md` (#2580, #
 here with decisions 1 to 5, all resolved by the owner.
 
 **Precondition.** Every entry built is DECIDED: §Product `ARCHITECTURE.md:107-113`, `:114-121`
-(who starts it), `:122-143` (loaded and kept; one user), `:152-157`; §Processor model
-`:1389-1407` (graph is data, emitted; environment beside it), `:1415-1425` (the split),
-`:1434-1446` (failure isolation); §Media I/O `:3202-3213` (built here, decision 2); §Networking
-`:4018-4022` (own configuration — router mode is step 8's), `:4052-4071` (address, collisions),
-`:4072-4079` (exposure); §Distribution `:4209-4219`; §Control plane `:4399-4415`, `:4559-4567`,
-`:4580-4585`. Not built against: needs `:1408`, resources `:1428`, accelerators optional `:1882`
-(the GPU still initialises at start), packs `:578`, discovery `:4080`, the stream map `:4097`,
-URLs `:4109`, the relay role, the control client. **Sequencing:** after #2592, #2593 and #2566.
+(who starts it), `:122-149` (loaded and kept; one user), `:158-163`; §Processor model
+`:1395-1416` (graph is data, emitted; environment beside it), `:1424-1436` (the split),
+`:1443-1455` (failure isolation); §Media I/O `:3211-3222` (built here, decision 2); §Networking
+`:4027-4031` (own configuration — router mode is step 8's), `:4061-4087` (address, collisions),
+`:4088-4095` (exposure); §Distribution `:4225-4235`; §Control plane `:4415-4431`, `:4575-4583`,
+`:4596-4601`. Not built against: needs `:1417`, resources `:1437`, accelerators optional `:1891`
+(the GPU still initialises at start), packs `:584`, discovery `:4096`, the stream map `:4113`,
+URLs `:4125`, the relay role, the control client. **Sequencing:** after #2592, #2593 and #2566.
 
 **Verified against the tree 2026-10-02 (HEAD 65e6c53a7)**, three sweeps; `E` =
 `runtime/streamlib-engine/src`, `A` = `runtime/streamlib-api-server`.
@@ -66,17 +66,15 @@ URLs `:4109`, the relay role, the control client. **Sequencing:** after #2592, #
 ## Decision 1 — RESOLVED: the runtime has no shutdown verb
 
 Owner, 2026-10-02: "shutdown doesn't feel like it makes sense in this context" — the runtime stays
-on as `tailscaled` does; quitting the app quits the app. The `shutdown` tool, `POST
-/api/runtime/shutdown` and the runtime's Quit menu item are deleted; `stop <stream>` ends a
-client's work. The runtime stops as a service does — `systemctl --user stop`, the app's runtime
-switch — or by a signal in the terminal that runs it.
+on, as `tailscaled` does. The `shutdown` tool, `POST /api/runtime/shutdown` and the runtime's Quit
+menu item go; `stop <stream>` ends a client's work; the runtime stops as a service does
+(`systemctl --user stop`, the app's switch) or by a signal in the terminal running it.
 
 ## Decision 2 — RESOLVED (a): a minimal `Tatolab.app` ships in this change
 
 Owner, 2026-10-02: on a Mac "most people would open the app and it starts the service if not
-started just like docker"; the owner holds the Developer ID. Options were (a) the app now, (b) a
-terminal until step 10. §Product `:114-121` holds as written — the app simply ships now; the
-terminal stays a developer's path. Step 10 grows the same app.
+started just like docker"; the owner holds the Developer ID. Chosen over a terminal until step 10;
+§Product's who-starts entry holds as written, the terminal a developer's path; step 10 grows it.
 
 ## Decision 3 — RESOLVED: every exposed name is cast to lowercase URL-safe
 
@@ -84,9 +82,10 @@ Owner, 2026-10-02: only URL-safe names, "always cast to lowercase … don't forc
 like that or change imports". Every exposed name is cast — lowercased, accents dropped, anything
 outside RFC 3986's unreserved set turned into `-`, ≤63 characters; empty, `.` or `..` refused —
 and a defaulted duplicate takes `-2` (`camerasource-2`). Written into §Networking's address entry
-and amending `:1367-1377`. The engine casts a live add and the pure-Python builder casts where the
-author writes; a pure package cannot call the engine, so the two read one fixture of cases. #2565's
-live add and #2567's builder build it, not ` 2`.
+and amending the display-name entry. Node names are cast in step 1 — #2565's live add and #2567's
+builder build the cast and `-2`, not ` 2` (stream-graph re-spelled here); machine and stream names
+and remote addresses in S3. The engine and the pure-Python builder each cast — a pure package
+cannot call the engine — reading one fixture of cases.
 
 ## Decision 4 — RESOLVED: no environment variables are built in
 
@@ -100,14 +99,13 @@ read none (they never did); the examples' `os.environ` reads go with their conve
 
 Owner, 2026-10-02: "restarting is not the same as failing … I'd want it in a failed state … and
 basically just make the user aware". A kept stream always restarts; one implicated in the
-runtime's last two crashes in a row — no time window; a clean stop or a manual restart is no
-crash and resets the count — is recorded `failed`, its reason shown by `streams` and the app, and
-skipped at start; `start` retries it, `rm` forgets it. A crash is pinned on the stream owning the
-crashing thread (each node runs on its own thread; a crash recorder, installed at start, writes
-that stream through a file it opened beforehand), or on the stream being loaded. A stream that
-cannot load — a failed compile, a missing venv, a refused type — is `failed` too, with that
-reason. A crash on an engine thread implicates no stream: it restarts, and is a bug to file.
-Options were (a) a failed state, (b) `stop` and `rm` editing records with the runtime down, (c) both.
+runtime's last two crashes in a row — no time window; a clean stop of the runtime or a manual
+restart is no crash and resets the count — is recorded `failed` with its reason, shown by
+`streams`, skipped at start; `start` retries it, `rm` forgets it. A kept stream that cannot re-load
+at start (a missing venv, a type that will not describe) is `failed` too; a first load that fails
+is refused, as before. A crash no stream owns restarts and is a bug to file. Chosen over parking
+it as `stopped` and over `stop`/`rm` editing records with the runtime down; how a crash is pinned
+on a stream is engineering (assumptions).
 
 ## Target layout
 
@@ -137,8 +135,8 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   answers (`*ThisRuntimesGraph` → `*ThisStreamsGraph`) and the virtual camera's stable id (the
   stream's project directory, its name and the node's) are per stream; a pipeline cache per stream.
 - **The watchdog is per stream:** on expiry it kills that stream's groups, abandons its threads and
-  marks it failed. Past an engine-chosen bound of abandoned threads in one process, the runtime
-  exits 124 and its service restarts it, kept streams returning.
+  unloads the stream, never recording it `failed`. Past an engine-chosen bound of abandoned
+  threads, the runtime exits 124 — a crash implicating the streams whose threads it abandoned.
 - **Links between streams on one machine** ride iceoryx2 with no exposure; the input's stream owns
   the link; a source stream not loaded leaves it `awaiting_remote`, reason naming it.
 - **A remote port read by several streams** has one ingress per machine that each subscribes to.
@@ -147,8 +145,8 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 
 - **`tatolabd`** takes the machine lock, opens the state directory, resolves the machine name,
   joins the mesh, serves `<runtime dir>/local-api.sock`, and re-loads every kept stream neither
-  stopped nor failed (decision 5); one that cannot load is `failed`, never deleted. It never
-  detaches. Signed on macOS, it loads only its
+  stopped nor failed (decision 5); one that cannot re-load is `failed`, never deleted. It
+  never detaches. Signed on macOS, it loads only its
   bundled Vulkan loader and MoltenVK, named in `VK_ADD_DRIVER_FILES` before the first instance.
 - **The machine lock**: on Linux the abstract socket `@tatolab-runtime` (a container sharing the
   host's network is this machine to it); on macOS an `fcntl` lock on a root-owned 0666 regular
@@ -158,14 +156,14 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   user may take the one runtime first, the decided "whoever started it"; the CLI names it too.
 - **The state directory**: `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or
   `~/Library/Application Support/Tatolab/`: `machine.json` (machine id, name, mesh settings),
-  `streams/<stream>.json` per kept stream (the graph compiled at load, the environment, `stopped`,
-  exposure rulings; mode 0600) and the runtime's own log, which belongs to no project. A stream's
-  logs and pipeline cache stay under its project's `.streamlib/`, as `:4446-4466` decides.
+  `streams/<stream>.json` per kept stream (the graph compiled at load, the environment, `stopped`
+  or `failed` and why, its crash count, exposure rulings; mode 0600) and the runtime's own log, which belongs to no project. A stream's
+  logs and pipeline cache stay under its project's `.streamlib/`, as `:4462-4481` decides.
 - **Loading.** `run_stream {project_directory, stream_function, name, keep}` — `stream_function`
   as `run` takes it (`stream.py:main`, none for the sole one): the runtime finds
   `<project>/.venv/bin/python` (absent → refused, pointing at `uv sync`), runs `tatolab.stream`'s
-  compile entry in it, describes the Python types, and loads. A name loaded or kept, stopped
-  included, is refused naming its project, `--name` the way out; a `keep` load of the same project
+  compile entry in it, describes the Python types, and loads. A name loaded or kept, stopped or
+  failed included, is refused naming its project, `--name` the way out; a `keep` load of the same project
   and function replaces the record — how a changed source is picked up.
 - **Attached is the connection's lifetime.** `keep: false` binds the stream to the connection
   carrying the call — `/mcp/stdio`, which `tatolab run` and `tatolab mcp` both hold; it unloads
@@ -204,15 +202,15 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   `streamlib/<mesh>/@machine/<machine>/<machine id>/<host identity>/<pid>`; offered ports, readers,
   link requests, egress and data keys gain the stream; `InboundLinkName` and the ingress hash follow.
 - **The machine id** — 128 random bits minted once into `machine.json` — rides the token. **The
-  name**: the recorded one, else the hostname with refused characters replaced by `-`. The claim
-  reads every `@machine` token and compares case-folded: a live holder with another id moves this
+  name**: the recorded one, else the hostname, cast (decision 3). The claim reads every `@machine`
+  token: a live holder with another id moves this
   machine to the next unused `<name>-2`, `-3`…, recorded and said once with `tatolab set
   --machine-name`; a token with this id from another boot, or a gone pid, is taken over. A failed
   query is never read as free: the runtime stays off the mesh, `graph.mesh` renders it
   `claiming`, and it retries on an engine-chosen backoff. Two claims inside one discovery window keep today's residual: both say so, links error.
 - **The builder.** `stream.remote_output(address)` and `remote_input(address)` take the address
   string, right-anchored — `"main/camera/video"` another stream here, `"rig/main/camera/video"`
-  another machine — refusing a chunk the grammar refuses where it is written.
+  another machine — each chunk cast; one casting to empty, `.` or `..` refused where written.
 
 ## ADDED: §Distribution — the Linux installer and the Mac app
 
@@ -247,15 +245,15 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 
 - package-split-and-lend: `tatolabd` finds the lend at `../lib/tatolab/lend` or, inside the
   bundle, through the layout above. stream-graph: the builder's remote references take an address
-  string; its defaulted suffix follows decision 3.
+  string; its names take decision 3's cast and `-2` (re-spelled in that file).
 
 ## MODIFIED: records re-spelled at the fold
 
-§Product `:122-143` (the tools); §Processor model `:1367-1377` (decision 3), `:1415-1425`,
-`:1434-1446`; §Media I/O's header, `:1905-1920` (the camera id); §Networking `:3556-3587`
-(claiming), `:3588-3610`, `:3611-3631`, `:3644-3691`, `:3765-3890`, `:3973-4010` (`nodes` gone),
-`:4052-4071`; §Control plane `:4345-4398` (no
-`shutdown`), `:4426-4445` (the verbs), `:4446-4466` (registry gone; the state directory holds the
+§Product `:122-149` (the tools); §Processor model `:1373-1388` (decision 3), `:1424-1436`,
+`:1443-1455`; §Media I/O's header, `:1914-1929` (the camera id); §Networking `:3565-3592`
+(claiming), `:3597-3616`, `:3620-3638`, `:3653-3695`, `:3774-3899`, `:3982-4014` (`nodes` gone),
+`:4061-4087`; §Control plane `:4361-4408` (no
+`shutdown`), `:4442-4458` (the verbs), `:4462-4481` (registry gone; the state directory holds the
 runtime's own log); the pivot ADR's steps 4 and 10.
 `docs/architecture/` and the README in the shipping tickets.
 
@@ -287,6 +285,12 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 ## Assumptions stated, not asked
 
 - **One engine, a table of streams**, not a stream id on every graph node.
+- **Pinning a crash**: a node's threads, those it spawns and its escalate worker carry its stream;
+  signal handlers on an alternate stack and a panic hook, installed at start, write the crashing
+  thread's stream through a file opened beforehand. OS-owned threads (AVFoundation queues, the
+  main thread), SIGKILL and an out-of-memory kill implicate none.
+- **A stream's processes inherit the runtime's environment and the lend's variables**, nothing per
+  stream: a terminal-run runtime passes its shell, a service its own.
 - **The runtime compiles**, in the project's interpreter, so an agent loads exactly as the CLI does.
 - **Attached is a connection's lifetime**: an agent's attached stream ends when its host restarts `mcp`.
 - **The owner's `expose` wins** over the function's `exposed` (the glossary's suggestion/decision).
@@ -304,10 +308,11 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 - **S1 — one engine, many streams.** Runtime suite: two streams in one `Runner`; one's shutdown,
   watchdog and graph change leave the other alone; one `VkDevice`. After #2592.
 - **S2 — the stream actions**: `tatolabd` without a stream, the lock, the state directory, the
-  tools and verbs, attached connections, the failed state and crash recorder, re-load and restart, `nodes` and
+  tools and verbs, attached connections, the failed state, the crash recorder, re-load and restart, `nodes` and
   `shutdown` gone. Blocked by S1, #2593.
 - **S3 — the machine segment**: addresses, keys, the machine id and name, `set`, cross-stream
-  links, one ingress per machine, the builder, the mesh fixtures, decision 3. Blocked by S2, #2566.
+  links, one ingress per machine, the builder, the mesh fixtures, the machine, stream and address
+  cast. Blocked by S2, #2566.
 - **S4 — Linux**: the tarball, `install.sh`, the service, the restart criterion. Blocked by S2.
 - **S5 — `Tatolab.app`**: bundle, agent, menu, CLI link, signing, notarisation, `.dmg`, cask, the
   prompt check, the restart criterion on a Mac. Blocked by S2; the owner copies the secrets first.
