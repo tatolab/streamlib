@@ -29,48 +29,44 @@ pub fn cast_exposed_name_to_url_safe(name: &str) -> Result<Cow<'_, str>> {
     if is_already_cast(name) {
         return Ok(Cow::Borrowed(name));
     }
-    let mut cast = String::with_capacity(name.len());
+    // Every character pushed is ASCII, so a byte truncate cuts on a character.
+    let mut cast = String::with_capacity(name.len().min(EXPOSED_NAME_MAXIMUM_LENGTH));
     let lowercased_without_accents = name
         .nfkd()
         .filter(|character| !is_combining_mark(*character))
         .flat_map(char::to_lowercase);
     for character in lowercased_without_accents {
-        let kept = if is_rfc_3986_unreserved(character) {
-            character
-        } else {
-            EXPOSED_NAME_REPLACEMENT_CHARACTER
-        };
-        if kept == EXPOSED_NAME_REPLACEMENT_CHARACTER
-            && cast.ends_with(EXPOSED_NAME_REPLACEMENT_CHARACTER)
-        {
-            continue;
+        if is_rfc_3986_unreserved(character) && character != EXPOSED_NAME_REPLACEMENT_CHARACTER {
+            cast.push(character);
+        } else if !cast.is_empty() && !cast.ends_with(EXPOSED_NAME_REPLACEMENT_CHARACTER) {
+            cast.push(EXPOSED_NAME_REPLACEMENT_CHARACTER);
         }
-        cast.push(kept);
+    }
+    cast.truncate(EXPOSED_NAME_MAXIMUM_LENGTH);
+    while cast.ends_with(EXPOSED_NAME_REPLACEMENT_CHARACTER) {
+        cast.pop();
     }
 
-    let trimmed: String = cast
-        .trim_matches(EXPOSED_NAME_REPLACEMENT_CHARACTER)
-        .chars()
-        .take(EXPOSED_NAME_MAXIMUM_LENGTH)
-        .collect();
-    let trimmed = trimmed.trim_end_matches(EXPOSED_NAME_REPLACEMENT_CHARACTER);
-
-    if matches!(trimmed, "" | "." | "..") {
+    if cast_names_nothing(&cast) {
         return Err(Error::ExposedNameCastsToNothing {
             name: name.to_string(),
-            cast: trimmed.to_string(),
+            cast,
         });
     }
-    Ok(Cow::Owned(trimmed.to_string()))
+    Ok(Cow::Owned(cast))
 }
 
 fn is_already_cast(name: &str) -> bool {
     name.len() <= EXPOSED_NAME_MAXIMUM_LENGTH
-        && !matches!(name, "" | "." | "..")
+        && !cast_names_nothing(name)
         && name.chars().all(is_rfc_3986_unreserved)
         && !name.starts_with(EXPOSED_NAME_REPLACEMENT_CHARACTER)
         && !name.ends_with(EXPOSED_NAME_REPLACEMENT_CHARACTER)
         && !name.contains("--")
+}
+
+fn cast_names_nothing(cast: &str) -> bool {
+    matches!(cast, "" | "." | "..")
 }
 
 fn is_rfc_3986_unreserved(character: char) -> bool {
@@ -109,23 +105,21 @@ mod tests {
                     case.name
                 );
             } else {
+                let expected_cast = case.cast.expect("an unrefused case names its cast");
                 assert_eq!(
-                    outcome.ok().map(Cow::into_owned),
-                    case.cast,
+                    outcome.ok().as_deref(),
+                    Some(expected_cast.as_str()),
                     "{:?} cast differently from the fixture",
                     case.name
                 );
+                assert!(
+                    matches!(
+                        cast_exposed_name_to_url_safe(&expected_cast).unwrap(),
+                        Cow::Borrowed(borrowed) if borrowed == expected_cast
+                    ),
+                    "{expected_cast:?} is a cast, so it must cast to itself without allocating"
+                );
             }
-        }
-    }
-
-    #[test]
-    fn a_cast_name_casts_to_itself() {
-        for name in ["camerasource", "front-camera", "v1.2~beta", "video_from_upstream"] {
-            assert!(matches!(
-                cast_exposed_name_to_url_safe(name).unwrap(),
-                Cow::Borrowed(borrowed) if borrowed == name
-            ));
         }
     }
 }

@@ -223,6 +223,27 @@ def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
         link_data_access.write_to_output_port("never_declared", {"frame_index": 1})
 
 
+def test_a_port_lookup_casts_its_argument_to_the_declared_name():
+    """`@node` declares each port under its cast name, so every lookup casts
+    too: `Video` and `VIDEO` reach the port declared as `video`.
+
+    Fail-without-fix: an uncast lookup raises "not one this processor declared"
+    for every spelling here but the cast one.
+    """
+    from streamlib import ProcessorLinkDataAccess
+
+    link_data_access = ProcessorLinkDataAccess()
+    link_data_access.declare_ports(["video"], ["frames-out"])
+
+    assert link_data_access.read_from_input_port("Video") is None
+    assert link_data_access.read_from_input_port_with_timestamp("VIDEO") == (None, None)
+    assert link_data_access.input_port_has_data("Vidéo") is False
+    link_data_access.write_to_output_port("Frames Out", {"frame_index": 1})
+
+    with pytest.raises(ValueError, match="cannot name anything"):
+        link_data_access.read_from_input_port("..")
+
+
 def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     """The whole point of the wiring envelope: two helpers open their own ends
     of one channel from what the parent sent, and a bag crosses between them.

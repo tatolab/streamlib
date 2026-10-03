@@ -211,8 +211,7 @@ def test_a_port_name_casting_to_nothing_is_refused_naming_the_class():
             def frames_to_downstream(self) -> None: ...
 
 
-def test_the_processor_decorator_is_gone():
-    """`@node` replaced it outright — pre-1.0, no alias."""
+def test_the_package_exports_node_and_no_processor_alias():
     assert not hasattr(streamlib, "processor")
     assert "processor" not in streamlib.__all__
     assert "node" in streamlib.__all__

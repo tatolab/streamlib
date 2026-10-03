@@ -749,7 +749,12 @@ class CapabilityExtensionHost:
 
 @final
 class AddedProcessor:
-    """A processor in the graph."""
+    """A processor in the graph.
+
+    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
+    casts to a declared port finds it; one casting to nothing raises `ValueError`.
+    """
 
     @property
     def processor_id(self) -> str: ...
@@ -968,7 +973,12 @@ class RuntimeContextLimitedAccess:
 
 @final
 class LinkInputDataReader:
-    """A processor's input ports, as `ctx.inputs`."""
+    """A processor's input ports, as `ctx.inputs`.
+
+    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
+    casts to a declared port finds it; one casting to nothing raises `ValueError`.
+    """
 
     @overload
     def read(self, port_name: str, *, into: None = None) -> Any | None: ...
@@ -1062,7 +1072,12 @@ class LinkInputDataReader:
 
 @final
 class LinkOutputDataWriter:
-    """A processor's output ports, as `ctx.outputs`."""
+    """A processor's output ports, as `ctx.outputs`.
+
+    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
+    casts to a declared port finds it; one casting to nothing raises `ValueError`.
+    """
 
     def write(
         self,
