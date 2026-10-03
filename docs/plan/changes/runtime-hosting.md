@@ -303,19 +303,18 @@ runtime's own log); the pivot ADR's steps 4 and 10.
   `objc2-service-management`; a native AppKit menu would be smaller, and switching rewrites the menu.
   The cask's tap is `tatolab/homebrew-tap`, created by the owner, bumped per release.
 
-## Slices, each deleting what it replaces, tests included
+## Tickets, each deleting what it replaces, tests included
 
-- **S1 — one engine, many streams.** Runtime suite: two streams in one `Runner`; one's shutdown,
-  watchdog and graph change leave the other alone; one `VkDevice`. After #2592.
-- **S2 — the stream actions**: `tatolabd` without a stream, the lock, the state directory, the
-  tools, attached connections, the failed state, the crash recorder, the children's environment,
-  re-load and restart, `nodes` and `shutdown` gone. Blocked by S1, #2593.
-- **S3 — the machine segment**: addresses, keys, the machine id and name, `set`, cross-stream
-  links, one ingress per machine, the builder, the mesh fixtures, the machine, stream and address
-  cast. Blocked by S2, #2566.
-- **S4 — Linux**: the tarball, `install.sh`, the service, the restart criterion. Blocked by S2.
-- **S5 — `Tatolab.app`**: bundle, agent, menu, CLI link, signing, notarisation, `.dmg`, cask, the
-  prompt check, the restart criterion on a Mac. Blocked by S2; the owner copies the secrets first.
+Derived 2026-10-02, milestone #58; "(ultracode)": `/implement` builds it only with ultracode on.
+- **S1 — one engine, many streams:** #2604 (ultracode). Blocked by #2592.
+- **S2, split in two — the stream actions:** #2605 (ultracode; blocked by #2604, #2593); then the
+  failed state and the crash recorder: #2606 (blocked by #2605).
+- **S3 — the machine segment:** #2607 (ultracode). Blocked by #2605, #2566, #2567 (the shared cast
+  fixture); it takes `APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST` and `STREAMLIB_APP_DIRECTORY`
+  from S1, since the runtime-name default reading them dies here.
+- **S4 — Linux:** #2608. **S5 — `Tatolab.app`:** #2609 (ultracode; the owner copies the secrets and
+  creates the tap first). Both blocked by #2605.
+- Operating-model PR: #2610, the live-ops skills (after #2607, #2594).
 
 ## REMOVED
 
