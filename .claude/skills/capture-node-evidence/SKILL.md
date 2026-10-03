@@ -20,13 +20,13 @@ mkdir -p "$EVIDENCE_DIR"
 ```bash
 streamlib graph --node <runtime_id> > "$EVIDENCE_DIR/graph.json"
 ```
-Read the channel names you want to tap out of this snapshot (`{source_processor}/{source_output_port}` — see `inspect-live-graph`).
+Read the channel names you want to tap out of this snapshot (`<runtime_name>/<node>/<port>` — see `inspect-live-graph`).
 
 ### 3. Tap N bags per channel to disk
 `tap` has NO `--output` flag — redirect stdout. Repeat per channel:
 ```bash
-streamlib tap --node <runtime_id> camera/frames --count 30 > "$EVIDENCE_DIR/frames-camera.json"
-streamlib tap --node <runtime_id> convert/frames --count 30 > "$EVIDENCE_DIR/frames-convert.json"
+streamlib tap --node <runtime_id> lab-one/camera/frames --count 30 > "$EVIDENCE_DIR/frames-camera.json"
+streamlib tap --node <runtime_id> lab-one/convert/frames --count 30 > "$EVIDENCE_DIR/frames-convert.json"
 ```
 Each file holds the hex-preview-plus-byte-length sample for that channel (bytes-flowing proof, not decoded pixels).
 

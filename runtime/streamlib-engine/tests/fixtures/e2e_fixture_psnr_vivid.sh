@@ -322,18 +322,17 @@ for _ in $(seq 1 60); do
     sleep 0.5
 done
 
-# A channel is `{processor_id}/{output_port}` with the id chunk lowercased, and
-# a processor id is a cuid2 minted at add time — `decoder` is the rig's display
-# name, not its id. Derived from the live graph rather than guessed.
+# A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
+# runtime's own `mesh.runtime_name`. Read off the live graph rather than guessed.
 DECODED_CHANNEL="$("$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
-    (node for node in graph.get("nodes", []) if node.get("display_name") == "decoder"), None
+    (node for node in graph.get("nodes", []) if node.get("name") == "decoder"), None
 )
 if decoder is None:
-    sys.exit("the running graph has no processor named `decoder`")
-print(decoder["id"].lower() + "/video")
+    sys.exit("the running graph has no node named `decoder`")
+print(graph["mesh"]["runtime_name"] + "/" + decoder["name"] + "/video")
 ')" || {
     echo "[vivid-color] FAIL: could not read the decoder channel off the live graph" >&2
     tail -30 "$LOG_FILE" >&2

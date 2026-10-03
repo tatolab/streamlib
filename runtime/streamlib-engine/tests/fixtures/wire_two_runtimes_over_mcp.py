@@ -59,10 +59,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", required=True, help="the wiring node's control plane")
     parser.add_argument("--from-runtime", required=True)
-    parser.add_argument("--from-display-name", required=True)
+    parser.add_argument("--from-node", required=True)
     parser.add_argument("--from-port", required=True)
     parser.add_argument("--to-runtime", required=True)
-    parser.add_argument("--to-display-name", required=True)
+    parser.add_argument("--to-node", required=True)
     parser.add_argument("--to-port", required=True)
     asked = parser.parse_args()
 
@@ -72,10 +72,10 @@ def main() -> int:
             "connect",
             {
                 "from_runtime_name": asked.from_runtime,
-                "from_processor_display_name": asked.from_display_name,
+                "from_node": asked.from_node,
                 "from_port": asked.from_port,
                 "to_runtime_name": asked.to_runtime,
-                "to_processor_display_name": asked.to_display_name,
+                "to_node": asked.to_node,
                 "to_port": asked.to_port,
             },
         )

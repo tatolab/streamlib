@@ -279,7 +279,7 @@ fi
 
 # First verdict: the block-level contract on the microphone's own port —
 # cadence, timestamp continuity, and a frame the engine did not re-stamp.
-if ! "$HERE/verify_audio_channel.sh" MicrophoneSource \
+if ! "$HERE/verify_audio_channel.sh" microphonesource \
     --url "$CONTROL_URL" --count "$BAG_COUNT" --port audio \
     --expect-frame-not-restamped >&2; then
     echo "ERROR: the microphone's channel failed its block-level contract" >&2

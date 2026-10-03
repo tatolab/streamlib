@@ -164,19 +164,19 @@ nodes = graph.get("nodes", [])
 links = graph.get("links", [])
 
 
-def processor_id_of(type_fragment):
+def node_name_of(type_fragment):
     for node in nodes:
         if type_fragment in node.get("type", ""):
-            return node.get("id")
+            return node.get("name")
     return None
 
 
-camera_id = processor_id_of("CameraSource")
-window_id = processor_id_of("DisplayWindow")
+camera_name = node_name_of("CameraSource")
+window_name = node_name_of("DisplayWindow")
 
 missing = [
     name
-    for name, found in (("CameraSource", camera_id), ("DisplayWindow", window_id))
+    for name, found in (("CameraSource", camera_name), ("DisplayWindow", window_name))
     if found is None
 ]
 if missing:
@@ -184,22 +184,22 @@ if missing:
     raise SystemExit(0)
 
 # The direction and both port names, not merely "some link exists" — a reversed
-# link, a link to an unrelated processor, or one on the wrong port is exactly
+# link, a link to an unrelated node, or one on the wrong port is exactly
 # the wiring bug this fixture is here to catch.
 wired = [
     link
     for link in links
-    if link.get("source", {}).get("processor_id") == camera_id
-    and link.get("source", {}).get("port_name") == "video"
-    and link.get("target", {}).get("processor_id") == window_id
-    and link.get("target", {}).get("port_name") == "video"
+    if link.get("source", {}).get("node") == camera_name
+    and link.get("source", {}).get("port") == "video"
+    and link.get("target", {}).get("node") == window_name
+    and link.get("target", {}).get("port") == "video"
 ]
 if not wired:
     present = [
-        f"{link.get('source', {}).get('processor_id')}"
-        f":{link.get('source', {}).get('port_name')}"
-        f" -> {link.get('target', {}).get('processor_id')}"
-        f":{link.get('target', {}).get('port_name')}"
+        f"{link.get('source', {}).get('node')}"
+        f":{link.get('source', {}).get('port')}"
+        f" -> {link.get('target', {}).get('node')}"
+        f":{link.get('target', {}).get('port')}"
         for link in links
     ]
     print(f"no CameraSource:video -> DisplayWindow:video link; found {present}")

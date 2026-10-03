@@ -15,7 +15,7 @@ engine's own path, unwrapped.
 
 `PIPELINE=python e2e_fixture_psnr_vivid.sh` drives it. The decoder is named
 `decoder` because that script derives the channel it exchanges from the live
-graph by display name, and it derives it the same way for both arms.
+graph by node name, and it derives it the same way for both arms.
 """
 
 import argparse

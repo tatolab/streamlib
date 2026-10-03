@@ -8,8 +8,8 @@ resources and the one prompt it picks from the node's listings, and the short
 class name of the effect it wants inserted. Everything else comes from the
 server: the resource URIs and the prompt's argument names from
 `resources/list` and `prompts/list`, the link from the graph resource, the
-import path from the catalog resource, and the tool order, ids and ports from
-the recipe text, whose numbered steps it dispatches as written. The graph it
+import path from the catalog resource, and the tool order, names and ports
+from the recipe text, whose numbered steps it dispatches as written. The graph it
 leaves is then checked through `graph`, and the frames through the processor it
 inserted.
 
@@ -42,10 +42,10 @@ JSON_RPC_TIMEOUT_SECONDS = 30.0
 # helper answers between callbacks, so this is bounded by one frame of the
 # processor's own work, not by the wire.
 LINK_ANSWER_TIMEOUT_SECONDS = 15.0
-# How long a processor added to a running graph has to reach `Running`. Its
-# helper is spawned, imports the class and starts it, so this is bounded by an
+# How long a node added to a running graph has to reach `Running`. Its helper
+# is spawned, imports the class and starts it, so this is bounded by an
 # interpreter launch rather than by the wire.
-ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS = 15.0
+ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 
 APP_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
 from streamlib import Runtime, TestPatternSource
@@ -130,28 +130,26 @@ def await_link_state(client: "ScriptedMcpClient", link_id: str, wanted: str) -> 
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
-def await_added_processor_state(
-    client: "ScriptedMcpClient", processor_id: str, wanted: str
-) -> str:
-    """Poll `graph` until one processor reaches `wanted`, and report what it reached.
+def await_added_node_state(client: "ScriptedMcpClient", node_name: str, wanted: str) -> str:
+    """Poll `graph` until one node reaches `wanted`, and report what it reached.
 
-    A processor added to a running graph is placed in a helper process that has
-    to be spawned before it can run, so `graph` reports it `Idle` for as long as
+    A node added to a running graph is placed in a helper process that has to
+    be spawned before it can run, so `graph` reports it `Idle` for as long as
     that takes — the same shape as the link that reads `pending` until its
     helper opens its port.
     """
-    deadline = time.monotonic() + ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS
+    deadline = time.monotonic() + ADDED_NODE_RUNNING_TIMEOUT_SECONDS
     state = None
     while time.monotonic() < deadline:
         node = next(
-            (each for each in client.call_tool("graph", {})["nodes"] if each["id"] == processor_id),
+            (each for each in client.call_tool("graph", {})["nodes"] if each["name"] == node_name),
             None,
         )
         state = node["components"]["state"] if node is not None else None
         if state == wanted:
             return wanted
         time.sleep(0.05)
-    return f"still {state or 'absent'} after {ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS}s"
+    return f"still {state or 'absent'} after {ADDED_NODE_RUNNING_TIMEOUT_SECONDS}s"
 
 
 class ScriptedMcpClient:
@@ -242,10 +240,10 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         resource["name"]: resource["uri"] for resource in client.request("resources/list", {})["resources"]
     }
     prompts_by_name = {prompt["name"]: prompt for prompt in client.request("prompts/list", {})["prompts"]}
-    insert_prompt = prompts_by_name["insert_processor_between_linked_processors"]
+    insert_prompt = prompts_by_name["insert_node_between_linked_nodes"]
 
-    catalog = client.read_json_resource(resource_uris_by_name["processor-catalog"])
-    catalog_paths = [entry["processor_class_import_path"] for entry in catalog["processors"]]
+    catalog = client.read_json_resource(resource_uris_by_name["node-catalog"])
+    catalog_paths = [entry["type"] for entry in catalog["nodes"]]
     inserted_type = next(
         (path for path in catalog_paths if path.endswith(":BagMarkingEffect")), None
     )
@@ -281,28 +279,26 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
 
     # Dispatch each step as written. An argument the text spells in backticks
     # is passed verbatim; the rest are what an earlier step answered.
-    added_processor_id = None
+    added_node_name = None
     added_node_ports: "dict[str, str]" = {}
     returned_link_ids: "list[str]" = []
     graph_after: "dict[str, Any]" = {}
     for tool_name, instruction in steps:
         spelled = dict(EXPLICIT_ARGUMENT.findall(instruction))
-        if tool_name == "add_processor":
-            added_processor_id = client.call_tool("add_processor", {"type": spelled["type"]})[
-                "processor_id"
-            ]
+        if tool_name == "add_node":
+            added_node_name = client.call_tool("add_node", {"type": spelled["type"]})["name"]
         elif tool_name == "graph":
             graph_after = client.call_tool("graph", {})
-            if added_processor_id is not None and not added_node_ports:
-                added_node = next(n for n in graph_after["nodes"] if n["id"] == added_processor_id)
+            if added_node_name is not None and not added_node_ports:
+                added_node = next(n for n in graph_after["nodes"] if n["name"] == added_node_name)
                 (added_input,) = added_node["ports"]["inputs"]
                 (added_output,) = added_node["ports"]["outputs"]
                 added_node_ports = {"to_port": added_input["name"], "from_port": added_output["name"]}
         elif tool_name == "connect":
             arguments = {
-                "from_processor_id": spelled.get("from_processor_id", added_processor_id),
+                "from_node": spelled.get("from_node", added_node_name),
                 "from_port": spelled.get("from_port", added_node_ports["from_port"]),
-                "to_processor_id": spelled.get("to_processor_id", added_processor_id),
+                "to_node": spelled.get("to_node", added_node_name),
                 "to_port": spelled.get("to_port", added_node_ports["to_port"]),
             }
             returned_link_ids.append(client.call_tool("connect", arguments)["link_id"])
@@ -311,11 +307,11 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         else:
             pytest.fail(f"the recipe calls `{tool_name}`, which this client was not asked to follow")
 
-    assert added_processor_id is not None, recipe_text
+    assert added_node_name is not None, recipe_text
     links_by_id = {link["id"]: link for link in graph_after["links"]}
     assert replaced_link["id"] not in links_by_id, "the replaced link must be gone"
     assert len(returned_link_ids) == 2, returned_link_ids
-    # Both new links land on helper-placed processors, so each returns
+    # Both new links land on helper-placed nodes, so each returns
     # `pending` and reaches `wired` only when that helper answers that it opened
     # its port — which is what the recipe the client just followed tells it to
     # read `graph` again for.
@@ -329,12 +325,12 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     links_by_id = {link["id"]: link for link in client.call_tool("graph", {})["links"]}
     upstream_link, downstream_link = (links_by_id[link_id] for link_id in returned_link_ids)
     assert upstream_link["source"] == replaced_link["source"]
-    assert upstream_link["target"]["processor_id"] == added_processor_id
-    assert downstream_link["source"]["processor_id"] == added_processor_id
+    assert upstream_link["target"]["node"] == added_node_name
+    assert downstream_link["source"]["node"] == added_node_name
     assert downstream_link["target"] == replaced_link["target"]
-    assert await_added_processor_state(client, added_processor_id, "Running") == "Running", (
-        "the splice is only carrying bags once the inserted processor runs; a "
-        "processor stuck Idle is a helper that never started it"
+    assert await_added_node_state(client, added_node_name, "Running") == "Running", (
+        "the splice is only carrying bags once the inserted node runs; a node "
+        "stuck Idle is a helper that never started it"
     )
 
     # The sink announces from its own helper only once a bag carrying the
@@ -350,18 +346,18 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         "prompts/get",
         {
             "name": camera_prompt["name"],
-            # Its required arguments name a processor, then one of its output ports.
+            # Its required arguments name a node, then one of its output ports.
             "arguments": dict(
                 zip(
                     [argument["name"] for argument in camera_prompt["arguments"] if argument["required"]],
-                    [source_endpoint["processor_id"], source_endpoint["port_name"]],
+                    [source_endpoint["node"], source_endpoint["port"]],
                 )
             ),
         },
     )["messages"][0]["content"]["text"]
     camera_add_step = next(
         instruction for tool_name, instruction in numbered_steps(camera_recipe_text)
-        if tool_name == "add_processor"
+        if tool_name == "add_node"
     )
     assert dict(EXPLICIT_ARGUMENT.findall(camera_add_step))["type"] in catalog_paths
 

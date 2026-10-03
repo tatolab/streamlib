@@ -30,12 +30,12 @@ It matters because window capture could only ever read a channel that *terminate
 
 **Ids come from bags, and the engine never reads one for you.** Tap is untouched — it forwards bags verbatim. The consumer decodes the bag, finds the surface id, and exchanges it. `streamlib tap <channel>` shows what a bag actually carries.
 
-**Deriving the channel name is the one fiddly step.** A channel is `{source_processor_id}/{output_port}`, but the processor-id chunk is **lowercased** — `streamlib graph` prints `Po8z66n…` and the channel is `po8z66n…/video`. Copying the id out of the graph verbatim gets you `no tappable channel named …`. The port name is author-supplied and is *not* normalized, so it rides through exactly as declared. Lowercasing is the whole recipe for a default `P{cuid2}` id; a name long enough to overflow the wire bound hash-legalizes the processor chunk instead, so derive it rather than assume (`runtime/streamlib-engine/src/iceoryx2/channel_name.rs`).
+**Deriving the channel name.** A channel is the output port's address, `<runtime_name>/<node>/<port>`, all three read off `streamlib graph`: `mesh.runtime_name` for a port on this runtime, the source node's `name`, and the port's name under its `ports.outputs` — e.g. `lab-one/decoder/video`. A node's name is already cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`, a defaulted `CameraSource` is `camerasource`), so copy it out of the graph rather than spelling it from the app source.
 
 ### The spelling you will use — CLI, channel form
 
 ```bash
-streamlib exchange --channel <processor>/<output_port> --out <dir> --count N [--every N] [--field NAME]
+streamlib exchange --channel <runtime_name>/<node>/<output_port> --out <dir> --count N [--every N] [--field NAME]
 ```
 
 One warm process: it taps a bounded round of bags, reads a surface id out of each sampled bag, and exchanges them — per tap round, not per bag as it lands. Writes **exact full-resolution** PNGs into `--out` and prints their paths on stdout, one per line. **Read those printed paths** — `--out` is not cleared, so listing the directory can hand you an older run's frames.
@@ -152,7 +152,7 @@ Drive these through **`/verify-audio`**, which owns the workflow: it picks the m
 
 #### Exchanged frames
 
-- Channel: `<processor>/<output_port>` — <mid-graph, or terminal and why>
+- Channel: `<runtime_name>/<node>/<output_port>` — <mid-graph, or terminal and why>
 - `DisplayWindow` in the observation path: no | yes — <why the window was the subject>
 - Sampling: `--count <N>` `--every <N>`
 - PNGs read with Read tool: `<path1>`, `<path2>`, … (the paths the run printed)

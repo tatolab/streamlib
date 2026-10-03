@@ -60,8 +60,9 @@ DESTINATION_CONTROL_PORT="${DESTINATION_CONTROL_PORT:-$ANOTHER_FREE_PORT}"
 WIRING_CONTROL_PORT="${WIRING_CONTROL_PORT:-$A_THIRD_FREE_PORT}"
 
 # The port's address on the mesh, spelled the way `connect` and `tap` take it.
-THE_SOURCE_ADDRESS="$SOURCE_RUNTIME_NAME/MicrophoneSource/audio"
-THE_DESTINATIONS_DISPLAY_NAME="OpusEncoder"
+THE_SOURCES_NODE_NAME="microphonesource"
+THE_SOURCE_ADDRESS="$SOURCE_RUNTIME_NAME/$THE_SOURCES_NODE_NAME/audio"
+THE_DESTINATIONS_NODE_NAME="opusencoder"
 THE_PORT="audio"
 
 # How long the link has to resolve: the request has to reach the destination,
@@ -113,7 +114,7 @@ STREAMLIB_RUNTIME_NAME="$DESTINATION_RUNTIME_NAME" STREAMLIB_MESH_NAME="$MESH_NA
   >"$OUTPUT_DIR/destination.log" 2>&1 &
 DESTINATION_PID=$!
 
-say "Starting the wiring runtime ($WIRING_RUNTIME_NAME), holding no processor..."
+say "Starting the wiring runtime ($WIRING_RUNTIME_NAME), holding no node..."
 STREAMLIB_RUNTIME_NAME="$WIRING_RUNTIME_NAME" STREAMLIB_MESH_NAME="$MESH_NAME" \
   "$RIG" --wiring-agent --control-plane-port "$WIRING_CONTROL_PORT" \
   >"$OUTPUT_DIR/wiring.log" 2>&1 &
@@ -166,10 +167,10 @@ say "Asking $WIRING_RUNTIME_NAME to wire $THE_SOURCE_ADDRESS into $DESTINATION_R
 WIRING_REPORT="$("$PYTHON" "$HERE/wire_two_runtimes_over_mcp.py" \
   --url "http://127.0.0.1:$WIRING_CONTROL_PORT" \
   --from-runtime "$SOURCE_RUNTIME_NAME" \
-  --from-display-name "MicrophoneSource" \
+  --from-node "$THE_SOURCES_NODE_NAME" \
   --from-port "$THE_PORT" \
   --to-runtime "$DESTINATION_RUNTIME_NAME" \
-  --to-display-name "$THE_DESTINATIONS_DISPLAY_NAME" \
+  --to-node "$THE_DESTINATIONS_NODE_NAME" \
   --to-port "$THE_PORT" 2>>"$OUTPUT_DIR/wiring-call.log")"
 if [ -z "$WIRING_REPORT" ]; then
   say "FAIL: the wiring call reported nothing; see $OUTPUT_DIR/wiring-call.log"

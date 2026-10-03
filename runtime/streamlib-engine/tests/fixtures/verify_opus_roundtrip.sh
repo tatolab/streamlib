@@ -130,7 +130,7 @@ fi
 # First verdict: the block-level contract on the decoder's own output port —
 # cadence and timestamp continuity, read off the wire rather than from the
 # recorder that also does the measuring.
-if ! "$HERE/verify_audio_channel.sh" OpusDecoder \
+if ! "$HERE/verify_audio_channel.sh" opusdecoder \
     --url "$CONTROL_URL" --count 64 --port audio >&2; then
     echo "ERROR: the decoder's channel failed its block-level contract" >&2
     exit 1
