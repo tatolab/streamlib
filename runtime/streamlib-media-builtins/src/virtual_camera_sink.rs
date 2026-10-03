@@ -1554,12 +1554,12 @@ mod tests {
         assert_ne!(first, other_app, "two apps never share a label");
         assert_eq!(
             first,
-            camera_name_for(None, app, "VirtualCameraSink"),
+            camera_name_for(None, app, "virtualcamerasink"),
             "the same app and instance get the same label on every run, which is what reclaim keys on"
         );
         assert_eq!(camera_name_for(Some("Desk cam"), app, "x"), "Desk cam");
         assert_eq!(
-            camera_name_for(Some("   "), app, "VirtualCameraSink"),
+            camera_name_for(Some("   "), app, "virtualcamerasink"),
             first,
             "a blank name is no name"
         );
