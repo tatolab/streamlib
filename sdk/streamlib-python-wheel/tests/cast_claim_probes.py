@@ -51,7 +51,7 @@ from streamlib import (
     VideoFrame,
     input,
     log,
-    processor,
+    node,
 )
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
@@ -259,7 +259,7 @@ class _LaggedHolderProbe:
         return read.surface_id if isinstance(read, VideoFrame) else read["surface_id"]
 
 
-@processor
+@node
 class TypedCastHoldsItsFrameProbe(_LaggedHolderProbe):
     """The frame is read as a `VideoFrame`, so the cast claims it. Holding the
     object is the only thing keeping the camera off that slot — no handle, no
@@ -269,7 +269,7 @@ class TypedCastHoldsItsFrameProbe(_LaggedHolderProbe):
         return ctx.inputs.read("video_from_upstream", into=VideoFrame)
 
 
-@processor
+@node
 class UntypedReadHoldsNothingProbe(_LaggedHolderProbe):
     """The control. Same probe, same lag, bag read as a plain dict — so nothing
     is claimed and the camera is free to recycle the slot. The late re-read
@@ -413,7 +413,7 @@ class _BareProtocolDeviceSideProbe(_BareProtocolProbe):
         return observation
 
 
-@processor
+@node
 class AUserAuthoredCastReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
     """The no-privilege half: a type the wheel does not ship gets the protocol
     by composing the shipped piece, and nothing else."""
@@ -422,7 +422,7 @@ class AUserAuthoredCastReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
         return ctx.inputs.read("video_from_upstream", into=UserAuthoredVideoFrameCast)
 
 
-@processor
+@node
 class TheShippedVideoFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
     """The parity half: `VideoFrame` is built from that same piece, so it must
     reach its pixels the same way and reach the same pixels."""
@@ -431,7 +431,7 @@ class TheShippedVideoFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
         return ctx.inputs.read("video_from_upstream", into=VideoFrame)
 
 
-@processor
+@node
 class AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe(
     _BareProtocolDeviceSideProbe
 ):
@@ -441,7 +441,7 @@ class AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe(
         return ctx.inputs.read("video_from_upstream", into=UserAuthoredVideoFrameCast)
 
 
-@processor
+@node
 class TheShippedVideoFrameReachesItsPixelsAsADeviceTensorProbe(
     _BareProtocolDeviceSideProbe
 ):
@@ -501,7 +501,7 @@ class _WriteDoorProbe(_BareProtocolProbe):
         }
 
 
-@processor
+@node
 class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     """`with frame.writable() as t:` — a CUDA package editing a live frame in
     place, with the edit on the surface once the block ends."""
@@ -516,7 +516,7 @@ class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
             torch.from_dlpack(device_tensor)[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@processor
+@node
 class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
     """The other half of the one write rule: the raise is never suppressed on
     the way out, and the surface follows its floor's publication rule — the
@@ -559,7 +559,7 @@ class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
         }
 
 
-@processor
+@node
 class TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
     """`with frame.cpu() as img:` — the named slow path, editing a live frame
     through plain numpy with no CUDA consumer anywhere in it."""
@@ -572,7 +572,7 @@ class TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
             host_pixels[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
 
 
-@processor
+@node
 class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
     """The CPU door's exception path, reported as what it is.
 

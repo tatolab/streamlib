@@ -26,8 +26,8 @@ from streamlib import (
     input,
     log,
     monotonic_now_ns,
+    node,
     output,
-    processor,
 )
 
 TELEMETRY_OUTPUT_PORT = "telemetry"
@@ -52,7 +52,7 @@ def telemetry_blob_for_frame(frame: int) -> bytes:
     return (frame.to_bytes(4, "little") + b"\x00\xff\x10\x7f") * 2
 
 
-@processor(
+@node(
     execution="continuous",
     interval_ms=TELEMETRY_INTERVAL_MS,
     description="Publishes one telemetry bag per tick onto the broadcast's data track",
@@ -86,7 +86,7 @@ class TelemetryBagSource:
         self._frame += 1
 
 
-@processor(description="Reads the data track's bags on the far side of the relay")
+@node(description="Reads the data track's bags on the far side of the relay")
 class TelemetryBagSink:
     """The data track's consumer for the whole run.
 

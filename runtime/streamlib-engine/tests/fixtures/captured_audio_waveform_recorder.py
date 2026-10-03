@@ -20,7 +20,7 @@ import os
 import numpy
 
 import known_audio_signal
-from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, log, processor
+from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, log, node
 
 RESULT_MARKER = "MARKER:WAVEFORM_WRITTEN "
 
@@ -35,7 +35,7 @@ RESULT_MARKER = "MARKER:WAVEFORM_WRITTEN "
 SECONDS_TO_RECORD = float(os.environ.get("STREAMLIB_CAPTURED_WAVEFORM_SECONDS", "5.0"))
 
 
-@processor
+@node
 class CapturedAudioWaveformRecorder:
     """Accumulates captured blocks, then writes them once as one waveform."""
 

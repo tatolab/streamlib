@@ -9,10 +9,10 @@ one module differ only in `__qualname__`, and a graph mixing modules is what a
 real app looks like.
 """
 
-from streamlib import processor
+from streamlib import node
 
 
-@processor(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class SecondIdentityStableProcessor:
     """Does nothing per tick. Identity is the whole subject here."""
 

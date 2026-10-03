@@ -16,7 +16,7 @@ import sys
 import traceback
 import uuid
 
-from streamlib import clock, input, log, output, processor
+from streamlib import clock, input, log, node, output
 
 MODEL_INPUT_TENSOR_SHAPE = [1, 3, 640, 640]
 ODD_TENSOR_SHAPE = [3, 7, 11]
@@ -94,7 +94,7 @@ class TensorStorageBufferPublishingSourceConfig:
     open_a_window_before_acquiring: bool = False
 
 
-@processor(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class TensorStorageBufferPublishingSource:
     """Writes each frame's values into a pooled tensor through torch and
     publishes its surface id once the handle's close has ordered the writes."""
@@ -245,7 +245,7 @@ class PublishedTensorReadingSinkConfig:
     resolve_the_previous_frames_id: bool = False
 
 
-@processor
+@node
 class PublishedTensorReadingSink:
     """Resolves each published tensor id and compares its values to the ones
     its producer wrote for that frame."""
@@ -287,7 +287,7 @@ class PublishedTensorReadingSink:
         )
 
 
-@processor
+@node
 class HeldTensorRereadingSink:
     """Resolves the first tensor and holds its handle open, re-reading it
     through torch as every later tensor is published."""
@@ -392,7 +392,7 @@ void main() {
 """
 
 
-@processor(
+@node(
     execution="manual",
     description="A compute kernel and a draw each bind a tensor storage buffer by surface id",
 )

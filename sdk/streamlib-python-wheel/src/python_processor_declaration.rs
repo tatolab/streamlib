@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Reading the `@processor` grammar off a Python class.
+//! Reading the `@node` grammar off a Python class.
 //!
 //! The `__streamlib_processor_*__` attributes the decorator attaches are the
 //! contract between `_processor_declaration.py` and this module; the two move
@@ -96,7 +96,7 @@ fn read_config_schema_document(processor_class: &Bound<'_, PyAny>) -> PyResult<s
         PyTypeError::new_err(format!(
             "__streamlib_processor_config_schema__ must be a JSON object, got a {} — the \
              decorator derives this document, so a class reaching here was built by hand \
-             rather than by @streamlib.processor",
+             rather than by @streamlib.node",
             python_type_name_for_error_message(&stamped, "value of unknown type")
         ))
     })?;
@@ -125,7 +125,7 @@ fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<Executi
         unknown => {
             return Err(PyTypeError::new_err(format!(
                 "unknown execution mode {unknown:?} — the decorator validates this, so a class \
-                 reaching here was built by hand rather than by @streamlib.processor"
+                 reaching here was built by hand rather than by @streamlib.node"
             )));
         }
     };
@@ -435,7 +435,7 @@ mod tests {
     use streamlib::sdk::descriptors::ProcessorConfigJsonSchema;
     use streamlib::sdk::processors::EmptyConfig;
 
-    /// A class carrying what `@streamlib.processor` attaches.
+    /// A class carrying what `@streamlib.node` attaches.
     const DECLARED_CLASS_SOURCE: &str = "\
 __name__ = 'my_app.filters'
 
@@ -478,7 +478,7 @@ class BlurProcessor:
 
     // ---- the window contract, declared in both languages ----
 
-    /// The wheel's own `@processor` grammar, run in the test interpreter.
+    /// The wheel's own `@node` grammar, run in the test interpreter.
     ///
     /// Embedded rather than imported: `cargo test` has no installed wheel on
     /// `sys.path`, and the point is to read a marker the real decorator built
@@ -613,7 +613,7 @@ class AudioConsumerConfig:
     label: str = 'unlabelled'
 
 
-@processor(execution='manual')
+@node(execution='manual')
 class AudioConsumer:
     def __init__(self, config: AudioConsumerConfig) -> None:
         self.config = config
@@ -654,7 +654,7 @@ class AudioConsumerConfig:
     fallback: typing.Optional[str] = None
 
 
-@processor(execution='manual')
+@node(execution='manual')
 class AudioConsumer:
     def __init__(self, config: AudioConsumerConfig) -> None:
         self.config = config
@@ -701,7 +701,7 @@ class AudioConsumer:
     fn a_class_declaring_no_config_carries_the_same_document_rust_publishes() {
         let declaration = read_python_declaration(
             "\
-@processor(execution='manual')
+@node(execution='manual')
 class AudioConsumer:
     def __init__(self) -> None:
         self.frames = 0
@@ -768,7 +768,7 @@ class AudioConsumer:
     #[test]
     fn a_python_declared_contract_and_a_rust_declared_one_are_the_same_schema() {
         let python_ports = python_declared_ports(
-            "@processor\n\
+            "@node\n\
              class AudioConsumer:\n\
              \x20   @input('audio', delivery_profile='ordered',\n\
              \x20          audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
@@ -804,7 +804,7 @@ class AudioConsumer:
     #[test]
     fn a_python_declared_sentinel_is_refused_at_decoration() {
         let refusal = python_declaration_refusal(
-            "@processor(execution='manual')\n\
+            "@node(execution='manual')\n\
              class AudioConsumer:\n\
              \x20   @input('audio', delivery_profile='ordered',\n\
              \x20          audio_window=AUDIO_WINDOW_MATCH_DEVICE)\n\
@@ -823,7 +823,7 @@ class AudioConsumer:
     #[test]
     fn a_python_port_declaring_no_contract_reaches_the_descriptor_with_none() {
         let ports = python_declared_ports(
-            "@processor\n\
+            "@node\n\
              class AudioConsumer:\n\
              \x20   @input('audio', delivery_profile='newest')\n\
              \x20   def audio_from_microphone(self): ...\n",
@@ -833,10 +833,28 @@ class AudioConsumer:
         assert_eq!(ports[0].delivery_profile.as_deref(), Some("newest"));
     }
 
+    /// The catalog lists what the descriptor carries, so a port an author spelled
+    /// `Video` has to arrive as the `video` every lookup casts to.
+    #[test]
+    fn a_python_port_reaches_the_descriptor_under_its_cast_name() {
+        let declaration = read_python_declaration(
+            "@node\n\
+             class AudioConsumer:\n\
+             \x20   @input(delivery_profile='newest')\n\
+             \x20   def Video(self): ...\n\
+             \x20   @output(name='Café Out')\n\
+             \x20   def frames_to_downstream(self): ...\n",
+        )
+        .expect("the declaration reads");
+
+        assert_eq!(declaration.descriptor.inputs[0].name, "video");
+        assert_eq!(declaration.descriptor.outputs[0].name, "cafe-out");
+    }
+
     #[test]
     fn a_python_contract_beside_a_skipping_profile_is_refused_naming_both_knobs() {
         let refusal = python_declaration_refusal(
-            "@processor\n\
+            "@node\n\
              class AudioConsumer:\n\
              \x20   @input('audio', delivery_profile='newest',\n\
              \x20          audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\

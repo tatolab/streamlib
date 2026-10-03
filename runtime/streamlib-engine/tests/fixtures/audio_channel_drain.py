@@ -7,10 +7,10 @@ Reads and discards: what is under test is what the source published, which the
 tap reads independently of anything downstream doing with it.
 """
 
-from streamlib import RuntimeContextLimitedAccess, input, processor
+from streamlib import RuntimeContextLimitedAccess, input, node
 
 
-@processor
+@node
 class AudioChannelDrain:
     @input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...

@@ -1,7 +1,7 @@
 # streamlib-moq
 
 Media over QUIC publish and subscribe for [StreamLib](https://github.com/tato123/streamlib), as a
-capability extension wheel: Rust inside, two ordinary `@processor` classes as the binding.
+capability extension wheel: Rust inside, two ordinary `@node` classes as the binding.
 
 ```bash
 pip install streamlib-moq --index-url https://tatolab.github.io/streamlib/simple/

@@ -11,10 +11,10 @@ spawned but never received traffic has not made the pipeline live.
 
 import os
 
-from streamlib import input, log, processor  # noqa: A004 — streamlib's port decorator
+from streamlib import input, log, node  # noqa: A004 — streamlib's port decorator
 
 
-@processor
+@node
 class ReportsItsProcessOnFirstFrame:
     """Announces its own process the first time a frame reaches it."""
 

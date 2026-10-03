@@ -17,7 +17,7 @@ from typing import TypedDict
 
 import numpy
 
-from streamlib import VideoFrame, input, log, output, processor
+from streamlib import VideoFrame, input, log, node, output
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 32
@@ -35,7 +35,7 @@ def _report(probe_body) -> None:
     log.info(RESULT_MARKER + json.dumps({"pid": os.getpid(), **observation}))
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class NumpyViewProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -57,7 +57,7 @@ class NumpyViewProbe:
             return observation
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class UnlockedExportProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -88,7 +88,7 @@ class UnlockedExportProbe:
             return outcomes
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class LockModeProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -112,7 +112,7 @@ class LockModeProbe:
         return outcomes
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class SharedMemoryProbe:
     """Writes through one handle, reads through a second one resolved by id."""
 
@@ -139,7 +139,7 @@ class SharedMemoryProbe:
                 return observation
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class TensorOutlivesTheSurfaceProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -163,7 +163,7 @@ class TensorOutlivesTheSurfaceProbe:
         }
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class PoolCycleProbe:
     """Holds a tensor, then churns the pool past its depth with fresh writes."""
 
@@ -200,7 +200,7 @@ class PoolCycleProbe:
         }
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class DlpackConsumerProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -223,7 +223,7 @@ class DlpackConsumerProbe:
             return observation
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class UnsupportedFormatProbe:
     def setup(self, ctx) -> None:
         _report(lambda: self._probe(ctx))
@@ -242,7 +242,7 @@ class UnsupportedFormatProbe:
             return {"outcome": outcome}
 
 
-@processor
+@node
 class InvertingEffect:
     """What a user writes: read the frame, change the pixels, pass it on.
 
@@ -300,7 +300,7 @@ class ReportingInvertingEffectConfig(TypedDict, total=False):
     skip_edit: bool
 
 
-@processor
+@node
 class ReportingInvertingEffect:
     """The scaffold's edit, reporting what the frame must read afterwards.
 
@@ -348,7 +348,7 @@ class ReportingInvertingEffect:
         ctx.outputs.write("video_to_downstream", bag)
 
 
-@processor
+@node
 class FrameDigestVerifier:
     """Reads the first frame it is handed, in a process of its own, and
     reports a digest of every pixel."""

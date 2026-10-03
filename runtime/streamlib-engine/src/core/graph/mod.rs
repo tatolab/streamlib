@@ -5,6 +5,7 @@ mod components;
 mod data_structure;
 
 mod edges;
+mod exposed_name_cast;
 mod graph_readiness;
 mod nodes;
 mod processor_state_ecs_component;
@@ -17,6 +18,7 @@ mod graph_tests;
 
 // top level
 pub use data_structure::{Graph, GraphState};
+pub use exposed_name_cast::{EXPOSED_NAME_MAXIMUM_LENGTH, cast_exposed_name_to_url_safe};
 pub use graph_readiness::ObservableGraphReadiness;
 pub use processor_state_ecs_component::{ProcessorState, ProcessorStateComponent};
 pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};

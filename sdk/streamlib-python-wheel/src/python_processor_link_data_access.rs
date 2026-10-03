@@ -15,6 +15,7 @@
 //! engine's discipline, so a child must create and drive all of them from one
 //! thread.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
@@ -22,6 +23,7 @@ use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
+use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
@@ -158,6 +160,7 @@ impl PythonProcessorLinkDataAccess {
         into: Option<&Bound<'py, PyAny>>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
         let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
             return Ok(None);
         };
@@ -213,6 +216,7 @@ impl PythonProcessorLinkDataAccess {
         into: Option<&Bound<'py, PyAny>>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<(Bound<'py, PyAny>, String, i64)>> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
         let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
             return Ok(None);
         };
@@ -238,6 +242,7 @@ impl PythonProcessorLinkDataAccess {
 
     /// Every inbound link feeding `port_name`, in wiring order.
     pub(crate) fn inbound_links_of_input_port(&self, port_name: &str) -> PyResult<Vec<String>> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
         let Some(input_mailboxes) = self.input_mailboxes.get() else {
             return Err(unwired_port_error("input", port_name));
         };
@@ -260,6 +265,7 @@ impl PythonProcessorLinkDataAccess {
         port_name: &str,
         inbound_link_name: &str,
     ) -> PyResult<WhatIsKnownOfAnInboundLinksStampClock> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
         let Some(input_mailboxes) = self.input_mailboxes.get() else {
             return Err(unwired_port_error("input", port_name));
         };
@@ -689,6 +695,7 @@ impl PythonProcessorLinkDataAccess {
         python: Python<'py>,
         port_name: &str,
     ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
         let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
             return Ok((None, None));
         };
@@ -710,6 +717,7 @@ impl PythonProcessorLinkDataAccess {
         python: Python<'_>,
         port_name: &str,
     ) -> PyResult<bool> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
         let Some(input_mailboxes) = self.input_mailboxes_reaching(port_name)? else {
             return Ok(false);
         };
@@ -740,6 +748,7 @@ impl PythonProcessorLinkDataAccess {
         bag: &Bound<'_, PyAny>,
         timestamp_ns: Option<i64>,
     ) -> PyResult<()> {
+        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
         let Some(output_writer) = self.output_writer_reaching(port_name)? else {
             return Ok(());
         };
@@ -1397,6 +1406,13 @@ fn not_a_helper_process_data_plane_error() -> PyErr {
         "this processor's links belong to the engine that wired them, so they cannot be wired \
          again from Python — only a helper process wires its own",
     )
+}
+
+/// The declared port an author's spelling names: `@node` cast each declared
+/// name, so a lookup casts its argument and `read("Video")` finds `video`.
+pub(crate) fn declared_port_name_the_spelling_names(port_name: &str) -> PyResult<Cow<'_, str>> {
+    cast_exposed_name_to_url_safe(port_name)
+        .map_err(|names_no_port| PyValueError::new_err(names_no_port.to_string()))
 }
 
 fn unwired_port_error(direction: &str, port_name: &str) -> PyErr {

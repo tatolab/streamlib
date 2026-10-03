@@ -36,7 +36,7 @@ use crate::python_processor_registration::register_processor_class;
 enum AddedProcessorClassKind {
     /// A wheel-exported marker for a statically-linked native processor.
     NativeBuiltin(streamlib::sdk::descriptors::ProcessorClassImportPath),
-    /// A class carrying the `@streamlib.processor` declaration.
+    /// A class carrying the `@streamlib.node` declaration.
     DeclaredPythonClass,
 }
 
@@ -65,7 +65,7 @@ fn classify_processor_class(
         return Ok(AddedProcessorClassKind::DeclaredPythonClass);
     }
     Err(PyRuntimeError::new_err(format!(
-        "{} is not a processor: decorate the class with @streamlib.processor, and pass \
+        "{} is not a processor: decorate the class with @streamlib.node, and pass \
          the class itself rather than an instance of it",
         processor_class
     )))

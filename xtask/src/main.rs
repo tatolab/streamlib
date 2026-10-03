@@ -720,6 +720,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::graph::components::state_component::tests::a_failure_keeps_the_reason_it_failed_for",
                 "core::graph::graph_readiness::tests::a_failed_processors_reason_rides_the_readiness_error",
                 "core::graph::graph_readiness::tests::a_failure_without_a_reason_reports_the_state_alone",
+                "core::graph::exposed_name_cast::tests",
                 "core::context::gpu_context::tests::an_owned_color_converter_shares_no_kernel_with_the_cached_one",
                 "core::color::matrix::tests::identity_rgb_to_yuv_is_a_pass_through",
                 "core::context::surface_store::fd_ownership_tests::a_texture_lookup_of_a_pixel_buffer_slot_is_refused_and_closes_the_plane_it_received",

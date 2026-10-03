@@ -34,7 +34,7 @@ from streamlib import (
     VideoFrame,
     input,
     log,
-    processor,
+    node,
 )
 from streamlib._engine import ComputeKernel, ProcessorOwnedWindow
 
@@ -192,7 +192,7 @@ class _WindowOwningProbeBase:
         raise NotImplementedError
 
 
-@processor
+@node
 class EveryArgumentShapeReachesTheWindowProbe(_WindowOwningProbeBase):
     """All three shapes that name a published surface, one per frame.
 
@@ -287,7 +287,7 @@ class EveryArgumentShapeReachesTheWindowProbe(_WindowOwningProbeBase):
         self.debug_window.show(self.kernel_output)
 
 
-@processor
+@node
 class AnOwnerClosingItsOwnWindowProbe(_WindowOwningProbeBase):
     """A close leaves the pipeline running and every later `show()` a no-op.
 
@@ -324,7 +324,7 @@ class AnOwnerClosingItsOwnWindowProbe(_WindowOwningProbeBase):
         )
 
 
-@processor
+@node
 class AProcessThatCanGetNoWindowRefusesAtSetupProbe:
     """The optional-window pattern, written the way an author writes it.
 
@@ -363,7 +363,7 @@ class AProcessThatCanGetNoWindowRefusesAtSetupProbe:
         pass
 
 
-@processor
+@node
 class ShowingSomethingThatNamesNoSurfaceIsRefusedProbe(_WindowOwningProbeBase):
     """A window refuses what names no published surface, in the caller's own
     stack rather than a round trip later — open or shut.
@@ -404,7 +404,7 @@ class ShowingSomethingThatNamesNoSurfaceIsRefusedProbe(_WindowOwningProbeBase):
         )
 
 
-@processor
+@node
 class AFrameDescribingItsColourReachesTheWindowProbe(_WindowOwningProbeBase):
     """A frame that names its colour and carries an HDR sidecar.
 

@@ -373,7 +373,7 @@ impl ProcessorInstanceFactory {
 
     /// Register a processor descriptor without a constructor.
     ///
-    /// What a Python class's `@processor` decorator calls, so the class is in
+    /// What a Python class's `@node` decorator calls, so the class is in
     /// the catalog before anything adds it. The graph has the descriptor and
     /// port info it needs to validate and wire, and `create()` refuses until
     /// [`Self::install_constructor_for_registered_descriptor`] supplies the
@@ -433,7 +433,7 @@ impl ProcessorInstanceFactory {
             return Err(Error::ProcessorNotFound(format!(
                 "no descriptor is registered for processor type \
                  '{processor_class_import_path}', so there is nothing to install a constructor \
-                 onto. A Python class registers its descriptor when its `@processor` decorator \
+                 onto. A Python class registers its descriptor when its `@node` decorator \
                  runs, so a path missing here names a class this process never imported."
             )));
         }

@@ -6,7 +6,7 @@
 The engine runs in this interpreter's process: `Runtime()` boots it, `rt.add`
 puts processors in its graph, `rt.connect` links them, and `rt.run()` blocks
 until Ctrl-C with the GIL released. Processors declare identity and ports with
-`@processor` / `@input` / `@output` and receive a capability-typed context in
+`@node` / `@input` / `@output` and receive a capability-typed context in
 every lifecycle hook.
 """
 
@@ -79,7 +79,7 @@ from ._engine import (
 from ._processor_declaration import AudioWindowContract as AudioWindowContract
 from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
-from ._processor_declaration import processor as processor
+from ._processor_declaration import node as node
 from .audio_block import AudioBlock as AudioBlock
 from .claimed_surface_pixel_access import (
     ClaimedSurfacePixelAccess as ClaimedSurfacePixelAccess,
@@ -176,7 +176,7 @@ __all__ = [
     "log",
     "monotonic_now_ns",
     "output",
-    "processor",
+    "node",
     "this_machines_stamp_clock_identity",
 ]
 

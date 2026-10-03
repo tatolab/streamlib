@@ -102,7 +102,7 @@ macos-deployment-target = "15.0"
 
 [tool.ruff]
 # ruff runs over the `streamlib new` renders only (tests/test_cli.py).
-# Rooted there so `processors` sorts as the scaffolded app's own first-party
+# Rooted there so `nodes` sorts as the scaffolded app's own first-party
 # package, as it does in the project `new` writes.
 src = ["python/streamlib/_scaffold_template"]
 
@@ -133,7 +133,7 @@ venv = ".venv"
 reportMissingModuleSource = "none"
 
 # The `streamlib new` template tree, checked as the app it becomes: rooted
-# at the app directory, so `app.py`'s `processors` import resolves, and at
+# at the app directory, so `app.py`'s `nodes` import resolves, and at
 # the Python version the scaffold pins.
 [[tool.pyright.executionEnvironments]]
 root = "python/streamlib/_scaffold_template"

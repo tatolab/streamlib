@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@processor` grammar — execution mode and ports, declared in code.
+"""The `@node` grammar — execution mode and ports, declared in code.
 
 Nothing is read from disk: there is no manifest, and a bare `.py` module defines
-a working processor. `@processor` attaches the metadata as
+a working node. `@node` attaches the metadata as
 `__streamlib_processor_*__` class attributes and hands the class to the native
 half, which reads exactly that set and registers the descriptor there and then;
 the set is the contract between this module and the native half, and the two
@@ -13,7 +13,7 @@ Ports are declared with the `@input` / `@output` method decorators and accessed
 at run time through `ctx.inputs` / `ctx.outputs` — the marker methods themselves
 are never called.
 
-A processor is named by its class's import path, derived from `__module__` and
+A node is named by its class's import path, derived from `__module__` and
 `__qualname__` by the native half. Identity is never authored here.
 """
 
@@ -25,6 +25,10 @@ import typing
 from typing import Any, Callable, Optional, TypeVar
 
 from ._engine import register_declared_processor_class
+from ._exposed_name_cast import (
+    ExposedNameCastsToNothingError,
+    cast_exposed_name_to_url_safe,
+)
 from ._processor_config_schema import (
     derive_config_class_json_schema,
     json_schema_for_a_processor_declaring_no_config,
@@ -34,8 +38,8 @@ from ._processor_config_schema import (
 __all__ = [
     "AudioWindowContract",
     "input",
+    "node",
     "output",
-    "processor",
 ]
 
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
@@ -331,7 +335,7 @@ def output(
     return attach_output_port_marker
 
 
-def processor(
+def node(
     processor_class: Optional[type] = None,
     *,
     execution: Optional[str] = None,
@@ -339,12 +343,16 @@ def processor(
     scheduling: Optional[str] = None,
     description: str = "",
 ) -> Any:
-    """Mark a class as a streamlib processor.
+    """Mark a class as a streamlib node.
 
-    Usable bare (`@processor`) or with keyword arguments. It declares execution,
-    interval, scheduling priority and description — never identity: a processor
-    is named by the import path of the class it is, derived from `__module__`
-    and `__qualname__`.
+    Usable bare (`@node`) or with keyword arguments. It declares execution,
+    interval, scheduling priority and description — never identity: a node is
+    named by the import path of the class it is, derived from `__module__` and
+    `__qualname__`.
+
+    Port names are cast to lowercase URL-safe characters, the way every exposed
+    name is, so a method `Video` declares the port `video` and a lookup of
+    either spelling finds it. Two ports casting alike are refused here.
 
     `execution` defaults to `"reactive"` for a class that declares at least one
     input port, and is required for one that declares none — a source has
@@ -376,10 +384,10 @@ def processor(
 
     if processor_class is not None:
         raise TypeError(
-            f"@processor() takes no positional argument; got "
-            f"{type(processor_class).__name__}. A processor is named by the import path "
-            f"of the class it is — `my_app.filters:BlurProcessor` — derived from "
-            f"`__module__` and `__qualname__` and never authored. Use `@processor` bare, "
+            f"@node() takes no positional argument; got "
+            f"{type(processor_class).__name__}. A node is named by the import path "
+            f"of the class it is — `my_app.filters:BlurEffect` — derived from "
+            f"`__module__` and `__qualname__` and never authored. Use `@node` bare, "
             f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
             f"`description`)."
         )
@@ -531,18 +539,35 @@ def _resolved_init_annotations(processor_class: type) -> "dict[str, Any]":
 def _collect_declared_ports(
     processor_class: type,
 ) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
-    """Every `@input` / `@output` declaration, as the dicts the engine reads."""
+    """Every `@input` / `@output` declaration, as the dicts the engine reads,
+    each port under its cast name."""
     input_ports: "list[dict[str, Any]]" = []
     output_ports: "list[dict[str, Any]]" = []
-    claimed_port_names: "set[str]" = set()
+    port_spelling_by_cast_name: "dict[str, str]" = {}
     for marker in _declared_port_markers(processor_class):
-        port_name = marker["name"]
-        if port_name in claimed_port_names:
+        port_spelling = marker["name"]
+        try:
+            port_name = cast_exposed_name_to_url_safe(port_spelling)
+        except ExposedNameCastsToNothingError as names_nothing:
+            raise ValueError(
+                f"{processor_class.__name__} declares a port {port_spelling!r}: "
+                f"{names_nothing}"
+            ) from names_nothing
+        first_spelling = port_spelling_by_cast_name.get(port_name)
+        if first_spelling == port_spelling:
             raise ValueError(
                 f"{processor_class.__name__} declares the port name {port_name!r} more "
                 f"than once — every port, input or output, needs its own name"
             )
-        claimed_port_names.add(port_name)
+        if first_spelling is not None:
+            raise ValueError(
+                f"{processor_class.__name__} declares the ports {first_spelling!r} and "
+                f"{port_spelling!r}, which both cast to {port_name!r} — a port name is "
+                f"lowercased with its accents dropped and anything outside "
+                f"a-z 0-9 - . _ ~ turned into '-', so two ports need names that stay "
+                f"apart once cast"
+            )
+        port_spelling_by_cast_name[port_name] = port_spelling
         if "delivery_profile" in marker:
             declared_input = {
                 "name": port_name,
@@ -598,7 +623,7 @@ def _resolve_execution(
         if not has_input_ports:
             raise ValueError(
                 f"{processor_class.__name__} declares no input ports, so it must declare "
-                f"an execution mode: `@processor(execution=\"continuous\", interval_ms=…)` "
+                f"an execution mode: `@node(execution=\"continuous\", interval_ms=…)` "
                 f"for a source that produces on its own schedule, or "
                 f"`execution=\"manual\"` for one driven by a callback it owns. Only a "
                 f"processor with an input port can default to \"reactive\"."

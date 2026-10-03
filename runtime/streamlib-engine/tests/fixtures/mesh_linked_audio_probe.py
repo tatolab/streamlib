@@ -20,7 +20,7 @@ by a person want the same line.
 
 import os
 
-from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, log, processor
+from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, log, node
 
 # What the shell arm greps for. One prefix per fact, so a missing one names
 # itself rather than showing up as a parse failure.
@@ -28,7 +28,7 @@ ENUMERATED_MARKER = "MARKER:INBOUND_LINKS "
 RECEIVED_MARKER = "MARKER:RECEIVED "
 
 
-@processor
+@node
 class MeshLinkedAudioProbe:
     """Reads audio off whatever is wired into it and names the link it came on."""
 

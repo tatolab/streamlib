@@ -26,8 +26,8 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     input,
     log,
     monotonic_now_ns,
+    node,
     output,
-    processor,
 )
 
 CONTIGUOUS_RESULT_MARKER = "MARKER:WINDOWS_SEEN "
@@ -64,7 +64,7 @@ def _reading(block) -> dict:
     }
 
 
-@processor
+@node
 class ExactWindowProbe:
     """Reports the shape and stamp of the first few windows it is handed."""
 
@@ -94,7 +94,7 @@ class ExactWindowProbe:
             log.info(CONTIGUOUS_RESULT_MARKER + json.dumps(self.readings))
 
 
-@processor
+@node
 class RollingWindowProbe:
     """A hop below the window: consecutive windows overlap by the difference."""
 
@@ -122,7 +122,7 @@ class RollingWindowProbe:
             log.info(ROLLING_RESULT_MARKER + json.dumps(self.readings))
 
 
-@processor(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class StereoToneSource:
     """Publishes a stereo tone at a stated rate, so a consumer's channel count
     is the test's own fact rather than the machine's.
@@ -177,7 +177,7 @@ class StereoToneSource:
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 
 
-@processor
+@node
 class SourceFollowingWindowProbe:
     """Declares no channel count, so its windows carry the source's own."""
 
@@ -203,7 +203,7 @@ class SourceFollowingWindowProbe:
             log.info(SOURCE_FOLLOWING_RESULT_MARKER + json.dumps(self.readings))
 
 
-@processor
+@node
 class DeclaredMonoWindowProbe:
     """The same source through a contract that does state a count: proof the
     declared path still converts while the one beside it follows."""

@@ -12,7 +12,7 @@ suite inside the child.
 import time
 from typing import TypedDict
 
-from streamlib import input, output, processor
+from streamlib import input, node, output
 
 
 class PassThroughProbeConfig(TypedDict, total=False):
@@ -21,7 +21,7 @@ class PassThroughProbeConfig(TypedDict, total=False):
     tag: str
 
 
-@processor
+@node
 class PassThroughProbe:
     """Copies every bag from its input to its output."""
 
@@ -43,13 +43,13 @@ class PassThroughProbe:
 class OuterProbe:
     """Holds a nested processor, so the dotted-qualname walk has a target."""
 
-    @processor(execution="manual")
+    @node(execution="manual")
     class InnerProbe:
         @output()
         def frames_to_downstream(self) -> None: ...
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class ImportsADmaBufOffLinuxProbe:
     """Adopts a DMA-BUF in `setup`, off Linux, and fails with the refusal."""
 
@@ -60,7 +60,7 @@ class ImportsADmaBufOffLinuxProbe:
         ctx.gpu_full_access.import_dma_buf(fd=0, width=16, height=16)
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class RefusesSetupProbe:
     """Raises out of `setup`, which the parent must hear about."""
 
@@ -71,7 +71,7 @@ class RefusesSetupProbe:
         raise RuntimeError("this processor cannot set itself up")
 
 
-@processor
+@node
 class SlowPassThroughProbe:
     """Copies every bag to its output, slower than a burst arrives."""
 
@@ -94,7 +94,7 @@ class SlowPassThroughProbe:
 HOOKS_THE_INTERRUPT_PROBES_REACHED: list[str] = []
 
 
-@processor(execution="continuous", interval_ms=0)
+@node(execution="continuous", interval_ms=0)
 class InterruptedInProcessProbe:
     """Takes a `KeyboardInterrupt` inside `process()`, the way the parent's
     shutdown ladder delivers one to a callback that outran its budget."""
@@ -119,7 +119,7 @@ class InterruptedInProcessProbe:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class InterruptedInSetupProbe:
     """Takes a `KeyboardInterrupt` inside `setup()`. Unlike a `setup()` that
     raises on its own, this one is still owed its `teardown()`."""
@@ -135,7 +135,7 @@ class InterruptedInSetupProbe:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class RaisesInSetupProbe:
     """A `setup()` that raises on its own, which keeps the no-teardown rule."""
 
@@ -158,7 +158,7 @@ class RaisesInSetupProbe:
 WHEN_THE_PACING_PROBE_PROCESSED_NS: list[int] = []
 
 
-@processor(execution="continuous", interval_ms=250)
+@node(execution="continuous", interval_ms=250)
 class ContinuousPacingProbe:
     """Records when each `process()` ran, so the interval the loop kept is
     measurable. The interval under test is the one the parent's `run` names."""
@@ -174,7 +174,7 @@ class ReconfigurableProbeConfig(TypedDict, total=False):
     gain: int
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class RefusesReconfigurationProbe:
     """Defines `configure` and refuses every configuration handed to it."""
 
@@ -188,7 +188,7 @@ class RefusesReconfigurationProbe:
         raise ValueError(f"a gain of {config.get('gain')} is out of range")
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class TakesReconfigurationProbe:
     """Defines `configure` and takes whatever it is handed."""
 
@@ -202,7 +202,7 @@ class TakesReconfigurationProbe:
         self.gain = config.get("gain", 1)
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class ReleasesAStructureInTeardownProbe:
     """Builds an acceleration structure in `setup` and lets go of it in
     `teardown`, so the structure's release is owed while teardown answers."""

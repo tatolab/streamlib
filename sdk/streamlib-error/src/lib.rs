@@ -71,6 +71,13 @@ pub enum Error {
         max: usize,
     },
 
+    #[error(
+        "the name `{name}` casts to `{cast}`, which cannot name anything — a name has to keep \
+         at least one of a-z 0-9 - . _ ~ once lowercased with its accents dropped, and cannot \
+         be `.` or `..`"
+    )]
+    ExposedNameCastsToNothing { name: String, cast: String },
+
     #[error("Invalid graph: {0}")]
     InvalidGraph(String),
 

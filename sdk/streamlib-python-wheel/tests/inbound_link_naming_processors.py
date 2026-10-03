@@ -12,12 +12,12 @@ from streamlib import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     input,
+    node,
     output,
-    processor,
 )
 
 
-@processor
+@node
 class ReportsWhichLinkEachBagCameFrom:
     """One input port, any number of producers into it.
 

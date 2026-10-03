@@ -749,7 +749,12 @@ class CapabilityExtensionHost:
 
 @final
 class AddedProcessor:
-    """A processor in the graph."""
+    """A processor in the graph.
+
+    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
+    casts to a declared port finds it; one casting to nothing raises `ValueError`.
+    """
 
     @property
     def processor_id(self) -> str: ...
@@ -968,7 +973,12 @@ class RuntimeContextLimitedAccess:
 
 @final
 class LinkInputDataReader:
-    """A processor's input ports, as `ctx.inputs`."""
+    """A processor's input ports, as `ctx.inputs`.
+
+    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
+    casts to a declared port finds it; one casting to nothing raises `ValueError`.
+    """
 
     @overload
     def read(self, port_name: str, *, into: None = None) -> Any | None: ...
@@ -1062,7 +1072,12 @@ class LinkInputDataReader:
 
 @final
 class LinkOutputDataWriter:
-    """A processor's output ports, as `ctx.outputs`."""
+    """A processor's output ports, as `ctx.outputs`.
+
+    A port name is cast the way `@node` casts it — lowercased, accents dropped,
+    anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
+    casts to a declared port finds it; one casting to nothing raises `ValueError`.
+    """
 
     def write(
         self,
@@ -2217,7 +2232,7 @@ def capability_extension_host_for_the_helper_process(
     """Mint the host `distribution`'s hook is handed in a helper process."""
 
 def register_declared_processor_class(processor_class: type) -> None:
-    """Register the descriptor `@processor` has just stamped onto a class.
+    """Register the descriptor `@node` has just stamped onto a class.
 
     Called by the decorator and nowhere else, so the class is in the processor
     catalog from the moment its module is imported; the constructor arrives at
@@ -2231,7 +2246,7 @@ def processor_class_import_paths_in_this_processes_catalog() -> list[str]:
 
     What `GET /api/registry` renders, readable in a process that serves no
     control plane — which a helper process is. In the app process a path
-    appears here the moment its `@processor` decorator runs, whether or not
+    appears here the moment its `@node` decorator runs, whether or not
     anything has added it, so a path listed here may be one the engine cannot
     yet construct. In a helper nothing appears, because decoration registers
     nothing there — and seeing that from inside one is what the wheel's own

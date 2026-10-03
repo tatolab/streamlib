@@ -163,15 +163,15 @@ def test_the_entry_file_executes_and_yields_its_setup_function(tmp_path: Path):
 def test_the_entry_runs_as_main_with_its_own_directory_importable(tmp_path: Path):
     """`streamlib dev` and `python app.py` must be the same arrangement.
 
-    An app importing its own `processors/` package is the case that breaks if
+    An app importing its own `nodes/` package is the case that breaks if
     the entry's directory is not what leads `sys.path`.
     """
-    write_app(tmp_path, "processors/__init__.py", "")
-    write_app(tmp_path, "processors/effect.py", "EFFECT_NAME = 'blur'\n")
+    write_app(tmp_path, "nodes/__init__.py", "")
+    write_app(tmp_path, "nodes/effect.py", "EFFECT_NAME = 'blur'\n")
     entry_file = write_app(
         tmp_path,
         "app.py",
-        "from processors.effect import EFFECT_NAME\n"
+        "from nodes.effect import EFFECT_NAME\n"
         "MODULE_NAME = __name__\n"
         "def setup(rt):\n    pass\n",
     )
@@ -229,13 +229,13 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(
     """The bad save the scaffold actually invites.
 
     `app.py` holds wiring the user rarely touches; the file they edit is the
-    processor module, which reaches the launcher only as an import from the
+    node module, which reaches the launcher only as an import from the
     entry file. So the traceback has to walk through `app.py` and land in the
     module — naming only the entry file would point at the wrong file.
     """
     app_directory = tmp_path / "demo"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
-    (app_directory / "processors" / "inverting_effect.py").write_text(
+    (app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH).write_text(
         "def process(self ctx:\n    this does not parse\n"
     )
 
@@ -424,9 +424,9 @@ def test_the_control_plane_binds_every_interface_by_default():
 
 SCAFFOLDED_FILE_NAMES = (
     "app.py",
-    "processors/__init__.py",
-    "processors/inverting_effect.py",
-    "processors/brightness_meter.py",
+    "nodes/__init__.py",
+    "nodes/inverting_effect.py",
+    "nodes/brightness_meter.py",
     "pyproject.toml",
     ".python-version",
     ".gitignore",
@@ -440,6 +440,9 @@ def test_new_writes_a_working_app(tmp_path: Path):
 
     for file_name in SCAFFOLDED_FILE_NAMES:
         assert (app_directory / file_name).is_file(), f"`new` must write {file_name}"
+    assert not (app_directory / "processors").exists(), (
+        "a scaffolded app keeps its node classes under `nodes/`"
+    )
     assert (app_directory / ".python-version").read_text().strip() == "3.12", (
         "the scaffold pins the Python version the plan names"
     )
@@ -590,11 +593,11 @@ def test_each_scaffolded_processor_lives_outside_the_entry_file(
     processor_source = (app_directory / module_path).read_text()
     module_name = module_path.removesuffix(".py").replace("/", ".")
 
-    assert "@processor" not in entry_source, (
+    assert "@node" not in entry_source, (
         "a processor class in the entry file would identify as `__main__:<Type>`"
     )
     assert f"class {class_name}" not in entry_source
-    assert "@processor" in processor_source, "the class belongs in the importable module"
+    assert "@node" in processor_source, "the class belongs in the importable module"
     assert f"class {class_name}" in processor_source
     assert f"from {module_name} import {class_name}" in entry_source, (
         "the entry file imports the class it wires"
@@ -652,7 +655,7 @@ def test_the_test_pattern_scaffold_needs_no_capture_device(tmp_path: Path):
     ast.parse(entry_source)
     assert "TestPatternSource" in entry_source
     assert "CameraSource" not in entry_source
-    # The processors are source-agnostic, so the split must not have made them vary.
+    # The nodes are source-agnostic, so the split must not have made them vary.
     ast.parse((app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH).read_text())
     ast.parse((app_directory / cli.SCAFFOLDED_METER_MODULE_PATH).read_text())
 

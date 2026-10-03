@@ -11,6 +11,8 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress, OutputLinkPortRef};
 
+use crate::python_processor_link_data_access::declared_port_name_the_spelling_names;
+
 /// A processor in the graph.
 #[pyclass(name = "AddedProcessor", module = "streamlib", frozen)]
 pub(crate) struct PythonAddedProcessor {
@@ -42,19 +44,19 @@ impl PythonAddedProcessor {
     }
 
     /// Name one of this processor's output ports, to connect it downstream.
-    fn output(&self, port_name: &str) -> PythonProcessorOutputPortReference {
-        PythonProcessorOutputPortReference {
+    fn output(&self, port_name: &str) -> PyResult<PythonProcessorOutputPortReference> {
+        Ok(PythonProcessorOutputPortReference {
             processor_id: self.processor_id.clone(),
-            port_name: port_name.to_string(),
-        }
+            port_name: declared_port_name_the_spelling_names(port_name)?.into_owned(),
+        })
     }
 
     /// Name one of this processor's input ports, to connect it upstream.
-    fn input(&self, port_name: &str) -> PythonProcessorInputPortReference {
-        PythonProcessorInputPortReference {
+    fn input(&self, port_name: &str) -> PyResult<PythonProcessorInputPortReference> {
+        Ok(PythonProcessorInputPortReference {
             processor_id: self.processor_id.clone(),
-            port_name: port_name.to_string(),
-        }
+            port_name: declared_port_name_the_spelling_names(port_name)?.into_owned(),
+        })
     }
 
     fn __repr__(&self) -> String {
@@ -196,4 +198,25 @@ pub(crate) fn the_input_link_port_ref_this_destination_names(
          display_name, port_name)` for one on another runtime. Got {}.",
         destination.get_type()
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_port_reference_carries_the_cast_port_name() {
+        let added_processor =
+            PythonAddedProcessor::new("processor-id".to_string(), "Camera".to_string());
+
+        assert_eq!(added_processor.output("Video").unwrap().port_name, "video");
+        assert_eq!(
+            added_processor
+                .input("Frames From Upstream")
+                .unwrap()
+                .port_name,
+            "frames-from-upstream"
+        );
+        assert!(added_processor.output("..").is_err());
+    }
 }

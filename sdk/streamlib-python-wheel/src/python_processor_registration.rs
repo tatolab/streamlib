@@ -3,7 +3,7 @@
 
 //! Making a Python class a processor type the engine can instantiate.
 //!
-//! Registration arrives in two halves. `@processor` registers the descriptor
+//! Registration arrives in two halves. `@node` registers the descriptor
 //! when it runs, so the class is in the catalog an agent reads before anything
 //! adds it; the first add installs the constructor onto that descriptor.
 //! Registration is per process and idempotent per identity: `rt.add(Blur)`
@@ -116,7 +116,7 @@ pub(crate) fn register_processor_class(
     Ok(identity)
 }
 
-/// Register the descriptor `@processor` has just stamped onto
+/// Register the descriptor `@node` has just stamped onto
 /// `processor_class`, so the class is in the catalog before anything adds it.
 ///
 /// The decorator's one call into the native half. Registers the descriptor

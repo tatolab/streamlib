@@ -63,6 +63,9 @@ THE_DATA_TRACK_NAME = "telemetry"
 #: and the name a refusal would carry, so it is spelled rather than invented.
 THE_PRODUCERS_LINK = "kx7q2v1m8nz4/telemetry"
 
+#: The producer's own output port, the name its link is wired under.
+THE_PRODUCERS_OUTPUT_PORT = "telemetry"
+
 #: One bag exercising every shape the claim is about at once: `bytes` at the
 #: top level and again inside a nested map, beside the scalar types a msgpack
 #: round trip is free to widen.
@@ -166,7 +169,7 @@ class DataTrackRoundTripUnderTest:
         self._objects_routed = 0
 
     def send(self, bag: "dict[str, Any]", timestamp_ns: int) -> None:
-        self._producer_links.write_to_output_port(THE_PRODUCERS_LINK, bag, timestamp_ns)
+        self._producer_links.write_to_output_port(THE_PRODUCERS_OUTPUT_PORT, bag, timestamp_ns)
         self._publisher.process(self._publisher_context)  # type: ignore[arg-type]
         self._deliver_what_the_publishing_session_was_handed()
 
@@ -201,7 +204,7 @@ def data_track_round_trip(
     """
     unique = f"moqdata{os.getpid()}_{request.node.name}"
     producer_links, publisher_links = _one_live_link(
-        f"{unique}/tracks", THE_PRODUCERS_LINK, TRACKS_INPUT_PORT
+        f"{unique}/tracks", THE_PRODUCERS_OUTPUT_PORT, TRACKS_INPUT_PORT
     )
     subscriber_links, consumer_links = _one_live_link(
         f"{unique}/bags", DATA_BAGS_OUTPUT_PORT, DATA_BAGS_OUTPUT_PORT

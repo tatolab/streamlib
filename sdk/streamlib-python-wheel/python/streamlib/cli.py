@@ -167,7 +167,7 @@ def execute_app_entry_file(entry_file: Path) -> "dict[str, Any]":
 
     Run under the name `__main__` with its own directory leading `sys.path`,
     which is what `python app.py` does — so an app that imports its own
-    `processors/` package resolves it here exactly as it does there. `sys.argv`
+    `nodes/` package resolves it here exactly as it does there. `sys.argv`
     is narrowed to the entry file for the same reason: the launcher's own flags
     are not the app's, and an app that parses `sys.argv` would otherwise see
     `run --dir … --port …`.
@@ -300,8 +300,8 @@ def _python_distribution_name_for(directory_name: str) -> str:
 
 
 SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parent / "_scaffold_template"
-SCAFFOLDED_EFFECT_MODULE_PATH = "processors/inverting_effect.py"
-SCAFFOLDED_METER_MODULE_PATH = "processors/brightness_meter.py"
+SCAFFOLDED_EFFECT_MODULE_PATH = "nodes/inverting_effect.py"
+SCAFFOLDED_METER_MODULE_PATH = "nodes/brightness_meter.py"
 # The template sources are StreamLib's; the app `new` writes is the user's own.
 SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
     "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n"
@@ -312,7 +312,7 @@ SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
 # reads the template's `.gitignore` as its own ignore rules.
 SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE = {
     "app.py": DEFAULT_APP_ENTRY_FILE_NAME,
-    "processors/__init__.py": "processors/__init__.py",
+    "nodes/__init__.py": "nodes/__init__.py",
     SCAFFOLDED_EFFECT_MODULE_PATH: SCAFFOLDED_EFFECT_MODULE_PATH,
     SCAFFOLDED_METER_MODULE_PATH: SCAFFOLDED_METER_MODULE_PATH,
     "pyproject.toml": "pyproject.toml",
@@ -843,7 +843,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "new",
         help="Scaffold a new StreamLib app.",
         description=(
-            "Write app.py, processors/, pyproject.toml, .python-version and .gitignore into "
+            "Write app.py, nodes/, pyproject.toml, .python-version and .gitignore into "
             "DIRECTORY — a working camera → effect → window pipeline."
         ),
     )

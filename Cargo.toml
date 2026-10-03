@@ -17,7 +17,7 @@ members = [
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux and macOS)
     "adapters/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux; absent on macOS, its dlpack module on both)
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux and macOS; GL arm Linux)
-    "sdk/streamlib-python-wheel", # The importable Python wheel — the app's CPython imports the engine and authors pipelines; every `@processor` runs in its own helper process
+    "sdk/streamlib-python-wheel", # The importable Python wheel — the app's CPython imports the engine and authors pipelines; every `@node` runs in its own helper process
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into the wheel and the streamlib crate
     "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
@@ -89,6 +89,10 @@ rmpv = { version = "1.3", features = ["with-serde"] }
 # asynchronous sinc arm, which handles an arbitrary rate ratio and reports the
 # group delay and reset seams the stage's stamp and flush rules are built on.
 rubato = { version = "5.0", default-features = false }
+
+# NFKD decomposition and the combining-mark test the exposed-name cast drops
+# accents with — the same two steps Python's `unicodedata` gives the wheel's twin.
+unicode-normalization = "0.1"
 
 # Hashing
 sha2 = "0.10"

@@ -109,8 +109,8 @@ it from the working directory and calls `setup(rt)`:
 ```python
 from streamlib import CameraSource, DisplayWindow, Runtime
 
-from processors.brightness_meter import BrightnessMeter
-from processors.inverting_effect import InvertingEffect
+from nodes.brightness_meter import BrightnessMeter
+from nodes.inverting_effect import InvertingEffect
 
 
 def setup(rt: Runtime) -> None:
@@ -125,7 +125,7 @@ def setup(rt: Runtime) -> None:
     rt.connect(effect.output("video_to_downstream"), meter.input("video_from_upstream"))
 ```
 
-Pixels stay on the GPU. `processors/inverting_effect.py` is one shader function:
+Pixels stay on the GPU. `nodes/inverting_effect.py` is one shader function:
 
 ```python
 from streamlib import (
@@ -134,8 +134,8 @@ from streamlib import (
     RuntimeContextLimitedAccess,
     VideoFrame,
     input,
+    node,
     output,
-    processor,
 )
 
 INVERT_GLSL = """
@@ -146,7 +146,7 @@ vec4 effect(vec4 source, ivec2 at) {
 """
 
 
-@processor
+@node
 class InvertingEffect:
     @input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
@@ -169,7 +169,7 @@ class InvertingEffect:
         )
 ```
 
-Logic runs on the CPU. `processors/brightness_meter.py` reads each frame back through an explicit
+Logic runs on the CPU. `nodes/brightness_meter.py` reads each frame back through an explicit
 `frame.cpu()` view and logs its mean brightness once a second. It sits on a fan-out in its own
 process, so it never slows the picture — it is the stage you replace with your model call.
 

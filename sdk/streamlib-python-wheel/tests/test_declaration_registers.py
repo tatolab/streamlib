@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""What `@processor` puts in the processor catalog the moment it runs.
+"""What `@node` puts in the processor catalog the moment it runs.
 
 A class is discoverable before anything adds it, which is what lets an agent
 read an app's effects off a node that has only imported them. No runtime boots
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from streamlib import processor
+from streamlib import node
 from streamlib._engine import (
     processor_class_import_paths_in_this_processes_catalog,
 )
@@ -29,22 +29,22 @@ PROCESSOR_MODULE_A_HELPER_HOSTS = "zero_argument_process_processor"
 PROCESSOR_A_HELPER_HOSTS = f"{PROCESSOR_MODULE_A_HELPER_HOSTS}:ZeroArgumentProcess"
 
 
-@processor(execution="manual", description="Declared here and added nowhere")
+@node(execution="manual", description="Declared here and added nowhere")
 class DeclaredAndNeverAdded:
     """A processor this suite imports and never puts in a graph."""
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class DescribedByItsDocstringAlone:
     """What a processor with no description= keyword falls back to."""
 
 
-@processor(execution="manual", description="The keyword wins")
+@node(execution="manual", description="The keyword wins")
 class DescribedByBothKeywordAndDocstring:
     """The docstring the keyword outranks."""
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class DescribedByNothingAtAll:
     pass
 
@@ -60,8 +60,8 @@ def _declare_in_a_module_named(module_name: str, class_name: str) -> type:
     module = types.ModuleType(module_name)
     sys.modules[module_name] = module
     source = (
-        "from streamlib import processor\n"
-        "@processor(execution='manual')\n"
+        "from streamlib import node\n"
+        "@node(execution='manual')\n"
         f"class {class_name}:\n"
         "    pass\n"
     )
@@ -99,7 +99,7 @@ def test_a_class_declared_inside_a_function_registers_nothing():
     """
     catalog_before = set(processor_class_import_paths_in_this_processes_catalog())
 
-    @processor(execution="manual")
+    @node(execution="manual")
     class DeclaredInsideThisTest:
         pass
 
@@ -119,8 +119,8 @@ def test_one_import_path_decorated_twice_is_refused_naming_the_reload():
     module = types.ModuleType("a_module_loaded_twice")
     sys.modules["a_module_loaded_twice"] = module
     source = compile(
-        "from streamlib import processor\n"
-        "@processor(execution='manual')\n"
+        "from streamlib import node\n"
+        "@node(execution='manual')\n"
         "class DecoratedTwice:\n"
         "    pass\n",
         "<a_module_loaded_twice>",
@@ -142,8 +142,8 @@ def test_a_refused_second_decoration_leaves_the_first_registration_standing():
 
     module = sys.modules["a_module_reloaded_once"]
     source = compile(
-        "from streamlib import processor\n"
-        "@processor(execution='manual')\n"
+        "from streamlib import node\n"
+        "@node(execution='manual')\n"
         "class SurvivesTheReload:\n"
         "    pass\n",
         "<a_module_reloaded_once>",

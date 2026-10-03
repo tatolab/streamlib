@@ -24,6 +24,10 @@ import threading
 from typing import Any, Dict, Mapping, Optional
 
 from . import Runtime
+from ._exposed_name_cast import (
+    ExposedNameCastsToNothingError,
+    cast_exposed_name_to_url_safe,
+)
 from ._engine import (
     TestBagCollector,
     TestBagFeeder,
@@ -228,8 +232,8 @@ class SingleProcessorTestPipeline:
         self, channels: "Dict[str, str]", port_name: str, direction: str
     ) -> str:
         try:
-            return channels[port_name]
-        except KeyError:
+            return channels[cast_exposed_name_to_url_safe(port_name)]
+        except (KeyError, ExposedNameCastsToNothingError):
             raise KeyError(
                 f"{self._processor_class.__name__} declares no {direction} port "
                 f"{port_name!r}; it declares {sorted(channels) or 'none'}"
@@ -243,7 +247,7 @@ def _declared_port_names(processor_class: type, direction: str) -> "list[str]":
     if declared is None:
         raise TypeError(
             f"{processor_class.__name__} is not a processor: decorate it with "
-            f"@streamlib.processor"
+            f"@streamlib.node"
         )
     return [port["name"] for port in declared]
 

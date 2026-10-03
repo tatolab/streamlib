@@ -17,7 +17,7 @@ from typing import Annotated, Optional, TypedDict
 
 import pydantic
 
-from streamlib import RuntimeContextFullAccess, log, processor
+from streamlib import RuntimeContextFullAccess, log, node
 
 
 def _report(processor_name: str, config: object) -> None:
@@ -43,7 +43,7 @@ class ModelProbeConfig(pydantic.BaseModel):
     width: int = 1280
 
 
-@processor(execution="manual", description="Configured by a TypedDict")
+@node(execution="manual", description="Configured by a TypedDict")
 class TypedDictConfiguredProbe:
     def __init__(self, config: TypedDictProbeConfig) -> None:
         self.config = config
@@ -52,7 +52,7 @@ class TypedDictConfiguredProbe:
         _report("TypedDictConfiguredProbe", self.config)
 
 
-@processor(execution="manual", description="Configured by a dataclass")
+@node(execution="manual", description="Configured by a dataclass")
 class DataclassConfiguredProbe:
     def __init__(self, config: DataclassProbeConfig) -> None:
         self.config = config
@@ -61,7 +61,7 @@ class DataclassConfiguredProbe:
         _report("DataclassConfiguredProbe", self.config)
 
 
-@processor(execution="manual", description="Configured by a model")
+@node(execution="manual", description="Configured by a model")
 class ModelConfiguredProbe:
     def __init__(self, config: ModelProbeConfig) -> None:
         self.config = config
@@ -70,13 +70,13 @@ class ModelConfiguredProbe:
         _report("ModelConfiguredProbe", self.config)
 
 
-@processor(execution="manual", description="Takes no configuration at all")
+@node(execution="manual", description="Takes no configuration at all")
 class UnconfiguredProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         _report("UnconfiguredProbe", None)
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class ImportedButNeverAddedProbe:
     """An effect the app knows how to run and has not been asked to."""
 
