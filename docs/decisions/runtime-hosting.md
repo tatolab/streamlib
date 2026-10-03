@@ -42,8 +42,8 @@ packaged on Apple.
   exposed name is lowercased into RFC 3986's unreserved characters — one casting to empty, `.` or
   `..` is refused — a defaulted duplicate takes `-2`; what a person writes is never constrained.
 - No environment variables are built in (2026-10-02, runtime-hosting decision 4): a stream's
-  processes start in its project directory with none of the user's variables; a stream that wants
-  a `.env` loads it itself.
+  processes start in its project directory with nothing added per stream or from the caller; a
+  stream that wants a `.env` loads it itself.
 - A stream that keeps crashing the runtime is `failed` (2026-10-02, runtime-hosting decision 5):
   implicated in the runtime's last two crashes in a row, or unable to load; shown with its
   reason, skipped at start, retried by `start`. Restarting is not failing.

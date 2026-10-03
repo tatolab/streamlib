@@ -1409,9 +1409,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A stream's environment is its project directory and that directory's venv
   interpreter. It is recorded beside the graph when the stream is loaded — never inside it, so
   the same graph loads from another checkout — and every processor interpreter of the stream
-  starts from it, its working directory the project. The runtime hands a stream's compile and
-  its processor interpreters none of the user's variables — no `.env`, no `-e`, no caller's
-  shell — and a stream reads its own settings from its project as any program does
+  starts from it, its working directory the project. The runtime adds nothing per stream and
+  nothing from the caller — no `.env`, no `-e`, no caller's shell; a stream's compile and its
+  processor interpreters inherit the runtime's own environment — and a stream reads its own
+  settings from its project as any program does
   (runtime-hosting decision 4). Provisioning an environment is
   the packs OPEN in §Packages. Owner, 2026-10-02. [package-split-and-lend; runtime-hosting]
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
@@ -4077,10 +4078,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   today's disambiguation of requested display names); a **port** is a method name on its class,
   and two casting alike are refused at `@node` naming both. Every exposed name — machine,
   stream, node, port — is cast, never refused for its spelling: lowercased, accents dropped,
-  every character outside RFC 3986's unreserved set (`a-z 0-9 - . _ ~`) turned into `-` (the
-  cast's detail: runs collapsed, ends trimmed), at most 63 characters; one that casts to empty,
-  `.` or `..` is refused by name; a suffix is the next unused one, the name truncated to fit; a
-  lookup casts its argument, so `read("Video")` finds `video`. So `CameraSource` is `camerasource`, `name="Front Camera"` is `front-camera`,
+  every character outside RFC 3986's unreserved set (`a-z 0-9 - . _ ~`) turned into `-`, at most
+  63 characters; one that casts to empty, `.` or `..` is refused by name (the cast's detail, not
+  the owner's: runs of `-` collapsed, ends trimmed, a suffix the next unused one with the name
+  truncated to fit, a lookup casting its argument so `read("Video")` finds `video`). So
+  `CameraSource` is `camerasource`, `name="Front Camera"` is `front-camera`,
   a hostname `Jonathans-MacBook` is `jonathans-macbook`. What a person writes — class names,
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.

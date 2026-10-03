@@ -11,7 +11,7 @@ ones it was told to keep, is addressed by its machine, and arrives from an insta
   socket; `graph` returns every stream;
 - a kept stream is recorded in the state directory and comes back on every start, a crash's
   restart included, unless it has `failed`; an attached one lives as long as its connection;
-- every exposed name is cast to lowercase URL-safe; a stream gets none of the user's variables;
+- every exposed name is cast to lowercase URL-safe; nothing is added to a stream's environment;
 - an address is `<machine>/<stream>/<node>/<port>`, right-anchored; the runtime name is gone;
 - Linux installs by `curl | sh`, which registers a systemd user service; macOS installs a signed,
   notarised `Tatolab.app` that starts the runtime if it is not running, as Docker Desktop does.
@@ -53,7 +53,8 @@ URLs `:4125`, the relay role, the control client. **Sequencing:** after #2592, #
   API, an `ApiServer` processor holding one `RuntimeOperations` (`A/src/control_plane_host.rs:24-47`,
   `state.rs:14`). Test binaries build many `Runner`s each (86 calls across 24 files).
 - **Channels:** cuid2-named locally (`E/iceoryx2/channel_name.rs:198-215`); a mesh ingress
-  (`:242-248`) allows one publisher (`iceoryx2/node.rs:321`). **Names:** `runtime_name.rs:25-180`, ~800 lines; every Zenoh key in `runtime_mesh_key.rs:28-326`,
+  (`:242-248`) allows one publisher (`iceoryx2/node.rs:321`). **Names:** `runtime_name.rs:25-180`,
+  ~800 lines; every Zenoh key in `runtime_mesh_key.rs:28-326`,
   parsed by position (`:164-184`, `:304-319`); host identity is boot-scoped
   (`host_identity.rs:20-107`); the duplicate check reads a failed query as free
   (`duplicate_runtime_name_on_the_mesh.rs:34-161`). Nothing persistent per user exists.
@@ -80,20 +81,20 @@ started just like docker"; the owner holds the Developer ID. Chosen over a termi
 
 Owner, 2026-10-02: only URL-safe names, "always cast to lowercase … don't force people to write it
 like that or change imports". Every exposed name is cast — lowercased, accents dropped, anything
-outside RFC 3986's unreserved set turned into `-`, ≤63 characters; empty, `.` or `..` refused —
-and a defaulted duplicate takes `-2` (`camerasource-2`). Written into §Networking's address entry
-and amending the display-name entry. Node names are cast in step 1 — #2565's live add and #2567's
-builder build the cast and `-2`, not ` 2` (stream-graph re-spelled here); machine and stream names
-and remote addresses in S3. The engine and the pure-Python builder each cast — a pure package
-cannot call the engine — reading one fixture of cases.
+outside RFC 3986's unreserved set turned into `-`, ≤63 characters; empty, `.` or `..` refused — and
+a defaulted duplicate takes `-2` (`camerasource-2`). Written into §Networking's address entry and
+amending the display-name entry. Node and port names are cast in step 1 — #2565's live add and
+#2567's builder build the cast and `-2`, not ` 2`, and `@node` refuses ports casting alike
+(stream-graph re-spelled here); machine and stream names and remote addresses in S3. The engine
+and the pure-Python builder, which cannot call it, each cast from one fixture of cases.
 
 ## Decision 4 — RESOLVED: no environment variables are built in
 
 Owner, 2026-10-02: a stream that wants a `.env` "could just include a python library that reads
-.env files on their own … why do we need to do that?" The runtime passes a stream's compile and
-its processor interpreters no user variables — no `.env`, no `-e`, no shell forwarding; they start
-in the project directory, so a stream reads its own settings as any program does. The extensions
-read none (they never did); the examples' `os.environ` reads go with their conversion backlog.
+.env files on their own … why do we need to do that?" The runtime adds nothing per stream and
+nothing from the caller — no `.env`, no `-e`, no shell — to a stream's compile and processor
+interpreters, which start in the project directory; examples' `os.environ` reads go with their
+conversion backlog (the extensions never read any).
 
 ## Decision 5 — RESOLVED: a stream that keeps crashing the runtime is `failed`
 
@@ -104,8 +105,7 @@ restart is no crash and resets the count — is recorded `failed` with its reaso
 `streams`, skipped at start; `start` retries it, `rm` forgets it. A kept stream that cannot re-load
 at start (a missing venv, a type that will not describe) is `failed` too; a first load that fails
 is refused, as before. A crash no stream owns restarts and is a bug to file. Chosen over parking
-it as `stopped` and over `stop`/`rm` editing records with the runtime down; how a crash is pinned
-on a stream is engineering (assumptions).
+it `stopped` and over offline `stop` and `rm`; how a crash is pinned is an assumption below.
 
 ## Target layout
 
@@ -136,18 +136,18 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   stream's project directory, its name and the node's) are per stream; a pipeline cache per stream.
 - **The watchdog is per stream:** on expiry it kills that stream's groups, abandons its threads and
   unloads the stream, never recording it `failed`. Past an engine-chosen bound of abandoned
-  threads, the runtime exits 124 — a crash implicating the streams whose threads it abandoned.
+  threads, the runtime exits 124, counted (engineering) as a crash implicating those streams.
 - **Links between streams on one machine** ride iceoryx2 with no exposure; the input's stream owns
   the link; a source stream not loaded leaves it `awaiting_remote`, reason naming it.
 - **A remote port read by several streams** has one ingress per machine that each subscribes to.
 
 ## ADDED: §Product — `tatolabd`, the state directory, the verbs
 
-- **`tatolabd`** takes the machine lock, opens the state directory, resolves the machine name,
-  joins the mesh, serves `<runtime dir>/local-api.sock`, and re-loads every kept stream neither
-  stopped nor failed (decision 5); one that cannot re-load is `failed`, never deleted. It
-  never detaches. Signed on macOS, it loads only its
-  bundled Vulkan loader and MoltenVK, named in `VK_ADD_DRIVER_FILES` before the first instance.
+- **`tatolabd`** takes the machine lock, opens the state directory, resolves the machine name, joins
+  the mesh, serves `<runtime dir>/local-api.sock`, and re-loads every kept stream neither stopped
+  nor failed (decision 5); one that cannot re-load is `failed`, never deleted. It never detaches.
+  Signed on macOS, it loads only its bundled Vulkan loader and MoltenVK, named in
+  `VK_ADD_DRIVER_FILES` before the first instance.
 - **The machine lock**: on Linux the abstract socket `@tatolab-runtime` (a container sharing the
   host's network is this machine to it); on macOS an `fcntl` lock on a root-owned 0666 regular
   file in root-owned `/Library/Application Support/Tatolab/`, made at the app's first-launch
@@ -156,9 +156,10 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   user may take the one runtime first, the decided "whoever started it"; the CLI names it too.
 - **The state directory**: `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or
   `~/Library/Application Support/Tatolab/`: `machine.json` (machine id, name, mesh settings),
-  `streams/<stream>.json` per kept stream (the graph compiled at load, the environment, `stopped`
-  or `failed` and why, its crash count, exposure rulings; mode 0600) and the runtime's own log, which belongs to no project. A stream's
-  logs and pipeline cache stay under its project's `.streamlib/`, as `:4462-4481` decides.
+  `streams/<stream>.json` per kept stream (the graph compiled at load, the environment, `stopped` or
+  `failed` and why, its crash count, exposure rulings; mode 0600) and the runtime's own log, which
+  belongs to no project. A stream's logs and pipeline cache stay under its project's `.streamlib/`,
+  as `:4462-4481` decides.
 - **Loading.** `run_stream {project_directory, stream_function, name, keep}` — `stream_function`
   as `run` takes it (`stream.py:main`, none for the sole one): the runtime finds
   `<project>/.venv/bin/python` (absent → refused, pointing at `uv sync`), runs `tatolab.stream`'s
@@ -171,8 +172,9 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   follows the stream's records with `logs {stream, after}`, `after` a record sequence number; a
   runtime crash closes the connection and `run` exits 1 naming it. A one-shot `POST /mcp` can only keep.
 - **The tools**: `stop_stream` (unload; record `stopped` for a kept stream, end an attached one's
-  `run`), `start_stream` (a stopped or failed one), `remove_stream` (unload, forget), `list_streams` (name, attached / kept
-  / stopped / failed and why, project, node count), `expose_port {stream, node, port, exposed}` (the owner's ruling,
+  `run`), `start_stream` (a stopped or failed one), `remove_stream` (unload, forget),
+  `list_streams` (name, attached / kept / stopped / failed and why, project, node count),
+  `expose_port {stream, node, port, exposed}` (the owner's ruling,
   recorded for a kept stream; the function's `exposed` is the default for a port without one).
   `dev` is `run` plus a watch re-loading on save and, after a crash, waiting and loading again.
   `set --machine-name | --mesh-name | --mesh-peer | --mesh-listen | --no-mesh-multicast-discovery`
@@ -203,11 +205,11 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   link requests, egress and data keys gain the stream; `InboundLinkName` and the ingress hash follow.
 - **The machine id** — 128 random bits minted once into `machine.json` — rides the token. **The
   name**: the recorded one, else the hostname, cast (decision 3). The claim reads every `@machine`
-  token: a live holder with another id moves this
-  machine to the next unused `<name>-2`, `-3`…, recorded and said once with `tatolab set
-  --machine-name`; a token with this id from another boot, or a gone pid, is taken over. A failed
-  query is never read as free: the runtime stays off the mesh, `graph.mesh` renders it
-  `claiming`, and it retries on an engine-chosen backoff. Two claims inside one discovery window keep today's residual: both say so, links error.
+  token: a live holder with another id moves this machine to the next unused `<name>-2`, `-3`…,
+  recorded and said once with `tatolab set --machine-name`; a token with this id from another boot,
+  or a gone pid, is taken over. A failed query is never read as free: the runtime stays off the
+  mesh, `graph.mesh` renders it `claiming`, and it retries on an engine-chosen backoff. Two claims
+  inside one discovery window keep today's residual: both say so, links error.
 - **The builder.** `stream.remote_output(address)` and `remote_input(address)` take the address
   string, right-anchored — `"main/camera/video"` another stream here, `"rig/main/camera/video"`
   another machine — each chunk cast; one casting to empty, `.` or `..` refused where written.
@@ -234,7 +236,8 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   Tatolab", covers both; opening the app registers the agent unless the user turned the switch
   off, which it remembers, and on `.requiresApproval` opens Login Items for the user. The menu shows whether
   the runtime is up and its stream count (`list_streams`); Quit quits the app. First launch links
-  `tatolab` into `/usr/local/bin` and creates the lock's directory behind one administrator prompt. `Info.plist`
+  `tatolab` into `/usr/local/bin` and creates the lock's directory behind one administrator
+  prompt. `Info.plist`
   carries the camera, microphone, local-network and Documents, Desktop and Downloads usage
   strings; the app and `tatolabd` carry the hardened-runtime device entitlements; every Mach-O is
   signed with the Developer ID and the `.dmg` notarised and stapled, with control-tower's desktop
@@ -278,19 +281,16 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 |---|---|---|
 | The app's stream views, in-place updates, the remaining Rust names | the app | step 10 |
 | Starting with no GPU | accelerators OPEN | step 5 |
-| `machines`, `streams --machine`, router mode, dialing relays | discovery, stream-map OPENs | step 8 |
 | `run <url-or-zip>`, registries | packs OPEN | step 7 |
-| The relay role, the URL forms | their OPENs | steps 8, 9 |
+| `machines`, router mode, dialing relays, the relay role, the URL forms | their OPENs | steps 8, 9 |
 
 ## Assumptions stated, not asked
 
 - **One engine, a table of streams**, not a stream id on every graph node.
 - **Pinning a crash**: a node's threads, those it spawns and its escalate worker carry its stream;
-  signal handlers on an alternate stack and a panic hook, installed at start, write the crashing
-  thread's stream through a file opened beforehand. OS-owned threads (AVFoundation queues, the
-  main thread), SIGKILL and an out-of-memory kill implicate none.
-- **A stream's processes inherit the runtime's environment and the lend's variables**, nothing per
-  stream: a terminal-run runtime passes its shell, a service its own.
+  alternate-stack signal handlers and a hook on an escaping panic write the crashing thread's
+  stream through a file opened at start. OS-owned threads, SIGKILL and an OOM kill implicate none.
+- **A stream's processes inherit the runtime's environment and the lend's variables** only.
 - **The runtime compiles**, in the project's interpreter, so an agent loads exactly as the CLI does.
 - **Attached is a connection's lifetime**: an agent's attached stream ends when its host restarts `mcp`.
 - **The owner's `expose` wins** over the function's `exposed` (the glossary's suggestion/decision).

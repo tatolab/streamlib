@@ -143,10 +143,10 @@ one, with no change to the graph, the loader or `graph`.
 - **Names are resolved by the builder**, because only it knows a typed name from a defaulted one:
   a name is cast to lowercase URL-safe and a defaulted one is the class's short name, cast; a
   defaulted duplicate takes the next unused `-2`, `-3` … (runtime-hosting decision 3, amending
-  ` 2`); and a typed duplicate — two typed names casting alike — raises at the `add` that typed it, naming
-  both — the error lands on the author's own line. The emitted graph therefore carries resolved,
+  ` 2`); a typed duplicate — two typed names casting alike — raises at the `add` that typed it,
+  naming both, on the author's own line; `@node` refuses two ports casting alike. The emitted graph therefore carries resolved,
   unique names, and a link names its ends by them. The engine keeps its own defaulting for a live
-  `add_processor` that names nothing, and gains the same typed-duplicate refusal; one rule, two
+  `add_processor` that names nothing, and gains the same cast, `-2` and typed-duplicate refusal; one rule, two
   seams, each proven on the same inputs.
 - **`compile_stream_to_graph(stream_function, *, name=None) -> dict`** runs the function once
   over a fresh `Stream` and returns the graph. A function that raises propagates; a function
