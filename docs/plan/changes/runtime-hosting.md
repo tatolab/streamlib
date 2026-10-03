@@ -155,11 +155,12 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   stream; one whose project or interpreter is gone is reported by name, never deleted; one that
   crashes the runtime is decision 5. It never detaches. Signed on macOS, it loads only its
   bundled Vulkan loader and MoltenVK, named in `VK_ADD_DRIVER_FILES` before the first instance.
-- **The machine lock**: on Linux the abstract socket `@tatolab-runtime`, held for life, the holder
-  named by its peer credentials — a container on the host's network namespace is this machine to
-  it; on macOS an `fcntl` lock on `/Users/Shared/Tatolab/runtime.lock` (directory 1777), whose
-  holder `F_GETLK` names. Another user's `tatolabd`, or a second one, is refused naming the
-  holder; a CLI that finds no socket but a held lock names whose runtime this machine runs.
+- **The machine lock**: on Linux the abstract socket `@tatolab-runtime` (a container sharing the
+  host's network is this machine to it); on macOS an `fcntl` lock on a root-owned 0666 regular
+  file in root-owned `/Library/Application Support/Tatolab/`, made at the app's first-launch
+  administrator prompt — any other type, owner or mode refused by name. A second `tatolabd`, or
+  any squatter, is refused naming its user, pid and executable (peer credentials, `F_GETLK`); any
+  user may take the one runtime first, the decided "whoever started it"; the CLI names it too.
 - **The state directory**: `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or
   `~/Library/Application Support/Tatolab/`: `machine.json` (machine id, name, mesh settings),
   `streams/<stream>.json` per kept stream (the graph compiled at load, the environment, `stopped`,
@@ -197,8 +198,9 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   is an address. Renamed on the wire: `created_by_machine`, `mesh.machine`, `peers[].machine`,
   `egress_ports[].readers: [{machine, stream}]`, `link_requests_awaiting_machine` and
   `awaiting_machine`, `disconnect`'s `input_machine` and `input_stream`, `connect`'s answer
-  `input_machine`, a link request's `requester_machine` and `requester_stream`. The `graph` resource, the catalog, instructions and prompts follow.
-- `nodes`, `--node` and the registry go: one socket at a fixed path; `graph.mesh` lists peers.
+  `input_machine`, a link request's `requester_machine` and `requester_stream`. The `graph`
+  resource, the catalog, instructions and prompts follow. `nodes`, `--node` and the registry go:
+  one socket at a fixed path; `graph.mesh` lists peers.
 
 ## MODIFIED: §Networking — the machine segment
 
@@ -239,7 +241,7 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   Tatolab", covers both; opening the app registers the agent unless the user turned the switch
   off, which it remembers, and on `.requiresApproval` opens Login Items for the user. The menu shows whether
   the runtime is up and its stream count (`list_streams`); Quit quits the app. First launch links
-  `tatolab` into `/usr/local/bin` behind the administrator prompt, or says where it is. `Info.plist`
+  `tatolab` into `/usr/local/bin` and creates the lock's directory behind one administrator prompt. `Info.plist`
   carries the camera, microphone, local-network and Documents, Desktop and Downloads usage
   strings; the app and `tatolabd` carry the hardened-runtime device entitlements; every Mach-O is
   signed with the Developer ID and the `.dmg` notarised and stapled, with control-tower's desktop
@@ -256,8 +258,8 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 
 §Product `:122-143` (the tools); §Processor model `:1367-1377` (decision 3), `:1415-1425`,
 `:1434-1446`; §Media I/O's header, `:1905-1920` (the camera id); §Networking `:3556-3587`
-(claiming), `:3588-3610`, `:3611-3631`, `:3644-3691`,
-`:3765-3890`, `:3973-4010` (`nodes` gone), `:4052-4071`; §Control plane `:4345-4398` (no
+(claiming), `:3588-3610`, `:3611-3631`, `:3644-3691`, `:3765-3890`, `:3973-4010` (`nodes` gone),
+`:4052-4071`; §Control plane `:4345-4398` (no
 `shutdown`), `:4426-4445` (the verbs), `:4446-4466` (registry gone; the state directory holds the
 runtime's own log); the pivot ADR's steps 4 and 10.
 `docs/architecture/` and the README in the shipping tickets.
