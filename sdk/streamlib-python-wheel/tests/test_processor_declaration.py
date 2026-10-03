@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@processor` / `@input` / `@output` grammar, exercised without an engine.
+"""The `@node` / `@input` / `@output` grammar, exercised without an engine.
 
 Everything here is a pure declaration check — no runtime boots — so this is the
 half of the authoring surface that stays honest on a machine with no GPU.
@@ -12,7 +12,7 @@ import dataclasses
 import pytest
 
 import streamlib
-from streamlib import AudioWindowContract, input, output, processor
+from streamlib import AudioWindowContract, input, node, output
 
 # Not `from streamlib import ...`: the sentinel is on no public surface, so
 # reaching the private module for it is what an author would have to do to
@@ -28,7 +28,7 @@ def test_a_bare_decorator_needs_no_arguments_at_all():
     on top of it — there is no identity, no manifest, no schema to wrangle.
     """
 
-    @processor
+    @node
     class BrightnessFilter:
         @input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
@@ -46,7 +46,7 @@ def test_a_bare_decorator_needs_no_arguments_at_all():
 def test_the_method_name_is_the_port_name():
     """A port is named once — no string repeated between declaration and use."""
 
-    @processor
+    @node
     class Passthrough:
         @input(delivery_profile="ordered")
         def frames_from_upstream(self) -> None: ...
@@ -70,7 +70,7 @@ def test_the_method_name_is_the_port_name():
 
 
 def test_an_explicit_name_overrides_the_method_name():
-    @processor
+    @node
     class Renamed:
         @input(name="video_in", delivery_profile="newest")
         def handle_incoming_video(self) -> None: ...
@@ -99,7 +99,7 @@ def test_a_port_declaration_takes_no_schema():
 
 
 def test_a_declared_port_carries_no_type_key_under_any_spelling():
-    @processor
+    @node
     class Untyped:
         @input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
@@ -125,7 +125,7 @@ def test_an_input_port_without_a_delivery_profile_is_refused():
     """There is no default, so the omission is a wiring error naming the port."""
     with pytest.raises(ValueError, match="'frames_from_upstream' must declare a delivery_profile"):
 
-        @processor
+        @node
         class Unprofiled:
             @input()
             def frames_from_upstream(self) -> None: ...
@@ -135,7 +135,7 @@ def test_the_refusal_names_the_overriding_port_name():
     """`name=` renames the port, so the error must name that, not the method."""
     with pytest.raises(ValueError, match="'video_in' must declare a delivery_profile"):
 
-        @processor
+        @node
         class Unprofiled:
             @input(name="video_in")
             def frames_from_upstream(self) -> None: ...
@@ -144,7 +144,7 @@ def test_the_refusal_names_the_overriding_port_name():
 def test_an_output_port_needs_no_delivery_profile():
     """Delivery is the consuming port's policy — an output declaring none is correct."""
 
-    @processor(execution="manual")
+    @node(execution="manual")
     class Source:
         @output()
         def frames_to_downstream(self) -> None: ...
@@ -157,13 +157,65 @@ def test_an_output_port_needs_no_delivery_profile():
 def test_a_duplicate_port_name_is_refused():
     with pytest.raises(ValueError, match="more than once"):
 
-        @processor
+        @node
         class Clashing:
             @input(name="frames", delivery_profile="newest")
             def frames_in(self) -> None: ...
 
             @output(name="frames")
             def frames_out(self) -> None: ...
+
+
+def test_a_port_is_declared_under_its_cast_name():
+    """A port name is an exposed name, so it is cast like one — the author's
+    method name is never refused for its spelling."""
+
+    @node
+    class CastPorts:
+        @input(delivery_profile="newest")
+        def Video(self) -> None: ...
+
+        @output(name="Café Out")
+        def frames_to_downstream(self) -> None: ...
+
+    assert [port["name"] for port in CastPorts.__streamlib_processor_input_ports__] == [
+        "video"
+    ]
+    assert [port["name"] for port in CastPorts.__streamlib_processor_output_ports__] == [
+        "cafe-out"
+    ]
+
+
+def test_two_ports_casting_alike_are_refused_naming_both():
+    with pytest.raises(ValueError) as refusal:
+
+        @node
+        class CastClash:
+            @input(delivery_profile="newest")
+            def Video(self) -> None: ...
+
+            @output()
+            def video(self) -> None: ...
+
+    message = str(refusal.value)
+    assert "'Video'" in message and "'video'" in message
+    assert "both cast to 'video'" in message
+
+
+def test_a_port_name_casting_to_nothing_is_refused_naming_the_class():
+    with pytest.raises(ValueError, match=r"CastsToNothing declares a port '\.\.'"):
+
+        @node
+        class CastsToNothing:
+            @output(name="..")
+            def frames_to_downstream(self) -> None: ...
+
+
+def test_the_processor_decorator_is_gone():
+    """`@node` replaced it outright — pre-1.0, no alias."""
+    assert not hasattr(streamlib, "processor")
+    assert "processor" not in streamlib.__all__
+    assert "node" in streamlib.__all__
 
 
 def test_a_source_must_declare_its_execution_mode():
@@ -175,14 +227,14 @@ def test_a_source_must_declare_its_execution_mode():
     """
     with pytest.raises(ValueError, match="declares no input ports"):
 
-        @processor
+        @node
         class TestPatternSource:
             @output()
             def frames_to_downstream(self) -> None: ...
 
 
 def test_a_source_that_declares_a_mode_is_accepted():
-    @processor(execution="continuous", interval_ms=33)
+    @node(execution="continuous", interval_ms=33)
     class TestPatternSource:
         @output()
         def frames_to_downstream(self) -> None: ...
@@ -194,7 +246,7 @@ def test_a_source_that_declares_a_mode_is_accepted():
 
 
 def test_keyword_arguments_are_the_whole_grammar():
-    @processor(execution="manual", scheduling="realtime")
+    @node(execution="manual", scheduling="realtime")
     class Camera:
         @output()
         def frames_to_downstream(self) -> None: ...
@@ -222,7 +274,7 @@ def test_a_positional_identity_is_refused_naming_the_class_path_rule(identity: s
     """
     with pytest.raises(TypeError, match="takes no positional argument"):
 
-        @processor(identity, execution="manual")  # pyright: ignore[reportArgumentType]
+        @node(identity, execution="manual")  # pyright: ignore[reportArgumentType]
         class Camera:
             @output()
             def frames_to_downstream(self) -> None: ...
@@ -231,7 +283,7 @@ def test_a_positional_identity_is_refused_naming_the_class_path_rule(identity: s
 def test_the_refusal_names_where_the_identity_actually_comes_from():
     with pytest.raises(TypeError) as refusal:
 
-        @processor("@tatolab/camera/Camera")  # pyright: ignore[reportArgumentType]
+        @node("@tatolab/camera/Camera")  # pyright: ignore[reportArgumentType]
         class Camera:
             @output()
             def frames_to_downstream(self) -> None: ...
@@ -249,7 +301,7 @@ def test_a_class_name_that_is_not_pascal_case_is_accepted():
     is read off `__name__` for the display-name default and passed through.
     """
 
-    @processor
+    @node
     class lowercase_name:
         @input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
@@ -267,7 +319,7 @@ def test_a_class_name_that_is_not_pascal_case_is_accepted():
 def test_an_unknown_mode_or_priority_is_refused(keyword, value, expected_message):
     with pytest.raises(ValueError, match=expected_message):
 
-        @processor(**{keyword: value})
+        @node(**{keyword: value})
         class Filter:
             @input(delivery_profile="newest")
             def frames_from_upstream(self) -> None: ...
@@ -276,14 +328,14 @@ def test_an_unknown_mode_or_priority_is_refused(keyword, value, expected_message
 def test_a_negative_interval_is_refused():
     with pytest.raises(ValueError, match="non-negative int"):
 
-        @processor(execution="continuous", interval_ms=-1)
+        @node(execution="continuous", interval_ms=-1)
         class TestPatternSource:
             @output()
             def frames_to_downstream(self) -> None: ...
 
 
 def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
-    @processor
+    @node
     class BaseFilter:
         @input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
@@ -291,7 +343,7 @@ def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
         @output()
         def frames_to_downstream(self) -> None: ...
 
-    @processor
+    @node
     class AudioFilter(BaseFilter):
         @input(delivery_profile="ordered")
         def frames_from_upstream(self) -> None: ...
@@ -313,7 +365,7 @@ def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
 
 
 def test_an_audio_input_declares_its_window_contract():
-    @processor
+    @node
     class WakeWordDetector:
         @input(
             "audio",
@@ -351,7 +403,7 @@ def test_the_device_matching_sentinel_is_refused_at_decoration(delivery_profile:
     """
     with pytest.raises(TypeError) as refusal:
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Speaker:
             @input(
                 "audio",
@@ -384,7 +436,7 @@ def test_the_device_matching_sentinel_is_on_no_public_surface():
 def test_a_port_declaring_no_contract_carries_no_audio_window_key():
     """The contract is opt-in: nothing about a contract-less port moves."""
 
-    @processor
+    @node
     class Passthrough:
         @input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
@@ -517,7 +569,7 @@ def test_the_contract_takes_no_positional_arguments():
 def test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_knobs():
     with pytest.raises(ValueError) as refusal:
 
-        @processor
+        @node
         class Skipping:
             @input(
                 "audio",
@@ -535,7 +587,7 @@ def test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_kn
 def test_an_audio_window_that_is_not_a_contract_is_refused():
     with pytest.raises(TypeError, match="AudioWindowContract"):
 
-        @processor
+        @node
         class Wrong:
             @input("audio", delivery_profile="ordered", audio_window={"window_size": 512})  # type: ignore[arg-type]
             def audio_from_microphone(self) -> None: ...

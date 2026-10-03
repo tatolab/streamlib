@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The native half of `streamlib-moq` — the module the wheel's two
-//! `@processor` classes import as `streamlib_moq._native`.
+//! `@node` classes import as `streamlib_moq._native`.
 //!
 //! The engine never calls anything here. A processor extension's per-frame work
 //! is its own package's Rust, reached directly from its own Python.

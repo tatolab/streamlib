@@ -56,15 +56,15 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     RuntimeContextLimitedAccess,
     input,
     log,
+    node,
     output,
-    processor,
 )
 
 BAGS_PER_TICK = 20
 TICKS_PER_OVERSIZED_BAG = 50
 
 
-@processor(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class FastBagSource:
     """Writes far faster than `SlowOrderedSink` reads, and now and then a bag no
     helper link can carry."""
@@ -88,7 +88,7 @@ class FastBagSource:
             )
 
 
-@processor
+@node
 class SlowOrderedSink:
     """Takes every bag in order, far slower than they arrive."""
 
@@ -103,7 +103,7 @@ class SlowOrderedSink:
             time.sleep(0.05)
 
 
-@processor
+@node
 class NewestSink:
     """Drains whatever reaches it."""
 

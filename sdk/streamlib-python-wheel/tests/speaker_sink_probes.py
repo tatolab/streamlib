@@ -13,7 +13,7 @@ a startup transient from a stream losing a period at a time; a couple of
 seconds of blocks can.
 """
 
-from streamlib import RuntimeContextLimitedAccess, input, log, processor
+from streamlib import RuntimeContextLimitedAccess, input, log, node
 
 RESULT_MARKER = "MARKER:BLOCKS_COUNTED "
 
@@ -22,7 +22,7 @@ RESULT_MARKER = "MARKER:BLOCKS_COUNTED "
 BLOCKS_TO_COUNT = 100
 
 
-@processor
+@node
 class AudioBlockCountingProbe:
     """Reports once enough blocks have crossed the link to judge a run by."""
 

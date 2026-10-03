@@ -31,8 +31,8 @@ from streamlib import (
     input,
     log,
     monotonic_now_ns,
+    node,
     output,
-    processor,
 )
 
 ENCODED_PACKET_MARKER = "MARKER:ENCODED_PACKET "
@@ -70,7 +70,7 @@ ENCODED_PORT = "encoded_audio_from_upstream"
 DECODED_PORT = "audio_from_upstream"
 
 
-@processor(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class StereoToneSource:
     """Publishes a stereo tone at a stated rate, for the encoder to frame.
 
@@ -124,7 +124,7 @@ class StereoToneSource:
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 
 
-@processor
+@node
 class EncodedAudioPacketProbe:
     """Casts the encoder's output and reports each packet's wire fields.
 
@@ -170,7 +170,7 @@ class EncodedAudioPacketProbe:
             log.info(ENCODED_PACKETS_COMPLETE_MARKER)
 
 
-@processor
+@node
 class DecodedAudioBlockProbe:
     """Reports each decoded block's format, its length and its stamp.
 

@@ -5,7 +5,7 @@
 
 """The helper process one Python processor runs in.
 
-Every `@processor` class runs here — its own interpreter, its own GIL, one
+Every `@node` class runs here — its own interpreter, its own GIL, one
 processor per process. The parent execs `sys.executable -m streamlib._helper`;
 this module imports the class by the import path the parent derived from it,
 opens that processor's own iceoryx2 ports from the wiring the parent sends,

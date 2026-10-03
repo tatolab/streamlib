@@ -10,10 +10,10 @@ capability-extension hooks ran in that child, before this module was imported.
 
 import sys
 
-from streamlib import log, output, processor
+from streamlib import log, node, output
 
 
-@processor(execution="continuous", interval_ms=100)
+@node(execution="continuous", interval_ms=100)
 class ReportsTheExtensionItsHelperLoaded:
     """Announces, once, which extension modules its own process imported."""
 

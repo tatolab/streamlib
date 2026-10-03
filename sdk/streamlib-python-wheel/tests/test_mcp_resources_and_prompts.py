@@ -65,10 +65,10 @@ def setup(rt: Runtime) -> None:
 # input can relate to the sink's — the same profile, a shallower one, a deeper
 # one — meets a live node.
 BAG_MARKING_EFFECT_SOURCE_TEMPLATE = '''\
-from streamlib import RuntimeContextLimitedAccess, input, output, processor
+from streamlib import RuntimeContextLimitedAccess, input, node, output
 
 
-@processor
+@node
 class BagMarkingEffect:
     """Forwards every bag with one key added, so a consumer can tell it passed through."""
 
@@ -85,10 +85,10 @@ class BagMarkingEffect:
 '''
 
 MARKED_BAG_SINK_SOURCE_TEMPLATE = '''\
-from streamlib import RuntimeContextLimitedAccess, input, log, processor
+from streamlib import RuntimeContextLimitedAccess, input, log, node
 
 
-@processor
+@node
 class MarkedBagSink:
     """Says so once when a bag arrives carrying the inserted effect's mark."""
 

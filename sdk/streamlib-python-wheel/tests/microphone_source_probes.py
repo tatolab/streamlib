@@ -13,14 +13,14 @@ import json
 
 import numpy
 
-from streamlib import AudioBlock, input, log, processor
+from streamlib import AudioBlock, input, log, node
 
 RESULT_MARKER = "MARKER:BLOCKS_SEEN "
 
 BLOCKS_REPORTED = 8
 
 
-@processor
+@node
 class AudioBlockProbe:
     """Reports what the cast saw for the first few blocks the source publishes."""
 

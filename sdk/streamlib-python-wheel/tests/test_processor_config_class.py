@@ -3,7 +3,7 @@
 
 """A processor's config class: how it is declared, derived and constructed.
 
-Three seams, none of which boots an engine. `@processor` reads the config class
+Three seams, none of which boots an engine. `@node` reads the config class
 off `__init__` and refuses every other signature; the deriver turns that class
 into the JSON Schema the catalog publishes; and the hosting module constructs
 the class from the mapping `rt.add` recorded, which is what a helper process
@@ -20,7 +20,7 @@ import pytest
 # wheel's own test environment installs; `typing.Required` arrives only at 3.11.
 from typing_extensions import NotRequired, Required
 
-from streamlib import processor
+from streamlib import node
 from streamlib._processor_hosting import (
     apply_configuration,
     construct_processor_instance,
@@ -93,7 +93,7 @@ class RightConfig:
 
 
 def test_an_annotated_config_parameter_names_the_config_class():
-    @processor(execution="manual")
+    @node(execution="manual")
     class Blur:
         def __init__(self, config: BlurConfigDataclass) -> None:
             self.config = config
@@ -102,7 +102,7 @@ def test_an_annotated_config_parameter_names_the_config_class():
 
 
 def test_an_init_taking_nothing_beyond_self_declares_no_config():
-    @processor(execution="manual")
+    @node(execution="manual")
     class Counter:
         def __init__(self) -> None:
             self.seen = 0
@@ -118,7 +118,7 @@ def test_a_class_defining_no_init_at_all_declares_no_config():
     author never wrote.
     """
 
-    @processor(execution="manual")
+    @node(execution="manual")
     class Bare:
         pass
 
@@ -128,7 +128,7 @@ def test_a_class_defining_no_init_at_all_declares_no_config():
 def test_a_keyword_parameter_is_refused_with_the_fix_named():
     with pytest.raises(TypeError) as refusal:
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Blur:
             def __init__(self, width: int = 1) -> None:
                 self.width = width
@@ -142,7 +142,7 @@ def test_a_keyword_parameter_is_refused_with_the_fix_named():
 def test_several_parameters_are_refused_and_all_of_them_named():
     with pytest.raises(TypeError, match="width, height"):
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Blur:
             def __init__(self, width: int, height: int) -> None:
                 self.size = (width, height)
@@ -151,7 +151,7 @@ def test_several_parameters_are_refused_and_all_of_them_named():
 def test_an_unannotated_config_parameter_is_refused():
     with pytest.raises(TypeError, match="with no annotation"):
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Blur:
             def __init__(self, config) -> None:  # noqa: ANN001
                 self.config = config
@@ -166,7 +166,7 @@ def test_a_config_annotated_as_a_parameterized_generic_is_refused():
     """
     with pytest.raises(TypeError, match="is not a class"):
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Blur:
             def __init__(self, config: "dict[str, Any]") -> None:
                 self.config = config
@@ -175,7 +175,7 @@ def test_a_config_annotated_as_a_parameterized_generic_is_refused():
 def test_keyword_variadic_configuration_is_refused_by_name():
     with pytest.raises(TypeError, match=r"\*\*config"):
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Blur:
             def __init__(self, **config: Any) -> None:
                 self.config = config
@@ -184,7 +184,7 @@ def test_keyword_variadic_configuration_is_refused_by_name():
 def test_a_positional_only_config_is_refused_because_the_helper_passes_it_by_name():
     with pytest.raises(TypeError, match="positionally only"):
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Blur:
             def __init__(self, config: BlurConfigDataclass, /) -> None:
                 self.config = config
@@ -193,7 +193,7 @@ def test_a_positional_only_config_is_refused_because_the_helper_passes_it_by_nam
 def test_an_unresolvable_annotation_is_refused_where_the_author_can_see_it():
     with pytest.raises(TypeError, match="cannot be resolved"):
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Blur:
             def __init__(
                 self,
@@ -211,14 +211,14 @@ def schema_of(config_class: "Optional[type]") -> "dict[str, Any]":
     """The document a processor taking `config_class` publishes."""
     if config_class is None:
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class SubjectDeclaringNoConfig:
             def __init__(self) -> None:
                 self.seen = 0
 
         return SubjectDeclaringNoConfig.__streamlib_processor_config_schema__
 
-    @processor(execution="manual")
+    @node(execution="manual")
     class SubjectTakingAConfigClass:
         def __init__(self, config: config_class) -> None:  # type: ignore[valid-type]
             self.config = config
@@ -393,7 +393,7 @@ def test_the_document_is_2020_12_with_no_meta_schema_key():
 # ---------------------------------------------------------------------------
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class DataclassConfigured:
     def __init__(self, config: BlurConfigDataclass) -> None:
         self.config = config
@@ -402,19 +402,19 @@ class DataclassConfigured:
         self.config = config
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class TypedDictConfigured:
     def __init__(self, config: BlurConfigTypedDict) -> None:
         self.config = config
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class ModelConfigured:
     def __init__(self, config: BlurConfigModel) -> None:
         self.config = config
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class Unconfigured:
     def __init__(self) -> None:
         self.seen = 0
@@ -503,7 +503,7 @@ def test_a_config_annotated_as_any_is_refused_the_same_on_every_version():
     without naming `Any` the rule would differ across the wheel's own range."""
     with pytest.raises(TypeError, match="`Any`"):
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Blur:
             def __init__(self, config: Any) -> None:
                 self.config = config
@@ -672,7 +672,7 @@ def test_the_helper_constructs_the_processor_by_the_config_keyword():
     moment an author writes a keyword-only `config`."""
     constructed_with: "dict[str, Any]" = {}
 
-    @processor(execution="manual")
+    @node(execution="manual")
     class KeywordOnlyConfigured:
         def __init__(self, *, config: BlurConfigDataclass) -> None:
             constructed_with["config"] = config
@@ -685,14 +685,14 @@ def test_the_helper_constructs_the_processor_by_the_config_keyword():
 def test_a_variadic_positional_config_is_refused_by_name():
     with pytest.raises(TypeError, match=r"\*config"):
 
-        @processor(execution="manual")
+        @node(execution="manual")
         class Blur:
             def __init__(self, *config: Any) -> None:
                 self.config = config
 
 
 def test_reconfiguring_a_processor_that_declares_no_config_refuses_the_keys():
-    @processor(execution="manual")
+    @node(execution="manual")
     class UnconfiguredButReconfigurable:
         def __init__(self) -> None:
             self.configured_with: Any = "never"
@@ -728,7 +728,7 @@ def test_a_config_class_of_a_kind_the_deriver_cannot_read_is_accepted_and_open()
             self.width = width
             self.label = label
 
-    @processor(execution="manual")
+    @node(execution="manual")
     class PlainlyConfigured:
         def __init__(self, config: PlainlyAnnotatedConfig) -> None:
             self.config = config

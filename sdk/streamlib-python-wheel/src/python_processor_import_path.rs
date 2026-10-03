@@ -70,7 +70,7 @@ pub(crate) fn processor_class_import_path(processor_class: &Bound<'_, PyAny>) ->
              Move `{qualname}` into an importable module beside the entry file and import it \
              from there — one import line:\n\n\
              \x20   # {module_suggestion}.py\n\
-             \x20   @processor(...)\n\
+             \x20   @node(...)\n\
              \x20   class {qualname}: ...\n\n\
              \x20   # app.py\n\
              \x20   from {module_suggestion} import {qualname}\n\n\
@@ -100,7 +100,7 @@ fn suggested_module_name(qualname: &str) -> String {
         }
     }
     if snake.is_empty() {
-        "processors".to_string()
+        "nodes".to_string()
     } else {
         snake
     }

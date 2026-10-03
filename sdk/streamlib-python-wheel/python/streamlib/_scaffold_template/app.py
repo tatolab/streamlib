@@ -4,17 +4,17 @@
 """A StreamLib app: camera → GPU effect → window, with a CPU meter watching.
 
 `streamlib dev` finds `setup(rt)` below by convention — there is no manifest and
-no `main()`. Edit `processors/inverting_effect.py` or
-`processors/brightness_meter.py` and re-run `streamlib dev` to see the change.
+no `main()`. Edit `nodes/inverting_effect.py` or
+`nodes/brightness_meter.py` and re-run `streamlib dev` to see the change.
 
-Processors live in their own modules, never in this file: each one runs in its
+Nodes live in their own modules, never in this file: each one runs in its
 own child interpreter, which imports the class by name.
 """
 
 from streamlib import CameraSource, DisplayWindow, Runtime
 
-from processors.brightness_meter import BrightnessMeter
-from processors.inverting_effect import InvertingEffect
+from nodes.brightness_meter import BrightnessMeter
+from nodes.inverting_effect import InvertingEffect
 
 
 def setup(rt: Runtime) -> None:

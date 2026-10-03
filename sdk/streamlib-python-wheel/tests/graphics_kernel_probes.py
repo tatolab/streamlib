@@ -25,7 +25,7 @@ from streamlib import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
-    processor,
+    node,
 )
 
 SURFACE_WIDTH = 64
@@ -191,7 +191,7 @@ class _GraphicsKernelProbeBase:
         raise NotImplementedError
 
 
-@processor(
+@node(
     execution="manual",
     description="Draws a fullscreen triangle sampling one texture into another",
 )
@@ -218,7 +218,7 @@ class FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="Every way of getting a draw's bindings wrong, refused by name",
 )
@@ -290,7 +290,7 @@ class GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="A binding declared for a stage the shaders do not read it in",
 )
@@ -332,7 +332,7 @@ class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="A uniform-buffer binding a draw cannot name a surface for",
 )
@@ -371,7 +371,7 @@ class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="Pass shapes a Python draw cannot ask for",
 )

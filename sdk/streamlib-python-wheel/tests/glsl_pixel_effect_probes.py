@@ -23,7 +23,7 @@ from streamlib import (
     VideoFrame,
     input,
     log,
-    processor,
+    node,
 )
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
@@ -123,7 +123,7 @@ class InvertingEffectProbeConfig(TypedDict, total=False):
     effect: str
 
 
-@processor
+@node
 class InvertingEffectProbe:
     """Applies an effect with a strength dial to the first frame and reports
     how many output pixels differ from `255 - source`.
@@ -168,7 +168,7 @@ class InvertingEffectProbe:
         _report(apply_and_compare)
 
 
-@processor
+@node
 class PreDeclaredHelpersProbe:
     """Applies one effect per pre-declared helper to the first frame and
     reports each one's mismatch against the same picture made with numpy."""
@@ -212,7 +212,7 @@ class PreDeclaredHelpersProbe:
         _report(apply_each)
 
 
-@processor
+@node
 class EveryDialTypeProbe:
     """Applies an effect that paints one colour out of every dial type and
     reports the distinct pixels it wrote."""
@@ -247,7 +247,7 @@ class EveryDialTypeProbe:
         _report(apply_and_read)
 
 
-@processor
+@node
 class CompilerDiagnosticLineProbe:
     """Compiles a body with a mistake on its third line and reports the line
     numbers the compiler's diagnostic names."""
@@ -277,7 +277,7 @@ class CompilerDiagnosticLineProbe:
         pass
 
 
-@processor
+@node
 class CopyRefusedFrameProbe:
     """Applies an effect to a `bgra` frame, as a camera may publish, which the
     engine copy refuses to land, and reports what the effect said."""

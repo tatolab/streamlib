@@ -4,7 +4,7 @@
 //! The single per-port delivery knob on the authoring surface.
 //!
 //! A [`DeliveryProfile`] is the one word an author writes at a port declaration
-//! site (`#[processor]` attribute / `@processor` decorator). It names a read
+//! site (`#[processor]` attribute / `@node` decorator). It names a read
 //! policy — which bag the consumer gets next — and resolves to the
 //! consumer-side drain order ([`ReadMode`]) and the ring depth. Every input
 //! port declares one and nothing is inferred — an input port without a profile

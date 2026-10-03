@@ -13,10 +13,10 @@ import dataclasses
 
 import numpy
 
-from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, output, processor
+from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, node, output
 
 
-@processor
+@node
 class DoublingFilter:
     """One input, one output — the shape the harness exists to drive."""
 
@@ -33,12 +33,31 @@ class DoublingFilter:
         ctx.outputs.write("numbers_to_downstream", {"value": bag["value"] * 2})
 
 
+@node
+class MixedCasePortDoubler:
+    """Ports declared and looked up in spellings other than their cast names."""
+
+    @input(delivery_profile="ordered")
+    def Numbers(self) -> None: ...
+
+    @output(name="Doubled Numbers")
+    def numbers_to_downstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        if not ctx.inputs.has_data("NUMBERS"):
+            return
+        bag = ctx.inputs.read("Numbers")
+        if bag is None:
+            return
+        ctx.outputs.write("Doubled Numbers", {"value": bag["value"] * 2})
+
+
 @dataclasses.dataclass
 class ConfiguredScalerConfig:
     factor: int = 1
 
 
-@processor
+@node
 class ConfiguredScaler:
     """Reads its factor from config, so the harness's `config=` is exercised."""
 
@@ -60,7 +79,7 @@ class ConfiguredScaler:
         )
 
 
-@processor
+@node
 class AudioBlockInspector:
     """Reads an audio block as `AudioBlock` and reports what the view saw.
 

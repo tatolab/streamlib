@@ -8,10 +8,10 @@ by its import path, and a class in the entry file identifies as `__main__:â€¦` â
 a name the child interpreter that hosts it cannot import.
 """
 
-from streamlib import processor
+from streamlib import node
 
 
-@processor(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class ZeroArgumentProcess:
     def process(self) -> None:  # deliberately missing the ctx parameter
         print("MARKER:HOOK_BODY_RAN", flush=True)

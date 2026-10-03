@@ -25,8 +25,8 @@ from streamlib import (
     RuntimeContextLimitedAccess,
     input,
     log,
+    node,
     output,
-    processor,
 )
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
@@ -52,7 +52,7 @@ def _report(probe_body) -> None:
 # ---------------------------------------------------------------------------
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class SetupContextProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         _report(
@@ -64,7 +64,7 @@ class SetupContextProbe:
         )
 
 
-@processor(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class ProcessContextProbe:
     def __init__(self) -> None:
         self.reported = False
@@ -100,7 +100,7 @@ class ConfigProbeConfig:
     label: str = ""
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class ConfigProbe:
     def __init__(self, config: ConfigProbeConfig) -> None:
         self.config = config
@@ -117,7 +117,7 @@ class ConfigProbe:
         )
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class TimeProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
@@ -134,7 +134,7 @@ class TimeProbe:
 # ---------------------------------------------------------------------------
 
 
-@processor(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class ExplicitlyStampedSource:
     @output()
     def bags_to_downstream(self) -> None: ...
@@ -145,7 +145,7 @@ class ExplicitlyStampedSource:
         )
 
 
-@processor(execution="continuous", interval_ms=1)
+@node(execution="continuous", interval_ms=1)
 class DefaultStampedSource:
     @output()
     def bags_to_downstream(self) -> None: ...
@@ -154,7 +154,7 @@ class DefaultStampedSource:
         ctx.outputs.write("bags_to_downstream", {"value": 1})
 
 
-@processor
+@node
 class TimestampCollectingSink:
     @input(delivery_profile="ordered")
     def bags_from_upstream(self) -> None: ...
@@ -176,7 +176,7 @@ class TimestampCollectingSink:
 # ---------------------------------------------------------------------------
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class ContextStasher:
     """Keeps the setup context and reads it again from `start`."""
 
@@ -199,7 +199,7 @@ class ContextStasher:
 # ---------------------------------------------------------------------------
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class WorkerThreadSource:
     """`ctx.outputs` captured in setup, written from a thread the processor owns."""
 
@@ -227,7 +227,7 @@ class WorkerThreadSource:
             self._worker.join(timeout=5.0)
 
 
-@processor
+@node
 class WorkerThreadBagSink:
     @input(delivery_profile="ordered")
     def bags_from_upstream(self) -> None: ...
@@ -249,7 +249,7 @@ class WorkerThreadBagSink:
 # ---------------------------------------------------------------------------
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class PixelBufferAcquirer:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
@@ -269,7 +269,7 @@ class PixelBufferAcquirer:
         _report(observe)
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class RepeatedPixelBufferAcquirer:
     """Acquires and closes the same shape more times than the pool has slots."""
 
@@ -289,7 +289,7 @@ class RepeatedPixelBufferAcquirer:
         _report(observe)
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class WorkerThreadPrivilegedConstructor:
     """The native camera's shape: stash the capabilities in setup, construct
     privileged resources from a thread the processor owns.

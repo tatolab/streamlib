@@ -25,8 +25,8 @@ from streamlib import (
     RuntimeContextLimitedAccess,
     input,
     log,
+    node,
     output,
-    processor,
 )
 
 from . import _native
@@ -222,7 +222,7 @@ class WhipPublisherConfig:
     ] = None
 
 
-@processor(
+@node(
     description=(
         "Publishes encoded video and audio to a WHIP endpoint, "
         "one RTP track per inbound link"
@@ -376,7 +376,7 @@ class WhepPlayerConfig:
     ] = None
 
 
-@processor(
+@node(
     execution="manual",
     description="Plays encoded video and audio back from a WHEP endpoint",
 )

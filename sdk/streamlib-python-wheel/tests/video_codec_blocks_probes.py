@@ -22,7 +22,7 @@ overlap.
 
 import json
 
-from streamlib import EncodedVideoFrame, input, log, processor
+from streamlib import EncodedVideoFrame, input, log, node
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
@@ -45,7 +45,7 @@ DECODED_STAMPS_REPORTED = 30
 ENCODED_PORT = "encoded_video_from_upstream"
 
 
-@processor
+@node
 class EncodedFrameProbe:
     """Casts the encoder's output and reports each frame's wire fields."""
 
@@ -91,7 +91,7 @@ class EncodedFrameProbe:
             log.info(ENCODED_FRAMES_COMPLETE_MARKER)
 
 
-@processor
+@node
 class EncodedFrameTimestampProbe:
     """Reports the frame-header stamp riding each of the encoder's bags.
 
@@ -115,7 +115,7 @@ class EncodedFrameTimestampProbe:
         )
 
 
-@processor
+@node
 class DecodedVideoFrameProbe:
     """Reports the decoder's first two bags whole, then every frame's stamp.
 

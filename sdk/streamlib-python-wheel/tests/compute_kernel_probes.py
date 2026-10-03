@@ -24,7 +24,7 @@ from streamlib import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
-    processor,
+    node,
 )
 from streamlib._engine import ComputeKernel, KernelDispatchBatch
 
@@ -133,7 +133,7 @@ class _ComputeKernelProbeBase:
         raise NotImplementedError
 
 
-@processor(
+@node(
     execution="manual",
     description="Reads one surface and writes another through a compute kernel",
 )
@@ -155,7 +155,7 @@ class ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="Every way of getting the bindings wrong, refused by name",
 )
@@ -217,7 +217,7 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="A texture's pixels reach the CPU through the staged door",
 )
@@ -263,7 +263,7 @@ class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="A raise inside the CPU door over a texture propagates",
 )
@@ -298,7 +298,7 @@ class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="An acquired texture takes a write-back without spelling copy usage",
 )
@@ -434,7 +434,7 @@ class _TwoPassProbeBase:
         raise NotImplementedError
 
 
-@processor(
+@node(
     execution="manual",
     description="A two-pass filter dispatched as one batch",
 )
@@ -466,7 +466,7 @@ class TwoPassBatchProbe(_TwoPassProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="A raise inside a batch scope submits nothing and propagates",
 )
@@ -498,7 +498,7 @@ class BatchExceptionProbe(_TwoPassProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="Every way of getting a batch wrong, refused by name",
 )
@@ -571,7 +571,7 @@ class BatchRefusalProbe(_TwoPassProbeBase):
         }
 
 
-@processor(
+@node(
     execution="manual",
     description="Every way of getting the kernel's source wrong, refused by name",
 )

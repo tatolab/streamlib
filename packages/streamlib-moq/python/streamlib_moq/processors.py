@@ -28,8 +28,8 @@ from streamlib import (
     encode_bag_to_msgpack_bytes,
     input,
     log,
+    node,
     output,
-    processor,
     this_machines_stamp_clock_identity,
 )
 
@@ -550,7 +550,7 @@ class MoqBroadcastPublisherConfig:
     ] = None
 
 
-@processor(
+@node(
     description=(
         "Publishes encoded video, encoded audio and data bags to a MoQ "
         "broadcast, one track per inbound link"
@@ -917,7 +917,7 @@ class MoqBroadcastSubscriberConfig:
     ] = None
 
 
-@processor(
+@node(
     execution="manual",
     description=(
         "Plays encoded video, encoded audio and data bags back from a MoQ "

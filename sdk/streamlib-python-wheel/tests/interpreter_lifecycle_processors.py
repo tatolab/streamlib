@@ -11,14 +11,14 @@ import os
 import signal
 import time
 
-from streamlib import log, output, processor
+from streamlib import log, node, output
 
 # How long a probe's teardown takes when it is meant to be slow but still inside
 # the ladder's five-second teardown budget.
 SLOW_TEARDOWN_SECONDS = 3.0
 
 
-@processor(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackProbe:
     """Parks in `process()` far past the ladder's one-second callback budget."""
 
@@ -39,7 +39,7 @@ class AsleepInItsCallbackProbe:
 TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_TEST_TEARDOWN_RECORD_DIRECTORY"
 
 
-@processor(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackRecordingItsTeardownProbe:
     """Parks in `process()`, and records its `teardown()` in a file."""
 
@@ -56,7 +56,7 @@ class AsleepInItsCallbackRecordingItsTeardownProbe:
             pass
 
 
-@processor(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackAndSlowToTearDownProbe:
     """Parks in `process()`, then takes three seconds over `teardown()`.
 
@@ -76,7 +76,7 @@ class AsleepInItsCallbackAndSlowToTearDownProbe:
         log.info(f"MARKER:SLOW_TEARDOWN_FINISHED {os.getpid()}")
 
 
-@processor(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class WorkerKeepingTeardownGoingProbe:
     """Forks a worker that ignores SIGTERM, then spends thirty seconds in a
     `teardown()` that ignores it too.
@@ -117,7 +117,7 @@ if os.environ.get("STREAMLIB_ENTRYPOINT", "").endswith(":ThirtySecondImportProbe
     time.sleep(30)
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class ThirtySecondImportProbe:
     """Its module takes thirty seconds to import in the helper that hosts it."""
 

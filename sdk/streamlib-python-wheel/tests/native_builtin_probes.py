@@ -10,12 +10,12 @@ production in the app process reaching a Python processor in its own child.
 
 import json
 
-from streamlib import input, log, processor
+from streamlib import input, log, node
 
 RESULT_MARKER = "MARKER:FRAMES_SEEN "
 
 
-@processor
+@node
 class VideoFrameProbe:
     """Reports the first two video-frame bags the native source publishes."""
 

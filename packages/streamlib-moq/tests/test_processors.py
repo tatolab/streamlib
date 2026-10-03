@@ -25,8 +25,8 @@ from streamlib import (
     decode_msgpack_bytes_to_python_object,
     encode_bag_to_msgpack_bytes,
     input,
+    node,
     output,
-    processor,
     this_machines_stamp_clock_identity,
 )
 from streamlib_moq import (
@@ -79,7 +79,7 @@ A_VIDEO_BAG = {
 A_DATA_BAG = {"frame": 3, "note": "hi", "blob": b"\x00\x01", "nested": {"a": [1, 2.5, None]}}
 
 
-@processor(
+@node(
     execution="continuous",
     interval_ms=100,
     description="Writes one telemetry bag per tick, as a graph's own data source",
@@ -107,7 +107,7 @@ A_DATA_TRACK_SUBSCRIBER_CONFIG = {
 A_DATA_ENVELOPE = {"sequence_index": 7, "timestamp_ns": 5_000_000_000, "bag": A_DATA_BAG}
 
 
-@processor(description="Reads the data bags a subscriber writes, as a graph's own sink")
+@node(description="Reads the data bags a subscriber writes, as a graph's own sink")
 class TelemetryReader:
     @input(delivery_profile="ordered")
     def data_bags(self) -> None: ...

@@ -73,8 +73,8 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     VideoFrame,
     input,
     log,
+    node,
     output,
-    processor,
 )
 
 
@@ -83,7 +83,7 @@ class LiveAddedEffectConfig:
     marker: str = "LIVE_FRAME"
 
 
-@processor
+@node
 class LiveAddedEffect:
     """Republishes each frame on a texture of its own and counts them."""
 
@@ -383,14 +383,14 @@ import time
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     RuntimeContextLimitedAccess,
     input,
-    processor,
+    node,
 )
 
 if "STREAMLIB_ENTRYPOINT" in os.environ:
     time.sleep({HELPER_IMPORT_SECONDS})
 
 
-@processor
+@node
 class SlowlyImportingSink:
     """Reads and drops every frame."""
 

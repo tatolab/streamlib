@@ -31,7 +31,7 @@ from streamlib import (
     VideoFrame,
     input,
     log,
-    processor,
+    node,
 )
 
 SURFACE_WIDTH = 64
@@ -79,7 +79,7 @@ class _FrameProbeBase:
         _report(lambda: self._probe(ctx, VideoFrame.from_bag(bag)))
 
 
-@processor
+@node
 class GraphFrameToTorchProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -107,7 +107,7 @@ class GraphFrameToTorchProbe(_FrameProbeBase):
             return observation
 
 
-@processor
+@node
 class DeviceEditProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -139,7 +139,7 @@ class DeviceEditProbe(_FrameProbeBase):
             return observation
 
 
-@processor
+@node
 class WithBlockEditProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -168,7 +168,7 @@ class WithBlockEditProbe(_FrameProbeBase):
             return observation
 
 
-@processor
+@node
 class TensorOutlivesHandleProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
@@ -193,7 +193,7 @@ class TensorOutlivesHandleProbe(_FrameProbeBase):
         }
 
 
-@processor
+@node
 class HostSideProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -213,7 +213,7 @@ class HostSideProbe(_FrameProbeBase):
             return observation
 
 
-@processor
+@node
 class LaggedConsumerHoldsItsFrameProbe:
     """View identity across ring cycles, plus a frame held past the pool's own
     depth.
@@ -348,7 +348,7 @@ class LaggedConsumerHoldsItsFrameProbe:
         _report(lambda: observation)
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class DmaBufExportProbe:
     """Round-trips a surface's DMA-BUF fd out of and back into the graph.
 
@@ -441,7 +441,7 @@ RENDER_TARGET_FLAVOUR_USAGE = [
 ]
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class TextureHandleRoundTripProbe:
     """A kernel output crosses the process boundary as the texture itself.
 
@@ -610,7 +610,7 @@ class TextureHandleRoundTripProbe:
         return observation
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class PrivilegedCapabilityProbe:
     """What the privileged capability answers from a helper process."""
 
@@ -655,7 +655,7 @@ class PrivilegedCapabilityProbe:
         return observation
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class DeviceTensorScopeDoublesAKernelOutputProbe:
     """The demo: torch doubles a kernel output in place through the scope.
 
@@ -706,7 +706,7 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
             return observation
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class DeviceTensorScopeDiscardsOnRaiseProbe:
     """A raise mid-scope leaves the surface holding its pre-scope content.
 
@@ -767,7 +767,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
             return observation
 
 
-@processor
+@node
 class PixelBufferScopeDiscardsOnRaiseProbe(_FrameProbeBase):
     """One rule for both scopes: the CPU pixel-buffer scope discards a pending
     device write when the block is left by a raise.
@@ -811,7 +811,7 @@ class PixelBufferScopeDiscardsOnRaiseProbe(_FrameProbeBase):
         }
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class PooledTextureExportProbe:
     """Resurrected from #1737 (removed by #1754, carried by #1757): a pooled
     texture acquired by a Python processor exports a device tensor of correct
@@ -847,7 +847,7 @@ class PooledTextureExportProbe:
         return outcomes
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
     """No usage an author spells at `acquire_texture` can close the scope.
 
@@ -889,7 +889,7 @@ class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
                     observation[entry] = f"refused: {refusal}"
         return observation
 
-@processor(execution="manual")
+@node(execution="manual")
 class OpaqueFdExportHandoffProbe:
     """Hands a kernel-written texture's OPAQUE_FD export to a foreign process.
 
@@ -969,7 +969,7 @@ class OpaqueFdExportHandoffProbe:
 # ---------------------------------------------------------------------------
 
 
-@processor
+@node
 class CopyRequestRefusedAtBothDoorsProbe(_FrameProbeBase):
     """`copy=True` asks for memory the consumer owns; both doors export in
     place, so both refuse by name rather than hand back an alias."""
@@ -1028,7 +1028,7 @@ def _store_at_the_end_of_a_row_and_read_it_back(tensor_scope_or_handle, host_rea
     return observation
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class DeviceTensorStridesFollowTheRowPitchProbe:
     """Both backings at a width whose GPU-image rows pad: the device tensor's
     row stride is the surface's own pitch, so a store at the last pixel of a
@@ -1149,7 +1149,7 @@ class _DeviceWriteThenEngineGpuReadProbe:
             return observation
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class TorchDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
     def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
         import torch
@@ -1167,7 +1167,7 @@ def _mlx_or_none():
         return None
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         if _mlx_or_none() is None:
@@ -1203,7 +1203,7 @@ class _TypedFrameProbeBase(_FrameProbeBase):
         _report(lambda: self._probe(ctx, frame))
 
 
-@processor
+@node
 class MlxReadsTheFrameProbe(_TypedFrameProbeBase):
     """`mx.from_dlpack(frame)` over a graph frame is an MLX array over the
     frame's own bytes."""
@@ -1238,7 +1238,7 @@ def _frame_pixels_now(ctx, surface_id: str):
     return pixels
 
 
-@processor
+@node
 class MlxWritesTheFrameThroughTheWriteDoorProbe(_TypedFrameProbeBase):
     """`with frame.writable() as t:` with MLX as the package: an in-place,
     evaluated write reaches every other holder once the block ends."""
@@ -1266,7 +1266,7 @@ class MlxWritesTheFrameThroughTheWriteDoorProbe(_TypedFrameProbeBase):
         }
 
 
-@processor
+@node
 class MlxWriteWithAViewAliveMissesTheFrameProbe(_TypedFrameProbeBase):
     """The negative control the MLX write contract rests on: with a view of the
     array alive at the write, MLX cannot donate the buffer, so the scatter lands
@@ -1295,7 +1295,7 @@ class MlxWriteWithAViewAliveMissesTheFrameProbe(_TypedFrameProbeBase):
 
 
 
-@processor
+@node
 class MlxWholeArrayAssignmentMissesTheFrameProbe(_TypedFrameProbeBase):
     """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
     array to MLX, not a store into this one, so the frame never sees it even
@@ -1321,7 +1321,7 @@ class MlxWholeArrayAssignmentMissesTheFrameProbe(_TypedFrameProbeBase):
 SCOPES_IN_ONE_HELPER = 12
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class TorchAndMlxScopesAlternateInOneHelperProbe:
     """Many device-tensor scopes in one helper, torch and MLX alternating, each
     over a fresh texture whose arrays are dropped as soon as the scope ends.
@@ -1422,7 +1422,7 @@ class _DeviceArrayOutlivesTextureHandleProbe:
         }
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
     def _import(self, handle):
         import torch
@@ -1435,7 +1435,7 @@ class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandlePro
         return int(array.to(torch.int64).sum().item())
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         if _mlx_or_none() is None:
@@ -1594,7 +1594,7 @@ def _export_iosurface_and_read_it_natively(ctx, shim, surface) -> dict:
     }
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class IOSurfaceExportProbe:
     """A pixel buffer and a texture whose rows pad, each exported as an
     IOSurface port and read back by native code in this same helper."""
@@ -1629,7 +1629,7 @@ def _refusal_of(export_call) -> str | None:
     return None
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class RawHandleOffItsPlatformRefusesProbe:
     """Every raw-handle flavour exists on both floors; off its own it refuses,
     naming its peer."""

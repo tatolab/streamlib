@@ -3,7 +3,7 @@
 
 """The behavioural gate on where a Python processor runs.
 
-Every `@processor` class runs in its own child process — own interpreter, own
+Every `@node` class runs in its own child process — own interpreter, own
 GIL. That is the library's reason to exist, so it is asserted behaviourally
 rather than trusted: the app's own interpreter never loads a second copy of the
 processor's module, and the pid a bag was produced in is not the app's.

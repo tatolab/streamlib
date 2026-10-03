@@ -3,8 +3,8 @@
 
 """Pixels on the GPU: the effect the app wires between its source and its window.
 
-Importable as `processors.inverting_effect:InvertingEffect`, which is the
-name the engine spawns this processor's child interpreter with.
+Importable as `nodes.inverting_effect:InvertingEffect`, which is the
+name the engine spawns this node's child interpreter with.
 """
 
 from streamlib import (
@@ -13,8 +13,8 @@ from streamlib import (
     RuntimeContextLimitedAccess,
     VideoFrame,
     input,  # noqa: A004 — streamlib's port decorator
+    node,
     output,
-    processor,
 )
 
 # The whole effect: the output pixel for the source pixel at `at`, with each
@@ -27,7 +27,7 @@ vec4 effect(vec4 source, ivec2 at) {
 """
 
 
-@processor
+@node
 class InvertingEffect:
     """Inverts every frame's colors on the GPU and passes it on."""
 

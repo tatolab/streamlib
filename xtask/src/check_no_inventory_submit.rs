@@ -7,7 +7,7 @@
 //! The engine substrate is an empty registry; processors land in
 //! `PROCESSOR_REGISTRY` when a caller registers them, by invoking
 //! `PROCESSOR_REGISTRY.register::<P>()` in process — the wheel does it
-//! for a `@processor` class as `rt.add` classifies it.
+//! for a `@node` class as `rt.add` classifies it.
 //!
 //! The link-time `inventory::submit!(FactoryRegistration { ... })`
 //! emission the `#[processor]` macro used to do is gone. Anyone

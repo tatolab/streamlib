@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import streamlib
-from streamlib import RuntimeContextLimitedAccess, input, output, processor
+from streamlib import RuntimeContextLimitedAccess, input, node, output
 
 GRAPH_BUILDING_APP = Path(__file__).parent / "graph_building_app.py"
 
@@ -25,7 +25,7 @@ def graph_building_app(start_app_under_test):
     return lambda scenario: start_app_under_test(GRAPH_BUILDING_APP, scenario)
 
 
-@processor
+@node
 class GraphBuildingFilter:
     @input(delivery_profile="newest")
     def frames_from_upstream(self) -> None: ...

@@ -3,7 +3,7 @@
 
 """Logic on the CPU: reads the effect's frames on the host and logs a number.
 
-Importable as `processors.brightness_meter:BrightnessMeter`. It is a sink off a
+Importable as `nodes.brightness_meter:BrightnessMeter`. It is a sink off a
 fan-out in its own child interpreter, so nothing it does can slow the picture —
 swap the mean for a call to a model server and the app keeps its frame rate.
 """
@@ -14,13 +14,13 @@ from streamlib import (
     VideoFrame,
     input,  # noqa: A004 — streamlib's port decorator
     log,
-    processor,
+    node,
 )
 
 BRIGHTNESS_REPORT_INTERVAL_NS = 1_000_000_000
 
 
-@processor
+@node
 class BrightnessMeter:
     """Logs the mean brightness of the frames it sees, once a second."""
 
@@ -31,7 +31,7 @@ class BrightnessMeter:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
-        # `ctx.time` is the monotonic clock every processor shares, in ns.
+        # `ctx.time` is the monotonic clock every node shares, in ns.
         if frame is None or ctx.time < self.next_brightness_report_at_ns:
             return
         # `frame.cpu()` is the slow door, named so: the frame lives on the GPU

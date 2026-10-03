@@ -1,0 +1,98 @@
+[
+  {
+    "name": "CameraSource",
+    "cast": "camerasource"
+  },
+  {
+    "name": "Front Camera",
+    "cast": "front-camera"
+  },
+  {
+    "name": "Jonathans-MacBook",
+    "cast": "jonathans-macbook"
+  },
+  {
+    "name": "Video",
+    "cast": "video"
+  },
+  {
+    "name": "video_from_upstream",
+    "cast": "video_from_upstream"
+  },
+  {
+    "name": "v1.2~beta",
+    "cast": "v1.2~beta"
+  },
+  {
+    "name": "...",
+    "cast": "..."
+  },
+  {
+    "name": "Café Crème",
+    "cast": "cafe-creme"
+  },
+  {
+    "name": "ÉCOLE",
+    "cast": "ecole"
+  },
+  {
+    "name": "Ångström",
+    "cast": "angstrom"
+  },
+  {
+    "name": "İstanbul",
+    "cast": "istanbul"
+  },
+  {
+    "name": "ﬁle",
+    "cast": "file"
+  },
+  {
+    "name": "Straße",
+    "cast": "stra-e"
+  },
+  {
+    "name": "a  b",
+    "cast": "a-b"
+  },
+  {
+    "name": "a/b:c?d#e",
+    "cast": "a-b-c-d-e"
+  },
+  {
+    "name": "--edge--",
+    "cast": "edge"
+  },
+  {
+    "name": " padded ",
+    "cast": "padded"
+  },
+  {
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cast": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b",
+    "cast": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+    "name": "",
+    "refused": true
+  },
+  {
+    "name": ".",
+    "refused": true
+  },
+  {
+    "name": "..",
+    "refused": true
+  },
+  {
+    "name": "---",
+    "refused": true
+  },
+  {
+    "name": "日本",
+    "refused": true
+  }
+]

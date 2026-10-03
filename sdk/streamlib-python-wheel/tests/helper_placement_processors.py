@@ -13,7 +13,7 @@ import dataclasses
 import os
 import time
 
-from streamlib import input, log, output, processor
+from streamlib import input, log, node, output
 from streamlib._engine import (
     processor_class_import_paths_in_this_processes_catalog,
 )
@@ -24,7 +24,7 @@ class ReportsItsOwnProcessSourceConfig:
     label: str = "unlabelled"
 
 
-@processor(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class ReportsItsOwnProcessSource:
     """Stamps every bag with the pid it was produced in."""
 
@@ -42,7 +42,7 @@ class ReportsItsOwnProcessSource:
         ctx.outputs.write("frames_to_downstream", {"produced_in_pid": os.getpid()})
 
 
-@processor
+@node
 class ReportsUpstreamProcessSink:
     """Announces the pid a bag was produced in, alongside its own."""
 
@@ -66,7 +66,7 @@ class ReportsUpstreamProcessSink:
             )
 
 
-@processor
+@node
 class ReportsItsOwnProcessVideoSink:
     """Announces its own process, reading frames a native built-in produced.
 
@@ -88,7 +88,7 @@ class ReportsItsOwnProcessVideoSink:
         log.info(f"MARKER:VIDEO_SINK_PID {os.getpid()}")
 
 
-@processor(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class DiesAbruptlyProbe:
     """Takes its own process down mid-run, the way a segfaulting native call
     inside a user callback would."""
@@ -108,7 +108,7 @@ class DiesAbruptlyProbe:
             os._exit(1)
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class ReportsItsOwnProcessesProcessorCatalog:
     """Announces the processor catalog of the process it was constructed in.
 
@@ -133,7 +133,7 @@ class ReportsItsOwnProcessesProcessorCatalog:
         )
 
 
-@processor(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class SleepsThroughItsOwnShutdownProbe:
     """Parks in `process()` far past the ladder's one-second budget.
 
@@ -156,7 +156,7 @@ class SleepsThroughItsOwnShutdownProbe:
         log.info("MARKER:SLEEPER_TORE_DOWN")
 
 
-@processor(execution="continuous", interval_ms=50)
+@node(execution="continuous", interval_ms=50)
 class ForksAWorkerThatOutlivesItProbe:
     """Starts a worker of its own the way `os.system("sleep 60 &")` does.
 
@@ -179,7 +179,7 @@ class ForksAWorkerThatOutlivesItProbe:
             log.info(f"MARKER:WORKER_PID {self.worker_pid} HELPER_PID {os.getpid()}")
 
 
-@processor(execution="manual")
+@node(execution="manual")
 class SleepsThroughItsOwnSetupProbe:
     """Parks in `setup()`, so shutdown finds it still registering.
 

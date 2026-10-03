@@ -23,10 +23,10 @@ that uses it (`test_single_processor_pipeline.py`).
 import pytest
 
 import streamlib
-from streamlib import RuntimeContextLimitedAccess, output, processor
+from streamlib import RuntimeContextLimitedAccess, node, output
 
 
-@processor(execution="continuous", interval_ms=10)
+@node(execution="continuous", interval_ms=10)
 class NeverStartedSource:
     @output()
     def bags_to_downstream(self) -> None: ...

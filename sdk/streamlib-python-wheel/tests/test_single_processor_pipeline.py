@@ -18,6 +18,7 @@ from single_processor_under_test import (
     AudioBlockInspector,
     ConfiguredScaler,
     DoublingFilter,
+    MixedCasePortDoubler,
 )
 from streamlib.testing import SingleProcessorTestPipeline
 
@@ -57,6 +58,17 @@ def test_the_processor_under_test_is_constructed_with_the_config():
     with SingleProcessorTestPipeline(ConfiguredScaler, config={"factor": 5}) as pipeline:
         pipeline.feed("numbers_from_upstream", {"value": 3})
         assert pipeline.await_bag("numbers_to_downstream") == {"value": 15}
+
+
+def test_a_port_is_found_by_any_spelling_that_casts_to_its_name():
+    """`@node` declared `Numbers` as `numbers`; the helper's own reads and writes
+    and the harness's lookups all cast their argument, so the author's spelling,
+    the cast one and a shouted one meet at one port."""
+    with SingleProcessorTestPipeline(MixedCasePortDoubler) as pipeline:
+        pipeline.feed("Numbers", {"value": 4})
+        assert pipeline.await_bag("doubled-numbers") == {"value": 8}
+        pipeline.feed("numbers", {"value": 5})
+        assert pipeline.await_bag("Doubled Numbers") == {"value": 10}
 
 
 def test_a_port_the_processor_does_not_declare_is_named_in_the_error():

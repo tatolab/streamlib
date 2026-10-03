@@ -23,7 +23,7 @@ from streamlib import (
     VideoFrame,
     input,
     log,
-    processor,
+    node,
 )
 from streamlib._engine import ComputeKernel
 
@@ -76,7 +76,7 @@ class FrameLandingProbeConfig(TypedDict, total=False):
     skip_copy: bool
 
 
-@processor
+@node
 class FrameLandingProbe:
     """Lands the first test-pattern frame in an acquired texture with the
     engine copy, inverts it with a kernel, and reports whether the kernel's
@@ -147,7 +147,7 @@ class FrameLandingProbe:
         _report(land_and_invert)
 
 
-@processor
+@node
 class CopyRefusalProbe:
     """Asks for each copy the engine must refuse, and reports what it said."""
 

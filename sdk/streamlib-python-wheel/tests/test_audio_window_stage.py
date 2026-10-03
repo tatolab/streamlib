@@ -227,8 +227,8 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     RuntimeContextLimitedAccess,
     input,
     monotonic_now_ns,
+    node,
     output,
-    processor,
 )
 
 SAMPLE_RATE = 16_000
@@ -236,7 +236,7 @@ FRAMES_PER_BLOCK = 300
 GAP_BETWEEN_BLOCKS_NS = 1_000_000_000
 
 
-@processor(execution="continuous", interval_ms=20)
+@node(execution="continuous", interval_ms=20)
 class GappedMonoSource:
     """Each block is short of a 512-sample window, and each one's stamp is a
     discontinuity, so the windowed consumer flushes what the last block left."""
@@ -264,7 +264,7 @@ class GappedMonoSource:
         self.blocks += 1
 
 
-@processor
+@node
 class WindowedMonoConsumer:
     @input(
         delivery_profile="ordered",

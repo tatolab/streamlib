@@ -8,10 +8,10 @@ by its import path, and a class in the entry file identifies as `__main__:â€¦` â
 a name the child interpreter that hosts it cannot import.
 """
 
-from streamlib import RuntimeContextLimitedAccess, input, output, processor
+from streamlib import RuntimeContextLimitedAccess, input, node, output
 
 
-@processor
+@node
 class GraphBuildingFilter:
     @input(delivery_profile="newest")
     def frames_from_upstream(self) -> None: ...
