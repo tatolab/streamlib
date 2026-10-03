@@ -74,7 +74,7 @@ def test_display_name_defaults_to_the_type_name(marker_class):
     runtime = streamlib.Runtime()
     try:
         block = runtime.add(marker_class)
-        assert block.display_name == marker_class.__name__
+        assert block.display_name == marker_class.__name__.lower()
     finally:
         runtime.shutdown()
 

@@ -124,7 +124,7 @@ def test_display_name_defaults_to_the_type_name(tmp_path):
         block = runtime.add(
             Mp4Sink, config={"path": str(tmp_path / "recording.mp4")}
         )
-        assert block.display_name == "Mp4Sink"
+        assert block.display_name == "mp4sink"
     finally:
         runtime.shutdown()
 

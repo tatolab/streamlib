@@ -51,7 +51,7 @@ def test_display_name_defaults_to_the_type_name():
     runtime = streamlib.Runtime()
     try:
         microphone = runtime.add(streamlib.MicrophoneSource)
-        assert microphone.display_name == "MicrophoneSource"
+        assert microphone.display_name == "microphonesource"
     finally:
         runtime.shutdown()
 

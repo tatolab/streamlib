@@ -85,71 +85,67 @@ def test_two_added_processors_of_one_class_get_their_own_identities():
         first = runtime.add(GraphBuildingFilter, display_name="First")
         second = runtime.add(GraphBuildingFilter, display_name="Second")
         assert first.processor_id != second.processor_id
-        assert (first.display_name, second.display_name) == ("First", "Second")
+        assert (first.display_name, second.display_name) == ("first", "second")
     finally:
         runtime.shutdown()
 
 
 def test_two_adds_of_one_class_get_distinct_display_names():
-    """`rt.add(Blur)` twice must not label both nodes `Blur`.
+    """`rt.add(Blur)` twice must not name both nodes `blur`.
 
     The engine is the only place that defaults a name and the only place that
-    disambiguates, so the handle reports what it assigned rather than what the
+    suffixes one, so the handle reports what it assigned rather than what the
     wheel asked for. Mental-revert: pre-computing the default in the wheel and
-    handing the engine a `Some(...)` — the engine then never sees an absent
-    name, both nodes come back `GraphBuildingFilter`, and this fails.
+    handing the engine a `Some(...)` — the engine then refuses the second as a
+    typed duplicate, and this fails.
     """
     runtime = streamlib.Runtime()
     try:
         first = runtime.add(GraphBuildingFilter)
         second = runtime.add(GraphBuildingFilter)
         third = runtime.add(GraphBuildingFilter)
-        assert first.display_name == "GraphBuildingFilter"
-        assert second.display_name == "GraphBuildingFilter 2"
-        assert third.display_name == "GraphBuildingFilter 3"
+        assert first.display_name == "graphbuildingfilter"
+        assert second.display_name == "graphbuildingfilter-2"
+        assert third.display_name == "graphbuildingfilter-3"
     finally:
         runtime.shutdown()
 
 
-def test_a_duplicate_requested_display_name_is_disambiguated_too():
-    """Two `display_name="Front"` calls are as ambiguous as two defaults."""
+def test_a_duplicate_requested_display_name_is_refused_by_name():
+    """A name the author typed is an address, so a second node whose name
+    casts alike is refused naming it rather than suffixed."""
     runtime = streamlib.Runtime()
     try:
-        first = runtime.add(GraphBuildingFilter, display_name="Front")
-        second = runtime.add(GraphBuildingFilter, display_name="Front")
-        assert (first.display_name, second.display_name) == ("Front", "Front 2")
+        first = runtime.add(GraphBuildingFilter, display_name="FrontCam")
+        assert first.display_name == "frontcam"
+        with pytest.raises(RuntimeError, match="frontcam"):
+            runtime.add(GraphBuildingFilter, display_name="frontcam")
     finally:
         runtime.shutdown()
 
 
-def test_a_display_name_that_cannot_be_an_address_chunk_is_refused_naming_the_character():
-    """The display name is the processor's part of its mesh address.
-
-    So `add` refuses one that cannot be a single address chunk, naming the
-    character rather than quietly re-addressing the processor's ports.
-    """
+def test_a_display_name_is_cast_rather_than_refused_for_its_spelling():
+    """The display name is the node's part of its mesh address, so it is cast
+    to lowercase URL-safe — never refused for a character it carries."""
     runtime = streamlib.Runtime()
     try:
-        for forbidden in ["/", "*", "$", "#", "?"]:
-            with pytest.raises(RuntimeError) as refusal:
-                runtime.add(GraphBuildingFilter, display_name=f"front{forbidden}left")
-            assert repr(forbidden) in str(refusal.value), (
-                f"the refusal must name {forbidden!r}: {refusal.value}"
-            )
-        with pytest.raises(RuntimeError) as refusal:
-            runtime.add(GraphBuildingFilter, display_name="@front")
-        assert "@" in str(refusal.value)
+        for typed, cast in [
+            ("Front Left", "front-left"),
+            ("front/left/two", "front-left-two"),
+            ("@front", "front"),
+            ("Café", "cafe"),
+        ]:
+            assert runtime.add(GraphBuildingFilter, display_name=typed).display_name == cast
     finally:
         runtime.shutdown()
 
 
-def test_a_display_name_carrying_spaces_or_unicode_is_still_accepted():
+def test_a_display_name_that_casts_to_nothing_is_refused_by_name():
     runtime = streamlib.Runtime()
     try:
-        assert runtime.add(GraphBuildingFilter, display_name="front left").display_name == (
-            "front left"
-        )
-        assert runtime.add(GraphBuildingFilter, display_name="カメラ").display_name == "カメラ"
+        for names_nothing in ["カメラ", "..", "///"]:
+            with pytest.raises(RuntimeError, match="casts to"):
+                runtime.add(GraphBuildingFilter, display_name=names_nothing)
     finally:
         runtime.shutdown()
 
@@ -193,8 +189,8 @@ def test_the_graph_cannot_be_built_after_the_runtime_is_shut_down():
 
 def test_a_port_on_another_runtime_is_named_by_its_mesh_address():
     """A remote reference carries the address and shows it — processor ids and
-    channel names never appear on the mesh, so the middle part is the display
-    name."""
+    channel names never appear on the mesh, so the middle part is the node's
+    name, cast as every node name is."""
     runtime = streamlib.Runtime()
     try:
         source = runtime.remote_processor_output(
@@ -202,7 +198,7 @@ def test_a_port_on_another_runtime_is_named_by_its_mesh_address():
         )
         assert isinstance(source, streamlib.RemoteProcessorOutputPortReference)
         assert repr(source) == (
-            "RemoteProcessorOutputPortReference(bench-cam-a1b2/CameraSource/video)"
+            "RemoteProcessorOutputPortReference(bench-cam-a1b2/camerasource/video)"
         )
     finally:
         runtime.shutdown()
@@ -212,9 +208,9 @@ def test_a_port_on_another_runtime_is_named_by_its_mesh_address():
     ("runtime_name", "display_name", "port_name", "offending_part"),
     [
         ("bench/cam", "CameraSource", "video", "runtime name"),
-        ("bench-cam", "Camera*Source", "video", "processor display name"),
-        ("bench-cam", "CameraSource", "@video", "port name"),
-        ("bench-cam", "", "video", "processor display name"),
+        ("bench-cam", "..", "video", "node name"),
+        ("bench-cam", "CameraSource", "?", "port name"),
+        ("bench-cam", "", "video", "node name"),
     ],
 )
 def test_an_address_the_mesh_cannot_carry_is_refused_where_it_was_written(
@@ -247,11 +243,11 @@ def test_a_remote_source_wires_into_a_local_input_before_run():
 
 def test_a_remote_source_naming_a_processor_this_runtime_lacks_is_refused_by_name():
     """An address naming this runtime's own name is a local reference, so it
-    meets the local refusal — which lists what this runtime does display."""
+    meets the local refusal — which lists the names this runtime holds."""
     runtime = streamlib.Runtime(runtime_name="graph-building-under-test")
     try:
         destination = runtime.add(GraphBuildingFilter, display_name="Destination")
-        with pytest.raises(RuntimeError, match="NoSuchProcessor"):
+        with pytest.raises(RuntimeError, match="nosuchprocessor"):
             runtime.connect(
                 runtime.remote_processor_output(
                     "graph-building-under-test", "NoSuchProcessor", "video"
@@ -289,7 +285,7 @@ def test_an_input_port_on_another_runtime_is_named_by_its_mesh_address():
         )
         assert isinstance(destination, streamlib.RemoteProcessorInputPortReference)
         assert repr(destination) == (
-            "RemoteProcessorInputPortReference(studio-display-9f3c/DisplayWindow/video)"
+            "RemoteProcessorInputPortReference(studio-display-9f3c/displaywindow/video)"
         )
     finally:
         runtime.shutdown()
@@ -299,9 +295,9 @@ def test_an_input_port_on_another_runtime_is_named_by_its_mesh_address():
     ("runtime_name", "display_name", "port_name", "offending_part"),
     [
         ("studio/display", "DisplayWindow", "video", "runtime name"),
-        ("studio-display", "Display*Window", "video", "processor display name"),
-        ("studio-display", "DisplayWindow", "@video", "port name"),
-        ("studio-display", "", "video", "processor display name"),
+        ("studio-display", "..", "video", "node name"),
+        ("studio-display", "DisplayWindow", "?", "port name"),
+        ("studio-display", "", "video", "node name"),
     ],
 )
 def test_a_destination_address_the_mesh_cannot_carry_is_refused_where_it_was_written(
@@ -353,12 +349,12 @@ def test_a_destination_naming_this_runtime_takes_the_local_path_and_its_refusals
     """An address naming this runtime's own name is a local reference, so it
     meets the local refusal — which is also the proof it took that path: a
     destination on another runtime is only asked for, and asking never
-    refuses on a display name this runtime cannot see.
+    refuses on a node name this runtime cannot see.
     """
     runtime = streamlib.Runtime(runtime_name="graph-building-destination")
     try:
         source = runtime.add(GraphBuildingFilter, display_name="Source")
-        with pytest.raises(RuntimeError, match="NoSuchProcessor"):
+        with pytest.raises(RuntimeError, match="nosuchprocessor"):
             runtime.connect(
                 source.output("frames_to_downstream"),
                 runtime.remote_processor_input(

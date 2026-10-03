@@ -1388,7 +1388,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment; amended by runtime-hosting decision 3: a name is cast to the address grammar (§Networking, the address) and a defaulted duplicate takes `-2`, superseding spaces, unicode, ` 2` and the character refusals]
   <!-- verify: cargo test -p streamlib-engine --test node_name_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_disambiguated_too -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_refused_by_name -->
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
@@ -4411,7 +4411,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
-  <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_processor_catalog_and_the_live_graph -->
+  <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_node_catalog_and_the_live_graph -->
   <!-- verify: cargo test -p streamlib-api-server every_step_of_every_prompt_calls_a_tool_the_node_serves -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth -->
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`

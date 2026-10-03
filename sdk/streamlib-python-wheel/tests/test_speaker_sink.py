@@ -53,7 +53,7 @@ def test_display_name_defaults_to_the_type_name():
     runtime = streamlib.Runtime()
     try:
         speaker = runtime.add(streamlib.SpeakerSink)
-        assert speaker.display_name == "SpeakerSink"
+        assert speaker.display_name == "speakersink"
     finally:
         runtime.shutdown()
 

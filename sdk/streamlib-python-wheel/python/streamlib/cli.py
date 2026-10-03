@@ -7,8 +7,8 @@ the one machine-setup verb, `enable-virtual-camera`.
 `nodes`, `graph`, `tap`, `logs`, and `exchange` observe nodes that are already
 running — `nodes` off the on-disk registry, the rest as clients of a node's
 control plane. None of them mutates a graph; the control plane's mutation tools
-(`add_processor`, `connect`, `disconnect`, `remove_processor`) are reached over
-MCP, and the edit loop for the code itself is re-running `dev`.
+(`add_node`, `connect`, `disconnect`, `remove_node`) are reached over MCP, and
+the edit loop for the code itself is re-running `dev`.
 
 `enable-virtual-camera` touches no node and speaks no control plane: it installs
 the standard udev grant the virtual camera's loopback door needs — the module
@@ -1068,7 +1068,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     tap_command.add_argument(
         "channel",
-        help="Channel data-service name, e.g. {source_processor}/{output_port}.",
+        help=(
+            "The output port's address, <runtime_name>/<node>/<port>, as `graph` "
+            "names them: its mesh.runtime_name and a node's name."
+        ),
     )
     tap_command.add_argument(
         "--count",

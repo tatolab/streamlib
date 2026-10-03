@@ -32,7 +32,7 @@ def test_display_name_defaults_to_the_type_name():
     runtime = streamlib.Runtime()
     try:
         camera = runtime.add(streamlib.CameraSource)
-        assert camera.display_name == "CameraSource"
+        assert camera.display_name == "camerasource"
     finally:
         runtime.shutdown()
 

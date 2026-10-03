@@ -94,5 +94,25 @@
   {
     "name": "日本",
     "refused": true
+  },
+  {
+    "name": "@front",
+    "cast": "front"
+  },
+  {
+    "name": "front/left/two",
+    "cast": "front-left-two"
+  },
+  {
+    "name": "VirtualCameraSink",
+    "cast": "virtualcamerasink"
+  },
+  {
+    "name": "my_app.filters:NeverRegistered",
+    "cast": "my_app.filters-neverregistered"
+  },
+  {
+    "name": "カメラ",
+    "refused": true
   }
 ]
