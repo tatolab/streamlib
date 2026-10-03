@@ -82,6 +82,22 @@ fn default_display_name_for(processor_class_import_path: &ProcessorClassImportPa
         .unwrap_or_else(|| processor_class_import_path.as_str().to_string())
 }
 
+/// `requested_name` cast, or [`Error::NodeNameTaken`] when a node in `graph`
+/// already has that name — a name the author typed is an address.
+pub(crate) fn the_requested_node_name_unless_taken(
+    graph: &DiGraph<ProcessorNode, Link>,
+    requested_name: &str,
+) -> Result<String> {
+    let cast = cast_exposed_name_to_url_safe(requested_name)?;
+    if graph.node_weights().any(|node| node.display_name == cast) {
+        return Err(Error::NodeNameTaken {
+            name: requested_name.to_string(),
+            cast: cast.into_owned(),
+        });
+    }
+    Ok(cast.into_owned())
+}
+
 /// The name a node added to `graph` takes: `requested_name` cast, or, when the
 /// caller gave none, the class's short name cast with the next free `-2`,
 /// `-3` … appended.
@@ -102,14 +118,7 @@ pub(crate) fn the_name_a_new_node_takes(
     };
 
     if let Some(requested_name) = requested_name {
-        let cast = cast_exposed_name_to_url_safe(requested_name)?;
-        if is_taken(&cast) {
-            return Err(Error::NodeNameTaken {
-                name: requested_name.to_string(),
-                cast: cast.into_owned(),
-            });
-        }
-        return Ok(cast.into_owned());
+        return the_requested_node_name_unless_taken(graph, requested_name);
     }
 
     let default_name = default_display_name_for(processor_class_import_path);

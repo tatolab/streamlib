@@ -5,3 +5,5 @@ mod add_e_op;
 mod add_link_from_another_runtime_op;
 mod add_v_op;
 mod drop_op;
+
+pub(crate) use add_v_op::the_requested_node_name_unless_taken;

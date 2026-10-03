@@ -71,7 +71,7 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
 
 /// Core implementation for add_processor - takes owned Arcs for 'static lifetime.
 ///
-/// Reports the display name the graph assigned alongside the id. Both come out
+/// Reports the node it became, id and name together. Both come out
 /// of the one `compiler.scope` that added the node, so a caller that needs the
 /// name never has to ask a second time — and never races a concurrent removal
 /// into being told its own successful add does not exist.
@@ -360,15 +360,12 @@ fn the_node_this_runtime_names(
                 name: named.display_name.clone(),
             });
         }
-        let node_names: Vec<String> = graph
-            .traversal()
-            .v(())
-            .iter()
-            .map(|node| node.display_name.clone())
-            .collect();
+        let every_node = graph.traversal().v(());
         Err(Error::ProcessorNotFound(format!(
             "no node on this runtime is named {node_name:?}. This runtime holds: {}",
-            node_names_listed_for_a_refusal(node_names.iter().map(String::as_str))
+            node_names_listed_for_a_refusal(
+                every_node.iter().map(|node| node.display_name.as_str())
+            )
         )))
     })
 }
@@ -621,8 +618,8 @@ impl Runner {
         self.runtime_context.lock().clone()
     }
 
-    /// Add a processor and report the display name the graph assigned it, which
-    /// is the requested one only when no other node already answered to it.
+    /// Add a processor and report the node it became: its id and its name — the
+    /// requested one cast, or the class's short name with any `-2` suffix.
     pub fn add_processor_reporting_its_name(&self, spec: ProcessorSpec) -> Result<NodeInTheGraph> {
         let live = self.live_commit_context();
         match &self.tokio_runtime_variant {

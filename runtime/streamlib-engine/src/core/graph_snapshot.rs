@@ -11,6 +11,7 @@
 //! [`Runner::load_graph_snapshot`](crate::core::runtime::Runner::load_graph_snapshot);
 //! there is no saver, because the render is the export.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
@@ -19,7 +20,7 @@ use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal};
 use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
 use crate::core::processors::PROCESSOR_REGISTRY;
-use crate::core::{Error, Result};
+use crate::core::{Error, PortDirection, Result};
 
 /// A graph a runtime runs: its nodes by class import path, config and name,
 /// the links between their ports, and the output ports the stream exposes.
@@ -85,36 +86,53 @@ impl GraphSnapshot {
             .map_err(|e| Error::GraphError(format!("the graph does not serialize: {e}")))
     }
 
-    /// Check the graph without loading it: names unique once cast, every
-    /// local link end on a node the graph holds, every exposure an output
-    /// port a node has and named once, and every `type` registered.
+    /// Check the graph without loading it: every `type` registered, names
+    /// unique once cast, every link end an address the mesh carries or a port
+    /// of the right direction on a node the graph holds, and every exposure an
+    /// output port a node has, named once.
     pub fn validate(&self) -> Result<()> {
         let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
-            let cast = cast_exposed_name_to_url_safe(&node.name)?.into_owned();
-            if nodes_by_cast_name.contains_key(&cast) {
-                return Err(Error::NodeNameTaken {
-                    name: node.name.clone(),
-                    cast,
+            if PROCESSOR_REGISTRY.port_info(&node.processor_type).is_none() {
+                return Err(Error::UnknownProcessorType {
+                    ident: node.processor_type.clone(),
                 });
             }
-            nodes_by_cast_name.insert(cast, node);
+            match nodes_by_cast_name.entry(cast_exposed_name_to_url_safe(&node.name)?.into_owned())
+            {
+                Entry::Occupied(taken) => {
+                    return Err(Error::NodeNameTaken {
+                        name: node.name.clone(),
+                        cast: taken.key().clone(),
+                    });
+                }
+                Entry::Vacant(free) => {
+                    free.insert(node);
+                }
+            }
         }
         let the_names_the_graph_holds =
             || node_names_listed_for_a_refusal(nodes_by_cast_name.keys().map(String::as_str));
 
         for link in &self.links {
-            for end in [&link.source, &link.target] {
-                if let Some(node) = end.node_on_this_runtime()
-                    && !nodes_by_cast_name
-                        .contains_key(cast_exposed_name_to_url_safe(node)?.as_ref())
-                {
+            for (end, direction) in [
+                (&link.source, PortDirection::Output),
+                (&link.target, PortDirection::Input),
+            ] {
+                if end.mesh_port_address().transpose()?.is_some() {
+                    continue;
+                }
+                let Some(node) =
+                    nodes_by_cast_name.get(cast_exposed_name_to_url_safe(end.node())?.as_ref())
+                else {
                     return Err(Error::GraphError(format!(
-                        "a link names node `{node}`, which the graph does not hold. The graph \
+                        "a link names node `{}`, which the graph does not hold. The graph \
                          holds: {}",
+                        end.node(),
                         the_names_the_graph_holds()
                     )));
-                }
+                };
+                refuse_a_port_the_node_does_not_have(end.node(), node, end.port(), direction)?;
             }
         }
 
@@ -131,7 +149,12 @@ impl GraphSnapshot {
                     the_names_the_graph_holds()
                 )));
             };
-            refuse_an_exposure_naming_no_output_port(exposed, node, &port_cast)?;
+            refuse_a_port_the_node_does_not_have(
+                &exposed.node,
+                node,
+                &exposed.port,
+                PortDirection::Output,
+            )?;
             if !exposures_seen.insert((node_cast, port_cast)) {
                 return Err(Error::GraphError(format!(
                     "the graph exposes `{}/{}` twice",
@@ -140,41 +163,38 @@ impl GraphSnapshot {
             }
         }
 
-        for node in &self.nodes {
-            if PROCESSOR_REGISTRY.port_info(&node.processor_type).is_none() {
-                return Err(Error::UnknownProcessorType {
-                    ident: node.processor_type.clone(),
-                });
-            }
-        }
-
         Ok(())
     }
 }
 
-fn refuse_an_exposure_naming_no_output_port(
-    exposed: &ExposedOutputPortOutput,
+/// Refuse `port` unless `node`'s type declares it in `direction`, listing the
+/// ports it does declare there.
+fn refuse_a_port_the_node_does_not_have(
+    node_name: &str,
     node: &GraphSnapshotNode,
-    port_cast: &str,
+    port: &str,
+    direction: PortDirection,
 ) -> Result<()> {
-    let output_port_names: Vec<String> = PROCESSOR_REGISTRY
+    let port_cast = cast_exposed_name_to_url_safe(port)?;
+    let port_names: Vec<String> = PROCESSOR_REGISTRY
         .port_info(&node.processor_type)
-        .map(|(_, outputs)| outputs.into_iter().map(|port| port.name).collect())
-        .unwrap_or_default();
-    if output_port_names.iter().any(|name| name == port_cast) {
+        .map(|(inputs, outputs)| match direction {
+            PortDirection::Input => inputs,
+            PortDirection::Output => outputs,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|declared| declared.name)
+        .collect();
+    if port_names.iter().any(|name| *name == port_cast) {
         return Ok(());
     }
     Err(Error::GraphError(format!(
-        "the graph exposes `{}/{}`, and node `{}` has no output port `{}`. Its output ports \
-         are: {}",
-        exposed.node,
-        exposed.port,
-        exposed.node,
-        exposed.port,
-        if output_port_names.is_empty() {
+        "node `{node_name}` has no {direction} port `{port}`. Its {direction} ports are: {}",
+        if port_names.is_empty() {
             "none".to_string()
         } else {
-            output_port_names.join(", ")
+            port_names.join(", ")
         }
     )))
 }
@@ -184,6 +204,28 @@ mod tests {
     use super::*;
 
     const A_CAMERA_CLASS: &str = "my_app.nodes:CameraNode";
+
+    /// A camera class registered descriptor-only, with an `frames_in` input and
+    /// a `video` output. Idempotent across tests.
+    fn a_registered_camera_class() -> &'static str {
+        const REGISTERED_CAMERA_CLASS: &str = "graph_snapshot_tests:RegisteredCamera";
+        let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+            crate::core::descriptors::ProcessorDescriptor::new(
+                crate::core::descriptors::ProcessorClassShortName::new("RegisteredCamera").unwrap(),
+                ProcessorClassImportPath::new(REGISTERED_CAMERA_CLASS).unwrap(),
+                "graph snapshot test",
+            )
+            .with_input(crate::core::descriptors::PortDescriptor::new(
+                "frames_in",
+                "",
+                false,
+            ))
+            .with_output(crate::core::descriptors::PortDescriptor::new(
+                "video", "", false,
+            )),
+        );
+        REGISTERED_CAMERA_CLASS
+    }
 
     #[test]
     fn a_graph_document_parses_with_its_live_keys_ignored() {
@@ -276,10 +318,11 @@ mod tests {
 
     #[test]
     fn two_nodes_whose_names_cast_alike_are_refused_naming_the_name() {
+        let camera_class = a_registered_camera_class();
         let graph = GraphSnapshot::from_graph_document(serde_json::json!({
             "nodes": [
-                {"name": "FrontCam", "type": A_CAMERA_CLASS},
-                {"name": "frontcam", "type": A_CAMERA_CLASS}
+                {"name": "FrontCam", "type": camera_class},
+                {"name": "frontcam", "type": camera_class}
             ]
         }))
         .unwrap();
@@ -295,8 +338,9 @@ mod tests {
 
     #[test]
     fn a_link_naming_a_node_the_graph_does_not_hold_is_refused() {
+        let camera_class = a_registered_camera_class();
         let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
+            "nodes": [{"name": "camera", "type": camera_class}],
             "links": [{"source": {"node": "camera", "port": "video"},
                        "target": {"node": "display", "port": "video"}}]
         }))
@@ -310,8 +354,9 @@ mod tests {
 
     #[test]
     fn an_exposure_naming_a_node_the_graph_does_not_hold_is_refused() {
+        let camera_class = a_registered_camera_class();
         let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
+            "nodes": [{"name": "camera", "type": camera_class}],
             "exposed": [{"node": "display", "port": "video"}]
         }))
         .unwrap();
@@ -319,6 +364,37 @@ mod tests {
         let refusal = graph.validate().unwrap_err().to_string();
 
         assert!(refusal.contains("holds no node `display`"), "{refusal}");
+    }
+
+    #[test]
+    fn a_link_end_naming_a_port_its_node_does_not_have_in_that_direction_is_refused() {
+        let camera_class = a_registered_camera_class();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "front", "type": camera_class}, {"name": "back", "type": camera_class}],
+            "links": [{"source": {"node": "front", "port": "frames_in"},
+                       "target": {"node": "back", "port": "frames_in"}}]
+        }))
+        .unwrap();
+
+        let refusal = graph.validate().unwrap_err().to_string();
+
+        assert!(refusal.contains("no output port `frames_in`"), "{refusal}");
+        assert!(refusal.contains("video"), "{refusal}");
+    }
+
+    #[test]
+    fn a_remote_end_the_mesh_cannot_address_is_refused_before_anything_loads() {
+        let camera_class = a_registered_camera_class();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "back", "type": camera_class}],
+            "links": [{"source": {"runtime_name": "bench/cam", "node": "camera", "port": "video"},
+                       "target": {"node": "back", "port": "frames_in"}}]
+        }))
+        .unwrap();
+
+        let refusal = graph.validate().unwrap_err().to_string();
+
+        assert!(refusal.contains("runtime name"), "{refusal}");
     }
 
     #[test]

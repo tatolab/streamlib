@@ -1405,22 +1405,19 @@ impl Runner {
     }
 
     /// Refuse, before anything is added, a node `graph` names that this
-    /// runtime's graph already holds — so a refused load adds nothing.
+    /// runtime's graph already holds. With `validate` run first, a load refused
+    /// for anything in the graph itself or for a name it shares adds nothing; a
+    /// link the engine then refuses still leaves the nodes added before it.
     fn refuse_a_node_name_this_graph_already_holds(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
     ) -> Result<()> {
         self.compiler.scope(|live_graph, _tx| {
-            for node in &graph.nodes {
-                let cast = crate::core::graph::cast_exposed_name_to_url_safe(&node.name)?;
-                if live_graph.traversal().v_with_node_name(&cast).exists() {
-                    return Err(Error::NodeNameTaken {
-                        name: node.name.clone(),
-                        cast: cast.into_owned(),
-                    });
-                }
-            }
-            Ok(())
+            graph.nodes.iter().try_for_each(|node| {
+                live_graph
+                    .the_requested_node_name_unless_taken(&node.name)
+                    .map(|_| ())
+            })
         })
     }
 }

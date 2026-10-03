@@ -3,6 +3,8 @@
 
 use std::time::Instant;
 
+use crate::core::error::Result;
+
 use super::edges::{Link, LinksFromAnotherRuntime};
 use super::nodes::ProcessorNode;
 use petgraph::graph::DiGraph;
@@ -92,6 +94,14 @@ impl Graph {
     /// Set the graph state.
     pub fn set_state(&mut self, state: GraphState) {
         self.state = state;
+    }
+
+    /// `requested_name` cast, refused by name when a node already has it.
+    pub(crate) fn the_requested_node_name_unless_taken(
+        &self,
+        requested_name: &str,
+    ) -> Result<String> {
+        super::traversal::the_requested_node_name_unless_taken(&self.digraph, requested_name)
     }
 
     /// The name of the stream this graph was loaded as, if it was loaded as one.
