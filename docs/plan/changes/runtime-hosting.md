@@ -10,7 +10,7 @@ ones it was told to keep, is addressed by its machine, and arrives from an insta
   is a local-API tool (`dev` is `run` plus a watch); with no runtime running each fails at the
   socket; `graph` returns every stream;
 - a kept stream is recorded in the state directory and comes back on every start, a crash's
-  restart included, unless it has `failed`; an attached one lives as long as its connection;
+  restart included, unless stopped or failed; an attached one lives as long as its connection;
 - every exposed name is cast to lowercase URL-safe; nothing is added to a stream's environment;
 - an address is `<machine>/<stream>/<node>/<port>`, right-anchored; the runtime name is gone;
 - Linux installs by `curl | sh`, which registers a systemd user service; macOS installs a signed,
@@ -82,7 +82,7 @@ started just like docker"; the owner holds the Developer ID. Chosen over a termi
 Owner, 2026-10-02: only URL-safe names, "always cast to lowercase … don't force people to write it
 like that or change imports". Every exposed name is cast — lowercased, accents dropped, anything
 outside RFC 3986's unreserved set turned into `-`, ≤63 characters; empty, `.` or `..` refused — and
-a defaulted duplicate takes `-2` (`camerasource-2`). Written into §Networking's address entry and
+a defaulted node duplicate takes `-2` (`camerasource-2`). Written into §Networking's address entry and
 amending the display-name entry. Node and port names are cast in step 1 — #2565's live add and
 #2567's builder build the cast and `-2`, not ` 2`, and `@node` refuses ports casting alike
 (stream-graph re-spelled here); machine and stream names and remote addresses in S3. The engine
@@ -290,7 +290,7 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 - **Pinning a crash**: a node's threads, those it spawns and its escalate worker carry its stream;
   alternate-stack signal handlers and a hook on an escaping panic write the crashing thread's
   stream through a file opened at start. OS-owned threads, SIGKILL and an OOM kill implicate none.
-- **A stream's processes inherit the runtime's environment and the lend's variables** only.
+- **A stream's processes inherit the runtime's environment minus every `PYTHON*` variable**; `PYTHONPATH` is the lend then the project.
 - **The runtime compiles**, in the project's interpreter, so an agent loads exactly as the CLI does.
 - **Attached is a connection's lifetime**: an agent's attached stream ends when its host restarts `mcp`.
 - **The owner's `expose` wins** over the function's `exposed` (the glossary's suggestion/decision).

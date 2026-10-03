@@ -14,7 +14,7 @@ packaged on Apple.
 
 - One runtime per machine, owned by whoever installed or started it; another user's runtime is
   refused naming the holder. A server or robot runs it as one service account.
-- `run` attached, `run -d` kept and re-loaded on every start unless failed, `stop` unloads and
+- `run` attached, `run -d` kept and re-loaded on every start unless stopped or failed, `stop` unloads and
   remembers, `start` resumes, `rm` forgets (amended 2026-10-02), `streams` lists, `dev` reloads
   on edit; no `up`/`down` — `tatolabd` runs in a terminal or a container where no installer put it.
 - Composition is plain Python over a flat graph.
@@ -26,7 +26,7 @@ packaged on Apple.
   cannot reach the socket, as `docker` does with its daemon down. `Tatolab.app` registers the
   login service on Apple (Docker Desktop's shape), a terminal runs `tatolabd` there until the app
   ships, and on Linux the installer registers a systemd user service, Docker Engine's shape.
-- Kept streams always come back unless failed; `stop` remembers, `start` resumes, `rm` forgets; an attached
+- Kept streams always come back unless stopped or failed; `stop` remembers, `start` resumes, `rm` forgets; an attached
   stream ends with its terminal command (2026-10-02).
 - Every CLI stream action is also a tool and `graph` returns every stream, because the CLI is a
   pure client of the runtime's tools; surfaces cross between streams on one machine with no
@@ -40,7 +40,8 @@ packaged on Apple.
   Docker Desktop does; Developer ID signed and notarised. The terminal stays a developer's path.
 - Names are cast, never refused for spelling (2026-10-02, runtime-hosting decision 3): every
   exposed name is lowercased into RFC 3986's unreserved characters — one casting to empty, `.` or
-  `..` is refused — a defaulted duplicate takes `-2`; what a person writes is never constrained.
+  `..` is refused — a defaulted node duplicate takes `-2` while a duplicate stream name is
+  refused (`--name`); what a person writes is never constrained.
 - No environment variables are built in (2026-10-02, runtime-hosting decision 4): a stream's
   processes start in its project directory with nothing added per stream or from the caller; a
   stream that wants a `.env` loads it itself.

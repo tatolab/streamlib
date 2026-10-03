@@ -123,8 +123,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   logs in the terminal, Ctrl-C unloads it; `tatolab run -d` loads it to keep — the runtime
   records the graph its function compiled to at that load, the project's venv path and the
   exposures in its state directory, and re-loads that recorded graph on every start, a crash's
-  restart included. There are no restart policies: a kept stream always comes back unless it has
-  failed. `tatolab
+  restart included. There are no restart policies: a kept stream always comes back unless stopped
+  or failed. `tatolab
   stop` unloads a kept stream and remembers it as stopped, across restarts too; `tatolab start`
   re-loads a stopped stream from its record; `tatolab rm` forgets a stream, the only verb that
   loses one (owner, 2026-10-02, amending the 2026-10-01 stop-forgets reading). An attached
