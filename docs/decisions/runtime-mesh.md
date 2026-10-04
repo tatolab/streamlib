@@ -3,6 +3,12 @@
 Rationale for the `[runtime-mesh]` entries in `docs/plan/ARCHITECTURE.md` §Networking,
 decided 2026-09-14.
 
+> Superseded 2026-10-04 by `moq-on-the-tailnet.md`: Zenoh and the runtime mesh are removed.
+> Real-time data that leaves a machine travels over MoQ on QUIC on the tailnet, served by the
+> engine. What stands from this record: that transport between machines is the engine's, never a
+> processor's or an extension's. It is kept as the rationale for code that ships until the
+> removal change lands.
+
 ## Trigger
 
 Read this before proposing that runtime-to-runtime data ride a processor, a gateway node, an

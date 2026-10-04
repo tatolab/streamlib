@@ -18,7 +18,9 @@ packaged on Apple.
   remembers, `start` resumes, `rm` forgets (amended 2026-10-02), `streams` lists, `dev` reloads
   on edit; no `up`/`down` — `tatolabd` runs in a terminal or a container where no installer put it.
 - Composition is plain Python over a flat graph.
-- The runtime keeps the GPU context, signals, Zenoh session, local API and relay once per machine;
+- The runtime keeps the GPU context, signals, ~~Zenoh session,~~ local API ~~and relay~~ once per
+  machine (the Zenoh session and the bundled relay superseded 2026-10-04 by
+  `moq-on-the-tailnet.md`);
   every other per-process table becomes per stream. Streams on one machine link without exposing;
   surfaces are shared across all of the runtime's processor interpreters.
 - On Apple, `tatolabd` is an SMAppService agent inside the signed Tatolab app.
@@ -31,9 +33,10 @@ packaged on Apple.
 - Every CLI stream action is also a tool and `graph` returns every stream, because the CLI is a
   pure client of the runtime's tools; surfaces cross between streams on one machine with no
   copy (both confirmed 2026-10-02).
-- A machine-name clash on the mesh takes the next unused suffix (`<name>-2`, then `-3`…),
-  recorded and kept for good —
-  the first claimant keeps the bare name (2026-10-02).
+- > ~~A machine-name clash on the mesh takes the next unused suffix (`<name>-2`, then `-3`…),
+  > recorded and kept for good — the first claimant keeps the bare name (2026-10-02).~~ —
+  > Superseded 2026-10-04 by `moq-on-the-tailnet.md`: a machine's name is its tailnet name, which
+  > Tailscale keeps unique, so nothing is claimed or suffixed here.
 
 - A minimal `Tatolab.app` ships with runtime hosting, not at step 10 (2026-10-02, runtime-hosting
   decision 2): opening it starts the runtime if it is not running and offers the login item, as
