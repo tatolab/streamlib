@@ -4258,7 +4258,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   sequence's steps 8 and 9, then resources, packs and the app. Owner, 2026-10-04.
   [moq-on-the-tailnet]
 - **OPEN** — The sharing step's details, decided at its own align and built against by nothing
-  until then: how groups are cut for data that is not video, without the engine reading a bag;
+  until then: which versions of `moq-net` and `moq-tokio` are pinned; how groups are cut for
+  data that is not video, without the engine reading a bag;
   what a public port whose bags name a surface serves off the machine, the mesh having sent raw
   pixels where a browser needs encoded video; how a relay is joined and how a machine's ports
   are named there; the certificate the engine's QUIC listener shows a browser; how the HTTP

@@ -78,6 +78,8 @@ Each is the sharing step's align to decide; none is built against until then.
 - The read-only MCP: its tools and who may call it.
 - What a control client hands the runtime beyond a relay address and a credential.
 - The verbs that list machines and their public ports.
+- Which versions of `moq-net` and `moq-tokio` are pinned; the change that builds the endpoint
+  names them.
 
 ## Why
 
