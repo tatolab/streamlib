@@ -59,7 +59,7 @@ SLACK_OVER_THE_OBSERVED_RUN_SECONDS = 2.0
 
 # The sink opens its file at `setup()`, which a graph loaded and never run does
 # not reach, so nothing is ever written here.
-NEVER_OPENED_RECORDING_PATH = "never-opened-recording.mp4"
+NEVER_OPENED_RECORDING_PATH = "/nonexistent-streamlib-test/never-opened.mp4"
 
 
 @pytest.fixture(scope="module")

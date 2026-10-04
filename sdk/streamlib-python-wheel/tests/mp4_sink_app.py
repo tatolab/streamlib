@@ -40,9 +40,11 @@ RECORDED_TRACK_NAMES_MARKER = "MARKER:RECORDED_TRACK_NAMES "
 # file owes one track per inbound link and this is the list of them.
 RECORDED_PAIR_NAMES = ("first", "second")
 
-# `--path`, which `main()` sets before compiling: a stream function takes
-# nothing but its `Stream`, so the command line reaches it through here.
-recording_path_from_the_command_line = ""
+
+def _parse_mp4_sink_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--path", required=True, help="the file to record into")
+    return parser.parse_args()
 
 
 @stream
@@ -50,7 +52,7 @@ def two_tone_pairs_recorded_into_one_mp4(stream: Stream) -> None:
     sink = stream.add(
         streamlib.Mp4Sink,
         name="recorder",
-        config={"path": recording_path_from_the_command_line},
+        config={"path": _parse_mp4_sink_arguments().path},
     )
     for pair_name in RECORDED_PAIR_NAMES:
         source = stream.add(StereoToneSource, name=f"{pair_name}_tone")
@@ -74,12 +76,6 @@ def _recorded_track_names() -> "list[str]":
 
 
 def main() -> None:
-    global recording_path_from_the_command_line
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--path", required=True, help="the file to record into")
-    arguments = parser.parse_args()
-    recording_path_from_the_command_line = arguments.path
-
     graph = compile_stream_to_graph(two_tone_pairs_recorded_into_one_mp4)
     runtime = streamlib.Runtime()
     runtime.load(graph)
