@@ -253,6 +253,10 @@ one, with no change to the graph, the loader or `graph`.
   (`:4437-4444`) — so a live `add_processor` adds an unexposed node, and exposing it means
   changing the stream's function, which is the "function wins" rule applied.
 - The two-process mesh fixtures and the live arms expose what they wire.
+- **Owner, 2026-10-04: exposure is a visibility dial, never a logic dial.** It says who *else*
+  may reach a port, and which ports get a usable address; a stream's own wiring always runs. So
+  "exposed ports only" above reads as "exposed ports, plus a port the stream itself wired into an
+  input on the asking runtime — offered to that runtime alone". Built in #2566 (PR #2622).
 
 ## MODIFIED: §Product `:39-46`, `:83-98` and §Processor model `:1253-1318` — records re-spelled
 

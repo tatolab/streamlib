@@ -518,29 +518,27 @@ fn this_runtimes_address_for_one_of_its_own_output_ports(
     MeshPortAddress::new(this_runtimes_name, display_name, port_name)
 }
 
-/// Record that the stream wired its own output port at `source_address` into an
-/// input on `input_runtime_name`, so that runtime may read the port.
+/// Record on the node `source_address` names that the stream wired one of its
+/// output ports into an input on another runtime.
 fn record_that_this_stream_wired_its_output_port_into_another_runtime(
     compiler: &Arc<Compiler>,
     source_address: &MeshPortAddress,
-    input_runtime_name: &str,
-) {
+    wired: OutputPortWiredToAnotherRuntime,
+) -> Result<()> {
     compiler.scope(|graph, _tx| {
-        let Some(processor_id) = graph
+        let processor_id = graph
             .traversal()
             .v_with_node_name(source_address.processor_display_name())
             .first()
             .map(|node| node.id.clone())
-        else {
-            return;
-        };
-        let Some(node) = graph.traversal_mut().v(&processor_id).first_mut() else {
-            return;
-        };
-        let wired = OutputPortWiredToAnotherRuntime {
-            port_name: source_address.port_name().to_string(),
-            input_runtime_name: input_runtime_name.to_string(),
-        };
+            .ok_or_else(|| {
+                Error::ProcessorNotFound(source_address.processor_display_name().to_string())
+            })?;
+        let node = graph
+            .traversal_mut()
+            .v(&processor_id)
+            .first_mut()
+            .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
         match node.get_mut::<OutputPortsWiredToAnotherRuntimeComponent>() {
             Some(wired_ports) => {
                 wired_ports.0.insert(wired);
@@ -548,6 +546,35 @@ fn record_that_this_stream_wired_its_output_port_into_another_runtime(
             None => node.insert_component_without_rendering_it(
                 OutputPortsWiredToAnotherRuntimeComponent([wired].into()),
             ),
+        }
+        Ok(())
+    })
+}
+
+/// Forget the wiring the request `link_request_id` asked for, wherever it was
+/// recorded — the request never left, or it was cancelled before any runtime
+/// applied it.
+fn forget_the_wiring_a_link_request_asked_for(
+    compiler: &Arc<Compiler>,
+    link_request_id: &LinkRequestUniqueId,
+) {
+    compiler.scope(|graph, _tx| {
+        let nodes_holding_wiring: Vec<ProcessorUniqueId> = graph
+            .traversal()
+            .v(())
+            .iter()
+            .filter(|node| node.has::<OutputPortsWiredToAnotherRuntimeComponent>())
+            .map(|node| node.id.clone())
+            .collect();
+        for processor_id in nodes_holding_wiring {
+            if let Some(wired_ports) = graph
+                .traversal_mut()
+                .v(&processor_id)
+                .first_mut()
+                .and_then(|node| node.get_mut::<OutputPortsWiredToAnotherRuntimeComponent>())
+            {
+                wired_ports.forget_the_wiring_requested_by(link_request_id);
+            }
         }
     });
 }
@@ -922,18 +949,23 @@ impl RuntimeOperations for Runner {
             )?,
         };
         let input_runtime_name = to.runtime_name().to_string();
-        if source_address.names_the_runtime(self.runtime_mesh.runtime_name()) {
+        let link_request_id = LinkRequestUniqueId::new();
+        let it_is_this_streams_own_wiring =
+            source_address.names_the_runtime(self.runtime_mesh.runtime_name());
+        if it_is_this_streams_own_wiring {
             // Before the request leaves: the input's runtime answers it by asking
-            // this one for the port, and a stream's own wiring runs whatever the
-            // port's exposure.
+            // this one for the port.
             record_that_this_stream_wired_its_output_port_into_another_runtime(
                 &self.compiler,
                 &source_address,
-                &input_runtime_name,
-            );
+                OutputPortWiredToAnotherRuntime {
+                    port_name: source_address.port_name().to_string(),
+                    input_runtime_name: input_runtime_name.clone(),
+                    link_request_id: link_request_id.clone(),
+                },
+            )?;
         }
-        let link_request_id = LinkRequestUniqueId::new();
-        self.runtime_mesh.ask_another_runtime_for_a_link(
+        let asked = self.runtime_mesh.ask_another_runtime_for_a_link(
             ALinkRequestOnTheMesh::asking_for_a_link(
                 link_request_id.clone(),
                 source_address,
@@ -941,7 +973,11 @@ impl RuntimeOperations for Runner {
                 self.runtime_mesh.runtime_name(),
             ),
             &input_runtime_name,
-        )?;
+        );
+        if asked.is_err() && it_is_this_streams_own_wiring {
+            forget_the_wiring_a_link_request_asked_for(&self.compiler, &link_request_id);
+        }
+        asked?;
         Ok(link_request_id)
     }
 
@@ -970,6 +1006,7 @@ impl RuntimeOperations for Runner {
 
     fn cancel_link_request(&self, link_request_id: &LinkRequestUniqueId) -> Result<()> {
         if self.runtime_mesh.cancel_a_link_request(link_request_id) {
+            forget_the_wiring_a_link_request_asked_for(&self.compiler, link_request_id);
             return Ok(());
         }
         Err(Error::NotFound(format!(
@@ -1055,13 +1092,21 @@ mod connect_wires_without_inspecting_a_port_tests {
 
     use parking_lot::Mutex;
 
-    use super::{RuntimeMeshMembership, connect_impl, disconnect_impl, remove_processor_impl};
+    use super::{
+        RuntimeMeshMembership, connect_impl, disconnect_impl,
+        forget_the_wiring_a_link_request_asked_for,
+        record_that_this_stream_wired_its_output_port_into_another_runtime, remove_processor_impl,
+    };
     use crate::core::compiler::{Compiler, PendingOperation};
     use crate::core::descriptors::ProcessorClassImportPath;
     use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
     use crate::core::graph::{
         GraphEdgeWithComponents, InputLinkPortRef, LinkUniqueId, MeshPortAddress,
         OutputLinkPortRef, PendingDeletionComponent, ProcessorUniqueId,
+    };
+    use crate::core::graph::{
+        GraphNodeWithComponents as _, LinkRequestUniqueId, OutputPortWiredToAnotherRuntime,
+        OutputPortsWiredToAnotherRuntimeComponent,
     };
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
@@ -1395,6 +1440,82 @@ mod connect_wires_without_inspecting_a_port_tests {
                 "the address must resolve to the node the display name labels"
             );
         });
+    }
+
+    /// Forgetting one request's wiring leaves every other request's in place,
+    /// so a cancelled push takes back only the read it granted.
+    ///
+    /// Mental-revert: forget by port or by runtime rather than by request and a
+    /// second push of the same port to the same runtime loses its grant too.
+    #[test]
+    fn forgetting_a_requests_wiring_takes_back_that_request_alone() {
+        register_producer_and_consumer_descriptors();
+        let (compiler, from, _to) = compiler_holding_a_producer_and_consumer_node();
+        let producer_id = from
+            .processor_id_on_this_runtime()
+            .cloned()
+            .expect("the fixture's source is local");
+        let source_address = MeshPortAddress::new(
+            THIS_RUNTIMES_NAME,
+            the_display_name_the_graph_gave(&compiler, &producer_id),
+            "out",
+        )
+        .expect("a legal address");
+        let (cancelled, kept) = (LinkRequestUniqueId::new(), LinkRequestUniqueId::new());
+        for link_request_id in [&cancelled, &kept] {
+            record_that_this_stream_wired_its_output_port_into_another_runtime(
+                &compiler,
+                &source_address,
+                OutputPortWiredToAnotherRuntime {
+                    port_name: "out".to_string(),
+                    input_runtime_name: "wall-screen-7c1d".to_string(),
+                    link_request_id: link_request_id.clone(),
+                },
+            )
+            .expect("the source is in the graph");
+        }
+
+        forget_the_wiring_a_link_request_asked_for(&compiler, &cancelled);
+
+        let still_wired = compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(&producer_id)
+                .first()
+                .and_then(|node| node.get::<OutputPortsWiredToAnotherRuntimeComponent>())
+                .map(|wired| {
+                    wired
+                        .0
+                        .iter()
+                        .map(|wired| wired.link_request_id.clone())
+                        .collect::<Vec<_>>()
+                })
+        });
+        assert_eq!(still_wired, Some(vec![kept]));
+    }
+
+    /// Recording wiring for a node the graph does not hold is refused by name
+    /// rather than dropped, so the request is never sent on a grant that was
+    /// never made.
+    #[test]
+    fn recording_wiring_for_a_node_the_graph_does_not_hold_is_refused() {
+        register_producer_and_consumer_descriptors();
+        let (compiler, _from, _to) = compiler_holding_a_producer_and_consumer_node();
+
+        let refusal = record_that_this_stream_wired_its_output_port_into_another_runtime(
+            &compiler,
+            &MeshPortAddress::new(THIS_RUNTIMES_NAME, "NoSuchProcessor", "out")
+                .expect("a legal address"),
+            OutputPortWiredToAnotherRuntime {
+                port_name: "out".to_string(),
+                input_runtime_name: "wall-screen-7c1d".to_string(),
+                link_request_id: LinkRequestUniqueId::new(),
+            },
+        )
+        .expect_err("there is no node to record it on")
+        .to_string();
+
+        assert!(refusal.contains("nosuchprocessor"), "{refusal}");
     }
 
     /// A destination node name this runtime does not hold is refused the same

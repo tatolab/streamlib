@@ -125,9 +125,9 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
 /// answer that it offers a port it then declines to send.
 ///
 /// Nameability alone: the offer is answered for every port the asker may read
-/// on every query, and a sending runtime does no work for a port nobody reads, so this
-/// may touch nothing but the two names. Every other way a port turns out
-/// unsendable is found when its egress starts, by the egress.
+/// on every query, and a sending runtime does no work for a port nobody reads,
+/// so this may touch nothing but the two names. Every other way a port turns
+/// out unsendable is found when its egress starts, by the egress.
 fn the_channel_an_output_port_publishes_to(
     source_processor_id: &str,
     port_name: &str,
@@ -252,36 +252,11 @@ mod tests {
         (compiler, display_name, output_writer)
     }
 
-    /// Expose `port_name` of the node `display_name` names, the way a loaded
-    /// stream's `exposed` does.
-    fn expose(compiler: &Compiler, display_name: &str, port_name: &str) {
-        compiler.scope(|graph, _tx| {
-            let processor_id = graph
-                .traversal()
-                .v_with_node_name(display_name)
-                .first()
-                .expect("the node is in the graph")
-                .id
-                .clone();
-            graph
-                .traversal_mut()
-                .v(&processor_id)
-                .first_mut()
-                .expect("the node is in the graph")
-                .insert_component_without_rendering_it(ExposedOutputPortsComponent(vec![
-                    port_name.to_string(),
-                ]));
-        });
-    }
-
-    /// Record that the stream wired `port_name` of the node `display_name` names
-    /// into an input on `input_runtime_name`, as asking that runtime for the
-    /// link does.
-    fn wire_into_another_runtime(
+    /// Insert `component` on the node `display_name` names.
+    fn insert_on_the_node_named<Component: crate::core::graph::StorableComponent>(
         compiler: &Compiler,
         display_name: &str,
-        port_name: &str,
-        input_runtime_name: &str,
+        component: Component,
     ) {
         compiler.scope(|graph, _tx| {
             let processor_id = graph
@@ -296,14 +271,41 @@ mod tests {
                 .v(&processor_id)
                 .first_mut()
                 .expect("the node is in the graph")
-                .insert_component_without_rendering_it(OutputPortsWiredToAnotherRuntimeComponent(
-                    [crate::core::graph::OutputPortWiredToAnotherRuntime {
-                        port_name: port_name.to_string(),
-                        input_runtime_name: input_runtime_name.to_string(),
-                    }]
-                    .into(),
-                ));
+                .insert_component_without_rendering_it(component);
         });
+    }
+
+    /// Expose `port_name` of the node `display_name` names, the way a loaded
+    /// stream's `exposed` does.
+    fn expose(compiler: &Compiler, display_name: &str, port_name: &str) {
+        insert_on_the_node_named(
+            compiler,
+            display_name,
+            ExposedOutputPortsComponent(vec![port_name.to_string()]),
+        );
+    }
+
+    /// Record that the stream wired `port_name` of the node `display_name` names
+    /// into an input on `input_runtime_name`, as asking that runtime for the
+    /// link does.
+    fn wire_into_another_runtime(
+        compiler: &Compiler,
+        display_name: &str,
+        port_name: &str,
+        input_runtime_name: &str,
+    ) {
+        insert_on_the_node_named(
+            compiler,
+            display_name,
+            OutputPortsWiredToAnotherRuntimeComponent(
+                [crate::core::graph::OutputPortWiredToAnotherRuntime {
+                    port_name: port_name.to_string(),
+                    input_runtime_name: input_runtime_name.to_string(),
+                    link_request_id: crate::core::graph::LinkRequestUniqueId::new(),
+                }]
+                .into(),
+            ),
+        );
     }
 
     /// A port the stream wired into another runtime is that runtime's to read

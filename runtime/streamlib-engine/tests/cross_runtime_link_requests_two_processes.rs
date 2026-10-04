@@ -218,16 +218,16 @@ impl LinkRequestPeerProcess {
     /// Add a processor under `display_name`, its output exposed, and wait for
     /// the peer to say so.
     fn add_a_processor_displayed_as(&mut self, display_name: &str) {
-        self.add_a_processor_displayed_as_exposing_its_output_or_not(display_name, true);
+        self.add_a_processor(display_name, true);
     }
 
-    /// Add a processor under `display_name`, exposing its output only when
-    /// `expose` says so, and wait for the peer to say so.
-    fn add_a_processor_displayed_as_exposing_its_output_or_not(
-        &mut self,
-        display_name: &str,
-        expose: bool,
-    ) {
+    /// Add a processor under `display_name` without exposing its output, and
+    /// wait for the peer to say so.
+    fn add_a_processor_displayed_as_without_exposing_its_output(&mut self, display_name: &str) {
+        self.add_a_processor(display_name, false);
+    }
+
+    fn add_a_processor(&mut self, display_name: &str, expose: bool) {
         self.ask_it_to(serde_json::json!({
             "command": "add",
             "display_name": display_name,
@@ -432,9 +432,8 @@ fn a_streams_own_push_from_an_unexposed_port_is_offered_only_to_the_runtime_it_p
         runtime_directory: sending_runtime_directory.path().to_path_buf(),
     });
     sending.wait_until_it_is_up();
-    sending
-        .add_a_processor_displayed_as_exposing_its_output_or_not(THE_SOURCES_DISPLAY_NAME, false);
-    sending.add_a_processor_displayed_as_exposing_its_output_or_not("secondsource", false);
+    sending.add_a_processor_displayed_as_without_exposing_its_output(THE_SOURCES_DISPLAY_NAME);
+    sending.add_a_processor_displayed_as_without_exposing_its_output("secondsource");
 
     let mut wiring = LinkRequestPeerProcess::launch(HowToLaunchAPeer {
         runtime_name: "xr-op-agent".to_string(),

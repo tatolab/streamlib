@@ -3,22 +3,24 @@
 
 use std::collections::BTreeSet;
 
-/// The output ports of this node its stream wired into an input on another
-/// runtime, each with that runtime's name.
-///
-/// A stream's own wiring runs whatever the port's exposure: the runtime named
-/// here may read the port, and no other runtime gains anything from it. Held on
-/// the node so a removed node takes its wiring with it.
+use crate::core::graph::LinkRequestUniqueId;
+
+/// The output ports of this node its stream asked another runtime to wire into
+/// one of its inputs — each of those runtimes may read the port whatever its
+/// exposure.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OutputPortsWiredToAnotherRuntimeComponent(pub BTreeSet<OutputPortWiredToAnotherRuntime>);
 
-/// One output port wired into an input on the runtime `input_runtime_name`.
+/// One output port the request `link_request_id` asked the runtime
+/// `input_runtime_name` to wire into one of its inputs.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct OutputPortWiredToAnotherRuntime {
     /// The output port's name on this node.
     pub port_name: String,
     /// The name of the runtime holding the input it is wired into.
     pub input_runtime_name: String,
+    /// The request that asked for the link.
+    pub link_request_id: LinkRequestUniqueId,
 }
 
 impl OutputPortsWiredToAnotherRuntimeComponent {
@@ -27,5 +29,11 @@ impl OutputPortsWiredToAnotherRuntimeComponent {
         self.0.iter().any(|wired| {
             wired.port_name == port_name && wired.input_runtime_name == input_runtime_name
         })
+    }
+
+    /// Forget the wiring the request `link_request_id` asked for.
+    pub fn forget_the_wiring_requested_by(&mut self, link_request_id: &LinkRequestUniqueId) {
+        self.0
+            .retain(|wired| &wired.link_request_id != link_request_id);
     }
 }

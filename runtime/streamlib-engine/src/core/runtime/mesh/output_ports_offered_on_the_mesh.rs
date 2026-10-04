@@ -537,6 +537,73 @@ pub(crate) fn a_registry_whose_graph_offers(
     registry
 }
 
+/// A graph reader that offers `ports` to the runtime `reading_runtime_name`
+/// alone, answering that runtime a way to read each one and every other
+/// runtime nothing.
+#[cfg(test)]
+struct AGraphOfferingOnlyTo {
+    reading_runtime_name: String,
+    ports: OutputPortsOfferedOnTheMesh,
+}
+
+#[cfg(test)]
+impl WhatThisRuntimeOffersOnTheMesh for AGraphOfferingOnlyTo {
+    fn output_ports_it_offers_right_now(
+        &self,
+        asking_runtime_name: &str,
+    ) -> OutputPortsOfferedOnTheMesh {
+        if asking_runtime_name == self.reading_runtime_name {
+            self.ports.clone()
+        } else {
+            OutputPortsOfferedOnTheMesh::default()
+        }
+    }
+
+    fn how_to_read_an_offered_output_port(
+        &self,
+        processor_display_name: &str,
+        port_name: &str,
+        reading_runtime_name: &str,
+    ) -> Option<HowToReadAnOfferedOutputPort> {
+        (reading_runtime_name == self.reading_runtime_name
+            && self.ports.offers(processor_display_name, port_name))
+        .then(|| HowToReadAnOfferedOutputPort {
+            channel_service_name: format!("{processor_display_name}/{port_name}"),
+            channel_sizing: crate::iceoryx2::ChannelSizing {
+                max_subscribers: 1,
+                channel_service_creation_depth: 1,
+            },
+            the_helpers_answer_that_it_opened_its_publisher: None,
+        })
+    }
+}
+
+/// A registry whose graph offers exactly `ports` to the runtime
+/// `reading_runtime_name` and nothing to any other.
+#[cfg(test)]
+pub(crate) fn a_registry_whose_graph_offers_only_to(
+    reading_runtime_name: &str,
+    ports: &[(&str, &str)],
+) -> WhatThisRuntimeOffersOnTheMeshRegistry {
+    let registry = WhatThisRuntimeOffersOnTheMeshRegistry::default();
+    registry.record_how_to_read_this_runtimes_graph(std::sync::Arc::new(AGraphOfferingOnlyTo {
+        reading_runtime_name: reading_runtime_name.to_string(),
+        ports: OutputPortsOfferedOnTheMesh {
+            ports: ports
+                .iter()
+                .map(
+                    |(processor_display_name, port_name)| OutputPortOfferedOnTheMesh {
+                        processor_display_name: processor_display_name.to_string(),
+                        port_name: port_name.to_string(),
+                    },
+                )
+                .collect(),
+            ..Default::default()
+        },
+    }));
+    registry
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
