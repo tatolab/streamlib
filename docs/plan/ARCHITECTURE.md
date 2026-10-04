@@ -4077,16 +4077,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
   any node of the stream may link to it, and nothing outside the stream may read it.
   **Private**: any other stream on the machine, and code on the machine, may read it.
-  **Public**: private, plus a URL reachable off the machine, the bundled relay serving it, and
-  other machines reading it over the mesh — directly on a LAN or a tailnet, or through a relay;
-  a pushed stream map, when there is one, narrows which peers. `stream.expose(output)` makes an
+  **Public**: private, plus a URL reachable off the machine, which other machines and tools
+  pull. `stream.expose(output)` makes an
   output private and `stream.expose(output, Exposure.PUBLIC)` public; a level is an enum
   member, never a string. The stream's function sets where its exposures start; `expose` at
   the CLI, the app or the local API changes them while the stream runs, the change applies at
   once — a reader the new level no longer allows is cut off — and neither the runtime nor the
   stream restarts. The engine checks the live exposures wherever a read crosses a stream's
-  edge: another stream's link, a reader or URL on the machine, the mesh's offer and egress,
-  and the relay. Nothing leaves the machine until a port is public; taking a public URL onto
+  edge — another stream's link, a reader or URL on the machine, a reader on another machine —
+  and a port is read from outside its stream only through exposure: no debugging tap or other
+  door bypasses it, and a stream's own logs are how its insides are seen. Nothing leaves the machine until a port is public; taking a public URL onto
   the internet is Tailscale serve's or funnel's, never the runtime's. The CLI and the app list
   every running stream with its private and public ports; an internal port may be listed and
   is never readable. Discovery is unaffected: a runtime still announces itself and lists its

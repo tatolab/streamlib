@@ -15,7 +15,7 @@ level, and before passing an exposure level as a string.
 Every output port of a stream is internal (the default), private or public. Inside a stream,
 any node links to any port and exposure is never consulted. Private lets other streams and code
 on the same machine read the port, so one stream's hardware camera can feed others. Public adds
-a URL reachable off the machine, the bundled relay, and other machines over the mesh. Exposure
+a URL reachable off the machine, which other machines and tools pull. Exposure
 is a permissions map the runtime consults where a read crosses a stream's edge, and it can be
 changed live.
 
@@ -40,6 +40,10 @@ changed live.
   exposed port and pulls it. This also matches the local-API rule that control never crosses
   machines, which a link request quietly did.
 
+- **No tap.** A tap that reads any port is a door around the permission. Reading a port from
+  outside its stream goes through exposure, so every read is listed and revocable; a stream's
+  insides are seen through its own logs.
+
 ## Rejected alternatives
 
 - **Any runtime may push or wire two others (2026-09-14).** It existed so agents could push data
@@ -51,6 +55,9 @@ changed live.
   shared machine.
 
 ## Consequences
+
+- The `tap` and `exchange` verbs and their MCP tools are retired once a private read can stand
+  in for them, including the repo's GPU verification. That is a later change.
 
 - The link request (push and third-party wiring) is retired: `request_link_on_remote_input_runtime`,
   the remote-destination spellings in Python and MCP, the link-request queryable, and `graph`'s
