@@ -32,7 +32,9 @@ use crate::python_added_processor::{
     PythonRemoteProcessorOutputPortReference, the_input_link_port_ref_this_destination_names,
     the_output_link_port_ref_this_source_names,
 };
-use crate::python_bag_conversion::python_object_to_json_value;
+use crate::python_bag_conversion::{
+    python_object_to_json_value, python_object_to_json_value_refusing_what_json_cannot_carry_as,
+};
 use crate::python_processor_registration::register_processor_class;
 
 /// What kind of thing `Runtime.add` was handed, resolved once up front.
@@ -676,7 +678,15 @@ impl PythonRuntimeHandle {
         // `rt.add(CameraSource)` — the spelling the plan blesses for a block
         // that needs no configuration — fail at graph compile time.
         let configuration = match config {
-            Some(config) => python_object_to_json_value(config.as_any())?,
+            Some(config) => python_object_to_json_value_refusing_what_json_cannot_carry_as(
+                config.as_any(),
+                |convert_failure| {
+                    PyTypeError::new_err(format!(
+                        "config must survive a JSON round trip, because the engine stores it on \
+                         the graph node: {convert_failure}"
+                    ))
+                },
+            )?,
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
 

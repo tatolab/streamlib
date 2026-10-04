@@ -541,6 +541,26 @@ def test_a_graph_holding_what_json_cannot_carry_is_refused_with_the_converters_t
     assert not the_node_name_is_taken(runtime, "testpatternsource")
 
 
+def test_bytes_are_refused_in_adds_config_naming_the_graph_node_and_in_a_graph_naming_none(
+    runtime: streamlib.Runtime,
+):
+    with pytest.raises(TypeError) as refused_by_add:
+        runtime.add(DisplayWindow, config={"title": b"fit"})
+    with pytest.raises(TypeError) as refused_by_load:
+        runtime.load(pattern_to_window_graph_with_window_scaling(b"fit"))
+
+    assert str(refused_by_add.value) == (
+        "config must survive a JSON round trip, because the engine stores it on the graph "
+        "node: error while decoding value: invalid type: byte array, expected any valid "
+        "JSON value"
+    )
+    assert str(refused_by_load.value) == (
+        f"{GRAPH_IS_NOT_JSON_DATA}the value must survive a JSON round trip: error while "
+        f"decoding value: invalid type: byte array, expected any valid JSON value — carry "
+        f"`bytes` as a `str` or a list of ints. {PLAIN_JSON_DATA_FIX}"
+    )
+
+
 GRAPH_HOLDING_ITSELF_REFUSED_IN_ITS_OWN_PROCESS = f"""
     import streamlib
     from streamlib import DisplayWindow
