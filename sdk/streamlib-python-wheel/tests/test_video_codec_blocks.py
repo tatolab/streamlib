@@ -26,7 +26,16 @@ from pathlib import Path
 import pytest
 
 import streamlib
-from streamlib import H264Decoder, H264Encoder, H265Decoder, H265Encoder, VideoFrame
+from streamlib import (
+    H264Decoder,
+    H264Encoder,
+    H265Decoder,
+    H265Encoder,
+    Stream,
+    VideoFrame,
+    compile_stream_to_graph,
+    stream,
+)
 from video_codec_blocks_probes import (
     DECODED_STAMPS_REPORTED,
     ENCODED_FRAMES_REPORTED,
@@ -59,18 +68,47 @@ ANNEX_B_START_CODES = ([0, 0, 0, 1], [0, 0, 1])
 
 FOUR_CODEC_MARKERS = [H264Encoder, H264Decoder, H265Encoder, H265Decoder]
 
+
+def _add_a_codec_round_trip_into_a_window(
+    stream: Stream,
+    encoder_class: "type[H264Encoder] | type[H265Encoder]",
+    decoder_class: "type[H264Decoder] | type[H265Decoder]",
+) -> None:
+    pattern = stream.add(streamlib.TestPatternSource)
+    encoder = stream.add(encoder_class)
+    decoder = stream.add(decoder_class)
+    window = stream.add(streamlib.DisplayWindow)
+    stream.connect(pattern.output("video"), encoder.input("video"))
+    stream.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
+    stream.connect(decoder.output("video"), window.input("video"))
+
+
+@stream
+def h264_round_trip_into_a_window(stream: Stream) -> None:
+    _add_a_codec_round_trip_into_a_window(stream, H264Encoder, H264Decoder)
+
+
+@stream
+def h265_round_trip_into_a_window(stream: Stream) -> None:
+    _add_a_codec_round_trip_into_a_window(stream, H265Encoder, H265Decoder)
+
+
+@stream
+def every_codec_block(stream: Stream) -> None:
+    for marker_class in FOUR_CODEC_MARKERS:
+        stream.add(marker_class)
+
+
 CODEC_ROUND_TRIPS = {
     "h264": {
-        "encoder": H264Encoder,
-        "decoder": H264Decoder,
+        "stream": h264_round_trip_into_a_window,
         "rendered_types": {
             "H264Encoder": "streamlib_media_builtins::h264_encoder::H264Encoder",
             "H264Decoder": "streamlib_media_builtins::h264_decoder::H264Decoder",
         },
     },
     "h265": {
-        "encoder": H265Encoder,
-        "decoder": H265Decoder,
+        "stream": h265_round_trip_into_a_window,
         "rendered_types": {
             "H265Encoder": "streamlib_media_builtins::h265_encoder::H265Encoder",
             "H265Decoder": "streamlib_media_builtins::h265_decoder::H265Decoder",
@@ -90,10 +128,14 @@ def test_the_marker_class_cannot_be_instantiated(marker_class):
 
 @pytest.mark.parametrize("marker_class", FOUR_CODEC_MARKERS)
 def test_display_name_defaults_to_the_type_name(marker_class):
+    graph = compile_stream_to_graph(every_codec_block)
+    (codec_node,) = [
+        node for node in graph["nodes"] if node["type"] == marker_class.type
+    ]
+    assert codec_node["name"] == marker_class.__name__.lower()
     runtime = streamlib.Runtime()
     try:
-        block = runtime.add(marker_class)
-        assert block.display_name == marker_class.__name__.lower()
+        runtime.load(graph)
     finally:
         runtime.shutdown()
 
@@ -101,18 +143,13 @@ def test_display_name_defaults_to_the_type_name(marker_class):
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 def test_the_round_trip_wires_without_an_adapter(codec):
     """Pattern into encoder, encoder into decoder, decoder into window — the
-    port names compose as published, which is what makes four `rt.add` calls
-    and three `rt.connect` calls the whole of a codec round trip."""
-    blocks = CODEC_ROUND_TRIPS[codec]
+    port names compose as published, which is what makes four `stream.add`
+    calls and three `stream.connect` calls the whole of a codec round trip.
+    The builder checks no port name, so the proof is the engine's `load`."""
+    graph = compile_stream_to_graph(CODEC_ROUND_TRIPS[codec]["stream"])
     runtime = streamlib.Runtime()
     try:
-        pattern = runtime.add(streamlib.TestPatternSource)
-        encoder = runtime.add(blocks["encoder"])
-        decoder = runtime.add(blocks["decoder"])
-        window = runtime.add(streamlib.DisplayWindow)
-        runtime.connect(pattern.output("video"), encoder.input("video"))
-        runtime.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
-        runtime.connect(decoder.output("video"), window.input("video"))
+        runtime.load(graph)
     finally:
         runtime.shutdown()
 
@@ -167,9 +204,8 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
         "timestamps are the ordering primitive and must advance"
     )
 
-    # The import path the marker resolved to is what identifies the node —
-    # readable only off a live graph, because a marker class exposes no
-    # import path to Python.
+    # The import path the marker resolved to is what identifies the node,
+    # read back off the live graph the run loaded.
     assert "MARKER:CODEC_NODE_TYPES_UNREADABLE" not in app.output, (
         f"the run could not read its own graph:\n{app.output}"
     )

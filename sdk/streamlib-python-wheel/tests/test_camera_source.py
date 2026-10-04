@@ -16,6 +16,7 @@ import pytest
 
 import streamlib
 from camera_source_named_device_app import UNOPENABLE_DEVICE_ID
+from streamlib import Stream, compile_stream_to_graph, stream
 
 NAMED_DEVICE_APP = Path(__file__).parent / "camera_source_named_device_app.py"
 
@@ -28,11 +29,17 @@ def test_the_marker_class_cannot_be_instantiated():
         streamlib.CameraSource()
 
 
+@stream
+def a_camera_source_alone(stream: Stream) -> None:
+    stream.add(streamlib.CameraSource)
+
+
 def test_display_name_defaults_to_the_type_name():
+    graph = compile_stream_to_graph(a_camera_source_alone)
+    assert [node["name"] for node in graph["nodes"]] == ["camerasource"]
     runtime = streamlib.Runtime()
     try:
-        camera = runtime.add(streamlib.CameraSource)
-        assert camera.display_name == "camerasource"
+        runtime.load(graph)
     finally:
         runtime.shutdown()
 
