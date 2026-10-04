@@ -32,8 +32,10 @@ use streamlib_engine::core::descriptors::{
 use streamlib_engine::core::graph::{
     LinkRequestUniqueId, LinkUniqueId, MeshPortAddress, OutputLinkPortRef, ProcessorUniqueId,
 };
-use streamlib_engine::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use streamlib_engine::core::json_schema::ExposedOutputPortOutput;
+use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
 use streamlib_engine::core::runtime::{Runner, RuntimeMeshConfiguration, RuntimeOperations};
+use streamlib_engine::core::{GraphSnapshot, GraphSnapshotNode};
 
 /// What the peer writes once its runtime is constructed.
 const READY_LINE: &str = "READY";
@@ -111,7 +113,8 @@ fn register_the_one_processor_type_this_peer_adds() {
 #[derive(serde::Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum WhatTheFixtureAsked {
-    /// Add a processor under this display name.
+    /// Load a one-node stream under this display name, exposing the node's
+    /// output, so another runtime can read it across the mesh.
     Add { display_name: String },
     /// Ask another runtime to carry a port into one of its inputs. A source
     /// with no runtime name is one of this runtime's own, named by display
@@ -159,16 +162,22 @@ fn read_every_command_until_stdin_closes(
 fn answer_one_command(runtime: &Arc<Runner>, asked: WhatTheFixtureAsked) -> serde_json::Value {
     match asked {
         WhatTheFixtureAsked::Add { display_name } => {
-            let mut spec = ProcessorSpec::new(
-                ProcessorClassImportPath::new(THE_CLASS_PATH).expect("a legal class path"),
-                serde_json::Value::Null,
-            );
-            spec.display_name = Some(display_name.clone());
-            match runtime.add_processor(spec) {
-                Ok(processor_id) => serde_json::json!({
-                    "added": display_name,
-                    "processor_id": processor_id.as_str(),
-                }),
+            let one_node_stream = GraphSnapshot {
+                stream: None,
+                nodes: vec![GraphSnapshotNode {
+                    name: display_name.clone(),
+                    processor_type: ProcessorClassImportPath::new(THE_CLASS_PATH)
+                        .expect("a legal class path"),
+                    config: serde_json::Value::Null,
+                }],
+                links: Vec::new(),
+                exposed: vec![ExposedOutputPortOutput {
+                    node: display_name.clone(),
+                    port: THE_OUTPUT_PORT.to_string(),
+                }],
+            };
+            match runtime.load_graph_snapshot(&one_node_stream) {
+                Ok(()) => serde_json::json!({ "added": display_name }),
                 Err(refusal) => serde_json::json!({ "refused": refusal.to_string() }),
             }
         }

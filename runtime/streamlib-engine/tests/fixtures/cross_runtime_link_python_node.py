@@ -11,7 +11,7 @@ is a Python processor, the reader spells the remote port with
 Python processor — so the link's name has to survive the parent's wiring
 envelope into a child interpreter to be read at all.
 
-`--source` publishes the known signal, with nothing on its own runtime reading
+`--source` publishes and exposes the known signal, with nothing on its own runtime reading
 it. `--reader <source runtime name>` pulls
 `<that name>/KnownAudioSignalSource/audio` into the probe.
 
@@ -64,7 +64,8 @@ def known_signal_offered_to_the_mesh(stream: Stream) -> None:
 
     # Nothing here reads the port: the reader across the mesh is its only
     # consumer, which is the whole of what this end proves (#2344).
-    stream.add(KnownAudioSignalSource, name=THE_SOURCES_NODE_NAME)
+    source = stream.add(KnownAudioSignalSource, name=THE_SOURCES_NODE_NAME)
+    stream.expose(source.output(THE_PORT))
 
 
 @stream

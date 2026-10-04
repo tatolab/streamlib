@@ -8,7 +8,7 @@
 //! half of the bar: two whole runtimes, both started, one pulling the other's
 //! output port through the ordinary `connect`.
 //!
-//! `--source` runs a `MicrophoneSource` and offers it. `--reader` links from
+//! `--source` runs a `MicrophoneSource` and exposes it. `--reader` links from
 //! `<source runtime name>/MicrophoneSource/audio` into an `OpusEncoder`, whose
 //! input declares a window contract — so the arm also covers the case where the
 //! destination's own contract sizes the channel the ingress must publish onto.
@@ -18,7 +18,7 @@
 //! of the bar: a link neither of them asked for, wired by a third runtime over
 //! MCP, which is the only way a third-party wiring is made.
 //!
-//! `--video-source` runs a `TestPatternSource` and offers it; `--video-reader`
+//! `--video-source` runs a `TestPatternSource` and exposes it; `--video-reader`
 //! links from `<source runtime name>/TestPatternSource/video` into an
 //! `H264Encoder` on Linux and a `DisplayWindow` on macOS. That arm is the
 //! frame-carrying one: a video bag names a surface, and a surface id means
@@ -46,8 +46,11 @@ fn main() -> streamlib::sdk::error::Result<()> {
 
 mod rig {
     use streamlib::sdk::app::{AddedProcessor, App};
+    use streamlib::sdk::descriptors::ProcessorClassImportPath;
     use streamlib::sdk::error::{Error, Result};
     use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress, OutputLinkPortRef};
+    use streamlib::sdk::graph_snapshot::{GraphSnapshot, GraphSnapshotNode};
+    use streamlib::sdk::json_schema::ExposedOutputPortOutput;
     use streamlib_media_builtins::{
         MicrophoneSource, OpusEncoder, TestPatternSource, register_media_builtin_processor_types,
     };
@@ -127,10 +130,12 @@ mod rig {
 
         match which_end {
             WhichEndOfTheLink::TheSource => {
-                app.add(
+                load_one_node_exposing_its_port(
+                    &app,
                     MicrophoneSource::Processor::processor_class_import_path(),
                     serde_json::json!({}),
-                    Some(THE_SOURCES_DISPLAY_NAME),
+                    THE_SOURCES_DISPLAY_NAME,
+                    THE_PORT,
                 )?;
                 tracing::info!(
                     "cross_runtime_link_rig: offering {}/{THE_PORT} as {}",
@@ -170,13 +175,15 @@ mod rig {
                 );
             }
             WhichEndOfTheLink::TheVideoSource => {
-                app.add(
+                load_one_node_exposing_its_port(
+                    &app,
                     TestPatternSource::Processor::processor_class_import_path(),
                     serde_json::json!({
                         "width": THE_PATTERNS_WIDTH,
                         "height": THE_PATTERNS_HEIGHT,
                     }),
-                    Some(THE_VIDEO_SOURCES_DISPLAY_NAME),
+                    THE_VIDEO_SOURCES_DISPLAY_NAME,
+                    THE_VIDEO_PORT,
                 )?;
                 tracing::info!(
                     "cross_runtime_link_rig: offering {}/{THE_VIDEO_PORT} as {}",
@@ -208,6 +215,30 @@ mod rig {
         }
 
         app.run()
+    }
+
+    /// Load a one-node stream exposing `port_name`, since nothing leaves the
+    /// machine until a stream exposes it.
+    fn load_one_node_exposing_its_port(
+        app: &App,
+        processor_class_import_path: ProcessorClassImportPath,
+        config: serde_json::Value,
+        node_name: &str,
+        port_name: &str,
+    ) -> Result<()> {
+        app.runner().load_graph_snapshot(&GraphSnapshot {
+            stream: None,
+            nodes: vec![GraphSnapshotNode {
+                name: node_name.to_string(),
+                processor_type: processor_class_import_path,
+                config,
+            }],
+            links: Vec::new(),
+            exposed: vec![ExposedOutputPortOutput {
+                node: node_name.to_string(),
+                port: port_name.to_string(),
+            }],
+        })
     }
 
     /// What the video reader links the crossed frames into.
