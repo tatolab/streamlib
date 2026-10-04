@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.4.0...streamlib-moq-v0.5.0) (2026-10-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** the graph is one shape — the snapshot a runtime loads is what graph renders ([#2614](https://github.com/tatolab/streamlib/issues/2614))
+
+### Features
+
+* **engine:** the graph is one shape — the snapshot a runtime loads is what graph renders ([#2614](https://github.com/tatolab/streamlib/issues/2614)) ([66a0675](https://github.com/tatolab/streamlib/commit/66a0675e34376c23afe1322a4f61bc22256ef553))
+
 ## [0.4.0](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.3.5...streamlib-moq-v0.4.0) (2026-10-03)
 
 

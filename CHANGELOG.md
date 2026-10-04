@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.28.0](https://github.com/tatolab/streamlib/compare/v0.27.0...v0.28.0) (2026-10-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** the graph is one shape — the snapshot a runtime loads is what graph renders ([#2614](https://github.com/tatolab/streamlib/issues/2614))
+
+### Features
+
+* **engine:** the graph is one shape — the snapshot a runtime loads is what graph renders ([#2614](https://github.com/tatolab/streamlib/issues/2614)) ([66a0675](https://github.com/tatolab/streamlib/commit/66a0675e34376c23afe1322a4f61bc22256ef553))
+
 ## [0.27.0](https://github.com/tatolab/streamlib/compare/v0.26.48...v0.27.0) (2026-10-03)
 
 
