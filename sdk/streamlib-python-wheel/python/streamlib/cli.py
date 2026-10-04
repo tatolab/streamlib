@@ -512,8 +512,10 @@ def stream_functions_defined_in(
 ) -> "list[Callable[..., Any]]":
     """The `@stream` functions the entry defines itself, each once, in definition order.
 
-    A stream imported into the entry from another module is that module's, and
-    is launched from there; a second name bound to a stream is still one stream.
+    A stream imported into the entry from another module is that module's: it is
+    never the entry's sole stream nor listed among its streams, though a target
+    naming the name it is bound at loads it. A second name bound to a stream is
+    still one stream.
     """
     return list(
         dict.fromkeys(
@@ -577,20 +579,8 @@ def select_stream_function(
         )
 
     named_value = entry_namespace.get(stream_function_name)
-    for stream_function in stream_functions:
-        if (
-            stream_function.__name__ == stream_function_name
-            or stream_function is named_value
-        ):
-            return stream_function
     if is_stream_function(named_value):
-        defining_module_name = getattr(named_value, "__module__", None)
-        raise AppLaunchError(
-            f"`{stream_function_name}` in {entry_described} is a @stream imported from "
-            f"`{defining_module_name}`; launch it where it is defined: "
-            f"`{launch_command} {defining_module_name}:"
-            f"{getattr(named_value, '__name__', stream_function_name)}`."
-        )
+        return named_value
     if stream_function_name in entry_namespace:
         raise AppLaunchError(
             f"`{stream_function_name}` in {entry_described} is not a @stream function: "

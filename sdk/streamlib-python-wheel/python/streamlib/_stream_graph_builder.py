@@ -17,7 +17,7 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import FunctionType
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar
 
 from ._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
@@ -163,7 +163,7 @@ def _the_function_unless_it_cannot_be_a_stream(candidate: object) -> FunctionTyp
     return stream_function
 
 
-def is_stream_function(candidate: object) -> bool:
+def is_stream_function(candidate: object) -> TypeGuard[Callable[..., Any]]:
     """Whether `candidate` is a function `@stream` declared."""
     return inspect.isfunction(candidate) and all(
         isinstance(getattr(candidate, stamp, None), str)

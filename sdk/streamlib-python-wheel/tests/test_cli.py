@@ -917,12 +917,10 @@ def test_a_named_function_that_is_not_a_stream_is_refused_naming_the_fix(
 
 
 @pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
-def test_a_stream_imported_into_the_entry_is_launched_where_it_is_defined(
-    tmp_path: Path,
-    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
-    capsys: pytest.CaptureFixture[str],
+def test_a_stream_imported_into_the_entry_loads_when_a_target_names_it(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
 ):
-    """A stream counts for the file that defines it, not every file importing it."""
+    """An imported stream is never the entry's sole stream, yet a target may name it."""
     write_app(tmp_path, "imported_rigs.py", TWO_STREAM_SOURCE)
     write_app(
         tmp_path, "stream.py", "from imported_rigs import front\n" + MINIMAL_STREAM_SOURCE
@@ -931,20 +929,14 @@ def test_a_stream_imported_into_the_entry_is_launched_where_it_is_defined(
     assert cli.main(["run", "--dir", str(tmp_path)]) == 0
     assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
 
-    exit_code = cli.main(["run", "--dir", str(tmp_path), "stream.py:front"])
-
-    assert exit_code == 1
-    assert (
-        f"`streamlib run --dir {tmp_path} imported_rigs:front`"
-        in capsys.readouterr().err
-    )
+    recorded_launch_runtime_calls.calls.clear()
+    assert cli.main(["run", "--dir", str(tmp_path), "stream.py:front"]) == 0
+    assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
 
 
 @pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
-def test_a_stream_imported_under_another_name_is_launched_by_its_own(
-    tmp_path: Path,
-    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
-    capsys: pytest.CaptureFixture[str],
+def test_a_stream_imported_under_another_name_loads_by_that_name(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
 ):
     write_app(tmp_path, "renamed_import_rigs.py", TWO_STREAM_SOURCE)
     write_app(
@@ -953,13 +945,54 @@ def test_a_stream_imported_under_another_name_is_launched_by_its_own(
         "from renamed_import_rigs import front as side\n" + MINIMAL_STREAM_SOURCE,
     )
 
-    exit_code = cli.main(["run", "--dir", str(tmp_path), "stream.py:side"])
+    assert cli.main(["run", "--dir", str(tmp_path), "stream.py:side"]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_package_target_loads_a_stream_its_init_re_exports(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    """`acme_rover:camera_rig`, where `acme_rover/__init__.py` re-exports it."""
+    write_app(
+        tmp_path,
+        "re_exporting_rover/__init__.py",
+        "from re_exporting_rover.streams import front\n",
+    )
+    write_app(tmp_path, "re_exporting_rover/streams.py", TWO_STREAM_SOURCE)
+
+    assert cli.main(["run", "--dir", str(tmp_path), "re_exporting_rover:front"]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_package_target_naming_a_value_that_is_not_a_stream_is_refused_naming_the_fix(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(
+        tmp_path,
+        "re_exporting_helper_rover/__init__.py",
+        "from re_exporting_helper_rover.helpers import wire_cameras\n",
+    )
+    write_app(
+        tmp_path,
+        "re_exporting_helper_rover/helpers.py",
+        "def wire_cameras(stream):\n    pass\n",
+    )
+
+    exit_code = cli.main(
+        ["run", "--dir", str(tmp_path), "re_exporting_helper_rover:wire_cameras"]
+    )
 
     assert exit_code == 1
     refusal = capsys.readouterr().err
-    assert "`side` in" in refusal
-    assert "is a @stream imported from `renamed_import_rigs`" in refusal
-    assert f"`streamlib run --dir {tmp_path} renamed_import_rigs:front`" in refusal
+    assert "`wire_cameras` in" in refusal and "is not a @stream function" in refusal
+    assert "decorate it with `@stream`" in refusal
+    assert recorded_launch_runtime_calls.calls == []
 
 
 def test_an_entry_defining_both_a_stream_and_setup_is_refused(
