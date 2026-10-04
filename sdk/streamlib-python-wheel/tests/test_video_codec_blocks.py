@@ -127,7 +127,7 @@ def test_the_marker_class_cannot_be_instantiated(marker_class):
 
 
 @pytest.mark.parametrize("marker_class", FOUR_CODEC_MARKERS)
-def test_display_name_defaults_to_the_type_name(marker_class):
+def test_node_name_defaults_to_the_type_name(marker_class):
     graph = compile_stream_to_graph(every_codec_block)
     (codec_node,) = [
         node for node in graph["nodes"] if node["type"] == marker_class.type

@@ -2898,7 +2898,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   #2413]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_marker_class_cannot_be_instantiated -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_display_name_defaults_to_the_type_name -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_node_name_defaults_to_the_type_name -->
 - **DECIDED** — `streamlib.EncodedVideoFrame` is the Python cast over the encoded-frame
   bag's wire keys: pure Python beside `audio_block.py`, read with
   `ctx.inputs.read("encoded_video", into=EncodedVideoFrame)`, owing no `.pyi` entry

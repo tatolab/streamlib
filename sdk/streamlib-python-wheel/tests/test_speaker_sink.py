@@ -55,7 +55,7 @@ def one_speaker_sink_left_unnamed(stream: Stream) -> None:
     stream.add(streamlib.SpeakerSink)
 
 
-def test_display_name_defaults_to_the_type_name():
+def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(one_speaker_sink_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == ["speakersink"]
 

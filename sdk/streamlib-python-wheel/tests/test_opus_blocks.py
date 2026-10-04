@@ -82,7 +82,7 @@ def both_opus_markers(stream: Stream) -> None:
 
 
 @pytest.mark.parametrize("marker_class", TWO_OPUS_MARKERS)
-def test_display_name_defaults_to_the_type_name(marker_class):
+def test_node_name_defaults_to_the_type_name(marker_class):
     graph = compile_stream_to_graph(both_opus_markers)
     [marker_node] = [
         node for node in graph["nodes"] if node["type"] == marker_class.type

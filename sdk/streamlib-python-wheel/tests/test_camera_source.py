@@ -34,7 +34,7 @@ def a_camera_source_alone(stream: Stream) -> None:
     stream.add(streamlib.CameraSource)
 
 
-def test_display_name_defaults_to_the_type_name():
+def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(a_camera_source_alone)
     assert [node["name"] for node in graph["nodes"]] == ["camerasource"]
     runtime = streamlib.Runtime()

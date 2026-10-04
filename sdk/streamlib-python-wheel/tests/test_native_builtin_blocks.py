@@ -183,7 +183,7 @@ def a_test_pattern_source_alone(stream: Stream) -> None:
     stream.add(TestPatternSource)
 
 
-def test_display_name_defaults_to_the_type_name():
+def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(a_test_pattern_source_alone)
     assert [node["name"] for node in graph["nodes"]] == ["testpatternsource"]
     runtime = streamlib.Runtime()

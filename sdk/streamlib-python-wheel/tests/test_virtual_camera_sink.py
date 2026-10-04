@@ -350,7 +350,7 @@ def a_virtual_camera_sink_alone(stream: Stream) -> None:
 
 
 @pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
-def test_display_name_defaults_to_the_type_name():
+def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(a_virtual_camera_sink_alone)
     assert [node["name"] for node in graph["nodes"]] == ["virtualcamerasink"]
     runtime = streamlib.Runtime()

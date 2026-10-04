@@ -127,7 +127,7 @@ def one_mp4_sink_left_unnamed(stream: Stream) -> None:
     stream.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
 
 
-def test_display_name_defaults_to_the_type_name():
+def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(one_mp4_sink_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == ["mp4sink"]
 
