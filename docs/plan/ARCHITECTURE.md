@@ -3820,7 +3820,6 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   2026-09-14 rule that any runtime may push or wire: a source never wires itself into a reader,
   the way a server never wires its URL into a client's browser. [exposure-levels; runtime-mesh;
   cross-runtime-links — link requests SHIPPED #2289, retired by this entry]
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::link_requests_this_runtime_has_sent -->
 - **DECIDED** — A remote link naming a runtime that is not on the mesh waits and wires when
   that runtime appears; a runtime that is present but offers no such processor or port refuses
   the link by name, listing what it does offer; and a link whose remote runtime leaves returns
@@ -3998,7 +3997,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   node has not had applied, each `awaiting_runtime` while its runtime is absent, `unanswered`
   while it is not replying, or `refused` with that runtime's own words.
   [runtime-mesh — SHIPPED #2283, #2285; the link shape and the two request keys —
-  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by local-api: peers and the `nodes` table drop `control_plane_urls`; a link end renders `{node, port}` or `{runtime_name, node, port}`, and an egress port `{node, port, reader_runtime_names}` (§Control plane, the local API speaks the graph's words)]
+  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by exposure-levels: `link_requests_awaiting_runtime` and a link's `created_by_runtime_name` are retired with the link request (pull-only); amended by local-api: peers and the `nodes` table drop `control_plane_urls`; a link end renders `{node, port}` or `{runtime_name, node, port}`, and an egress port `{node, port, reader_runtime_names}` (§Control plane, the local API speaks the graph's words)]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_port_another_runtime_reads_renders_with_the_runtimes_reading_it -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is -->
@@ -4395,7 +4394,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   instructions carry what the new states mean — `awaiting_remote` and its reason,
   `created_by_runtime_name`, `stamp_clock_identity`, and a `connect` whose input is on
   another runtime answering a `link_request_id` rather than a `link_id`, because only the
-  runtime owning an input wires a link into it.
+  runtime owning an input wires a link into it. Since 2026-10-04 links are only pulled, so
+  `created_by_runtime_name`, `link_request_id` and a remote input are retired (§Networking,
+  pull-only).
   [importable-python-library, mcp-served-with-the-node — SHIPPED #1712;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974 for the vocabulary
   sentence; live graph mutation restored by owner ruling 2026-09-06; resources and
