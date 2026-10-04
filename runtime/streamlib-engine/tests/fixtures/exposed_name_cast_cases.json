@@ -114,5 +114,25 @@
   {
     "name": "カメラ",
     "refused": true
+  },
+  {
+    "name": "main",
+    "cast": "main"
+  },
+  {
+    "name": "camera_rig",
+    "cast": "camera_rig"
+  },
+  {
+    "name": "Camera Rig",
+    "cast": "camera-rig"
+  },
+  {
+    "name": "InvertingEffect",
+    "cast": "invertingeffect"
+  },
+  {
+    "name": "BrightnessMeter",
+    "cast": "brightnessmeter"
   }
 ]
