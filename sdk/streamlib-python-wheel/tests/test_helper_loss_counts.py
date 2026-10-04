@@ -122,8 +122,8 @@ from {LOSS_COUNTING_PROCESSORS_MODULE} import FastBagSource, NewestSink, SlowOrd
 
 def setup(rt: Runtime) -> None:
     source = rt.add(FastBagSource, display_name="source")
-    slow_sink = rt.add(SlowOrderedSink, display_name="slow sink")
-    oversized_sink = rt.add(NewestSink, display_name="oversized sink")
+    slow_sink = rt.add(SlowOrderedSink, display_name="slow-sink")
+    oversized_sink = rt.add(NewestSink, display_name="oversized-sink")
     rt.connect(source.output("bags"), slow_sink.input("bags"))
     rt.connect(source.output("oversized_bags"), oversized_sink.input("bags"))
 '''
@@ -144,39 +144,39 @@ def mcp_json(control_url: str, tool_name: str, arguments: dict) -> dict:
     return json.loads(call_tool(control_url, tool_name, arguments))
 
 
-def node_named(graph: dict, display_name: str) -> dict:
-    """The one node carrying `display_name`, or a failure naming what is there."""
-    matches = [node for node in graph["nodes"] if node["display_name"] == display_name]
+def node_named(graph: dict, name: str) -> dict:
+    """The one node carrying `name`, or a failure naming what is there."""
+    matches = [node for node in graph["nodes"] if node["name"] == name]
     assert len(matches) == 1, (
-        f"expected exactly one node named {display_name!r}; graph names "
-        f"{[node['display_name'] for node in graph['nodes']]}"
+        f"expected exactly one node named {name!r}; graph names "
+        f"{[node['name'] for node in graph['nodes']]}"
     )
     return matches[0]
 
 
-def metrics_of(control_url: str, display_name: str) -> dict:
-    """What `graph` renders under `display_name`'s `metrics`, or `{}` for no key."""
-    node = node_named(mcp_json(control_url, "graph", {}), display_name)
+def metrics_of(control_url: str, name: str) -> dict:
+    """What `graph` renders under `name`'s `metrics`, or `{}` for no key."""
+    node = node_named(mcp_json(control_url, "graph", {}), name)
     return node["components"].get("metrics", {})
 
 
 def await_metrics_satisfying(
     control_url: str,
-    display_name: str,
+    name: str,
     satisfied: "Callable[[dict], bool]",
     awaited: str,
     node: LaunchedNode,
 ) -> dict:
-    """Poll `graph` until `display_name`'s metrics satisfy `satisfied`."""
+    """Poll `graph` until `name`'s metrics satisfy `satisfied`."""
     deadline = time.monotonic() + COUNT_TIMEOUT_SECONDS
     metrics: dict = {}
     while time.monotonic() < deadline:
-        metrics = metrics_of(control_url, display_name)
+        metrics = metrics_of(control_url, name)
         if satisfied(metrics):
             return metrics
         time.sleep(0.2)
     raise AssertionError(
-        f"{display_name!r} never rendered {awaited} within {COUNT_TIMEOUT_SECONDS}s; "
+        f"{name!r} never rendered {awaited} within {COUNT_TIMEOUT_SECONDS}s; "
         f"its metrics were {metrics}\n{node.recent_output()}"
     )
 
@@ -207,11 +207,11 @@ def launch_the_loss_counting_node(
     return node, entry["control_url"]
 
 
-def the_link_into(graph: dict, display_name: str) -> str:
-    """The id of the one link into `display_name`."""
-    node_id = node_named(graph, display_name)["id"]
-    link_ids = [link["id"] for link in graph["links"] if link["target"]["processor_id"] == node_id]
-    assert len(link_ids) == 1, f"expected one link into {display_name!r}: {graph['links']}"
+def the_link_into(graph: dict, name: str) -> str:
+    """The id of the one link into `name`."""
+    node_named(graph, name)
+    link_ids = [link["id"] for link in graph["links"] if link["target"]["node"] == name]
+    assert len(link_ids) == 1, f"expected one link into {name!r}: {graph['links']}"
     return link_ids[0]
 
 
@@ -233,11 +233,11 @@ def test_an_overrun_helper_placed_ordered_destination_renders_its_dropped_bags_p
     node, control_url = launch_the_loss_counting_node(
         tmp_path, isolated_runtime_directory, launch_node, monkeypatch
     )
-    link_id = the_link_into(mcp_json(control_url, "graph", {}), "slow sink")
+    link_id = the_link_into(mcp_json(control_url, "graph", {}), "slow-sink")
 
     metrics = await_metrics_satisfying(
         control_url,
-        "slow sink",
+        "slow-sink",
         any_dropped_bags_on(link_id),
         f"dropped bags on {link_id}",
         node,
@@ -277,8 +277,8 @@ def test_a_helper_placed_producers_write_refused_at_the_ceiling_renders_on_its_o
     assert metrics["refused_bags_by_output_port"]["bags"] == 0
     assert metrics["dropped_bags_by_link"] == {}, "the source has no inbound link"
     graph = mcp_json(control_url, "graph", {})
-    assert metrics_of(control_url, "oversized sink")["dropped_bags_by_link"] == {
-        the_link_into(graph, "oversized sink"): 0
+    assert metrics_of(control_url, "oversized-sink")["dropped_bags_by_link"] == {
+        the_link_into(graph, "oversized-sink"): 0
     }, "a bag refused before it reached any link is no loss on the destination's link"
     node.await_captured_output_containing(
         "refused a", COUNT_TIMEOUT_SECONDS
@@ -301,25 +301,24 @@ def test_a_killed_helpers_last_counts_render_until_its_processor_is_removed(
         tmp_path, isolated_runtime_directory, launch_node, monkeypatch
     )
     graph = mcp_json(control_url, "graph", {})
-    slow_sink_id = node_named(graph, "slow sink")["id"]
-    link_id = the_link_into(graph, "slow sink")
+    link_id = the_link_into(graph, "slow-sink")
     await_metrics_satisfying(
         control_url,
-        "slow sink",
+        "slow-sink",
         any_dropped_bags_on(link_id),
         f"dropped bags on {link_id}",
         node,
     )
     pid_marker = SLOW_SINK_PID.search(node.captured_output())
     assert pid_marker is not None, node.recent_output()
-    counted_before_the_kill = metrics_of(control_url, "slow sink")["dropped_bags_by_link"][link_id]
+    counted_before_the_kill = metrics_of(control_url, "slow-sink")["dropped_bags_by_link"][link_id]
 
     os.kill(int(pid_marker.group(1)), signal.SIGKILL)
     node.await_captured_output_containing("its helper process (pid=", COUNT_TIMEOUT_SECONDS)
 
-    after_the_kill = metrics_of(control_url, "slow sink")
+    after_the_kill = metrics_of(control_url, "slow-sink")
     time.sleep(1.0)
-    a_second_later = metrics_of(control_url, "slow sink")
+    a_second_later = metrics_of(control_url, "slow-sink")
     assert after_the_kill == a_second_later, "a dead helper's counts no longer move"
     assert set(after_the_kill) == APP_PROCESS_METRICS_KEYS, after_the_kill
     assert after_the_kill["dropped_bags_by_link"][link_id] >= counted_before_the_kill > 0, (
@@ -327,8 +326,8 @@ def test_a_killed_helpers_last_counts_render_until_its_processor_is_removed(
         f"{counted_before_the_kill}, after {after_the_kill}"
     )
 
-    mcp_json(control_url, "remove_processor", {"processor_id": slow_sink_id})
+    mcp_json(control_url, "remove_node", {"name": "slow-sink"})
     assert all(
-        rendered["id"] != slow_sink_id
+        rendered["name"] != "slow-sink"
         for rendered in mcp_json(control_url, "graph", {})["nodes"]
-    ), "a removed processor's node, and the counts on it, go with it"
+    ), "a removed node, and the counts on it, go with it"

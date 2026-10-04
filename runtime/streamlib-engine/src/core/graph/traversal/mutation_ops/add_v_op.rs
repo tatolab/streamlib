@@ -4,14 +4,15 @@
 use petgraph::graph::DiGraph;
 
 use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    GraphNodeWithComponents, Link, ProcessorNode, ProcessorTraversalMut, StateComponent,
-    TraversalSourceMut,
+    EXPOSED_NAME_MAXIMUM_LENGTH, GraphNodeWithComponents, Link, ProcessorNode,
+    ProcessorTraversalMut, StateComponent, TraversalSourceMut, cast_exposed_name_to_url_safe,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 
 impl<'a> TraversalSourceMut<'a> {
-    /// Add a new processor node to the graph.
+    /// Add a new processor node to the graph, named by `the_name_a_new_node_takes`.
     ///
     /// The node carries a [`StateComponent`] from here on — `Pending`, or
     /// `Error` on a registry miss.
@@ -22,7 +23,7 @@ impl<'a> TraversalSourceMut<'a> {
     /// gives API consumers (`GET /api/graph`) visibility of what failed and
     /// why — runtime-dynamic systems prefer "load-and-mark-failed" over
     /// "silently-skip" so observability survives the misconfiguration.
-    pub fn add_v(self, spec: ProcessorSpec) -> ProcessorTraversalMut<'a> {
+    pub fn add_v(self, spec: ProcessorSpec) -> Result<ProcessorTraversalMut<'a>> {
         // Gated on `port_info` presence — every registered processor has an
         // entry (subprocess-only descriptors register empty port lists), so
         // this resolves any registered type and misses only a
@@ -30,6 +31,8 @@ impl<'a> TraversalSourceMut<'a> {
         let resolved_ports = PROCESSOR_REGISTRY.port_info(&spec.name);
 
         let registry_miss = resolved_ports.is_none();
+
+        let name = the_name_a_new_node_takes(self.graph, spec.display_name.as_deref(), &spec.name)?;
 
         if registry_miss {
             tracing::error!(
@@ -42,13 +45,7 @@ impl<'a> TraversalSourceMut<'a> {
         // `GET /api/graph` names exactly what the caller asked for.
         let (inputs, outputs) = resolved_ports.unwrap_or_default();
 
-        let requested_display_name = spec
-            .display_name
-            .unwrap_or_else(|| default_display_name_for(&spec.name));
-        let display_name =
-            disambiguate_display_name_within_graph(self.graph, requested_display_name);
-
-        let node = ProcessorNode::new(spec.name, display_name, Some(spec.config), inputs, outputs);
+        let node = ProcessorNode::new(spec.name, name, Some(spec.config), inputs, outputs);
 
         let node_idx = self.graph.add_node(node);
 
@@ -64,55 +61,79 @@ impl<'a> TraversalSourceMut<'a> {
             }));
         }
 
-        ProcessorTraversalMut {
+        Ok(ProcessorTraversalMut {
             graph: self.graph,
             links_from_another_runtime: self.links_from_another_runtime,
             ids: vec![node_idx],
-        }
+        })
     }
 }
 
-/// The label a node takes when the caller named none: the class's short name,
-/// falling back to the requested import path when nothing is registered under
-/// it.
+/// The class's short name, falling back to the requested import path when
+/// nothing is registered under it — uncast.
 ///
 /// Read off the registered descriptor rather than recovered from the import
 /// path. Splitting the path on `:` or `::` would re-derive the short name the
 /// identity grammar used to carry — the engine holds the path opaque, and a
-/// display default is not a reason to start parsing it.
-pub(crate) fn default_display_name_for(
-    processor_class_import_path: &ProcessorClassImportPath,
-) -> String {
+/// default name is not a reason to start parsing it.
+fn default_display_name_for(processor_class_import_path: &ProcessorClassImportPath) -> String {
     PROCESSOR_REGISTRY
         .default_display_name(processor_class_import_path)
         .unwrap_or_else(|| processor_class_import_path.as_str().to_string())
 }
 
-/// Make `requested_display_name` unique among the graph's nodes by appending
-/// ` 2`, ` 3` … until nothing else answers to it.
-///
-/// The spelling is a contract, not a formatting choice: this one string is what
-/// the `add` handle reports, what `streamlib graph` renders, and what prefixes
-/// the processor's log records, so every language must show the same one.
-fn disambiguate_display_name_within_graph(
+/// `requested_name` cast, or [`Error::NodeNameTaken`] when a node in `graph`
+/// already has that name — a name the author typed is an address.
+pub(crate) fn the_requested_node_name_unless_taken(
     graph: &DiGraph<ProcessorNode, Link>,
-    requested_display_name: String,
-) -> String {
+    requested_name: &str,
+) -> Result<String> {
+    let cast = cast_exposed_name_to_url_safe(requested_name)?;
+    if graph.node_weights().any(|node| node.display_name == cast) {
+        return Err(Error::NodeNameTaken {
+            name: requested_name.to_string(),
+            cast: cast.into_owned(),
+        });
+    }
+    Ok(cast.into_owned())
+}
+
+/// The name a node added to `graph` takes: `requested_name` cast, or, when the
+/// caller gave none, the class's short name cast with the next free `-2`,
+/// `-3` … appended.
+///
+/// A given name that casts to one a node already has is [`Error::NodeNameTaken`]
+/// rather than suffixed, because a name the author typed is an address. A
+/// suffix is fitted by truncating the name before it, so the result stays
+/// within [`EXPOSED_NAME_MAXIMUM_LENGTH`].
+pub(crate) fn the_name_a_new_node_takes(
+    graph: &DiGraph<ProcessorNode, Link>,
+    requested_name: Option<&str>,
+    processor_class_import_path: &ProcessorClassImportPath,
+) -> Result<String> {
     let is_taken = |candidate: &str| {
         graph
             .node_weights()
             .any(|node| node.display_name == candidate)
     };
 
-    if !is_taken(&requested_display_name) {
-        return requested_display_name;
+    if let Some(requested_name) = requested_name {
+        return the_requested_node_name_unless_taken(graph, requested_name);
     }
 
+    let default_name = default_display_name_for(processor_class_import_path);
+    let cast = cast_exposed_name_to_url_safe(&default_name)?;
+    if !is_taken(&cast) {
+        return Ok(cast.into_owned());
+    }
     let mut ordinal = 2usize;
     loop {
-        let candidate = format!("{requested_display_name} {ordinal}");
+        let suffix = format!("-{ordinal}");
+        let room_before_the_suffix = EXPOSED_NAME_MAXIMUM_LENGTH - suffix.len();
+        let stem = cast[..cast.len().min(room_before_the_suffix)].trim_end_matches('-');
+        let candidate = format!("{stem}{suffix}");
         if !is_taken(&candidate) {
-            return candidate;
+            return Ok(candidate);
         }
         ordinal += 1;
     }

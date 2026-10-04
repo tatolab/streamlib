@@ -49,9 +49,9 @@ def main() -> None:
             with urllib.request.urlopen(registry_url, timeout=READ_TIMEOUT_SECONDS) as response:
                 served = json.load(response)
             catalog = {
-                entry["processor_class_import_path"]: entry
-                for entry in served["processors"]
-                if entry["processor_class_import_path"].startswith(
+                entry["type"]: entry
+                for entry in served["nodes"]
+                if entry["type"].startswith(
                     "processor_config_catalog_probes:"
                 )
             }

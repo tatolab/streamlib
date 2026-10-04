@@ -60,14 +60,15 @@ def _this_processes_control_url() -> str:
 
 
 def _report_the_codec_nodes_rendered_types(
-    encoder_display_name: str, decoder_display_name: str
+    marker_class_name_by_node_name: "dict[str, str]",
 ) -> None:
-    """Print the `type` `graph` renders for the two codec nodes."""
+    """Print the `type` `graph` renders for the two codec nodes, keyed by the
+    marker class each was added as."""
     graph = json.loads(call_tool(_this_processes_control_url(), "graph", {}))
     rendered_types = {
-        node["display_name"]: node["type"]
+        marker_class_name_by_node_name[node["name"]]: node["type"]
         for node in graph["nodes"]
-        if node["display_name"] in (encoder_display_name, decoder_display_name)
+        if node["name"] in marker_class_name_by_node_name
     }
     print(f"MARKER:CODEC_NODE_TYPES {json.dumps(rendered_types)}", flush=True)
 
@@ -119,7 +120,10 @@ def main() -> None:
         # failure this graph did not have.
         try:
             _report_the_codec_nodes_rendered_types(
-                encoder_class.__name__, decoder_class.__name__
+                {
+                    encoder.display_name: encoder_class.__name__,
+                    decoder.display_name: decoder_class.__name__,
+                }
             )
         except Exception as unreadable:  # noqa: BLE001 — the marker is the report
             print(f"MARKER:CODEC_NODE_TYPES_UNREADABLE {unreadable}", flush=True)

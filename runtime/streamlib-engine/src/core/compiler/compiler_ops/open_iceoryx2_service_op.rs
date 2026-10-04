@@ -873,39 +873,39 @@ fn the_id_a_mesh_egress_holds_a_helper_placed_output_port_open_under(
     LinkUniqueId::from(format!("mesh-egress/{source_proc_id}/{source_port}"))
 }
 
-/// Reverse-resolve what a caller named a channel by to the source that
-/// publishes to it: a channel data-service name
-/// (`{source processor id}/{source output port}`) or a port's mesh address
-/// (`<runtime name>/<display name>/<port>`).
+/// Resolve the address a caller names a port by — `<runtime name>/<node>/<port>`
+/// — to the source a link carries from: a port on this runtime when the address
+/// names `this_runtimes_name`, and a port on another runtime otherwise.
 ///
 /// A channel's iceoryx2 data service only exists once a `connect()` has wired
-/// its source, so a name no link carries from is genuinely untappable — the
-/// caller maps `None` to [`Error::TapChannelNotFound`]. The derivation is the
-/// same one the compiler op keys the service on, so a match here is exact
-/// (including the hash-legalized over-budget form and the hashed mesh-ingress
-/// form).
+/// its source, so an address no link carries from is genuinely untappable —
+/// the caller maps `None` to [`Error::TapChannelNotFound`], as it does an
+/// address that does not parse.
 ///
 /// [`Error::TapChannelNotFound`]: crate::core::error::Error::TapChannelNotFound
 pub(crate) fn find_the_source_a_caller_named(
-    graph: &mut Graph,
-    channel_or_mesh_address: &str,
+    graph: &Graph,
+    this_runtimes_name: &str,
+    port_address: &str,
 ) -> Option<OutputLinkPortRef> {
-    graph.traversal_mut().e(()).iter().find_map(|link| {
-        let source = link.from_port();
-        match source.mesh_port_address() {
-            Some(address) => {
-                (address.to_string() == channel_or_mesh_address).then(|| source.clone())
-            }
-            None => {
-                let derived = crate::iceoryx2::source_channel_name(
-                    source.processor_id_on_this_runtime()?.as_str(),
-                    source.port_name(),
-                )
-                .ok()?;
-                (derived.as_str() == channel_or_mesh_address).then(|| source.clone())
-            }
-        }
-    })
+    let address = crate::core::graph::MeshPortAddress::parse(port_address).ok()?;
+    let source = if address.names_the_runtime(this_runtimes_name) {
+        let processor_id = graph
+            .traversal()
+            .v_with_node_name(address.processor_display_name())
+            .first()?
+            .id
+            .clone();
+        OutputLinkPortRef::new(processor_id, address.port_name())
+    } else {
+        OutputLinkPortRef::on_another_runtime(address)
+    };
+    graph
+        .traversal()
+        .e(())
+        .iter()
+        .any(|link| *link.from_port() == source)
+        .then_some(source)
 }
 
 /// The `max_notifiers` every destination-keyed notify service is created with:
@@ -3002,6 +3002,7 @@ mod tests {
                 crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
+            .expect("the node is named")
             .first()
             .expect("mock_output_only_processor must be in the registry")
             .id
@@ -3016,6 +3017,7 @@ mod tests {
                 crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
+            .expect("the node is named")
             .first()
             .expect("mock_input_only_processor must be in the registry")
             .id
@@ -3029,7 +3031,7 @@ mod tests {
             .add_v(ProcessorSpec::new(
                 crate::core::test_support::MockOrderedInputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
-            ))
+            )).expect("the node is named")
             .first()
             .expect("mock_ordered_input_only_processor must be in the registry")
             .id
@@ -3286,6 +3288,7 @@ mod tests {
         let rendered = crate::core::json_schema::LinkOutput::of_a_link_on_the_runtime_named(
             link,
             "a-test-runtime",
+            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         );
         (rendered.state, rendered.error_reason)
     }
@@ -3425,6 +3428,7 @@ mod tests {
                 crate::core::test_support::MockProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
+            .expect("the node is named")
             .first()
             .expect("the four-port mock must be in the registry")
             .id
@@ -3663,7 +3667,7 @@ mod tests {
             .add_v(ProcessorSpec::new(
                 crate::core::test_support::MockReactiveInputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
-            ))
+            )).expect("the node is named")
             .first()
             .expect("mock_reactive_input_only_processor must be in the registry")
             .id
@@ -3677,7 +3681,7 @@ mod tests {
             .add_v(ProcessorSpec::new(
                 crate::core::test_support::MockWindowedAudioConsumerProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
-            ))
+            )).expect("the node is named")
             .first()
             .expect("mock_windowed_audio_consumer_processor must be in the registry")
             .id
@@ -3691,7 +3695,7 @@ mod tests {
             .add_v(ProcessorSpec::new(
                 crate::core::test_support::MockDeviceMatchedAudioConsumerProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
-            ))
+            )).expect("the node is named")
             .first()
             .expect("mock_device_matched_audio_consumer_processor must be in the registry")
             .id
@@ -4547,12 +4551,12 @@ mod tests {
         );
     }
 
-    /// A wired channel's data-service name reverse-resolves to the exact source
-    /// that publishes to it; an unknown name resolves to `None` (the tap op
-    /// maps that to `TapChannelNotFound`). Round-trips through the same
-    /// `source_channel_name` the compiler op keys the service on.
+    /// A port on this runtime is named by `<this runtime>/<node>/<port>` and
+    /// resolves to the exact source a link carries from; its iceoryx2 channel
+    /// name, an address naming no node, and a port no link carries from all
+    /// resolve to `None` (the tap op maps that to `TapChannelNotFound`).
     #[test]
-    fn the_source_a_caller_named_round_trips_and_misses() {
+    fn a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel() {
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
         let dest_id = add_mock_input_only(&mut graph);
@@ -4560,16 +4564,20 @@ mod tests {
             OutputLinkPortRef::new(&src_id, "out1"),
             InputLinkPortRef::new(&dest_id, "in1"),
         );
+        let source_node_name = graph
+            .traversal()
+            .v(src_id.as_str())
+            .first()
+            .expect("the source node is in the graph")
+            .display_name
+            .clone();
 
-        let channel_name = crate::iceoryx2::source_channel_name(&src_id, "out1")
-            .expect("source port derives a channel name")
-            .into_string();
-
-        // The reverse lookup returns the graph node's original processor id (the
-        // channel name lowercases it only for the wire), so it round-trips to the
-        // id we wired, not its lowercased channel form.
-        let resolved = find_the_source_a_caller_named(&mut graph, &channel_name)
-            .expect("wired channel resolves");
+        let resolved = find_the_source_a_caller_named(
+            &graph,
+            "bench-cam-a1b2",
+            &format!("bench-cam-a1b2/{source_node_name}/out1"),
+        )
+        .expect("a wired port on this runtime resolves by its address");
         assert_eq!(
             resolved
                 .processor_id_on_this_runtime()
@@ -4578,10 +4586,18 @@ mod tests {
         );
         assert_eq!(resolved.port_name(), "out1");
 
-        assert!(
-            find_the_source_a_caller_named(&mut graph, "nosuch/channel").is_none(),
-            "an unwired / unknown channel name must not resolve to any source port",
-        );
+        let its_channel = crate::iceoryx2::source_channel_name(&src_id, "out1")
+            .expect("source port derives a channel name");
+        for unresolvable in [
+            its_channel.as_str().to_string(),
+            "bench-cam-a1b2/nosuchnode/out1".to_string(),
+            format!("bench-cam-a1b2/{source_node_name}/out2"),
+        ] {
+            assert!(
+                find_the_source_a_caller_named(&graph, "bench-cam-a1b2", &unresolvable).is_none(),
+                "{unresolvable:?} must not resolve to any source port",
+            );
+        }
     }
 
     /// A port on another runtime is named by its mesh address, not by the
@@ -4592,19 +4608,21 @@ mod tests {
         let mut graph = Graph::new();
         let dest_id = add_mock_input_only(&mut graph);
         let address =
-            crate::core::graph::MeshPortAddress::new("bench-cam-a1b2", "Camera Source 2", "video")
+            crate::core::graph::MeshPortAddress::new("bench-cam-a1b2", "camera-source-2", "video")
                 .expect("a legal address");
         graph
             .traversal_mut()
             .add_link_from_another_runtime(address.clone(), InputLinkPortRef::new(&dest_id, "in1"));
 
-        let resolved = find_the_source_a_caller_named(&mut graph, &address.to_string())
-            .expect("a remote link's address resolves");
+        let resolved =
+            find_the_source_a_caller_named(&graph, "studio-display", &address.to_string())
+                .expect("a remote link's address resolves");
         assert_eq!(resolved.mesh_port_address(), Some(&address));
 
         let its_channel = crate::iceoryx2::mesh_ingress_channel_name(&address.to_string());
         assert!(
-            find_the_source_a_caller_named(&mut graph, its_channel.as_str()).is_none(),
+            find_the_source_a_caller_named(&graph, "studio-display", its_channel.as_str())
+                .is_none(),
             "the hashed ingress channel is not what a caller names a remote port by"
         );
     }
@@ -4972,7 +4990,7 @@ mod tests {
                     "meshlink-deadbeefdeadbeef/bags",
                 )
                 .as_str(),
-                "bench-cam-naming/Camera Source 2/video"
+                "bench-cam-naming/camera-source-2/video"
             );
         }
 

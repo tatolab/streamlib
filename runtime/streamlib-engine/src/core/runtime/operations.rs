@@ -12,6 +12,17 @@ use std::pin::Pin;
 /// Boxed future type for async trait methods (required for dyn compatibility).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// A node in the graph: its per-run id and its name — for an added node, the
+/// name it received: the one asked for, cast, or the class's short name with
+/// any `-2` suffix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeInTheGraph {
+    /// The node's per-run id.
+    pub processor_id: ProcessorUniqueId,
+    /// The node's name.
+    pub name: String,
+}
+
 /// Unified interface for runtime graph operations.
 ///
 /// Implemented by `Runner`, and by the control plane's test stubs. Callers use
@@ -37,10 +48,15 @@ pub trait RuntimeOperations: Send + Sync {
     // Async Methods (primary implementation - safe from any context)
     // =========================================================================
 
-    /// Add a processor to the graph asynchronously. Returns the processor ID.
+    /// Add a processor to the graph asynchronously. Returns its id and the
+    /// name it received.
     ///
     /// Note: No `#[must_use]` - callers may intentionally ignore the ID in fire-and-forget scenarios.
-    fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<ProcessorUniqueId>>;
+    fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<NodeInTheGraph>>;
+
+    /// The node `node_name` names once cast, refused by name — listing the
+    /// names the graph holds — when no node has it.
+    fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph>;
 
     /// Remove a processor from the graph asynchronously.
     ///
@@ -66,9 +82,8 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// Attach a read-only tap to a named channel, streaming its raw bags.
     ///
-    /// `channel` is a channel data-service name
-    /// (`{source_processor}/{source_output_port}`,
-    /// [`crate::iceoryx2::source_channel_name`]); `count` bounds the tap to that
+    /// `channel` is the port's address, `<runtime name>/<node>/<port>` — this
+    /// runtime's own name for a port on one of its nodes; `count` bounds the tap to that
     /// many bags then ends, `None` streams live until the returned
     /// [`TapSubscription`] is dropped. The tap takes a subscriber slot on the
     /// channel with no publisher re-open; the channel reserves one slot beyond

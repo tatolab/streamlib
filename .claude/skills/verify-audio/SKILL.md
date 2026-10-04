@@ -177,21 +177,19 @@ What a busy port looks like depends on what holds it, and none of these is `Conn
   processor it looks for. **This is the dangerous one**: every other failure mode here announces
   itself.
 - **A second StreamLib node without one** → the query succeeds against the wrong graph and the run
-  dies at `no processor named MicrophoneSource in the running graph`.
+  dies at `no node named microphonesource in the running graph`.
 - **A socket that accepts and never answers** → `no control plane reachable at
   http://127.0.0.1:9077 (timed out)`.
 - **A foreign HTTP server** → an HTTP status rather than a refusal, e.g. `answered 404`.
 
 **Confirm the run measured its own node before believing a pass.** The tap prints the channel it
-read (`tapping <processor-id>/audio for N bags`); that id must belong to the node whose `node.log`
-you have, or the verdict is about someone else's graph:
+read (`tapping <runtime_name>/microphonesource/audio for N bags`); its first chunk is the runtime
+the tap resolved against, and it must be the runtime whose `node.log` you have, or the verdict is
+about someone else's graph:
 
 ```bash
-grep -i "<tapped-processor-id>" "<artifacts-dir>/node.log"
+grep -F "Creating Runner named <tapped-runtime-name> " "<artifacts-dir>/node.log"
 ```
-
-`-i` is not optional. The tap lowercases the id and `node.log` does not, so the exact-case
-spelling returns zero hits on a perfectly healthy run — a false collision alarm every time.
 
 **`Connection refused` on 9077 means the opposite — nothing is listening there at all**, so the
 node died or never served. That is a real failure and must never be waved away as a port
@@ -367,7 +365,7 @@ without its label invites it to be read as though it were.
 - Acoustic only: `raw_tone_rms_dbfs` <n> · `room_noise_rms_dbfs` <n> · `tone_to_noise_db` <n> ·
   `exact_zero_stretch_ms` <n> · output volume <n> — or `n/a`
 - Channel contract (through-engine only): <verdict + `bags_dropped_by_the_tap`, or "n/a">
-- Tapped channel belonged to this run's own node: yes — `<tapped id>` vs `node.log` | n/a
+- Tapped channel belonged to this run's own node: yes — `<tapped runtime name>` vs `node.log` | n/a
 
 #### Spectrogram
 

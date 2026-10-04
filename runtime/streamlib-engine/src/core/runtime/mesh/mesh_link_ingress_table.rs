@@ -921,7 +921,7 @@ mod tests {
     };
 
     fn an_address() -> MeshPortAddress {
-        MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
+        MeshPortAddress::new("bench-cam-a1b2", "camerasource", "video").expect("a legal address")
     }
 
     fn a_runtime_on(
@@ -1151,15 +1151,15 @@ mod tests {
         let outcome = what_the_offered_ports_say(
             &an_address(),
             Some(&a_listing_offering(&[
-                ("MicrophoneSource", "audio"),
-                ("CameraSource", "depth"),
+                ("microphonesource", "audio"),
+                ("camerasource", "depth"),
             ])),
         );
         assert!(matches!(outcome, Err(RemoteLinkResolution::Refused { .. })));
         let reason = the_reason(outcome);
-        assert!(reason.contains("CameraSource/video"), "{reason}");
-        assert!(reason.contains("MicrophoneSource/audio"), "{reason}");
-        assert!(reason.contains("CameraSource/depth"), "{reason}");
+        assert!(reason.contains("camerasource/video"), "{reason}");
+        assert!(reason.contains("microphonesource/audio"), "{reason}");
+        assert!(reason.contains("camerasource/depth"), "{reason}");
     }
 
     /// A port the source holds and cannot send refuses the link with the
@@ -1178,7 +1178,7 @@ mod tests {
             Some(&OutputPortsOfferedOnTheMesh {
                 ports: vec![],
                 ports_it_holds_and_cannot_send: the_held_and_unsendable_ports(&[(
-                    "CameraSource",
+                    "camerasource",
                     "video",
                     "its channel cannot be named: it contains 'V'",
                 )]),
@@ -1190,7 +1190,7 @@ mod tests {
             "a port that can never be sent is refused, not waited on; it read {outcome:?}"
         );
         let reason = the_reason(outcome);
-        assert!(reason.contains("CameraSource/video"), "{reason}");
+        assert!(reason.contains("camerasource/video"), "{reason}");
         assert!(reason.contains("cannot send it"), "{reason}");
         assert!(reason.contains("it contains 'V'"), "{reason}");
         assert!(
@@ -1204,9 +1204,9 @@ mod tests {
     #[test]
     fn a_held_and_unsendable_port_is_refused_listing_what_the_runtime_does_offer() {
         let listing = OutputPortsOfferedOnTheMesh {
-            ports: a_listing_offering(&[("MicrophoneSource", "audio")]).ports,
+            ports: a_listing_offering(&[("microphonesource", "audio")]).ports,
             ports_it_holds_and_cannot_send: the_held_and_unsendable_ports(&[(
-                "CameraSource",
+                "camerasource",
                 "video",
                 "no channel name",
             )]),
@@ -1214,7 +1214,7 @@ mod tests {
         };
 
         let reason = the_reason(what_the_offered_ports_say(&an_address(), Some(&listing)));
-        assert!(reason.contains("MicrophoneSource/audio"), "{reason}");
+        assert!(reason.contains("microphonesource/audio"), "{reason}");
     }
 
     /// A runtime offering the port is carried from.
@@ -1223,7 +1223,7 @@ mod tests {
         assert!(
             what_the_offered_ports_say(
                 &an_address(),
-                Some(&a_listing_offering(&[("CameraSource", "video")])),
+                Some(&a_listing_offering(&[("camerasource", "video")])),
             )
             .is_ok()
         );
@@ -1239,7 +1239,7 @@ mod tests {
 
     /// The address every resolution test below reads.
     fn the_address_being_read() -> MeshPortAddress {
-        MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
+        MeshPortAddress::new("bench-cam-a1b2", "camerasource", "video").expect("a legal address")
     }
 
     /// An ingress that is open over a port nobody is sending is not a link that
@@ -1279,7 +1279,7 @@ mod tests {
         let RemoteLinkResolution::AwaitingRemote { reason } = how_far else {
             panic!("a port whose egress stopped is not final; it read {how_far:?}");
         };
-        assert!(reason.contains("CameraSource/video"), "{reason}");
+        assert!(reason.contains("camerasource/video"), "{reason}");
         assert!(reason.contains("destination slot"), "{reason}");
         assert!(reason.contains("Nothing is retrying it"), "{reason}");
         assert!(

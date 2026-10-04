@@ -6,7 +6,7 @@
 The point of the fixture is that there is nothing remote about reading one. The
 processor declares an ordinary `ordered` input, reads with the ordinary fan-in
 read, and the only thing that says a machine boundary was crossed is the *name*
-the read hands back: `<runtime name>/<display name>/<port>`, the port's address
+the read hands back: `<runtime name>/<node>/<port>`, the port's address
 on the mesh, rather than the hashed channel its ingress actually writes.
 
 It runs in its own helper process like every Python processor, so it also

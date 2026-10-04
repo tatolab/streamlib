@@ -3,14 +3,17 @@
 
 use std::time::Instant;
 
+use crate::core::error::Result;
+
 use super::edges::{Link, LinksFromAnotherRuntime};
 use super::nodes::ProcessorNode;
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
+use crate::core::graph::{ExposedOutputPortsComponent, GraphNodeWithComponents};
 use crate::core::json_schema::{
-    GraphResponse, LinkOutput, LoadedCapabilityExtensionOutput, ProcessorNodeOutput,
-    RuntimeMeshOutput,
+    ExposedOutputPortOutput, GraphResponse, LinkOutput, LoadedCapabilityExtensionOutput,
+    NodeNamesByProcessorId, ProcessorNodeOutput, RuntimeMeshOutput,
 };
 
 /// Graph state.
@@ -37,6 +40,9 @@ pub struct Graph {
     /// beside the digraph's edges.
     links_from_another_runtime: LinksFromAnotherRuntime,
 
+    /// The name of the stream this graph was loaded as, until then `None`.
+    loaded_stream_name: Option<String>,
+
     /// When the graph was last compiled.
     compiled_at: Option<Instant>,
 
@@ -56,6 +62,7 @@ impl Graph {
         Self {
             digraph: DiGraph::new(),
             links_from_another_runtime: LinksFromAnotherRuntime::default(),
+            loaded_stream_name: None,
             compiled_at: None,
             state: GraphState::Idle,
         }
@@ -87,6 +94,24 @@ impl Graph {
     /// Set the graph state.
     pub fn set_state(&mut self, state: GraphState) {
         self.state = state;
+    }
+
+    /// `requested_name` cast, refused by name when a node already has it.
+    pub(crate) fn the_requested_node_name_unless_taken(
+        &self,
+        requested_name: &str,
+    ) -> Result<String> {
+        super::traversal::the_requested_node_name_unless_taken(&self.digraph, requested_name)
+    }
+
+    /// The name of the stream this graph was loaded as, if it was loaded as one.
+    pub fn loaded_stream_name(&self) -> Option<&str> {
+        self.loaded_stream_name.as_deref()
+    }
+
+    /// Record the name of the stream this graph was loaded as.
+    pub fn set_loaded_stream_name(&mut self, stream_name: String) {
+        self.loaded_stream_name = Some(stream_name);
     }
 
     /// Get when the graph was compiled.
@@ -144,7 +169,9 @@ impl Graph {
         loaded_capability_extensions: Vec<LoadedCapabilityExtensionOutput>,
         runtime_mesh: RuntimeMeshOutput,
     ) -> GraphResponse {
+        let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
         GraphResponse {
+            stream: self.loaded_stream_name.clone(),
             nodes: self
                 .digraph
                 .node_indices()
@@ -156,11 +183,42 @@ impl Graph {
                 .map(|idx| &self.digraph[idx])
                 .chain(self.links_from_another_runtime.every_link())
                 .map(|link| {
-                    LinkOutput::of_a_link_on_the_runtime_named(link, &runtime_mesh.runtime_name)
+                    LinkOutput::of_a_link_on_the_runtime_named(
+                        link,
+                        &runtime_mesh.runtime_name,
+                        &node_names,
+                    )
+                })
+                .collect(),
+            exposed: self
+                .digraph
+                .node_weights()
+                .flat_map(|node| {
+                    node.get::<ExposedOutputPortsComponent>()
+                        .into_iter()
+                        .flat_map(|exposed| exposed.0.iter())
+                        .map(|port| ExposedOutputPortOutput {
+                            node: node.display_name.clone(),
+                            port: port.clone(),
+                        })
                 })
                 .collect(),
             extensions: loaded_capability_extensions,
             mesh: runtime_mesh,
         }
+    }
+}
+
+/// Node names, sorted and comma-joined for a refusal that lists what a graph
+/// holds — `no node` when it holds none.
+pub(crate) fn node_names_listed_for_a_refusal<'name>(
+    node_names: impl IntoIterator<Item = &'name str>,
+) -> String {
+    let mut sorted: Vec<&str> = node_names.into_iter().collect();
+    sorted.sort_unstable();
+    if sorted.is_empty() {
+        "no node".to_string()
+    } else {
+        sorted.join(", ")
     }
 }

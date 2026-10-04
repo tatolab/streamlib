@@ -25,13 +25,23 @@ pub use streamlib_processor_schema::ProcessorClassImportPath;
 // Graph Response Schema (/api/graph)
 // =============================================================================
 
-/// Response from the `/api/graph` endpoint.
+/// Response from the `/api/graph` endpoint: the graph's spec — `stream`,
+/// `nodes[].name` / `type` / `config`, `links[].source` / `target` and
+/// `exposed` — with the live keys beside it, so it loads back as a
+/// [`GraphSnapshot`](crate::core::graph_snapshot::GraphSnapshot).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct GraphResponse {
-    /// All processor nodes in the graph.
+    /// The name of the stream this graph was loaded as. Absent until a load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<String>,
+    /// All nodes in the graph.
     pub nodes: Vec<ProcessorNodeOutput>,
-    /// All links (connections) between processors.
+    /// All links between nodes' ports.
     pub links: Vec<LinkOutput>,
+    /// The output ports the stream exposes. Always present; empty when it
+    /// exposes none.
+    #[serde(default)]
+    pub exposed: Vec<ExposedOutputPortOutput>,
     /// The capabilities the extension wheels installed beside this engine
     /// registered at startup. Always present; empty when none loaded.
     pub extensions: Vec<LoadedCapabilityExtensionOutput>,
@@ -141,11 +151,11 @@ pub enum LinkRequestStateOutput {
 /// One output port of this runtime that the mesh is sending, and to whom.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct MeshEgressPortOutput {
-    /// The display name of the processor that owns the port — the middle chunk
-    /// of the port's mesh address.
-    pub processor_display_name: String,
-    /// The port's own name on that processor.
-    pub port_name: String,
+    /// The name of the node that owns the port — the middle chunk of the port's
+    /// mesh address.
+    pub node: String,
+    /// The port's own name on that node.
+    pub port: String,
     /// Every runtime currently reading it, sorted by name.
     pub reader_runtime_names: Vec<String>,
 }
@@ -205,16 +215,17 @@ impl From<LoadedCapabilityExtension> for LoadedCapabilityExtensionOutput {
     }
 }
 
-/// A processor node in the graph.
+/// A node in the graph.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorNodeOutput {
-    /// Unique identifier for this processor instance.
+    /// This node's per-run id. A live key: a loaded graph mints new ones.
     pub id: String,
-    /// The import path of the class this processor is — a plain string.
+    /// The import path of the class this node is — a plain string.
     #[serde(rename = "type")]
     pub processor_type: ProcessorClassImportPath,
-    /// Display name for UI. May differ from type for hosted processors.
-    pub display_name: String,
+    /// The node's name, unique in its graph and cast to lowercase URL-safe —
+    /// what a link end, an exposure and a mesh address name it by.
+    pub name: String,
     /// Processor configuration as JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
@@ -321,52 +332,166 @@ pub struct LinkOutput {
     pub components: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Reference to a port on a processor — on this node, or on another runtime
-/// over the mesh.
+/// One end of a link: `{node, port}` for a port in this graph, or
+/// `{runtime_name, node, port}` for a port on another runtime, addressed
+/// `<runtime name>/<node>/<port>`.
 ///
-/// One of two shapes, told apart by their keys and not by a tag: a port on this
-/// node carries `processor_id`, and a port on another runtime carries the three
-/// parts of its mesh address. A reader checking `processor_id` therefore finds
-/// nothing on a remote end rather than a processor id this node does not have.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+/// Told apart by their keys and not by a tag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum LinkPortRefOutput {
-    /// A port on a processor this node holds.
-    OnThisRuntime {
-        /// Processor instance ID.
-        processor_id: String,
-        /// Port name on that processor.
-        port_name: String,
-    },
-    /// A port on a processor another runtime holds, addressed
-    /// `<runtime name>/<display name>/<port>`.
+    // First, because an untagged enum takes the first variant that fits and
+    // ignores unknown keys: `{node, port}` would swallow a remote end whole.
+    /// A port on a node another runtime holds.
     OnAnotherRuntime {
         /// The name the owning runtime is addressed by on the mesh.
         runtime_name: String,
-        /// The display name of the processor that owns the port, there.
-        processor_display_name: String,
-        /// The port's own name on that processor.
-        port_name: String,
+        /// The name of the node that owns the port, there.
+        node: String,
+        /// The port's own name on that node.
+        port: String,
+    },
+    /// A port on a node this graph holds.
+    OnThisRuntime {
+        /// The node's name.
+        node: String,
+        /// The port's own name on that node.
+        port: String,
     },
 }
 
 impl LinkPortRefOutput {
-    /// The processor this port belongs to when this node holds it, and `None`
-    /// for a port on another runtime.
-    pub fn processor_id_on_this_runtime(&self) -> Option<&str> {
+    /// The node this port belongs to when this graph holds it, and `None` for
+    /// a port on another runtime.
+    pub fn node_on_this_runtime(&self) -> Option<&str> {
         match self {
-            Self::OnThisRuntime { processor_id, .. } => Some(processor_id),
+            Self::OnThisRuntime { node, .. } => Some(node),
             Self::OnAnotherRuntime { .. } => None,
         }
     }
 
-    /// The port's own name, wherever the port lives.
-    pub fn port_name(&self) -> &str {
+    /// The node's name, wherever the node lives.
+    pub fn node(&self) -> &str {
         match self {
-            Self::OnThisRuntime { port_name, .. } | Self::OnAnotherRuntime { port_name, .. } => {
-                port_name
+            Self::OnThisRuntime { node, .. } | Self::OnAnotherRuntime { node, .. } => node,
+        }
+    }
+
+    /// The mesh address a port on another runtime is named by, and `None` for
+    /// a port in this graph.
+    pub fn mesh_port_address(
+        &self,
+    ) -> Option<crate::core::Result<crate::core::graph::MeshPortAddress>> {
+        match self {
+            Self::OnAnotherRuntime {
+                runtime_name,
+                node,
+                port,
+            } => Some(crate::core::graph::MeshPortAddress::new(
+                runtime_name.as_str(),
+                node.as_str(),
+                port.as_str(),
+            )),
+            Self::OnThisRuntime { .. } => None,
+        }
+    }
+
+    /// The port's own name, wherever the port lives.
+    pub fn port(&self) -> &str {
+        match self {
+            Self::OnThisRuntime { port, .. } | Self::OnAnotherRuntime { port, .. } => port,
+        }
+    }
+
+    /// The end `port_ref` names, with a port on this runtime named by its
+    /// node's name.
+    pub(crate) fn of_an_output_port(
+        port_ref: &crate::core::graph::OutputLinkPortRef,
+        node_names: &NodeNamesByProcessorId,
+    ) -> Self {
+        match port_ref {
+            crate::core::graph::OutputLinkPortRef::OnThisRuntime {
+                processor_id,
+                port_name,
+            } => Self::OnThisRuntime {
+                node: node_names.name_of(processor_id),
+                port: port_name.clone(),
+            },
+            crate::core::graph::OutputLinkPortRef::OnAnotherRuntime(address) => {
+                Self::of_a_mesh_port_address(address)
             }
         }
+    }
+
+    /// The end `port_ref` names, with a port on this runtime named by its
+    /// node's name.
+    pub(crate) fn of_an_input_port(
+        port_ref: &crate::core::graph::InputLinkPortRef,
+        node_names: &NodeNamesByProcessorId,
+    ) -> Self {
+        match port_ref {
+            crate::core::graph::InputLinkPortRef::OnThisRuntime {
+                processor_id,
+                port_name,
+            } => Self::OnThisRuntime {
+                node: node_names.name_of(processor_id),
+                port: port_name.clone(),
+            },
+            crate::core::graph::InputLinkPortRef::OnAnotherRuntime(address) => {
+                Self::of_a_mesh_port_address(address)
+            }
+        }
+    }
+
+    fn of_a_mesh_port_address(address: &crate::core::graph::MeshPortAddress) -> Self {
+        Self::OnAnotherRuntime {
+            runtime_name: address.runtime_name().to_string(),
+            node: address.processor_display_name().to_string(),
+            port: address.port_name().to_string(),
+        }
+    }
+}
+
+/// One output port a stream exposes, named by its node's name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct ExposedOutputPortOutput {
+    /// The name of the node that owns the port.
+    pub node: String,
+    /// The output port's own name on that node.
+    pub port: String,
+}
+
+/// Every node's name by its processor id, for rendering the ends a graph
+/// holds by id under the name a reader knows them by.
+pub(crate) struct NodeNamesByProcessorId(
+    std::collections::HashMap<crate::core::graph::ProcessorUniqueId, String>,
+);
+
+impl NodeNamesByProcessorId {
+    /// Index every node `nodes` yields.
+    pub(crate) fn of<'node>(
+        nodes: impl Iterator<Item = &'node crate::core::graph::ProcessorNode>,
+    ) -> Self {
+        Self(
+            nodes
+                .map(|node| (node.id.clone(), node.display_name.clone()))
+                .collect(),
+        )
+    }
+
+    /// An index holding no node, so every end renders under its id.
+    #[cfg(test)]
+    pub(crate) fn holding_no_node() -> Self {
+        Self(std::collections::HashMap::new())
+    }
+
+    /// The name of the node `processor_id` names — the id itself for one this
+    /// index does not hold, which only an end whose node is mid-removal is.
+    fn name_of(&self, processor_id: &crate::core::graph::ProcessorUniqueId) -> String {
+        self.0
+            .get(processor_id)
+            .cloned()
+            .unwrap_or_else(|| processor_id.to_string())
     }
 }
 
@@ -396,11 +521,11 @@ pub enum LinkStateOutput {
 // Registry Response Schema (/api/registry)
 // =============================================================================
 
-/// Response from the `/api/registry` endpoint.
+/// Response from the `/api/registry` endpoint, and the MCP node catalog.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct RegistryResponse {
-    /// Available processor types with their descriptors.
-    pub processors: Vec<ProcessorDescriptorOutput>,
+    /// Every node type this process can add, with its descriptor.
+    pub nodes: Vec<ProcessorDescriptorOutput>,
 }
 
 /// Runtime environment for a processor.
@@ -415,11 +540,9 @@ pub enum ProcessorRuntimeOutput {
 /// Descriptor for a processor type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorDescriptorOutput {
-    /// The import path of the class this processor is.
-    ///
-    /// The same value a graph node carries, but under its own key: a node
-    /// renames the field to `type`, because there it is the node's type; here
-    /// it is what the registry is keyed on.
+    /// The import path of the class this node type is — the `type` a graph
+    /// node carries and `add_node` takes.
+    #[serde(rename = "type")]
     pub processor_class_import_path: ProcessorClassImportPath,
     /// Human-readable description.
     pub description: String,
@@ -481,7 +604,7 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
         Self {
             id: node.id.to_string(),
             processor_type: node.processor_type.clone(),
-            display_name: node.display_name.clone(),
+            name: node.display_name.clone(),
             config: node.config.clone(),
             config_checksum: node.config_checksum,
             ports: ProcessorNodePortsOutput::rendered_for_a_node_over_its_settled_contracts(node),
@@ -578,9 +701,10 @@ impl LinkOutput {
     /// The renderer's own name is what a link carries no room for: a link this
     /// runtime wired was asked for here, and only a link another runtime
     /// requested carries a name of its own to render instead.
-    pub fn of_a_link_on_the_runtime_named(
+    pub(crate) fn of_a_link_on_the_runtime_named(
         link: &crate::core::graph::Link,
         this_runtimes_name: &str,
+        node_names: &NodeNamesByProcessorId,
     ) -> Self {
         let rendered = RenderedLinkState::of(link);
         let mut components = link.serialize_components();
@@ -594,8 +718,8 @@ impl LinkOutput {
         }
         Self {
             id: link.id.to_string(),
-            source: LinkPortRefOutput::from(&link.source),
-            target: LinkPortRefOutput::from(&link.target),
+            source: LinkPortRefOutput::of_an_output_port(&link.source, node_names),
+            target: LinkPortRefOutput::of_an_input_port(&link.target, node_names),
             capacity: link.capacity.get(),
             state: rendered.state,
             error_reason: rendered.error_reason,
@@ -646,6 +770,13 @@ fn the_machine_a_links_stamps_are_taken_on(link: &crate::core::graph::Link) -> O
     }
     link.get::<crate::core::graph::TheMachineClockALinksStampsAreTakenOnComponent>()
         .and_then(|machine_clock| machine_clock.as_uuid_text())
+}
+
+impl LinkStateOutput {
+    /// The state `graph` renders for `link`.
+    pub(crate) fn of_a_link_as_graph_renders_it(link: &crate::core::graph::Link) -> Self {
+        RenderedLinkState::of(link).state
+    }
 }
 
 /// What a link reports as its state, and why where that is `error` or
@@ -737,48 +868,6 @@ impl RenderedLinkState {
     }
 }
 
-impl From<&crate::core::graph::OutputLinkPortRef> for LinkPortRefOutput {
-    fn from(port_ref: &crate::core::graph::OutputLinkPortRef) -> Self {
-        match port_ref {
-            crate::core::graph::OutputLinkPortRef::OnThisRuntime {
-                processor_id,
-                port_name,
-            } => Self::OnThisRuntime {
-                processor_id: processor_id.to_string(),
-                port_name: port_name.clone(),
-            },
-            crate::core::graph::OutputLinkPortRef::OnAnotherRuntime(address) => {
-                Self::OnAnotherRuntime {
-                    runtime_name: address.runtime_name().to_string(),
-                    processor_display_name: address.processor_display_name().to_string(),
-                    port_name: address.port_name().to_string(),
-                }
-            }
-        }
-    }
-}
-
-impl From<&crate::core::graph::InputLinkPortRef> for LinkPortRefOutput {
-    fn from(port_ref: &crate::core::graph::InputLinkPortRef) -> Self {
-        match port_ref {
-            crate::core::graph::InputLinkPortRef::OnThisRuntime {
-                processor_id,
-                port_name,
-            } => Self::OnThisRuntime {
-                processor_id: processor_id.to_string(),
-                port_name: port_name.clone(),
-            },
-            crate::core::graph::InputLinkPortRef::OnAnotherRuntime(address) => {
-                Self::OnAnotherRuntime {
-                    runtime_name: address.runtime_name().to_string(),
-                    processor_display_name: address.processor_display_name().to_string(),
-                    port_name: address.port_name().to_string(),
-                }
-            }
-        }
-    }
-}
-
 impl From<crate::core::graph::LinkState> for LinkStateOutput {
     fn from(state: crate::core::graph::LinkState) -> Self {
         match state {
@@ -866,6 +955,7 @@ mod link_rendering_tests {
         let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
             &link,
             A_RENDERING_RUNTIME,
+            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         ))
         .unwrap();
         assert_eq!(rendered["created_by_runtime_name"], A_RENDERING_RUNTIME);
@@ -884,6 +974,7 @@ mod link_rendering_tests {
         let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
             &link,
             A_RENDERING_RUNTIME,
+            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         ))
         .unwrap();
         let this_machine = crate::core::runtime::mesh::MachineClockIdentity::of_this_machine();
@@ -923,6 +1014,7 @@ mod link_rendering_tests {
         let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
             &link,
             A_RENDERING_RUNTIME,
+            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         ))
         .unwrap();
 
@@ -978,6 +1070,7 @@ mod link_rendering_tests {
                 let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
                     link,
                     A_RENDERING_RUNTIME,
+                    &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
                 ))
                 .unwrap();
                 assert_eq!(
@@ -1021,6 +1114,7 @@ mod link_rendering_tests {
             serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
                 link,
                 A_RENDERING_RUNTIME,
+                &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
             ))
             .unwrap()
         };
@@ -1061,6 +1155,7 @@ mod link_rendering_tests {
             serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
                 link,
                 A_RENDERING_RUNTIME,
+                &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
             ))
             .unwrap()
         };
@@ -1094,6 +1189,7 @@ mod link_rendering_tests {
             serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
                 link,
                 A_RENDERING_RUNTIME,
+                &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
             ))
             .unwrap()
         };
@@ -1130,6 +1226,7 @@ mod link_rendering_tests {
         let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
             &link,
             A_RENDERING_RUNTIME,
+            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         ))
         .unwrap();
         assert_eq!(rendered["state"], "error");
@@ -1152,6 +1249,7 @@ mod link_rendering_tests {
         let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
             &link,
             A_RENDERING_RUNTIME,
+            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         ))
         .unwrap();
         assert!(
@@ -1517,7 +1615,7 @@ mod capability_extension_and_mesh_rendering_tests {
                 .unwrap();
 
         let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["nodes", "links", "extensions", "mesh"]);
+        assert_eq!(keys, ["nodes", "links", "exposed", "extensions", "mesh"]);
         assert_eq!(rendered["extensions"], serde_json::json!([]));
     }
 
@@ -1542,8 +1640,8 @@ mod capability_extension_and_mesh_rendering_tests {
         );
     }
 
-    /// A port another runtime is reading renders under the display name the
-    /// mesh addresses it by, with every reader — so an agent on the sending
+    /// A port another runtime is reading renders under the node name the mesh
+    /// addresses it by, with every reader — so an agent on the sending
     /// node can see who is pulling from it without asking the other end.
     #[test]
     fn a_port_another_runtime_reads_renders_with_the_runtimes_reading_it() {
@@ -1551,8 +1649,8 @@ mod capability_extension_and_mesh_rendering_tests {
             Vec::new(),
             RuntimeMeshOutput {
                 egress_ports: vec![MeshEgressPortOutput {
-                    processor_display_name: "CameraSource".to_string(),
-                    port_name: "video".to_string(),
+                    node: "camerasource".to_string(),
+                    port: "video".to_string(),
                     reader_runtime_names: vec![
                         "bench-fx-c3d4".to_string(),
                         "bench-rec-e5f6".to_string(),
@@ -1566,8 +1664,8 @@ mod capability_extension_and_mesh_rendering_tests {
         assert_eq!(
             rendered["mesh"]["egress_ports"],
             serde_json::json!([{
-                "processor_display_name": "CameraSource",
-                "port_name": "video",
+                "node": "camerasource",
+                "port": "video",
                 "reader_runtime_names": ["bench-fx-c3d4", "bench-rec-e5f6"],
             }])
         );

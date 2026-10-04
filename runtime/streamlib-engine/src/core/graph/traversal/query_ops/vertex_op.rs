@@ -67,16 +67,20 @@ impl<'a> TraversalSource<'a> {
         }
     }
 
-    /// Start traversal from the processor a display name labels.
+    /// Start traversal from the node `node_name` names once cast — empty when
+    /// no node has that name, or it casts to nothing.
     ///
-    /// A display name is unique within a graph and is the processor's part of
-    /// its mesh address, which is what a peer names a port by — so this is how
-    /// an address is turned back into one of this runtime's own nodes.
-    pub fn v_with_display_name(self, display_name: &str) -> ProcessorTraversal<'a> {
-        let ids = self
-            .graph
-            .node_references()
-            .find(|(_, processor_node)| processor_node.display_name == display_name)
+    /// A node's name is unique within a graph and is its part of its mesh
+    /// address, which is what a peer names a port by — so this is how an
+    /// address is turned back into one of this runtime's own nodes.
+    pub fn v_with_node_name(self, node_name: &str) -> ProcessorTraversal<'a> {
+        let ids = crate::core::graph::cast_exposed_name_to_url_safe(node_name)
+            .ok()
+            .and_then(|cast| {
+                self.graph
+                    .node_references()
+                    .find(|(_, processor_node)| processor_node.display_name == cast)
+            })
             .map(|(idx, _)| vec![idx])
             .unwrap_or_default();
         ProcessorTraversal {

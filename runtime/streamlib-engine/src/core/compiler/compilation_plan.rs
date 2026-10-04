@@ -115,6 +115,7 @@ mod tests {
                 crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
+            .expect("the node is named")
             .first()
             .expect("source node added")
             .id
@@ -125,6 +126,7 @@ mod tests {
                 crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
+            .expect("the node is named")
             .first()
             .expect("target node added")
             .id

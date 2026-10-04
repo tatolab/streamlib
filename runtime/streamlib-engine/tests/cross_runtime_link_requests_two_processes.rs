@@ -47,11 +47,11 @@ const MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_MESH_MULT
 /// Where scouting is pinned to.
 const LOOPBACK_INTERFACE: &str = "127.0.0.1";
 
-/// The display name the sending runtime gives the processor it pushes from.
-const THE_SOURCES_DISPLAY_NAME: &str = "CameraSource";
+/// The name the sending runtime gives the node it pushes from.
+const THE_SOURCES_DISPLAY_NAME: &str = "camerasource";
 
-/// The display name the receiving runtime gives the processor pushed into.
-const THE_DESTINATIONS_DISPLAY_NAME: &str = "DisplayWindow";
+/// The name the receiving runtime gives the node pushed into.
+const THE_DESTINATIONS_DISPLAY_NAME: &str = "displaywindow";
 
 /// The input port every peer's processor declares.
 const THE_INPUT_PORT: &str = "frames_from_upstream";
@@ -359,14 +359,14 @@ fn a_push_lands_on_the_runtime_that_owns_the_input_naming_the_runtime_that_asked
         link["source"],
         serde_json::json!({
             "runtime_name": "xr-push-sender",
-            "processor_display_name": THE_SOURCES_DISPLAY_NAME,
-            "port_name": "video",
+            "node": THE_SOURCES_DISPLAY_NAME,
+            "port": "video",
         }),
         "the source is the address the request named: {link}"
     );
-    assert_eq!(link["target"]["port_name"], THE_INPUT_PORT, "{link}");
-    assert!(
-        link["target"]["processor_id"].is_string(),
+    assert_eq!(
+        link["target"],
+        serde_json::json!({"node": THE_DESTINATIONS_DISPLAY_NAME, "port": THE_INPUT_PORT}),
         "the destination resolved to one of this runtime's own nodes: {link}"
     );
 
@@ -514,7 +514,7 @@ fn a_request_naming_a_processor_the_answering_runtime_lacks_is_refused_by_name()
         "the refusal names who refused: {reason}"
     );
     assert!(
-        reason.contains("NoSuchProcessor"),
+        reason.contains("nosuchprocessor"),
         "the refusal names what was asked for: {reason}"
     );
     assert!(

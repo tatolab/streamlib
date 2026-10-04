@@ -77,7 +77,7 @@ fi
 MESH_NAME="xpy-$$"
 SOURCE_RUNTIME_NAME="xpy-source-$$"
 READER_RUNTIME_NAME="xpy-reader-$$"
-THE_ADDRESS="$SOURCE_RUNTIME_NAME/KnownAudioSignalSource/audio"
+THE_ADDRESS="$SOURCE_RUNTIME_NAME/knownaudiosignalsource/audio"
 
 # Both ports in one go, holding both sockets until both are known: asked one at
 # a time, the first socket is closed before the second is bound and the kernel
@@ -199,8 +199,8 @@ for link in graph.get("links", []):
     source = link.get("source", {})
     if source.get("runtime_name"):
         print("{}/{}/{}".format(source["runtime_name"],
-                                source["processor_display_name"],
-                                source["port_name"]))
+                                source["node"],
+                                source["port"]))
         break
 ' "$OUTPUT_DIR/reader-graph.json")"
 if [ "$SOURCE_RENDERED" != "$THE_ADDRESS" ]; then

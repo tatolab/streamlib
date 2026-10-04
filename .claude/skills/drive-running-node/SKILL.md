@@ -31,7 +31,7 @@ If exactly one node is live, both flags may be omitted and the resolver uses tha
 streamlib graph
 ```
 
-A JSON graph dump (processors, links, states, metrics, loaded capability extensions) means the node is healthy and the address is good. A non-zero exit means it is not drivable:
+A JSON graph dump (nodes, links, states, metrics, loaded capability extensions) means the node is healthy and the address is good. A non-zero exit means it is not drivable:
 - `no running StreamLib nodes found` — nothing is running; start a node.
 - `N live nodes — pick one with --node <runtime name or id> or --url <url>` — more than one is live and you passed neither flag; re-run with a specific `--node`/`--url`.
 - `no live node named <name>, and none with that runtime_id` — the `--node` value is wrong or the node exited; re-run `streamlib nodes`. `N live nodes answer to <name>` means two runtimes were given one name: pick one by `runtime_id`.

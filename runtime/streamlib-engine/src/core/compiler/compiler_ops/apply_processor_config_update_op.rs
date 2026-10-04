@@ -73,6 +73,7 @@ mod tests {
                 MockOutputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
+            .expect("the node is named")
             .first_mut()
             .expect("the mock is registered");
         let processor_instance = PROCESSOR_REGISTRY

@@ -348,7 +348,7 @@ def test_display_name_defaults_to_the_type_name():
     runtime = streamlib.Runtime()
     try:
         sink = runtime.add(streamlib.VirtualCameraSink)
-        assert sink.display_name == "VirtualCameraSink"
+        assert sink.display_name == "virtualcamerasink"
     finally:
         runtime.shutdown()
 

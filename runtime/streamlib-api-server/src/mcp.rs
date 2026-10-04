@@ -12,14 +12,14 @@
 //! pointing at a running node's URL — there is nothing to start and nothing to
 //! attach. It exposes the runtime as MCP *tools* so an LLM agent observes the
 //! live graph the same way the REST client does, and beside them serves the
-//! processor catalog and the live graph as *resources*
+//! node catalog and the live graph as *resources*
 //! ([`crate::mcp_resources`]) and recipes over those tools as *prompts*
 //! ([`crate::mcp_prompts`]).
 //!
 //! The vocabulary is the observation verbs — graph, tap, logs, exchange,
-//! shutdown — beside the four graph-mutation verbs the engine's own runtime
-//! API has always had: `add_processor`, `remove_processor`, `connect` and
-//! `disconnect`. A mutation tool answers when the engine accepted the change
+//! shutdown — beside the four graph-mutation verbs, each naming a node by its
+//! name: `add_node`, `remove_node`, `connect` and `disconnect`. A mutation tool
+//! answers when the engine accepted the change
 //! into its graph; the wiring itself commits on the engine's own compile task,
 //! whose failure `graph` and `logs` show rather than this call.
 //!
@@ -53,13 +53,10 @@ use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{
     InputLinkPortRef, LinkRequestUniqueId, LinkUniqueId, MeshPortAddress, OutputLinkPortRef,
-    ProcessorUniqueId,
 };
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::{
-    ExchangedPublishedSurfaceFramePngImage, RuntimeOperations, what_one_mesh_address_chunk_may_be,
-};
+use streamlib::sdk::runtime::{ExchangedPublishedSurfaceFramePngImage, RuntimeOperations};
 
 use crate::state::{AppState, RuntimeShutdownRequest};
 
@@ -261,7 +258,7 @@ fn initialize_result() -> Value {
             "prompts": { "listChanged": false },
         },
         "serverInfo": { "name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION },
-        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (processors, their ids, port names and links), `tap` (raw bags on a channel spelled `<processor id, lowercased>/<output port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_processor`, `connect`, `disconnect` and `remove_processor`: a Python processor class written to a module the app can import — a file beside `app.py`, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new processor on both sides, then disconnecting the link it replaces. Read `graph` first for ids and port names, and again afterwards to confirm a link's state is `wired` and the processor is `Running`. A `connect` onto a processor in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A link whose source is a port on another runtime reads `awaiting_remote` until that runtime is on the mesh, offers the port and is sending it, with `awaiting_remote_reason` saying what it is still waiting on; unlike `error` it is not final, and the link wires itself the moment what it names turns up — except where that reason says the source's own attempt to send the port stopped and names why, which also says plainly that nothing is retrying it. Every link says which runtime asked for it in `created_by_runtime_name`, and which machine's monotonic clock its bags were stamped on in `stamp_clock_identity`: a stamp is only comparable against a stamp from a link naming the same machine, and a link from another runtime carries no `stamp_clock_identity` until its first bag lands, nor while its source runtime is away — so read it again rather than caching it. Either end of a `connect` may name a port on another runtime on the mesh, so this node can push its own output into another runtime's input, or wire two other runtimes together. A link whose input is on another runtime is that runtime's to apply, so `connect` returns a `link_request_id` rather than a `link_id`: read that runtime's own `graph` for the link, and this node's `mesh.link_requests_awaiting_runtime` while it has not answered — an entry there is `awaiting_runtime` while that runtime is absent, `unanswered` while it is not replying, or `refused` with that runtime's own words, and `disconnect` with the `link_request_id` cancels it. The resource `streamlib://processor-catalog` lists every type `add_processor` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a processor into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
+        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the app can import — a file beside the app, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A link whose source is a port on another runtime reads `awaiting_remote` until that runtime is on the mesh, offers the port and is sending it, with `awaiting_remote_reason` saying what it is still waiting on; unlike `error` it is not final, and the link wires itself the moment what it names turns up — except where that reason says the source's own attempt to send the port stopped and names why, which also says plainly that nothing is retrying it. Every link says which runtime asked for it in `created_by_runtime_name`, and which machine's monotonic clock its bags were stamped on in `stamp_clock_identity`: a stamp is only comparable against a stamp from a link naming the same machine, and a link from another runtime carries no `stamp_clock_identity` until its first bag lands, nor while its source runtime is away — so read it again rather than caching it. Either end of a `connect` may name a port on another runtime on the mesh, so this node can push its own output into another runtime's input, or wire two other runtimes together. A link whose input is on another runtime is that runtime's to apply, so `connect` returns a `link_request_id` rather than a `link_id`: read that runtime's own `graph` for the link, and this node's `mesh.link_requests_awaiting_runtime` while it has not answered — an entry there is `awaiting_runtime` while that runtime is absent, `unanswered` while it is not replying, or `refused` with that runtime's own words, and `disconnect` with the `link_request_id` cancels it. The resource `streamlib://node-catalog` lists every type `add_node` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
     })
 }
 
@@ -276,7 +273,7 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "graph",
-            "description": "Export the current runtime graph (processors, links, states, metrics) and the capability extensions loaded in this process, as JSON.",
+            "description": "Export the current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, the capability extensions loaded in this process, and this runtime's place on the mesh.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
         }),
         json!({
@@ -285,7 +282,7 @@ fn tool_definitions() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "channel": { "type": "string", "description": "What the port is named by: a channel data-service name for a port on this node, e.g. {source_processor}/{source_output_port}, or a port on another runtime by its mesh address {runtime_name}/{processor_display_name}/{port} — the channel a remote link lands on is hashed from that address and is nothing to spell." },
+                    "channel": { "type": "string", "description": "The output port's address, `<runtime_name>/<node>/<port>`: this node's own runtime name (`mesh.runtime_name` in `graph`) for a port here, another runtime's for a port a link carries from it. A port is tappable once a link carries from it." },
                     "count": { "type": "integer", "minimum": 1, "description": "Number of bags to collect before returning. Defaults to a small sample." },
                     "max_bag_bytes": { "type": "integer", "minimum": 1, "maximum": MAX_TAP_RESPONSE_BAG_BYTES, "description": "Per-bag ceiling on the bytes hex-encoded into the result. A bag over the cap comes back flagged `hex_truncated` and cannot be decoded, so raise this rather than accept one. Defaults high enough to carry any audio block whole." }
                 },
@@ -329,53 +326,45 @@ fn tool_definitions() -> Vec<Value> {
             },
         }),
         json!({
-            "name": "add_processor",
-            "description": "Add a processor to the running graph by its class import path — the `type` string `graph` reports for every node. A Python class is named `module:QualifiedClassName` and must be importable from the app's own environment (a module beside `app.py`, or a pip-installed package); a built-in is named by the `type` an existing node of that kind shows. Returns the new processor's id, which `connect` and `remove_processor` take, once the engine has spawned the processor — a Python class in its own helper process, which imports the module fresh, so edited code is picked up by every new add. The class's port declaration is read the first time it is added and kept; to change a class's ports, add it under a new class name. Read `graph` to see its state and ports.",
+            "name": "add_node",
+            "description": "Add a node to the running graph by its class import path — the `type` string `graph` reports for every node and `streamlib://node-catalog` lists. A Python class is named `module:QualifiedClassName` and must be importable from the app's own environment (a module beside the app, or a pip-installed package); a built-in is named by the `type` an existing node of that kind shows. Returns the name the node received, which `connect` and `remove_node` take, once the engine has spawned it — a Python class in its own helper process, which imports the module fresh, so edited code is picked up by every new add. The class's port declaration is read the first time it is added and kept; to change a class's ports, add it under a new class name. Read `graph` to see its state and ports.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "type": { "type": "string", "description": "The processor class import path, e.g. `processors.grayscale_effect:GrayscaleEffect`." },
-                    "config": { "type": "object", "description": "The processor's configuration, as the keys its config schema declares. Omit for none." },
-                    "display_name": { "type": "string", "description": format!(
-                        "Human-facing label; defaults to the class's short name, disambiguated \
-                         within the graph. It is also the processor's part of its address on the \
-                         runtime mesh: {}. Spaces and unicode are fine, and a label that breaks \
-                         the rule is refused naming the character.",
-                        what_one_mesh_address_chunk_may_be()
-                    ) }
+                    "type": { "type": "string", "description": "The node's class import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`." },
+                    "config": { "type": "object", "description": "The node's configuration, as the keys its config schema declares. Omit for none." },
+                    "name": { "type": "string", "description": "The node's name: cast to lowercase URL-safe (`Front Camera` becomes `front-camera`), and refused when a node already has that name. Omit it to take the class's short name, cast, with the next free `-2`, `-3` … when one is taken. The name is the node's part of its address on the mesh." }
                 },
                 "required": ["type"],
                 "additionalProperties": false
             },
         }),
         json!({
-            "name": "remove_processor",
-            "description": "Remove a processor from the running graph by id, stopping it and dropping its node. Its links go with it.",
+            "name": "remove_node",
+            "description": "Remove a node from the running graph by name, stopping it. Its links go with it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "processor_id": { "type": "string", "description": "A processor id `graph` or `add_processor` reported." }
+                    "name": { "type": "string", "description": "A node's name, as `graph` or `add_node` reported it." }
                 },
-                "required": ["processor_id"],
+                "required": ["name"],
                 "additionalProperties": false
             },
         }),
         json!({
             "name": "connect",
-            "description": "Link an output port to an input port. Port names are what `graph` lists under each node's `outputs` and `inputs`. Each end is named one of two ways: `from_processor_id` / `to_processor_id` for a port on this node, or `<end>_runtime_name` with `<end>_processor_display_name` for a port on another runtime on the mesh — the runtime names `graph` lists under `mesh.peers`, and the display name rather than the id, because processor ids never appear on the mesh. Giving both forms for one end, or neither, is refused. A link whose input is on this node is applied here and returns `link_id`. A link whose input is on another runtime is that runtime's to apply — this node asks it and returns `link_request_id` instead, because only the runtime owning an input wires a link into it; read that runtime's own `graph` for the link, and this node's `mesh.link_requests_awaiting_runtime` while it has not answered. Naming both ends remotely wires two other runtimes together.",
+            "description": "Link an output port to an input port. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs` — with `<end>_runtime_name` beside them for a port on another runtime on the mesh, one of the runtime names `graph` lists under `mesh.peers`. A runtime name equal to this node's own names a port here. A link whose input is on this node is applied here and returns `link_id`. A link whose input is on another runtime is that runtime's to apply — this node asks it and returns `link_request_id` instead, because only the runtime owning an input wires a link into it; read that runtime's own `graph` for the link, and this node's `mesh.link_requests_awaiting_runtime` while it has not answered. Naming both ends on other runtimes wires two other runtimes together.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "from_processor_id": { "type": "string", "description": "The source processor's id, for a port on this node." },
-                    "from_runtime_name": { "type": "string", "description": "The source runtime's name on the mesh, for a port on another runtime. Goes with `from_processor_display_name`." },
-                    "from_processor_display_name": { "type": "string", "description": "The source processor's display name on that runtime. Goes with `from_runtime_name`." },
+                    "from_runtime_name": { "type": "string", "description": "The source runtime's name on the mesh, for a port on another runtime. Omit it for a port on this node." },
+                    "from_node": { "type": "string", "description": "The source node's name." },
                     "from_port": { "type": "string", "description": "The source's output port name." },
-                    "to_processor_id": { "type": "string", "description": "The destination processor's id, for a port on this node." },
-                    "to_runtime_name": { "type": "string", "description": "The destination runtime's name on the mesh, for a port on another runtime. Goes with `to_processor_display_name`." },
-                    "to_processor_display_name": { "type": "string", "description": "The destination processor's display name on that runtime. Goes with `to_runtime_name`." },
+                    "to_runtime_name": { "type": "string", "description": "The destination runtime's name on the mesh, for a port on another runtime. Omit it for a port on this node." },
+                    "to_node": { "type": "string", "description": "The destination node's name." },
                     "to_port": { "type": "string", "description": "The destination's input port name." }
                 },
-                "required": ["from_port", "to_port"],
+                "required": ["from_node", "from_port", "to_node", "to_port"],
                 "additionalProperties": false
             },
         }),
@@ -420,8 +409,8 @@ async fn tools_call(runtime: &Arc<dyn RuntimeOperations>, params: Value) -> RpcR
         "logs" => call_logs(runtime, arguments).await,
         "exchange" => call_exchange(runtime, arguments).await,
         "shutdown" => call_shutdown(runtime, arguments),
-        "add_processor" => call_add_processor(runtime, arguments).await,
-        "remove_processor" => call_remove_processor(runtime, arguments).await,
+        "add_node" => call_add_node(runtime, arguments).await,
+        "remove_node" => call_remove_node(runtime, arguments).await,
         "connect" => call_connect(runtime, arguments).await,
         "disconnect" => call_disconnect(runtime, arguments).await,
         other => tool_error(format!("unknown tool: {other}")),
@@ -603,24 +592,25 @@ fn call_shutdown(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Valu
     }
 }
 
-async fn call_add_processor(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
+async fn call_add_node(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
     #[derive(Deserialize)]
-    struct AddProcessorArguments {
+    #[serde(deny_unknown_fields)]
+    struct AddNodeArguments {
         #[serde(rename = "type")]
         processor_class_import_path: String,
         #[serde(default)]
         config: Option<Value>,
         #[serde(default)]
-        display_name: Option<String>,
+        name: Option<String>,
     }
-    let arguments: AddProcessorArguments = match serde_json::from_value(arguments) {
+    let arguments: AddNodeArguments = match serde_json::from_value(arguments) {
         Ok(arguments) => arguments,
-        Err(e) => return tool_error(format!("add_processor arguments: {e}")),
+        Err(e) => return tool_error(format!("add_node arguments: {e}")),
     };
     let processor_class_import_path =
         match ProcessorClassImportPath::new(&arguments.processor_class_import_path) {
             Ok(path) => path,
-            Err(e) => return tool_error(format!("add_processor `type`: {e}")),
+            Err(e) => return tool_error(format!("add_node `type`: {e}")),
         };
     // Absent is an empty object, never null: a config struct deserializes from
     // `{}` and not from `null`.
@@ -629,77 +619,82 @@ async fn call_add_processor(runtime: &Arc<dyn RuntimeOperations>, arguments: Val
         Some(object @ Value::Object(_)) => object,
         Some(other) => {
             return tool_error(format!(
-                "add_processor `config` must be a JSON object, got {other}"
+                "add_node `config` must be a JSON object, got {other}"
             ));
         }
     };
     let mut spec = ProcessorSpec::new(processor_class_import_path, config);
-    spec.display_name = arguments.display_name;
+    spec.display_name = arguments.name;
 
     match runtime.add_processor_async(spec).await {
-        Ok(processor_id) => tool_ok(json!({ "processor_id": processor_id.as_str() })),
-        Err(e) => tool_error(format!("add_processor failed: {e}")),
+        Ok(added) => tool_ok(json!({ "name": added.name })),
+        Err(e) => tool_error(format!("add_node failed: {e}")),
     }
 }
 
-async fn call_remove_processor(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
+async fn call_remove_node(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
     #[derive(Deserialize)]
-    struct RemoveProcessorArguments {
-        processor_id: String,
+    #[serde(deny_unknown_fields)]
+    struct RemoveNodeArguments {
+        name: String,
     }
-    let arguments: RemoveProcessorArguments = match serde_json::from_value(arguments) {
+    let arguments: RemoveNodeArguments = match serde_json::from_value(arguments) {
         Ok(arguments) => arguments,
-        Err(e) => return tool_error(format!("remove_processor arguments: {e}")),
+        Err(e) => return tool_error(format!("remove_node arguments: {e}")),
     };
-    let processor_id = ProcessorUniqueId::from(arguments.processor_id.as_str());
-    match runtime.remove_processor_async(processor_id).await {
-        Ok(()) => tool_ok(json!({ "removed_processor_id": arguments.processor_id })),
-        Err(e) => tool_error(format!("remove_processor failed: {e}")),
+    let node = match runtime.the_node_named(&arguments.name) {
+        Ok(node) => node,
+        Err(e) => return tool_error(format!("remove_node failed: {e}")),
+    };
+    match runtime.remove_processor_async(node.processor_id).await {
+        Ok(()) => tool_ok(json!({ "removed_name": node.name })),
+        Err(e) => tool_error(format!("remove_node failed: {e}")),
     }
 }
 
 async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
     // Unknown fields are refused rather than ignored: `to_runtime_nam` read
-    // past would leave the destination named by nothing, and this tool would
+    // past would leave the destination on this runtime, and this tool would
     // wire a *local* link while the caller believed it had named another
     // runtime's port.
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct ConnectArguments {
         #[serde(default)]
-        from_processor_id: Option<String>,
-        #[serde(default)]
         from_runtime_name: Option<String>,
-        #[serde(default)]
-        from_processor_display_name: Option<String>,
+        from_node: String,
         from_port: String,
         #[serde(default)]
-        to_processor_id: Option<String>,
-        #[serde(default)]
         to_runtime_name: Option<String>,
-        #[serde(default)]
-        to_processor_display_name: Option<String>,
+        to_node: String,
         to_port: String,
     }
     let arguments: ConnectArguments = match serde_json::from_value(arguments) {
         Ok(arguments) => arguments,
         Err(e) => return tool_error(format!("connect arguments: {e}")),
     };
-    let from = match the_end_these_arguments_name(
-        WhichEndOfTheLinkWasNamed::Source,
-        arguments.from_processor_id,
+    let this_runtimes_name = runtime.this_runtimes_name_on_the_mesh();
+    // A port on this runtime is addressed under this runtime's own name, which
+    // the engine resolves to the node by name — the same rule it applies to a
+    // caller that names this runtime outright.
+    let address_of = |runtime_name: Option<String>, node: String, port: String| {
+        MeshPortAddress::new(
+            runtime_name.unwrap_or_else(|| this_runtimes_name.to_string()),
+            node,
+            port,
+        )
+    };
+    let from = match address_of(
         arguments.from_runtime_name,
-        arguments.from_processor_display_name,
+        arguments.from_node,
         arguments.from_port,
     ) {
-        Ok(from) => from,
+        Ok(from) => OutputLinkPortRef::on_another_runtime(from),
         Err(refusal) => return tool_error(format!("connect arguments: {refusal}")),
     };
-    let to = match the_end_these_arguments_name(
-        WhichEndOfTheLinkWasNamed::Destination,
-        arguments.to_processor_id,
+    let to = match address_of(
         arguments.to_runtime_name,
-        arguments.to_processor_display_name,
+        arguments.to_node,
         arguments.to_port,
     ) {
         Ok(to) => to,
@@ -709,163 +704,30 @@ async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) ->
     // The runtime that owns an input applies every link into it. A destination
     // on another runtime is therefore a request this node sends, not a link it
     // makes — and the caller is told which happened by which id comes back.
-    let from_as_an_output = OutputLinkPortRef::from(from);
-    match to {
-        NamedEndOfALink::OnThisRuntime {
-            processor_id,
-            port_name,
-        } => {
-            let to = InputLinkPortRef::new(processor_id, port_name);
-            match runtime.connect_async(from_as_an_output, to).await {
-                Ok(link_id) => {
-                    let how_the_graph_reads_it =
-                        how_the_graph_reads_one_link(runtime, &link_id).await;
-                    tool_ok(json!({
-                        "link_id": link_id.as_str(),
-                        "input_runtime_name": runtime.this_runtimes_name_on_the_mesh(),
-                        "state": how_the_graph_reads_it.state,
-                    }))
-                }
-                Err(e) => tool_error(format!("connect failed: {e}")),
-            }
-        }
-        // A destination naming this node is a local reference, resolved by
-        // display name — the same rule the engine, Python and `disconnect`
-        // already apply, so an agent that wires uniformly by runtime name gets
-        // a link rather than a refusal telling it to use the tool it just used.
-        NamedEndOfALink::OnAnotherRuntime(address)
-            if address.names_the_runtime(runtime.this_runtimes_name_on_the_mesh()) =>
+    if to.names_the_runtime(this_runtimes_name) {
+        return match runtime
+            .connect_async(from, InputLinkPortRef::on_another_runtime(to))
+            .await
         {
-            match runtime
-                .connect_async(
-                    from_as_an_output,
-                    InputLinkPortRef::on_another_runtime(address),
-                )
-                .await
-            {
-                Ok(link_id) => {
-                    let how_the_graph_reads_it =
-                        how_the_graph_reads_one_link(runtime, &link_id).await;
-                    tool_ok(json!({
-                        "link_id": link_id.as_str(),
-                        "input_runtime_name": runtime.this_runtimes_name_on_the_mesh(),
-                        "state": how_the_graph_reads_it.state,
-                    }))
-                }
-                Err(e) => tool_error(format!("connect failed: {e}")),
+            Ok(link_id) => {
+                let how_the_graph_reads_it = how_the_graph_reads_one_link(runtime, &link_id).await;
+                tool_ok(json!({
+                    "link_id": link_id.as_str(),
+                    "input_runtime_name": this_runtimes_name,
+                    "state": how_the_graph_reads_it.state,
+                }))
             }
-        }
-        NamedEndOfALink::OnAnotherRuntime(destination_address) => {
-            let input_runtime_name = destination_address.runtime_name().to_string();
-            match runtime
-                .request_link_on_remote_input_runtime(from_as_an_output, destination_address)
-            {
-                Ok(link_request_id) => tool_ok(json!({
-                    "link_request_id": link_request_id.as_str(),
-                    "input_runtime_name": input_runtime_name,
-                    "state": "awaiting_runtime",
-                })),
-                Err(e) => tool_error(format!("connect failed: {e}")),
-            }
-        }
+            Err(e) => tool_error(format!("connect failed: {e}")),
+        };
     }
-}
-
-/// Which end of the link a set of `connect` arguments describes, so one reader
-/// can name the argument the caller actually typed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WhichEndOfTheLinkWasNamed {
-    Source,
-    Destination,
-}
-
-impl WhichEndOfTheLinkWasNamed {
-    /// The prefix this end's arguments carry: `from` or `to`.
-    fn argument_prefix(self) -> &'static str {
-        match self {
-            Self::Source => "from",
-            Self::Destination => "to",
-        }
-    }
-
-    /// What this end is called in a refusal.
-    fn what_it_is_called(self) -> &'static str {
-        match self {
-            Self::Source => "source",
-            Self::Destination => "destination",
-        }
-    }
-}
-
-/// One end of a link, as `connect`'s arguments named it.
-///
-/// Neither `OutputLinkPortRef` nor `InputLinkPortRef`, because the reader
-/// serves both ends and only the caller's arguments say which this is.
-enum NamedEndOfALink {
-    OnThisRuntime {
-        processor_id: String,
-        port_name: String,
-    },
-    OnAnotherRuntime(MeshPortAddress),
-}
-
-impl From<NamedEndOfALink> for OutputLinkPortRef {
-    fn from(named: NamedEndOfALink) -> Self {
-        match named {
-            NamedEndOfALink::OnThisRuntime {
-                processor_id,
-                port_name,
-            } => Self::new(processor_id, port_name),
-            NamedEndOfALink::OnAnotherRuntime(address) => Self::on_another_runtime(address),
-        }
-    }
-}
-
-/// The end `connect`'s arguments name, or why they name none.
-///
-/// The two forms are exclusive rather than merged, because a caller that gave
-/// both has two different ports in mind and the tool cannot know which; and a
-/// caller that gave neither named no port at all. Either way it is refused
-/// by name rather than wired to whichever arrived first.
-fn the_end_these_arguments_name(
-    which_end: WhichEndOfTheLinkWasNamed,
-    processor_id: Option<String>,
-    runtime_name: Option<String>,
-    processor_display_name: Option<String>,
-    port_name: String,
-) -> std::result::Result<NamedEndOfALink, String> {
-    let prefix = which_end.argument_prefix();
-    let end = which_end.what_it_is_called();
-    match (processor_id, runtime_name, processor_display_name) {
-        (Some(processor_id), None, None) => Ok(NamedEndOfALink::OnThisRuntime {
-            processor_id,
-            port_name,
-        }),
-        (None, Some(runtime_name), Some(processor_display_name)) => {
-            MeshPortAddress::new(runtime_name, processor_display_name, port_name)
-                .map(NamedEndOfALink::OnAnotherRuntime)
-                .map_err(|not_an_address| not_an_address.to_string())
-        }
-        (None, None, None) => Err(format!(
-            "the {end} end was not named. Give `{prefix}_processor_id` for a port on this node, \
-             or `{prefix}_runtime_name` with `{prefix}_processor_display_name` for a port on \
-             another runtime."
-        )),
-        (None, Some(_), None) => Err(format!(
-            "`{prefix}_runtime_name` names a runtime but not a processor on it. Give \
-             `{prefix}_processor_display_name` beside it — `graph` on that runtime lists the \
-             display names."
-        )),
-        (None, None, Some(_)) => Err(format!(
-            "`{prefix}_processor_display_name` names a processor but not the runtime holding \
-             it. Give `{prefix}_runtime_name` beside it, or `{prefix}_processor_id` for a port \
-             on this node."
-        )),
-        (Some(_), _, _) => Err(format!(
-            "the {end} end was named twice. `{prefix}_processor_id` names a port on this node \
-             and `{prefix}_runtime_name` with `{prefix}_processor_display_name` names one on \
-             another runtime — give one form or the other, never both."
-        )),
+    let input_runtime_name = to.runtime_name().to_string();
+    match runtime.request_link_on_remote_input_runtime(from, to) {
+        Ok(link_request_id) => tool_ok(json!({
+            "link_request_id": link_request_id.as_str(),
+            "input_runtime_name": input_runtime_name,
+            "state": "awaiting_runtime",
+        })),
+        Err(e) => tool_error(format!("connect failed: {e}")),
     }
 }
 
@@ -1185,7 +1047,7 @@ mod tests {
     impl ControlPlaneMcpDispatchStubRuntime {
         fn new() -> Self {
             Self {
-                exported_graph: Arc::new(Mutex::new(json!({ "processors": [], "links": [] }))),
+                exported_graph: Arc::new(Mutex::new(json!({ "nodes": [], "links": [] }))),
                 tap_plan: None,
                 recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
                 recorded_graph_mutations: Arc::new(Mutex::new(Vec::new())),
@@ -1194,9 +1056,9 @@ mod tests {
             }
         }
 
-        /// A stub whose `add_processor` refuses with `refusal`, standing in for
-        /// an engine-side refusal the front end has to carry back.
-        fn refusing_every_add_processor(refusal: &str) -> Self {
+        /// A stub whose `add_node` refuses with `refusal`, standing in for an
+        /// engine-side refusal the front end has to carry back.
+        fn refusing_every_add_node(refusal: &str) -> Self {
             Self {
                 armed_add_processor_refusal: Arc::new(Mutex::new(Some(refusal.to_string()))),
                 ..Self::new()
@@ -1284,8 +1146,8 @@ mod tests {
         "logs",
         "exchange",
         "shutdown",
-        "add_processor",
-        "remove_processor",
+        "add_node",
+        "remove_node",
         "connect",
         "disconnect",
     ];
@@ -1382,7 +1244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_call_add_processor_reaches_the_runtime_op_with_the_spec() {
+    async fn tools_call_add_node_reaches_the_runtime_op_with_the_spec() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
@@ -1390,10 +1252,10 @@ mod tests {
             runtime,
             json!({
                 "jsonrpc": "2.0", "id": 30, "method": "tools/call",
-                "params": { "name": "add_processor", "arguments": {
+                "params": { "name": "add_node", "arguments": {
                     "type": "processors.grayscale_effect:GrayscaleEffect",
                     "config": { "strength": 0.5 },
-                    "display_name": "Gray"
+                    "name": "Gray"
                 } }
             }),
         )
@@ -1404,14 +1266,15 @@ mod tests {
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
         let stated: Value = serde_json::from_str(text).unwrap();
         assert_eq!(
-            stated["processor_id"],
-            crate::control_plane_stub_support::STUB_ADDED_PROCESSOR_ID
+            stated,
+            json!({ "name": "gray" }),
+            "the result is the name the node received, which `connect` and `remove_node` take"
         );
         let recorded = recorded.lock();
         let [crate::control_plane_stub_support::RecordedGraphMutation::AddProcessor(spec)] =
             &recorded[..]
         else {
-            panic!("add_processor must reach exactly one add op, recorded {recorded:?}");
+            panic!("add_node must reach exactly one add op, recorded {recorded:?}");
         };
         assert_eq!(
             spec.name.as_str(),
@@ -1421,26 +1284,23 @@ mod tests {
         assert_eq!(spec.display_name.as_deref(), Some("Gray"));
     }
 
-    /// What this locks is the door, not the grammar: an engine that refuses an
-    /// add reaches the MCP caller as a tool error carrying its own words, the
-    /// offending character intact, rather than as a success or a swallowed
-    /// reason. The refusal itself lives at `add_processor_impl`, and is locked
-    /// by the engine's own tests and by `rt.add`.
+    /// What this locks is the door: an engine that refuses an add — a name
+    /// already taken, an unknown class — reaches the MCP caller as a tool error
+    /// carrying its own words, rather than as a success or a swallowed reason.
     #[tokio::test]
-    async fn tools_call_add_processor_carries_back_a_refused_display_name_naming_the_character() {
-        let runtime = Arc::new(
-            ControlPlaneMcpDispatchStubRuntime::refusing_every_add_processor(
-                "display name \"a/b\" cannot be one chunk of a processor's mesh address: it contains '/'",
-            ),
-        );
+    async fn tools_call_add_node_carries_back_an_engine_refusal_in_its_own_words() {
+        let refusal = "the node name `gray` is already taken in this graph";
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::refusing_every_add_node(
+            refusal,
+        ));
 
         let (status, body) = mcp_call(
             runtime,
             json!({
                 "jsonrpc": "2.0", "id": 32, "method": "tools/call",
-                "params": { "name": "add_processor", "arguments": {
+                "params": { "name": "add_node", "arguments": {
                     "type": "processors.grayscale_effect:GrayscaleEffect",
-                    "display_name": "a/b"
+                    "name": "gray"
                 } }
             }),
         )
@@ -1449,18 +1309,16 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["result"]["isError"], true, "body={body}");
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("add_node failed"), "{text}");
         assert!(
-            text.contains("a/b"),
-            "the refusal must name the display name: {text}"
-        );
-        assert!(
-            text.contains("'/'"),
-            "the refusal must name the character: {text}"
+            text.contains(refusal),
+            "the refusal must reach the caller in the engine's own words: {text}"
         );
     }
 
     #[tokio::test]
-    async fn tools_call_add_processor_without_config_sends_an_empty_object_not_null() {
+    async fn tools_call_add_node_without_config_or_name_sends_an_empty_object_and_answers_the_engines_name()
+     {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
@@ -1468,12 +1326,19 @@ mod tests {
             runtime,
             json!({
                 "jsonrpc": "2.0", "id": 31, "method": "tools/call",
-                "params": { "name": "add_processor", "arguments": { "type": "streamlib:CameraSource" } }
+                "params": { "name": "add_node", "arguments": { "type": "streamlib:CameraSource" } }
             }),
         )
         .await;
 
         assert_eq!(body["result"]["isError"], false, "body={body}");
+        let stated: Value =
+            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            stated["name"],
+            crate::control_plane_stub_support::STUB_ADDED_NODE_NAME,
+            "an unnamed node is answered with the name the engine gave it"
+        );
         let recorded = recorded.lock();
         let [crate::control_plane_stub_support::RecordedGraphMutation::AddProcessor(spec)] =
             &recorded[..]
@@ -1482,6 +1347,41 @@ mod tests {
         };
         assert_eq!(spec.config, json!({}));
         assert_eq!(spec.display_name, None);
+    }
+
+    /// Mental-revert: read unknown fields past and `display_name` is dropped,
+    /// so the node takes the class's short name while the caller believes it
+    /// named it.
+    #[tokio::test]
+    async fn tools_call_add_node_refuses_an_argument_it_does_not_take() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        let recorded = runtime.recorded_graph_mutations.clone();
+
+        let (_, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 33, "method": "tools/call",
+                "params": { "name": "add_node", "arguments": {
+                    "type": "processors.grayscale_effect:GrayscaleEffect",
+                    "display_name": "gray"
+                } }
+            }),
+        )
+        .await;
+
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["result"]["isError"], true, "{text}");
+        assert!(text.contains("add_node arguments"), "{text}");
+        assert!(text.contains("display_name"), "{text}");
+        assert!(recorded.lock().is_empty(), "nothing was added");
+    }
+
+    /// The address `connect` hands the engine for a port on this node.
+    fn mesh_address_of_a_port_here(node: &str, port: &str) -> String {
+        format!(
+            "{}/{node}/{port}",
+            crate::control_plane_stub_support::STUB_RUNTIME_NAME
+        )
     }
 
     #[tokio::test]
@@ -1494,8 +1394,8 @@ mod tests {
             json!({
                 "jsonrpc": "2.0", "id": 32, "method": "tools/call",
                 "params": { "name": "connect", "arguments": {
-                    "from_processor_id": "cam-1", "from_port": "video",
-                    "to_processor_id": "fx-1", "to_port": "video_from_upstream"
+                    "from_node": "camera", "from_port": "video",
+                    "to_node": "fx", "to_port": "video_from_upstream"
                 } }
             }),
         )
@@ -1536,17 +1436,53 @@ mod tests {
         else {
             panic!("expected a connect then a disconnect, recorded {recorded:?}");
         };
+        // Both ends travel as addresses under this runtime's own name, which
+        // the engine resolves to the node by name.
         assert_eq!(
-            from.processor_id_on_this_runtime().map(|id| id.as_str()),
-            Some("cam-1")
+            from.mesh_port_address().map(|address| address.to_string()),
+            Some(mesh_address_of_a_port_here("camera", "video"))
         );
-        assert_eq!(from.port_name(), "video");
         assert_eq!(
-            to.processor_id_on_this_runtime().map(|id| id.as_str()),
-            Some("fx-1")
+            to.mesh_port_address().map(|address| address.to_string()),
+            Some(mesh_address_of_a_port_here("fx", "video_from_upstream"))
         );
-        assert_eq!(to.port_name(), "video_from_upstream");
         assert_eq!(link_id.as_str(), "link-9");
+    }
+
+    /// A node and port are named on the link as `graph` lists them, cast, so
+    /// a caller that typed a name the way it reads still reaches the node.
+    #[tokio::test]
+    async fn tools_call_connect_casts_each_ends_node_and_port_name() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        let recorded = runtime.recorded_graph_mutations.clone();
+
+        let body = call_the_connect_tool(
+            runtime,
+            json!({
+                "from_node": "Front Camera", "from_port": "Video",
+                "to_node": "Gray FX", "to_port": "video_from_upstream",
+            }),
+        )
+        .await;
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+
+        let recorded = recorded.lock();
+        let [crate::control_plane_stub_support::RecordedGraphMutation::Connect(from, to)] =
+            &recorded[..]
+        else {
+            panic!("expected one connect op, recorded {recorded:?}");
+        };
+        assert_eq!(
+            from.mesh_port_address().map(|address| address.to_string()),
+            Some(mesh_address_of_a_port_here("front-camera", "video"))
+        );
+        assert_eq!(
+            to.mesh_port_address().map(|address| address.to_string()),
+            Some(mesh_address_of_a_port_here(
+                "gray-fx",
+                "video_from_upstream"
+            ))
+        );
     }
 
     /// Call `connect` with `arguments` and hand back the whole tool result.
@@ -1565,9 +1501,9 @@ mod tests {
         body
     }
 
-    /// The remote source form reaches the op as a mesh address rather than as
-    /// a processor id invented out of the display name — which is what makes a
-    /// port on another runtime reachable from an agent at all.
+    /// The remote source reaches the op as a mesh address naming its own
+    /// runtime — which is what makes a port on another runtime reachable from
+    /// an agent at all.
     #[tokio::test]
     async fn tools_call_connect_names_a_source_on_another_runtime_by_its_mesh_address() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
@@ -1577,9 +1513,9 @@ mod tests {
             runtime,
             json!({
                 "from_runtime_name": "bench-cam-a1b2",
-                "from_processor_display_name": "CameraSource",
+                "from_node": "camerasource",
                 "from_port": "video",
-                "to_processor_id": "fx-1",
+                "to_node": "fx",
                 "to_port": "video_from_upstream",
             }),
         )
@@ -1595,11 +1531,11 @@ mod tests {
         assert_eq!(from.processor_id_on_this_runtime(), None);
         assert_eq!(
             from.mesh_port_address().map(|address| address.to_string()),
-            Some("bench-cam-a1b2/CameraSource/video".to_string())
+            Some("bench-cam-a1b2/camerasource/video".to_string())
         );
         assert_eq!(
-            to.processor_id_on_this_runtime().map(|id| id.as_str()),
-            Some("fx-1")
+            to.mesh_port_address().map(|address| address.to_string()),
+            Some(mesh_address_of_a_port_here("fx", "video_from_upstream"))
         );
     }
 
@@ -1632,10 +1568,10 @@ mod tests {
         let body = call_the_connect_tool(
             Arc::clone(&runtime),
             json!({
-                "from_processor_id": "cam-1",
+                "from_node": "camera",
                 "from_port": "video",
                 "to_runtime_name": "studio-display-9f3c",
-                "to_processor_display_name": "DisplayWindow",
+                "to_node": "window",
                 "to_port": "video",
             }),
         )
@@ -1648,10 +1584,10 @@ mod tests {
             panic!("expected one link request, recorded {recorded:?}");
         };
         assert_eq!(
-            from.processor_id_on_this_runtime().map(|id| id.as_str()),
-            Some("cam-1")
+            from.mesh_port_address().map(|address| address.to_string()),
+            Some(mesh_address_of_a_port_here("camera", "video"))
         );
-        assert_eq!(to.to_string(), "studio-display-9f3c/DisplayWindow/video");
+        assert_eq!(to.to_string(), "studio-display-9f3c/window/video");
 
         let stated: Value =
             serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
@@ -1664,14 +1600,16 @@ mod tests {
             "a link this node did not apply has no id here: {stated}"
         );
         assert_eq!(stated["input_runtime_name"], "studio-display-9f3c");
+        assert_eq!(stated["state"], "awaiting_runtime");
     }
 
     /// A destination naming this node's own runtime is an ordinary local link,
     /// not a request this node sends to itself.
     ///
-    /// Mental-revert: route on argument shape alone and an agent that wires
-    /// uniformly by runtime name — the names `graph` hands it — is refused
-    /// with "use `connect` instead", by `connect`.
+    /// Mental-revert: route on whether `to_runtime_name` was given rather than
+    /// on what it names, and an agent that names every end by runtime name —
+    /// the names `graph` hands it — sends this node a link request addressed
+    /// to itself.
     #[tokio::test]
     async fn tools_call_connect_naming_this_node_as_the_destination_wires_it_here() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
@@ -1680,10 +1618,10 @@ mod tests {
         let body = call_the_connect_tool(
             Arc::clone(&runtime),
             json!({
-                "from_processor_id": "cam-1",
+                "from_node": "camera",
                 "from_port": "video",
                 "to_runtime_name": crate::control_plane_stub_support::STUB_RUNTIME_NAME,
-                "to_processor_display_name": "DisplayWindow",
+                "to_node": "window",
                 "to_port": "video",
             }),
         )
@@ -1697,11 +1635,8 @@ mod tests {
         };
         assert_eq!(
             to.mesh_port_address().map(|address| address.to_string()),
-            Some(format!(
-                "{}/DisplayWindow/video",
-                crate::control_plane_stub_support::STUB_RUNTIME_NAME
-            )),
-            "the address is handed to `connect`, which resolves it by display name"
+            Some(mesh_address_of_a_port_here("window", "video")),
+            "the address is handed to `connect`, which resolves it by node name"
         );
 
         let stated: Value =
@@ -1727,10 +1662,10 @@ mod tests {
             runtime,
             json!({
                 "from_runtime_name": "bench-cam-a1b2",
-                "from_processor_display_name": "CameraSource",
+                "from_node": "camerasource",
                 "from_port": "video",
                 "to_runtime_name": "studio-display-9f3c",
-                "to_processor_display_name": "DisplayWindow",
+                "to_node": "window",
                 "to_port": "video",
             }),
         )
@@ -1744,52 +1679,69 @@ mod tests {
         };
         assert_eq!(
             from.mesh_port_address().map(|address| address.to_string()),
-            Some("bench-cam-a1b2/CameraSource/video".to_string())
+            Some("bench-cam-a1b2/camerasource/video".to_string())
         );
-        assert_eq!(to.to_string(), "studio-display-9f3c/DisplayWindow/video");
+        assert_eq!(to.to_string(), "studio-display-9f3c/window/video");
     }
 
-    /// The destination end is refused the same four ways the source end is,
-    /// and each refusal names the argument the caller actually typed.
+    /// Every end needs its node and its port, and a call missing one is
+    /// refused naming the field rather than wired against a guess.
     #[tokio::test]
-    async fn tools_call_connect_refuses_a_destination_end_named_twice_or_not_at_all() {
-        for (arguments, what_the_refusal_must_name) in [
-            (
-                json!({ "from_processor_id": "cam-1", "from_port": "video", "to_port": "video" }),
-                "to_processor_id",
-            ),
-            (
-                json!({
-                    "from_processor_id": "cam-1", "from_port": "video",
-                    "to_processor_id": "fx-1", "to_runtime_name": "studio-display-9f3c",
-                    "to_processor_display_name": "DisplayWindow", "to_port": "video",
-                }),
-                "named twice",
-            ),
-            (
-                json!({
-                    "from_processor_id": "cam-1", "from_port": "video",
-                    "to_runtime_name": "studio-display-9f3c", "to_port": "video",
-                }),
-                "to_processor_display_name",
-            ),
-            (
-                json!({
-                    "from_processor_id": "cam-1", "from_port": "video",
-                    "to_processor_display_name": "DisplayWindow", "to_port": "video",
-                }),
-                "to_runtime_name",
-            ),
-        ] {
+    async fn tools_call_connect_refuses_an_end_missing_its_node_or_port_naming_the_field() {
+        for missing_field in ["from_node", "from_port", "to_node", "to_port"] {
+            let mut arguments = json!({
+                "from_node": "camera", "from_port": "video",
+                "to_node": "fx", "to_port": "video_from_upstream",
+            });
+            arguments
+                .as_object_mut()
+                .unwrap()
+                .remove(missing_field)
+                .expect("the field this case removes");
             let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
             let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
             let body = call_the_connect_tool(runtime, arguments.clone()).await;
 
             let text = body["result"]["content"][0]["text"].as_str().unwrap();
             assert_eq!(body["result"]["isError"], true, "{arguments} gave {text}");
+            assert!(text.contains("connect arguments"), "{text}");
             assert!(
-                text.contains(what_the_refusal_must_name),
-                "{arguments} must be refused naming {what_the_refusal_must_name}: {text}"
+                text.contains(missing_field),
+                "{arguments} must be refused naming {missing_field}: {text}"
+            );
+            assert!(
+                recorded_calls.lock().is_empty(),
+                "a refused connect reaches no runtime op"
+            );
+        }
+    }
+
+    /// An end named by an argument `connect` does not take is refused naming
+    /// it — the id and display-name spellings included, which a caller holding
+    /// an older `graph` would still send.
+    #[tokio::test]
+    async fn tools_call_connect_refuses_an_argument_it_does_not_take_naming_it() {
+        for unknown_field in [
+            "from_processor_id",
+            "from_processor_display_name",
+            "to_processor_id",
+            "to_processor_display_name",
+        ] {
+            let mut arguments = json!({
+                "from_node": "camera", "from_port": "video",
+                "to_node": "fx", "to_port": "video_from_upstream",
+            });
+            arguments[unknown_field] = json!("camera");
+            let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+            let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
+            let body = call_the_connect_tool(runtime, arguments.clone()).await;
+
+            let text = body["result"]["content"][0]["text"].as_str().unwrap();
+            assert_eq!(body["result"]["isError"], true, "{arguments} gave {text}");
+            assert!(text.contains("connect arguments"), "{text}");
+            assert!(
+                text.contains(unknown_field),
+                "{arguments} must be refused naming {unknown_field}: {text}"
             );
             assert!(
                 recorded_calls.lock().is_empty(),
@@ -1801,8 +1753,8 @@ mod tests {
     /// A misspelled argument is refused rather than read past.
     ///
     /// Mental-revert: ignore unknown fields and `to_runtime_nam` leaves the
-    /// destination named by `to_processor_id` alone — so a caller that meant
-    /// another runtime's port silently wires a link on this node instead.
+    /// destination on this node — so a caller that meant another runtime's
+    /// port silently wires a link on this node instead.
     #[tokio::test]
     async fn tools_call_connect_refuses_a_misspelled_argument_rather_than_reading_past_it() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
@@ -1811,9 +1763,9 @@ mod tests {
         let body = call_the_connect_tool(
             runtime,
             json!({
-                "from_processor_id": "cam-1",
+                "from_node": "camera",
                 "from_port": "video",
-                "to_processor_id": "fx-1",
+                "to_node": "fx",
                 "to_runtime_nam": "studio-display-9f3c",
                 "to_port": "video",
             }),
@@ -1974,9 +1926,9 @@ mod tests {
             runtime,
             json!({
                 "from_runtime_name": "bench-cam-a1b2",
-                "from_processor_display_name": "CameraSource",
+                "from_node": "camerasource",
                 "from_port": "video",
-                "to_processor_id": "fx-1",
+                "to_node": "fx",
                 "to_port": "video_from_upstream",
             }),
         )
@@ -1997,45 +1949,26 @@ mod tests {
         assert_eq!(stated["state"], "awaiting_remote");
     }
 
-    /// Every way of naming the source end wrong, refused by name and reaching
-    /// no op. Both forms at once is the one worth spelling out: the two name
-    /// different ports and the tool cannot know which was meant, so wiring
-    /// whichever arrived first would silently build the wrong graph.
+    /// An address part the mesh key grammar cannot carry, or a name that
+    /// casts to nothing, is refused at the tool naming the part rather than
+    /// reaching the engine as a link that can never resolve.
     #[tokio::test]
-    async fn tools_call_connect_refuses_a_source_end_named_twice_or_not_at_all() {
+    async fn tools_call_connect_refuses_an_end_the_mesh_cannot_address() {
         for (arguments, named_in_the_refusal) in [
             (
                 json!({
-                    "from_processor_id": "cam-1",
-                    "from_runtime_name": "bench-cam-a1b2",
-                    "from_processor_display_name": "CameraSource",
-                    "from_port": "video",
-                    "to_processor_id": "fx-1", "to_port": "video_from_upstream",
+                    "from_runtime_name": "bench/cam",
+                    "from_node": "camerasource", "from_port": "video",
+                    "to_node": "fx", "to_port": "video_from_upstream",
                 }),
-                "named twice",
+                "runtime name",
             ),
             (
                 json!({
-                    "from_port": "video",
-                    "to_processor_id": "fx-1", "to_port": "video_from_upstream",
+                    "from_node": "camerasource", "from_port": "video",
+                    "to_node": "///", "to_port": "video_from_upstream",
                 }),
-                "was not named",
-            ),
-            (
-                json!({
-                    "from_runtime_name": "bench-cam-a1b2",
-                    "from_port": "video",
-                    "to_processor_id": "fx-1", "to_port": "video_from_upstream",
-                }),
-                "from_processor_display_name",
-            ),
-            (
-                json!({
-                    "from_processor_display_name": "CameraSource",
-                    "from_port": "video",
-                    "to_processor_id": "fx-1", "to_port": "video_from_upstream",
-                }),
-                "from_runtime_name",
+                "`///`",
             ),
         ] {
             let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
@@ -2045,6 +1978,7 @@ mod tests {
 
             assert_eq!(body["result"]["isError"], true, "body={body}");
             let refusal = body["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(refusal.contains("connect arguments"), "{refusal}");
             assert!(
                 refusal.contains(named_in_the_refusal),
                 "{arguments} must be refused naming {named_in_the_refusal:?}; got {refusal}"
@@ -2056,38 +1990,8 @@ mod tests {
         }
     }
 
-    /// An address part the mesh key grammar cannot carry is refused at the
-    /// tool rather than reaching the engine as a link that can never resolve.
     #[tokio::test]
-    async fn tools_call_connect_refuses_a_remote_source_the_mesh_cannot_address() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded = runtime.recorded_graph_mutations.clone();
-
-        let body = call_the_connect_tool(
-            runtime,
-            json!({
-                "from_runtime_name": "bench-cam-a1b2",
-                "from_processor_display_name": "Camera/Source",
-                "from_port": "video",
-                "to_processor_id": "fx-1",
-                "to_port": "video_from_upstream",
-            }),
-        )
-        .await;
-
-        assert_eq!(body["result"]["isError"], true, "body={body}");
-        assert!(
-            body["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap()
-                .contains("processor display name"),
-            "the refusal names the part that cannot be addressed; got {body}"
-        );
-        assert!(recorded.lock().is_empty());
-    }
-
-    #[tokio::test]
-    async fn tools_call_remove_processor_reaches_the_runtime_op() {
+    async fn tools_call_remove_node_resolves_the_name_and_reaches_the_runtime_op() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
@@ -2095,11 +1999,18 @@ mod tests {
             runtime,
             json!({
                 "jsonrpc": "2.0", "id": 34, "method": "tools/call",
-                "params": { "name": "remove_processor", "arguments": { "processor_id": "fx-1" } }
+                "params": { "name": "remove_node", "arguments": { "name": "FX" } }
             }),
         )
         .await;
         assert_eq!(body["result"]["isError"], false, "body={body}");
+        let stated: Value =
+            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            stated,
+            json!({ "removed_name": "fx" }),
+            "the result names the node as `graph` listed it"
+        );
 
         let recorded = recorded.lock();
         let [crate::control_plane_stub_support::RecordedGraphMutation::RemoveProcessor(id)] =
@@ -2107,7 +2018,41 @@ mod tests {
         else {
             panic!("expected one remove op, recorded {recorded:?}");
         };
-        assert_eq!(id.as_str(), "fx-1");
+        assert_eq!(
+            id.as_str(),
+            format!(
+                "fx{}",
+                crate::control_plane_stub_support::STUB_NODE_ID_SUFFIX
+            ),
+            "the op is handed the id the runtime resolved the name to"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_remove_node_naming_an_absent_node_is_refused_naming_it() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        let recorded = runtime.recorded_graph_mutations.clone();
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 37, "method": "tools/call",
+                "params": { "name": "remove_node", "arguments": {
+                    "name": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME
+                } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], true, "body={body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("remove_node failed"), "{text}");
+        assert!(
+            text.contains(crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME),
+            "the refusal must name the node asked for: {text}"
+        );
+        assert!(recorded.lock().is_empty(), "nothing was removed");
     }
 
     #[tokio::test]
@@ -2119,7 +2064,7 @@ mod tests {
             runtime,
             json!({
                 "jsonrpc": "2.0", "id": 35, "method": "tools/call",
-                "params": { "name": "connect", "arguments": { "from_processor_id": "cam-1" } }
+                "params": { "name": "connect", "arguments": { "from_node": "camera" } }
             }),
         )
         .await;
@@ -2143,7 +2088,7 @@ mod tests {
         assert_eq!(body["result"]["isError"], false);
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
         let graph: Value = serde_json::from_str(text).unwrap();
-        assert!(graph["processors"].is_array());
+        assert!(graph["nodes"].is_array());
     }
 
     #[tokio::test]
@@ -2892,15 +2837,16 @@ mod tests {
     };
     use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 
-    /// Two processors and the one link between them, in the shape the engine's
+    /// Two nodes and the one link between them, in the shape the engine's
     /// graph export takes, so the prompts parse what a real node answers.
-    fn two_linked_processors_graph() -> Value {
+    fn two_linked_nodes_graph() -> Value {
         json!({
+            "stream": "desk-preview",
             "nodes": [
                 {
                     "id": "PatternSourceId",
                     "type": "graph_probes:PatternSource",
-                    "display_name": "pattern",
+                    "name": "pattern",
                     "ports": {
                         "inputs": [],
                         "outputs": [{ "name": "video", "description": "", "delivery_profile": null }]
@@ -2910,7 +2856,7 @@ mod tests {
                 {
                     "id": "WindowSinkId",
                     "type": "graph_probes:WindowSink",
-                    "display_name": "window",
+                    "name": "window",
                     "ports": {
                         "inputs": [{ "name": "video", "description": "", "delivery_profile": "newest" }],
                         "outputs": []
@@ -2920,36 +2866,41 @@ mod tests {
             ],
             "links": [{
                 "id": "link-pattern-to-window",
-                "source": { "processor_id": "PatternSourceId", "port_name": "video" },
-                "target": { "processor_id": "WindowSinkId", "port_name": "video" },
+                "source": { "node": "pattern", "port": "video" },
+                "target": { "node": "window", "port": "video" },
                 "state": "wired",
                 "created_by_runtime_name": "rig-desk-a1b2",
                 "stamp_clock_identity": "2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93",
                 "components": {}
             }],
+            "exposed": [],
             "extensions": [],
-            // A runtime that is on its mesh and sees nobody: the prompts parse
-            // a real node's answer, and `mesh` is always on one.
+            // A runtime that is on its mesh and sending one port to one reader:
+            // the prompts parse a real node's answer, and `mesh` is always on one.
             "mesh": {
                 "mesh_name": "default",
                 "runtime_name": "rig-desk-a1b2",
                 "session": "open",
                 "peers": [],
-                "egress_ports": [],
+                "egress_ports": [{
+                    "node": "pattern",
+                    "port": "video",
+                    "reader_runtime_names": ["studio-display-9f3c"]
+                }],
                 "link_requests_awaiting_runtime": []
             }
         })
     }
 
     /// The same graph after the helper that was to open the link refused it —
-    /// what a live `connect` onto a helper-placed processor leaves behind when
+    /// what a live `connect` onto a helper-placed node leaves behind when
     /// that helper's port could not open.
     ///
     /// Kept beside the wired fixture rather than replacing its link: the
     /// prompts pick a link out of the graph they are rendered against, and an
     /// errored one has no business in the recipes' happy path.
-    fn two_linked_processors_graph_whose_link_a_helper_refused() -> Value {
-        let mut graph = two_linked_processors_graph();
+    fn two_linked_nodes_graph_whose_link_a_helper_refused() -> Value {
+        let mut graph = two_linked_nodes_graph();
         graph["links"][0]["state"] = json!("error");
         graph["links"][0]["error_reason"] = json!(
             "could not wire input port \"video\": BufferSizeExceedsMaxSupportedBufferSizeOfService"
@@ -2962,7 +2913,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_graph_carries_the_reason_a_helper_refused_a_link_for() {
         let runtime = ControlPlaneMcpDispatchStubRuntime::new();
-        *runtime.exported_graph.lock() = two_linked_processors_graph_whose_link_a_helper_refused();
+        *runtime.exported_graph.lock() = two_linked_nodes_graph_whose_link_a_helper_refused();
 
         let (status, body) = mcp_call(
             Arc::new(runtime),
@@ -2998,21 +2949,21 @@ mod tests {
         )];
         for (recipe, arguments) in [
             (
-                "insert_processor_between_linked_processors",
-                json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:Blur" }),
+                "insert_node_between_linked_nodes",
+                json!({ "link_id": "link-pattern-to-window", "type": "effects:Blur" }),
             ),
             (
                 "fan_output_to_another_consumer",
-                json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": "effects:Blur" }),
+                json!({ "from_node": "pattern", "from_port": "video", "type": "effects:Blur" }),
             ),
             (
                 "show_channel_on_virtual_camera",
-                json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+                json!({ "from_node": "pattern", "from_port": "video" }),
             ),
         ] {
             texts.push((
                 recipe,
-                prompt_text(stub_serving_two_linked_processors(), recipe, arguments).await,
+                prompt_text(stub_serving_two_linked_nodes(), recipe, arguments).await,
             ));
         }
         for (name, text) in texts {
@@ -3025,9 +2976,9 @@ mod tests {
         }
     }
 
-    fn stub_serving_two_linked_processors() -> Arc<ControlPlaneMcpDispatchStubRuntime> {
+    fn stub_serving_two_linked_nodes() -> Arc<ControlPlaneMcpDispatchStubRuntime> {
         let runtime = ControlPlaneMcpDispatchStubRuntime::new();
-        *runtime.exported_graph.lock() = two_linked_processors_graph();
+        *runtime.exported_graph.lock() = two_linked_nodes_graph();
         Arc::new(runtime)
     }
 
@@ -3139,7 +3090,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resources_list_names_the_processor_catalog_and_the_live_graph() {
+    async fn resources_list_names_the_node_catalog_and_the_live_graph() {
         let result = rpc_result(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             "resources/list",
@@ -3153,7 +3104,7 @@ mod tests {
             .iter()
             .map(|resource| resource["uri"].as_str().unwrap())
             .collect();
-        assert_eq!(uris, ["streamlib://processor-catalog", "streamlib://graph"]);
+        assert_eq!(uris, ["streamlib://node-catalog", "streamlib://graph"]);
         for resource in result["resources"].as_array().unwrap() {
             assert_eq!(resource["mimeType"], "application/json", "{resource}");
             assert!(
@@ -3179,17 +3130,17 @@ mod tests {
         let class_import_path =
             "streamlib_api_server::catalog_resource_probe::RegisteredBetweenReads";
         let entry_for_the_probe = |catalog: &Value| {
-            catalog["processors"]
+            catalog["nodes"]
                 .as_array()
-                .expect("a processor list")
+                .expect("a node type list")
                 .iter()
-                .find(|entry| entry["processor_class_import_path"] == class_import_path)
+                .find(|entry| entry["type"] == class_import_path)
                 .cloned()
         };
 
         let before = resource_document(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            "streamlib://processor-catalog",
+            "streamlib://node-catalog",
         )
         .await;
         assert!(entry_for_the_probe(&before).is_none());
@@ -3215,7 +3166,7 @@ mod tests {
 
         let after = resource_document(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            "streamlib://processor-catalog",
+            "streamlib://node-catalog",
         )
         .await;
         let entry = entry_for_the_probe(&after).expect("the type registered between reads");
@@ -3230,11 +3181,11 @@ mod tests {
         let exported_graph = runtime.exported_graph.clone();
 
         let before = resource_document(runtime.clone(), "streamlib://graph").await;
-        assert_eq!(before, json!({ "processors": [], "links": [] }));
+        assert_eq!(before, json!({ "nodes": [], "links": [] }));
 
-        *exported_graph.lock() = two_linked_processors_graph();
+        *exported_graph.lock() = two_linked_nodes_graph();
         let after = resource_document(runtime, "streamlib://graph").await;
-        assert_eq!(after, two_linked_processors_graph());
+        assert_eq!(after, two_linked_nodes_graph());
     }
 
     #[tokio::test]
@@ -3295,28 +3246,24 @@ mod tests {
             described,
             vec![
                 owned(
-                    "insert_processor_between_linked_processors",
-                    &[("link_id", true), ("processor_type", true)]
+                    "insert_node_between_linked_nodes",
+                    &[("link_id", true), ("type", true)]
                 ),
                 owned(
                     "fan_output_to_another_consumer",
-                    &[
-                        ("from_processor_id", true),
-                        ("from_port", true),
-                        ("processor_type", true)
-                    ]
+                    &[("from_node", true), ("from_port", true), ("type", true)]
                 ),
                 owned(
                     "show_channel_on_virtual_camera",
                     &[
-                        ("from_processor_id", true),
+                        ("from_node", true),
                         ("from_port", true),
                         ("camera_name", false)
                     ]
                 ),
                 owned(
                     "look_at_what_a_channel_carries",
-                    &[("from_processor_id", true), ("from_port", true)]
+                    &[("from_node", true), ("from_port", true)]
                 ),
             ]
         );
@@ -3331,24 +3278,23 @@ mod tests {
 
         for (prompt_name, arguments) in [
             (
-                "insert_processor_between_linked_processors",
-                json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:Blur" }),
+                "insert_node_between_linked_nodes",
+                json!({ "link_id": "link-pattern-to-window", "type": "effects:Blur" }),
             ),
             (
                 "fan_output_to_another_consumer",
-                json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": "effects:Blur" }),
+                json!({ "from_node": "pattern", "from_port": "video", "type": "effects:Blur" }),
             ),
             (
                 "show_channel_on_virtual_camera",
-                json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+                json!({ "from_node": "pattern", "from_port": "video" }),
             ),
             (
                 "look_at_what_a_channel_carries",
-                json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+                json!({ "from_node": "pattern", "from_port": "video" }),
             ),
         ] {
-            let text =
-                prompt_text(stub_serving_two_linked_processors(), prompt_name, arguments).await;
+            let text = prompt_text(stub_serving_two_linked_nodes(), prompt_name, arguments).await;
             let called = tool_names_the_numbered_steps_call(&text);
             assert!(!called.is_empty(), "{prompt_name} lists no steps:\n{text}");
             for tool_name in &called {
@@ -3363,16 +3309,16 @@ mod tests {
     #[tokio::test]
     async fn the_insert_prompt_splices_the_named_link_in_an_order_that_never_leaves_it_unfed() {
         let text = prompt_text(
-            stub_serving_two_linked_processors(),
-            "insert_processor_between_linked_processors",
-            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:Blur" }),
+            stub_serving_two_linked_nodes(),
+            "insert_node_between_linked_nodes",
+            json!({ "link_id": "link-pattern-to-window", "type": "effects:Blur" }),
         )
         .await;
 
         assert_eq!(
             tool_names_the_numbered_steps_call(&text),
             [
-                "add_processor",
+                "add_node",
                 "graph",
                 "connect",
                 "connect",
@@ -3382,8 +3328,8 @@ mod tests {
         );
         for named in [
             "`effects:Blur`",
-            "`PatternSourceId`",
-            "`WindowSinkId`",
+            "`pattern`",
+            "`window`",
             "`link-pattern-to-window`",
         ] {
             assert!(
@@ -3413,9 +3359,9 @@ mod tests {
             .expect("the probe's path is registered by this test alone");
 
         let registered = prompt_text(
-            stub_serving_two_linked_processors(),
+            stub_serving_two_linked_nodes(),
             "fan_output_to_another_consumer",
-            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": class_import_path }),
+            json!({ "from_node": "pattern", "from_port": "video", "type": class_import_path }),
         )
         .await;
         assert!(
@@ -3424,9 +3370,9 @@ mod tests {
         );
 
         let unregistered = prompt_text(
-            stub_serving_two_linked_processors(),
+            stub_serving_two_linked_nodes(),
             "fan_output_to_another_consumer",
-            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": "never_imported:Effect" }),
+            json!({ "from_node": "pattern", "from_port": "video", "type": "never_imported:Effect" }),
         )
         .await;
         assert!(
@@ -3440,15 +3386,15 @@ mod tests {
         register_a_virtual_camera_sink_probe_once();
 
         let text = prompt_text(
-            stub_serving_two_linked_processors(),
+            stub_serving_two_linked_nodes(),
             "show_channel_on_virtual_camera",
-            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "camera_name": "Desk \"cam\"" }),
+            json!({ "from_node": "pattern", "from_port": "video", "camera_name": "Desk \"cam\"" }),
         )
         .await;
 
         assert_eq!(
             tool_names_the_numbered_steps_call(&text),
-            ["add_processor", "connect", "graph"]
+            ["add_node", "connect", "graph"]
         );
         assert!(
             text.contains(crate::mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH),
@@ -3464,9 +3410,9 @@ mod tests {
     #[tokio::test]
     async fn the_look_prompt_taps_the_channel_the_output_publishes_on() {
         let text = prompt_text(
-            stub_serving_two_linked_processors(),
+            stub_serving_two_linked_nodes(),
             "look_at_what_a_channel_carries",
-            json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+            json!({ "from_node": "pattern", "from_port": "video" }),
         )
         .await;
 
@@ -3475,8 +3421,8 @@ mod tests {
             ["tap", "exchange"]
         );
         assert!(
-            text.contains("`channel`: `patternsourceid/video`"),
-            "the channel is the processor id lowercased, then the port:\n{text}"
+            text.contains("`channel`: `rig-desk-a1b2/pattern/video`"),
+            "the channel is the runtime's name, the node's name, then the port:\n{text}"
         );
         assert!(
             text.contains(&format!(
@@ -3498,37 +3444,37 @@ mod tests {
             ),
             (
                 "a missing required argument",
-                "insert_processor_between_linked_processors",
+                "insert_node_between_linked_nodes",
                 json!({ "link_id": "link-pattern-to-window" }),
-                "processor_type",
+                "`type`",
             ),
             (
                 "a link the graph does not have",
-                "insert_processor_between_linked_processors",
-                json!({ "link_id": "no-such-link", "processor_type": "effects:Blur" }),
+                "insert_node_between_linked_nodes",
+                json!({ "link_id": "no-such-link", "type": "effects:Blur" }),
                 "no-such-link",
             ),
             (
-                "a processor the graph does not have",
+                "a node the graph does not have",
                 "look_at_what_a_channel_carries",
-                json!({ "from_processor_id": "NoSuchProcessor", "from_port": "video" }),
-                "NoSuchProcessor",
+                json!({ "from_node": "nosuchnode", "from_port": "video" }),
+                "nosuchnode",
             ),
             (
-                "a port that is not one of the processor's outputs",
+                "a port that is not one of the node's outputs",
                 "look_at_what_a_channel_carries",
-                json!({ "from_processor_id": "WindowSinkId", "from_port": "video" }),
+                json!({ "from_node": "window", "from_port": "video" }),
                 "video",
             ),
             (
                 "an argument that is not a string",
                 "look_at_what_a_channel_carries",
-                json!({ "from_processor_id": 7, "from_port": "video" }),
-                "from_processor_id",
+                json!({ "from_node": 7, "from_port": "video" }),
+                "from_node",
             ),
         ] {
             let error = rpc_error(
-                stub_serving_two_linked_processors(),
+                stub_serving_two_linked_nodes(),
                 "prompts/get",
                 json!({ "name": prompt_name, "arguments": arguments }),
             )
@@ -3558,7 +3504,7 @@ mod tests {
             ("prompts/list", json!({})),
             (
                 "prompts/get",
-                json!({ "name": "look_at_what_a_channel_carries", "arguments": { "from_processor_id": "PatternSourceId", "from_port": "video" } }),
+                json!({ "name": "look_at_what_a_channel_carries", "arguments": { "from_node": "pattern", "from_port": "video" } }),
             ),
         ] {
             let message = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
@@ -3575,7 +3521,7 @@ mod tests {
             };
             let router = || {
                 crate::handlers::build_router(
-                    stub_serving_two_linked_processors(),
+                    stub_serving_two_linked_nodes(),
                     Some(crate::auth::ApiServerBearerToken::from_secret(TOKEN)),
                 )
             };
@@ -3602,18 +3548,18 @@ mod tests {
     #[tokio::test]
     async fn the_fan_prompt_adds_one_consumer_and_wires_it_to_the_named_port() {
         let text = prompt_text(
-            stub_serving_two_linked_processors(),
+            stub_serving_two_linked_nodes(),
             "fan_output_to_another_consumer",
-            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": "effects:Blur" }),
+            json!({ "from_node": "pattern", "from_port": "video", "type": "effects:Blur" }),
         )
         .await;
 
         assert_eq!(
             tool_names_the_numbered_steps_call(&text),
-            ["add_processor", "graph", "connect", "graph"]
+            ["add_node", "graph", "connect", "graph"]
         );
         assert!(
-            text.contains("`from_processor_id`: `PatternSourceId`, `from_port`: `video`"),
+            text.contains("`from_node`: `pattern`, `from_port`: `video`"),
             "{text}"
         );
     }
@@ -3626,15 +3572,15 @@ mod tests {
         let ordered_input_probe = register_a_sole_input_probe_once("ordered");
 
         let text = prompt_text(
-            stub_serving_two_linked_processors(),
+            stub_serving_two_linked_nodes(),
             "fan_output_to_another_consumer",
-            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": ordered_input_probe }),
+            json!({ "from_node": "pattern", "from_port": "video", "type": ordered_input_probe }),
         )
         .await;
 
         assert_eq!(
             tool_names_the_numbered_steps_call(&text),
-            ["add_processor", "graph", "connect", "graph"]
+            ["add_node", "graph", "connect", "graph"]
         );
     }
 
@@ -3645,20 +3591,20 @@ mod tests {
     async fn the_virtual_camera_prompt_wires_onto_a_port_that_feeds_an_ordered_consumer() {
         register_a_virtual_camera_sink_probe_once();
         let runtime = ControlPlaneMcpDispatchStubRuntime::new();
-        let mut graph = two_linked_processors_graph();
+        let mut graph = two_linked_nodes_graph();
         graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!("ordered");
         *runtime.exported_graph.lock() = graph;
 
         let text = prompt_text(
             Arc::new(runtime),
             "show_channel_on_virtual_camera",
-            json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+            json!({ "from_node": "pattern", "from_port": "video" }),
         )
         .await;
 
         assert_eq!(
             tool_names_the_numbered_steps_call(&text),
-            ["add_processor", "connect", "graph"]
+            ["add_node", "connect", "graph"]
         );
     }
 
@@ -3705,21 +3651,21 @@ mod tests {
         for (inserted_profile, replaced_profile) in [("newest", "ordered"), ("ordered", "newest")] {
             let inserted_probe = register_a_sole_input_probe_once(inserted_profile);
             let runtime = ControlPlaneMcpDispatchStubRuntime::new();
-            let mut graph = two_linked_processors_graph();
+            let mut graph = two_linked_nodes_graph();
             graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!(replaced_profile);
             *runtime.exported_graph.lock() = graph;
 
             let text = prompt_text(
                 Arc::new(runtime),
-                "insert_processor_between_linked_processors",
-                json!({ "link_id": "link-pattern-to-window", "processor_type": inserted_probe }),
+                "insert_node_between_linked_nodes",
+                json!({ "link_id": "link-pattern-to-window", "type": inserted_probe }),
             )
             .await;
 
             assert_eq!(
                 tool_names_the_numbered_steps_call(&text),
                 [
-                    "add_processor",
+                    "add_node",
                     "graph",
                     "connect",
                     "connect",
@@ -3738,16 +3684,16 @@ mod tests {
     async fn an_insert_of_an_uncatalogued_type_connects_before_it_disconnects_with_no_profile_note()
     {
         let text = prompt_text(
-            stub_serving_two_linked_processors(),
-            "insert_processor_between_linked_processors",
-            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:WrittenJustNow" }),
+            stub_serving_two_linked_nodes(),
+            "insert_node_between_linked_nodes",
+            json!({ "link_id": "link-pattern-to-window", "type": "effects:WrittenJustNow" }),
         )
         .await;
 
         assert_eq!(
             tool_names_the_numbered_steps_call(&text),
             [
-                "add_processor",
+                "add_node",
                 "graph",
                 "connect",
                 "connect",
@@ -3756,7 +3702,7 @@ mod tests {
             ]
         );
         assert!(
-            !text.contains("delivery profile") && !text.contains("remove_processor"),
+            !text.contains("delivery profile") && !text.contains("remove_node"),
             "nothing about the insert depends on the new type's profile:\n{text}"
         );
     }
@@ -3764,7 +3710,7 @@ mod tests {
     #[tokio::test]
     async fn inserting_into_a_link_whose_target_takes_one_inbound_link_removes_the_link_first() {
         let runtime = ControlPlaneMcpDispatchStubRuntime::new();
-        let mut graph = two_linked_processors_graph();
+        let mut graph = two_linked_nodes_graph();
         graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!("ordered");
         graph["nodes"][1]["ports"]["inputs"][0]["audio_window"] =
             json!({ "resolved_from": "match_device" });
@@ -3772,15 +3718,15 @@ mod tests {
 
         let text = prompt_text(
             Arc::new(runtime),
-            "insert_processor_between_linked_processors",
-            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:NeverImported" }),
+            "insert_node_between_linked_nodes",
+            json!({ "link_id": "link-pattern-to-window", "type": "effects:NeverImported" }),
         )
         .await;
 
         assert_eq!(
             tool_names_the_numbered_steps_call(&text),
             [
-                "add_processor",
+                "add_node",
                 "graph",
                 "disconnect",
                 "connect",

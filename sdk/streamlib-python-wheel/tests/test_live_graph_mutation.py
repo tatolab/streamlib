@@ -4,8 +4,8 @@
 """Changing a running node's graph over its MCP surface, end to end.
 
 The agent loop this locks: a node is up, a processor class is written to a
-module beside `app.py` *after* launch, and `add_processor` / `connect` /
-`disconnect` / `remove_processor` splice it into and back out of the live
+module beside `app.py` *after* launch, and `add_node` / `connect` /
+`disconnect` / `remove_node` splice it into and back out of the live
 graph. Every step is asserted from the outside — the `graph` the node reports,
 the bags a `tap` collects, the marker the added processor logs from its own
 helper process — because the failure this guards against is a call that
@@ -139,12 +139,12 @@ def mcp_json(control_url: str, tool_name: str, arguments: dict) -> dict:
     return json.loads(call_tool(control_url, tool_name, arguments))
 
 
-def node_named(graph: dict, display_name: str) -> dict:
-    """The one node carrying `display_name`, or a failure naming what is there."""
-    matches = [node for node in graph["nodes"] if node["display_name"] == display_name]
+def node_named(graph: dict, name: str) -> dict:
+    """The one node carrying `name`, or a failure naming what is there."""
+    matches = [node for node in graph["nodes"] if node["name"] == name]
     assert len(matches) == 1, (
-        f"expected exactly one node named {display_name!r}; graph names "
-        f"{[node['display_name'] for node in graph['nodes']]}"
+        f"expected exactly one node named {name!r}; graph names "
+        f"{[node['name'] for node in graph['nodes']]}"
     )
     return matches[0]
 
@@ -175,7 +175,7 @@ def await_link_state(control_url: str, link_id: str, wanted: str) -> str:
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
-def await_node_state(control_url: str, display_name: str, wanted: str) -> str:
+def await_node_state(control_url: str, name: str, wanted: str) -> str:
     """Poll `graph` until one node reaches `wanted`, and report what it reached.
 
     A helper-placed node reads `Running` only once its helper has finished
@@ -186,7 +186,7 @@ def await_node_state(control_url: str, display_name: str, wanted: str) -> str:
     deadline = time.monotonic() + FIRST_FRAME_TIMEOUT_SECONDS
     state = "absent"
     while time.monotonic() < deadline:
-        state = node_named(mcp_json(control_url, "graph", {}), display_name)["components"][
+        state = node_named(mcp_json(control_url, "graph", {}), name)["components"][
             "state"
         ]
         if state == wanted:
@@ -195,9 +195,9 @@ def await_node_state(control_url: str, display_name: str, wanted: str) -> str:
     return f"still {state} after {FIRST_FRAME_TIMEOUT_SECONDS}s"
 
 
-def tap_channel_of(processor_id: str, output_port: str) -> str:
-    """The channel name `tap` takes: the source id lowercased, then the port."""
-    return f"{processor_id.lower()}/{output_port}"
+def tap_channel_of(graph: dict, node_name: str, output_port: str) -> str:
+    """The channel `tap` takes: the port's address on this runtime."""
+    return f"{graph['mesh']['runtime_name']}/{node_name}/{output_port}"
 
 
 def await_marker(node: LaunchedNode, marker: str) -> None:
@@ -241,18 +241,17 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
 
     added = mcp_json(
         control_url,
-        "add_processor",
+        "add_node",
         {
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "FIRST_EFFECT_SAW_A_FRAME"},
-            "display_name": "effect",
+            "name": "effect",
         },
     )
-    effect_id = added["processor_id"]
+    assert added == {"name": "effect"}
 
     graph_after_add = mcp_json(control_url, "graph", {})
     effect = node_named(graph_after_add, "effect")
-    assert effect["id"] == effect_id
     assert effect["type"] == f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}"
     assert effect["config"] == {"marker": "FIRST_EFFECT_SAW_A_FRAME"}
     assert [port["name"] for port in effect["ports"]["inputs"]] == ["video_from_upstream"]
@@ -262,9 +261,9 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         control_url,
         "connect",
         {
-            "from_processor_id": pattern["id"],
+            "from_node": "pattern",
             "from_port": "video",
-            "to_processor_id": effect_id,
+            "to_node": "effect",
             "to_port": "video_from_upstream",
         },
     )
@@ -293,20 +292,20 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     # so this is the late subscriber the fixed sizing exists for.
     second = mcp_json(
         control_url,
-        "add_processor",
+        "add_node",
         {
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "SECOND_EFFECT_SAW_A_FRAME"},
-            "display_name": "second effect",
+            "name": "second-effect",
         },
     )
     mcp_json(
         control_url,
         "connect",
         {
-            "from_processor_id": pattern["id"],
+            "from_node": "pattern",
             "from_port": "video",
-            "to_processor_id": second["processor_id"],
+            "to_node": second["name"],
             "to_port": "video_from_upstream",
         },
     )
@@ -317,24 +316,24 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     # notify service is created after the source was already publishing.
     window = mcp_json(
         control_url,
-        "add_processor",
+        "add_node",
         {
             "type": DISPLAY_WINDOW_TYPE,
             "config": {"title": "live-added", "scaling": "fit"},
-            "display_name": "window",
+            "name": "window",
         },
     )
     mcp_json(
         control_url,
         "connect",
         {
-            "from_processor_id": effect_id,
+            "from_node": "effect",
             "from_port": "video_to_downstream",
-            "to_processor_id": window["processor_id"],
+            "to_node": window["name"],
             "to_port": "video",
         },
     )
-    effect_output_channel = tap_channel_of(effect_id, "video_to_downstream")
+    effect_output_channel = tap_channel_of(graph_after_add, "effect", "video_to_downstream")
     flowing = mcp_json(control_url, "tap", {"channel": effect_output_channel, "count": 3})
     assert flowing["received"] > 0, f"no bags left the live-added effect: {flowing}"
 
@@ -348,15 +347,15 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     starved = mcp_json(control_url, "tap", {"channel": effect_output_channel, "count": 3})
     assert starved["received"] == 0, f"bags still leave a disconnected effect: {starved}"
 
-    mcp_json(control_url, "remove_processor", {"processor_id": effect_id})
+    assert mcp_json(control_url, "remove_node", {"name": "effect"}) == {"removed_name": "effect"}
     graph_after_remove = mcp_json(control_url, "graph", {})
-    assert all(node["id"] != effect_id for node in graph_after_remove["nodes"])
+    assert all(node["name"] != "effect" for node in graph_after_remove["nodes"])
     assert all(
-        effect_id not in (link["source"]["processor_id"], link["target"]["processor_id"])
+        "effect" not in (link["source"]["node"], link["target"]["node"])
         for link in graph_after_remove["links"]
-    ), f"a removed processor's links must go with it: {graph_after_remove['links']}"
+    ), f"a removed node's links must go with it: {graph_after_remove['links']}"
     # The rest of the graph is untouched by the removal.
-    assert node_named(graph_after_remove, "second effect")["components"]["state"] == "Running"
+    assert node_named(graph_after_remove, "second-effect")["components"]["state"] == "Running"
     assert node_named(graph_after_remove, "window")["components"]["state"] == "Running"
 
     node.interrupt()
@@ -438,10 +437,10 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
 
     sink = mcp_json(
         control_url,
-        "add_processor",
+        "add_node",
         {
             "type": f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}",
-            "display_name": "sink",
+            "name": "sink",
         },
     )
 
@@ -450,9 +449,9 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
             control_url,
             "connect",
             {
-                "from_processor_id": pattern["id"],
+                "from_node": pattern["name"],
                 "from_port": "video",
-                "to_processor_id": sink["processor_id"],
+                "to_node": sink["name"],
                 "to_port": "video_from_upstream",
             },
         )
@@ -474,12 +473,12 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     add_seconds, _ = seconds_taken_by(
         lambda: mcp_json(
             control_url,
-            "add_processor",
-            {"type": pattern["type"], "display_name": "second pattern"},
+            "add_node",
+            {"type": pattern["type"], "name": "second-pattern"},
         )
     )
     assert add_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
-        f"add_processor took {add_seconds:.1f}s, waiting on a helper still importing"
+        f"add_node took {add_seconds:.1f}s, waiting on a helper still importing"
     )
 
     assert await_node_state(control_url, "sink", "Running") == "Running"
@@ -512,23 +511,22 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
 
     with pytest.raises(ControlPlaneError) as refusal:
-        call_tool(control_url, "add_processor", {"type": "processors.no_such_module:Missing"})
+        call_tool(control_url, "add_node", {"type": "processors.no_such_module:Missing"})
     assert re.search(r"no_such_module|No module named", str(refusal.value)), str(refusal.value)
 
     graph = mcp_json(control_url, "graph", {})
-    assert [n["display_name"] for n in graph["nodes"] if n["display_name"] == "pattern"], (
+    assert [n["name"] for n in graph["nodes"] if n["name"] == "pattern"], (
         "a refused add must leave the running graph as it was"
     )
 
-    pattern = node_named(graph, "pattern")
     with pytest.raises(ControlPlaneError) as port_refusal:
         call_tool(
             control_url,
             "connect",
             {
-                "from_processor_id": pattern["id"],
+                "from_node": "pattern",
                 "from_port": "no_such_port",
-                "to_processor_id": pattern["id"],
+                "to_node": "pattern",
                 "to_port": "video",
             },
         )

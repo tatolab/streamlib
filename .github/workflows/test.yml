@@ -131,6 +131,10 @@ jobs:
             -p streamlib-processor-schema -p streamlib-ipc-types \
             -p streamlib-surface-client --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
+          # A `graph` document loads back as the same graph, and a node's name
+          # is cast, suffixed when defaulted and refused when typed twice.
+          cargo test --locked -p streamlib-engine \
+            --test graph_snapshot_round_trip_test --test node_name_test
           # The compile-fail half of the same locks. The descriptor carries the
           # config type's schema, so the derive is a requirement, and the note
           # naming the fix is the only thing standing between an author and a
@@ -670,7 +674,10 @@ jobs:
             core::runtime::mesh \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_whose_source_is_on_another_runtime \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_another_runtime_is_named_by_its_address_and_not_by_its_channel \
-            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_source_a_caller_named_round_trips_and_misses \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel \
+            core::graph_snapshot \
+            core::graph::graph_tests::node_names \
+            core::json_schema::capability_extension_and_mesh_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
             core::graph::edges \
             core::graph::graph_tests::links_from_another_runtime \
             core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests \

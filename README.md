@@ -186,8 +186,8 @@ $ streamlib nodes
 RUNTIME_NAME      RUNTIME_ID                 CONTROL_URL            PID  ALIVE?  HINT
 desk-my-rig-8kq3  Rq1w8xk3m2v0pz7ny4tbd6hsf  http://127.0.0.1:9000  48212  yes     streamlib (/home/you/my-rig)
 
-$ streamlib tap CameraSource/video --count 3
-{"channel": "CameraSource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
+$ streamlib tap desk-my-rig-8kq3/camerasource/video --count 3
+{"channel": "desk-my-rig-8kq3/camerasource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
  "bags": [{"byte_len": 214, "hex_preview": "84aa73...", "hex_truncated": false}, ...]}
 ```
 
@@ -208,8 +208,8 @@ $ claude mcp add --transport http streamlib http://127.0.0.1:9000/mcp
 
 Served at `POST /mcp`, mounted with the node and sharing its lifecycle — there is no bridge
 process to run; `streamlib nodes` prints the URL a running node actually bound. The tools are
-`graph`, `tap`, `logs`, `exchange` and `shutdown` to observe, and `add_processor`, `connect`,
-`disconnect` and `remove_processor` to change the running graph: an agent writes a processor
+`graph`, `tap`, `logs`, `exchange` and `shutdown` to observe, and `add_node`, `connect`,
+`disconnect` and `remove_node` to change the running graph: an agent writes a processor
 class into a module beside `app.py` — or `pip install`s one — names it to the node by its
 `module:ClassName` path, and splices it into the live pipeline. The class runs in its own
 helper process like every other. The CLI is a pure client of exactly this surface.

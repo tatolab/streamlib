@@ -49,14 +49,12 @@ def _this_processes_control_url() -> str:
     raise RuntimeError("this run published no node registry entry")
 
 
-def _report_the_speakers_settled_window_contract() -> None:
+def _report_the_speakers_settled_window_contract(speaker_node_name: str) -> None:
     """Print what `graph` renders for the speaker's `audio` port."""
     graph = json.loads(call_tool(_this_processes_control_url(), "graph", {}))
     for node in graph["nodes"]:
-        # By the display name the marker class defaults to, because a marker
-        # class exposes no import path to Python — and this app adds exactly one
-        # speaker, so the default is unambiguous.
-        if node["display_name"] != "SpeakerSink":
+        # By name, because a marker class exposes no import path to Python.
+        if node["name"] != speaker_node_name:
             continue
         audio = next(
             (port for port in node["ports"]["inputs"] if port["name"] == "audio"),
@@ -104,7 +102,7 @@ def main() -> None:
         # itself healthy, which reads as a startup failure this graph did not
         # have.
         try:
-            _report_the_speakers_settled_window_contract()
+            _report_the_speakers_settled_window_contract(speaker.display_name)
         except Exception as unreadable:  # noqa: BLE001 — the marker is the report
             print(f"MARKER:SPEAKER_AUDIO_WINDOW_UNREADABLE {unreadable}", flush=True)
 

@@ -1,191 +1,369 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Round-trip equivalence for the graph snapshot save/load API.
-//!
-//! The contract: an imperative build → save → load (into a fresh
-//! runtime) → save-again produces byte-equivalent JSON. The save
-//! side has no graph state of its own to lean on; if any field
-//! drifts across the round-trip, the second save diverges and this
-//! test catches it.
-//!
-//! Also locks:
-//! - Deterministic alias regeneration (two same-type processors
-//!   become `<short>` and `<short>_2` in node-iteration order).
-//! - `display_name` override survives load → save.
-//! - Pipeline `name` survives load → save without caller bookkeeping.
+//! A `graph` document is a loadable graph: what a running engine renders loads
+//! into a fresh one as the same graph, by name.
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
     PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
 };
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::error::Error;
+use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
-/// Register a descriptor-only processor type with two `Any`-typed
-/// ports — enough to satisfy `add_processor`'s port-info lookup and
-/// `connect`'s port existence check. Idempotent under `serial_test`.
+/// Register a descriptor-only type with one input and one output port.
+/// Idempotent under `serial_test`.
 fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassImportPath {
     let import_path =
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let descriptor = ProcessorDescriptor::new(
         ProcessorClassShortName::new(short).unwrap(),
         import_path.clone(),
-        "snapshot round-trip test",
+        "graph round-trip test",
     )
     .with_input(PortDescriptor::new(input, "", false))
     .with_output(PortDescriptor::new(output, "", false));
-    // Idempotent across `serial_test` runs — second register returns
-    // `Error::Configuration("Processor 'X' already registered")` which
-    // we ignore.
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }
 
-#[test]
-#[serial]
-fn imperative_build_save_load_save_is_byte_equivalent() {
-    let cam = register_test_type("CameraProc", "_unused_in", "video");
-    let dsp = register_test_type("DisplayProc", "video_in", "_unused_out");
+fn the_graph_document_of(runtime: &Runner) -> serde_json::Value {
+    runtime.to_json().expect("the graph renders")
+}
 
-    // First runtime — imperative build.
-    let r1 = Runner::new().unwrap();
-    r1.set_pipeline_name(Some("rt-fixture".to_string()));
-    let cam_id = r1
-        .add_processor(ProcessorSpec::new(cam.clone(), serde_json::json!({})))
-        .unwrap();
-    let dsp_id = r1
-        .add_processor(ProcessorSpec::new(
-            dsp.clone(),
-            serde_json::json!({"width": 1920, "height": 1080}),
-        ))
-        .unwrap();
-    r1.connect(
-        OutputLinkPortRef::new(&cam_id, "video"),
-        InputLinkPortRef::new(&dsp_id, "video_in"),
-    )
-    .unwrap();
-
-    let snap1 = r1.save_graph_snapshot().unwrap();
-    let json1 = snap1.to_json_string().unwrap();
-
-    // Second runtime — load the snapshot from disk-equivalent JSON,
-    // then save again. The byte-equivalence holds across this cycle
-    // because (a) the snapshot carries everything load needs and (b)
-    // save regenerates aliases deterministically from each node's
-    // PascalCase short name in insertion order.
-    let r2 = Runner::new().unwrap();
-    let snap_from_json = GraphSnapshot::from_json_str(&json1).unwrap();
-    r2.load_graph_snapshot(&snap_from_json).unwrap();
-    let snap2 = r2.save_graph_snapshot().unwrap();
-    let json2 = snap2.to_json_string().unwrap();
-
-    assert_eq!(json1, json2, "second save must byte-equal the first save");
-
-    // Pipeline name survived the round-trip without explicit threading.
-    assert_eq!(snap2.name.as_deref(), Some("rt-fixture"));
+fn the_spec_in(graph_document: serde_json::Value) -> GraphSnapshot {
+    GraphSnapshot::from_graph_document(graph_document).expect("a graph document is a graph")
 }
 
 #[test]
 #[serial]
-fn save_side_regenerates_aliases_on_collision() {
-    let cam = register_test_type("CameraProc", "_unused_in", "video");
+fn a_graph_document_saved_from_a_running_engine_loads_back_as_the_same_graph() {
+    let camera = register_test_type("RoundTripCamera", "_unused_in", "video");
+    let display = register_test_type("RoundTripDisplay", "video_in", "_unused_out");
+
+    let first = Runner::new().unwrap();
+    let first_camera = first
+        .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
+        .unwrap();
+    let second_camera = first
+        .add_processor(ProcessorSpec::new(camera, serde_json::json!({"fps": 30})))
+        .unwrap();
+    let front_display = first
+        .add_processor(
+            ProcessorSpec::new(display.clone(), serde_json::json!({"width": 1920}))
+                .with_display_name("Front Display"),
+        )
+        .unwrap();
+    let back_display = first
+        .add_processor(ProcessorSpec::new(display, serde_json::json!({})))
+        .unwrap();
+    first
+        .connect(
+            OutputLinkPortRef::new(&first_camera, "video"),
+            InputLinkPortRef::new(&front_display, "video_in"),
+        )
+        .unwrap();
+    first
+        .connect(
+            OutputLinkPortRef::new(&second_camera, "video"),
+            InputLinkPortRef::new(&back_display, "video_in"),
+        )
+        .unwrap();
+    let rendered_first = the_graph_document_of(&first);
+
+    let second = Runner::new().unwrap();
+    second
+        .load_graph_snapshot(&the_spec_in(rendered_first.clone()))
+        .expect("a graph document loads");
+    let rendered_second = the_graph_document_of(&second);
+
+    assert_eq!(
+        the_spec_in(rendered_second.clone()),
+        the_spec_in(rendered_first.clone()),
+        "the loaded graph must render the spec it was loaded from"
+    );
+    let node_names: Vec<&str> = rendered_second["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        node_names,
+        [
+            "roundtripcamera",
+            "roundtripcamera-2",
+            "front-display",
+            "roundtripdisplay"
+        ]
+    );
+    assert_eq!(
+        rendered_second["links"][0]["source"],
+        serde_json::json!({"node": "roundtripcamera", "port": "video"})
+    );
+    assert_eq!(
+        rendered_second["links"][0]["target"],
+        serde_json::json!({"node": "front-display", "port": "video_in"})
+    );
+    assert_ne!(
+        rendered_second["nodes"][0]["id"], rendered_first["nodes"][0]["id"],
+        "ids are live keys a load mints anew"
+    );
+    assert_eq!(rendered_second["exposed"], serde_json::json!([]));
+    assert!(
+        rendered_second.get("stream").is_none(),
+        "a graph built rather than loaded as a stream names none"
+    );
+}
+
+#[test]
+#[serial]
+fn a_loaded_stream_renders_its_name_and_its_exposures_and_round_trips_them() {
+    let camera = register_test_type("ExposedCamera", "_unused_in", "video");
 
     let runtime = Runner::new().unwrap();
     runtime
-        .add_processor(ProcessorSpec::new(cam.clone(), serde_json::json!({})))
-        .unwrap();
-    runtime
-        .add_processor(ProcessorSpec::new(cam.clone(), serde_json::json!({})))
-        .unwrap();
-    runtime
-        .add_processor(ProcessorSpec::new(cam.clone(), serde_json::json!({})))
-        .unwrap();
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "stream": "main",
+            "nodes": [{"name": "Front Camera", "type": camera.as_str(), "config": {}}],
+            "exposed": [{"node": "front-camera", "port": "Video"}]
+        })))
+        .expect("the graph loads");
+    let rendered = the_graph_document_of(&runtime);
 
-    let snap = runtime.save_graph_snapshot().unwrap();
-    let aliases: Vec<&str> = snap.processors.iter().map(|p| p.alias.as_str()).collect();
+    assert_eq!(rendered["stream"], "main");
     assert_eq!(
-        aliases,
-        vec!["cameraProc", "cameraProc_2", "cameraProc_3"],
-        "collision suffixes must be deterministic in node-iteration order"
+        rendered["exposed"],
+        serde_json::json!([{"node": "front-camera", "port": "video"}])
     );
 
-    // Mentally revert the collision-suffix logic (always use the base
-    // alias) and this assertion fails on the duplicate-alias rejection
-    // path — `validate()` rejects duplicate aliases in `load_graph_snapshot`,
-    // so round-trip would error.
-    let json = snap.to_json_string().unwrap();
-    let r2 = Runner::new().unwrap();
-    r2.load_graph_snapshot(&GraphSnapshot::from_json_str(&json).unwrap())
-        .unwrap();
+    let reloaded = Runner::new().unwrap();
+    reloaded
+        .load_graph_snapshot(&the_spec_in(rendered.clone()))
+        .expect("the render loads");
+    assert_eq!(
+        the_spec_in(the_graph_document_of(&reloaded)),
+        the_spec_in(rendered)
+    );
 }
 
 #[test]
 #[serial]
-fn display_name_override_round_trips() {
-    let cam = register_test_type("CameraProc", "_unused_in", "video");
+fn a_loaded_name_already_in_the_graph_is_refused_rather_than_suffixed() {
+    let camera = register_test_type("LoadedTwiceCamera", "_unused_in", "video");
 
-    let r1 = Runner::new().unwrap();
-    r1.add_processor(
-        ProcessorSpec::new(cam.clone(), serde_json::json!({}))
-            .with_display_name("Front-Left Camera"),
-    )
-    .unwrap();
-    // And one without an override — saved snapshot must omit
-    // `display_name` for this node so a load → save cycle stays
-    // byte-stable.
-    r1.add_processor(ProcessorSpec::new(cam.clone(), serde_json::json!({})))
+    let runtime = Runner::new().unwrap();
+    runtime
+        .add_processor(
+            ProcessorSpec::new(camera.clone(), serde_json::json!({})).with_display_name("camera"),
+        )
         .unwrap();
 
-    let snap1 = r1.save_graph_snapshot().unwrap();
+    let refusal = runtime.load_graph_snapshot(&the_spec_in(serde_json::json!({
+        "nodes": [{"name": "Camera", "type": camera.as_str()}]
+    })));
+
+    match refusal {
+        Err(Error::NodeNameTaken { name, cast }) => {
+            assert_eq!(name, "Camera");
+            assert_eq!(cast, "camera");
+        }
+        other => panic!("expected NodeNameTaken, got {other:?}"),
+    }
+}
+
+#[test]
+#[serial]
+fn an_exposure_naming_an_input_port_is_refused_naming_the_outputs() {
+    let camera = register_test_type("InputExposingCamera", "frames_in", "video");
+
+    let runtime = Runner::new().unwrap();
+    let refusal = runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [{"name": "camera", "type": camera.as_str()}],
+            "exposed": [{"node": "camera", "port": "frames_in"}]
+        })))
+        .expect_err("only an output port is exposed")
+        .to_string();
+
+    assert!(refusal.contains("no output port `frames_in`"), "{refusal}");
+    assert!(refusal.contains("video"), "{refusal}");
     assert_eq!(
-        snap1.processors[0].display_name.as_deref(),
-        Some("Front-Left Camera"),
-        "explicit display_name must serialize"
+        the_graph_document_of(&runtime)["nodes"],
+        serde_json::json!([]),
+        "a refused graph adds nothing"
     );
+}
+
+/// Every name is checked against the live graph before the first node is
+/// added, so a refused load leaves the graph as it found it.
+#[test]
+#[serial]
+fn a_load_refused_for_a_taken_name_adds_none_of_its_nodes() {
+    let camera = register_test_type("PartlyTakenCamera", "_unused_in", "video");
+
+    let runtime = Runner::new().unwrap();
+    runtime
+        .add_processor(
+            ProcessorSpec::new(camera.clone(), serde_json::json!({})).with_display_name("camera"),
+        )
+        .unwrap();
+
+    let refusal = runtime.load_graph_snapshot(&the_spec_in(serde_json::json!({
+        "nodes": [
+            {"name": "other", "type": camera.as_str()},
+            {"name": "Camera", "type": camera.as_str()}
+        ]
+    })));
+
     assert!(
-        snap1.processors[1].display_name.is_none(),
-        "default display_name must NOT serialize"
+        matches!(refusal, Err(Error::NodeNameTaken { .. })),
+        "{refusal:?}"
+    );
+    assert_eq!(
+        the_graph_document_of(&runtime)["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|node| node["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["camera"]
+    );
+}
+
+/// A link naming a port its node does not have, in that direction, is
+/// refused before any node is added.
+#[test]
+#[serial]
+fn a_load_refused_for_a_missing_link_port_adds_none_of_its_nodes() {
+    let camera = register_test_type("MissingPortCamera", "frames_in", "video");
+
+    let runtime = Runner::new().unwrap();
+    let refusal = runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [
+                {"name": "front", "type": camera.as_str()},
+                {"name": "back", "type": camera.as_str()}
+            ],
+            "links": [{"source": {"node": "front", "port": "video"},
+                       "target": {"node": "back", "port": "no_such_input"}}]
+        })))
+        .expect_err("the link names an input `back` does not have")
+        .to_string();
+
+    assert!(
+        refusal.contains("no input port `no_such_input`"),
+        "{refusal}"
+    );
+    assert_eq!(
+        the_graph_document_of(&runtime)["nodes"],
+        serde_json::json!([])
+    );
+}
+
+/// An end addressed under this runtime's own name is a local reference: a
+/// target so named wires here, and one naming a node nobody holds is refused
+/// before anything is added.
+#[test]
+#[serial]
+fn an_end_naming_this_runtime_is_a_local_reference() {
+    let camera = register_test_type("SelfAddressedCamera", "frames_in", "video");
+
+    let runtime = Runner::new().unwrap();
+    let this_runtimes_name = the_graph_document_of(&runtime)["mesh"]["runtime_name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let refusal = runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [{"name": "front", "type": camera.as_str()}],
+            "links": [{"source": {"node": "front", "port": "video"},
+                       "target": {"runtime_name": this_runtimes_name, "node": "nobody", "port": "frames_in"}}]
+        })))
+        .expect_err("no node here is named `nobody`")
+        .to_string();
+    assert!(refusal.contains("nobody"), "{refusal}");
+    assert_eq!(
+        the_graph_document_of(&runtime)["nodes"],
+        serde_json::json!([])
     );
 
-    // Round-trip the explicit override back through a fresh runtime.
-    let r2 = Runner::new().unwrap();
-    r2.load_graph_snapshot(&snap1).unwrap();
-    let snap2 = r2.save_graph_snapshot().unwrap();
-    assert_eq!(snap1, snap2, "round-trip must preserve display_name shape");
+    runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [{"name": "front", "type": camera.as_str()},
+                      {"name": "back", "type": camera.as_str()}],
+            "links": [{"source": {"node": "front", "port": "video"},
+                       "target": {"runtime_name": this_runtimes_name, "node": "Back", "port": "frames_in"}}]
+        })))
+        .expect("a target naming this runtime wires here");
+    assert_eq!(
+        the_graph_document_of(&runtime)["links"][0]["target"],
+        serde_json::json!({"node": "back", "port": "frames_in"})
+    );
 }
 
 #[test]
 #[serial]
-fn empty_graph_round_trips() {
-    let r1 = Runner::new().unwrap();
-    let snap1 = r1.save_graph_snapshot().unwrap();
-    assert!(snap1.processors.is_empty());
-    assert!(snap1.connections.is_empty());
-    assert!(snap1.name.is_none());
+fn an_exposure_named_twice_is_refused() {
+    let camera = register_test_type("TwiceExposedCamera", "_unused_in", "video");
 
-    let r2 = Runner::new().unwrap();
-    r2.load_graph_snapshot(&snap1).unwrap();
-    let snap2 = r2.save_graph_snapshot().unwrap();
-    assert_eq!(snap1, snap2);
+    let refusal = Runner::new()
+        .unwrap()
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [{"name": "camera", "type": camera.as_str()}],
+            "exposed": [{"node": "camera", "port": "video"}, {"node": "Camera", "port": "Video"}]
+        })))
+        .expect_err("one port is exposed once")
+        .to_string();
+
+    assert!(refusal.contains("twice"), "{refusal}");
 }
 
-/// A node whose type never resolved saves under the requested import path
-/// verbatim — it used to save a synthesized `(org, package, type)@0.0.0`
-/// diagnostic ident instead.
-///
-/// Its display name, and so its alias base, is that whole path, which for a
-/// Python class carries `.` — the separator `parse_port_ref` splits an
-/// `alias.port` reference on. Inert twice over: an unresolved node has empty
-/// port lists so `connect` refuses it and no connection can name its alias,
-/// and the snapshot cannot be loaded at all, because `validate` resolves every
-/// processor type against the registry and this one still misses. That refusal
-/// is unchanged by the re-key — the old diagnostic ident missed too.
+/// A link from a port on another runtime renders `{runtime_name, node, port}`
+/// and loads back as that same remote end, waiting on its runtime.
 #[test]
 #[serial]
-fn an_unresolved_node_saves_under_the_requested_path_and_still_refuses_to_load() {
+fn a_link_from_another_runtime_loads_back_as_the_same_remote_end() {
+    let display = register_test_type("RemoteFedDisplay", "video_in", "_unused_out");
+
+    let first = Runner::new().unwrap();
+    let display_id = first
+        .add_processor(ProcessorSpec::new(display, serde_json::json!({})))
+        .unwrap();
+    first
+        .connect(
+            OutputLinkPortRef::on_another_runtime(
+                MeshPortAddress::new("bench-cam-a1b2", "Camera Source", "Video").unwrap(),
+            ),
+            InputLinkPortRef::new(&display_id, "video_in"),
+        )
+        .unwrap();
+    let rendered_first = the_graph_document_of(&first);
+    assert_eq!(
+        rendered_first["links"][0]["source"],
+        serde_json::json!({"runtime_name": "bench-cam-a1b2", "node": "camera-source", "port": "video"})
+    );
+
+    let second = Runner::new().unwrap();
+    second
+        .load_graph_snapshot(&the_spec_in(rendered_first.clone()))
+        .expect("a graph with a remote end loads");
+
+    assert_eq!(
+        the_spec_in(the_graph_document_of(&second)),
+        the_spec_in(rendered_first)
+    );
+}
+
+/// A node whose type never resolved renders under the requested import path
+/// verbatim, and its render cannot be loaded — `validate` resolves every type.
+#[test]
+#[serial]
+fn an_unresolved_node_renders_under_the_requested_path_and_refuses_to_load() {
     const UNRESOLVED: &str = "my_app.filters:NeverRegistered";
 
     let runtime = Runner::new().unwrap();
@@ -193,20 +371,14 @@ fn an_unresolved_node_saves_under_the_requested_path_and_still_refuses_to_load()
         ProcessorClassImportPath::new(UNRESOLVED).unwrap(),
         serde_json::json!({}),
     ));
+    let rendered = the_graph_document_of(&runtime);
+    assert_eq!(rendered["nodes"][0]["type"], UNRESOLVED);
 
-    let saved = runtime
-        .save_graph_snapshot()
-        .expect("save with a failed node");
-    assert_eq!(saved.processors.len(), 1, "the failed node must be saved");
-    assert_eq!(
-        saved.processors[0].processor_type.as_str(),
-        UNRESOLVED,
-        "the saved type must be what the caller asked for, not a synthesized stand-in"
-    );
-
-    let reloaded = Runner::new().unwrap();
-    match reloaded.load_graph_snapshot(&saved) {
-        Err(streamlib::sdk::error::Error::UnknownProcessorType { ident }) => {
+    match Runner::new()
+        .unwrap()
+        .load_graph_snapshot(&the_spec_in(rendered))
+    {
+        Err(Error::UnknownProcessorType { ident }) => {
             assert_eq!(ident.as_str(), UNRESOLVED);
         }
         other => panic!("expected the load to refuse the unresolved type, got {other:?}"),

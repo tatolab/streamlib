@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The MCP resources a node serves beside its tools: its processor catalog and
-//! its live graph, each rendered at the moment it is read.
+//! The MCP resources a node serves beside its tools: its node catalog and its
+//! live graph, each rendered at the moment it is read.
 //!
 //! Both are read-only and expose nothing the control plane does not already
 //! serve — the catalog is `/api/registry`'s document, the graph is the `graph`
@@ -17,10 +17,10 @@ use streamlib::sdk::runtime::RuntimeOperations;
 use crate::handlers::processor_catalog_of_this_process;
 use crate::mcp::{RpcError, RpcResult};
 
-/// Every processor type the node can add, with its config schema and ports.
-pub(crate) const PROCESSOR_CATALOG_RESOURCE_URI: &str = "streamlib://processor-catalog";
+/// Every node type the node can add, with its config schema and ports.
+pub(crate) const NODE_CATALOG_RESOURCE_URI: &str = "streamlib://node-catalog";
 
-/// The node's running graph: processors, links, states, metrics, extensions.
+/// The node's running graph: nodes, links, states, metrics, extensions.
 pub(crate) const LIVE_GRAPH_RESOURCE_URI: &str = "streamlib://graph";
 
 const JSON_RESOURCE_MIME_TYPE: &str = "application/json";
@@ -30,17 +30,17 @@ pub(crate) fn resources_list_result() -> Value {
     json!({
         "resources": [
             {
-                "uri": PROCESSOR_CATALOG_RESOURCE_URI,
-                "name": "processor-catalog",
-                "title": "Processor catalog",
-                "description": "Every processor type this node can add, by the import path `add_processor` takes: its description, its config schema (JSON Schema 2020-12; the keys `add_processor`'s `config` takes) and its input and output ports. A Python class appears once the app has imported its module.",
+                "uri": NODE_CATALOG_RESOURCE_URI,
+                "name": "node-catalog",
+                "title": "Node catalog",
+                "description": "Every node type this node can add, each under the `type` `add_node` takes: its description, its config schema (JSON Schema 2020-12; the keys `add_node`'s `config` takes) and its input and output ports. A Python class appears once the app has imported its module.",
                 "mimeType": JSON_RESOURCE_MIME_TYPE,
             },
             {
                 "uri": LIVE_GRAPH_RESOURCE_URI,
                 "name": "graph",
                 "title": "Live graph",
-                "description": "The node's running graph as the `graph` tool returns it: processors with their ids, ports, config and state, links with their state, and the capability extensions loaded.",
+                "description": "The node's running graph as the `graph` tool returns it: nodes by name with their types, ports, config and state, links with their state, the ports it exposes, and the capability extensions loaded.",
                 "mimeType": JSON_RESOURCE_MIME_TYPE,
             },
         ]
@@ -67,7 +67,7 @@ pub(crate) async fn read_resource(
         .map_err(|e| RpcError::invalid_params(format!("malformed resources/read params: {e}")))?;
 
     let rendering = match uri.as_str() {
-        PROCESSOR_CATALOG_RESOURCE_URI => {
+        NODE_CATALOG_RESOURCE_URI => {
             serde_json::to_string_pretty(&processor_catalog_of_this_process())
         }
         LIVE_GRAPH_RESOURCE_URI => {

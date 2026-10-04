@@ -352,6 +352,20 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             ],
         ),
         (
+            "the graph's one shape and node names",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--test",
+                "graph_snapshot_round_trip_test",
+                "--test",
+                "node_name_test",
+            ],
+        ),
+        (
             "the missing-JsonSchema-derive refusal (compile-fail)",
             "cargo",
             &[
@@ -772,7 +786,10 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::mesh",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_whose_source_is_on_another_runtime",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_another_runtime_is_named_by_its_address_and_not_by_its_channel",
-                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_source_a_caller_named_round_trips_and_misses",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel",
+                "core::graph_snapshot",
+                "core::graph::graph_tests::node_names",
+                "core::json_schema::capability_extension_and_mesh_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list",
                 "core::graph::edges",
                 "core::graph::graph_tests::links_from_another_runtime",
                 "core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests",
@@ -913,8 +930,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             ],
         ),
         // The deviceless arm's integration binaries, which the workflow runs
-        // beside the slice. `attribute_macro_test` aside, these are the only
-        // engine integration tests CI runs at all.
+        // beside the slice. `attribute_macro_test` and the graph's two aside,
+        // these are the only engine integration tests CI runs at all.
         (
             "the deviceless audio arm's integration binaries",
             "cargo",

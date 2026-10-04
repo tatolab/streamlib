@@ -129,7 +129,7 @@ fn node_named<'a>(graph: &'a Value, display_name: &str) -> &'a Value {
         .as_array()
         .expect("the graph renders its nodes")
         .iter()
-        .find(|node| node["display_name"] == display_name)
+        .find(|node| node["name"] == display_name)
         .unwrap_or_else(|| panic!("no node named '{display_name}' in {graph}"))
 }
 

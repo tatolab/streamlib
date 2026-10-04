@@ -257,22 +257,21 @@ for _ in $(seq 1 120); do
     sleep 0.5
 done
 
-# A channel is `{processor_id}/{output_port}` with the id chunk lowercased, and
-# the id is a cuid2 minted at add time — the display name is not it. Derived
-# from the live graph, in a pipe: the graph renders every processor's config,
-# and this graph's config holds both endpoint URLs.
+# A channel is the port's address, `<runtime_name>/<node>/<port>`. Derived from
+# the live graph, in a pipe: the graph renders every node's config, and this
+# graph's config holds both endpoint URLs.
 channel_of() {
     "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
-wanted_display_name, wanted_port = sys.argv[1], sys.argv[2]
+wanted_node_name, wanted_port = sys.argv[1], sys.argv[2]
 node = next(
-    (n for n in graph.get("nodes", []) if n.get("display_name") == wanted_display_name),
+    (n for n in graph.get("nodes", []) if n.get("name") == wanted_node_name),
     None,
 )
 if node is None:
-    sys.exit(f"the running graph has no processor named `{wanted_display_name}`")
-print(node["id"].lower() + "/" + wanted_port)
+    sys.exit(f"the running graph has no node named `{wanted_node_name}`")
+print(graph["mesh"]["runtime_name"] + "/" + node["name"] + "/" + wanted_port)
 ' "$1" "$2"
 }
 

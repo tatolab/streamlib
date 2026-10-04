@@ -50,7 +50,7 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
         self.compiler.scope(|graph, _tx| {
             let node = graph
                 .traversal()
-                .v_with_display_name(processor_display_name)
+                .v_with_node_name(processor_display_name)
                 .first()?;
             if !node.has_output(port_name) {
                 return None;
@@ -189,7 +189,7 @@ mod tests {
                 .add_v(ProcessorSpec::new(
                     MockOutputOnlyProcessor::Processor::processor_class_import_path(),
                     serde_json::Value::Null,
-                ))
+                )).expect("the node is named")
                 .first()
                 .expect("the mock is in the registry");
             let (processor_id, display_name) = (node.id.to_string(), node.display_name.clone());
@@ -291,7 +291,7 @@ mod tests {
                 .add_v(ProcessorSpec::new(
                     MockProcessorWhoseOutputPortTheChannelGrammarCannotName::Processor::processor_class_import_path(),
                     serde_json::Value::Null,
-                ))
+                )).expect("the node is named")
                 .first()
                 .expect("the mock is in the registry")
                 .display_name

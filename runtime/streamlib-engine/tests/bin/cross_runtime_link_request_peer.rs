@@ -233,7 +233,7 @@ fn answer_one_command(runtime: &Arc<Runner>, asked: WhatTheFixtureAsked) -> serd
     }
 }
 
-/// The id of the node this runtime displays under `display_name`.
+/// The id of the node this runtime names `display_name`.
 fn the_processor_this_runtime_displays_as(
     runtime: &Arc<Runner>,
     display_name: &str,
@@ -242,7 +242,7 @@ fn the_processor_this_runtime_displays_as(
     graph["nodes"]
         .as_array()?
         .iter()
-        .find(|node| node["display_name"].as_str() == Some(display_name))
+        .find(|node| node["name"].as_str() == Some(display_name))
         .and_then(|node| node["id"].as_str())
         .map(ProcessorUniqueId::from)
 }

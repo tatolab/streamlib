@@ -830,7 +830,7 @@ mod tests {
     /// The port this test's egress sends.
     fn the_port_one_egress_sends() -> OutputPortOfferedOnTheMesh {
         OutputPortOfferedOnTheMesh {
-            processor_display_name: "Camera Source 2".to_string(),
+            processor_display_name: "camera-source-2".to_string(),
             port_name: "video".to_string(),
         }
     }

@@ -1,216 +1,165 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Declarative graph snapshot format for round-tripping a runtime's
-//! graph through JSON.
+//! The graph as data: the spec a runtime loads, in the one shape `graph`
+//! renders.
 //!
-//! A snapshot is the typed wire shape behind
-//! [`Runner::load_graph_snapshot`](crate::core::runtime::Runner::load_graph_snapshot)
-//! and
-//! [`Runner::save_graph_snapshot`](crate::core::runtime::Runner::save_graph_snapshot):
-//! save walks the live graph and emits one of these, load applies it
-//! to an empty runtime. The shape is symmetric — load(save(g)) yields
-//! a graph that, when saved, byte-equals the first save.
+//! A [`GraphSnapshot`] is the spec keys of a `graph` document — `stream`,
+//! `nodes[].name` / `type` / `config`, `links[].source` / `target` and
+//! `exposed` — and nothing else, so `graph`'s own output deserializes into one
+//! with its live keys ignored. Loading one is
+//! [`Runner::load_graph_snapshot`](crate::core::runtime::Runner::load_graph_snapshot);
+//! there is no saver, because the render is the export.
+
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::{Error, ProcessorSpec, Result};
+use crate::core::graph::{cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal};
+use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
+use crate::core::processors::PROCESSOR_REGISTRY;
+use crate::core::{Error, PortDirection, Result};
 
-/// Round-trippable JSON shape for a runtime's graph.
-///
-/// Processors are identified by local aliases within the snapshot.
-/// These aliases are resolved to runtime-generated processor IDs on
-/// load and regenerated deterministically on save.
+/// A graph a runtime runs: its nodes by class import path, config and name,
+/// the links between their ports, and the output ports the stream exposes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GraphSnapshot {
-    /// Optional pipeline name for display/logging.
+    /// The stream this graph is. Absent on a graph no stream was loaded as.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    pub stream: Option<String>,
 
-    /// Processor definitions with local aliases.
-    pub processors: Vec<ProcessorDefinition>,
+    /// Every node, each under the name links and exposures name it by.
+    pub nodes: Vec<GraphSnapshotNode>,
 
-    /// Connections between processors using aliases.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub connections: Vec<ConnectionDefinition>,
+    /// Every link, each end a node's port or a port on another runtime.
+    #[serde(default)]
+    pub links: Vec<GraphSnapshotLink>,
+
+    /// The output ports the stream exposes.
+    #[serde(default)]
+    pub exposed: Vec<ExposedOutputPortOutput>,
 }
 
-/// A processor definition in the snapshot.
+/// One node of a [`GraphSnapshot`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ProcessorDefinition {
-    /// Local alias for referencing in connections.
-    ///
-    /// Must be unique within the snapshot. Used in connection
-    /// definitions as `"alias.port_name"`.
-    pub alias: String,
+pub struct GraphSnapshotNode {
+    /// The node's name, unique in the graph once cast.
+    pub name: String,
 
-    /// The import path of the class to instantiate.
+    /// The import path of the class the node is.
     #[serde(rename = "type")]
     pub processor_type: ProcessorClassImportPath,
 
-    /// Processor configuration as JSON.
-    ///
-    /// Must match the config schema for the processor type.
+    /// The node's config.
     #[serde(default)]
     pub config: serde_json::Value,
-
-    /// Optional display-name override. Absent ↔ default to the
-    /// processor's PascalCase short name. Save side omits this field
-    /// when the live node's display name equals the auto-default, so
-    /// the user-intent distinction round-trips.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
 }
 
-/// A connection definition using aliases.
+/// One link of a [`GraphSnapshot`], from an output port to an input port.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ConnectionDefinition {
-    /// Source output port: `"alias.port_name"`
-    pub from: String,
+pub struct GraphSnapshotLink {
+    /// The output port the link carries from.
+    pub source: LinkPortRefOutput,
 
-    /// Target input port: `"alias.port_name"`
-    pub to: String,
-}
-
-/// Parsed port reference with alias and port name.
-#[derive(Debug, Clone)]
-pub struct ParsedPortRef<'a> {
-    pub alias: &'a str,
-    pub port_name: &'a str,
-}
-
-impl ConnectionDefinition {
-    /// Parse the `from` field into alias and port name.
-    pub fn parse_from(&self) -> Result<ParsedPortRef<'_>> {
-        parse_port_ref(&self.from)
-    }
-
-    /// Parse the `to` field into alias and port name.
-    pub fn parse_to(&self) -> Result<ParsedPortRef<'_>> {
-        parse_port_ref(&self.to)
-    }
-}
-
-/// Parse `"alias.port_name"` into components.
-fn parse_port_ref(s: &str) -> Result<ParsedPortRef<'_>> {
-    let parts: Vec<&str> = s.splitn(2, '.').collect();
-    if parts.len() != 2 {
-        return Err(Error::GraphError(format!(
-            "Invalid port reference '{}', expected 'alias.port_name'",
-            s
-        )));
-    }
-    Ok(ParsedPortRef {
-        alias: parts[0],
-        port_name: parts[1],
-    })
-}
-
-impl ProcessorDefinition {
-    /// Convert to a [`ProcessorSpec`] for runtime instantiation.
-    pub fn to_processor_spec(&self) -> ProcessorSpec {
-        let mut spec = ProcessorSpec::new(self.processor_type.clone(), self.config.clone());
-        if let Some(name) = &self.display_name {
-            spec = spec.with_display_name(name.clone());
-        }
-        spec
-    }
+    /// The input port the link carries into.
+    pub target: LinkPortRefOutput,
 }
 
 impl GraphSnapshot {
-    /// Load a snapshot from a JSON file path.
-    pub fn from_json_file(path: &std::path::Path) -> Result<Self> {
-        let file = std::fs::File::open(path).map_err(|e| {
-            Error::GraphError(format!(
-                "Failed to open snapshot file '{}': {}",
-                path.display(),
-                e
-            ))
-        })?;
-
-        serde_json::from_reader(file).map_err(|e| {
-            Error::GraphError(format!(
-                "Failed to parse snapshot file '{}': {}",
-                path.display(),
-                e
-            ))
-        })
-    }
-
-    /// Load a snapshot from a JSON string.
+    /// Read a graph from JSON — a `graph` document or the spec keys alone.
     pub fn from_json_str(json: &str) -> Result<Self> {
         serde_json::from_str(json)
-            .map_err(|e| Error::GraphError(format!("Failed to parse snapshot JSON: {}", e)))
+            .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))
     }
 
-    /// Serialize this snapshot as a pretty-printed JSON string.
+    /// Read a graph from a parsed `graph` document, its live keys ignored.
+    pub fn from_graph_document(graph_document: serde_json::Value) -> Result<Self> {
+        serde_json::from_value(graph_document)
+            .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))
+    }
+
+    /// Serialize the graph as pretty-printed JSON.
     pub fn to_json_string(&self) -> Result<String> {
         serde_json::to_string_pretty(self)
-            .map_err(|e| Error::GraphError(format!("Failed to serialize snapshot: {}", e)))
+            .map_err(|e| Error::GraphError(format!("the graph does not serialize: {e}")))
     }
 
-    /// Serialize this snapshot to a JSON file path.
-    pub fn to_json_file(&self, path: &std::path::Path) -> Result<()> {
-        let body = self.to_json_string()?;
-        std::fs::write(path, body).map_err(|e| {
-            Error::GraphError(format!(
-                "Failed to write snapshot file '{}': {}",
-                path.display(),
-                e
-            ))
-        })
-    }
-
-    /// Validate the snapshot without loading it.
-    ///
-    /// Checks:
-    /// - All aliases are unique
-    /// - All connection references point to valid aliases
-    /// - All processor types exist in the global processor registry
+    /// Check the graph without loading it: every `type` registered, names
+    /// unique once cast, every link end an address the mesh carries or a port
+    /// of the right direction on a node the graph holds, and every exposure an
+    /// output port a node has, named once.
     pub fn validate(&self) -> Result<()> {
-        use std::collections::HashSet;
-
-        use crate::core::processors::PROCESSOR_REGISTRY;
-
-        // Check for duplicate aliases
-        let mut aliases: HashSet<&str> = HashSet::new();
-        for proc in &self.processors {
-            if !aliases.insert(proc.alias.as_str()) {
-                return Err(Error::GraphError(format!(
-                    "Duplicate processor alias: '{}'",
-                    proc.alias
-                )));
-            }
-        }
-
-        // Check all connection references
-        for conn in &self.connections {
-            let from = conn.parse_from()?;
-            let to = conn.parse_to()?;
-
-            if !aliases.contains(&from.alias) {
-                return Err(Error::GraphError(format!(
-                    "Connection references unknown processor alias: '{}'",
-                    from.alias
-                )));
-            }
-            if !aliases.contains(&to.alias) {
-                return Err(Error::GraphError(format!(
-                    "Connection references unknown processor alias: '{}'",
-                    to.alias
-                )));
-            }
-        }
-
-        // Check all processor types resolve through the runtime registry.
-        // Bails on the first miss — matches the behavior of the
-        // surrounding alias / connection checks above.
-        for proc in &self.processors {
-            if PROCESSOR_REGISTRY.port_info(&proc.processor_type).is_none() {
+        let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
+        for node in &self.nodes {
+            if PROCESSOR_REGISTRY.port_info(&node.processor_type).is_none() {
                 return Err(Error::UnknownProcessorType {
-                    ident: proc.processor_type.clone(),
+                    ident: node.processor_type.clone(),
                 });
+            }
+            match nodes_by_cast_name.entry(cast_exposed_name_to_url_safe(&node.name)?.into_owned())
+            {
+                Entry::Occupied(taken) => {
+                    return Err(Error::NodeNameTaken {
+                        name: node.name.clone(),
+                        cast: taken.key().clone(),
+                    });
+                }
+                Entry::Vacant(free) => {
+                    free.insert(node);
+                }
+            }
+        }
+        let the_names_the_graph_holds =
+            || node_names_listed_for_a_refusal(nodes_by_cast_name.keys().map(String::as_str));
+
+        for link in &self.links {
+            for (end, direction) in [
+                (&link.source, PortDirection::Output),
+                (&link.target, PortDirection::Input),
+            ] {
+                if end.mesh_port_address().transpose()?.is_some() {
+                    continue;
+                }
+                let Some(node) =
+                    nodes_by_cast_name.get(cast_exposed_name_to_url_safe(end.node())?.as_ref())
+                else {
+                    return Err(Error::GraphError(format!(
+                        "a link names node `{}`, which the graph does not hold. The graph \
+                         holds: {}",
+                        end.node(),
+                        the_names_the_graph_holds()
+                    )));
+                };
+                refuse_a_port_the_node_does_not_have(end.node(), node, end.port(), direction)?;
+            }
+        }
+
+        let mut exposures_seen: HashSet<(String, String)> = HashSet::new();
+        for exposed in &self.exposed {
+            let node_cast = cast_exposed_name_to_url_safe(&exposed.node)?.into_owned();
+            let port_cast = cast_exposed_name_to_url_safe(&exposed.port)?.into_owned();
+            let Some(node) = nodes_by_cast_name.get(&node_cast) else {
+                return Err(Error::GraphError(format!(
+                    "the graph exposes `{}/{}`, and holds no node `{}`. The graph holds: {}",
+                    exposed.node,
+                    exposed.port,
+                    exposed.node,
+                    the_names_the_graph_holds()
+                )));
+            };
+            refuse_a_port_the_node_does_not_have(
+                &exposed.node,
+                node,
+                &exposed.port,
+                PortDirection::Output,
+            )?;
+            if !exposures_seen.insert((node_cast, port_cast)) {
+                return Err(Error::GraphError(format!(
+                    "the graph exposes `{}/{}` twice",
+                    exposed.node, exposed.port
+                )));
             }
         }
 
@@ -218,236 +167,256 @@ impl GraphSnapshot {
     }
 }
 
+/// Refuse `port` unless `node`'s type declares it in `direction`, listing the
+/// ports it does declare there.
+fn refuse_a_port_the_node_does_not_have(
+    node_name: &str,
+    node: &GraphSnapshotNode,
+    port: &str,
+    direction: PortDirection,
+) -> Result<()> {
+    let port_cast = cast_exposed_name_to_url_safe(port)?;
+    let port_names: Vec<String> = PROCESSOR_REGISTRY
+        .port_info(&node.processor_type)
+        .map(|(inputs, outputs)| match direction {
+            PortDirection::Input => inputs,
+            PortDirection::Output => outputs,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|declared| declared.name)
+        .collect();
+    if port_names.iter().any(|name| *name == port_cast) {
+        return Ok(());
+    }
+    Err(Error::GraphError(format!(
+        "node `{node_name}` has no {direction} port `{port}`. Its {direction} ports are: {}",
+        if port_names.is_empty() {
+            "none".to_string()
+        } else {
+            port_names.join(", ")
+        }
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Helper for tests — the JSON literal a snapshot's `type` field carries:
-    /// the quoted class import path.
-    fn serialized_class_import_path(short: &str) -> String {
-        format!(r#""my_app.processors:{short}""#)
+    const A_CAMERA_CLASS: &str = "my_app.nodes:CameraNode";
+
+    /// A camera class registered descriptor-only, with an `frames_in` input and
+    /// a `video` output. Idempotent across tests.
+    fn a_registered_camera_class() -> &'static str {
+        const REGISTERED_CAMERA_CLASS: &str = "graph_snapshot_tests:RegisteredCamera";
+        let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+            crate::core::descriptors::ProcessorDescriptor::new(
+                crate::core::descriptors::ProcessorClassShortName::new("RegisteredCamera").unwrap(),
+                ProcessorClassImportPath::new(REGISTERED_CAMERA_CLASS).unwrap(),
+                "graph snapshot test",
+            )
+            .with_input(crate::core::descriptors::PortDescriptor::new(
+                "frames_in",
+                "",
+                false,
+            ))
+            .with_output(crate::core::descriptors::PortDescriptor::new(
+                "video", "", false,
+            )),
+        );
+        REGISTERED_CAMERA_CLASS
     }
 
     #[test]
-    fn test_parse_simple_snapshot() {
-        let json = format!(
-            r#"{{
-                "name": "test-pipeline",
-                "processors": [
-                    {{ "alias": "camera", "type": {}, "config": {{}} }},
-                    {{ "alias": "display", "type": {}, "config": {{ "width": 1920 }} }}
-                ],
-                "connections": [
-                    {{ "from": "camera.video", "to": "display.video" }}
-                ]
-            }}"#,
-            serialized_class_import_path("CameraProcessor"),
-            serialized_class_import_path("DisplayProcessor"),
-        );
+    fn a_graph_document_parses_with_its_live_keys_ignored() {
+        let graph_document = serde_json::json!({
+            "stream": "main",
+            "nodes": [
+                {"id": "abc", "name": "camera", "type": A_CAMERA_CLASS, "config": {"fps": 30},
+                 "config_checksum": 7, "ports": {"inputs": [], "outputs": []}, "components": {}},
+                {"id": "def", "name": "display", "type": "my_app.nodes:DisplayNode", "config": {}}
+            ],
+            "links": [
+                {"id": "l1", "state": "wired", "capacity": 4,
+                 "source": {"node": "camera", "port": "video"},
+                 "target": {"node": "display", "port": "video"}},
+                {"source": {"runtime_name": "rig", "node": "mic", "port": "audio"},
+                 "target": {"node": "display", "port": "audio"}}
+            ],
+            "exposed": [{"node": "camera", "port": "video"}],
+            "extensions": [],
+            "mesh": {"mesh_name": "default"}
+        });
 
-        let snap = GraphSnapshot::from_json_str(&json).unwrap();
+        let graph = GraphSnapshot::from_graph_document(graph_document).unwrap();
 
-        assert_eq!(snap.name, Some("test-pipeline".to_string()));
-        assert_eq!(snap.processors.len(), 2);
-        assert_eq!(snap.processors[0].alias, "camera");
+        assert_eq!(graph.stream.as_deref(), Some("main"));
+        assert_eq!(graph.nodes[0].name, "camera");
+        assert_eq!(graph.nodes[0].processor_type.as_str(), A_CAMERA_CLASS);
+        assert_eq!(graph.nodes[0].config, serde_json::json!({"fps": 30}));
         assert_eq!(
-            snap.processors[0].processor_type.as_str(),
-            "my_app.processors:CameraProcessor"
-        );
-        assert!(snap.processors[0].display_name.is_none());
-        assert_eq!(snap.processors[1].alias, "display");
-        assert_eq!(snap.connections.len(), 1);
-        assert_eq!(snap.connections[0].from, "camera.video");
-        assert_eq!(snap.connections[0].to, "display.video");
-    }
-
-    #[test]
-    fn test_round_trip_serde_preserves_the_class_import_path() {
-        let json = format!(
-            r#"{{
-                "processors": [
-                    {{ "alias": "camera", "type": {}, "config": {{}} }}
-                ]
-            }}"#,
-            serialized_class_import_path("CameraProcessor"),
-        );
-        let snap = GraphSnapshot::from_json_str(&json).unwrap();
-        let back = serde_json::to_value(&snap).unwrap();
-        assert_eq!(
-            back["processors"][0]["type"],
-            serde_json::json!("my_app.processors:CameraProcessor"),
-            "the snapshot names a class by its import path, as a plain string"
-        );
-    }
-
-    /// Pre-1.0 forbids parser shims: the three-key object the snapshot wire
-    /// used to carry must fail to deserialize rather than be accepted
-    /// alongside the string.
-    #[test]
-    fn test_the_structured_processor_type_object_is_rejected() {
-        let json = r#"{
-            "processors": [
-                {
-                    "alias": "camera",
-                    "type": {
-                        "org": "tatolab",
-                        "package": "streamlib",
-                        "type": "CameraProcessor",
-                        "version": "1.0.0"
-                    },
-                    "config": {}
-                }
-            ]
-        }"#;
-        assert!(
-            GraphSnapshot::from_json_str(json).is_err(),
-            "the old structured object must not deserialize"
-        );
-    }
-
-    #[test]
-    fn test_display_name_optional_field_round_trips() {
-        let json = format!(
-            r#"{{
-                "processors": [
-                    {{ "alias": "cam_a", "type": {}, "config": {{}},
-                       "display_name": "Camera A" }}
-                ]
-            }}"#,
-            serialized_class_import_path("CameraProcessor"),
-        );
-        let snap = GraphSnapshot::from_json_str(&json).unwrap();
-        assert_eq!(snap.processors[0].display_name.as_deref(), Some("Camera A"));
-        let spec = snap.processors[0].to_processor_spec();
-        assert_eq!(spec.display_name.as_deref(), Some("Camera A"));
-
-        // Re-serialize and confirm the field survives.
-        let back: serde_json::Value = serde_json::to_value(&snap).unwrap();
-        assert_eq!(back["processors"][0]["display_name"], "Camera A");
-    }
-
-    #[test]
-    fn test_to_json_string_round_trip() {
-        let json_in = format!(
-            r#"{{
-                "name": "rt",
-                "processors": [
-                    {{ "alias": "camera", "type": {}, "config": {{}} }}
-                ],
-                "connections": []
-            }}"#,
-            serialized_class_import_path("CameraProcessor"),
-        );
-        let snap = GraphSnapshot::from_json_str(&json_in).unwrap();
-        let json_out = snap.to_json_string().unwrap();
-        let snap_back = GraphSnapshot::from_json_str(&json_out).unwrap();
-        assert_eq!(snap, snap_back);
-    }
-
-    #[test]
-    fn test_to_json_file_round_trip() {
-        let json_in = format!(
-            r#"{{
-                "processors": [
-                    {{ "alias": "camera", "type": {}, "config": {{ "n": 7 }} }}
-                ]
-            }}"#,
-            serialized_class_import_path("CameraProcessor"),
-        );
-        let snap = GraphSnapshot::from_json_str(&json_in).unwrap();
-        let tmp = std::env::temp_dir().join(format!(
-            "streamlib-graph-snapshot-test-{}.json",
-            std::process::id()
-        ));
-        snap.to_json_file(&tmp).unwrap();
-        let snap_back = GraphSnapshot::from_json_file(&tmp).unwrap();
-        std::fs::remove_file(&tmp).ok();
-        assert_eq!(snap, snap_back);
-    }
-
-    #[test]
-    fn test_parse_port_ref() {
-        let result = parse_port_ref("camera.video").unwrap();
-        assert_eq!(result.alias, "camera");
-        assert_eq!(result.port_name, "video");
-
-        let result = parse_port_ref("my_processor.video_out").unwrap();
-        assert_eq!(result.alias, "my_processor");
-        assert_eq!(result.port_name, "video_out");
-    }
-
-    #[test]
-    fn test_parse_port_ref_invalid() {
-        assert!(parse_port_ref("no_dot").is_err());
-        assert!(parse_port_ref("").is_err());
-    }
-
-    #[test]
-    fn test_validate_duplicate_alias() {
-        let json = format!(
-            r#"{{
-                "processors": [
-                    {{ "alias": "cam", "type": {}, "config": {{}} }},
-                    {{ "alias": "cam", "type": {}, "config": {{}} }}
-                ]
-            }}"#,
-            serialized_class_import_path("CameraProcessor"),
-            serialized_class_import_path("DisplayProcessor"),
-        );
-
-        let snap = GraphSnapshot::from_json_str(&json).unwrap();
-        assert!(snap.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_unknown_alias_in_connection() {
-        let json = format!(
-            r#"{{
-                "processors": [
-                    {{ "alias": "camera", "type": {}, "config": {{}} }}
-                ],
-                "connections": [
-                    {{ "from": "camera.video", "to": "unknown.video" }}
-                ]
-            }}"#,
-            serialized_class_import_path("CameraProcessor"),
-        );
-
-        let snap = GraphSnapshot::from_json_str(&json).unwrap();
-        assert!(snap.validate().is_err());
-    }
-
-    #[test]
-    fn test_minimal_snapshot() {
-        let json = r#"{ "processors": [] }"#;
-        let snap = GraphSnapshot::from_json_str(json).unwrap();
-        assert!(snap.name.is_none());
-        assert!(snap.processors.is_empty());
-        assert!(snap.connections.is_empty());
-        assert!(snap.validate().is_ok());
-    }
-
-    /// `validate()` checks every processor type against the global registry
-    /// and fails with the typed `UnknownProcessorType` variant on the first
-    /// miss. The docstring promised this; the implementation now delivers.
-    #[test]
-    fn test_validate_unknown_processor_type() {
-        let unknown_type = serialized_class_import_path("NotARegisteredProcessor");
-        let json = format!(
-            r#"{{
-                "processors": [
-                    {{ "alias": "ghost", "type": {}, "config": {{}} }}
-                ]
-            }}"#,
-            unknown_type,
-        );
-
-        let snap = GraphSnapshot::from_json_str(&json).unwrap();
-        match snap.validate() {
-            Err(Error::UnknownProcessorType { ident }) => {
-                assert_eq!(ident.as_str(), "my_app.processors:NotARegisteredProcessor");
+            graph.links[0].source,
+            LinkPortRefOutput::OnThisRuntime {
+                node: "camera".into(),
+                port: "video".into()
             }
-            other => panic!("expected UnknownProcessorType, got {:?}", other),
+        );
+        assert_eq!(
+            graph.links[1].source,
+            LinkPortRefOutput::OnAnotherRuntime {
+                runtime_name: "rig".into(),
+                node: "mic".into(),
+                port: "audio".into()
+            },
+            "a remote end must not be read as a local one with its runtime dropped"
+        );
+        assert_eq!(
+            graph.exposed,
+            vec![ExposedOutputPortOutput {
+                node: "camera".into(),
+                port: "video".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_graph_serializes_exactly_the_spec_keys() {
+        let graph = GraphSnapshot {
+            stream: None,
+            nodes: vec![GraphSnapshotNode {
+                name: "camera".into(),
+                processor_type: ProcessorClassImportPath::new(A_CAMERA_CLASS).unwrap(),
+                config: serde_json::json!({}),
+            }],
+            links: vec![],
+            exposed: vec![],
+        };
+
+        let serialized = serde_json::to_value(&graph).unwrap();
+
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "nodes": [{"name": "camera", "type": A_CAMERA_CLASS, "config": {}}],
+                "links": [],
+                "exposed": []
+            })
+        );
+        assert_eq!(
+            GraphSnapshot::from_json_str(&graph.to_json_string().unwrap()).unwrap(),
+            graph
+        );
+    }
+
+    #[test]
+    fn the_retired_alias_shape_does_not_parse() {
+        let aliases = r#"{"processors": [{"alias": "camera", "type": "a:B", "config": {}}],
+                          "connections": [{"from": "camera.video", "to": "display.video"}]}"#;
+
+        assert!(GraphSnapshot::from_json_str(aliases).is_err());
+    }
+
+    #[test]
+    fn two_nodes_whose_names_cast_alike_are_refused_naming_the_name() {
+        let camera_class = a_registered_camera_class();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "FrontCam", "type": camera_class},
+                {"name": "frontcam", "type": camera_class}
+            ]
+        }))
+        .unwrap();
+
+        match graph.validate() {
+            Err(Error::NodeNameTaken { name, cast }) => {
+                assert_eq!(name, "frontcam");
+                assert_eq!(cast, "frontcam");
+            }
+            other => panic!("expected NodeNameTaken, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_link_naming_a_node_the_graph_does_not_hold_is_refused() {
+        let camera_class = a_registered_camera_class();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "camera", "type": camera_class}],
+            "links": [{"source": {"node": "camera", "port": "video"},
+                       "target": {"node": "display", "port": "video"}}]
+        }))
+        .unwrap();
+
+        let refusal = graph.validate().unwrap_err().to_string();
+
+        assert!(refusal.contains("`display`"), "{refusal}");
+        assert!(refusal.contains("camera"), "{refusal}");
+    }
+
+    #[test]
+    fn an_exposure_naming_a_node_the_graph_does_not_hold_is_refused() {
+        let camera_class = a_registered_camera_class();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "camera", "type": camera_class}],
+            "exposed": [{"node": "display", "port": "video"}]
+        }))
+        .unwrap();
+
+        let refusal = graph.validate().unwrap_err().to_string();
+
+        assert!(refusal.contains("holds no node `display`"), "{refusal}");
+    }
+
+    #[test]
+    fn a_link_end_naming_a_port_its_node_does_not_have_in_that_direction_is_refused() {
+        let camera_class = a_registered_camera_class();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "front", "type": camera_class}, {"name": "back", "type": camera_class}],
+            "links": [{"source": {"node": "front", "port": "frames_in"},
+                       "target": {"node": "back", "port": "frames_in"}}]
+        }))
+        .unwrap();
+
+        let refusal = graph.validate().unwrap_err().to_string();
+
+        assert!(refusal.contains("no output port `frames_in`"), "{refusal}");
+        assert!(refusal.contains("video"), "{refusal}");
+    }
+
+    #[test]
+    fn a_remote_end_the_mesh_cannot_address_is_refused_before_anything_loads() {
+        let camera_class = a_registered_camera_class();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "back", "type": camera_class}],
+            "links": [{"source": {"runtime_name": "bench/cam", "node": "camera", "port": "video"},
+                       "target": {"node": "back", "port": "frames_in"}}]
+        }))
+        .unwrap();
+
+        let refusal = graph.validate().unwrap_err().to_string();
+
+        assert!(refusal.contains("runtime name"), "{refusal}");
+    }
+
+    #[test]
+    fn an_unregistered_type_is_refused_as_unknown() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "ghost", "type": "my_app.nodes:NotARegisteredNode"}]
+        }))
+        .unwrap();
+
+        match graph.validate() {
+            Err(Error::UnknownProcessorType { ident }) => {
+                assert_eq!(ident.as_str(), "my_app.nodes:NotARegisteredNode");
+            }
+            other => panic!("expected UnknownProcessorType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_empty_graph_is_valid() {
+        let graph = GraphSnapshot::from_json_str(r#"{"nodes": []}"#).unwrap();
+
+        assert!(graph.validate().is_ok());
+        assert!(graph.links.is_empty() && graph.exposed.is_empty());
     }
 }

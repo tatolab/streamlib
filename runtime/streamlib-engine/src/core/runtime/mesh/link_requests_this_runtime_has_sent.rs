@@ -536,9 +536,9 @@ mod tests {
     fn a_connect_request(link_request_id: &str) -> ALinkRequestOnTheMesh {
         ALinkRequestOnTheMesh::asking_for_a_link(
             LinkRequestUniqueId::from(link_request_id),
-            MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video")
+            MeshPortAddress::new("bench-cam-a1b2", "camerasource", "video")
                 .expect("a legal address"),
-            MeshPortAddress::new("studio-display-9f3c", "DisplayWindow", "video")
+            MeshPortAddress::new("studio-display-9f3c", "displaywindow", "video")
                 .expect("a legal address"),
             "bench-cam-a1b2",
         )
@@ -564,11 +564,11 @@ mod tests {
         assert_eq!(rendered.input_runtime_name, "studio-display-9f3c");
         assert_eq!(
             rendered.source.as_deref(),
-            Some("bench-cam-a1b2/CameraSource/video")
+            Some("bench-cam-a1b2/camerasource/video")
         );
         assert_eq!(
             rendered.destination.as_deref(),
-            Some("studio-display-9f3c/DisplayWindow/video")
+            Some("studio-display-9f3c/displaywindow/video")
         );
         assert_eq!(rendered.state, LinkRequestStateOutput::AwaitingRuntime);
         assert!(rendered.reason.contains("default"), "{}", rendered.reason);

@@ -136,12 +136,10 @@ impl App {
         requested_display_name: Option<&str>,
     ) -> Result<AddedProcessor> {
         spec.display_name = requested_display_name.map(str::to_string);
-        let (processor_id, display_name) = self
-            .runner
-            .add_processor_reporting_assigned_display_name(spec)?;
+        let added = self.runner.add_processor_reporting_its_name(spec)?;
         Ok(AddedProcessor {
-            processor_id,
-            display_name,
+            processor_id: added.processor_id,
+            display_name: added.name,
         })
     }
 }

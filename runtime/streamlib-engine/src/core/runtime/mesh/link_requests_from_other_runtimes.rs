@@ -473,9 +473,9 @@ mod tests {
     fn a_request() -> ALinkRequestOnTheMesh {
         ALinkRequestOnTheMesh::asking_for_a_link(
             LinkRequestUniqueId::from("LRabc123"),
-            MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video")
+            MeshPortAddress::new("bench-cam-a1b2", "camerasource", "video")
                 .expect("a legal address"),
-            MeshPortAddress::new("studio-display-9f3c", "DisplayWindow", "video")
+            MeshPortAddress::new("studio-display-9f3c", "displaywindow", "video")
                 .expect("a legal address"),
             "bench-cam-a1b2",
         )

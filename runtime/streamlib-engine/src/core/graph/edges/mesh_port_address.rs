@@ -3,10 +3,10 @@
 
 //! A port on another runtime, as a link names it.
 //!
-//! `<runtime name>/<display name>/<port>` — the one address a port has on the
+//! `<runtime name>/<node>/<port>` — the one address a port has on the
 //! runtime mesh, and the only way a link reaches out of this runtime. Processor
 //! ids and cuid2 channel names never appear on the mesh, so the middle chunk is
-//! the display name, which is why renaming a processor re-addresses its ports.
+//! the node's name, which is why renaming a node re-addresses its ports.
 //!
 //! Each of the three parts is one legal key chunk on its own, checked against
 //! the grammar `core::runtime::mesh_address_chunk` states rather than a second
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::core::error::{Error, Result};
+use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::runtime::mesh_address_chunk::first_reason_this_is_not_one_mesh_address_chunk;
 use crate::core::runtime::what_one_mesh_address_chunk_may_be;
 
@@ -80,20 +81,34 @@ impl<'de> Deserialize<'de> for MeshPortAddress {
 }
 
 impl MeshPortAddress {
-    /// Address a port, refusing by name any part the key grammar cannot carry.
+    /// Address a port, casting the node and port names the way every node and
+    /// port is named, and refusing by name any part the key grammar cannot
+    /// carry.
     pub fn new(
         runtime_name: impl Into<String>,
         processor_display_name: impl Into<String>,
         port_name: impl Into<String>,
     ) -> Result<Self> {
+        let cast_naming_the_part = |part_name: &str, part: String| -> Result<String> {
+            cast_exposed_name_to_url_safe(&part)
+                .map(|cast| cast.into_owned())
+                .map_err(|names_nothing| {
+                    Error::InvalidLink(format!(
+                        "the {part_name} {part:?} cannot be addressed on the mesh: {names_nothing}"
+                    ))
+                })
+        };
         let addressed = Self {
             runtime_name: runtime_name.into(),
-            processor_display_name: processor_display_name.into(),
-            port_name: port_name.into(),
+            processor_display_name: cast_naming_the_part(
+                "node name",
+                processor_display_name.into(),
+            )?,
+            port_name: cast_naming_the_part("port name", port_name.into())?,
         };
         for (part_name, part) in [
             ("runtime name", &addressed.runtime_name),
-            ("processor display name", &addressed.processor_display_name),
+            ("node name", &addressed.processor_display_name),
             ("port name", &addressed.port_name),
         ] {
             if let Some(reason) = first_reason_this_is_not_one_mesh_address_chunk(part) {
@@ -151,7 +166,7 @@ mod tests {
     fn an_address_that_arrives_illegal_is_refused_rather_than_deserialized() {
         let illegal = serde_json::json!({
             "runtime_name": "la*b",
-            "processor_display_name": "Camera Source 2",
+            "processor_display_name": "camera-source-2",
             "port_name": "video",
         });
         let refusal = serde_json::from_value::<MeshPortAddress>(illegal)
@@ -166,7 +181,7 @@ mod tests {
     /// struct literal cannot smuggle one past them, here or in a consumer.
     #[test]
     fn every_part_of_an_address_came_through_a_checked_constructor() {
-        let addressed = MeshPortAddress::parse("bench-cam-a1b2/Camera Source 2/video")
+        let addressed = MeshPortAddress::parse("bench-cam-a1b2/Camera Source 2/Video")
             .expect("a legal address");
         for part in [
             addressed.runtime_name(),
@@ -184,7 +199,7 @@ mod tests {
     /// ordinary path nothing but the refusal.
     #[test]
     fn a_legal_address_round_trips_through_the_wire_unchanged() {
-        let addressed = MeshPortAddress::new("bench-cam-a1b2", "Camera Source 2", "video")
+        let addressed = MeshPortAddress::new("bench-cam-a1b2", "camera-source-2", "video")
             .expect("a legal address");
         let back: MeshPortAddress =
             rmp_serde::from_slice(&rmp_serde::to_vec_named(&addressed).expect("encode"))
@@ -193,7 +208,7 @@ mod tests {
     }
 
     fn an_address() -> MeshPortAddress {
-        MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
+        MeshPortAddress::new("bench-cam-a1b2", "camerasource", "video").expect("a legal address")
     }
 
     /// The three parts render as the one address every mesh key is built from,
@@ -202,22 +217,21 @@ mod tests {
     fn an_address_renders_as_its_three_parts_and_reads_back_as_them() {
         assert_eq!(
             an_address().to_string(),
-            "bench-cam-a1b2/CameraSource/video"
+            "bench-cam-a1b2/camerasource/video"
         );
         assert_eq!(
-            MeshPortAddress::parse("bench-cam-a1b2/CameraSource/video").expect("it parses"),
+            MeshPortAddress::parse("bench-cam-a1b2/camerasource/video").expect("it parses"),
             an_address()
         );
     }
 
-    /// A display name with a space is legal on the mesh, and so it is here —
-    /// the grammar refuses the five key characters and a leading `@`, nothing
-    /// else.
+    /// The node and port parts are cast the way every node and port is named,
+    /// so an address spelled the way an author typed a name finds the node.
     #[test]
-    fn a_display_name_carrying_a_space_is_one_legal_part() {
-        let addressed = MeshPortAddress::new("lab-two", "Camera Source 2", "video")
-            .expect("a space is legal in a display name");
-        assert_eq!(addressed.to_string(), "lab-two/Camera Source 2/video");
+    fn the_node_and_port_parts_are_cast() {
+        let addressed = MeshPortAddress::new("lab-two", "Camera Source 2", "Video Out")
+            .expect("a name that casts to something is legal");
+        assert_eq!(addressed.to_string(), "lab-two/camera-source-2/video-out");
     }
 
     /// Every part is checked, and the refusal names the part, the value and the
@@ -226,11 +240,8 @@ mod tests {
     fn each_illegal_part_is_refused_naming_the_part_and_the_reason() {
         for (part_name, refused) in [
             ("runtime name", MeshPortAddress::new("la*b", "Cam", "video")),
-            (
-                "processor display name",
-                MeshPortAddress::new("lab", "@Cam", "video"),
-            ),
-            ("port name", MeshPortAddress::new("lab", "Cam", "vid?eo")),
+            ("node name", MeshPortAddress::new("lab", "..", "video")),
+            ("port name", MeshPortAddress::new("lab", "Cam", "?")),
         ] {
             let refusal = refused.expect_err("an illegal part is refused").to_string();
             assert!(refusal.contains(part_name), "{refusal}");

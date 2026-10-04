@@ -142,19 +142,18 @@ mkdir -p "$DECODED_DIR" "$ARMS_DIR" "$SCORED_REFERENCES_DIR"
 
 CONTROL_PLANE_URL="http://127.0.0.1:$CONTROL_PLANE_PORT"
 
-# A channel is `{processor_id}/{output_port}` with the id chunk lowercased, and
-# a processor id is a cuid2 minted at add time — `decoder` is the rig's display
-# name, not its id. Derived per run from the live graph rather than guessed.
+# A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
+# runtime's own `mesh.runtime_name`. Read off the live graph rather than guessed.
 decoded_channel_of_running_rig() {
     "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
-    (node for node in graph.get("nodes", []) if node.get("display_name") == "decoder"), None
+    (node for node in graph.get("nodes", []) if node.get("name") == "decoder"), None
 )
 if decoder is None:
-    sys.exit("the running graph has no processor named `decoder`")
-print(decoder["id"].lower() + "/video")
+    sys.exit("the running graph has no node named `decoder`")
+print(graph["mesh"]["runtime_name"] + "/" + decoder["name"] + "/video")
 '
 }
 

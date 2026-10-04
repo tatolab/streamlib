@@ -221,12 +221,6 @@ pub struct Runner {
     /// construction needs the live GpuContext but whose registration must
     /// precede the first `process()` call. Drained on each `start()`.
     setup_hooks: Arc<Mutex<Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>>>>,
-    /// Optional pipeline name carried across snapshot load → save.
-    /// Set by [`Self::load_graph_snapshot`] and read by
-    /// [`Self::save_graph_snapshot`] so a snapshot loaded from disk
-    /// can be re-saved with the same `name` without caller bookkeeping.
-    /// `None` when the graph was built imperatively without a name.
-    pipeline_name: Arc<Mutex<Option<String>>>,
 }
 
 impl Runner {
@@ -442,7 +436,6 @@ impl Runner {
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
-            pipeline_name: Arc::new(Mutex::new(None)),
         });
 
         // Last, because it is the one thing that needs the runtime itself: a
@@ -1324,231 +1317,140 @@ impl Runner {
     }
 
     // =========================================================================
-    // Graph Snapshot Save / Load
+    // Graph Load
     // =========================================================================
 
-    /// Load a graph snapshot into this runtime.
+    /// Load `graph` into this runtime: each node added under its name, each
+    /// link connected by name, the exposures recorded on their nodes, and the
+    /// stream's name recorded on the graph.
     ///
-    /// Processors are created first, building an alias → ID map. Then
-    /// connections are created by resolving aliases to runtime IDs.
-    /// The snapshot's `name` is stashed on the runtime so a subsequent
-    /// [`Self::save_graph_snapshot`] re-emits it without caller
-    /// bookkeeping.
-    ///
-    /// Assumes every referenced processor type is already registered (it
-    /// validates and fails on an unregistered type). For the turnkey case —
-    /// resolve and build referenced packages by version first — use
+    /// A node name already in the graph is refused rather than suffixed — a
+    /// loaded graph's names are already resolved. A link whose input is on
+    /// another runtime is asked of that runtime, as `connect` asks it. Every
+    /// `type` must already be registered.
     pub fn load_graph_snapshot(
         &self,
-        snapshot: &crate::core::graph_snapshot::GraphSnapshot,
+        graph: &crate::core::graph_snapshot::GraphSnapshot,
     ) -> Result<()> {
         use std::collections::HashMap;
 
-        // Validate before loading
-        snapshot.validate()?;
-
-        // Phase 1: Create processors, build alias → ID map
-        let mut alias_to_id: HashMap<String, ProcessorUniqueId> = HashMap::new();
-
-        for proc_def in &snapshot.processors {
-            let spec = proc_def.to_processor_spec();
-            let id = self.add_processor(spec)?;
-
-            alias_to_id.insert(proc_def.alias.clone(), id.clone());
-
-            tracing::info!(
-                "Created processor '{}' ({}) → {}",
-                proc_def.alias,
-                proc_def.processor_type,
-                id
-            );
-        }
-
-        // Phase 2: Create connections, resolving aliases
-        for conn_def in &snapshot.connections {
-            let from = conn_def.parse_from()?;
-            let to = conn_def.parse_to()?;
-
-            let from_id = alias_to_id.get(from.alias).ok_or_else(|| {
-                Error::GraphError(format!("Unknown processor alias: '{}'", from.alias))
-            })?;
-            let to_id = alias_to_id.get(to.alias).ok_or_else(|| {
-                Error::GraphError(format!("Unknown processor alias: '{}'", to.alias))
-            })?;
-
-            self.connect(
-                OutputLinkPortRef::new(from_id, from.port_name),
-                InputLinkPortRef::new(to_id, to.port_name),
-            )?;
-
-            tracing::info!(
-                "Connected {}.{} → {}.{}",
-                from.alias,
-                from.port_name,
-                to.alias,
-                to.port_name
-            );
-        }
-
-        *self.pipeline_name.lock() = snapshot.name.clone();
-
-        if let Some(name) = &snapshot.name {
-            tracing::info!("Loaded pipeline: {}", name);
-        }
-
-        Ok(())
-    }
-
-    /// Load a graph snapshot from a JSON file path.
-    ///
-    /// Assumes referenced processor types are already registered; for the
-    /// turnkey path that resolves missing modules by version, use
-    pub fn load_graph_snapshot_from_path(&self, path: &std::path::Path) -> Result<()> {
-        let snapshot = crate::core::graph_snapshot::GraphSnapshot::from_json_file(path)?;
-
-        if let Some(name) = &snapshot.name {
-            tracing::info!("Loading pipeline '{}' from {}", name, path.display());
-        } else {
-            tracing::info!("Loading pipeline from {}", path.display());
-        }
-
-        self.load_graph_snapshot(&snapshot)
-    }
-
-    /// Snapshot the live graph as a [`GraphSnapshot`].
-    ///
-    /// Walks every processor node and link, regenerates per-node
-    /// aliases deterministically from each node's
-    /// PascalCase short name (with `_2`, `_3`, … on collision in
-    /// node-iteration order), and emits the structured snapshot the
-    /// load side accepts. The current `pipeline_name` is included
-    /// when present so `load → save` preserves it without caller
-    /// bookkeeping.
-    ///
-    /// `display_name` rides the snapshot only when the live node's
-    /// display name differs from its processor type's PascalCase
-    /// short name — i.e. only when a caller explicitly overrode the
-    /// default — so the user-intent distinction survives round-trips.
-    pub fn save_graph_snapshot(&self) -> Result<crate::core::graph_snapshot::GraphSnapshot> {
-        use std::collections::HashMap;
-
-        use crate::core::graph::default_display_name_for;
-        use crate::core::graph_snapshot::{
-            ConnectionDefinition, GraphSnapshot, ProcessorDefinition,
+        use crate::core::graph::{
+            ExposedOutputPortsComponent, GraphNodeWithComponents, cast_exposed_name_to_url_safe,
         };
 
-        self.compiler.scope(|graph, _tx| {
-            // Deterministic aliasing — camelCase the type's PascalCase
-            // short name (e.g. CameraProcessor → cameraProcessor) and
-            // suffix `_2`, `_3` … on collision in node-iteration order.
-            let mut alias_counts: HashMap<String, u32> = HashMap::new();
-            let mut id_to_alias: HashMap<String, String> = HashMap::new();
-            let mut processors: Vec<ProcessorDefinition> = Vec::new();
-
-            for node in graph.traversal().v(()).iter() {
-                let default_name = default_display_name_for(&node.processor_type);
-                let base = pascal_to_camel(&default_name);
-
-                let count = alias_counts.entry(base.clone()).or_insert(0);
-                *count += 1;
-                let alias = if *count == 1 {
-                    base.clone()
-                } else {
-                    format!("{}_{}", base, count)
-                };
-
-                id_to_alias.insert(node.id.to_string(), alias.clone());
-
-                let display_name =
-                    (node.display_name != default_name).then(|| node.display_name.clone());
-
-                processors.push(ProcessorDefinition {
-                    alias,
-                    processor_type: node.processor_type.clone(),
-                    config: node.config.clone().unwrap_or(serde_json::Value::Null),
-                    display_name,
-                });
-            }
-
-            let mut connections: Vec<ConnectionDefinition> = Vec::new();
-            for link in graph.traversal().e(()).iter() {
-                // A snapshot names every endpoint by an alias of a processor it
-                // also carries, so it has no way to spell a port on another
-                // runtime. Refused by name rather than written out a link
-                // short: a snapshot missing a link reads as a graph that never
-                // had one.
-                let source_on_this_runtime =
-                    link.source.processor_id_on_this_runtime().ok_or_else(|| {
-                        Error::GraphError(format!(
-                            "link '{}' carries from {} on another runtime, and a graph snapshot \
-                             names every port by the alias of a processor it also carries, so it \
-                             cannot spell one. Save a snapshot of a graph with no remote link, or \
-                             wire the remote link again after loading one.",
-                            link.id, link.source
-                        ))
-                    })?;
-                let from_alias = id_to_alias
-                    .get(source_on_this_runtime.as_str())
-                    .ok_or_else(|| {
-                        Error::GraphError(format!(
-                            "Link source processor '{source_on_this_runtime}' missing from \
-                             snapshot alias map"
-                        ))
-                    })?;
-                let target_on_this_runtime =
-                    link.target.processor_id_on_this_runtime().ok_or_else(|| {
-                        Error::GraphError(format!(
-                            "link '{}' carries into {} on another runtime, which only that \
-                             runtime's own graph holds",
-                            link.id, link.target
-                        ))
-                    })?;
-                let to_alias = id_to_alias
-                    .get(target_on_this_runtime.as_str())
-                    .ok_or_else(|| {
-                        Error::GraphError(format!(
-                            "Link target processor '{target_on_this_runtime}' missing from \
-                             snapshot alias map"
-                        ))
-                    })?;
-                connections.push(ConnectionDefinition {
-                    from: format!("{}.{}", from_alias, link.source.port_name()),
-                    to: format!("{}.{}", to_alias, link.target.port_name()),
-                });
-            }
-
-            Ok(GraphSnapshot {
-                name: self.pipeline_name.lock().clone(),
-                processors,
-                connections,
-            })
-        })
-    }
-
-    /// Snapshot the live graph and write it to a JSON file path.
-    pub fn save_graph_snapshot_to_path(&self, path: &std::path::Path) -> Result<()> {
-        let snapshot = self.save_graph_snapshot()?;
-        snapshot.to_json_file(path)?;
-        if let Some(name) = &snapshot.name {
-            tracing::info!("Saved pipeline '{}' to {}", name, path.display());
-        } else {
-            tracing::info!("Saved pipeline to {}", path.display());
+        for node in &graph.nodes {
+            crate::core::processors::PROCESSOR_REGISTRY
+                .resolve_processor_type_if_unregistered(&node.processor_type)?;
         }
+        graph.validate()?;
+        self.refuse_what_this_runtimes_graph_contradicts(graph)?;
+
+        let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
+        for node in &graph.nodes {
+            let added = self.add_processor_reporting_its_name(
+                ProcessorSpec::new(node.processor_type.clone(), node.config.clone())
+                    .with_display_name(node.name.clone()),
+            )?;
+            processor_id_by_node_name.insert(added.name, added.processor_id);
+        }
+        let processor_id_of = |node: &str| -> Result<ProcessorUniqueId> {
+            let cast = cast_exposed_name_to_url_safe(node)?;
+            processor_id_by_node_name
+                .get(cast.as_ref())
+                .cloned()
+                .ok_or_else(|| Error::GraphError(format!("the graph holds no node `{node}`")))
+        };
+
+        for link in &graph.links {
+            let from = match link.source.mesh_port_address() {
+                Some(address) => OutputLinkPortRef::on_another_runtime(address?),
+                None => {
+                    OutputLinkPortRef::new(processor_id_of(link.source.node())?, link.source.port())
+                }
+            };
+            match link.target.mesh_port_address().transpose()? {
+                Some(address) if address.names_the_runtime(self.runtime_mesh.runtime_name()) => {
+                    self.connect(from, InputLinkPortRef::on_another_runtime(address))?;
+                }
+                Some(address) => {
+                    RuntimeOperations::request_link_on_remote_input_runtime(self, from, address)?;
+                }
+                None => {
+                    self.connect(
+                        from,
+                        InputLinkPortRef::new(
+                            processor_id_of(link.target.node())?,
+                            link.target.port(),
+                        ),
+                    )?;
+                }
+            }
+        }
+
+        let mut exposed_ports_by_processor_id: HashMap<ProcessorUniqueId, Vec<String>> =
+            HashMap::new();
+        for exposed in &graph.exposed {
+            exposed_ports_by_processor_id
+                .entry(processor_id_of(&exposed.node)?)
+                .or_default()
+                .push(cast_exposed_name_to_url_safe(&exposed.port)?.into_owned());
+        }
+        self.compiler.scope(|live_graph, _tx| {
+            for (processor_id, exposed_ports) in exposed_ports_by_processor_id {
+                if let Some(node) = live_graph.traversal_mut().v(&processor_id).first_mut() {
+                    node.insert_component_without_rendering_it(ExposedOutputPortsComponent(
+                        exposed_ports,
+                    ));
+                }
+            }
+            if let Some(stream_name) = &graph.stream {
+                live_graph.set_loaded_stream_name(stream_name.clone());
+            }
+        });
+
         Ok(())
     }
 
-    /// Set or clear the pipeline name carried into the next
-    /// [`Self::save_graph_snapshot`]. Imperative-build callers use
-    /// this when they want their snapshots to round-trip with a
-    /// label; snapshot loaders set it automatically.
-    pub fn set_pipeline_name(&self, name: Option<String>) {
-        *self.pipeline_name.lock() = name;
-    }
-
-    /// Current pipeline name, if any. Set by
-    /// [`Self::load_graph_snapshot`] or [`Self::set_pipeline_name`].
-    pub fn pipeline_name(&self) -> Option<String> {
-        self.pipeline_name.lock().clone()
+    /// Refuse, before anything is added, what this runtime's own graph would
+    /// refuse partway through the load: a node name it already holds, and an
+    /// address naming this runtime whose node neither `graph` nor this
+    /// runtime's graph holds. With `validate` run first, a load refused for
+    /// either adds nothing; a link the engine refuses after that still leaves
+    /// the nodes added before it.
+    fn refuse_what_this_runtimes_graph_contradicts(
+        &self,
+        graph: &crate::core::graph_snapshot::GraphSnapshot,
+    ) -> Result<()> {
+        let this_runtimes_name = self.runtime_mesh.runtime_name();
+        self.compiler.scope(|live_graph, _tx| {
+            for node in &graph.nodes {
+                live_graph.the_requested_node_name_unless_taken(&node.name)?;
+            }
+            for link in &graph.links {
+                for end in [&link.source, &link.target] {
+                    let Some(address) = end.mesh_port_address().transpose()? else {
+                        continue;
+                    };
+                    if !address.names_the_runtime(this_runtimes_name) {
+                        continue;
+                    }
+                    let named = address.processor_display_name();
+                    let in_the_loaded_graph = graph.nodes.iter().any(|node| {
+                        crate::core::graph::cast_exposed_name_to_url_safe(&node.name)
+                            .is_ok_and(|cast| cast == named)
+                    });
+                    if !in_the_loaded_graph
+                        && !live_graph.traversal().v_with_node_name(named).exists()
+                    {
+                        return Err(Error::ProcessorNotFound(format!(
+                            "{address} names this runtime, and neither the graph being loaded \
+                             nor this runtime holds a node named `{named}`"
+                        )));
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 }
 
@@ -1558,22 +1460,6 @@ impl Runner {
 fn runtime_shutdown_observed(event_shutdown_flag: &AtomicBool) -> bool {
     event_shutdown_flag.load(Ordering::SeqCst)
         || crate::core::runtime::is_runtime_shutdown_requested()
-}
-
-/// PascalCase → camelCase for snapshot alias generation.
-///
-/// `CameraProcessor → cameraProcessor`; `BGRAFileSource → bGRAFileSource`
-/// (only the first character is lowercased — the alias just needs to
-/// be deterministic and human-readable, not perfectly idiomatic). The
-/// alias is local to the snapshot and consumed by `to_processor_spec`
-/// on load; the actual processor identity rides the `processor_type`
-/// field.
-fn pascal_to_camel(short: &str) -> String {
-    let mut chars = short.chars();
-    match chars.next() {
-        Some(c) => c.to_lowercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
 }
 
 /// Compute the per-runtime surface-sharing socket path, refuse to start if

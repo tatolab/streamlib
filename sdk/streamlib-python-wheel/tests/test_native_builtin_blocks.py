@@ -176,6 +176,6 @@ def test_display_name_defaults_to_the_type_name():
     runtime = streamlib.Runtime()
     try:
         pattern = runtime.add(TestPatternSource)
-        assert pattern.display_name == "TestPatternSource"
+        assert pattern.display_name == "testpatternsource"
     finally:
         runtime.shutdown()

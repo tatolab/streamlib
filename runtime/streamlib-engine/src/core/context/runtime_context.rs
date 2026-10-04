@@ -32,7 +32,7 @@ pub struct RuntimeContext {
     runtime_name: Arc<RuntimeName>,
     /// Unique identifier for this processor (None for shared/global context).
     processor_id: Option<ProcessorUniqueId>,
-    /// The processor's disambiguated display name — the one string `add`
+    /// The node's name — the one string `add`
     /// reports, `graph` renders and the log prefix carries — so a processor
     /// that has to name itself to the outside world names itself the way
     /// every other surface does. `None` for the shared/global context.
@@ -189,7 +189,7 @@ impl RuntimeContext {
         self.processor_id.as_ref()
     }
 
-    /// The processor's disambiguated display name (None for the
+    /// The node's name (None for the
     /// shared/global context).
     pub fn processor_display_name(&self) -> Option<&str> {
         self.processor_display_name.as_deref()
@@ -291,7 +291,7 @@ impl RuntimeContext {
     }
 
     /// Create a processor-specific context carrying the processor's
-    /// disambiguated display name.
+    /// node name.
     pub fn with_processor_display_name(&self, processor_display_name: String) -> Self {
         Self {
             processor_display_name: Some(processor_display_name),
@@ -788,7 +788,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().mesh_link_ingress_table()
     }
 
-    /// The processor's disambiguated display name, or `None` for the
+    /// The node's name, or `None` for the
     /// shared/global context.
     pub fn processor_display_name(&self) -> Option<String> {
         self.host_base().processor_display_name().map(str::to_owned)
@@ -904,7 +904,7 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
         self.host_base().processor_id().map(|id| id.to_string())
     }
 
-    /// The processor's disambiguated display name, or `None` for the
+    /// The node's name, or `None` for the
     /// shared/global context.
     pub fn processor_display_name(&self) -> Option<String> {
         self.host_base().processor_display_name().map(str::to_owned)

@@ -59,7 +59,7 @@ SOURCE_CONTROL_PORT="${SOURCE_CONTROL_PORT:-$A_FREE_PORT}"
 READER_CONTROL_PORT="${READER_CONTROL_PORT:-$ANOTHER_FREE_PORT}"
 
 # The port's address on the mesh, spelled the way `connect` and `tap` take it.
-THE_ADDRESS="$SOURCE_RUNTIME_NAME/MicrophoneSource/audio"
+THE_ADDRESS="$SOURCE_RUNTIME_NAME/microphonesource/audio"
 
 # How long the link has to resolve: the source's token has to reach the reader,
 # the reader has to ask what it offers, and the egress has to come up. Generous
@@ -167,8 +167,8 @@ for link in graph.get("links", []):
     source = link.get("source", {})
     if source.get("runtime_name"):
         print("{}/{}/{}".format(source["runtime_name"],
-                                source["processor_display_name"],
-                                source["port_name"]))
+                                source["node"],
+                                source["port"]))
         break
 ' "$OUTPUT_DIR/reader-graph.json")"
 if [ "$SOURCE_RENDERED" != "$THE_ADDRESS" ]; then

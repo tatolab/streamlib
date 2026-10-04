@@ -5,24 +5,25 @@ description: Attach a read-only tap to one named channel of a running StreamLib 
 
 # tap-live-channel
 
-Proof-of-life for a link. A channel is named `{source_processor}/{source_output_port}` — the source processor plus the output port it publishes on. Tapping collects a bounded sample of raw bags off that channel and prints a hex preview plus byte length per bag; it does NOT decode pixels or audio samples, so treat it as "bytes are flowing, and roughly this many per bag," not as a rendered frame.
+Proof-of-life for a link. A channel is the output port's address, `<runtime_name>/<node>/<port>` — the runtime the source node runs in, the node's name, and the output port it publishes on. Tapping collects a bounded sample of raw bags off that channel and prints a hex preview plus byte length per bag; it does NOT decode pixels or audio samples, so treat it as "bytes are flowing, and roughly this many per bag," not as a rendered frame.
 
 ## Steps
 
 ### 1. Get the channel name from the live graph
-Run `inspect-live-graph` and read the source processor and its output port, then join them:
+Run `inspect-live-graph` and read `mesh.runtime_name`, the source node's `name`, and its output port under `ports.outputs`, then join them:
 ```
-{source_processor}/{source_output_port}   e.g.  camera/frames
+<runtime_name>/<node>/<port>   e.g.  lab-one/camera/frames
 ```
+A port on another runtime that a link carries here is tapped under that runtime's name — the `runtime_name` on the link's `source`.
 
 ### 2. Tap a bounded sample
 The channel is a positional argument; `--count` bounds how many bags to collect before returning:
 ```bash
-streamlib tap --node <runtime_id> camera/frames --count 10
+streamlib tap --node <runtime_id> lab-one/camera/frames --count 10
 # or
-streamlib tap --url <control_url> camera/frames --count 10
+streamlib tap --url <control_url> lab-one/camera/frames --count 10
 # or, when exactly one node is live:
-streamlib tap camera/frames --count 10
+streamlib tap lab-one/camera/frames --count 10
 ```
 Each collected bag prints as a hex preview and a byte length. Omitting `--count` uses the tool's own default sample bound.
 

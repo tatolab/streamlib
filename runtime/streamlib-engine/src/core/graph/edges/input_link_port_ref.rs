@@ -4,7 +4,10 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::core::graph::{LinkDirection, MeshPortAddress, ProcessorUniqueId};
+use crate::core::error::Result;
+use crate::core::graph::{
+    LinkDirection, MeshPortAddress, ProcessorUniqueId, cast_exposed_name_to_url_safe,
+};
 
 /// Reference to the input port a link carries into — on this runtime, or on
 /// another runtime over the mesh.
@@ -70,6 +73,23 @@ impl InputLinkPortRef {
         match self {
             Self::OnThisRuntime { port_name, .. } => port_name,
             Self::OnAnotherRuntime(address) => address.port_name(),
+        }
+    }
+
+    /// This reference with its port name cast, the way every port is named.
+    ///
+    /// A mesh address is cast when it is made, so only a port on this runtime
+    /// changes.
+    pub fn with_its_port_name_cast(self) -> Result<Self> {
+        match self {
+            Self::OnThisRuntime {
+                processor_id,
+                port_name,
+            } => Ok(Self::OnThisRuntime {
+                processor_id,
+                port_name: cast_exposed_name_to_url_safe(&port_name)?.into_owned(),
+            }),
+            Self::OnAnotherRuntime(_) => Ok(self),
         }
     }
 
@@ -140,7 +160,7 @@ mod tests {
             rmp_serde::from_slice::<serde_json::Value>(&bytes).expect("a msgpack map"),
             serde_json::json!({
                 "runtime_name": "studio-display-9f3c",
-                "processor_display_name": "DisplayWindow",
+                "processor_display_name": "displaywindow",
                 "port_name": "video",
             })
         );
@@ -180,7 +200,7 @@ mod tests {
         );
         assert_eq!(
             InputLinkPortRef::on_another_runtime(a_mesh_address()).to_string(),
-            "studio-display-9f3c/DisplayWindow/video"
+            "studio-display-9f3c/displaywindow/video"
         );
     }
 

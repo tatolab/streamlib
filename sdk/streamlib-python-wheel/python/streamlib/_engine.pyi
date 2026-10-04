@@ -597,7 +597,12 @@ class Runtime:
         `config` parameter; for a native built-in, its Rust config struct.
         Either way a processor that declares no config refuses a non-empty one,
         and the keys it takes — with their types, defaults and descriptions —
-        are published as its config schema in the processor catalog.
+        are published as its config schema in the node catalog.
+
+        `display_name` is cast to lowercase URL-safe (`"Front Camera"` becomes
+        `front-camera`), and refused with `RuntimeError` when a node already
+        has that name or it casts to nothing. Left out, the node takes its
+        class's short name, cast, with the next free `-2`, `-3` … appended.
         """
 
     def remote_processor_output(
@@ -605,13 +610,14 @@ class Runtime:
     ) -> RemoteProcessorOutputPortReference:
         """Name an output port on another runtime, to pull it over the mesh.
 
-        A port on the mesh is addressed `<runtime name>/<display name>/<port>`
-        — the processor's display name, never its id, so renaming a processor
-        re-addresses its ports. A part the mesh cannot carry raises
-        `ValueError` here rather than at `connect`.
+        A port on the mesh is addressed `<runtime name>/<node>/<port>` — the
+        node's name, never its id, so renaming a node re-addresses its ports.
+        The node and port names are cast as every name is; a part the mesh
+        cannot carry, or one casting to nothing, raises `ValueError` here
+        rather than at `connect`.
 
         A `runtime_name` equal to this runtime's own is a local reference,
-        resolved by display name when the link is applied.
+        resolved by node name when the link is applied.
         """
 
     def remote_processor_input(
@@ -621,7 +627,7 @@ class Runtime:
 
         Addressed the way `remote_processor_output` addresses an output, and
         refused here the same way. A `runtime_name` equal to this runtime's own
-        is a local reference, resolved by display name when the link is applied.
+        is a local reference, resolved by node name when the link is applied.
         """
 
     def connect(
@@ -759,7 +765,8 @@ class AddedProcessor:
     @property
     def processor_id(self) -> str: ...
     @property
-    def display_name(self) -> str: ...
+    def display_name(self) -> str:
+        """The name the node received — what `graph` renders as its `name`."""
     def output(self, port_name: str) -> ProcessorOutputPortReference: ...
     def input(self, port_name: str) -> ProcessorInputPortReference: ...
     def __repr__(self) -> str: ...

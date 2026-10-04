@@ -516,21 +516,21 @@ mod tests {
         OutputPortsOfferedOnTheMesh {
             ports: vec![
                 OutputPortOfferedOnTheMesh {
-                    processor_display_name: "CameraSource".to_string(),
+                    processor_display_name: "camerasource".to_string(),
                     port_name: "video".to_string(),
                 },
                 OutputPortOfferedOnTheMesh {
-                    processor_display_name: "MicrophoneSource".to_string(),
+                    processor_display_name: "microphonesource".to_string(),
                     port_name: "audio".to_string(),
                 },
             ],
             ports_it_holds_and_cannot_send: vec![OutputPortThisRuntimeHoldsAndCannotSend {
-                processor_display_name: "CameraSource".to_string(),
+                processor_display_name: "camerasource".to_string(),
                 port_name: "depthOut".to_string(),
                 why_it_cannot_be_sent: "its channel cannot be named: it contains 'O'".to_string(),
             }],
             ports_it_stopped_sending: vec![OutputPortThisRuntimeStoppedSending {
-                processor_display_name: "MicrophoneSource".to_string(),
+                processor_display_name: "microphonesource".to_string(),
                 port_name: "audio".to_string(),
                 why_it_stopped_being_sent: "it could not take a destination slot".to_string(),
             }],
@@ -556,19 +556,19 @@ mod tests {
             rmp_serde::from_slice::<serde_json::Value>(&encoded).expect("a msgpack map"),
             serde_json::json!({
                 "ports": [
-                    { "processor_display_name": "CameraSource", "port_name": "video" },
-                    { "processor_display_name": "MicrophoneSource", "port_name": "audio" },
+                    { "processor_display_name": "camerasource", "port_name": "video" },
+                    { "processor_display_name": "microphonesource", "port_name": "audio" },
                 ],
                 "ports_it_holds_and_cannot_send": [
                     {
-                        "processor_display_name": "CameraSource",
+                        "processor_display_name": "camerasource",
                         "port_name": "depthOut",
                         "why_it_cannot_be_sent": "its channel cannot be named: it contains 'O'",
                     },
                 ],
                 "ports_it_stopped_sending": [
                     {
-                        "processor_display_name": "MicrophoneSource",
+                        "processor_display_name": "microphonesource",
                         "port_name": "audio",
                         "why_it_stopped_being_sent": "it could not take a destination slot",
                     },
@@ -582,9 +582,9 @@ mod tests {
     #[test]
     fn a_port_is_offered_only_under_both_of_its_names() {
         let listed = a_listing();
-        assert!(listed.offers("CameraSource", "video"));
-        assert!(!listed.offers("CameraSource", "audio"));
-        assert!(!listed.offers("MicrophoneSource", "video"));
+        assert!(listed.offers("camerasource", "video"));
+        assert!(!listed.offers("camerasource", "audio"));
+        assert!(!listed.offers("microphonesource", "video"));
         assert!(!listed.offers("NoSuchProcessor", "video"));
     }
 
@@ -594,13 +594,13 @@ mod tests {
     #[test]
     fn a_document_naming_no_unsendable_ports_reads_as_holding_none() {
         let without_the_key = rmp_serde::to_vec_named(&serde_json::json!({
-            "ports": [{ "processor_display_name": "CameraSource", "port_name": "video" }],
+            "ports": [{ "processor_display_name": "camerasource", "port_name": "video" }],
         }))
         .expect("the older shape encodes");
 
         let listed = OutputPortsOfferedOnTheMesh::decode(&without_the_key)
             .expect("a document with no unsendable ports still decodes");
-        assert!(listed.offers("CameraSource", "video"));
+        assert!(listed.offers("camerasource", "video"));
         assert!(listed.ports_it_holds_and_cannot_send.is_empty());
         assert!(listed.ports_it_stopped_sending.is_empty());
     }
@@ -616,14 +616,14 @@ mod tests {
     #[test]
     fn a_document_carrying_a_key_this_engine_does_not_know_still_decodes() {
         let with_a_key_from_later = rmp_serde::to_vec_named(&serde_json::json!({
-            "ports": [{ "processor_display_name": "CameraSource", "port_name": "video" }],
-            "ports_a_later_engine_added": [{ "processor_display_name": "CameraSource" }],
+            "ports": [{ "processor_display_name": "camerasource", "port_name": "video" }],
+            "ports_a_later_engine_added": [{ "processor_display_name": "camerasource" }],
         }))
         .expect("the later shape encodes");
 
         let listed = OutputPortsOfferedOnTheMesh::decode(&with_a_key_from_later)
             .expect("a document carrying an unknown key still decodes");
-        assert!(listed.offers("CameraSource", "video"));
+        assert!(listed.offers("camerasource", "video"));
     }
 
     /// A port whose last egress ended stays on offer and answers why under both
@@ -636,24 +636,24 @@ mod tests {
     fn a_port_that_stopped_being_sent_is_still_offered_and_answers_why() {
         let listed = a_listing();
         assert!(
-            listed.offers("MicrophoneSource", "audio"),
+            listed.offers("microphonesource", "audio"),
             "a port whose egress ended is still one a later reader revives"
         );
         assert_eq!(
-            listed.why_it_cannot_send("MicrophoneSource", "audio"),
+            listed.why_it_cannot_send("microphonesource", "audio"),
             None,
             "a port that stopped being sent is not one this runtime refuses"
         );
         assert_eq!(
-            listed.why_it_stopped_being_sent("MicrophoneSource", "audio"),
+            listed.why_it_stopped_being_sent("microphonesource", "audio"),
             Some("it could not take a destination slot")
         );
         assert_eq!(
-            listed.why_it_stopped_being_sent("CameraSource", "video"),
+            listed.why_it_stopped_being_sent("camerasource", "video"),
             None
         );
         assert_eq!(
-            listed.why_it_stopped_being_sent("MicrophoneSource", "video"),
+            listed.why_it_stopped_being_sent("microphonesource", "video"),
             None
         );
     }
@@ -662,7 +662,7 @@ mod tests {
     /// something sending the port again takes it back out.
     #[test]
     fn what_stopped_being_sent_rides_the_answer_until_it_is_forgotten() {
-        let registry = a_registry_whose_graph_offers(&[("CameraSource", "video")]);
+        let registry = a_registry_whose_graph_offers(&[("camerasource", "video")]);
         assert!(
             registry
                 .output_ports_it_offers_right_now()
@@ -671,17 +671,17 @@ mod tests {
         );
 
         registry.record_why_it_stopped_sending_an_output_port(
-            a_port("CameraSource", "video"),
+            a_port("camerasource", "video"),
             "its publisher did not declare".to_string(),
         );
         assert_eq!(
             registry
                 .output_ports_it_offers_right_now()
-                .why_it_stopped_being_sent("CameraSource", "video"),
+                .why_it_stopped_being_sent("camerasource", "video"),
             Some("its publisher did not declare")
         );
 
-        registry.forget_that_it_stopped_sending_an_output_port(&a_port("CameraSource", "video"));
+        registry.forget_that_it_stopped_sending_an_output_port(&a_port("camerasource", "video"));
         assert!(
             registry
                 .output_ports_it_offers_right_now()
@@ -700,7 +700,7 @@ mod tests {
     fn a_record_for_a_port_the_graph_no_longer_holds_is_not_answered() {
         let registry = a_registry_whose_graph_offers(&[]);
         registry.record_why_it_stopped_sending_an_output_port(
-            a_port("CameraSource", "video"),
+            a_port("camerasource", "video"),
             "its publisher did not declare".to_string(),
         );
 
@@ -719,16 +719,16 @@ mod tests {
     fn a_port_held_and_unsendable_is_not_offered_and_answers_why() {
         let listed = a_listing();
         assert!(
-            !listed.offers("CameraSource", "depthOut"),
+            !listed.offers("camerasource", "depthOut"),
             "a port that cannot be sent is not on offer"
         );
         assert_eq!(
-            listed.why_it_cannot_send("CameraSource", "depthOut"),
+            listed.why_it_cannot_send("camerasource", "depthOut"),
             Some("its channel cannot be named: it contains 'O'")
         );
-        assert_eq!(listed.why_it_cannot_send("CameraSource", "video"), None);
+        assert_eq!(listed.why_it_cannot_send("camerasource", "video"), None);
         assert_eq!(
-            listed.why_it_cannot_send("CameraSource", "no_such_port"),
+            listed.why_it_cannot_send("camerasource", "no_such_port"),
             None
         );
         assert_eq!(
@@ -744,7 +744,7 @@ mod tests {
     fn a_refusal_lists_what_is_offered_in_a_stable_order() {
         assert_eq!(
             a_listing().listed_for_a_refusal(),
-            "CameraSource/video, MicrophoneSource/audio"
+            "camerasource/video, microphonesource/audio"
         );
         assert_eq!(
             OutputPortsOfferedOnTheMesh::default().listed_for_a_refusal(),
@@ -769,7 +769,7 @@ mod tests {
             registry.output_ports_it_offers_right_now(),
             OutputPortsOfferedOnTheMesh::default()
         );
-        let how_to_read = registry.how_to_read_an_offered_output_port("CameraSource", "video");
+        let how_to_read = registry.how_to_read_an_offered_output_port("camerasource", "video");
         assert!(how_to_read.is_none(), "{how_to_read:?}");
     }
 }

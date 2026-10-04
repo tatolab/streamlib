@@ -374,6 +374,7 @@ mod tests {
         let processor_id = graph
             .traversal_mut()
             .add_v(spec)
+            .expect("the node is named")
             .first()
             .expect("the node is added")
             .id
@@ -481,7 +482,7 @@ mod tests {
         let told_to_stop = WhenEachThreadWasToldToStop::default();
         let stuck = a_processor_node_running_a_thread(
             &mut graph,
-            "StuckEncoder",
+            "stuckencoder",
             ThreadOnceToldToStop::IgnoresShutdown,
             ProcessorThreadKind::NativeProcessor,
             &told_to_stop,
@@ -511,7 +512,7 @@ mod tests {
             abandoned,
             vec![ProcessorDisplayNameAndId {
                 processor_id: stuck,
-                processor_display_name: "StuckEncoder".to_string(),
+                processor_display_name: "stuckencoder".to_string(),
             }]
         );
         assert!(
@@ -521,7 +522,7 @@ mod tests {
 
         let description = DescriptionOfTheAbandonedProcessorThreads(&abandoned).to_string();
         assert!(
-            description.contains("'StuckEncoder'")
+            description.contains("'stuckencoder'")
                 && description.contains(abandoned[0].processor_id.as_str()),
             "the description must name the processor by display name and id: {description}"
         );
@@ -564,7 +565,7 @@ mod tests {
         let told_to_stop = WhenEachThreadWasToldToStop::default();
         let stuck = a_processor_node_running_a_thread(
             &mut graph,
-            "StuckEncoder",
+            "stuckencoder",
             ThreadOnceToldToStop::IgnoresShutdown,
             ProcessorThreadKind::NativeProcessor,
             &told_to_stop,

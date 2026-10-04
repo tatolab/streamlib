@@ -1533,12 +1533,12 @@ mod tests {
     #[test]
     fn an_unnamed_camera_gets_a_stable_id_that_differs_between_instances() {
         let app = Path::new("/home/someone/apps/desk");
-        let first = camera_name_for(None, app, "VirtualCameraSink");
-        let second = camera_name_for(None, app, "VirtualCameraSink 2");
+        let first = camera_name_for(None, app, "virtualcamerasink");
+        let second = camera_name_for(None, app, "virtualcamerasink-2");
         let other_app = camera_name_for(
             None,
             Path::new("/home/someone/apps/lab"),
-            "VirtualCameraSink",
+            "virtualcamerasink",
         );
 
         assert!(first.starts_with("StreamLib Camera "), "{first}");
@@ -1554,12 +1554,12 @@ mod tests {
         assert_ne!(first, other_app, "two apps never share a label");
         assert_eq!(
             first,
-            camera_name_for(None, app, "VirtualCameraSink"),
+            camera_name_for(None, app, "virtualcamerasink"),
             "the same app and instance get the same label on every run, which is what reclaim keys on"
         );
         assert_eq!(camera_name_for(Some("Desk cam"), app, "x"), "Desk cam");
         assert_eq!(
-            camera_name_for(Some("   "), app, "VirtualCameraSink"),
+            camera_name_for(Some("   "), app, "virtualcamerasink"),
             first,
             "a blank name is no name"
         );
