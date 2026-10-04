@@ -12,10 +12,13 @@ import ast
 import json
 import math
 import sys
+from collections.abc import Mapping
+from enum import Enum, IntEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+import numpy
 import pytest
 
 import streamlib
@@ -67,6 +70,28 @@ class UndecoratedFilter:
 
 class StreamBuildingFailure(Exception):
     """The one exception `a_stream_that_raises` raises."""
+
+
+class FrameColour(str, Enum):
+    """A `str` enum, whose `str()` is `FrameColour.RED` rather than its value."""
+
+    RED = "red"
+
+
+class FrameRate(IntEnum):
+    """An `int` enum."""
+
+    SIXTY = 60
+
+
+class KeyComparedByIdentity(str):
+    """A `str` a mapping can hold beside an equal plain `str` key."""
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __hash__(self) -> int:
+        return id(self)
 
 
 THE_STREAM_BUILDING_FAILURE = StreamBuildingFailure("the camera rig is unplugged")
@@ -157,12 +182,54 @@ def a_stream_with_a_typed_duplicate(stream: Stream) -> None:
     stream.add(BrightnessReader, name="front-CAMERA")
 
 
+@stream
+def hand_built_references(stream: Stream) -> None:
+    """Every port named through a reference built by hand rather than minted."""
+    stream.add(FrameInverter)
+    stream.add(BrightnessReader)
+    stream.connect(
+        NodeOutputPortReference("FrameInverter", "VIDEO_TO_DOWNSTREAM"),
+        NodeInputPortReference("BrightnessReader", "VIDEO_FROM_UPSTREAM"),
+    )
+    stream.connect(
+        RemoteNodeOutputPortReference("studio", "Front Camera", "Video"),
+        NodeInputPortReference("FRAMEINVERTER", "video_from_upstream"),
+    )
+    stream.expose(NodeOutputPortReference("FrameInverter", "Video_To_Downstream"))
+
+
 def not_decorated(stream: Stream) -> None:
     stream.add(FrameInverter)
 
 
 def names_of_nodes_added(builder: Stream, *node_classes: type) -> "list[str]":
     return [builder.add(node_class).name for node_class in node_classes]
+
+
+def config_compiled_for(config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """The config `compile_stream_to_graph` records for one node added with `config`."""
+    namespace: "dict[str, Any]" = {
+        "__name__": "rig_streams",
+        "StandInMarker": StandInMarker,
+        "config_under_test": config,
+    }
+    exec(
+        "def main(stream):\n    stream.add(StandInMarker, config=config_under_test)\n",
+        namespace,
+    )
+    return compile_stream_to_graph(stream(namespace["main"]))["nodes"][0]["config"]
+
+
+def a_config_holding_itself() -> "dict[str, Any]":
+    config: "dict[str, Any]" = {"title": "Rig"}
+    config["overlay"] = {"parent": config}
+    return config
+
+
+def a_config_holding_a_list_holding_itself() -> "dict[str, Any]":
+    labels: "list[Any]" = ["left"]
+    labels.append(labels)
+    return {"overlay": {"labels": labels}}
 
 
 def test_a_defaulted_name_is_the_cast_short_name_and_a_duplicate_takes_the_next_suffix() -> (
@@ -423,6 +490,55 @@ def test_a_class_named_like_the_virtual_camera_sink_elsewhere_is_not_refused(
     assert Stream("rig").add(look_alike).name == "virtualcamerasink"
 
 
+def test_an_add_refused_for_its_platform_records_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+    builder = Stream("rig")
+    look_alike = type(
+        "VirtualCameraSink", (), {"type": "stand_in_builtins::look_alike::Sink"}
+    )
+
+    with pytest.raises(RuntimeError, match="VirtualCameraSink is Linux-only"):
+        builder.add(streamlib.VirtualCameraSink)
+    with pytest.raises(RuntimeError, match="VirtualCameraSink is Linux-only"):
+        builder.add(streamlib.VirtualCameraSink, name="Loopback Camera")
+
+    assert builder.add(look_alike).name == "virtualcamerasink"
+    assert builder.add(FrameInverter, name="Loopback Camera").name == "loopback-camera"
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"labels": {"left"}},
+        {1: "left"},
+        {"gain": math.nan},
+        {"frame_count": 2**64},
+        a_config_holding_itself(),
+        ["gain"],
+    ],
+    ids=[
+        "a-set",
+        "a-non-string-key",
+        "nan",
+        "an-integer-beyond-64-bits",
+        "a-config-holding-itself",
+        "not-a-mapping",
+    ],
+)
+def test_an_add_refused_for_its_config_records_nothing(config: Any) -> None:
+    builder = Stream("rig")
+
+    with pytest.raises((TypeError, ValueError)):
+        builder.add(FrameInverter, config=config)
+    with pytest.raises((TypeError, ValueError)):
+        builder.add(FrameInverter, name="Front Camera", config=config)
+
+    assert builder.add(FrameInverter).name == "frameinverter"
+    assert builder.add(BrightnessReader, name="Front Camera").name == "front-camera"
+
+
 def test_config_is_normalised_to_plain_json() -> None:
     config = compile_stream_to_graph(a_configured_stream)["nodes"][0]["config"]
 
@@ -474,6 +590,105 @@ def test_a_config_key_that_is_not_a_string_is_refused_naming_its_path() -> None:
 def test_a_config_float_json_cannot_carry_is_refused_naming_its_key_path() -> None:
     with pytest.raises(ValueError, match=r"config\['gain'\]"):
         Stream("rig").add(FrameInverter, config={"gain": math.nan})
+
+
+def test_config_values_subclassing_str_int_or_float_are_recorded_as_the_base_type() -> (
+    None
+):
+    config = config_compiled_for(
+        {
+            "colour": FrameColour.RED,
+            "frame_rate": FrameRate.SIXTY,
+            "gain": numpy.float64(0.5),
+            "palette": [FrameColour.RED, FrameRate.SIXTY, numpy.float64(0.25)],
+            "enabled": True,
+        }
+    )
+
+    assert config == {
+        "colour": "red",
+        "frame_rate": 60,
+        "gain": 0.5,
+        "palette": ["red", 60, 0.25],
+        "enabled": True,
+    }
+    assert [type(value) for value in config.values()] == [str, int, float, list, bool]
+    assert [type(item) for item in config["palette"]] == [str, int, float]
+
+
+def test_config_keys_subclassing_str_are_recorded_as_plain_strings() -> None:
+    config = config_compiled_for({FrameColour.RED: {FrameColour.RED: 1}})
+
+    assert config == {"red": {"red": 1}}
+    assert type(next(iter(config))) is str
+    assert type(next(iter(config["red"]))) is str
+
+
+def test_config_keys_equal_only_as_plain_strings_are_refused_naming_the_key() -> None:
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(
+            FrameInverter,
+            config={"overlay": {"gain": 1, KeyComparedByIdentity("gain"): 2}},
+        )
+
+    message = str(refusal.value)
+    assert message.startswith("config must be JSON:")
+    assert "`config['overlay']`" in message
+    assert "'gain'" in message
+
+
+def test_config_integers_at_the_64_bit_bounds_are_kept() -> None:
+    bounds = [-(2**63), 2**63 - 1, 2**64 - 1]
+
+    assert config_compiled_for({"bounds": bounds}) == {"bounds": bounds}
+
+
+@pytest.mark.parametrize(
+    "integer",
+    [2**64, -(2**63) - 1, 10**5000],
+    ids=["past-u64", "below-i64", "five-thousand-digits"],
+)
+def test_a_config_integer_beyond_64_bits_is_refused_naming_its_key_path(
+    integer: int,
+) -> None:
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(FrameInverter, config={"limits": [0, integer]})
+
+    message = str(refusal.value)
+    assert message.startswith("config must be JSON:")
+    assert "`config['limits'][1]`" in message
+    assert "-2**63 to 2**64 - 1" in message
+
+
+def test_a_config_holding_itself_is_refused_naming_where_it_loops() -> None:
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(FrameInverter, config=a_config_holding_itself())
+
+    message = str(refusal.value)
+    assert message.startswith("config must be JSON:")
+    assert "`config['overlay']['parent']` is `config`" in message
+
+
+def test_a_list_holding_itself_is_refused_naming_where_it_loops() -> None:
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(
+            FrameInverter, config=a_config_holding_a_list_holding_itself()
+        )
+
+    message = str(refusal.value)
+    assert message.startswith("config must be JSON:")
+    assert (
+        "`config['overlay']['labels'][1]` is `config['overlay']['labels']`" in message
+    )
+
+
+def test_a_container_two_keys_share_is_recorded_under_each() -> None:
+    shared_size = [640, 480]
+
+    config = config_compiled_for({"size": shared_size, "preview_size": shared_size})
+
+    assert config == {"size": [640, 480], "preview_size": [640, 480]}
+    assert config["size"] is not config["preview_size"]
 
 
 def test_connect_refuses_an_input_as_its_source_naming_the_fix() -> None:
@@ -588,6 +803,99 @@ def test_a_node_reference_casts_the_port_names_it_names() -> None:
 def test_a_port_name_casting_to_nothing_is_refused_naming_it() -> None:
     with pytest.raises(ExposedNameCastsToNothingError, match=r"'\.\.'"):
         NodeReference("frameinverter").output("..")
+
+
+def test_a_hand_built_reference_is_cast_like_a_minted_one() -> None:
+    builder = Stream("rig")
+    inverter = builder.add(FrameInverter)
+
+    assert NodeReference("Frame Inverter").name == "frame-inverter"
+    assert NodeReference("FrameInverter") == inverter
+    assert NodeOutputPortReference(
+        "FrameInverter", "Video To Downstream"
+    ) == inverter.output("video to downstream")
+    assert NodeInputPortReference("FRAMEINVERTER", "VIDEO_FROM_UPSTREAM") == (
+        NodeInputPortReference("frameinverter", "video_from_upstream")
+    )
+    assert RemoteNodeOutputPortReference(
+        "studio", "Front Camera", "Video"
+    ) == builder.remote_output("studio", "front-camera", "video")
+    assert RemoteNodeInputPortReference(
+        "Studio Mac", "Wall Display", "Video In"
+    ) == RemoteNodeInputPortReference("Studio Mac", "wall-display", "video-in")
+
+
+@pytest.mark.parametrize(
+    "build_the_reference",
+    [
+        lambda: RemoteNodeOutputPortReference("studio/left", "camera", "video"),
+        lambda: RemoteNodeInputPortReference("@studio", "camera", "video"),
+    ],
+    ids=["output", "input"],
+)
+def test_a_hand_built_remote_reference_refuses_a_runtime_name_the_mesh_cannot_carry(
+    build_the_reference: Any,
+) -> None:
+    with pytest.raises(ValueError, match="cannot be addressed on the mesh"):
+        build_the_reference()
+
+
+@pytest.mark.parametrize(
+    "build_the_reference",
+    [
+        lambda: NodeReference("✨"),
+        lambda: NodeOutputPortReference("frameinverter", ".."),
+        lambda: NodeInputPortReference("---", "video_from_upstream"),
+        lambda: RemoteNodeInputPortReference("studio", "カメラ", "video"),
+    ],
+    ids=["node", "output-port", "input-node", "remote-node"],
+)
+def test_a_hand_built_reference_casting_to_nothing_is_refused_at_construction(
+    build_the_reference: Any,
+) -> None:
+    with pytest.raises(ExposedNameCastsToNothingError):
+        build_the_reference()
+
+
+def test_a_hand_built_reference_given_a_name_that_is_not_a_string_is_refused() -> None:
+    with pytest.raises(TypeError, match="port name"):
+        NodeInputPortReference("frameinverter", 7)  # pyright: ignore[reportArgumentType]
+
+
+def test_a_hand_built_reference_reaches_the_graph_cast() -> None:
+    assert compile_stream_to_graph(hand_built_references) == {
+        "stream": "hand_built_references",
+        "nodes": [
+            {"name": "frameinverter", "type": FRAME_INVERTER_TYPE, "config": {}},
+            {"name": "brightnessreader", "type": BRIGHTNESS_READER_TYPE, "config": {}},
+        ],
+        "links": [
+            {
+                "source": {"node": "frameinverter", "port": "video_to_downstream"},
+                "target": {"node": "brightnessreader", "port": "video_from_upstream"},
+            },
+            {
+                "source": {
+                    "runtime_name": "studio",
+                    "node": "front-camera",
+                    "port": "video",
+                },
+                "target": {"node": "frameinverter", "port": "video_from_upstream"},
+            },
+        ],
+        "exposed": [{"node": "frameinverter", "port": "video_to_downstream"}],
+    }
+
+
+def test_exposing_a_hand_built_output_then_its_minted_twin_is_refused_at_the_second() -> (
+    None
+):
+    builder = Stream("rig")
+    inverter = builder.add(FrameInverter)
+    builder.expose(NodeOutputPortReference("FrameInverter", "Video To Downstream"))
+
+    with pytest.raises(ValueError, match="already exposes"):
+        builder.expose(inverter.output("video to downstream"))
 
 
 def test_references_are_immutable_values() -> None:
@@ -802,9 +1110,9 @@ def test_a_stream_in_the_entry_file_is_named_from_main() -> None:
 @pytest.mark.parametrize(
     "misuse",
     [
-        lambda: stream(),
-        lambda: stream(name="rig"),
-        lambda: stream(not_decorated, name="rig"),
+        lambda: stream(),  # pyright: ignore[reportCallIssue]
+        lambda: stream(name="rig"),  # pyright: ignore[reportCallIssue]
+        lambda: stream(not_decorated, name="rig"),  # pyright: ignore[reportCallIssue]
     ],
     ids=["no-arguments", "a-name", "a-function-and-a-name"],
 )
@@ -818,11 +1126,6 @@ def test_stream_called_with_arguments_is_refused_naming_the_bare_form(
         "@stream takes no arguments: the name is the function's, overridden at load "
         "with `--name`"
     )
-
-
-def test_stream_given_a_string_is_refused_naming_the_bare_form() -> None:
-    with pytest.raises(TypeError, match="@stream takes no arguments"):
-        stream("rig")  # pyright: ignore[reportArgumentType]
 
 
 def test_a_nested_function_is_refused_as_not_module_level() -> None:
@@ -879,15 +1182,35 @@ def test_a_function_not_taking_exactly_one_positional_parameter_is_refused(
 
 
 @pytest.mark.parametrize(
-    "not_a_plain_function",
-    [UndecoratedFilter, UndecoratedFilter(), len, Stream("rig").add],
-    ids=["a-class", "an-instance", "a-builtin", "a-bound-method"],
+    "callable_but_not_a_plain_function",
+    [UndecoratedFilter, len, Stream("rig").add],
+    ids=["a-class", "a-builtin", "a-bound-method"],
 )
-def test_what_is_not_a_plain_function_is_refused(not_a_plain_function: Any) -> None:
-    with pytest.raises(
-        TypeError, match="@stream decorates a plain module-level function"
-    ):
-        stream(not_a_plain_function)
+def test_a_callable_that_is_not_a_plain_function_is_refused_as_what_it_is(
+    callable_but_not_a_plain_function: Any,
+) -> None:
+    with pytest.raises(TypeError) as refusal:
+        stream(callable_but_not_a_plain_function)
+
+    message = str(refusal.value)
+    assert message.startswith("@stream decorates a plain module-level function")
+    assert "@stream takes no arguments" not in message
+
+
+@pytest.mark.parametrize(
+    "not_callable",
+    ["rig", UndecoratedFilter()],
+    ids=["a-string", "an-instance"],
+)
+def test_what_is_not_callable_is_refused_naming_the_bare_form(
+    not_callable: Any,
+) -> None:
+    with pytest.raises(TypeError) as refusal:
+        stream(not_callable)
+
+    message = str(refusal.value)
+    assert message.startswith("@stream decorates a plain module-level function")
+    assert "@stream takes no arguments: the name is the function's" in message
 
 
 def test_a_lambda_is_refused_naming_def() -> None:

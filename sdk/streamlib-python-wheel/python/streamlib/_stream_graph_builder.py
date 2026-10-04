@@ -17,7 +17,7 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import FunctionType
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
@@ -36,7 +36,7 @@ __all__ = [
     "stream",
 ]
 
-_StreamFunction = TypeVar("_StreamFunction", bound=Callable[..., Any])
+_StreamFunction = TypeVar("_StreamFunction", bound="Callable[[Stream], object]")
 
 _STREAM_IDENTITY_ATTRIBUTE = "__streamlib_stream_identity__"
 _STREAM_NAME_ATTRIBUTE = "__streamlib_stream_name__"
@@ -58,38 +58,58 @@ _FUNCTION_LOCAL_MARKER = "<locals>"
 _CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN = ("/", "*", "$", "#", "?")
 _CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH = "@"
 
+# The engine reads a config integer as an i64, else a u64
+# (`python_bag_conversion.rs`); a graph carries no wider one.
+_SMALLEST_INTEGER_A_GRAPH_CARRIES = -(2**63)
+_LARGEST_INTEGER_A_GRAPH_CARRIES = 2**64 - 1
+
 _STREAM_TAKES_NO_ARGUMENTS = (
     "@stream takes no arguments: the name is the function's, overridden at load "
     "with `--name`. Write `@stream` bare above `def main(stream: Stream) -> None:`."
 )
 
+# A type checker sees the one-argument signature and flags `@stream()` and
+# `@stream(name=...)` where they are written; the call itself accepts them only
+# to refuse them by name.
+if TYPE_CHECKING:
 
-def stream(
-    stream_function: _StreamFunction | None = None,
-    /,
-    **misused_keyword_arguments: object,
-) -> _StreamFunction:
-    """Mark a module-level function taking one `Stream` as a stream, and return it unchanged."""
-    if stream_function is None or misused_keyword_arguments:
-        raise TypeError(_STREAM_TAKES_NO_ARGUMENTS)
-    declared_function = _the_function_unless_it_cannot_be_a_stream(stream_function)
-    module = declared_function.__module__
-    qualname = declared_function.__qualname__
-    setattr(declared_function, _STREAM_IDENTITY_ATTRIBUTE, f"{module}:{qualname}")
-    setattr(declared_function, _STREAM_NAME_ATTRIBUTE, declared_function.__name__)
+    def stream(stream_function: _StreamFunction, /) -> _StreamFunction:
+        """Mark a module-level function taking one `Stream` as a stream, and return it unchanged."""
+        ...
+
+else:
+
+    def stream(stream_function=None, /, **misused_keyword_arguments):
+        """Mark a module-level function taking one `Stream` as a stream, and return it unchanged."""
+        if stream_function is None or misused_keyword_arguments:
+            raise TypeError(_STREAM_TAKES_NO_ARGUMENTS)
+        return _stamp_stream_function(stream_function)
+
+
+def _stamp_stream_function(candidate: object) -> FunctionType:
+    stream_function = _the_function_unless_it_cannot_be_a_stream(candidate)
+    module = stream_function.__module__
+    qualname = stream_function.__qualname__
+    setattr(stream_function, _STREAM_IDENTITY_ATTRIBUTE, f"{module}:{qualname}")
+    setattr(stream_function, _STREAM_NAME_ATTRIBUTE, stream_function.__name__)
     setattr(
-        declared_function,
+        stream_function,
         _STREAM_DESCRIPTION_ATTRIBUTE,
-        inspect.getdoc(declared_function) or "",
+        inspect.getdoc(stream_function) or "",
     )
     return stream_function
 
 
 def _the_function_unless_it_cannot_be_a_stream(candidate: object) -> FunctionType:
     if not inspect.isfunction(candidate):
+        # Decorating a `def` or a class always passes something callable, so a
+        # value that is not came from a call: `@stream("rig")`.
+        called_with_an_argument = (
+            "" if callable(candidate) else f" {_STREAM_TAKES_NO_ARGUMENTS}"
+        )
         raise TypeError(
             f"@stream decorates a plain module-level function taking one `Stream`, and "
-            f"{candidate!r} is not one. {_STREAM_TAKES_NO_ARGUMENTS}"
+            f"{candidate!r} is not one.{called_with_an_argument}"
         )
     stream_function = candidate
     module = stream_function.__module__
@@ -144,51 +164,72 @@ def is_stream_function(candidate: object) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class NodeOutputPortReference:
-    """An output port of a node a `Stream` holds — the producing end of a link."""
+    """An output port of a node a `Stream` holds — the producing end of a link; names cast."""
 
     node_name: str
     port_name: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "node_name", _cast_name(self.node_name, "node name"))
+        object.__setattr__(self, "port_name", _cast_name(self.port_name, "port name"))
 
 
 @dataclass(frozen=True, slots=True)
 class NodeInputPortReference:
-    """An input port of a node a `Stream` holds — the consuming end of a link."""
+    """An input port of a node a `Stream` holds — the consuming end of a link; names cast."""
 
     node_name: str
     port_name: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "node_name", _cast_name(self.node_name, "node name"))
+        object.__setattr__(self, "port_name", _cast_name(self.port_name, "port name"))
 
 
 @dataclass(frozen=True, slots=True)
 class RemoteNodeOutputPortReference:
-    """An output port of a node on another runtime, addressed over the mesh."""
+    """An output port of a node on another runtime, addressed over the mesh; names cast."""
 
     runtime_name: str
     node_name: str
     port_name: str
+
+    def __post_init__(self) -> None:
+        _refuse_a_runtime_name_the_mesh_cannot_carry(self.runtime_name)
+        object.__setattr__(self, "node_name", _cast_name(self.node_name, "node name"))
+        object.__setattr__(self, "port_name", _cast_name(self.port_name, "port name"))
 
 
 @dataclass(frozen=True, slots=True)
 class RemoteNodeInputPortReference:
-    """An input port of a node on another runtime, addressed over the mesh."""
+    """An input port of a node on another runtime, addressed over the mesh; names cast."""
 
     runtime_name: str
     node_name: str
     port_name: str
 
+    def __post_init__(self) -> None:
+        _refuse_a_runtime_name_the_mesh_cannot_carry(self.runtime_name)
+        object.__setattr__(self, "node_name", _cast_name(self.node_name, "node name"))
+        object.__setattr__(self, "port_name", _cast_name(self.port_name, "port name"))
+
 
 @dataclass(frozen=True, slots=True)
 class NodeReference:
-    """A node `Stream.add` recorded, under the name links and exposures name it by."""
+    """A node `Stream.add` recorded, under the cast name links and exposures name it by."""
 
     name: str
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", _cast_name(self.name, "node name"))
+
     def output(self, port_name: str) -> NodeOutputPortReference:
         """Name one of this node's output ports, cast as `@node` declared it."""
-        return NodeOutputPortReference(self.name, _cast_name(port_name, "port name"))
+        return NodeOutputPortReference(self.name, port_name)
 
     def input(self, port_name: str) -> NodeInputPortReference:
         """Name one of this node's input ports, cast as `@node` declared it."""
-        return NodeInputPortReference(self.name, _cast_name(port_name, "port name"))
+        return NodeInputPortReference(self.name, port_name)
 
 
 @dataclass(frozen=True)
@@ -295,31 +336,22 @@ class Stream:
         self, runtime_name: str, node_name: str, port_name: str
     ) -> RemoteNodeOutputPortReference:
         """Name an output port on another runtime, to connect into this stream."""
-        _refuse_a_runtime_name_the_mesh_cannot_carry(runtime_name)
-        return RemoteNodeOutputPortReference(
-            runtime_name,
-            _cast_name(node_name, "node name"),
-            _cast_name(port_name, "port name"),
-        )
+        return RemoteNodeOutputPortReference(runtime_name, node_name, port_name)
 
     def remote_input(
         self, runtime_name: str, node_name: str, port_name: str
     ) -> RemoteNodeInputPortReference:
         """Name an input port on another runtime, to connect this stream into."""
-        _refuse_a_runtime_name_the_mesh_cannot_carry(runtime_name)
-        return RemoteNodeInputPortReference(
-            runtime_name,
-            _cast_name(node_name, "node name"),
-            _cast_name(port_name, "port name"),
-        )
+        return RemoteNodeInputPortReference(runtime_name, node_name, port_name)
 
     def _typed_name_unless_taken(self, typed_name: str) -> str:
         cast = _cast_name(typed_name, "node name")
-        holder = self._recorded_nodes_by_name.get(cast)
-        if holder is not None:
+        node_already_holding_the_cast_name = self._recorded_nodes_by_name.get(cast)
+        if node_already_holding_the_cast_name is not None:
             raise ValueError(
                 f"the node name {typed_name!r} casts to `{cast}`, which node `{cast}` in "
-                f"stream `{self._name}` already has — {holder.how_its_name_was_given()}. "
+                f"stream `{self._name}` already has — "
+                f"{node_already_holding_the_cast_name.how_its_name_was_given()}. "
                 f"A name the author gives is an address, so it is never suffixed: give one "
                 f"of them another name, or leave the name out to take a `-2` suffix."
             )
@@ -526,10 +558,14 @@ def _config_as_json_object(config: Mapping[str, Any] | None) -> dict[str, Any]:
             f"config must be a mapping of str keys to JSON values — the object a node's "
             f"config is; got {config!r}, a {type(config).__name__}"
         )
-    return _json_object(config, "config")
+    return _json_object(config, "config", {id(config): "config"})
 
 
-def _json_object(mapping: Mapping[Any, Any], key_path: str) -> dict[str, Any]:
+def _json_object(
+    mapping: Mapping[Any, Any],
+    key_path: str,
+    key_paths_of_enclosing_containers_by_id: dict[int, str],
+) -> dict[str, Any]:
     json_object: dict[str, Any] = {}
     for key, value in mapping.items():
         if not isinstance(key, str):
@@ -537,27 +573,79 @@ def _json_object(mapping: Mapping[Any, Any], key_path: str) -> dict[str, Any]:
                 f"config must be JSON: `{key_path}` has the key {key!r}, a "
                 f"{type(key).__name__}, and a JSON object's keys are strings"
             )
-        json_object[key] = _json_value(value, f"{key_path}[{key!r}]")
+        plain_key = str.__str__(key)
+        if plain_key in json_object:
+            raise ValueError(
+                f"config must be JSON: `{key_path}` has two keys that are both "
+                f"{plain_key!r} as plain strings, and a JSON object holds a key once"
+            )
+        json_object[plain_key] = _json_value(
+            value, f"{key_path}[{plain_key!r}]", key_paths_of_enclosing_containers_by_id
+        )
     return json_object
 
 
-def _json_value(value: object, key_path: str) -> Any:
-    if value is None or isinstance(value, (str, bool, int)):
+def _json_value(
+    value: object,
+    key_path: str,
+    key_paths_of_enclosing_containers_by_id: dict[int, str],
+) -> Any:
+    if value is None or isinstance(value, bool):
         return value
+    if isinstance(value, str):
+        return str.__str__(value)
+    if isinstance(value, int):
+        return _json_integer(value, key_path)
     if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError(
-                f"config must be JSON: `{key_path}` is {value!r}, which JSON cannot carry"
-            )
-        return value
+        return _json_float(value, key_path)
+    if not isinstance(value, (Mapping, list, tuple)):
+        raise TypeError(
+            f"config must be JSON: `{key_path}` is a {type(value).__name__}, and a graph "
+            f"carries only dict, list, tuple, str, int, float, bool and None"
+        )
+    enclosing_key_path = key_paths_of_enclosing_containers_by_id.get(id(value))
+    if enclosing_key_path is not None:
+        raise ValueError(
+            f"config must be JSON: `{key_path}` is `{enclosing_key_path}`, which holds "
+            f"it — a value holding itself has no JSON form"
+        )
+    key_paths_of_enclosing_containers_by_id[id(value)] = key_path
     if isinstance(value, Mapping):
-        return _json_object(value, key_path)
-    if isinstance(value, (list, tuple)):
-        return [
-            _json_value(item, f"{key_path}[{index}]")
+        json_container: Any = _json_object(
+            value, key_path, key_paths_of_enclosing_containers_by_id
+        )
+    else:
+        json_container = [
+            _json_value(
+                item, f"{key_path}[{index}]", key_paths_of_enclosing_containers_by_id
+            )
             for index, item in enumerate(value)
         ]
-    raise TypeError(
-        f"config must be JSON: `{key_path}` is a {type(value).__name__}, and a graph "
-        f"carries only dict, list, tuple, str, int, float, bool and None"
-    )
+    del key_paths_of_enclosing_containers_by_id[id(value)]
+    return json_container
+
+
+def _json_integer(value: int, key_path: str) -> int:
+    plain_integer = int.__int__(value)
+    if not (
+        _SMALLEST_INTEGER_A_GRAPH_CARRIES
+        <= plain_integer
+        <= _LARGEST_INTEGER_A_GRAPH_CARRIES
+    ):
+        # The value is left out: CPython refuses to render an int of more than
+        # 4300 digits as text.
+        raise ValueError(
+            f"config must be JSON: `{key_path}` is an integer outside -2**63 to "
+            f"2**64 - 1, the range a graph carries one in"
+        )
+    return plain_integer
+
+
+def _json_float(value: float, key_path: str) -> float:
+    plain_float = float.__float__(value)
+    if not math.isfinite(plain_float):
+        raise ValueError(
+            f"config must be JSON: `{key_path}` is {plain_float!r}, which JSON cannot "
+            f"carry"
+        )
+    return plain_float
