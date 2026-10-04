@@ -50,8 +50,8 @@ and the MCP 2026-07-28 specification, fetched live.
 - Defaults `0.0.0.0` / `9000`: `cli.py:71-72` (used `:914`, `:923`),
   `src/python_runtime_lifecycle.rs:475`, `_engine.pyi:650-658`; `--control-plane-port 9000` in
   the rigs (`codec_roundtrip_rig.rs:836`, `cross_runtime_link_rig.rs:79`), six engine fixtures and
-  the two packages' live nodes; `CONTROL_PORT` falls back to 9000 in `audio_capture_node.py:31`,
-  `audio_loopback_node.py:95`.
+  the two packages' live nodes; `CONTROL_PORT` falls back to 9000 in `audio_capture_node.py:40`,
+  `audio_loopback_node.py:107`.
 
 **The router, the client, the registry**
 - `build_router` (`src/handlers.rs:80`): `/health`, `/api/graph`, `/api/registry`,
