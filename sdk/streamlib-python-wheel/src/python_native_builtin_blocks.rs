@@ -340,8 +340,8 @@ impl NativeProcessorMarkerClass for PythonVirtualCameraSinkBlock {
 type NativeProcessorClassImportPathIfItIs =
     fn(Python<'_>, &Bound<'_, PyAny>) -> Option<ProcessorClassImportPath>;
 
-/// Every media built-in marker the wheel exports.
-const NATIVE_BUILTIN_MARKERS: [NativeProcessorClassImportPathIfItIs; 13] = [
+/// Every media built-in marker the wheel exports, by its import-path resolver.
+const NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS: [NativeProcessorClassImportPathIfItIs; 13] = [
     PythonTestPatternSourceBlock::native_processor_class_import_path_if_it_is,
     PythonCameraSourceBlock::native_processor_class_import_path_if_it_is,
     PythonDisplayWindowBlock::native_processor_class_import_path_if_it_is,
@@ -380,7 +380,7 @@ pub(crate) fn native_builtin_class_import_path(
              streamlib wheel yet",
         ));
     }
-    Ok(NATIVE_BUILTIN_MARKERS
+    Ok(NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS
         .iter()
         .find_map(|import_path_if_it_is| import_path_if_it_is(python, processor_class)))
 }
@@ -435,7 +435,10 @@ mod tests {
                 python.get_type::<PythonMp4SinkBlock>(),
                 python.get_type::<PythonVirtualCameraSinkBlock>(),
             ];
-            assert_eq!(marker_classes.len(), NATIVE_BUILTIN_MARKERS.len());
+            assert_eq!(
+                marker_classes.len(),
+                NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS.len()
+            );
             for marker_class in marker_classes {
                 let type_attribute: String =
                     marker_class.getattr("type").unwrap().extract().unwrap();
