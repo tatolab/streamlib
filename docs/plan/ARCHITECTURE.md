@@ -177,7 +177,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [runtime-hosting; one-runtime-per-machine]
 
-## Packages & extension model — IN-FLIGHT (→ package-split-and-lend)
+## Packages & extension model — IN-FLIGHT (→ package-split-and-lend, zenoh-and-moq-wheel-removal)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -744,7 +744,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
+## Processor model & scheduling — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting, zenoh-and-moq-wheel-removal)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -3248,7 +3248,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   prompt's exact wording under `SMAppService` is an acceptance check of the installer change.
   Owner, 2026-10-01, on #2560's research. [runtime-hosting; one-runtime-per-machine]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ stream-graph, local-api, runtime-hosting)
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ stream-graph, local-api, runtime-hosting, zenoh-and-moq-wheel-removal)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -4341,7 +4341,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sighup_tears_the_graph_down_gracefully -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
-## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend, runtime-hosting)
+## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend, runtime-hosting, zenoh-and-moq-wheel-removal)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
 
 - **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
@@ -4474,7 +4474,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   custom module system is needed. [one-runtime-per-machine; the two packages and the lend
   decided 2026-10-02 — package-split-and-lend, §Packages]
 
-## Control plane & observability — IN-FLIGHT (→ local-api, stream-graph, runtime-hosting)
+## Control plane & observability — IN-FLIGHT (→ local-api, stream-graph, runtime-hosting, zenoh-and-moq-wheel-removal)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
