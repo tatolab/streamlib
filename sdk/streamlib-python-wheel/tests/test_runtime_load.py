@@ -201,9 +201,9 @@ def processor_ids_a_never_run_runtimes_readiness_wait_lists(
     return []
 
 
-def the_runtimes_graph_holds_no_processor(runtime: streamlib.Runtime) -> bool:
-    """Whether a never-run runtime's readiness wait returns rather than listing a processor."""
-    return not processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime)
+def the_runtimes_graph_holds_a_processor(runtime: streamlib.Runtime) -> bool:
+    """Whether a never-run runtime's readiness wait lists a processor rather than returning."""
+    return bool(processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime))
 
 
 def pattern_to_window_graph_with_window_scaling(scaling: object) -> dict[str, Any]:
@@ -373,7 +373,7 @@ def test_a_loaded_graphs_nodes_are_in_the_runtimes_graph(runtime: streamlib.Runt
 def test_a_mapping_that_is_not_a_dict_loads(runtime: streamlib.Runtime):
     runtime.load(types.MappingProxyType(pattern_to_window_graph()))
 
-    assert not the_runtimes_graph_holds_no_processor(runtime)
+    assert the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: streamlib.Runtime):
@@ -382,13 +382,13 @@ def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: streamlib.Runtime)
 
     runtime.load(graph)
 
-    assert not the_runtimes_graph_holds_no_processor(runtime)
+    assert the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_the_deepest_config_the_builder_compiles_loads(runtime: streamlib.Runtime):
     runtime.load(compile_stream_to_graph(window_with_the_deepest_config_the_builder_compiles))
 
-    assert not the_runtimes_graph_holds_no_processor(runtime)
+    assert the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_load(
@@ -412,7 +412,7 @@ def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_l
 
     assert str(refused.value).startswith(GRAPH_IS_NOT_JSON_DATA)
     assert NESTED_PAST_THE_MAXIMUM in str(refused.value)
-    assert the_runtimes_graph_holds_no_processor(runtime)
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 @pytest.mark.parametrize("not_a_number", [float("nan"), float("inf")], ids=["nan", "infinity"])
@@ -421,7 +421,7 @@ def test_nan_and_infinity_in_a_graph_load_the_way_add_converts_them_in_config(
 ):
     runtime.load(pattern_to_window_graph_with_window_scaling(not_a_number))
 
-    assert not the_runtimes_graph_holds_no_processor(runtime)
+    assert the_runtimes_graph_holds_a_processor(runtime)
     runtime.add(DisplayWindow, config={"scaling": not_a_number}, display_name="added-window")
 
 
@@ -455,7 +455,7 @@ def test_a_python_node_type_the_process_never_imported_loads_through_the_resolve
 
     assert RESOLVER_IMPORTED_NODE_MODULE in sys.modules
     assert RESOLVER_IMPORTED_NODE_TYPE in processor_class_import_paths_in_this_processes_catalog()
-    assert not the_runtimes_graph_holds_no_processor(runtime)
+    assert the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_add_and_connect_still_build_beside_a_loaded_graph(runtime: streamlib.Runtime):
@@ -528,7 +528,7 @@ def test_a_stream_name_that_cannot_be_encoded_is_refused_naming_it_and_the_fix(
     assert "Runtime.load's `name`" in str(refused.value)
     assert "pass a str without lone surrogates" in str(refused.value)
     assert isinstance(refused.value.__cause__, UnicodeEncodeError)
-    assert the_runtimes_graph_holds_no_processor(runtime)
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_a_stream_name_casting_to_nothing_is_refused_naming_it(runtime: streamlib.Runtime):
@@ -537,7 +537,7 @@ def test_a_stream_name_casting_to_nothing_is_refused_naming_it(runtime: streamli
 
     assert "`..`" in str(refused.value)
     assert "cannot name anything" in str(refused.value)
-    assert the_runtimes_graph_holds_no_processor(runtime)
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 @pytest.mark.parametrize(
@@ -577,7 +577,7 @@ def test_a_graph_holding_what_json_cannot_carry_is_refused_with_the_converters_t
     assert converter_text in str(refused.value)
     assert type(refused.value.__cause__) is cause_type
     assert str(refused.value.__cause__).rstrip(".") in str(refused.value)
-    assert the_runtimes_graph_holds_no_processor(runtime)
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_bytes_are_refused_in_adds_config_naming_the_graph_node_and_in_a_graph_naming_none(
@@ -745,7 +745,7 @@ def test_a_second_load_after_a_refusal_is_refused_naming_that_refusal(
 
     assert "earlier load was refused" in str(refused.value)
     assert "holds no node" in str(refused.value)
-    assert the_runtimes_graph_holds_no_processor(runtime)
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_load_after_shutdown_is_refused():
@@ -828,7 +828,7 @@ def test_a_remote_source_into_a_local_input_loads_before_run(runtime: streamlib.
     """The link is applied now and resolves later, so a stream naming an absent runtime loads."""
     runtime.load(compile_stream_to_graph(remote_camera_into_a_local_window))
 
-    assert not the_runtimes_graph_holds_no_processor(runtime)
+    assert the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_a_remote_source_naming_this_runtime_and_a_node_it_lacks_is_refused_by_load():
@@ -851,7 +851,7 @@ def test_a_link_pushed_into_another_runtime_loads_without_waiting_on_it():
     try:
         runtime.load(compile_stream_to_graph(local_pattern_pushed_into_a_remote_window))
 
-        assert not the_runtimes_graph_holds_no_processor(runtime)
+        assert the_runtimes_graph_holds_a_processor(runtime)
     finally:
         runtime.shutdown()
 
@@ -949,7 +949,7 @@ def test_a_load_refused_while_another_is_underway_stands_over_its_success_and_ru
 
     assert "still underway on another thread" in str(run_refused_while_underway[0])
     assert held_load_refusal is None
-    assert not the_runtimes_graph_holds_no_processor(runtime)
+    assert the_runtimes_graph_holds_a_processor(runtime)
     run_refusal = run_expecting_a_refusal(runtime)
     assert str(refused_while_underway[0]) in str(run_refusal)
 
