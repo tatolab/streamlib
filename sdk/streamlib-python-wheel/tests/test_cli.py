@@ -379,9 +379,11 @@ def recorded_launch_runtime_calls(
 
     A real `Runtime` reads `sys.path[0]` once per process as the directory its
     child interpreters import from, so constructing one in this process would
-    pin a test's temporary directory for every later suite.
+    pin a test's temporary directory for every later suite. The launch also
+    exports the app directory, which is restored with the rest.
     """
     recorded = RecordedLaunchRuntimeCalls()
+    monkeypatch.delenv(cli.APP_DIRECTORY_ENVIRONMENT_VARIABLE, raising=False)
 
     class RecordingLaunchRuntime:
         def __init__(self, **runtime_keyword_arguments: Any) -> None:
