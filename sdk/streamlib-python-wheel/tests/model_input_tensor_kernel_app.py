@@ -5,39 +5,51 @@
 probe in its real placement, a helper process."""
 
 import sys
+from typing import Any
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 
 import model_input_tensor_kernel_probes
 
 
-def scenario(probe_name: str, config: "dict | None" = None) -> None:
-    runtime = streamlib.Runtime()
-    pattern = runtime.add(
+def _probe_class_name_and_config_named_on_the_command_line() -> tuple[
+    str, dict[str, Any] | None
+]:
+    if sys.argv[1] == "matrix":
+        return "ModelInputTensorMatrixProbe", {"fit_case_name": sys.argv[2]}
+    if sys.argv[1] == "matrix_with_the_wrong_mean":
+        return "ModelInputTensorMatrixProbe", {
+            "fit_case_name": sys.argv[2],
+            "compile_with_the_wrong_mean": True,
+        }
+    return sys.argv[1], None
+
+
+@stream
+def a_test_pattern_into_one_model_input_tensor_kernel_probe(stream: Stream) -> None:
+    pattern = stream.add(
         streamlib.TestPatternSource,
         config={
             "width": model_input_tensor_kernel_probes.FRAME_WIDTH,
             "height": model_input_tensor_kernel_probes.FRAME_HEIGHT,
         },
     )
-    probe_class = getattr(model_input_tensor_kernel_probes, probe_name)
-    probe = (
-        runtime.add(probe_class, config=config)
-        if config is not None
-        else runtime.add(probe_class)
+    probe_class_name, probe_config = (
+        _probe_class_name_and_config_named_on_the_command_line()
     )
-    runtime.connect(pattern.output("video"), probe.input("video_from_upstream"))
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
+    probe = stream.add(
+        getattr(model_input_tensor_kernel_probes, probe_class_name),
+        config=probe_config,
+    )
+    stream.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 
 if __name__ == "__main__":
-    if sys.argv[1] == "matrix":
-        scenario("ModelInputTensorMatrixProbe", {"fit_case_name": sys.argv[2]})
-    elif sys.argv[1] == "matrix_with_the_wrong_mean":
-        scenario(
-            "ModelInputTensorMatrixProbe",
-            {"fit_case_name": sys.argv[2], "compile_with_the_wrong_mean": True},
-        )
-    else:
-        scenario(sys.argv[1])
+    graph = compile_stream_to_graph(
+        a_test_pattern_into_one_model_input_tensor_kernel_probe
+    )
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.run()
+    print("MARKER:CLEAN_EXIT", flush=True)
