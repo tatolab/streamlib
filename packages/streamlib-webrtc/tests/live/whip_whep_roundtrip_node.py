@@ -8,7 +8,7 @@
 `MicrophoneSource -> OpusEncoder -> WhipPublisher`, and
 `WhepPlayer -> H264Decoder -> DisplayWindow` beside `-> OpusDecoder ->
 SpeakerSink`. It is `examples/camera-webrtc-publish` with the playback half
-attached: the same publish shape, with display names the driving script can
+attached: the same publish shape, with node names the driving script can
 find processors by and a control plane it can read them through.
 
 Nothing joins the two halves locally. Every frame the decoder publishes was
@@ -27,6 +27,7 @@ import argparse
 import os
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib_webrtc import WhepPlayer, WhipPublisher
 
 #: Stated rather than left to the encoder's default, because the baseline this
@@ -60,7 +61,7 @@ def _session_configuration(url_variable: str, token_variable: str) -> dict[str, 
     return configuration
 
 
-def main() -> None:
+def _parse_fixture_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     # An argument and never an environment variable: a rig carrying both a
     # virtual and a real camera hands the first-enumerated node to a run that
@@ -80,70 +81,82 @@ def main() -> None:
         ),
     )
     parser.add_argument("--control-plane-port", type=int, default=9000)
-    arguments = parser.parse_args()
+    return parser.parse_args()
 
-    runtime = streamlib.Runtime(runtime_name="whip-whep-roundtrip-node")
 
-    publisher = runtime.add(
+@stream
+def whip_whep_roundtrip(stream: Stream) -> None:
+    """The round trip this process's argv and endpoint URLs describe."""
+    arguments = _parse_fixture_arguments()
+
+    publisher = stream.add(
         WhipPublisher,
         config=_session_configuration(
             PUBLISH_URL_VARIABLE, "STREAMLIB_WHIP_BEARER_TOKEN"
         ),
-        display_name="publisher",
+        name="publisher",
     )
-    player = runtime.add(
+    player = stream.add(
         WhepPlayer,
         config=_session_configuration(
             PLAYBACK_URL_VARIABLE, "STREAMLIB_WHEP_BEARER_TOKEN"
         ),
-        display_name="player",
+        name="player",
     )
 
-    camera = runtime.add(
+    camera = stream.add(
         streamlib.CameraSource,
         config={"device_id": arguments.camera} if arguments.camera else {},
-        display_name="camera",
+        name="camera",
     )
-    video_encoder = runtime.add(
+    video_encoder = stream.add(
         streamlib.H264Encoder,
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
-        display_name="video_encoder",
+        name="video_encoder",
     )
-    microphone = runtime.add(
+    microphone = stream.add(
         streamlib.MicrophoneSource,
         config=(
             {"device_id": arguments.audio_capture_device}
             if arguments.audio_capture_device
             else {}
         ),
-        display_name="microphone",
+        name="microphone",
     )
-    audio_encoder = runtime.add(streamlib.OpusEncoder, display_name="audio_encoder")
+    audio_encoder = stream.add(streamlib.OpusEncoder, name="audio_encoder")
 
-    video_decoder = runtime.add(streamlib.H264Decoder, display_name="video_decoder")
-    audio_decoder = runtime.add(streamlib.OpusDecoder, display_name="audio_decoder")
+    video_decoder = stream.add(streamlib.H264Decoder, name="video_decoder")
+    audio_decoder = stream.add(streamlib.OpusDecoder, name="audio_decoder")
     # Both sinks are here so each decoder has a subscriber for the whole run,
     # which is the shape the showcase ships and the shape the codec rig scored.
-    window = runtime.add(
+    window = stream.add(
         streamlib.DisplayWindow,
         config={"title": "streamlib whip/whep round-trip"},
-        display_name="window",
+        name="window",
     )
-    speaker = runtime.add(streamlib.SpeakerSink, display_name="speaker")
+    speaker = stream.add(streamlib.SpeakerSink, name="speaker")
 
-    runtime.connect(camera.output("video"), video_encoder.input("video"))
-    runtime.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
-    runtime.connect(microphone.output("audio"), audio_encoder.input("audio"))
-    runtime.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+    stream.connect(camera.output("video"), video_encoder.input("video"))
+    stream.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
+    stream.connect(microphone.output("audio"), audio_encoder.input("audio"))
+    stream.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
 
-    runtime.connect(
+    stream.connect(
         player.output("encoded_video"), video_decoder.input("encoded_video")
     )
-    runtime.connect(video_decoder.output("video"), window.input("video"))
-    runtime.connect(
+    stream.connect(video_decoder.output("video"), window.input("video"))
+    stream.connect(
         player.output("encoded_audio"), audio_decoder.input("encoded_audio")
     )
-    runtime.connect(audio_decoder.output("audio"), speaker.input("audio"))
+    stream.connect(audio_decoder.output("audio"), speaker.input("audio"))
+
+
+def main() -> None:
+    arguments = _parse_fixture_arguments()
+    graph = compile_stream_to_graph(whip_whep_roundtrip)
+
+    runtime = streamlib.Runtime(runtime_name="whip-whep-roundtrip-node")
+    runtime.load(graph)
 
     # Loopback rather than the default every interface: this node exists to be
     # tapped from the machine it runs on, and it carries no authentication —
