@@ -2267,7 +2267,7 @@ def decode_tapped_channel_bag_frame_to_python_object(
     The bytes a tap hands back are the channel's wire bytes verbatim, header
     included; this reads exactly the payload the header declares. Refuses a bag
     shorter than its own declared length rather than returning the prefix that
-    did arrive.
+    did arrive, and one whose containers nest more than 128 deep.
     """
 
 def encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes:
@@ -2277,15 +2277,19 @@ def encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes:
     The engine's one bag codec, reachable: a dict with string keys at every
     level, values from `dict`, `list`, `tuple`, `str`, `bytes`, `int`, `float`,
     `bool` and `None`, `bytes` as msgpack `bin` at 1×. Anything else raises
-    `TypeError`, and an integer wider than 64 bits raises `ValueError`.
+    `TypeError`; an integer wider than 64 bits, and containers nested more than
+    128 deep — the bag itself the outermost, as one holding itself is — raise
+    `ValueError`.
     """
 
 def decode_msgpack_bytes_to_python_object(msgpack_bytes: bytes) -> Any:
     """Decode msgpack bytes into ordinary Python data.
 
     Unlike `decode_tapped_channel_bag_frame_to_python_object` these are payload
-    bytes with no transport frame header in front of them. Nesting is bounded
-    at decode, so bytes from an untrusted peer cannot recurse without limit.
+    bytes with no transport frame header in front of them. A value whose
+    containers nest more than 128 deep raises `ValueError` — the bound
+    `encode_bag_to_msgpack_bytes` keeps, so whatever decodes encodes again, and
+    bytes from an untrusted peer cannot recurse without limit.
     """
 
 def capability_extension_host_for_the_app_process(

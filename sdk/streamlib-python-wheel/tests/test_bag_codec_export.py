@@ -63,14 +63,33 @@ def test_binary_rides_as_msgpack_bin_at_one_times_its_length() -> None:
 
 def test_a_payload_nested_past_the_decoder_bound_is_refused() -> None:
     # One-element arrays all the way down, the shape a hostile peer sends to
-    # recurse the decoder off its stack. The decoder bounds nesting at 1024;
-    # what this locks is that it bounds it at all, because the subscriber that
-    # decodes relay-delivered bytes has nothing else standing between it and
-    # whatever the far end sent.
+    # recurse the decoder off its stack. The subscriber that decodes
+    # relay-delivered bytes has nothing else standing between it and whatever
+    # the far end sent.
     nested_far_past_the_bound = b"\x91" * 5000 + b"\xc0"
 
-    with pytest.raises(ValueError, match="depth limit exceeded"):
+    with pytest.raises(ValueError, match=NESTED_PAST_THE_MAXIMUM):
         streamlib.decode_msgpack_bytes_to_python_object(nested_far_past_the_bound)
+
+
+def test_the_deepest_bag_that_decodes_encodes_again_and_one_deeper_is_refused() -> None:
+    # A passthrough processor publishes what it read, so decode keeps encode's
+    # bound: the deepest bag that decodes is one that encodes again.
+    reaching_the_maximum = streamlib.encode_bag_to_msgpack_bytes(
+        {"nested": lists_nested_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH - 1)}
+    )
+    one_element_array = b"\x91"
+    one_past_the_maximum = reaching_the_maximum.replace(
+        b"nested", b"nested" + one_element_array, 1
+    )
+
+    decoded = streamlib.decode_msgpack_bytes_to_python_object(reaching_the_maximum)
+    assert streamlib.encode_bag_to_msgpack_bytes(decoded) == reaching_the_maximum
+    with pytest.raises(ValueError, match=NESTED_PAST_THE_MAXIMUM) as refused:
+        streamlib.decode_msgpack_bytes_to_python_object(one_past_the_maximum)
+    assert "Have its producer nest the data at most 128 containers deep" in str(
+        refused.value
+    )
 
 
 def test_bytes_that_do_not_hold_a_whole_msgpack_value_are_refused() -> None:
