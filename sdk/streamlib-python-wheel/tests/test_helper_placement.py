@@ -83,8 +83,8 @@ def test_adding_a_processor_loads_nothing_into_the_app(start_app_under_test):
     in this interpreter.
     """
     app = run_scenario(start_app_under_test, "the_app_never_hosts_the_processor")
-    assert "MODULES_ADDED_BY_ADD=[]" in app.output, (
-        f"`rt.add` loaded modules into the app's own interpreter:\n{app.output}"
+    assert "MODULES_ADDED_BY_LOAD=[]" in app.output, (
+        f"`runtime.load` loaded modules into the app's own interpreter:\n{app.output}"
     )
     assert "MODULES_ADDED_WHILE_RUNNING=[]" in app.output, (
         f"running the graph loaded modules into the app's own interpreter — a host "
@@ -429,7 +429,7 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
     app_engine_build_id = re.search(r"MARKER:APP_ENGINE_BUILD_ID=(\S+)", app.output)
     assert app_engine_build_id is not None, app.output
     refusal = (
-        "[ReportsItsOwnProcessSource] its helper process died before it finished setting "
+        "[reportsitsownprocesssource] its helper process died before it finished setting "
         "up. Its standard error ended with:\n"
         f"[streamlib] this helper imported engine build {app_engine_build_id.group(1)}"
     )
