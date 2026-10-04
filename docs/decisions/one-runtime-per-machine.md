@@ -41,6 +41,12 @@ Read this before any of the following:
    host package, with accelerators optional, an extension point for an external control client,
    and support for Linux and Apple Silicon macOS with no streamlib-owned service.
 
+> Superseded in part 2026-10-04 by `moq-on-the-tailnet.md`. Sentences 2 to 4 named a Zenoh
+> session and router, a pushed stream map, peer authentication, and MoQ as edge I/O only. The
+> owner reversed those: real-time data that leaves a machine travels over MoQ on QUIC on the
+> tailnet, Zenoh is removed, and no stream map or peer authentication is built. One runtime per
+> machine, the runtime deciding what leaves it by exposure, and sentences 1 and 5 stand.
+
 The owner's later clarifications, the same day:
 
 - A **stream** is what we call an app today: a graph plus its code, built by `setup`; it may
@@ -81,6 +87,11 @@ The owner's later clarifications, the same day:
 
 ## Decided
 
+> The bullets struck below were superseded 2026-10-04 by `moq-on-the-tailnet.md`. Also amended
+> by it, in place: the first bullet's "behind the machine's single Zenoh session"; in "streamlib
+> does not solve every networking problem", a VPN as an alternative to Tailscale; in "Every
+> exposed port is a URL", "in the form that tool wants" and "inside a private network".
+
 - **A stream is the unit** a person writes and runs, and **one runtime per machine** runs many
   of them behind the machine's single Zenoh session, owning the accelerator when present, the
   local API and the scheduler. Every Python node keeps its own process; agents keep changing
@@ -90,19 +101,19 @@ The owner's later clarifications, the same day:
 - **The graph is emitted, never authored,** and the function wins over live edits on the next
   start.
 - **Several streams per project or package,** each a decorated function; `setup` retires.
-- **The runtime decides what leaves the machine.** It builds its Zenoh session from its own
+- **The runtime decides what leaves the machine.** ~~It builds its Zenoh session from its own
   configuration, dials routers, and enforces a pushed stream map that refuses links to
-  unexposed ports and authenticates peers. Its session is the machine's router.
-- **Zenoh between machines; MoQ only as a browser form.** MoQ never carries a link between
-  runtimes, and the MoQ-gateway transport change is not happening.
-- **The relay is a role** of the same runtime software; machines link peer to peer where they
-  can reach each other and through a relay where they cannot.
-- **The runtime bundles its own MoQ relay** (`moq-relay-ietf`, the relay from the repository
+  unexposed ports and authenticates peers. Its session is the machine's router.~~
+- ~~**Zenoh between machines; MoQ only as a browser form.** MoQ never carries a link between
+  runtimes, and the MoQ-gateway transport change is not happening.~~
+- ~~**The relay is a role** of the same runtime software; machines link peer to peer where they
+  can reach each other and through a relay where they cannot.~~
+- ~~**The runtime bundles its own MoQ relay** (`moq-relay-ietf`, the relay from the repository
   the vendored client comes from, at the same draft), publishing into it over loopback; a
   private network terminates MoQ free and with nothing external; the same relay serves the
   relay-VM role; hosted relays are opt-in with the user's own credentials. Owner, 2026-09-30,
   after the research: no MoQ server of our own; a home lab must never cost anyone a hosted
-  relay by accident.
+  relay by accident.~~
 - **End-to-end encryption through a relay is a later change, not a launch requirement.** A
   hosted relay sees content until it lands, said plainly; private and self-hosted relays are
   the user's own. The door stays open by construction: relays never parse payloads, the engine
@@ -167,11 +178,13 @@ from what the owner said. A struck item has since been decided, and the plan hol
   machine, typed node names refused when duplicated.~~ — Decided 2026-10-02 (runtime-hosting):
   a machine name clash takes the next unused numeric suffix (`-2`, then `-3`…) and records it,
   Bonjour- and Tailscale-style.
-- The stream map's details: who pushes it, how long it stays valid offline, how a peer
-  authenticates.
-- Discovery: on one machine, on one network, across networks through a relay, and through a
-  pushed map — the Tailscale analogy applied.
-- The URL grammar, the forms and their order, and certificates per reach tier.
+- ~~The stream map's details: who pushes it, how long it stays valid offline, how a peer
+  authenticates.~~ — Superseded 2026-10-04 (`moq-on-the-tailnet.md`): no stream map is built.
+- ~~Discovery: on one machine, on one network, across networks through a relay, and through a
+  pushed map — the Tailscale analogy applied.~~ — Superseded 2026-10-04: discovery is the
+  tailnet's.
+- The URL grammar, the forms and their order, and certificates per reach tier. Narrowed
+  2026-10-04: live data has one form, MoQ.
 - ~~The local API's protocol, MCP reach, remote reach and the multi-user case.~~ — Decided
   2026-10-01 (local-api, #2570; one runtime per machine owned by one user, #2580).
 
@@ -212,9 +225,11 @@ Checked against the tree on 2026-09-30:
 
 ## Rejected alternatives (by the owner)
 
-- **MoQ as the transport between machines** (the `spike/moq-gateway` direction), or a publisher
-  inside every app. It adds a second network protocol to every machine and keeps networking
-  inside streams.
+- > ~~**MoQ as the transport between machines** (the `spike/moq-gateway` direction), or a
+  > publisher inside every app. It adds a second network protocol to every machine and keeps
+  > networking inside streams.~~ — Reversed 2026-10-04 by `moq-on-the-tailnet.md` for the
+  > transport: with Zenoh removed MoQ is the only network protocol, served by the engine. A
+  > publisher inside every stream stays rejected.
 - **A new high-level wiring language** replacing `add` and `connect`. It invents a second way
   of working; the builder object changes, the calls do not.
 - **Per-runtime launchd services with an orchestrator sharing surfaces.** The earlier setup,
@@ -223,6 +238,9 @@ Checked against the tree on 2026-09-30:
   ninety other senses in the plan (host-visible memory, host pointers, host identity, `--host`),
   and users never say it; "runtime" keeps every mesh term with one runtime per machine.
 - **A MoQ server of streamlib's own, or a WebTransport framing of our own instead of MoQ.**
+  (Amended 2026-10-04 by `moq-on-the-tailnet.md`: the engine serves MoQ itself through the
+  moq-dev line's embeddable server, and no relay is bundled; a framing of our own stays
+  rejected.)
   The listener, the certificates and the browser player cost the same either way; our own
   framing would re-invent groups, priorities and late-join and lose every relay and every
   third-party player, and the server half of a MoQ session already exists in the vendored
@@ -286,12 +304,17 @@ step needs decided first, so that `/plan` and every session read one sequence. E
 6. **Resources across streams** — align the resources OPEN.
 7. **Packs and the registry** — align packs, a registry, `add <pack>` and `run <url-or-zip>`;
    after hosting, whose state directory and runtime-managed default project they load into.
-8. **The runtime's own session and the stream map** — align discovery, the stream map's details
-   and the control-client seam: own Zenoh configuration, router mode, dialing relays, the pushed
-   map compiled into Zenoh and checked in the engine, peer authentication, `machines` and
-   `streams`.
-9. **Streams as URLs** — align the URL grammar and the forms: listing, `ndjson`, `png`, raw H.264
-   and MPEG-TS, then HLS, then `moq` through the bundled relay, the relay role.
+8. ~~**The runtime's own session and the stream map** — align discovery, the stream map's
+   details and the control-client seam: own Zenoh configuration, router mode, dialing relays,
+   the pushed map compiled into Zenoh and checked in the engine, peer authentication, `machines`
+   and `streams`.~~
+9. ~~**Streams as URLs** — align the URL grammar and the forms: listing, `ndjson`, `png`, raw
+   H.264 and MPEG-TS, then HLS, then `moq` through the bundled relay, the relay role.~~
+
+   > Steps 8 and 9 superseded 2026-10-04 by `moq-on-the-tailnet.md`. The removal of Zenoh and
+   > the MoQ extension wheel comes first, ahead of the rest of steps 1 to 4. After step 5, one **sharing** step takes the place of both: MoQ on the
+   > tailnet, the relay a machine joins, and the HTTP listing, read-only MCP, snapshots, samples
+   > and viewer page. Steps 6, 7 and 10 follow it.
 10. **The app** — `Tatolab.app` with `tatolabd` as its SMAppService agent, the dmg, the
     permission prompts named Tatolab, and the remaining Rust names; last, because it packages
     everything above.

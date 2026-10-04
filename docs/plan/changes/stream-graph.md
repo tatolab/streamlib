@@ -15,7 +15,8 @@ machine offers. After this change:
   on `Runtime` are gone;
 - a typed duplicate node name is refused where it is written; a defaulted one takes `-2`, every
   name cast to lowercase URL-safe (runtime-hosting decision 3);
-- nothing leaves the machine until exposed: the mesh offers and sends exposed ports only.
+- a port is read from outside its stream only at the level the stream exposes it (amended
+  2026-10-04: three levels, and no mesh to offer or send — the §Networking delta below).
 
 Unchanged and left to later changes, each mapped below: one engine per `run` process, today's
 runtime name as the first chunk of a mesh address, the environment a node runs from, the local
@@ -235,24 +236,15 @@ one, with no change to the graph, the loader or `graph`.
   builder and the render. `load` accepts a mapping because the render is one; nothing documents
   hand-writing it.
 
-## MODIFIED: §Networking `:3986-3993` — exposure gates what leaves
+## MODIFIED: §Networking — exposure (superseded)
 
-- **The exposure set** is engine state beside the graph: `(processor id, port)` pairs, filled by
-  `load` from `exposed`, rendered in `graph` by node name. A removed processor leaves it.
-- **The offer answers exposed ports only**: `every_output_port_in` becomes the exposed subset
-  (`output_ports_in_this_runtimes_graph.rs:127-146`), so a reader asking for an unexposed port
-  gets today's `error` listing what *is* offered (`ARCHITECTURE.md:3754-3756`), and
-  `ports_it_holds_and_cannot_send` is computed over the exposed subset too.
-- **An egress is created for an exposed port only** (`mesh_port_egress.rs:4-18`): a reader token
-  naming an unexposed port creates nothing, and `mesh.egress_ports` stays what it is.
-- **Links between streams on one machine are unaffected**, there being one stream per runtime
-  process in this change; links from a processor interpreter and the local tap are unaffected,
-  since neither leaves the machine. A link request *into* this runtime is unaffected: exposure is
-  about leaving (sentence 3), and the stream map OPEN owns the inbound side.
-- **No `expose` verb** joins the control vocabulary here — it is the local API OPEN's
-  (`:4437-4444`) — so a live `add_processor` adds an unexposed node, and exposing it means
-  changing the stream's function, which is the "function wins" rule applied.
-- The two-process mesh fixtures and the live arms expose what they wire.
+> ~~Exposure gates what leaves: a binary exposure set, the mesh's offer answering exposed ports
+> only, an egress created for an exposed port only, the mesh fixtures exposing what they wire.~~
+> — Superseded 2026-10-04, twice. The exposure align made exposure three levels checked where a
+> read crosses a stream's edge (`docs/decisions/exposure-levels.md`), and the pivot removed Zenoh,
+> so no offer or egress exists to gate (`docs/decisions/moq-on-the-tailnet.md`). What S4 builds
+> is §Networking's exposure entry: the live map and the check at the stream's edge on one
+> machine. No `expose` verb joins the control vocabulary in this change, as before.
 
 ## MODIFIED: §Product `:39-46`, `:83-98` and §Processor model `:1253-1318` — records re-spelled
 
@@ -304,8 +296,8 @@ the hosting change for the reason above.
 - **S3 — `@stream`, `Stream`, `load`, `run`.** The builder and its name resolution,
   `compile_stream_to_graph`, `Runtime.load`, `rt.add`/`connect`/remote references deleted, `run`
   and `dev` over `stream.py`, the scaffold's `stream.py`, the forty fixtures. Blocked by S1, S2.
-- **S4 — exposure.** The exposure set, the offer and the egress over it, the mesh fixtures
-  exposing. Blocked by S2.
+- **S4 — exposure.** The live exposure map and the check at the stream's edge on one machine
+  (superseded as written; see the §Networking delta above). Blocked by S2.
 
 Restart time stays an acceptance criterion of the hosting change, not this one (#2559's record).
 

@@ -72,33 +72,22 @@ package-split-and-lend (its decision 2): no package extends the engine; the entr
 that change ships._
 
 **Edge I/O processor**: a source or sink processor that ingests or egresses an
-external-world stream at a runtime boundary — WebRTC, MoQ, raw UDP. Not the runtime mesh.
-_Avoid_: "transport processor", "network transport" (runtime-to-runtime transport is the
-**runtime mesh**).
+external-world stream at a runtime boundary — WebRTC, raw UDP. Not how machines share
+streams, which is the engine's own. _Avoid_: "transport processor", "network transport".
 
-**Runtime mesh**: the runtimes that have discovered each other over Zenoh under one mesh
-name, carrying remote links as engine transport beside iceoryx2 — always on, never a
-processor or an extension. _Avoid_: "fabric" (retired for this term), "gateway", "cluster",
-"federation".
+**Tailnet** _(user)_: the Tailscale network a machine belongs to, where its name, its reach to
+other machines, encryption, identity and discovery come from. Tailscale's own word, used as it
+is. _Avoid_: "mesh" (retired), "VPN", "network" unqualified.
 
 **Runtime** _(crosses)_: the one program per machine that runs streams — the engine, the
 accelerator when one is present, the transports, the local API; installed once, never
 constructed by a stream. Its program is `tatolabd`, as Tailscale's is `tailscaled`; the word
-users read stays "runtime". Runtime mesh, mesh name and cross-runtime links keep their meaning
-with one runtime per machine. _Avoid_: "host", "daemon", "server", "node", "engine" on a user
+users read stays "runtime". _Avoid_: "host", "daemon", "server", "node", "engine" on a user
 surface (the engine is the library inside it).
 
-**Machine** _(user)_: what a runtime is addressed as — the first chunk of an address,
-defaulting to the hostname; a containerised runtime is its own machine. Unique per mesh: a
-runtime finding its name taken takes the next unused suffix (`<name>-2`, then `-3`…) once,
-records it and keeps it. _Avoid_: "host",
-"device", "runtime name" (retired).
-
-**Mesh name**: the name of one runtime mesh — one chunk of the channel-name grammar,
-`default` unless a runtime names another. Everything a runtime announces lives under it, and
-naming a different one is how groups sharing a network separate what they announce and read —
-never what dials whom. _Avoid_: "namespace" (Zenoh's own config key, which this is not),
-"cluster", "domain" (that is the iceoryx2 one).
+**Machine** _(user)_: what a runtime is addressed as — the first chunk of an address: its
+**tailnet** name, or its hostname where it has no tailnet; a containerised runtime is its own
+machine. _Avoid_: "host", "device", "runtime name" (retired).
 
 **Address** _(crosses)_: the right-anchored path `<machine>/<stream>/<node>/<port>`, leading
 chunks omitted to mean "here"; the same string on every surface, so a link whose ends are on
@@ -107,22 +96,19 @@ name", "remote link" (retired).
 
 **Exposure** _(crosses)_: who outside a stream may read one of its output ports — **internal**
 (the default: the stream's own nodes only), **private** (any stream or code on the machine) or
-**public** (private, plus other machines, a URL off the machine and the relay). A live permission
+**public** (private, plus readers off the machine — on the **tailnet**, and at a **relay** the
+machine has joined). A live permission
 the runtime checks at the stream's edge, never part of the stream's logic. `expose` is the verb —
 in the stream's function, where the exposures start; at the CLI, the app or the local API, while
 it runs. _Avoid_: "visibility" (discovery's word), "export", "publish", "endpoint".
 
 **Exposed port** _(crosses)_: a private or public output port. _Avoid_: "shared port", "open port".
 
-**Form** _(user)_: the shape an exposed port is served in — the URL's child chunk (`ndjson`,
-`png`, `ts`, `hls`, `whep`, `moq`, `page`). _Avoid_: "format" (a pixel format), "transport".
+**Form** _(user)_: the shape an exposed port is served in — the URL's child chunk. Live data
+has one form, `moq`. _Avoid_: "format" (a pixel format), "transport".
 
-**Relay** _(crosses)_: a runtime in the relay role — the same software, whose router other
-runtimes dial and whose URL browsers reach; a role, not a place. _Avoid_: "gateway", "tower",
-"router" unqualified (Zenoh's component inside it).
-
-**Mesh peer**: another runtime on the same runtime mesh. _Avoid_: "node" for a peer (a node is
-a step in a stream).
+**Relay** _(crosses)_: a separate program a machine joins so its public ports have an internet
+address. Never the runtime. _Avoid_: "gateway", "tower", "router".
 
 **Capability extension**: an extension wheel's support code — declared by a standard entry
 point in its `pyproject.toml` that pip records and the engine runs once at startup, like
@@ -173,7 +159,7 @@ and an external control client call, reachable only on its own machine. An MCP h
 by launching the CLI's `mcp` verb, which forwards messages to the socket unchanged. Embedding
 happens by importing the runtime package, never through the local API. _Avoid_: "control
 plane" (retired), "API server" as the concept; "relay" or "bridge" for the `mcp` verb
-("relay" is the runtime's role for other machines).
+("relay" is the program a machine joins for an internet address).
 
 **Node catalog** _(user)_: what a runtime reports it can add — every registered node class
 with its description, config schema and ports — served over the local API. _Avoid_:
@@ -212,13 +198,8 @@ interpreter", "sandbox".
 **Runtime process** _(engine)_: the runtime's own OS process — engine, local API, built-ins;
 it hosts no Python node. _Avoid_: "app-process" (retired), "daemon".
 
-**Stream map** _(engine)_: the policy the runtime enforces on what leaves its machine — which
-ports may be linked from outside it, and by which authenticated peers; links to unexposed
-ports are refused. It is pushed to the runtime; by whom, and its other details, are OPEN.
-_Avoid_: "ACL", "firewall".
-
 **Control client** _(engine)_: an external component that plugs into the runtime through the
-pivot's extension point, for example to enrol a machine with a coordination service; the
+pivot's extension point, for example to hand it a relay's address and credential; the
 runtime runs complete without one, and how it plugs in is OPEN. _Avoid_: "connector",
 "sidecar", "agent".
 
@@ -242,7 +223,7 @@ reserved subscriber slot missed — different subject, and the two are never sum
 
 **Monotonic clock**: the machine's boot-relative clock (`CLOCK_MONOTONIC` /
 `mach_absolute_time`) — the epoch of every data-plane timestamp and of the V4L2 and ALSA
-driver stamps. One per machine, not one per mesh: two stamps from two machines are
+driver stamps. One per machine: two stamps from two machines are
 readings of two unrelated clocks and subtracting them means nothing, which is what
 **clock identity** exists to say. The default; anything a processor stamps or compares
 uses it. _Avoid_: "media clock" for the epoch (`MediaClock` is the Rust naming seam, not a
@@ -251,14 +232,14 @@ machine matters.
 
 **Clock identity**: which machine's monotonic clock a stamp was taken on — the kernel's
 boot-session UUID (`/proc/sys/kernel/random/boot_id`, `kern.bootsessionuuid`), the boot
-alone, so a container and its host share one. It rides every mesh message's attachment,
-renders on every link in `graph` as `stamp_clock_identity`, and is read by
+alone, so a container and its host share one. It renders on every link in `graph` as `stamp_clock_identity`, and is read by
 `inbound_link_stamp_clock_identity(port, link)` against
 `this_machines_stamp_clock_identity()`. Two stamps are comparable when their links name the
-same identity **and** neither stamp was restated by a relay: what a link names is the clock
+same identity **and** neither stamp was restated by a node in between: what a link names is the clock
 of the machine that last wrote the bag, not necessarily of the machine that took the reading,
 so a processor restating an upstream stamp on a local output makes its link name this machine
-confidently and wrongly. That is the known relay gap, and it is the common-clock OPEN's to
+confidently and wrongly. That is the known restating gap (the plan's "relay gap", no kin of
+the **relay** a machine joins), and it is the common-clock OPEN's to
 close. _Avoid_: "host identity" (that is the boot id **plus** the pid-namespace inode, and it
 settles duplicate runtime names, never stamps), "boot id" unqualified, "clock id", "epoch".
 
@@ -377,3 +358,10 @@ description** — say **graph**; "helper" and "helper process" — say **process
 said "host" for what the glossary calls the **runtime**. The older entries that still use the
 retired words are facts about the shipped tree, read through the plan's reading rule until the
 rename change re-spells them.
+
+Retired by the 2026-10-04 moq-on-the-tailnet pivot (see `docs/decisions/moq-on-the-tailnet.md`):
+**Runtime mesh**, **Mesh name** and **Mesh peer** — no mesh exists; machines on one **tailnet**
+read each other's public ports directly; **Stream map** — not built, exposure being the whole of
+what the runtime enforces; **Relay** as a role of the runtime — a relay is a separate program.
+Entries that still use these words are facts about the shipped tree until the removal change
+ships.

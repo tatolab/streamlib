@@ -27,13 +27,18 @@ changed live.
 - **Live, so it is checked at the edge.** Zenoh's own access control is fixed when its session
   opens. A live permission therefore lives in the engine, at the points a read crosses a stream's
   edge, like a proxy in front of every port. A change reaches the next check, cuts off readers it
-  no longer allows, and needs no restart of the runtime or of any stream.
+  no longer allows, and needs no restart of the runtime or of any stream. (Zenoh is removed as of
+  2026-10-04, `moq-on-the-tailnet.md`; the edge check stands on its own.)
 - **`expose(output)` means private.** The common case is sharing on the machine, and private keeps
   the 2026-09-30 rule that nothing leaves the machine unasked: leaving takes an explicit public.
 - **An enum, not a string.** A string level is a typo the type checker cannot see; an enum member
   is checked by pyright and by the stub test.
 - **The internet is not the runtime's.** A public port's URL is what Tailscale serve or funnel
   publishes, so the runtime has nothing to build for internet exposure.
+
+  > Amended 2026-10-04 by `moq-on-the-tailnet.md`: that holds for the HTTP. Live data reaches the
+  > internet through a relay the machine has joined, which offers every public port there;
+  > Funnel carries TCP only. The levels are unchanged.
 
 - **Pull, never push.** A source wiring itself into a reader on another machine is a server
   wiring its URL into a client's browser. The reader's side decides what it consumes: it finds an
@@ -57,7 +62,9 @@ changed live.
 ## Consequences
 
 - The `tap` and `exchange` verbs and their MCP tools are retired once a private read can stand
-  in for them, including the repo's GPU verification. That is a later change.
+  in for them, including the repo's GPU verification. That is a later change. (Settled
+  2026-10-04 by `moq-on-the-tailnet.md`: the later change is the sharing step, which builds the
+  snapshot and sample forms the repo's verification reads from a private port.)
 
 - The link request (push and third-party wiring) is retired: `request_link_on_remote_input_runtime`,
   the remote-destination spellings in Python and MCP, the link-request queryable, and `graph`'s
@@ -65,5 +72,6 @@ changed live.
 
 - `expose` on the CLI, the app and the local API edits the live map. Whether those live edits
   persist across a restart is the runtime-hosting change's to settle.
-- The URL listener serves private and public ports on loopback, and only public ones on a LAN
-  or tailnet address.
+- The URL listener serves private and public ports on loopback, and only public ones on a
+  ~~LAN or~~ tailnet address (no LAN address is served: amended 2026-10-04 by
+  `moq-on-the-tailnet.md`).

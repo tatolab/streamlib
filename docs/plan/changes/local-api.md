@@ -2,6 +2,12 @@
 
 > **Approved by the owner, 2026-10-01**, as written, with its stated assumptions. Tickets
 > derived 2026-10-01 (below).
+>
+> **Amended 2026-10-04** by the moq-on-the-tailnet pivot (`docs/decisions/moq-on-the-tailnet.md`):
+> Zenoh is removed before the rest of this change is built. S2, the announcement (#2578), has
+> nothing left to edit — no description, peer table or mesh-peers listing exists once the mesh is
+> gone — and `nodes` lists the local registry alone. `tap` and `exchange` are carried as written;
+> the sharing step deletes them.
 
 Step 2 of the one-runtime-per-machine pivot: control leaves the network, and MCP hosts reach it by
 launching a command. After this change:

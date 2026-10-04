@@ -15,6 +15,12 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
+Reading rule since the 2026-10-04 pivot (`[moq-on-the-tailnet]`): Zenoh, the runtime mesh and
+the MoQ extension wheel are removed, and the `tap` and `exchange` verbs go at the sharing step.
+An entry describing one of them is a fact about the shipped tree until the change that removes
+it ships and folds it out — never direction, and nothing new is built on it. Off a machine, the direction is §Networking's
+`[moq-on-the-tailnet]` entries.
+
 ## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
@@ -105,7 +111,14 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   or teams — behind that machine's single Zenoh session, owns the accelerator when one is
   present, serves the machine's local API, and schedules across streams. Every Python node
   keeps its own process, and agents keep changing live graphs. Owner, 2026-09-30: sentence 2
-  restated after its "daemon" wording was reopened. [one-runtime-per-machine; stream-graph]
+  restated after its "daemon" wording was reopened. [one-runtime-per-machine; stream-graph;
+  amended by moq-on-the-tailnet: no Zenoh session — the runtime serves the machine's MoQ
+  endpoint once the sharing step builds it]
+- **DECIDED** — What Tatolab is for: a simple SDK for defining live streams as pipes and
+  sharing them with people and agents. Tailscale users are the first customers, and Tatolab
+  builds nothing Tailscale already does. Robotics and physical-machine systems are out of
+  scope, and Tatolab never replaces a team's own ROS or Zenoh stack. Owner, 2026-10-04.
+  [moq-on-the-tailnet]
 - **DECIDED** — The runtime is required and always on, installed once per machine by an
   installer — the desktop app, a package manager, a `curl | sh` script or a distro package —
   which ships the runtime, the CLI and the native portion processor interpreters borrow as one
@@ -427,7 +440,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   does an untyped read: the strictness dial is also the safety dial — depth bounds
   the window, and outwaiting it is an error, never somebody else's pixels. The
   engine inspects no bag content anywhere, save the top-level `surface_id` a remote link
-  carries across the runtime mesh (§Networking). The producer never waits on a consumer:
+  carries across the runtime mesh (§Networking; that exception is deleted with the mesh,
+  2026-10-04). The producer never waits on a consumer:
   the pool skips leased slots and grows to its cap; at cap the producer drops its
   own frame — a slow consumer costs memory, then its own frames, never another
   processor's cadence. A producer-internal transient (a frames-in-flight ring
@@ -560,8 +574,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   older stream recorded. Compiling happens in the project's interpreter, never in the
   runtime process. Owner, 2026-10-02. [package-split-and-lend; one-runtime-per-machine]
 - **OPEN** — How an external control client plugs in: an entry point with a role of its own
-  beside today's two, handed a door for pushing the stream map, router credentials and peer
-  identity — or another seam. [one-runtime-per-machine]
+  beside today's two ~~, handed a door for pushing the stream map, router credentials and peer
+  identity~~ — or another seam. Since 2026-10-04 no stream map, router or peer identity exists
+  to push; what it hands the runtime beyond a relay address and a credential is the sharing
+  step's to decide (§Networking). [one-runtime-per-machine; narrowed by moq-on-the-tailnet]
 - **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
   `tatolab`; the desktop app is Tatolab (`Tatolab.app`); the installer ships all three as one
   unit, and users still call the program "the runtime" (owner, 2026-10-02); the bare name `tatolab` is the
@@ -570,7 +586,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP 420 namespace
   shared by Tatolab's own distributions only: `tatolab.stream`; `tatolab.runtime`, the native
   portion `tatolabd` lends and no user installs; and optional first-party extensions, each
-  `tatolab-<name>` importing as `tatolab.<name>` (`tatolab-moq` → `tatolab.moq`). No
+  `tatolab-<name>` importing as `tatolab.<name>` (`tatolab-webrtc` → `tatolab.webrtc`). No
   distribution ships `tatolab/__init__.py`. A third party's pack uses its own name, never the
   `tatolab` namespace. Which built-ins, extensions and packs ship inside the app or through pip
   is §Packages' packs OPEN. The extensions' entry-point group is `tatolab.extensions`, and the
@@ -739,7 +755,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   port's opt-in to the engine reading its bags as `AudioBlock`, so the engine inspects a
   payload on exactly the ports that asked it to; and a remote link reads a bag's top-level
   `surface_id` to carry the frame across the runtime mesh (§Networking) — reading that one
-  key, never a type, a tag or anything else in the bag. A link into a port with
+  key, never a type, a tag or anything else in the bag; that second carve-out is deleted with
+  the mesh (2026-10-04), leaving the audio one. A link into a port with
   no contract is unchanged in every respect — still pure plumbing, `connect` still
   compares nothing, and the frame header still carries no schema ident.
   [schema-free-ports — SHIPPED #1814; the carve-out — audio-port-window-contract, SHIPPED
@@ -785,7 +802,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   build id above.
   [opus-mp4-recording-rung — SHIPPED #2124; the timestamped spelling with
   networking-extension-wheels — #2150; the mesh address and the envelope's link name —
-  cross-runtime-links, SHIPPED #2287; reopened by one-runtime-per-machine: whether addresses gain a stream level]
+  cross-runtime-links, SHIPPED #2287; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by moq-on-the-tailnet: the mesh address of a link from another runtime is deleted with Zenoh; naming a link pulled from another machine is the sharing step's]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::naming_the_inbound_link_a_bag_arrived_on_leaves_the_per_link_drop_counts_alone -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none -->
@@ -1440,7 +1457,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   children, so a link between two streams on one machine copies no pixels. Streams needing
   conflicting Python packages each start from their own venv (the package split and the lend,
   §Packages). Owner, 2026-10-01; the surface clause confirmed 2026-10-02. [runtime-hosting;
-  one-runtime-per-machine]
+  one-runtime-per-machine; amended by moq-on-the-tailnet: the runtime keeps no Zenoh session and bundles no relay; once the sharing step builds it, the machine's MoQ endpoint is kept once for the machine]
 - **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
   admission control, and how a stream states what it needs. Direction (review, not decided):
   what a stream needs is read from its graph (the derived needs above) and granted per stream
@@ -1459,7 +1476,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   deliberately ephemeral today). Owner, 2026-09-30: a driver-level fault taking every stream
   down for a few seconds is the equivalent of a fundamental Docker issue crashing everything;
   one engine is easier to run and to get bug reports for, and an engine per stream multiplies
-  the ways things can fail. An engine per stream is not a fallback. [one-runtime-per-machine]
+  the ways things can fail. An engine per stream is not a fallback. [one-runtime-per-machine; amended by moq-on-the-tailnet: the mesh's copy path is deleted with Zenoh, and no stream map exists to keep]
 
 ## Graphics (RHI / GPU) — DECIDED (unbuilt: accelerators optional, pivot step 5)
 
@@ -3250,7 +3267,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime mesh. The held consumers `packages/{moq,webrtc}` and
   `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}` resolved through this
   change and are gone — mined, replaced or deleted per §Consumers.
-  [extension-model; networking-extension-wheels — SHIPPED #2153]
+  [extension-model; networking-extension-wheels — SHIPPED #2153; amended by moq-on-the-tailnet: the MoQ wheel is deleted and MoQ becomes the engine's own transport off the machine; the WebRTC wheel stands]
 - **DECIDED** — Both wheels sit on the encoded side of the codec blocks and touch no
   raw frame, surface or GPU: `WhipPublisher` and `MoqBroadcastPublisher` consume
   `EncodedVideoFrame` and `EncodedAudioPacket` bags downstream of `H264Encoder` and
@@ -3261,7 +3278,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   hook brought up. The MoQ pair was named `MoqPublishTrack` / `MoqSubscribeTrack` here
   until the build: under the `Mp4Sink` shape a publisher carries a broadcast of many
   tracks, so a name saying one track fails the zero-context test.
-  [extension-model; renamed at networking-extension-wheels — SHIPPED #2151]
+  [extension-model; renamed at networking-extension-wheels — SHIPPED #2151; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
 - **DECIDED** — The ordering pair never rides the transport's own identifiers. Both are
   reachable — a subscriber can read `SubgroupReader::group_id` and
   `SubgroupObjectReader::object_id` — but neither can carry the producer's: the publisher
@@ -3292,7 +3309,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   however old the idle has made it. An idle close would need a timer, which no processor
   here owns; a downstream that wants only the live edge filters on the stamp it already
   receives.
-  [extension-model; the data pair and the age backstop at moq-data-tracks — SHIPPED #2172]
+  [extension-model; the data pair and the age backstop at moq-data-tracks — SHIPPED #2172; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
 - **DECIDED** — Many tracks follow the `Mp4Sink` shape: a publisher takes one track per
   inbound link and derives its catalog or session media description from them. The
   container names the tracks: under `cmaf` they are `.catalog`, an init track `0.mp4`
@@ -3311,7 +3328,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   configuration is ticket-level, as for every built-in's config.
   [extension-model; port shape narrowed and the player's track config corrected at
   networking-extension-wheels — SHIPPED #2150, #2151; the data port and name at
-  moq-data-tracks — SHIPPED #2172, #2173]
+  moq-data-tracks — SHIPPED #2172, #2173; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
 - **DECIDED** — The control plane keeps nothing from the move. Its one use of
   `runtime/streamlib-moq` — a `/api/moq/catalog` route behind a `moq` feature no crate
   enables — read a process-global session registry that, with the publisher in a helper,
@@ -3340,7 +3357,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   bag, whole and nested, because for data the bag is the payload. It is the opposite of
   opaque forwarding either way: the old processors restamped on receive, and a data track
   carries the user's own keys byte-exact under the producer's own stamp.
-  [extension-model; narrowed to media at moq-data-tracks — SHIPPED #2172, #2173]
+  [extension-model; narrowed to media at moq-data-tracks — SHIPPED #2172, #2173; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
 - **DECIDED** — What the move carries and what it leaves: `runtime/streamlib-moq`'s
   catalog shape is mined, not moved, and its session logic was rewritten for draft-16;
   from `packages/webrtc` the RFC 6184
@@ -3354,7 +3371,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   here: a helper stops on the shutdown ladder §Processor model states, whose `teardown()`
   budget is five seconds, so a WHIP `DELETE` or a QUIC close must fit inside it; and
   connecting inside `setup()` spends the sixty-second registration budget.
-  [extension-model; the ladder — local-transport-hardening, SHIPPED #2264, #2266]
+  [extension-model; the ladder — local-transport-hardening, SHIPPED #2264, #2266; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
 - **DECIDED** — The proof bar is the codec blocks' two halves. CI-run, GPU-free and
   endpoint-free: RTP packetising and depacketising round trips, SDP construction and
   parsing, MoQ catalog and object bytes, and the bag literal a player writes checked
@@ -3367,7 +3384,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   against current library versions rather than the pins the held code carried: `webrtc`,
   `moq-transport`, `quinn` and `rustls` have moved since the freeze, and the patches the
   old MoQ path carried for TLS and for newer draft versions may now be upstream — whoever
-  moves it checks first. [extension-model]
+  moves it checks first. [extension-model; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
 - **DECIDED** — `packages/streamlib-webrtc/`: a standalone maturin project — own
   `Cargo.toml` (`[workspace]` root, `[lib] name = "_native"`, `crate-type = ["cdylib"]`,
   `pyo3` on `abi3-py310`, `webrtc 0.14`, `tokio`, `hyper` + `hyper-rustls`, `rustls`,
@@ -3408,7 +3425,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   revision, because Cloudflare deploys draft-16 and it carries the acknowledgement and
   namespace machinery draft-14 lacks — owner ruling, superseding the original draft-14
   default. Draft-16 requires authentication, so no credential-free public relay remains.
-  [networking-extension-wheels — SHIPPED #2151]
+  [networking-extension-wheels — SHIPPED #2151; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
 - **DECIDED** — `MoqBroadcastPublisher`: `@processor`, one fan-in input `tracks`, one MoQ
   track per inbound link, the catalog derived from them; config `relay_url` (required),
   `broadcast` (default `streamlib/<runtime_id>`), `container_format`, `track_names` and
@@ -3422,7 +3439,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   or below the latest and then drops every object written to it with no error on either
   side — hence `append` and the library's own counter, and the ordering pair riding the
   object as §Networking's rule above already requires.
-  [networking-extension-wheels — SHIPPED #2151]
+  [networking-extension-wheels — SHIPPED #2151; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
 - **DECIDED** — Two container formats, selected by `container_format` on each processor and
   declared per track in the catalog's own `packaging` field. `"cmaf"` is the default,
   because interop is the point: the broadcast is laid out as `moq-pub` lays one out — a
@@ -3443,7 +3460,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   data track — needs per-track `packaging` in the catalog and its own `moq-sub` check, and
   is named here as a later rung rather than built.
   [networking-extension-wheels — SHIPPED #2151; the data container at moq-data-tracks —
-  SHIPPED #2172, #2173]
+  SHIPPED #2172, #2173; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
 - **DECIDED** — `python-wheel.yml` carries an `extension-wheels` job over a matrix of the
   two directories: install the just-built `streamlib` wheel into the venv, `maturin develop`
   the extension, `cargo test` its crate, `mypy.stubtest` over its `_native`, pyright over
@@ -3453,7 +3470,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `build_simple_index.py` is multi-project — a set of published names, one PEP 503 directory
   each — with its tests. [networking-extension-wheels — SHIPPED #2152; the independent
   versions and tags amended by package-split-and-lend: one version for everything released
-  from this repository (§Distribution & versioning)]
+  from this repository (§Distribution & versioning); amended by moq-on-the-tailnet: the matrix holds the WebRTC wheel alone]
 - **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by each wheel:
   the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
   cases), SDP offer construction and answer parsing, MoQ catalog and object encoding, and
@@ -3471,7 +3488,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   The decode-back is the lock: `WhepPlayer` / `MoqBroadcastSubscriber` → `H264Decoder` → tap
   and exchange → `xtask psnr channel-means` against the per-codec vivid baseline within
   ±0.05 — the network sits inside a path the codec rig already scored, so a mismatch is the
-  wheel's. [networking-extension-wheels — SHIPPED #2153]
+  wheel's. [networking-extension-wheels — SHIPPED #2153; amended by moq-on-the-tailnet: the MoQ arm is deleted with its wheel]
   <!-- verify: git ls-files packages/streamlib-moq packages/streamlib-webrtc -->
 - **DECIDED** — A media bag past its deadline is shed rather than delivered late.
   `MoqBroadcastPublisher` takes `delivery_deadline_ms`; a media bag older than it by its
@@ -3493,7 +3510,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   restating an upstream stamp on a local link reads as local here too, which the common-clock
   OPEN below owns, and `MoqBroadcastSubscriber` feeding `MoqBroadcastPublisher` is that case
   inside this wheel.
-  [moq-data-tracks — SHIPPED #2159; the cross-clock arm — cross-runtime-links, SHIPPED #2340]
+  [moq-data-tracks — SHIPPED #2159; the cross-clock arm — cross-runtime-links, SHIPPED #2340; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
 - **DECIDED** — The deadline alone cannot see the uplink, because `moq-transport` never
   blocks and never pre-empts: a bag hands off to a forwarder and the writer learns nothing
   of the backlog behind it. So the wheel vendors `moq-transport` 0.16.2 at
@@ -3513,7 +3530,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   QUIC path's readings. Vendored rather than patched from git because a path dependency
   reaches the manylinux release build and the draft-16 line is frozen upstream; the patches
   stay ours and are never sent upstream (owner, 2026-09-06).
-  [moq-data-tracks — SHIPPED #2179, #2180]
+  [moq-data-tracks — SHIPPED #2179, #2180; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
   <!-- verify: cargo xtask check-vendored-trees -->
 - **DECIDED** — A MoQ broadcast carries data tracks beside video and audio, under
   `streamlib_bag` only. `MoqBroadcastPublisher` classifies each inbound link by its first
@@ -3538,7 +3555,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   verbatim where a demux key would be pollution. The catalog is unchanged: a data track's
   entry is the entry every `streamlib_bag` track already gets, `codec` the literal
   `streamlib-bag` with every media field empty, because the catalog is written at connect
-  before any bag has said what it is. [moq-data-tracks — SHIPPED #2172, #2173]
+  before any bag has said what it is. [moq-data-tracks — SHIPPED #2172, #2173; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
 - **DECIDED** — Track names under `streamlib_bag` are the app's to choose.
   `MoqBroadcastPublisher` takes `track_names`, positional in wiring order — the order
   `runtime.connect` ran, which is the order `cmaf` already numbers `{track_id}.m4s` by. A
@@ -3548,7 +3565,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   its link's channel name as before. That name is `{processor_id}/{port}` on a cuid2 minted
   at `add`, which a subscriber in another node cannot know — so before `track_names` the
   only broadcast a second node could name was `cmaf`, and the live fixture ran `cmaf` for
-  that reason and said so. It no longer needs to. [moq-data-tracks — SHIPPED #2172]
+  that reason and said so. It no longer needs to. [moq-data-tracks — SHIPPED #2172; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
 - **DECIDED** — The wheel's oversize warning is charged against what the link charges: the
   **framed** encoded bag, header included, against the helper-link ceiling — not
   `len(bitstream)`, which under-reported by the bag's other keys and by the frame header.
@@ -3556,7 +3573,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   so it is taken only once a cheap prefilter says the bag is near enough to the ceiling for
   the answer to be in doubt. The ceiling itself stays the engine's and unexported; the
   wheel's copy stays a warning that lands at the wrong size on drift, never a failing test.
-  [moq-data-tracks — SHIPPED #2172]
+  [moq-data-tracks — SHIPPED #2172; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
 - **DECIDED** — The data track's proof. CI-run, GPU-free, endpoint-free, owned by the
   wheel: the envelope round trip on the `wired_link` fixture — a nested bag with a `bytes`
   value crosses the publisher's encode, the subscriber's decode and a real link, and
@@ -3570,7 +3587,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   telemetry data track with `track_names` set through the Cloudflare draft-16 relay — the
   data bags received `==` and stamped as sent, the media decode-back locking PSNR as
   before. The `cmaf` arm and its `moq-sub` read are unchanged.
-  [moq-data-tracks — SHIPPED #2174]
+  [moq-data-tracks — SHIPPED #2174; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
   <!-- verify: pytest packages/streamlib-moq/tests/test_data_track_round_trip.py -->
 - **DECIDED** — Runtimes on different machines form a runtime mesh over Zenoh, and the mesh
   is engine transport: always on, beside iceoryx2, in the app process. It is not a processor,
@@ -3599,7 +3616,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   whose kernel-closed TCP peers see within milliseconds, and no Zenoh call ever runs on one of
   the engine's current-thread tokio runtimes. And **a helper opens no session**, because it
   never constructs a `Runner` and Zenoh's thread pool starts on first use.
-  [runtime-mesh — SHIPPED #2283; the defaults clause superseded by one-runtime-per-machine: the runtime builds its session from its own configuration]
+  [runtime-mesh — SHIPPED #2283; the defaults clause superseded by one-runtime-per-machine: the runtime builds its session from its own configuration; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::resolved_runtime_mesh_configuration::tests::the_zenoh_configuration_carries_peer_mode_and_exactly_these_endpoints -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_local_only_runtime_renders_the_reason_its_session_did_not_open -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason -->
@@ -3623,7 +3640,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   mesh configuration mutable state on a constructed runtime and moves both proofs behind the
   GPU in `start()`; and a `[tool.streamlib]` table in `pyproject.toml`, the first
   streamlib-specific file an app would author, which the zero-ceremony bar rules out. Owner,
-  2026-09-14. [runtime-mesh — SHIPPED #2282, #2283; superseded by one-runtime-per-machine: the runtime builds its session from its own configuration]
+  2026-09-14. [runtime-mesh — SHIPPED #2282, #2283; superseded by one-runtime-per-machine: the runtime builds its session from its own configuration; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::resolved_runtime_mesh_configuration -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_mesh_peer_this_build_cannot_dial_is_a_usage_error -->
@@ -3645,7 +3662,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and never waits. Multicast discovery is proven by the two-process fixture's multicast arm,
   run beside its explicit-peer arms with scouting pinned to loopback — a local end-to-end
   tier, compiled on both CI lanes and never a merge gate.
-  [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the runtime dials routers from its own configuration; what a runtime with no stream map discovers on a LAN is OPEN; amended by local-api: the description drops `control_plane_urls`]
+  [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the runtime dials routers from its own configuration; what a runtime with no stream map discovers on a LAN is OPEN; amended by local-api: the description drops `control_plane_urls`; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes two_runtimes_discovering_by_multicast_each_list_the_other -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has -->
 - **DECIDED** — Everything a runtime puts on the mesh lives under a mesh name, `default`
@@ -3657,7 +3674,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and does not buy is worth stating exactly: runtimes in different meshes on one network may
   still connect at the transport and exchange nothing, and unrelated Zenoh traffic — ROS 2's
   `rmw_zenoh`, say — may connect the same way. Separation is of what is announced and read,
-  never of what dials whom. [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the runtime authenticates peers and enforces the stream map]
+  never of what dials whom. [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the runtime authenticates peers and enforces the stream map; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::runtime_mesh_name -->
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
 - **DECIDED** — A port on the mesh is addressed `<runtime name>/<display name>/<port>`. The
@@ -3702,7 +3719,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the link is `error` naming both hosts and carries from neither until one leaves, because a
   link that picked one could feed the wrong machine.
   [runtime-mesh — SHIPPED #2282, #2284; the residual settled by cross-runtime-links #2292;
-  the Apple host identity and native liveness — macos-platform-floor, SHIPPED #2363; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by runtime-hosting: the runtime name gives way to the machine name, which takes a recorded suffix on a clash rather than refusing the start]
+  the Apple host identity and native liveness — macos-platform-floor, SHIPPED #2363; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by runtime-hosting: the runtime name gives way to the machine name, which takes a recorded suffix on a clash rather than refusing the start; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::duplicate_runtime_name_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
@@ -3732,7 +3749,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime off the LAN (measured under iTerm2: every dial `No route to host`, visible only at
   `debug`), so discovery finds nobody and a duplicate goes unrefused.
   [macos-platform-floor — SHIPPED #2363; the arms' waits #2450, #2457; shared-prefix domains
-  #2529]
+  #2529; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::node::tests::two_domains_sharing_a_prefix_never_share_a_channel -->
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes --test cross_runtime_links_two_processes --test cross_runtime_link_requests_two_processes -->
 - **DECIDED** — A bag's top-level `surface_id` crosses the mesh transparently, for now: the
@@ -3766,7 +3783,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the import path that reads it. And bandwidth is the reason encoded bags are the path for
   ordinary links — 1080p RGBA is 8.3 MB, which must queue inside the transport's own window,
   so raw frames over 1 GbE mostly drop and are counted.
-  [cross-runtime-links — SHIPPED #2290]
+  [cross-runtime-links — SHIPPED #2290; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_bags_top_level_surface_id -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_written_into_a_local_surface -->
@@ -3777,7 +3794,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   exactly `transport_tcp` and `transport_udp`, so the QUIC-over-UDP link runs unencrypted on
   a self-signed key Zenoh makes itself — nothing to provision — and `transport_quic`, which
   needs a provisioned key and certificate, waits for that security pass.
-  [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the security pass is the stream map and peer authentication]
+  [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the security pass is the stream map and peer authentication; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: grep -n "transport_udp" runtime/streamlib-engine/Cargo.toml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
@@ -3805,7 +3822,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `Runner::request_link_on_remote_input_runtime` and the `to_*` remote pair are retired with the
   link request (pull-only, below).
   [cross-runtime-links — SHIPPED #2292 for the Rust address and #2287 for the Python and MCP
-  spellings; the `to_*` pair with #2289; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by local-api: each end is `<end>_node` and `<end>_port`, with `<end>_runtime_name` for a port on another runtime — a node by its name, never its id (§Control plane, the local API speaks the graph's words)]
+  spellings; the `to_*` pair with #2289; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by local-api: each end is `<end>_node` and `<end>_port`, with `<end>_runtime_name` for a port on another runtime — a node by its name, never its id (§Control plane, the local API speaks the graph's words); removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted; how a link names a port on another machine is the sharing step's to rebuild]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_names_a_source_on_another_runtime_by_its_mesh_address -->
@@ -3878,7 +3895,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   nothing a caller could spell.
   [runtime-mesh; cross-runtime-links — SHIPPED #2292, #2287; the offer's split #2345, the
   Python-authored source #2344, the forgotten egress #2346, and the stopped-sending reason
-  #2379; reopened by one-runtime-per-machine: how a runtime and a stream's processor interpreters agree on a build; settled by package-split-and-lend: the lend gives both one build by construction]
+  #2379; reopened by one-runtime-per-machine: how a runtime and a stream's processor interpreters agree on a build; settled by package-split-and-lend: the lend gives both one build by construction; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_links_two_processes -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::output_ports_offered_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_port_egress -->
@@ -3927,7 +3944,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stamp onto ours.
   [runtime-mesh; cross-runtime-links — SHIPPED #2288 for the carried identity and #2291 for its
   reads, rendering and the `Mp4Sink` refusal; the MoQ deadline's arm #2340; the shared Apple
-  read — macos-platform-floor, SHIPPED #2363]
+  read — macos-platform-floor, SHIPPED #2363; amended by moq-on-the-tailnet: the mesh attachment that carried a clock identity between machines is deleted with Zenoh; one monotonic clock per machine stands, and how a stamp from another machine is marked is the sharing step's OPEN]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::machine_clock_identity -->
   <!-- verify: cargo test -p streamlib-engine --lib apple::host_identity::tests::the_host_identity_is_the_boot_session_the_clock_identity_names -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::machine_clock_a_remote_link_carries_from -->
@@ -3960,7 +3977,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   to have lost anything. The ingress runs in the app process wherever the destination runs, so
   a helper-placed destination's hop count reaches `graph` with no blackboard while its ports'
   own counts still come off its helper's board.
-  [runtime-mesh; cross-runtime-links — SHIPPED #2288]
+  [runtime-mesh; cross-runtime-links — SHIPPED #2288; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_data_message_attachment -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processors_metrics_render_mesh_hop_loss_beside_its_ports_own_and_never_inside_it -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processor_with_no_remote_link_renders_no_mesh_hop_key_rather_than_an_empty_one -->
@@ -3997,7 +4014,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   node has not had applied, each `awaiting_runtime` while its runtime is absent, `unanswered`
   while it is not replying, or `refused` with that runtime's own words.
   [runtime-mesh — SHIPPED #2283, #2285; the link shape and the two request keys —
-  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by exposure-levels: `link_requests_awaiting_runtime` and a link's `created_by_runtime_name` are retired with the link request (pull-only); amended by local-api: peers and the `nodes` table drop `control_plane_urls`; a link end renders `{node, port}` or `{runtime_name, node, port}`, and an egress port `{node, port, reader_runtime_names}` (§Control plane, the local API speaks the graph's words)]
+  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by exposure-levels: `link_requests_awaiting_runtime` and a link's `created_by_runtime_name` are retired with the link request (pull-only); amended by local-api: peers and the `nodes` table drop `control_plane_urls`; a link end renders `{node, port}` or `{runtime_name, node, port}`, and an egress port `{node, port, reader_runtime_names}` (§Control plane, the local API speaks the graph's words); removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_port_another_runtime_reads_renders_with_the_runtimes_reading_it -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is -->
@@ -4009,22 +4026,29 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   owns the relay gap the per-link identity leaves: a processor restating an upstream stamp on
   a local output renders that link as this machine, confidently and wrongly, so whatever
   closes this has to correct that reading too and not only add a shared epoch.
-  [runtime-mesh; the relay gap named by cross-runtime-links]
-- **DECIDED** — The runtime decides what leaves the machine. It builds its Zenoh session from
-  its own configuration, dials routers, and enforces a pushed stream map that refuses links to
-  unexposed ports and authenticates peers (sentence 3). Its session is the machine's single
-  Zenoh router: streams publish through it, and tools, other processes and relays attach to it
-  (owner, 2026-09-30). [one-runtime-per-machine]
-- **DECIDED** — Zenoh stays the transport between machines. MoQ is only a form for browsers — a
-  WebTransport translation at a relay, or on a machine that serves it itself — and never
+  [runtime-mesh; the relay gap named by cross-runtime-links; amended by moq-on-the-tailnet: no runtimes negotiate over a mesh; the question stands for stamps that cross machines over MoQ]
+- **DECIDED** — The runtime decides what leaves the machine. ~~It builds its Zenoh session from
+  its own configuration,
+  dials routers, and enforces a pushed stream map that refuses links to unexposed ports and
+  authenticates peers (sentence 3). Its session is the machine's single Zenoh router: streams
+  publish through it, and tools, other processes and relays attach to it (owner, 2026-09-30).~~
+  Superseded 2026-10-04: Zenoh, the stream map and peer authentication are not built; who reads
+  a public port off the machine is the tailnet's access rules or a relay's.
+  [one-runtime-per-machine; superseded in part by moq-on-the-tailnet]
+- **DECIDED** — ~~Zenoh stays the transport between machines. MoQ is only a form for browsers —
+  a WebTransport translation at a relay, or on a machine that serves it itself — and never
   carries a link between runtimes; the MoQ-gateway transport change is not happening (sentence
-  4; owner, 2026-09-30). [one-runtime-per-machine]
-- **DECIDED** — The relay is a role, not a place: the same runtime software — on a public VM
+  4; owner, 2026-09-30).~~ Superseded 2026-10-04: MoQ on QUIC carries every real-time byte that
+  leaves a machine, and Zenoh is removed (the moq-on-the-tailnet entries below).
+  [one-runtime-per-machine; superseded by moq-on-the-tailnet]
+- **DECIDED** — ~~The relay is a role, not a place: the same runtime software — on a public VM
   with a stable URL, on a machine inside a private network, or on the machine itself — running
   a Zenoh router that other runtimes dial and a fast translation of exposed ports into the
   forms browsers and tools want. Machines link peer to peer where they can reach each other,
-  and through a relay where they cannot (owner, 2026-09-30). [one-runtime-per-machine]
-- **DECIDED** — The runtime bundles its own MoQ relay: `moq-relay-ietf`, the relay from the
+  and through a relay where they cannot (owner, 2026-09-30).~~ Superseded 2026-10-04: a relay
+  is a separate program a machine joins for an internet address, never the runtime in a role
+  (below). [one-runtime-per-machine; superseded by moq-on-the-tailnet]
+- **DECIDED** — ~~The runtime bundles its own MoQ relay: `moq-relay-ietf`, the relay from the
   repository the vendored `moq-transport` comes from, at the same draft. The runtime publishes
   its exposed ports into it over loopback the way it publishes to a hosted relay today, and
   browsers connect to the bundled relay, so a private network terminates MoQ with nothing
@@ -4037,24 +4061,29 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the relay crate ships as a library and a binary; Safari accepts no self-signed certificate
   hash, so on a bare LAN it needs a tailnet certificate or `hls`; the one maintained draft-16
   browser player is young. To verify in the build: the relay crate linking against the
-  vendored `moq-transport`. [one-runtime-per-machine]
+  vendored `moq-transport`.~~
+  Superseded 2026-10-04: the engine serves MoQ itself on the moq-dev line, no relay is bundled,
+  the vendored `moq-transport` is deleted, and `whep` and `hls` are not built as forms (below).
+  [one-runtime-per-machine; superseded by moq-on-the-tailnet]
 - **DECIDED** — streamlib does not solve every networking problem. Reaching a machine behind
-  NAT, a peer machine's identity, and encryption between machines are left to Tailscale, a VPN,
-  or a relay the machine dials out to. streamlib owns what leaves a machine, streams as URLs,
-  and many streams on one runtime, and that must be super simple inside a private network
-  (owner, 2026-09-30). Known: Zenoh does no NAT traversal — one side must be reachable, or both
-  dial a router. [one-runtime-per-machine]
+  NAT, a peer machine's identity, and encryption between machines are left to Tailscale~~, a
+  VPN,~~ or a relay the machine dials out to. streamlib owns what leaves a machine, streams as
+  URLs, and many streams on one runtime~~, and that must be super simple inside a private
+  network~~ (owner, 2026-09-30). ~~Known: Zenoh does no NAT traversal — one side must be
+  reachable, or both dial a router.~~ [one-runtime-per-machine; narrowed by
+  moq-on-the-tailnet: nothing is built for a private network without a tailnet]
 - **DECIDED** — The address is `<machine>/<stream>/<node>/<port>`: the stream takes the place
   of today's runtime name, the runtime is addressed by its machine (default the hostname),
   every existing address maps across with one segment prefixed, and the same string is the
-  address in Python, the CLI, the URL path and the graph; the Zenoh key grammar gains the same
-  segment in one place (owner, 2026-09-30). Collisions (owner, 2026-10-02): a **machine** name
+  address in Python, the CLI, the URL path and the graph~~; the Zenoh key grammar gains the same
+  segment in one place~~ (owner, 2026-09-30). Collisions (owner, 2026-10-02): ~~a **machine** name
   is unique per mesh, settled the way Bonjour (RFC 6762 §9) and Tailscale settle a hostname — the
   first runtime to claim a name keeps it; one that finds its name live on the mesh takes the
   next free `<name>-2`, `<name>-3`…, records it in its state directory, says once what happened
   and how to rename, and keeps it for good, even after the other machine leaves; a runtime
-  restarting on its own machine reclaims its recorded name, and the rule holds through a relay.
-  A second user's runtime on one machine is refused, not suffixed (§Product). A **stream** name
+  restarting on its own machine reclaims its recorded name, and the rule holds through a relay.~~
+  (Superseded 2026-10-04: a machine's name is its tailnet name, the moq-on-the-tailnet entry
+  below.) A second user's runtime on one machine is refused, not suffixed (§Product). A **stream** name
   is unique per machine, defaults to its function's, and a second
   load of a name is refused naming where the first came from, with `--name` the way out, which
   covers two packs that each define a `main`; a **node** name is unique per stream — a
@@ -4071,7 +4100,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   a hostname `Jonathans-MacBook` is `jonathans-macbook`. What a person writes — class names,
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
-  Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting]
+  Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting;
+  amended by moq-on-the-tailnet: the machine clause and the Zenoh key grammar, struck above]
 - **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
   runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
   any node of the stream may link to it, and nothing outside the stream may read it.
@@ -4085,13 +4115,16 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stream restarts. The engine checks the live exposures wherever a read crosses a stream's
   edge — another stream's link, a reader or URL on the machine, a reader on another machine —
   and a port is read from outside its stream only through exposure: no debugging tap or other
-  door bypasses it, and a stream's own logs are how its insides are seen. Nothing leaves the machine until a port is public; taking a public URL onto
-  the internet is Tailscale serve's or funnel's, never the runtime's. The CLI and the app list
+  door bypasses it, and a stream's own logs are how its insides are seen. Nothing leaves the machine until a port is public~~; taking a public URL onto
+  the internet is Tailscale serve's or funnel's, never the runtime's~~. The CLI and the app list
   every running stream with its private and public ports; an internal port may be listed and
-  is never readable. Discovery is unaffected: a runtime still announces itself and lists its
-  public ports to whoever can reach it. Owner, 2026-10-04, superseding 2026-09-30's binary
-  exposure and its same-machine rule. [exposure-levels; one-runtime-per-machine; stream-graph]
-- **OPEN** — Discovery, the Tailscale analogy applied. Direction (review, not decided): on one
+  is never readable. ~~Discovery is unaffected: a runtime still announces itself and lists its
+  public ports to whoever can reach it.~~ Owner, 2026-10-04, superseding 2026-09-30's binary
+  exposure and its same-machine rule. [exposure-levels; one-runtime-per-machine; stream-graph;
+  amended by moq-on-the-tailnet, the two struck clauses: off the machine a public port is read
+  over MoQ on the tailnet, and at a relay once the machine has joined one; a runtime announces
+  nothing — machines are listed from Tailscale's status and asked for their public ports]
+- **OPEN** (closed 2026-10-04) — ~~Discovery, the Tailscale analogy applied. Direction (review, not decided): on one
   machine the local API lists streams and exposed ports, and the URL namespace is listable; on
   one network, Zenoh scouting finds the other runtimes' routers with nothing configured and
   each announcement carries the ports it exposes, so `machines` lists runtimes and `streams
@@ -4107,31 +4140,42 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   dialing out only; with a map, the peer list is the map's, filtered per machine the way
   Tailscale filters each node's netmap by its ACLs, a team being a key prefix the relay's
   router scopes. Undecided: the verbs' spelling, whether multicast discovery stays on by
-  default, and whether a map may hide exposed-port names per peer. [one-runtime-per-machine]
-- **OPEN** — The stream map's details: who pushes it (the local API's `expose`, an external
+  default, and whether a map may hide exposed-port names per peer.~~
+  Superseded 2026-10-04: discovery is the tailnet's — the engine lists machines from
+  Tailscale's status and asks each for what it exposes. The verbs' spelling is the sharing
+  step's (the moq-on-the-tailnet OPEN below).
+  [one-runtime-per-machine; superseded by moq-on-the-tailnet]
+- **OPEN** (closed 2026-10-04) — ~~The stream map's details: who pushes it (the local API's `expose`, an external
   control client — two pushers of one object); how long a map stays valid when its source is
   unreachable, which needs a wall-clock exception to the monotonic-only rule; and how a peer
   authenticates. Known: Zenoh's own access control
   cannot change without restarting the session and sees only the adjacent hop's identity, so a
   pushed map compiles into it once and the per-stream checks live in the engine at the offer
   answer, egress creation and link-request application — a check in the link layer alone is
-  bypassable by any subscriber with network reach. [one-runtime-per-machine]
-- **DECIDED** — Every public port is reachable by URL from any tool, and every private port
-  from any tool on the machine, in the form that tool wants: a browser, an MCP client, curl,
-  ffmpeg, or something that knows how to handle the raw stream (levels amended 2026-10-04). A user with no account can see and use their own streams locally, and the same works
-  inside a private network (owner, 2026-09-30). [one-runtime-per-machine]
+  bypassable by any subscriber with network reach.~~
+  Superseded 2026-10-04: no stream map is built and the engine authenticates no peer; the
+  exposure levels are the whole of what the runtime enforces.
+  [one-runtime-per-machine; superseded by moq-on-the-tailnet]
+- **DECIDED** — Every public port is reachable by URL ~~from any tool~~, and every private port
+  from any tool on the machine ~~, in the form that tool wants: a browser, an MCP client, curl,
+  ffmpeg, or something that knows how to handle the raw stream~~ (levels amended 2026-10-04). A
+  user with no account can see and use their own streams locally ~~, and the same works inside
+  a private network~~ (owner, 2026-09-30). [one-runtime-per-machine; narrowed by
+  moq-on-the-tailnet: live data has one form, MoQ, played by a browser through the viewer page
+  or read by another runtime; HTTP serves the listing, the read-only MCP, snapshots and small
+  samples, and off the machine both need a tailnet or a relay]
 - **OPEN** — The URL grammar and the forms. Direction (review, not decided): a machine exports
-  one namespace, `/<stream>/<node>/<port>/<form>`, every level listable, a relay prefixing
-  `/<machine>/`, an unexposed port simply absent from it; the form a child segment (`ndjson`,
-  `png`, `ts`, `hls`, `whep`, `moq`, `page`), never a query parameter; the first slice being
-  listing, `ndjson`, `png`, raw H.264 and MPEG-TS for ffmpeg, then fMP4 and HLS, then `moq`
-  through the bundled relay, `whep` a client-side form only. Undecided: whether a stream's
-  description is written by its author, generated from the nodes' descriptions and a live
-  sample, or both (it stays documentation, never a contract at the port); certificates per
-  reach tier (a token URL on loopback; a short-lived self-minted certificate whose hash the
-  page is given, on a LAN; Tailscale's per-machine certificate on a tailnet; a real one at a
-  relay). Known: Tailscale Funnel carries no UDP, so MoQ and WebRTC media from a private node
-  go over the tailnet directly or through a relay; the HTTP forms pass. [one-runtime-per-machine]
+  one namespace, `/<stream>/<node>/<port>/<form>`, every level listable, an unexposed port
+  simply absent from it; the form a child segment, never a query parameter. Since 2026-10-04
+  live data has one form, `moq`, and `ts`, `hls`, raw H.264, fMP4 and `whep` are not forms.
+  Direction for the rest, names undecided: `page` for the viewer, and a snapshot and a
+  bounded-sample form (`png`, `ndjson`). Undecided:
+  how a relay prefixes the namespace; whether a stream's description is written by its author,
+  generated from the nodes' descriptions and a live sample, or both (it stays documentation,
+  never a contract at the port); and the certificate a browser is shown on the engine's QUIC
+  listener. Known: Tailscale Funnel carries no UDP, so live data from a machine goes over the
+  tailnet directly or through a relay; the HTTP passes.
+  [one-runtime-per-machine; narrowed by moq-on-the-tailnet]
 - **DECIDED** — End-to-end encryption through a relay is not a launch requirement; it is a
   later change, and the design keeps it possible. A hosted relay's operator can see the
   streams passing through it until that change lands, and that is said plainly; a bundled
@@ -4145,7 +4189,96 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   per-stream keys through the control client later, and the team's devices signing the key
   set the way Tailnet Lock does. Its cost, accepted for later: every server-side form
   (snapshots, HLS, transcoding) then comes from the machine, and stock ffmpeg and curl work
-  only through a TLS tunnel ending on the machine. Owner, 2026-09-30. [one-runtime-per-machine]
+  only through a TLS tunnel ending on the machine. Owner, 2026-09-30. [one-runtime-per-machine;
+  amended by moq-on-the-tailnet: the relay is a separate program the machine joins, never
+  bundled, and the HTTP forms named here are not built]
+- **DECIDED** — Off a machine, real-time data travels over MoQ on QUIC and over nothing else.
+  On one machine streams share data through shared memory, as today. Each machine's engine
+  serves a MoQ endpoint itself, on its tailnet address, and a reader on another machine
+  subscribes to it directly; no MoQ relay is needed between machines on one tailnet. A
+  link between streams on two machines is still pulled by its reader from a public port
+  (pull-only, above), and nothing is sent for a port nobody subscribes to. Zenoh is removed —
+  no session, no runtime mesh, no mesh name, no multicast discovery, no router. Owner,
+  2026-10-04, superseding 2026-09-14's runtime mesh and 2026-09-30's "Zenoh stays the transport
+  between machines". [moq-on-the-tailnet]
+- **DECIDED** — Tatolab builds nothing Tailscale already does. Reach between machines, machine
+  names, encryption on the wire, identity and discovery come from the tailnet. A machine with
+  no Tailscale runs every stream, shares between streams on itself, and can join a relay; it is
+  never read directly by another machine, and nothing is built for a plain LAN — no discovery,
+  no certificate minting, no name claiming, no peer authentication. Who may read a public port
+  on the tailnet is Tailscale's access rules: the engine checks the port's exposure and adds no
+  per-reader check, so the stream map and peer authentication are not built. Owner, 2026-10-04.
+  [moq-on-the-tailnet]
+- **DECIDED** — A machine's name is its tailnet name. The engine reads the local Tailscale's
+  status for two things: its own machine name, and the list of the tailnet's other machines.
+  Whether a listed machine runs Tatolab, and what it exposes, is learned by asking that
+  machine. `desk/<stream>/<node>/<port>` therefore names the tailnet machine `desk`, and a full
+  tailnet name is accepted in the machine position for a machine shared in from another
+  tailnet. With no Tailscale the machine's name is its hostname and matters only on that
+  machine. The machine-name collision rule of the address entry above — the claim on the mesh,
+  the `-2` suffix, the recorded suffix — is deleted; the stream, node and port rules and the
+  cast stand. Owner, 2026-10-04. [moq-on-the-tailnet]
+- **DECIDED** — The engine stands on the moq-dev line of MoQ, the `moq-net` and `moq-tokio`
+  crates, pinned to exact versions, and serves sessions itself with no relay program beside it.
+  The vendored draft-16 `moq-transport` and its two recorded patches are deleted, never
+  repaired. Known (2026-10-04): the line's compatibility with Cloudflare's hosted relays is
+  claimed upstream and unverified here. Owner, 2026-10-04. [moq-on-the-tailnet]
+- **DECIDED** — The internet edge is a relay the machine has joined, and joining is a machine
+  setting. A machine joined to a relay offers every one of its public ports there, sending a
+  port only while someone subscribes; there is no fourth exposure level and no per-port
+  internet flag, and who reads at the relay is the relay's own access rules. The runtime joins
+  any relay from an address and a credential and holds nothing else about relays — no account,
+  team, directory, signed link or billing, which belong to a separate private service. No relay
+  is written or bundled here; a person who wants their own runs an existing open-source relay
+  program. The relay is no longer a role of the runtime. Owner, 2026-10-04, superseding 2026-09-30's
+  relay role and bundled `moq-relay-ietf`. [moq-on-the-tailnet]
+- **DECIDED** — HTTP carries only what is not real time: the listing of exposed ports, a
+  read-only MCP, snapshots, small samples and the viewer page — never live media, in any
+  browser and for any tool. `tatolabd` asks Tailscale to serve its HTTP, on a port of its own,
+  the first time a port goes public; where Tailscale refuses for lack of rights it says the
+  one command to run once, and it never alters any other serve setting. Off the machine that
+  HTTP shows public ports only, as on any address but loopback (§Control plane, the local
+  API). The 2026-09-30 direction's live forms over HTTP — MPEG-TS, HLS, raw H.264 and fMP4 —
+  and its `whep` form are not built. Owner, 2026-10-04. [moq-on-the-tailnet]
+- **DECIDED** — The viewer page is in the first version of sharing: every public port has a
+  page that plays it, served with the HTTP above and built on the MoQ stack's own browser
+  player, never one written here. One path serves every browser — QUIC and MoQ. No WebSocket
+  or other TCP fallback is built or enabled. Owner, 2026-10-04. [moq-on-the-tailnet]
+- **DECIDED** — The removal comes first and is one change: Zenoh and everything that exists for
+  it, and the MoQ extension wheel with its vendored tree. Between it and the sharing step
+  nothing links one machine to another and the tree holds no MoQ; everything on one machine
+  keeps working. The WebRTC extension stays as it is. The `tap` and `exchange` verbs, retired
+  by the exposure entry above, stay until the sharing step and are deleted in the change that
+  builds the snapshot and sample forms: from then the repo's live verification reads a port
+  the way a user does — the fixture stream exposes it private, and the check fetches exact,
+  full-resolution snapshots from the machine's local HTTP listing.
+  The one-runtime-per-machine sequence then continues through runtime hosting, its in-flight
+  changes built minus their mesh parts, then
+  accelerators optional, then one sharing step — the entries above — in place of that
+  sequence's steps 8 and 9, then resources, packs and the app. Owner, 2026-10-04.
+  [moq-on-the-tailnet]
+- **OPEN** — The sharing step's details, decided at its own align and built against by nothing
+  until then: which versions of `moq-net` and `moq-tokio` are pinned; how groups are cut for
+  data that is not video, without the engine reading a bag;
+  what a public port whose bags name a surface serves off the machine, the mesh having sent raw
+  pixels where a browser needs encoded video; how a relay is joined and how a machine's ports
+  are named there; the certificate the engine's QUIC listener shows a browser; how the HTTP
+  that `tailscale serve` fronts shows public ports only, the loopback listener showing private
+  ones too; what a browser that cannot play is told; the read-only
+  MCP's tools and who may call it; the verbs that list machines and their public ports; what a
+  control client hands the runtime beyond a relay address and a credential; and how a stamp
+  taken on another machine's clock is marked once the mesh attachment that carried the clock
+  identity is gone. Direction (session's, not decided): a bag stands alone, so each may open
+  its own group, video cutting at its keyframes; machine to machine needs no certificate from
+  Tailscale, a tailnet address being authenticated already; `tailscale serve` supplies the
+  HTTPS certificate for what it fronts, so the runtime requests and renews none. Known
+  (2026-10-04): `tailscale serve` proxies no UDP, so the engine listens for QUIC on the tailnet
+  address itself; changing serve settings needs root, Tailscale's operator user or, on macOS,
+  the admin group, and HTTPS must be switched on for the tailnet; Funnel carries TCP only, on
+  ports 443, 8443 and 10000; any local user reads Tailscale's status on Linux, the same user
+  on macOS; the stack's player keeps WebKit on a WebSocket fallback by default, which the entry
+  above rules out, so Safari and iOS play only where their own QUIC support holds.
+  [moq-on-the-tailnet]
 
 ## Language SDKs & parity — IN-FLIGHT (→ package-split-and-lend)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
@@ -4230,7 +4363,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   dependency of a stream: nothing in a stream, its `pyproject.toml` or its graph names a
   runtime version, and nothing compares versions to admit a stream. A runtime at least as new
   as a stream's `tatolab-stream` runs it; an older one refuses what it lacks by name, and the
-  refusal names the runtime's own version. Owner, 2026-10-02. [package-split-and-lend]
+  refusal names the runtime's own version. Owner, 2026-10-02. [package-split-and-lend; amended
+  by moq-on-the-tailnet: `tatolab-webrtc` is the one first-party extension, `tatolab-moq` being
+  deleted before it is renamed]
 - **DECIDED** — Wheel portability model: what the host may supply is stated per platform,
   and nothing else is linked. On Linux, system libraries (Vulkan loader, window system,
   libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape.
@@ -4405,7 +4540,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   in the tree and gave a helper's link the `pending` state the instructions now explain;
   cross-runtime-links — SHIPPED #2287, #2289 for the mesh arguments and the states the
   instructions explain; reopened by one-runtime-per-machine: the local API; amended by
-  local-api: the tools, resources and prompts speak the graph's words (the entry below)]
+  local-api: the tools, resources and prompts speak the graph's words (the entry below); amended by moq-on-the-tailnet: the mesh arguments and states leave `connect`, `disconnect` and the instructions with Zenoh; `tap` and `exchange` leave the tool set at the sharing step]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
@@ -4428,7 +4563,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the prompts say node — `insert_node_between_linked_nodes` among them. `runtime_name` stays
   until one runtime hosts several streams and the address gains its machine and stream. The
   engine's Rust identifiers keep "processor" until the rename. It ships with the graph's one
-  shape. Owner, 2026-10-02. [local-api; stream-graph]
+  shape. Owner, 2026-10-02. [local-api; stream-graph; amended by moq-on-the-tailnet: the `runtime_name` link end and `mesh.egress_ports` are deleted with Zenoh; `tap`'s channel goes with `tap`, at the sharing step]
 - **DECIDED** — ~~`dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
@@ -4455,7 +4590,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
-  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself; amended by local-api: the `mcp` verb joins; amended by tatolab-names and package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the installer and never in a pip wheel]
+  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself; amended by local-api: the `mcp` verb joins; amended by tatolab-names and package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the installer and never in a pip wheel; amended by moq-on-the-tailnet: `nodes` lists no mesh peers once Zenoh is removed; `tap` and `exchange` leave the CLI at the sharing step]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
@@ -4483,7 +4618,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_directory.py -->
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
   bags verbatim, trading completeness for guaranteed non-interference; graph and health
-  inspection ride the same control plane. [control-plane-one-surface]
+  inspection ride the same control plane. [control-plane-one-surface; amended by moq-on-the-tailnet: `tap` is deleted at the sharing step; logs, `graph` and health stand]
 - **DECIDED** — The control plane exposes one composable door for pixels: `exchange`
   takes a published surface id and hands back that frame's image bytes, out of process,
   with no window in the graph and no display server in the path. It is its own verb,
@@ -4498,7 +4633,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   id, and calls `exchange` with that id. The engine therefore still inspects no bag
   content anywhere. This is how verification sees pixels, and equally how any API
   consumer sees them, because the door knows nothing about verification.
-  [control-plane-surface-pixel-exchange — SHIPPED #1972]
+  [control-plane-surface-pixel-exchange — SHIPPED #1972; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-api-server the_tap_tool_schema_is_unchanged_by_the_exchange_joining_the_catalog -->
   <!-- verify: cargo test -p streamlib-engine --lib a_published_pool_frame_exchanges_through_the_runtime_operation_for_its_own_pixels -->
 - **DECIDED** — The exchange is a pool claim, bounded to the copy. Inside one operation
@@ -4511,7 +4646,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   worst, never another processor's cadence. Without the claim a producer could recycle
   the slot mid-copy and the caller would receive a torn frame — half one frame, half the
   next — which is precisely the silent wrongness the surface-id lifetime contract exists
-  to kill. [control-plane-surface-pixel-exchange — SHIPPED #1972]
+  to kill. [control-plane-surface-pixel-exchange — SHIPPED #1972; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-engine --lib sequential_exchanges_of_one_frame_never_pin_more_than_one_hold -->
 - **DECIDED** — Staleness fails loud and composes as a retry, never as wrong pixels. A
   surface id is per-frame (`<slot>#<generation>`), and resolving a retired one is refused
@@ -4522,7 +4657,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Sample-and-exchange-as-you-go is therefore the intended loop, and temporal sampling
   falls out of composition rather than needing a batched verb. The publish-to-claim
   window is the one every pool consumer already obeys: it rides pool depth, and
-  outwaiting it is an error. [control-plane-surface-pixel-exchange — SHIPPED #1972]
+  outwaiting it is an error. [control-plane-surface-pixel-exchange — SHIPPED #1972; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-engine --lib a_retired_frame_id_is_refused_at_the_exchange_naming_the_recycling -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_on_a_recycled_frame_is_a_tool_error_naming_the_recycling -->
 - **DECIDED** — The engine converts, in the RHI, or the caller gets nothing viewable: a
@@ -4540,7 +4675,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   door is one `ResolvedSurfaceBacking` — and the caller needs no Vulkan device, no surface
   socket and no runtime link.
   [control-plane-surface-pixel-exchange — SHIPPED #1972; opened on macOS by
-  macos-capability-parity — SHIPPED #2406; amended by one-runtime-per-machine: accelerators are optional]
+  macos-capability-parity — SHIPPED #2406; amended by one-runtime-per-machine: accelerators are optional; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-engine --lib a_pooled_rgba_frame_exchanges_for_the_pixels_the_bag_published -->
   <!-- verify: cargo test -p streamlib-engine --lib a_texture_backed_frame_exchanges_for_the_pixels_its_producer_rendered -->
 - **DECIDED** — Two spellings of one operation: MCP tool and REST route serve the same
@@ -4557,7 +4692,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   whatever the auth entry below decides later, it decides for this verb the same as the
   rest. [control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; amended by local-api:
   the auth entry decided that control carries no token, so the bearer gate retires with the
-  network listener]
+  network listener; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route -->
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_rejects_a_missing_token_with_401_when_auth_on -->
@@ -4565,7 +4700,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   proof. Reading a channel no longer requires terminating it in a window, so a mid-graph
   channel is observable in the topology that ships. Window capture survives only where
   the window is genuinely the subject — the present and swapchain path.
-  [control-plane-surface-pixel-exchange — SHIPPED #1972, #1976]
+  [control-plane-surface-pixel-exchange — SHIPPED #1972, #1976; amended by moq-on-the-tailnet: once `exchange` is deleted at the sharing step the same holds through a private port's snapshot — a port is read with no node added to the graph]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-26-control-plane-surface-pixel-exchange.md -->
 - **DECIDED** — Auth and remote-access posture: whoever can open the local API's socket may
   call it — the owning user, by file permission — and nothing off the machine can call it at
@@ -4576,11 +4711,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   serves one local API on a socket in its runtime directory that only the owning user can
   open, carrying today's router and control vocabulary unchanged; no network address serves
   control. The URL forms are a separate listener that changes nothing — private and public ports
-  on loopback, public ports on a LAN or tailnet address when the user asks (levels amended
-  2026-10-04) — because browsers and ffmpeg cannot dial a socket. A runtime is never driven from another machine
+  on loopback, public ports on ~~a LAN or tailnet address when the user asks~~ the tailnet,
+  through `tailscale serve` (levels amended 2026-10-04; the tailnet clause the same day) — because browsers and ffmpeg cannot dial a socket. A runtime is never driven from another machine
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
-  client's. Owner, 2026-10-01. [local-api; one-runtime-per-machine]
+  client's. Owner, 2026-10-01. [local-api; one-runtime-per-machine; amended by moq-on-the-tailnet: the URL listener serves loopback, and the tailnet through `tailscale serve`; no LAN address is served]
 - **DECIDED** — An MCP host reaches the local API by launching the CLI's `mcp` verb as a
   stdio server — `claude mcp add streamlib -- <cli> mcp`. The verb forwards each message
   from its stdin to the runtime's MCP endpoint over the socket, unchanged, and writes the
