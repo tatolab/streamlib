@@ -482,6 +482,8 @@ def launch_until_the_entry_stops_it(app_directory: Path) -> int:
         "dev",
         requested_anchor_directory=app_directory,
         requested_entry_file=None,
+        requested_stream_target=None,
+        requested_stream_name=None,
         bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
         bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
         runtime_name=None,
