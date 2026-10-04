@@ -23,7 +23,14 @@ that uses it (`test_single_processor_pipeline.py`).
 import pytest
 
 import streamlib
-from streamlib import RuntimeContextLimitedAccess, node, output
+from streamlib import (
+    RuntimeContextLimitedAccess,
+    Stream,
+    compile_stream_to_graph,
+    node,
+    output,
+    stream,
+)
 
 
 @node(execution="continuous", interval_ms=10)
@@ -34,12 +41,17 @@ class NeverStartedSource:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None: ...
 
 
+@stream
+def one_never_started_source(stream: Stream) -> None:
+    stream.add(NeverStartedSource)
+
+
 def test_waiting_on_a_graph_that_was_never_run_times_out_naming_the_state():
     """Not an error, a wait — and when nothing ever starts it, the timeout says
     every processor is still `Pending` rather than blaming the caller."""
     runtime = streamlib.Runtime()
     try:
-        runtime.add(NeverStartedSource)
+        runtime.load(compile_stream_to_graph(one_never_started_source))
         with pytest.raises(RuntimeError, match="Pending"):
             runtime.wait_until_every_processor_is_running(timeout=0.5)
     finally:
