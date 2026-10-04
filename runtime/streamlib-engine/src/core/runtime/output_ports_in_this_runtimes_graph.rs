@@ -12,7 +12,9 @@
 use std::sync::Arc;
 
 use crate::core::compiler::Compiler;
-use crate::core::graph::{Graph, OutputLinkPortRef};
+use crate::core::graph::{
+    ExposedOutputPortsComponent, Graph, GraphNodeWithComponents, OutputLinkPortRef, ProcessorNode,
+};
 use crate::core::runtime::mesh::{
     HowToReadAnOfferedOutputPort, OutputPortOfferedOnTheMesh,
     OutputPortThisRuntimeHoldsAndCannotSend, OutputPortsOfferedOnTheMesh,
@@ -39,7 +41,7 @@ impl OutputPortsInThisRuntimesGraph {
 impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
     fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
         self.compiler
-            .scope(|graph, _tx| every_output_port_in(graph))
+            .scope(|graph, _tx| every_exposed_output_port_in(graph))
     }
 
     fn how_to_read_an_offered_output_port(
@@ -52,7 +54,9 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
                 .traversal()
                 .v_with_node_name(processor_display_name)
                 .first()?;
-            if !node.has_output(port_name) {
+            // Checked here as well as in the offer: a reader token is anyone's to
+            // declare, and naming a port is no reason to send it.
+            if !node.has_output(port_name) || !its_stream_exposes(node, port_name) {
                 return None;
             }
             let source_processor_id = node.id.clone();
@@ -112,7 +116,7 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
 /// The one check the offer and the egress both read, so a runtime can never
 /// answer that it offers a port it then declines to send.
 ///
-/// Nameability alone: the offer is answered for every port in the graph on every
+/// Nameability alone: the offer is answered for every exposed port on every
 /// query, and a sending runtime does no work for a port nobody reads, so this
 /// may touch nothing but the two names. Every other way a port turns out
 /// unsendable is found when its egress starts, by the egress.
@@ -124,14 +128,25 @@ fn the_channel_an_output_port_publishes_to(
         .map_err(|cannot_be_named| format!("its channel cannot be named: {cannot_be_named}"))
 }
 
-/// Every output port of every processor in `graph`, addressed the way the mesh
-/// addresses one, split into what this runtime can send and what it holds and
-/// cannot.
-fn every_output_port_in(graph: &Graph) -> OutputPortsOfferedOnTheMesh {
+/// Whether the stream loaded into this runtime exposes `node`'s output port
+/// `port_name` — the one thing that lets a port leave the machine.
+fn its_stream_exposes(node: &ProcessorNode, port_name: &str) -> bool {
+    node.get::<ExposedOutputPortsComponent>()
+        .is_some_and(|exposed| exposed.exposes(port_name))
+}
+
+/// Every exposed output port in `graph`, addressed the way the mesh addresses
+/// one, split into what this runtime can send and what it holds and cannot.
+fn every_exposed_output_port_in(graph: &Graph) -> OutputPortsOfferedOnTheMesh {
     let mut ports = Vec::new();
     let mut ports_it_holds_and_cannot_send = Vec::new();
     for node in graph.traversal().v(()).iter() {
-        for port in &node.ports.outputs {
+        for port in node
+            .ports
+            .outputs
+            .iter()
+            .filter(|port| its_stream_exposes(node, &port.name))
+        {
             match the_channel_an_output_port_publishes_to(node.id.as_str(), &port.name) {
                 Ok(_) => ports.push(OutputPortOfferedOnTheMesh {
                     processor_display_name: node.display_name.clone(),
@@ -218,6 +233,28 @@ mod tests {
         (compiler, display_name, output_writer)
     }
 
+    /// Expose `port_name` of the node `display_name` names, the way a loaded
+    /// stream's `exposed` does.
+    fn expose(compiler: &Compiler, display_name: &str, port_name: &str) {
+        compiler.scope(|graph, _tx| {
+            let processor_id = graph
+                .traversal()
+                .v_with_node_name(display_name)
+                .first()
+                .expect("the node is in the graph")
+                .id
+                .clone();
+            graph
+                .traversal_mut()
+                .v(&processor_id)
+                .first_mut()
+                .expect("the node is in the graph")
+                .insert_component_without_rendering_it(ExposedOutputPortsComponent(vec![
+                    port_name.to_string(),
+                ]));
+        });
+    }
+
     /// Asking how to read an offered port is what opens its channel, because
     /// the mesh's egress is the first consumer a port nothing local reads ever
     /// has.
@@ -230,6 +267,7 @@ mod tests {
     fn asking_how_to_read_an_offered_port_is_what_opens_its_channel() {
         let (compiler, display_name, output_writer) =
             a_compiler_holding_one_output_only_processor();
+        expose(&compiler, &display_name, "out1");
         let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
 
@@ -254,13 +292,14 @@ mod tests {
         );
     }
 
-    /// Every output port in the graph is offered, under its processor's display
-    /// name — the name a peer addresses it by — and asking does not open
-    /// anything, because a runtime does no work for a port nobody reads.
+    /// An exposed output port is offered, under its processor's display name —
+    /// the name a peer addresses it by — and asking does not open anything,
+    /// because a runtime does no work for a port nobody reads.
     #[test]
-    fn every_output_port_is_offered_under_its_display_name_and_listing_opens_nothing() {
+    fn an_exposed_output_port_is_offered_under_its_display_name_and_listing_opens_nothing() {
         let (compiler, display_name, output_writer) =
             a_compiler_holding_one_output_only_processor();
+        expose(&compiler, &display_name, "out1");
         let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
 
@@ -297,6 +336,7 @@ mod tests {
                 .display_name
                 .clone()
         });
+        expose(&compiler, &display_name, "outOne");
         let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
 
@@ -310,6 +350,49 @@ mod tests {
             .expect("the port it holds and cannot send is answered with its reason");
         assert!(why.contains("channel cannot be named"), "{why}");
         assert!(why.contains('O'), "the reason names the character: {why}");
+    }
+
+    /// A port its stream does not expose is neither offered nor held: nothing
+    /// leaves the machine until a stream exposes it, and a peer is not told the
+    /// port exists.
+    ///
+    /// Mental-revert: drop the exposure filter from the offer and this goes red.
+    #[test]
+    fn an_unexposed_output_port_is_not_offered_and_not_listed_as_held() {
+        let (compiler, _, _) = a_compiler_holding_one_output_only_processor();
+        let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
+        let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
+
+        let answered = reads_the_graph.output_ports_it_offers_right_now();
+        assert!(answered.ports.is_empty(), "{answered:?}");
+        assert!(
+            answered.ports_it_holds_and_cannot_send.is_empty(),
+            "{answered:?}"
+        );
+    }
+
+    /// A reader naming an unexposed port is answered no way to read it, and
+    /// the port's channel stays shut: a reader token is anyone's to declare.
+    ///
+    /// Mental-revert: drop the exposure check from
+    /// `how_to_read_an_offered_output_port` and this goes red on both halves —
+    /// the egress gets a way to read the port, and the port's channel opens.
+    #[test]
+    fn a_reader_naming_an_unexposed_port_is_answered_nothing_and_opens_no_channel() {
+        let (compiler, display_name, output_writer) =
+            a_compiler_holding_one_output_only_processor();
+        let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
+        let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
+
+        assert!(
+            reads_the_graph
+                .how_to_read_an_offered_output_port(&display_name, "out1")
+                .is_none()
+        );
+        assert!(
+            !output_writer.has_channel_publisher("out1"),
+            "an unexposed port's channel must stay shut however a reader names it"
+        );
     }
 
     /// A port no processor here has says so by answering nothing, which is what

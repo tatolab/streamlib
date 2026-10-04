@@ -8,3 +8,12 @@
 /// exposure once, in its top-level `exposed`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExposedOutputPortsComponent(pub Vec<String>);
+
+impl ExposedOutputPortsComponent {
+    /// Whether the stream exposes this node's output port `port_name`.
+    pub fn exposes(&self, port_name: &str) -> bool {
+        self.0
+            .iter()
+            .any(|exposed_port_name| exposed_port_name == port_name)
+    }
+}
