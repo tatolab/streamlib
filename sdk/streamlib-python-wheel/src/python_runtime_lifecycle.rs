@@ -283,6 +283,8 @@ impl RuntimeGraphLoadRecord {
 #[pyclass(name = "Runtime", module = "streamlib", subclass)]
 pub struct PythonRuntimeHandle {
     lifecycle: Mutex<PythonRuntimeLifecycleState>,
+    /// Locked after `lifecycle` wherever both are held, so `run()`'s check of
+    /// the record and `load()`'s claim of it cannot interleave.
     graph_load_record: Mutex<RuntimeGraphLoadRecord>,
 }
 
@@ -318,7 +320,14 @@ impl PythonRuntimeHandle {
     /// teardown wait out an in-flight `add`, which reintroduces the wait this
     /// exists to avoid.
     fn engine_being_built(&self, what: &str) -> PyResult<Arc<Runner>> {
-        match &*self.lifecycle() {
+        Self::engine_being_built_in(&self.lifecycle(), what)
+    }
+
+    fn engine_being_built_in(
+        lifecycle: &PythonRuntimeLifecycleState,
+        what: &str,
+    ) -> PyResult<Arc<Runner>> {
+        match lifecycle {
             PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => Ok(engine.clone()),
             PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested(_) => {
                 Err(PyRuntimeError::new_err(format!(
@@ -778,10 +787,14 @@ impl PythonRuntimeHandle {
                 self.graph_load_record()
                     .record_a_refusal_that_claimed_no_load(&refusal.value(python).to_string());
             })?;
-        let engine = self.engine_being_built("load a graph")?;
-        self.graph_load_record()
-            .claim_the_one_load()
-            .map_err(PyRuntimeError::new_err)?;
+        let engine = {
+            let lifecycle = self.lifecycle();
+            let engine = Self::engine_being_built_in(&lifecycle, "load a graph")?;
+            self.graph_load_record()
+                .claim_the_one_load()
+                .map_err(PyRuntimeError::new_err)?;
+            engine
+        };
 
         RuntimeGraphLoadRecord::run_the_claimed_load(
             &self.graph_load_record,
@@ -840,12 +853,12 @@ impl PythonRuntimeHandle {
     ///
     /// [`shutdown`]: PythonRuntimeHandle::shutdown
     fn run(&self, python: Python<'_>) -> PyResult<()> {
-        let refusal_of_run = self.graph_load_record().refusal_of_run();
-        if let Some(refusal_of_run) = refusal_of_run {
-            return Err(PyRuntimeError::new_err(refusal_of_run));
-        }
         let engine = {
             let mut lifecycle = self.lifecycle();
+            let refusal_of_run = self.graph_load_record().refusal_of_run();
+            if let Some(refusal_of_run) = refusal_of_run {
+                return Err(PyRuntimeError::new_err(refusal_of_run));
+            }
             // Replaced with the terminal state first because the running state
             // needs the engine to point at, which is what is being taken here.
             match std::mem::replace(
