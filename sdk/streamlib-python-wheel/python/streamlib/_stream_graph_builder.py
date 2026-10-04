@@ -58,6 +58,11 @@ _FUNCTION_LOCAL_MARKER = "<locals>"
 _CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN = ("/", "*", "$", "#", "?")
 _CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH = "@"
 
+# The engine reads a config integer as an i64, else a u64
+# (`python_bag_conversion.rs`); a graph carries no wider one.
+_SMALLEST_INTEGER_A_GRAPH_CARRIES = -(2**63)
+_LARGEST_INTEGER_A_GRAPH_CARRIES = 2**64 - 1
+
 _STREAM_TAKES_NO_ARGUMENTS = (
     "@stream takes no arguments: the name is the function's, overridden at load "
     "with `--name`. Write `@stream` bare above `def main(stream: Stream) -> None:`."
@@ -553,10 +558,14 @@ def _config_as_json_object(config: Mapping[str, Any] | None) -> dict[str, Any]:
             f"config must be a mapping of str keys to JSON values — the object a node's "
             f"config is; got {config!r}, a {type(config).__name__}"
         )
-    return _json_object(config, "config")
+    return _json_object(config, "config", {id(config): "config"})
 
 
-def _json_object(mapping: Mapping[Any, Any], key_path: str) -> dict[str, Any]:
+def _json_object(
+    mapping: Mapping[Any, Any],
+    key_path: str,
+    key_paths_of_enclosing_containers_by_id: dict[int, str],
+) -> dict[str, Any]:
     json_object: dict[str, Any] = {}
     for key, value in mapping.items():
         if not isinstance(key, str):
@@ -564,27 +573,79 @@ def _json_object(mapping: Mapping[Any, Any], key_path: str) -> dict[str, Any]:
                 f"config must be JSON: `{key_path}` has the key {key!r}, a "
                 f"{type(key).__name__}, and a JSON object's keys are strings"
             )
-        json_object[key] = _json_value(value, f"{key_path}[{key!r}]")
+        plain_key = str.__str__(key)
+        if plain_key in json_object:
+            raise ValueError(
+                f"config must be JSON: `{key_path}` has two keys that are both "
+                f"{plain_key!r} as plain strings, and a JSON object holds a key once"
+            )
+        json_object[plain_key] = _json_value(
+            value, f"{key_path}[{plain_key!r}]", key_paths_of_enclosing_containers_by_id
+        )
     return json_object
 
 
-def _json_value(value: object, key_path: str) -> Any:
-    if value is None or isinstance(value, (str, bool, int)):
+def _json_value(
+    value: object,
+    key_path: str,
+    key_paths_of_enclosing_containers_by_id: dict[int, str],
+) -> Any:
+    if value is None or isinstance(value, bool):
         return value
+    if isinstance(value, str):
+        return str.__str__(value)
+    if isinstance(value, int):
+        return _json_integer(value, key_path)
     if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError(
-                f"config must be JSON: `{key_path}` is {value!r}, which JSON cannot carry"
-            )
-        return value
+        return _json_float(value, key_path)
+    if not isinstance(value, (Mapping, list, tuple)):
+        raise TypeError(
+            f"config must be JSON: `{key_path}` is a {type(value).__name__}, and a graph "
+            f"carries only dict, list, tuple, str, int, float, bool and None"
+        )
+    enclosing_key_path = key_paths_of_enclosing_containers_by_id.get(id(value))
+    if enclosing_key_path is not None:
+        raise ValueError(
+            f"config must be JSON: `{key_path}` is `{enclosing_key_path}`, which holds "
+            f"it — a value holding itself has no JSON form"
+        )
+    key_paths_of_enclosing_containers_by_id[id(value)] = key_path
     if isinstance(value, Mapping):
-        return _json_object(value, key_path)
-    if isinstance(value, (list, tuple)):
-        return [
-            _json_value(item, f"{key_path}[{index}]")
+        json_container: Any = _json_object(
+            value, key_path, key_paths_of_enclosing_containers_by_id
+        )
+    else:
+        json_container = [
+            _json_value(
+                item, f"{key_path}[{index}]", key_paths_of_enclosing_containers_by_id
+            )
             for index, item in enumerate(value)
         ]
-    raise TypeError(
-        f"config must be JSON: `{key_path}` is a {type(value).__name__}, and a graph "
-        f"carries only dict, list, tuple, str, int, float, bool and None"
-    )
+    del key_paths_of_enclosing_containers_by_id[id(value)]
+    return json_container
+
+
+def _json_integer(value: int, key_path: str) -> int:
+    plain_integer = int.__int__(value)
+    if not (
+        _SMALLEST_INTEGER_A_GRAPH_CARRIES
+        <= plain_integer
+        <= _LARGEST_INTEGER_A_GRAPH_CARRIES
+    ):
+        # The value is left out: CPython refuses to render an int of more than
+        # 4300 digits as text.
+        raise ValueError(
+            f"config must be JSON: `{key_path}` is an integer outside -2**63 to "
+            f"2**64 - 1, the range a graph carries one in"
+        )
+    return plain_integer
+
+
+def _json_float(value: float, key_path: str) -> float:
+    plain_float = float.__float__(value)
+    if not math.isfinite(plain_float):
+        raise ValueError(
+            f"config must be JSON: `{key_path}` is {plain_float!r}, which JSON cannot "
+            f"carry"
+        )
+    return plain_float

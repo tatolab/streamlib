@@ -12,10 +12,13 @@ import ast
 import json
 import math
 import sys
+from collections.abc import Mapping
+from enum import Enum, IntEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+import numpy
 import pytest
 
 import streamlib
@@ -67,6 +70,28 @@ class UndecoratedFilter:
 
 class StreamBuildingFailure(Exception):
     """The one exception `a_stream_that_raises` raises."""
+
+
+class FrameColour(str, Enum):
+    """A `str` enum, whose `str()` is `FrameColour.RED` rather than its value."""
+
+    RED = "red"
+
+
+class FrameRate(IntEnum):
+    """An `int` enum."""
+
+    SIXTY = 60
+
+
+class KeyComparedByIdentity(str):
+    """A `str` a mapping can hold beside an equal plain `str` key."""
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __hash__(self) -> int:
+        return id(self)
 
 
 THE_STREAM_BUILDING_FAILURE = StreamBuildingFailure("the camera rig is unplugged")
@@ -179,6 +204,32 @@ def not_decorated(stream: Stream) -> None:
 
 def names_of_nodes_added(builder: Stream, *node_classes: type) -> "list[str]":
     return [builder.add(node_class).name for node_class in node_classes]
+
+
+def config_compiled_for(config: "Mapping[str, Any]") -> "dict[str, Any]":
+    """The config `compile_stream_to_graph` records for one node added with `config`."""
+    namespace: "dict[str, Any]" = {
+        "__name__": "rig_streams",
+        "StandInMarker": StandInMarker,
+        "config_under_test": config,
+    }
+    exec(
+        "def main(stream):\n    stream.add(StandInMarker, config=config_under_test)\n",
+        namespace,
+    )
+    return compile_stream_to_graph(stream(namespace["main"]))["nodes"][0]["config"]
+
+
+def a_config_holding_itself() -> "dict[str, Any]":
+    config: "dict[str, Any]" = {"title": "Rig"}
+    config["overlay"] = {"parent": config}
+    return config
+
+
+def a_config_holding_a_list_holding_itself() -> "dict[str, Any]":
+    labels: "list[Any]" = ["left"]
+    labels.append(labels)
+    return {"overlay": {"labels": labels}}
 
 
 def test_a_defaulted_name_is_the_cast_short_name_and_a_duplicate_takes_the_next_suffix() -> (
@@ -463,12 +514,16 @@ def test_an_add_refused_for_its_platform_records_nothing(
         {"labels": {"left"}},
         {1: "left"},
         {"gain": math.nan},
+        {"frame_count": 2**64},
+        a_config_holding_itself(),
         ["gain"],
     ],
     ids=[
         "a-set",
         "a-non-string-key",
         "nan",
+        "an-integer-beyond-64-bits",
+        "a-config-holding-itself",
         "not-a-mapping",
     ],
 )
@@ -535,6 +590,105 @@ def test_a_config_key_that_is_not_a_string_is_refused_naming_its_path() -> None:
 def test_a_config_float_json_cannot_carry_is_refused_naming_its_key_path() -> None:
     with pytest.raises(ValueError, match=r"config\['gain'\]"):
         Stream("rig").add(FrameInverter, config={"gain": math.nan})
+
+
+def test_config_values_subclassing_str_int_or_float_are_recorded_as_the_base_type() -> (
+    None
+):
+    config = config_compiled_for(
+        {
+            "colour": FrameColour.RED,
+            "frame_rate": FrameRate.SIXTY,
+            "gain": numpy.float64(0.5),
+            "palette": [FrameColour.RED, FrameRate.SIXTY, numpy.float64(0.25)],
+            "enabled": True,
+        }
+    )
+
+    assert config == {
+        "colour": "red",
+        "frame_rate": 60,
+        "gain": 0.5,
+        "palette": ["red", 60, 0.25],
+        "enabled": True,
+    }
+    assert [type(value) for value in config.values()] == [str, int, float, list, bool]
+    assert [type(item) for item in config["palette"]] == [str, int, float]
+
+
+def test_config_keys_subclassing_str_are_recorded_as_plain_strings() -> None:
+    config = config_compiled_for({FrameColour.RED: {FrameColour.RED: 1}})
+
+    assert config == {"red": {"red": 1}}
+    assert type(next(iter(config))) is str
+    assert type(next(iter(config["red"]))) is str
+
+
+def test_config_keys_equal_only_as_plain_strings_are_refused_naming_the_key() -> None:
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(
+            FrameInverter,
+            config={"overlay": {"gain": 1, KeyComparedByIdentity("gain"): 2}},
+        )
+
+    message = str(refusal.value)
+    assert message.startswith("config must be JSON:")
+    assert "`config['overlay']`" in message
+    assert "'gain'" in message
+
+
+def test_config_integers_at_the_64_bit_bounds_are_kept() -> None:
+    bounds = [-(2**63), 2**63 - 1, 2**64 - 1]
+
+    assert config_compiled_for({"bounds": bounds}) == {"bounds": bounds}
+
+
+@pytest.mark.parametrize(
+    "integer",
+    [2**64, -(2**63) - 1, 10**5000],
+    ids=["past-u64", "below-i64", "five-thousand-digits"],
+)
+def test_a_config_integer_beyond_64_bits_is_refused_naming_its_key_path(
+    integer: int,
+) -> None:
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(FrameInverter, config={"limits": [0, integer]})
+
+    message = str(refusal.value)
+    assert message.startswith("config must be JSON:")
+    assert "`config['limits'][1]`" in message
+    assert "-2**63 to 2**64 - 1" in message
+
+
+def test_a_config_holding_itself_is_refused_naming_where_it_loops() -> None:
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(FrameInverter, config=a_config_holding_itself())
+
+    message = str(refusal.value)
+    assert message.startswith("config must be JSON:")
+    assert "`config['overlay']['parent']` is `config`" in message
+
+
+def test_a_list_holding_itself_is_refused_naming_where_it_loops() -> None:
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(
+            FrameInverter, config=a_config_holding_a_list_holding_itself()
+        )
+
+    message = str(refusal.value)
+    assert message.startswith("config must be JSON:")
+    assert (
+        "`config['overlay']['labels'][1]` is `config['overlay']['labels']`" in message
+    )
+
+
+def test_a_container_two_keys_share_is_recorded_under_each() -> None:
+    shared_size = [640, 480]
+
+    config = config_compiled_for({"size": shared_size, "preview_size": shared_size})
+
+    assert config == {"size": [640, 480], "preview_size": [640, 480]}
+    assert config["size"] is not config["preview_size"]
 
 
 def test_connect_refuses_an_input_as_its_source_naming_the_fix() -> None:
