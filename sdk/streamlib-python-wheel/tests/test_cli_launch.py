@@ -6,8 +6,8 @@
 What these lock is that a Python-launched app is a first-class node: its
 stream's graph was loaded — or its `setup(rt)` built one — it published a
 node-registry entry the observation verbs discover, and a clean interrupt takes
-the entry away again. Booting
-initializes a GPU context, so the whole module needs a device.
+the entry away again. Booting initializes a GPU context, so the whole module
+needs a device.
 
 The MVP minute is measured here too, with every processor in its own child
 interpreter: what `new` writes runs frame after frame, a graph of helpers goes
@@ -468,14 +468,14 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     """What `streamlib new` writes must actually run, frame after frame.
 
     Run exactly as scaffolded — window included, which is why this is rig-only:
-    `dev` compiles the scaffold's `@stream` and loads the graph it builds. The
-    graph the control plane renders is the loaded one — its stream's name and
-    the exposure the stream declared. A registry entry alone proves almost
-    nothing here: it appears whether or not `process()` ever succeeds, so the
-    assertions that carry this test are the ones on the child's own output. `process() failed` catches an effect that
-    raises every frame; the delivered-frame count catches an effect that is
-    correct but so slow the demo is a slideshow — which is what editing the
-    write-combined mapping in place through a strided view produced (~4fps).
+    `dev` compiles the scaffold's `@stream` and loads the graph it builds, so the
+    graph the control plane renders carries the stream's name and the exposure
+    it declared. A registry entry alone proves almost nothing here: it appears
+    whether or not `process()` ever succeeds, so the assertions that carry this
+    test are the ones on the child's own output. `process() failed` catches an
+    effect that raises every frame; the delivered-frame count catches an effect
+    that is correct but so slow the demo is a slideshow — which is what editing
+    the write-combined mapping in place through a strided view produced (~4fps).
     The meter's line is the logic half of the first minute: a fan-out reader
     that never reports is a graph that shows the picture and drops the rest.
     """
