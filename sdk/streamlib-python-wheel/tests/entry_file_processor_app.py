@@ -28,12 +28,12 @@ def marker(name: str) -> None:
 
 
 @stream
-def entry_file_class(stream: Stream) -> None:
+def a_processor_defined_in_the_entry_file(stream: Stream) -> None:
     stream.add(EntryFileProcessor)
 
 
 @stream
-def function_local_class(stream: Stream) -> None:
+def a_function_local_processor(stream: Stream) -> None:
     def build_processor() -> type:
         @node(execution="continuous", interval_ms=1)
         class FunctionLocalProcessor:
@@ -45,7 +45,7 @@ def function_local_class(stream: Stream) -> None:
 
 
 @stream
-def importable_class(stream: Stream) -> None:
+def an_importable_processor(stream: Stream) -> None:
     """The same stream, one import line different — the fix the refusal names."""
     from zero_argument_process_processor import ZeroArgumentProcess
 
@@ -63,15 +63,15 @@ def compile_reporting_its_refusal(stream_function) -> None:
 
 
 def scenario_entry_file_class_is_refused() -> None:
-    compile_reporting_its_refusal(entry_file_class)
+    compile_reporting_its_refusal(a_processor_defined_in_the_entry_file)
 
 
 def scenario_function_local_class_is_refused() -> None:
-    compile_reporting_its_refusal(function_local_class)
+    compile_reporting_its_refusal(a_function_local_processor)
 
 
 def scenario_importable_class_is_accepted() -> None:
-    graph = compile_stream_to_graph(importable_class)
+    graph = compile_stream_to_graph(an_importable_processor)
     runtime = streamlib.Runtime()
     runtime.load(graph)
     marker("ACCEPTED")
