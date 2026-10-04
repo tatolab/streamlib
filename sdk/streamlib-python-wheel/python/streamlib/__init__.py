@@ -3,11 +3,13 @@
 
 """StreamLib — a realtime streaming engine with Python authoring.
 
-The engine runs in this interpreter's process: `Runtime()` boots it, `rt.add`
-puts processors in its graph, `rt.connect` links them, and `rt.run()` blocks
-until Ctrl-C with the GIL released. Processors declare identity and ports with
-`@node` / `@input` / `@output` and receive a capability-typed context in
-every lifecycle hook.
+The engine runs in this interpreter's process: `Runtime()` boots it,
+`rt.load(graph)` puts a stream's graph in it — or `rt.add` / `rt.connect` build
+one in place — and `rt.run()` blocks until Ctrl-C with the GIL released. A
+stream is a `@stream` function that adds, links and exposes nodes on a
+`Stream`; `compile_stream_to_graph` returns the graph it builds. Processors
+declare identity and ports with `@node` / `@input` / `@output` and receive a
+capability-typed context in every lifecycle hook.
 """
 
 import atexit
@@ -80,6 +82,20 @@ from ._processor_declaration import AudioWindowContract as AudioWindowContract
 from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
 from ._processor_declaration import node as node
+from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
+from ._stream_graph_builder import (
+    NodeOutputPortReference as NodeOutputPortReference,
+)
+from ._stream_graph_builder import NodeReference as NodeReference
+from ._stream_graph_builder import (
+    RemoteNodeInputPortReference as RemoteNodeInputPortReference,
+)
+from ._stream_graph_builder import (
+    RemoteNodeOutputPortReference as RemoteNodeOutputPortReference,
+)
+from ._stream_graph_builder import Stream as Stream
+from ._stream_graph_builder import compile_stream_to_graph as compile_stream_to_graph
+from ._stream_graph_builder import stream as stream
 from .audio_block import AudioBlock as AudioBlock
 from .claimed_surface_pixel_access import (
     ClaimedSurfacePixelAccess as ClaimedSurfacePixelAccess,
@@ -149,6 +165,9 @@ __all__ = [
     "ModelInputTensorLayout",
     "MonotonicTimer",
     "Mp4Sink",
+    "NodeInputPortReference",
+    "NodeOutputPortReference",
+    "NodeReference",
     "OpaqueFdTextureExport",
     "OpusDecoder",
     "OpusEncoder",
@@ -159,16 +178,20 @@ __all__ = [
     "ProcessorOutputTextureRing",
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
+    "RemoteNodeInputPortReference",
+    "RemoteNodeOutputPortReference",
     "RemoteProcessorInputPortReference",
     "RemoteProcessorOutputPortReference",
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "SpeakerSink",
+    "Stream",
     "TestPatternSource",
     "VideoFrame",
     "VirtualCameraSink",
     "clock",
+    "compile_stream_to_graph",
     "decode_msgpack_bytes_to_python_object",
     "encode_bag_to_msgpack_bytes",
     "gpu_limited_access_of_the_typed_read_in_progress",
@@ -177,6 +200,7 @@ __all__ = [
     "monotonic_now_ns",
     "output",
     "node",
+    "stream",
     "this_machines_stamp_clock_identity",
 ]
 
