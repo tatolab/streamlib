@@ -3,11 +3,13 @@
 
 """The two processors as a graph sees them.
 
-`rt.add` with no adapter and no engine change is the whole claim of the
-extension model, so it is what these check — over a real `Runtime`, which needs
-no device to build a graph. Nothing here reaches a relay.
+`stream.add` with no adapter and no engine change is the whole claim of the
+extension model, so it is what these check — each stream's graph taken by
+`Runtime.load` on a real `Runtime`, which needs no device to load one. Nothing
+here reaches a relay.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from unittest import mock
@@ -22,11 +24,14 @@ from streamlib import (
     OpusDecoder,
     OpusEncoder,
     RuntimeContextLimitedAccess,
+    Stream,
+    compile_stream_to_graph,
     decode_msgpack_bytes_to_python_object,
     encode_bag_to_msgpack_bytes,
     input,
     node,
     output,
+    stream,
     this_machines_stamp_clock_identity,
 )
 from streamlib_moq import (
@@ -116,6 +121,115 @@ class TelemetryReader:
         ctx.inputs.read("data_bags")
 
 
+@stream
+def the_publisher_alone(stream: Stream) -> None:
+    stream.add(MoqBroadcastPublisher, config=PUBLISHER_CONFIG)
+
+
+@stream
+def the_subscriber_alone(stream: Stream) -> None:
+    stream.add(MoqBroadcastSubscriber, config=SUBSCRIBER_CONFIG)
+
+
+@stream
+def the_publisher_fed_by_both_encoders(stream: Stream) -> None:
+    video_encoder = stream.add(H264Encoder)
+    audio_encoder = stream.add(OpusEncoder)
+    publisher = stream.add(MoqBroadcastPublisher, config=PUBLISHER_CONFIG)
+
+    stream.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
+    stream.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+
+
+@stream
+def the_publisher_fed_by_both_encoders_and_a_telemetry_probe(stream: Stream) -> None:
+    video_encoder = stream.add(H264Encoder)
+    audio_encoder = stream.add(OpusEncoder)
+    probe = stream.add(TelemetryProbe)
+    publisher = stream.add(
+        MoqBroadcastPublisher,
+        config={
+            **PUBLISHER_CONFIG,
+            "container_format": "streamlib_bag",
+            "track_names": ["video", "audio", "telemetry"],
+        },
+    )
+
+    stream.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
+    stream.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+    stream.connect(probe.output("telemetry"), publisher.input("tracks"))
+
+
+@stream
+def the_subscriber_feeding_both_decoders(stream: Stream) -> None:
+    subscriber = stream.add(MoqBroadcastSubscriber, config=SUBSCRIBER_CONFIG)
+    video_decoder = stream.add(H264Decoder)
+    audio_decoder = stream.add(OpusDecoder)
+
+    stream.connect(
+        subscriber.output("encoded_video"), video_decoder.input("encoded_video")
+    )
+    stream.connect(
+        subscriber.output("encoded_audio"), audio_decoder.input("encoded_audio")
+    )
+
+
+@stream
+def the_publisher_writing_cmaf(stream: Stream) -> None:
+    stream.add(
+        MoqBroadcastPublisher,
+        config={**PUBLISHER_CONFIG, "container_format": "cmaf"},
+    )
+
+
+@stream
+def the_publisher_writing_streamlib_bag(stream: Stream) -> None:
+    stream.add(
+        MoqBroadcastPublisher,
+        config={**PUBLISHER_CONFIG, "container_format": "streamlib_bag"},
+    )
+
+
+PUBLISHER_STREAM_BY_CONTAINER_FORMAT: "dict[str, Callable[[Stream], None]]" = {
+    "cmaf": the_publisher_writing_cmaf,
+    "streamlib_bag": the_publisher_writing_streamlib_bag,
+}
+
+
+@stream
+def the_subscriber_naming_only_a_data_track(stream: Stream) -> None:
+    stream.add(MoqBroadcastSubscriber, config=A_DATA_TRACK_SUBSCRIBER_CONFIG)
+
+
+@stream
+def the_subscriber_feeding_a_data_bags_reader(stream: Stream) -> None:
+    subscriber = stream.add(MoqBroadcastSubscriber, config=A_DATA_TRACK_SUBSCRIBER_CONFIG)
+    reader = stream.add(TelemetryReader)
+
+    stream.connect(subscriber.output("data_bags"), reader.input("data_bags"))
+
+
+@stream
+def the_publisher_carrying_a_delivery_deadline(stream: Stream) -> None:
+    stream.add(
+        MoqBroadcastPublisher,
+        config={**PUBLISHER_CONFIG, "delivery_deadline_ms": 250},
+    )
+
+
+def node_names_loaded_into(
+    runtime: streamlib.Runtime, stream_function: "Callable[[Stream], None]"
+) -> "list[str]":
+    """Load `stream_function`'s graph into `runtime`, and name the nodes it holds.
+
+    `Runtime.load` never suffixes a name, so the compiled names are the names
+    the engine holds.
+    """
+    graph = compile_stream_to_graph(stream_function)
+    runtime.load(graph)
+    return [loaded_node["name"] for loaded_node in graph["nodes"]]
+
+
 @pytest.fixture
 def runtime():
     runtime = streamlib.Runtime()
@@ -126,69 +240,43 @@ def runtime():
 
 
 @pytest.mark.parametrize(
-    ("processor_class", "config"),
-    [(MoqBroadcastPublisher, PUBLISHER_CONFIG), (MoqBroadcastSubscriber, SUBSCRIBER_CONFIG)],
+    ("stream_function", "processor_class"),
+    [
+        (the_publisher_alone, MoqBroadcastPublisher),
+        (the_subscriber_alone, MoqBroadcastSubscriber),
+    ],
 )
 def test_an_installed_extensions_processor_is_added_like_any_other(
-    runtime, processor_class, config
+    runtime, stream_function, processor_class
 ):
-    added = runtime.add(processor_class, config=config)
-
-    assert added.display_name == processor_class.__name__.lower()
+    assert node_names_loaded_into(runtime, stream_function) == [
+        processor_class.__name__.lower()
+    ]
 
 
 def test_the_publisher_wires_to_both_encoders_without_an_adapter(runtime):
     """One fan-in port takes both encoders, which is what makes a broadcast
     with video and audio a matter of wiring rather than of config."""
-    video_encoder = runtime.add(H264Encoder)
-    audio_encoder = runtime.add(OpusEncoder)
-    publisher = runtime.add(MoqBroadcastPublisher, config=PUBLISHER_CONFIG)
-
-    runtime.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
-    runtime.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+    runtime.load(compile_stream_to_graph(the_publisher_fed_by_both_encoders))
 
 
 def test_a_data_producing_processor_wires_into_the_publisher_beside_both_encoders(runtime):
     """A data track is a matter of wiring: any processor's output into the
     same fan-in port the encoders feed, with the tracks named in that order."""
-    video_encoder = runtime.add(H264Encoder)
-    audio_encoder = runtime.add(OpusEncoder)
-    probe = runtime.add(TelemetryProbe)
-    publisher = runtime.add(
-        MoqBroadcastPublisher,
-        config={
-            **PUBLISHER_CONFIG,
-            "container_format": "streamlib_bag",
-            "track_names": ["video", "audio", "telemetry"],
-        },
+    runtime.load(
+        compile_stream_to_graph(the_publisher_fed_by_both_encoders_and_a_telemetry_probe)
     )
-
-    runtime.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
-    runtime.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
-    runtime.connect(probe.output("telemetry"), publisher.input("tracks"))
 
 
 def test_the_subscriber_wires_to_both_decoders_without_an_adapter(runtime):
-    subscriber = runtime.add(MoqBroadcastSubscriber, config=SUBSCRIBER_CONFIG)
-    video_decoder = runtime.add(H264Decoder)
-    audio_decoder = runtime.add(OpusDecoder)
-
-    runtime.connect(
-        subscriber.output("encoded_video"), video_decoder.input("encoded_video")
-    )
-    runtime.connect(
-        subscriber.output("encoded_audio"), audio_decoder.input("encoded_audio")
-    )
+    runtime.load(compile_stream_to_graph(the_subscriber_feeding_both_decoders))
 
 
 @pytest.mark.parametrize("container_format", CONTAINER_FORMATS)
 def test_both_container_formats_are_addable(runtime, container_format):
-    added = runtime.add(
-        MoqBroadcastPublisher,
-        config={**PUBLISHER_CONFIG, "container_format": container_format},
-    )
-
-    assert added.display_name == "moqbroadcastpublisher"
+    assert node_names_loaded_into(
+        runtime, PUBLISHER_STREAM_BY_CONTAINER_FORMAT[container_format]
+    ) == ["moqbroadcastpublisher"]
 
 
 def test_a_container_format_this_wheel_does_not_write_is_refused_by_name():
@@ -264,18 +352,15 @@ def test_a_subscriber_may_name_one_track_and_leave_the_other_ports_silent():
 
 
 def test_a_subscriber_naming_only_a_data_track_is_added_like_any_other(runtime):
-    added = runtime.add(MoqBroadcastSubscriber, config=A_DATA_TRACK_SUBSCRIBER_CONFIG)
-
-    assert added.display_name == "moqbroadcastsubscriber"
+    assert node_names_loaded_into(runtime, the_subscriber_naming_only_a_data_track) == [
+        "moqbroadcastsubscriber"
+    ]
 
 
 def test_the_subscribers_data_bags_port_wires_to_a_processor_that_reads_it(runtime):
     """A data track is a matter of wiring on this side too: a static port a
     downstream names at wiring time, beside the two decoders' ports."""
-    subscriber = runtime.add(MoqBroadcastSubscriber, config=A_DATA_TRACK_SUBSCRIBER_CONFIG)
-    reader = runtime.add(TelemetryReader)
-
-    runtime.connect(subscriber.output("data_bags"), reader.input("data_bags"))
+    runtime.load(compile_stream_to_graph(the_subscriber_feeding_a_data_bags_reader))
 
 
 def test_a_data_track_beside_both_media_tracks_is_accepted_under_streamlib_bag():
@@ -690,12 +775,9 @@ def test_a_bag_past_the_link_ceiling_is_reported_once_and_not_every_frame():
 
 
 def test_a_publisher_carrying_a_delivery_deadline_is_added_like_any_other(runtime):
-    added = runtime.add(
-        MoqBroadcastPublisher,
-        config={**PUBLISHER_CONFIG, "delivery_deadline_ms": 250},
-    )
-
-    assert added.display_name == "moqbroadcastpublisher"
+    assert node_names_loaded_into(
+        runtime, the_publisher_carrying_a_delivery_deadline
+    ) == ["moqbroadcastpublisher"]
 
 
 @pytest.mark.parametrize("not_a_deadline", ["250", 2.5, True, -1])
