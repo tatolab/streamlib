@@ -13,10 +13,10 @@ use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyOverflowError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::type_object::PyTypeInfo;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyMapping, PyString, PyTuple};
+use pyo3::types::{PyDict, PyMapping, PyString};
 use streamlib::engine_internal::core::app_directory::record_the_app_entry_directory_the_language_host_captured;
 use streamlib::sdk::graph::{MeshPortAddress, cast_exposed_name_to_url_safe};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
@@ -127,14 +127,15 @@ enum PythonRuntimeLifecycleState {
 ///
 /// `run()` reads it because a load the engine refused partway can leave the
 /// nodes it added before the refusal, and a Runtime must never run half a
-/// graph. The first refusal recorded stands.
+/// graph. The claimed load's own refusal stands; otherwise the first refusal
+/// recorded does.
 #[derive(Debug, Clone, PartialEq)]
 enum RuntimeGraphLoadRecord {
     NoGraphLoaded,
     /// A `load` claimed this Runtime's one load and has not returned yet.
     GraphLoadUnderway {
         /// The first call refused while the claimed load was underway, which
-        /// stands over the claimed load's own outcome.
+        /// stands over the claimed load's success but never over its refusal.
         first_refusal_while_underway: Option<String>,
     },
     GraphLoaded {
@@ -205,9 +206,9 @@ impl RuntimeGraphLoadRecord {
         }
     }
 
-    /// Record how the load a successful claim began ended: the stream name it
-    /// loaded, or its refusal — unless a call refused while it was underway
-    /// came first.
+    /// Record how the load a successful claim began ended: its own refusal;
+    /// else the first call refused while it was underway; else the stream
+    /// name it loaded.
     fn record_the_claimed_load_outcome(&mut self, outcome: Result<Option<String>, String>) {
         let first_refusal_while_underway = match self {
             Self::GraphLoadUnderway {
@@ -215,9 +216,9 @@ impl RuntimeGraphLoadRecord {
             } => first_refusal_while_underway.take(),
             _ => None,
         };
-        *self = match (first_refusal_while_underway, outcome) {
-            (Some(refusal), _) | (None, Err(refusal)) => Self::GraphLoadRefused { refusal },
-            (None, Ok(stream_name)) => Self::GraphLoaded { stream_name },
+        *self = match (outcome, first_refusal_while_underway) {
+            (Err(refusal), _) | (Ok(_), Some(refusal)) => Self::GraphLoadRefused { refusal },
+            (Ok(stream_name), None) => Self::GraphLoaded { stream_name },
         };
     }
 
@@ -453,39 +454,29 @@ fn install_unregistered_processor_type_resolver_once() {
     });
 }
 
-/// `value` as a `dict` when it is a `collections.abc.Mapping`: itself when it
-/// is a `dict`, else `dict(value)`.
-fn mapping_as_a_dict<'py>(value: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyDict>>> {
-    if let Ok(dict) = value.cast::<PyDict>() {
-        return Ok(Some(dict.clone()));
-    }
-    if !value.is_instance_of::<PyMapping>() {
-        return Ok(None);
-    }
-    Ok(Some(
-        PyDict::type_object(value.py())
-            .call1((value,))?
-            .cast_into::<PyDict>()?,
-    ))
-}
-
-/// The mapping `Runtime.load` was passed, as a `dict`; anything that is not a
-/// `collections.abc.Mapping` is refused naming what it is.
+/// The mapping `Runtime.load` was passed, as a `dict` — itself when it is one,
+/// else `dict(graph)`; anything that is not a `collections.abc.Mapping` is
+/// refused naming what it is.
 fn the_graph_mapping_load_was_passed<'py>(
     graph: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    match mapping_as_a_dict(graph)? {
-        Some(graph_mapping) => Ok(graph_mapping),
-        None => Err(PyTypeError::new_err(format!(
-            "Runtime.load takes a graph mapping, and was passed a `{}`: pass the mapping \
-             compile_stream_to_graph returns, or a graph `streamlib graph` rendered",
-            graph.get_type().name()?
-        ))),
+    if let Ok(graph_dict) = graph.cast::<PyDict>() {
+        return Ok(graph_dict.clone());
     }
+    if graph.is_instance_of::<PyMapping>() {
+        return Ok(PyDict::type_object(graph.py())
+            .call1((graph,))?
+            .cast_into::<PyDict>()?);
+    }
+    Err(PyTypeError::new_err(format!(
+        "Runtime.load takes a graph mapping, and was passed a `{}`: pass the mapping \
+         compile_stream_to_graph returns, or a graph `streamlib graph` rendered",
+        graph.get_type().name()?
+    )))
 }
 
-/// The stream name `Runtime.load` was passed. A `str` that cannot be encoded
-/// raises its own encode error; anything else is refused naming the fix.
+/// The stream name `Runtime.load` was passed; anything but a `str` that
+/// encodes as UTF-8 is refused naming the fix.
 fn the_stream_name_load_was_passed(name: Option<&Bound<'_, PyAny>>) -> PyResult<Option<String>> {
     let Some(name) = name else {
         return Ok(None);
@@ -497,178 +488,55 @@ fn the_stream_name_load_was_passed(name: Option<&Bound<'_, PyAny>>) -> PyResult<
             name.get_type().name()?
         )));
     };
-    Ok(Some(name.to_str()?.to_owned()))
-}
-
-/// How deeply a graph's mappings and lists may nest — serde_json's own limit
-/// for JSON text — so a deeper one is refused rather than overflowing the stack.
-const GRAPH_DOCUMENT_NESTING_DEPTH_LIMIT: usize = 128;
-
-/// The refusal of a graph holding what JSON cannot carry at
-/// `location_in_graph`, naming what sits there and the fix.
-fn graph_is_not_json_data_refusal(location_in_graph: &str, what_sits_there: &str) -> String {
-    format!(
-        "the graph is not JSON data: `{location_in_graph}` {what_sits_there}. Build the graph \
-         from plain dict, list, str, int, float, bool and None, as compile_stream_to_graph does"
-    )
-}
-
-/// A graph refusal raised with the Python exception that caused it as its
-/// `__cause__`.
-fn graph_refusal_caused_by(python: Python<'_>, refusal: PyErr, cause: PyErr) -> PyErr {
-    refusal.set_cause(python, Some(cause));
-    refusal
-}
-
-/// The JSON document the engine parses, read from the graph `Runtime.load`
-/// was passed. Any mapping reads as a `dict` and a tuple as a list; anything
-/// JSON cannot carry is refused naming where it sits in the graph.
-fn graph_document_from_python_graph(
-    graph_value: &Bound<'_, PyAny>,
-    location_in_graph: &str,
-    containers_enclosing_it: &mut Vec<usize>,
-) -> PyResult<serde_json::Value> {
-    if graph_value.is_none() {
-        return Ok(serde_json::Value::Null);
-    }
-    if let Ok(boolean) = graph_value.cast::<PyBool>() {
-        return Ok(serde_json::Value::Bool(boolean.is_true()));
-    }
-    if let Ok(integer) = graph_value.cast::<PyInt>() {
-        return integer
-            .extract::<i64>()
-            .map(serde_json::Value::from)
-            .or_else(|_| integer.extract::<u64>().map(serde_json::Value::from))
-            .map_err(|wider_than_64_bits| {
-                graph_refusal_caused_by(
-                    integer.py(),
-                    PyValueError::new_err(graph_is_not_json_data_refusal(
-                        location_in_graph,
-                        "is an int wider than 64 bits",
-                    )),
-                    wider_than_64_bits,
-                )
-            });
-    }
-    if let Ok(float) = graph_value.cast::<PyFloat>() {
-        return match serde_json::Number::from_f64(float.value()) {
-            Some(number) => Ok(serde_json::Value::Number(number)),
-            None => Err(PyValueError::new_err(graph_is_not_json_data_refusal(
-                location_in_graph,
-                &format!(
-                    "is the float {}, and JSON carries no NaN or infinity",
-                    float.repr()?
-                ),
-            ))),
-        };
-    }
-    if let Ok(text) = graph_value.cast::<PyString>() {
-        return text
-            .to_str()
-            .map(|text| serde_json::Value::String(text.to_owned()))
-            .map_err(|cannot_be_encoded| {
-                let what_sits_there = format!(
-                    "is a str that cannot be encoded as UTF-8 ({})",
-                    cannot_be_encoded.value(text.py())
-                );
-                graph_refusal_caused_by(
-                    text.py(),
-                    PyValueError::new_err(graph_is_not_json_data_refusal(
-                        location_in_graph,
-                        &what_sits_there,
-                    )),
-                    cannot_be_encoded,
-                )
-            });
-    }
-
-    let container_identity = graph_value.as_ptr() as usize;
-    if containers_enclosing_it.contains(&container_identity) {
-        return Err(PyValueError::new_err(graph_is_not_json_data_refusal(
-            location_in_graph,
-            "is the very mapping or list that encloses it, a cycle JSON cannot carry",
-        )));
-    }
-    if containers_enclosing_it.len() >= GRAPH_DOCUMENT_NESTING_DEPTH_LIMIT {
-        return Err(PyValueError::new_err(graph_is_not_json_data_refusal(
-            location_in_graph,
-            &format!(
-                "nests deeper than {GRAPH_DOCUMENT_NESTING_DEPTH_LIMIT} levels, the most a graph \
-                 read from JSON text can"
-            ),
-        )));
-    }
-    containers_enclosing_it.push(container_identity);
-    let container_document = graph_document_from_python_container(
-        graph_value,
-        location_in_graph,
-        containers_enclosing_it,
-    );
-    containers_enclosing_it.pop();
-    container_document
-}
-
-/// The JSON object or array a mapping, list or tuple in the graph reads as.
-fn graph_document_from_python_container(
-    graph_value: &Bound<'_, PyAny>,
-    location_in_graph: &str,
-    containers_enclosing_it: &mut Vec<usize>,
-) -> PyResult<serde_json::Value> {
-    if let Some(mapping) = mapping_as_a_dict(graph_value)? {
-        let mut object = serde_json::Map::new();
-        for item in mapping.items().iter() {
-            let (key, value) = item.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
-            let Ok(key_text) = key.cast::<PyString>() else {
-                return Err(PyTypeError::new_err(graph_is_not_json_data_refusal(
-                    location_in_graph,
-                    &format!(
-                        "has the key `{}`, a `{}`, and a JSON object's keys are str",
-                        key.repr()?,
-                        key.get_type().name()?
-                    ),
-                )));
-            };
-            let key_text = key_text.to_str().map_err(|cannot_be_encoded| {
-                graph_refusal_caused_by(
-                    key.py(),
-                    PyValueError::new_err(graph_is_not_json_data_refusal(
-                        location_in_graph,
-                        "has a str key that cannot be encoded as UTF-8",
-                    )),
-                    cannot_be_encoded,
-                )
-            })?;
-            let value_document = graph_document_from_python_graph(
-                &value,
-                &format!("{location_in_graph}[{key_text:?}]"),
-                containers_enclosing_it,
-            )?;
-            object.insert(key_text.to_owned(), value_document);
+    match name.to_str() {
+        Ok(stream_name) => Ok(Some(stream_name.to_owned())),
+        Err(cannot_be_encoded) => {
+            let python = name.py();
+            let refusal = PyValueError::new_err(format!(
+                "Runtime.load's `name` names the stream, and was passed a str that cannot be \
+                 encoded as UTF-8 ({}): pass a str without lone surrogates",
+                cannot_be_encoded.value(python)
+            ));
+            refusal.set_cause(python, Some(cannot_be_encoded));
+            Err(refusal)
         }
-        return Ok(serde_json::Value::Object(object));
     }
-    let items = if let Ok(list) = graph_value.cast::<PyList>() {
-        list.iter().collect::<Vec<_>>()
-    } else if let Ok(tuple) = graph_value.cast::<PyTuple>() {
-        tuple.iter().collect::<Vec<_>>()
+}
+
+/// The converter's refusal of a graph, re-raised naming the graph and the fix,
+/// with the converter's error as its `__cause__`. An error that refuses no
+/// value — a `MemoryError`, a `KeyboardInterrupt` — passes through unchanged.
+fn graph_is_not_json_data_refusal(python: Python<'_>, converter_refusal: PyErr) -> PyErr {
+    let converter_refusal_type = converter_refusal.get_type(python);
+    let converter_refusal_type_constructs_from_one_str = [
+        PyTypeError::type_object(python),
+        PyValueError::type_object(python),
+        PyOverflowError::type_object(python),
+    ]
+    .iter()
+    .any(|one_str_exception_type| converter_refusal_type.is(one_str_exception_type));
+    let graph_refusal_type = if converter_refusal_type_constructs_from_one_str {
+        converter_refusal_type
+    } else if converter_refusal.is_instance_of::<PyTypeError>(python) {
+        PyTypeError::type_object(python)
+    } else if converter_refusal.is_instance_of::<PyValueError>(python) {
+        PyValueError::type_object(python)
     } else {
-        return Err(PyTypeError::new_err(graph_is_not_json_data_refusal(
-            location_in_graph,
-            &format!("is a `{}`", graph_value.get_type().name()?),
-        )));
+        return converter_refusal;
     };
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            graph_document_from_python_graph(
-                item,
-                &format!("{location_in_graph}[{index}]"),
-                containers_enclosing_it,
-            )
-        })
-        .collect::<PyResult<Vec<_>>>()
-        .map(serde_json::Value::Array)
+    let graph_refusal = PyErr::from_type(
+        graph_refusal_type,
+        format!(
+            "the graph is not JSON data: {}. Build the graph from plain dict, list, str, int, \
+             float, bool and None, as compile_stream_to_graph does.",
+            converter_refusal
+                .value(python)
+                .to_string()
+                .trim_end_matches('.')
+        ),
+    );
+    graph_refusal.set_cause(python, Some(converter_refusal));
+    graph_refusal
 }
 
 /// Read, name and load the graph a claimed `load` was passed, reporting the
@@ -679,8 +547,8 @@ fn load_the_claimed_graph(
     graph_mapping: &Bound<'_, PyDict>,
     stream_name_override: Option<String>,
 ) -> PyResult<Option<String>> {
-    let graph_document =
-        graph_document_from_python_graph(graph_mapping.as_any(), "graph", &mut Vec::new())?;
+    let graph_document = python_object_to_json_value(graph_mapping.as_any())
+        .map_err(|converter_refusal| graph_is_not_json_data_refusal(python, converter_refusal))?;
     let mut graph_snapshot = GraphSnapshot::from_graph_document(graph_document)
         .map_err(|does_not_parse| PyRuntimeError::new_err(does_not_parse.to_string()))?;
 
@@ -894,7 +762,8 @@ impl PythonRuntimeHandle {
     /// A Runtime takes exactly one `load`. Every refused call is recorded —
     /// save one refused because this Runtime is already running or shut down,
     /// which `run()` refuses anyway — and so is a panic inside the load; `run()`
-    /// then refuses, naming the first refusal recorded.
+    /// then refuses, naming the load's own refusal or panic, else the first
+    /// refusal recorded.
     #[pyo3(signature = (graph, *, name = None))]
     fn load(
         &self,
@@ -1341,5 +1210,100 @@ mod tests {
                 .unwrap()
                 .contains("the load panicked: the type resolver fell over")
         );
+    }
+
+    /// A Mutex-held record whose one load is claimed and underway.
+    fn graph_load_record_with_its_load_claimed() -> Mutex<RuntimeGraphLoadRecord> {
+        let graph_load_record = Mutex::new(RuntimeGraphLoadRecord::NoGraphLoaded);
+        RuntimeGraphLoadRecord::locked(&graph_load_record)
+            .claim_the_one_load()
+            .unwrap();
+        graph_load_record
+    }
+
+    /// Another `load` of the same Runtime, refused because the claimed one is
+    /// underway, as a second thread would be.
+    fn refuse_another_load_while_underway(graph_load_record: &Mutex<RuntimeGraphLoadRecord>) {
+        let refused_while_underway = RuntimeGraphLoadRecord::locked(graph_load_record)
+            .claim_the_one_load()
+            .unwrap_err();
+        assert!(
+            refused_while_underway.contains("still underway"),
+            "{refused_while_underway}"
+        );
+    }
+
+    #[test]
+    fn a_claimed_loads_own_refusal_stands_over_a_load_refused_while_it_was_underway() {
+        let graph_load_record = graph_load_record_with_its_load_claimed();
+
+        let load_outcome = RuntimeGraphLoadRecord::run_the_claimed_load(
+            &graph_load_record,
+            || {
+                refuse_another_load_while_underway(&graph_load_record);
+                Err::<(), _>("Unknown processor type `no_such_node`")
+            },
+            |load_outcome| load_outcome.map(|()| None).map_err(str::to_owned),
+        );
+
+        assert_eq!(load_outcome, Err("Unknown processor type `no_such_node`"));
+        let record = RuntimeGraphLoadRecord::locked(&graph_load_record);
+        assert_eq!(
+            *record,
+            RuntimeGraphLoadRecord::GraphLoadRefused {
+                refusal: "Unknown processor type `no_such_node`".to_owned()
+            }
+        );
+        assert!(
+            !record.refusal_of_run().unwrap().contains("still underway"),
+            "{:?}",
+            record.refusal_of_run()
+        );
+    }
+
+    #[test]
+    fn a_claimed_loads_panic_stands_over_a_load_refused_while_it_was_underway() {
+        let graph_load_record = graph_load_record_with_its_load_claimed();
+
+        let unwound = std::panic::catch_unwind(|| {
+            RuntimeGraphLoadRecord::run_the_claimed_load(
+                &graph_load_record,
+                || -> Result<(), String> {
+                    refuse_another_load_while_underway(&graph_load_record);
+                    panic!("the type resolver fell over")
+                },
+                |_load_outcome| Ok(None),
+            )
+        });
+
+        assert!(unwound.is_err());
+        assert_eq!(
+            *RuntimeGraphLoadRecord::locked(&graph_load_record),
+            RuntimeGraphLoadRecord::GraphLoadRefused {
+                refusal: "the load panicked: the type resolver fell over".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_load_refused_while_the_claimed_one_was_underway_stands_over_its_success() {
+        let graph_load_record = graph_load_record_with_its_load_claimed();
+
+        let load_outcome = RuntimeGraphLoadRecord::run_the_claimed_load(
+            &graph_load_record,
+            || {
+                refuse_another_load_while_underway(&graph_load_record);
+                Ok::<_, String>(Some("camera-rig".to_owned()))
+            },
+            |load_outcome| load_outcome.clone(),
+        );
+
+        assert_eq!(load_outcome, Ok(Some("camera-rig".to_owned())));
+        let record = RuntimeGraphLoadRecord::locked(&graph_load_record);
+        let RuntimeGraphLoadRecord::GraphLoadRefused { refusal } = &*record else {
+            panic!("a refusal while underway must stand over a success, got {record:?}");
+        };
+        assert!(refusal.contains("still underway"), "{refusal}");
+        assert!(record.refusal_of_run().unwrap().contains(refusal.as_str()));
     }
 }

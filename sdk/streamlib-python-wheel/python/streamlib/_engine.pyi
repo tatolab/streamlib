@@ -685,25 +685,29 @@ class Runtime:
 
         `graph` is the mapping `compile_stream_to_graph` returns, or a graph
         `streamlib graph` rendered; anything not a mapping raises `TypeError`.
-        Inside it any mapping reads as a dict and a tuple as a list, and what
-        JSON cannot carry — a set, bytes, a key that is not a str, NaN or
-        infinity, an int wider than 64 bits, a str that cannot be encoded as
-        UTF-8, a cycle — raises `TypeError` or `ValueError` naming where it
-        sits. `name`, when given, is a str. The stream's name — `name` when
-        given, else the graph's own `stream` — is cast the way a node name is,
-        and one casting to nothing raises `ValueError`. A Runtime takes exactly
-        one `load`: a second raises `RuntimeError` naming the stream already
+        It is converted to JSON the way `add`'s `config` is: a tuple reads as a
+        list, NaN and infinity as null, and what JSON cannot carry — a set,
+        bytes, a nested mapping that is not a dict, a key that is not a str, an
+        int wider than 64 bits, a str that cannot be encoded as UTF-8,
+        containers nested more than 128 deep, as one holding itself is —
+        raises `TypeError` or `ValueError` saying the graph is not JSON data,
+        with the converter's own error as `__cause__`. `name`, when given, is a
+        str that encodes as UTF-8. The stream's name — `name` when given, else
+        the graph's own `stream` — is cast the way a node name is, and one
+        casting to nothing raises `ValueError`. A Runtime takes exactly one
+        `load`: a second raises `RuntimeError` naming the stream already
         loaded, the earlier refusal, or the load still underway on another
-        thread. An empty graph raises `RuntimeError` naming the stream; one
-        that does not parse, and one the engine refuses — an unknown `type`, a
-        taken node name, a link to a port no node has — raise `RuntimeError`
-        with the engine's own text. A refused load can leave part of its graph
-        behind, so every refused call is recorded — save one refused because
-        this Runtime is already running or shut down, which `run()` refuses
-        anyway — and so is a panic inside the load; `run()` then raises naming
-        the first refusal recorded, and raises while a load is still underway.
-        Construct a new Runtime and load a corrected graph. `add` and `connect`
-        work with or without a load.
+        thread. An empty graph raises `RuntimeError`, naming the stream when it
+        has one; one that does not parse, and one the engine refuses — an
+        unknown `type`, a taken node name, a link to a port no node has — raise
+        `RuntimeError` with the engine's own text. A refused load can leave part
+        of its graph behind, so every refused call is recorded — save one
+        refused because this Runtime is already running or shut down, which
+        `run()` refuses anyway — and so is a panic inside the load; `run()` then
+        raises naming the load's own refusal or panic, else the first refusal
+        recorded, and raises while a load is still underway. Construct a new
+        Runtime and load a corrected graph. `add` and `connect` work with or
+        without a load.
         """
 
     # `bind_host` is `...` rather than its literal default because the binding

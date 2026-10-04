@@ -12,10 +12,15 @@ is a literal dict naming its nodes' types through the markers' own `type`, or a
 
 from __future__ import annotations
 
+import importlib.machinery
+import importlib.util
+import subprocess
 import sys
+import textwrap
 import threading
 import types
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -78,8 +83,16 @@ RUN_REFUSAL_DEADLINE_SECONDS = 20.0
 # Imported by nothing but the engine's type resolver, during `load`.
 RESOLVER_IMPORTED_NODE_MODULE = "runtime_load_nodes"
 RESOLVER_IMPORTED_NODE_TYPE = f"{RESOLVER_IMPORTED_NODE_MODULE}:LoadedFrameRelay"
+RESOLVER_IMPORTED_NODE_SOURCE = Path(__file__).with_name(f"{RESOLVER_IMPORTED_NODE_MODULE}.py")
 
-PLAIN_JSON_DATA_FIX = "plain dict, list, str, int, float, bool and None"
+GRAPH_IS_NOT_JSON_DATA = "the graph is not JSON data: "
+PLAIN_JSON_DATA_FIX = (
+    "Build the graph from plain dict, list, str, int, float, bool and None, as "
+    "compile_stream_to_graph does."
+)
+NESTED_PAST_THE_MAXIMUM = "containers nest more than 128 deep"
+
+OWN_PROCESS_DEADLINE_SECONDS = 120.0
 
 
 @pytest.fixture
@@ -138,28 +151,109 @@ def pattern_to_window_graph_with_window_scaling(scaling: object) -> dict[str, An
     return graph
 
 
-WINDOW_SCALING_LOCATION = 'graph["nodes"][1]["config"]["scaling"]'
+class NodeModuleWhoseImportHoldsTheLoad(importlib.machinery.SourceFileLoader):
+    """`runtime_load_nodes.py` as `held_module_name`, its import parking the load until released."""
 
-
-class ConfigMappingThatHoldsItsLoadUntilReleased(Mapping[str, Any]):
-    """A config mapping whose iteration parks the `load` reading it until released."""
-
-    def __init__(self, entries: dict[str, Any]) -> None:
-        self.entries = entries
-        self.load_reached_this_config = threading.Event()
+    def __init__(self, held_module_name: str) -> None:
+        super().__init__(held_module_name, str(RESOLVER_IMPORTED_NODE_SOURCE))
+        self.load_reached_this_import = threading.Event()
         self.release_the_load = threading.Event()
 
-    def __getitem__(self, key: str) -> Any:
-        return self.entries[key]
+    def find_spec(
+        self,
+        fullname: str,
+        path: Sequence[str] | None,
+        target: types.ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
+        if fullname != self.name:
+            return None
+        return importlib.util.spec_from_loader(fullname, self)
 
-    def __len__(self) -> int:
-        return len(self.entries)
-
-    def __iter__(self) -> Iterator[str]:
-        self.load_reached_this_config.set()
+    def exec_module(self, module: types.ModuleType) -> None:
+        self.load_reached_this_import.set()
         if not self.release_the_load.wait(RUN_REFUSAL_DEADLINE_SECONDS):
-            raise TimeoutError("the test never released the held load")
-        return iter(self.entries)
+            raise TimeoutError("the test never released the held import")
+        super().exec_module(module)
+
+
+@pytest.fixture
+def held_node_module(request: pytest.FixtureRequest) -> Iterator[NodeModuleWhoseImportHoldsTheLoad]:
+    """A node module only the resolver imports, found first on `sys.meta_path` for the test."""
+    held_module_name = f"runtime_load_held_nodes_{request.node.name}"
+    node_module = NodeModuleWhoseImportHoldsTheLoad(held_module_name)
+    sys.meta_path.insert(0, node_module)
+    try:
+        yield node_module
+    finally:
+        node_module.release_the_load.set()
+        sys.meta_path.remove(node_module)
+        sys.modules.pop(held_module_name, None)
+
+
+def graph_relaying_through(relay_type: str, *, stream_name: str) -> dict[str, Any]:
+    """A test pattern into a window through a node of `relay_type`."""
+    return {
+        "stream": stream_name,
+        "nodes": [
+            {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
+            {"name": "loadedframerelay", "type": relay_type, "config": {}},
+            {"name": "displaywindow", "type": DisplayWindow.type, "config": {}},
+        ],
+        "links": [
+            {
+                "source": {"node": "testpatternsource", "port": "video"},
+                "target": {"node": "loadedframerelay", "port": "video_from_upstream"},
+            },
+            {
+                "source": {"node": "loadedframerelay", "port": "video_to_downstream"},
+                "target": {"node": "displaywindow", "port": "video"},
+            },
+        ],
+        "exposed": [{"node": "loadedframerelay", "port": "video_to_downstream"}],
+    }
+
+
+def load_on_another_thread_holding_at_the_import(
+    runtime: streamlib.Runtime,
+    graph: dict[str, Any],
+    held_node_module: NodeModuleWhoseImportHoldsTheLoad,
+    while_the_load_is_held: Callable[[], None],
+) -> Exception | None:
+    """What a `load` of `graph` raised, `while_the_load_is_held` called while its import parks."""
+    held_load_outcome: list[Exception | None] = []
+
+    def load_the_held_graph() -> None:
+        try:
+            runtime.load(graph)
+        except Exception as held_load_refusal:
+            held_load_outcome.append(held_load_refusal)
+        else:
+            held_load_outcome.append(None)
+
+    loading_thread = threading.Thread(target=load_the_held_graph)
+    loading_thread.start()
+    try:
+        assert held_node_module.load_reached_this_import.wait(RUN_REFUSAL_DEADLINE_SECONDS)
+        while_the_load_is_held()
+    finally:
+        held_node_module.release_the_load.set()
+        loading_thread.join(RUN_REFUSAL_DEADLINE_SECONDS)
+    assert len(held_load_outcome) == 1, "the held load never returned"
+    return held_load_outcome[0]
+
+
+def run_in_its_own_process(script: str) -> None:
+    """Run `script` in its own process, so a crash fails the test rather than ending the suite."""
+    completed = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        capture_output=True,
+        text=True,
+        timeout=OWN_PROCESS_DEADLINE_SECONDS,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        f"exit status {completed.returncode}\n{completed.stderr[-4000:]}"
+    )
 
 
 def run_expecting_a_refusal(runtime: streamlib.Runtime) -> RuntimeError:
@@ -220,16 +314,23 @@ def test_a_mapping_that_is_not_a_dict_loads(runtime: streamlib.Runtime):
     assert the_node_name_is_taken(runtime, "testpatternsource")
 
 
-def test_a_mapping_or_tuple_nested_in_the_graph_loads_as_a_dict_or_list(
-    runtime: streamlib.Runtime,
-):
+def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: streamlib.Runtime):
     graph = pattern_to_window_graph()
-    graph["nodes"][1]["config"] = types.MappingProxyType({"title": "load", "scaling": "fit"})
     graph["nodes"] = tuple(graph["nodes"])
 
     runtime.load(graph)
 
     assert the_node_name_is_taken(runtime, "displaywindow")
+
+
+@pytest.mark.parametrize("not_a_number", [float("nan"), float("inf")], ids=["nan", "infinity"])
+def test_nan_and_infinity_in_a_graph_load_the_way_add_converts_them_in_config(
+    runtime: streamlib.Runtime, not_a_number: float
+):
+    runtime.load(pattern_to_window_graph_with_window_scaling(not_a_number))
+
+    assert the_node_name_is_taken(runtime, "displaywindow")
+    runtime.add(DisplayWindow, config={"scaling": not_a_number}, display_name="added-window")
 
 
 def test_a_python_node_type_the_process_never_imported_loads_through_the_resolver(
@@ -325,12 +426,16 @@ def test_a_stream_name_that_is_not_a_str_is_refused_naming_the_fix(runtime: stre
     assert "pass a str, or leave `name` out" in str(refused.value)
 
 
-def test_a_stream_name_that_cannot_be_encoded_raises_its_encode_error(
+def test_a_stream_name_that_cannot_be_encoded_is_refused_naming_it_and_the_fix(
     runtime: streamlib.Runtime,
 ):
-    with pytest.raises(UnicodeEncodeError):
+    with pytest.raises(ValueError) as refused:
         runtime.load(pattern_to_window_graph(), name="\udc80")
 
+    assert type(refused.value) is ValueError
+    assert "Runtime.load's `name`" in str(refused.value)
+    assert "pass a str without lone surrogates" in str(refused.value)
+    assert isinstance(refused.value.__cause__, UnicodeEncodeError)
     assert not the_node_name_is_taken(runtime, "testpatternsource")
 
 
@@ -344,77 +449,132 @@ def test_a_stream_name_casting_to_nothing_is_refused_naming_it(runtime: streamli
 
 
 @pytest.mark.parametrize(
-    ("scaling", "refusal_type", "what_is_named"),
+    ("scaling", "refusal_type", "cause_type", "converter_text"),
     [
-        ({"fit"}, TypeError, "a `set`"),
-        (b"fit", TypeError, "a `bytes`"),
-        (object(), TypeError, "a `object`"),
-        ({1: "fit"}, TypeError, "the key `1`, a `int`"),
-        (float("nan"), ValueError, "the float nan"),
-        (float("inf"), ValueError, "the float inf"),
-        (2**64, ValueError, "wider than 64 bits"),
-        ("\udc80", ValueError, "cannot be encoded as UTF-8"),
+        ({"fit"}, TypeError, TypeError, "cannot put a set in a bag"),
+        (b"fit", TypeError, TypeError, "invalid type: byte array"),
+        (object(), TypeError, TypeError, "cannot put a object in a bag"),
+        (types.MappingProxyType({"fit": 1}), TypeError, TypeError, "cannot put a mappingproxy"),
+        ({1: "fit"}, TypeError, TypeError, "bag keys must be strings"),
+        (2**64, ValueError, ValueError, "does not fit in 64 bits"),
+        ("\udc80", ValueError, UnicodeEncodeError, "surrogates not allowed"),
     ],
-    ids=["set", "bytes", "object", "int-key", "nan", "infinity", "int-wider-than-64-bits", "lone-surrogate"],
+    ids=[
+        "set",
+        "bytes",
+        "object",
+        "nested-mapping-not-a-dict",
+        "int-key",
+        "int-wider-than-64-bits",
+        "lone-surrogate",
+    ],
 )
-def test_a_graph_holding_what_json_cannot_carry_is_refused_naming_where_and_the_fix(
+def test_a_graph_holding_what_json_cannot_carry_is_refused_with_the_converters_text_and_the_fix(
     runtime: streamlib.Runtime,
     scaling: object,
     refusal_type: type[Exception],
-    what_is_named: str,
+    cause_type: type[Exception],
+    converter_text: str,
 ):
     with pytest.raises(refusal_type) as refused:
         runtime.load(pattern_to_window_graph_with_window_scaling(scaling))
 
     assert type(refused.value) is refusal_type
-    assert str(refused.value).startswith("the graph is not JSON data: ")
-    assert f"`{WINDOW_SCALING_LOCATION}`" in str(refused.value)
-    assert what_is_named in str(refused.value)
-    assert PLAIN_JSON_DATA_FIX in str(refused.value)
+    assert str(refused.value).startswith(GRAPH_IS_NOT_JSON_DATA)
+    assert str(refused.value).endswith(PLAIN_JSON_DATA_FIX)
+    assert converter_text in str(refused.value)
+    assert type(refused.value.__cause__) is cause_type
+    assert str(refused.value.__cause__).rstrip(".") in str(refused.value)
     assert not the_node_name_is_taken(runtime, "testpatternsource")
 
 
-def test_a_stream_name_in_the_graph_that_cannot_be_encoded_is_refused_chaining_its_encode_error(
-    runtime: streamlib.Runtime,
-):
-    graph = pattern_to_window_graph(stream_name="\udc80")
+GRAPH_HOLDING_ITSELF_REFUSED_IN_ITS_OWN_PROCESS = f"""
+    import streamlib
+    from streamlib import DisplayWindow
 
-    with pytest.raises(ValueError) as refused:
-        runtime.load(graph)
+    config_holding_itself = {{"title": "load"}}
+    config_holding_itself["itself"] = config_holding_itself
+    runtime = streamlib.Runtime()
+    try:
+        runtime.load(
+            {{
+                "nodes": [
+                    {{"name": "displaywindow", "type": DisplayWindow.type,
+                      "config": config_holding_itself}},
+                ]
+            }}
+        )
+    except ValueError as refusal:
+        assert type(refusal) is ValueError, repr(refusal)
+        assert str(refusal).startswith({GRAPH_IS_NOT_JSON_DATA!r}), refusal
+        assert {NESTED_PAST_THE_MAXIMUM!r} in str(refusal), refusal
+        assert "holds itself" in str(refusal), refusal
+        assert str(refusal).endswith({PLAIN_JSON_DATA_FIX!r}), refusal
+        assert type(refusal.__cause__) is ValueError, repr(refusal.__cause__)
+    else:
+        raise AssertionError("a graph holding itself loaded")
+    finally:
+        runtime.shutdown()
+"""
 
-    assert '`graph["stream"]`' in str(refused.value)
-    assert PLAIN_JSON_DATA_FIX in str(refused.value)
-    assert isinstance(refused.value.__cause__, UnicodeEncodeError)
+GRAPH_NESTED_FAR_PAST_THE_MAXIMUM_REFUSED_IN_ITS_OWN_PROCESS = f"""
+    import streamlib
+    from streamlib import DisplayWindow
 
-
-def test_a_graph_holding_itself_is_refused_naming_where_the_cycle_closes(
-    runtime: streamlib.Runtime,
-):
-    circular_config: dict[str, Any] = {"title": "load"}
-    circular_config["itself"] = circular_config
-    graph = pattern_to_window_graph()
-    graph["nodes"][1]["config"] = circular_config
-
-    with pytest.raises(ValueError) as refused:
-        runtime.load(graph)
-
-    assert '`graph["nodes"][1]["config"]["itself"]`' in str(refused.value)
-    assert "a cycle JSON cannot carry" in str(refused.value)
-    assert PLAIN_JSON_DATA_FIX in str(refused.value)
-
-
-def test_a_graph_nested_deeper_than_json_text_carries_is_refused(runtime: streamlib.Runtime):
-    deeply_nested: list[Any] = []
+    nested_far_past_the_maximum = []
     for _ in range(100_000):
-        deeply_nested = [deeply_nested]
-    graph = pattern_to_window_graph()
-    graph["nodes"][1]["config"]["nested"] = deeply_nested
+        nested_far_past_the_maximum = [nested_far_past_the_maximum]
+    runtime = streamlib.Runtime()
+    try:
+        runtime.load(
+            {{
+                "nodes": [
+                    {{"name": "displaywindow", "type": DisplayWindow.type,
+                      "config": {{"nested": nested_far_past_the_maximum}}}},
+                ]
+            }}
+        )
+    except ValueError as refusal:
+        assert str(refusal).startswith({GRAPH_IS_NOT_JSON_DATA!r}), refusal
+        assert {NESTED_PAST_THE_MAXIMUM!r} in str(refusal), refusal
+    else:
+        raise AssertionError("a graph nested 100,000 deep loaded")
+    finally:
+        runtime.shutdown()
+"""
 
-    with pytest.raises(ValueError) as refused:
-        runtime.load(graph)
+CONFIG_HOLDING_ITSELF_REFUSED_BY_ADD_IN_ITS_OWN_PROCESS = f"""
+    import streamlib
+    from streamlib import DisplayWindow
 
-    assert "nests deeper than 128 levels" in str(refused.value)
-    assert PLAIN_JSON_DATA_FIX in str(refused.value)
+    config_holding_itself = {{"title": "add"}}
+    config_holding_itself["itself"] = config_holding_itself
+    runtime = streamlib.Runtime()
+    try:
+        runtime.add(DisplayWindow, config=config_holding_itself)
+    except ValueError as refusal:
+        assert {NESTED_PAST_THE_MAXIMUM!r} in str(refusal), refusal
+        assert "holds itself" in str(refusal), refusal
+    else:
+        raise AssertionError("add accepted a config holding itself")
+    finally:
+        runtime.shutdown()
+"""
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        GRAPH_HOLDING_ITSELF_REFUSED_IN_ITS_OWN_PROCESS,
+        GRAPH_NESTED_FAR_PAST_THE_MAXIMUM_REFUSED_IN_ITS_OWN_PROCESS,
+        CONFIG_HOLDING_ITSELF_REFUSED_BY_ADD_IN_ITS_OWN_PROCESS,
+    ],
+    ids=["load-graph-holding-itself", "load-graph-nested-100000-deep", "add-config-holding-itself"],
+)
+def test_a_container_holding_itself_or_nested_past_the_maximum_is_refused_rather_than_crashing(
+    script: str,
+):
+    run_in_its_own_process(script)
 
 
 def test_a_graph_that_does_not_parse_is_refused_with_the_engines_text(
@@ -490,8 +650,16 @@ def test_load_after_shutdown_is_refused():
         ),
         lambda runtime: runtime.load(pattern_to_window_graph_with_window_scaling({"fit"})),
         lambda runtime: runtime.load(pattern_to_window_graph(), name=7),
+        lambda runtime: runtime.load(pattern_to_window_graph(), name="\udc80"),
     ],
-    ids=["empty-graph", "not-a-mapping", "unknown-type", "not-json-data", "name-not-a-str"],
+    ids=[
+        "empty-graph",
+        "not-a-mapping",
+        "unknown-type",
+        "not-json-data",
+        "name-not-a-str",
+        "name-cannot-be-encoded",
+    ],
 )
 def test_run_after_a_refused_load_refuses_naming_it_and_never_starts(
     runtime: streamlib.Runtime, refused_load
@@ -517,35 +685,48 @@ def test_run_after_a_refused_second_load_refuses_too(runtime: streamlib.Runtime)
     assert str(second_load_refused.value) in str(run_refusal)
 
 
-def test_a_load_refused_while_another_is_underway_is_recorded_and_run_then_refuses_naming_it(
-    runtime: streamlib.Runtime,
+def test_a_load_refused_while_another_is_underway_stands_over_its_success_and_run_names_it(
+    runtime: streamlib.Runtime, held_node_module: NodeModuleWhoseImportHoldsTheLoad
 ):
-    held_config = ConfigMappingThatHoldsItsLoadUntilReleased({"title": "load", "scaling": "fit"})
-    held_graph = pattern_to_window_graph(stream_name="held")
-    held_graph["nodes"][1]["config"] = held_config
-    held_load_outcome: list[Exception | None] = []
+    refused_while_underway: list[RuntimeError] = []
+    run_refused_while_underway: list[RuntimeError] = []
 
-    def load_the_held_graph() -> None:
-        try:
-            runtime.load(held_graph)
-        except Exception as held_load_refusal:
-            held_load_outcome.append(held_load_refusal)
-        else:
-            held_load_outcome.append(None)
-
-    loading_thread = threading.Thread(target=load_the_held_graph)
-    loading_thread.start()
-    try:
-        assert held_config.load_reached_this_config.wait(RUN_REFUSAL_DEADLINE_SECONDS)
-        with pytest.raises(RuntimeError, match="still underway") as refused_while_underway:
+    def refuse_a_load_and_a_run() -> None:
+        with pytest.raises(RuntimeError, match="still underway") as refused:
             runtime.load(empty_graph())
-        run_refused_while_underway = run_expecting_a_refusal(runtime)
-    finally:
-        held_config.release_the_load.set()
-        loading_thread.join(RUN_REFUSAL_DEADLINE_SECONDS)
+        refused_while_underway.append(refused.value)
+        run_refused_while_underway.append(run_expecting_a_refusal(runtime))
 
-    assert "still underway on another thread" in str(run_refused_while_underway)
-    assert held_load_outcome == [None]
-    assert the_node_name_is_taken(runtime, "displaywindow")
+    held_load_refusal = load_on_another_thread_holding_at_the_import(
+        runtime,
+        graph_relaying_through(f"{held_node_module.name}:LoadedFrameRelay", stream_name="held"),
+        held_node_module,
+        refuse_a_load_and_a_run,
+    )
+
+    assert "still underway on another thread" in str(run_refused_while_underway[0])
+    assert held_load_refusal is None
+    assert the_node_name_is_taken(runtime, "loadedframerelay")
     run_refusal = run_expecting_a_refusal(runtime)
-    assert str(refused_while_underway.value) in str(run_refusal)
+    assert str(refused_while_underway[0]) in str(run_refusal)
+
+
+def test_a_held_loads_own_refusal_stands_over_a_load_refused_while_it_was_underway(
+    runtime: streamlib.Runtime, held_node_module: NodeModuleWhoseImportHoldsTheLoad
+):
+    def refuse_a_load() -> None:
+        with pytest.raises(RuntimeError, match="still underway"):
+            runtime.load(empty_graph())
+
+    held_load_refusal = load_on_another_thread_holding_at_the_import(
+        runtime,
+        graph_relaying_through(f"{held_node_module.name}:NoSuchNode", stream_name="held"),
+        held_node_module,
+        refuse_a_load,
+    )
+
+    assert isinstance(held_load_refusal, RuntimeError)
+    assert "could not register" in str(held_load_refusal)
+    run_refusal = run_expecting_a_refusal(runtime)
+    assert str(held_load_refusal) in str(run_refusal)
+    assert "still underway" not in str(run_refusal)
