@@ -41,7 +41,6 @@ def _report_the_speakers_settled_window_contract(speaker_node_name: str) -> None
     """Print what `graph` renders for the speaker's `audio` port."""
     graph = json.loads(call_tool(this_processes_control_url(), "graph", {}))
     for node in graph["nodes"]:
-        # By name, because a marker class exposes no import path to Python.
         if node["name"] != speaker_node_name:
             continue
         audio = next(
