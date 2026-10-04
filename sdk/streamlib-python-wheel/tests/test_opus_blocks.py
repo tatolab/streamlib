@@ -3,10 +3,10 @@
 
 """The Opus codec pair, marker class to decoded audio block.
 
-The marker tests are pure Python — constructing a `Runtime` and wiring a graph
-needs no device, which is why they run in CI. The graph tests start one, so
-they carry `requires_gpu` like every other graph test here and run nowhere in
-CI: libopus needs no device, but a running processor does.
+The marker tests are pure Python — constructing a `Runtime` and loading a graph
+into it needs no device, which is why they run in CI. The graph tests start
+one, so they carry `requires_gpu` like every other graph test here and run
+nowhere in CI: libopus needs no device, but a running processor does.
 
 No microphone: a Python source publishes a stereo tone at a stated rate, so
 the channel count the encoder follows and the rate the decoder reconstructs at
@@ -25,7 +25,13 @@ from pathlib import Path
 import pytest
 
 import streamlib
-from streamlib import OpusDecoder, OpusEncoder
+from streamlib import (
+    OpusDecoder,
+    OpusEncoder,
+    Stream,
+    compile_stream_to_graph,
+    stream,
+)
 from opus_blocks_probes import (
     DECODED_BLOCKS_REPORTED,
     ENCODED_PACKETS_REPORTED,
@@ -69,30 +75,52 @@ def test_the_marker_class_cannot_be_instantiated(marker_class):
         marker_class()
 
 
+@stream
+def both_opus_markers(stream: Stream) -> None:
+    stream.add(OpusEncoder)
+    stream.add(OpusDecoder)
+
+
 @pytest.mark.parametrize("marker_class", TWO_OPUS_MARKERS)
 def test_display_name_defaults_to_the_type_name(marker_class):
+    graph = compile_stream_to_graph(both_opus_markers)
+    [marker_node] = [
+        node for node in graph["nodes"] if node["type"] == marker_class.type
+    ]
+    assert marker_node["name"] == marker_class.__name__.lower()
+
     runtime = streamlib.Runtime()
     try:
-        block = runtime.add(marker_class)
-        assert block.display_name == marker_class.__name__.lower()
+        runtime.load(graph)
     finally:
         runtime.shutdown()
 
 
+@stream
+def microphone_through_the_opus_round_trip_into_a_speaker(stream: Stream) -> None:
+    microphone = stream.add(streamlib.MicrophoneSource)
+    encoder = stream.add(OpusEncoder)
+    decoder = stream.add(OpusDecoder)
+    speaker = stream.add(streamlib.SpeakerSink)
+    stream.connect(microphone.output("audio"), encoder.input("audio"))
+    stream.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
+    stream.connect(decoder.output("audio"), speaker.input("audio"))
+
+
 def test_the_round_trip_wires_without_an_adapter():
     """Source into encoder, encoder into decoder — the port names compose as
-    published, which is what makes three `rt.add` calls and two `rt.connect`
-    calls the whole of an audio codec round trip. No rechunker between the
-    source and the encoder: the encoder's own window contract frames."""
+    published, which is what makes three `stream.add` calls and two
+    `stream.connect` calls the whole of an audio codec round trip. No rechunker
+    between the source and the encoder: the encoder's own window contract
+    frames. The builder checks no port names, so the engine accepting the load
+    is the proof."""
     runtime = streamlib.Runtime()
     try:
-        microphone = runtime.add(streamlib.MicrophoneSource)
-        encoder = runtime.add(OpusEncoder)
-        decoder = runtime.add(OpusDecoder)
-        speaker = runtime.add(streamlib.SpeakerSink)
-        runtime.connect(microphone.output("audio"), encoder.input("audio"))
-        runtime.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
-        runtime.connect(decoder.output("audio"), speaker.input("audio"))
+        runtime.load(
+            compile_stream_to_graph(
+                microphone_through_the_opus_round_trip_into_a_speaker
+            )
+        )
     finally:
         runtime.shutdown()
 
