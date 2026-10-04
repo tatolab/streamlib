@@ -22,7 +22,6 @@ marker class resolved to.
 """
 
 import json
-import os
 import sys
 import threading
 
@@ -34,7 +33,7 @@ from video_codec_blocks_probes import (
 )
 from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib._control_plane_client import call_tool
-from streamlib._node_registry import live_nodes
+from this_processes_node_registry_entry import this_processes_control_url
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
@@ -102,24 +101,12 @@ CODEC_BLOCKS = {
 }
 
 
-def _this_processes_control_url() -> str:
-    """This run's own control plane, found by pid.
-
-    By pid rather than by "the only live node": another test's app may be up at
-    the same time, and this must never read that one's graph.
-    """
-    for node in live_nodes():
-        if node.pid == os.getpid():
-            return node.control_url
-    raise RuntimeError("this run published no node registry entry")
-
-
 def _report_the_codec_nodes_rendered_types(
     marker_class_name_by_node_name: "dict[str, str]",
 ) -> None:
     """Print the `type` `graph` renders for the two codec nodes, keyed by the
     marker class each was added as."""
-    graph = json.loads(call_tool(_this_processes_control_url(), "graph", {}))
+    graph = json.loads(call_tool(this_processes_control_url(), "graph", {}))
     rendered_types = {
         marker_class_name_by_node_name[node["name"]]: node["type"]
         for node in graph["nodes"]

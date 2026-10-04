@@ -11,23 +11,18 @@ app's effects reads.
 """
 
 import json
-import os
 import sys
 import threading
 import urllib.request
 
 import streamlib
 from streamlib import Stream, compile_stream_to_graph, stream
-from streamlib._node_registry import live_nodes
+from this_processes_node_registry_entry import this_processes_control_url
 
 import processor_config_catalog_probes as probes
 
 READ_TIMEOUT_SECONDS = 30.0
 GRAPH_READY_TIMEOUT_SECONDS = 90.0
-
-
-def _this_processes_control_url() -> str:
-    return next(node.control_url for node in live_nodes() if node.pid == os.getpid())
 
 
 @stream
@@ -52,7 +47,7 @@ def main() -> None:
             runtime.wait_until_every_processor_is_running(
                 timeout=GRAPH_READY_TIMEOUT_SECONDS
             )
-            registry_url = f"{_this_processes_control_url()}/api/registry"
+            registry_url = f"{this_processes_control_url()}/api/registry"
             # A loopback URL this app minted, read back off itself.
             with urllib.request.urlopen(registry_url, timeout=READ_TIMEOUT_SECONDS) as response:
                 served = json.load(response)

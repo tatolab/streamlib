@@ -25,34 +25,21 @@ them from the device rather than writing them down.
 """
 
 import json
-import os
 import threading
 
 import streamlib
 from speaker_sink_probes import AudioBlockCountingProbe
 from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib._control_plane_client import call_tool
-from streamlib._node_registry import live_nodes
+from this_processes_node_registry_entry import this_processes_control_url
 
 READINESS_TIMEOUT_SECONDS = 20.0
 SPEAKER_NODE_NAME = "speakersink"
 
 
-def _this_processes_control_url() -> str:
-    """This run's own control plane, found by pid.
-
-    By pid rather than by "the only live node": another test's app may be up at
-    the same time, and this must never read that one's graph.
-    """
-    for node in live_nodes():
-        if node.pid == os.getpid():
-            return node.control_url
-    raise RuntimeError("this run published no node registry entry")
-
-
 def _report_the_speakers_settled_window_contract(speaker_node_name: str) -> None:
     """Print what `graph` renders for the speaker's `audio` port."""
-    graph = json.loads(call_tool(_this_processes_control_url(), "graph", {}))
+    graph = json.loads(call_tool(this_processes_control_url(), "graph", {}))
     for node in graph["nodes"]:
         # By name, because a marker class exposes no import path to Python.
         if node["name"] != speaker_node_name:

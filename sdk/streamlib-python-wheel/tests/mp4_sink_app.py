@@ -24,14 +24,13 @@ producer's engine-minted processor id, not its node name.
 
 import argparse
 import json
-import os
 import threading
 
 import streamlib
 from opus_blocks_probes import StereoToneSource
 from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib._control_plane_client import call_tool
-from streamlib._node_registry import live_nodes
+from this_processes_node_registry_entry import this_processes_control_url
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
@@ -60,25 +59,13 @@ def two_tone_pairs_recorded_into_one_mp4(stream: Stream) -> None:
         stream.connect(encoder.output("encoded_audio"), sink.input("tracks"))
 
 
-def _this_processes_control_url() -> str:
-    """This run's own control plane, found by pid.
-
-    By pid rather than by "the only live node": another test's app may be up at
-    the same time, and this must never read that one's graph.
-    """
-    for node in live_nodes():
-        if node.pid == os.getpid():
-            return node.control_url
-    raise RuntimeError("this run published no node registry entry")
-
-
 def _recorded_track_names() -> "list[str]":
     """The name each pair's track will carry, in `RECORDED_PAIR_NAMES` order.
 
     A track is named by the channel its link subscribed to: the producing
     processor's id lowercased over its output port — what `graph` and `tap` show.
     """
-    graph = json.loads(call_tool(_this_processes_control_url(), "graph", {}))
+    graph = json.loads(call_tool(this_processes_control_url(), "graph", {}))
     processor_id_by_node_name = {node["name"]: node["id"] for node in graph["nodes"]}
     return [
         f"{processor_id_by_node_name[f'{pair_name}_encoder'].lower()}/encoded_audio"
