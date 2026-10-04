@@ -15,8 +15,10 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 from interpreter_lifecycle_processors import (
     AsleepInItsCallbackAndSlowToTearDownProbe,
     AsleepInItsCallbackProbe,
@@ -31,6 +33,47 @@ KEYBOARD_INTERRUPT_UPPER_BOUND_SECONDS = 5.0
 
 def marker(text: str) -> None:
     print(f"MARKER:{text}", flush=True)
+
+
+@stream
+def one_processor_asleep_in_its_callback(stream: Stream) -> None:
+    """One processor that sleeps in `process()`."""
+    stream.add(AsleepInItsCallbackProbe)
+
+
+@stream
+def two_processors_asleep_recording_their_teardown(stream: Stream) -> None:
+    """Two processors asleep in `process()`, each recording its own teardown."""
+    for _ in range(2):
+        stream.add(AsleepInItsCallbackRecordingItsTeardownProbe)
+
+
+@stream
+def three_processors_slow_to_tear_down(stream: Stream) -> None:
+    """Three processors asleep in `process()`, each three seconds over its teardown."""
+    for _ in range(3):
+        stream.add(AsleepInItsCallbackAndSlowToTearDownProbe)
+
+
+@stream
+def a_teardown_only_a_forced_shutdown_cuts_short(stream: Stream) -> None:
+    """One processor with a thirty-second teardown and a forked worker ignoring SIGTERM."""
+    stream.add(WorkerKeepingTeardownGoingProbe)
+
+
+@stream
+def a_helper_still_importing(stream: Stream) -> None:
+    """One processor whose module takes thirty seconds to import in its helper."""
+    stream.add(ThirtySecondImportProbe)
+
+
+def run_stream_until_it_returns(stream_function: Callable[[Stream], None]) -> None:
+    """Load `stream_function`'s graph on a fresh `Runtime`, run it, and say it returned."""
+    graph = compile_stream_to_graph(stream_function)
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.run()
+    marker("RUN_RETURNED")
 
 
 def scenario_ctrl_c() -> None:
@@ -261,10 +304,7 @@ def scenario_two_pipelines_in_one_process() -> None:
 
 def scenario_a_processor_asleep_in_its_callback() -> None:
     """The driver interrupts a graph whose one processor sleeps in `process()`."""
-    runtime = streamlib.Runtime()
-    runtime.add(AsleepInItsCallbackProbe)
-    runtime.run()
-    marker("RUN_RETURNED")
+    run_stream_until_it_returns(one_processor_asleep_in_its_callback)
 
 
 def scenario_a_processor_asleep_in_its_callback_with_hangups_not_ignored() -> None:
@@ -280,30 +320,19 @@ def scenario_a_processor_asleep_in_its_callback_with_hangups_not_ignored() -> No
 
 def scenario_two_processors_asleep_in_their_callbacks_recording_their_teardown() -> None:
     """Two helpers asleep in `process()`, for a driver that kills the app."""
-    runtime = streamlib.Runtime()
-    for _ in range(2):
-        runtime.add(AsleepInItsCallbackRecordingItsTeardownProbe)
-    runtime.run()
-    marker("RUN_RETURNED")
+    run_stream_until_it_returns(two_processors_asleep_recording_their_teardown)
 
 
 def scenario_three_processors_slow_to_tear_down() -> None:
     """Three helpers, each asleep in its callback and three seconds over its
     teardown, so stopping them one after another is plainly slower than at once."""
-    runtime = streamlib.Runtime()
-    for _ in range(3):
-        runtime.add(AsleepInItsCallbackAndSlowToTearDownProbe)
-    runtime.run()
-    marker("RUN_RETURNED")
+    run_stream_until_it_returns(three_processors_slow_to_tear_down)
 
 
 def scenario_a_teardown_only_a_forced_shutdown_cuts_short() -> None:
     """A helper whose teardown takes thirty seconds, and whose forked worker
     ignores SIGTERM. The driver interrupts it two or three times."""
-    runtime = streamlib.Runtime()
-    runtime.add(WorkerKeepingTeardownGoingProbe)
-    runtime.run()
-    marker("RUN_RETURNED")
+    run_stream_until_it_returns(a_teardown_only_a_forced_shutdown_cuts_short)
 
 
 def scenario_a_process_the_app_started_outlives_it() -> None:
@@ -323,10 +352,7 @@ def scenario_a_process_the_app_started_outlives_it() -> None:
 
 def scenario_a_helper_still_importing_its_processor() -> None:
     """The one processor's module takes thirty seconds to import in its helper."""
-    runtime = streamlib.Runtime()
-    runtime.add(ThirtySecondImportProbe)
-    runtime.run()
-    marker("RUN_RETURNED")
+    run_stream_until_it_returns(a_helper_still_importing)
 
 
 SCENARIOS = {
