@@ -233,6 +233,19 @@ def a_config_holding_a_list_holding_itself() -> "dict[str, Any]":
     return {"overlay": {"labels": labels}}
 
 
+# `Runtime.load` takes a graph 128 containers deep, and the graph, its `nodes`
+# list and the node enclose every config.
+CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF = 125
+
+
+def a_config_nesting_containers_deep(containers_counting_the_config: int) -> "dict[str, Any]":
+    """`{"nested": [[...]]}`, `containers_counting_the_config` containers deep in all."""
+    nested: "list[Any]" = []
+    for _ in range(containers_counting_the_config - 2):
+        nested = [nested]
+    return {"nested": nested}
+
+
 def test_a_defaulted_name_is_the_cast_short_name_and_a_duplicate_takes_the_next_suffix() -> (
     None
 ):
@@ -733,6 +746,46 @@ def test_a_container_two_keys_share_is_recorded_under_each() -> None:
 
     assert config == {"size": [640, 480], "preview_size": [640, 480]}
     assert config["size"] is not config["preview_size"]
+
+
+def test_a_config_nested_as_deep_as_a_graph_carries_compiles_unchanged() -> None:
+    config = a_config_nesting_containers_deep(
+        CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF
+    )
+
+    assert config_compiled_for(config) == config
+
+
+def test_a_config_nested_one_past_what_a_graph_carries_is_refused_at_add_by_key_path() -> (
+    None
+):
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(
+            FrameInverter,
+            config=a_config_nesting_containers_deep(
+                CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF + 1
+            ),
+        )
+
+    deepest_key_path = "config['nested']" + "[0]" * (
+        CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF - 1
+    )
+    assert str(refusal.value) == (
+        f"config nests too deep for a graph: `{deepest_key_path}` is a container 126 "
+        f"deep counting `config` itself, and a config nests at most 125 — "
+        f"`Runtime.load` counts containers from the graph's root, and the graph, its "
+        f"`nodes` list and the node enclose every config. Nest the data at most 125 "
+        f"containers deep, or carry the deeper part as a `str`"
+    )
+
+
+def test_a_config_nested_5000_deep_is_refused_by_name_rather_than_by_recursion() -> None:
+    with pytest.raises(ValueError) as refusal:
+        Stream("rig").add(FrameInverter, config=a_config_nesting_containers_deep(5000))
+
+    assert type(refusal.value) is ValueError
+    assert str(refusal.value).startswith("config nests too deep for a graph: ")
+    assert "a config nests at most 125" in str(refusal.value)
 
 
 def test_connect_refuses_an_input_as_its_source_naming_the_fix() -> None:

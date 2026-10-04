@@ -63,6 +63,12 @@ _CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH = "@"
 _SMALLEST_INTEGER_A_GRAPH_CARRIES = -(2**63)
 _LARGEST_INTEGER_A_GRAPH_CARRIES = 2**64 - 1
 
+# `Runtime.load` refuses a graph whose containers nest more than 128 deep from
+# its root (`MAXIMUM_NESTED_CONTAINER_DEPTH`, `python_bag_conversion.rs`), and
+# three of them — the graph dict, its `nodes` list and the node dict — enclose
+# every config.
+_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF = 128 - 3
+
 _STREAM_TAKES_NO_ARGUMENTS = (
     "@stream takes no arguments: the name is the function's, overridden at load "
     "with `--name`. Write `@stream` bare above `def main(stream: Stream) -> None:`."
@@ -628,6 +634,23 @@ def _json_value(
             f"config must be JSON: `{key_path}` is `{enclosing_key_path}`, which holds "
             f"it — a value holding itself has no JSON form. Break the cycle: put the "
             f"data `{key_path}` should carry there, not the container holding it"
+        )
+    containers_enclosing_this_one_counting_config = len(
+        key_paths_of_enclosing_containers_by_id
+    )
+    if (
+        containers_enclosing_this_one_counting_config
+        >= _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF
+    ):
+        raise ValueError(
+            f"config nests too deep for a graph: `{key_path}` is a container "
+            f"{containers_enclosing_this_one_counting_config + 1} deep counting `config` "
+            f"itself, and a config nests at most "
+            f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} — `Runtime.load` counts "
+            f"containers from the graph's root, and the graph, its `nodes` list and the "
+            f"node enclose every config. Nest the data at most "
+            f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} containers deep, or carry "
+            f"the deeper part as a `str`"
         )
     key_paths_of_enclosing_containers_by_id[id(value)] = key_path
     if isinstance(value, Mapping):

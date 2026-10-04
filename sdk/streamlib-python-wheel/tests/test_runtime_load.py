@@ -38,8 +38,11 @@ from streamlib import (
     OpusDecoder,
     OpusEncoder,
     SpeakerSink,
+    Stream,
     TestPatternSource,
     VirtualCameraSink,
+    compile_stream_to_graph,
+    stream,
 )
 from streamlib._engine import (
     TestBagCollector,
@@ -92,6 +95,10 @@ PLAIN_JSON_DATA_FIX = (
 )
 NESTED_PAST_THE_MAXIMUM = "containers nest more than 128 deep"
 
+# The deepest config the builder compiles: 128 containers from the graph's
+# root, less the graph, its `nodes` list and the node enclosing the config.
+CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF = 125
+
 OWN_PROCESS_DEADLINE_SECONDS = 120.0
 
 
@@ -127,6 +134,22 @@ def pattern_to_window_graph(*, stream_name: str | None = None) -> dict[str, Any]
     if stream_name is not None:
         graph["stream"] = stream_name
     return graph
+
+
+def config_nesting_containers_deep(containers_counting_the_config: int) -> dict[str, Any]:
+    """`{"nested": [[...]]}`, `containers_counting_the_config` containers deep in all."""
+    nested: list[Any] = []
+    for _ in range(containers_counting_the_config - 2):
+        nested = [nested]
+    return {"nested": nested}
+
+
+@stream
+def window_with_the_deepest_config_the_builder_compiles(stream: Stream) -> None:
+    stream.add(
+        DisplayWindow,
+        config=config_nesting_containers_deep(CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF),
+    )
 
 
 def empty_graph() -> dict[str, Any]:
@@ -321,6 +344,36 @@ def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: streamlib.Runtime)
     runtime.load(graph)
 
     assert the_node_name_is_taken(runtime, "displaywindow")
+
+
+def test_the_deepest_config_the_builder_compiles_loads(runtime: streamlib.Runtime):
+    runtime.load(compile_stream_to_graph(window_with_the_deepest_config_the_builder_compiles))
+
+    assert the_node_name_is_taken(runtime, "displaywindow")
+
+
+def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_load(
+    runtime: streamlib.Runtime,
+):
+    """The builder's bound is `load`'s: one container past it, written by hand, is refused."""
+    with pytest.raises(ValueError) as refused:
+        runtime.load(
+            {
+                "nodes": [
+                    {
+                        "name": "displaywindow",
+                        "type": DisplayWindow.type,
+                        "config": config_nesting_containers_deep(
+                            CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF + 1
+                        ),
+                    }
+                ]
+            }
+        )
+
+    assert str(refused.value).startswith(GRAPH_IS_NOT_JSON_DATA)
+    assert NESTED_PAST_THE_MAXIMUM in str(refused.value)
+    assert not the_node_name_is_taken(runtime, "displaywindow")
 
 
 @pytest.mark.parametrize("not_a_number", [float("nan"), float("inf")], ids=["nan", "infinity"])
