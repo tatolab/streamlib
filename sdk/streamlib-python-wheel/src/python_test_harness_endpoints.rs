@@ -24,12 +24,16 @@ use parking_lot::{Condvar, Mutex};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
+use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ContinuousProcessor, ReactiveProcessor};
 use streamlib::sdk::schemars::JsonSchema;
 
 use crate::python_bag_conversion::{decode_msgpack_to_python_object, encode_bag_to_msgpack};
 use crate::python_logging::monotonic_clock_now_ns;
+use crate::python_native_builtin_blocks::{
+    NativeProcessorMarkerClass, marker_type_class_attribute,
+};
 
 /// Which channel an endpoint reads from or writes to.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -232,6 +236,18 @@ impl PythonTestBagFeederBlock {
     fn dunder_test() -> bool {
         false
     }
+
+    #[classattr]
+    #[pyo3(name = "type")]
+    fn native_processor_type() -> String {
+        marker_type_class_attribute::<Self>()
+    }
+}
+
+impl NativeProcessorMarkerClass for PythonTestBagFeederBlock {
+    fn native_processor_class_import_path() -> ProcessorClassImportPath {
+        TestBagFeeder::Processor::processor_class_import_path()
+    }
 }
 
 /// `streamlib.testing`'s collector, as the marker type `Runtime.add` resolves.
@@ -246,20 +262,32 @@ impl PythonTestBagCollectorBlock {
     fn dunder_test() -> bool {
         false
     }
+
+    #[classattr]
+    #[pyo3(name = "type")]
+    fn native_processor_type() -> String {
+        marker_type_class_attribute::<Self>()
+    }
+}
+
+impl NativeProcessorMarkerClass for PythonTestBagCollectorBlock {
+    fn native_processor_class_import_path() -> ProcessorClassImportPath {
+        TestBagCollector::Processor::processor_class_import_path()
+    }
 }
 
 /// The harness marker classes, resolved the same way the media built-ins are.
 pub(crate) fn test_harness_class_import_path(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
-) -> Option<streamlib::sdk::descriptors::ProcessorClassImportPath> {
-    if processor_class.is(python.get_type::<PythonTestBagFeederBlock>()) {
-        return Some(TestBagFeeder::Processor::processor_class_import_path());
-    }
-    if processor_class.is(python.get_type::<PythonTestBagCollectorBlock>()) {
-        return Some(TestBagCollector::Processor::processor_class_import_path());
-    }
-    None
+) -> Option<ProcessorClassImportPath> {
+    PythonTestBagFeederBlock::native_processor_class_import_path_if_it_is(python, processor_class)
+        .or_else(|| {
+            PythonTestBagCollectorBlock::native_processor_class_import_path_if_it_is(
+                python,
+                processor_class,
+            )
+        })
 }
 
 /// Open a harness channel under `channel`.
@@ -344,6 +372,23 @@ mod tests {
         let mut wire_bytes = Vec::new();
         rmpv::encode::write_value(&mut wire_bytes, &bag).expect("msgpack encode");
         wire_bytes
+    }
+
+    #[test]
+    fn each_harness_marker_type_attribute_is_the_path_add_resolves_it_to() {
+        Python::initialize();
+        Python::attach(|python| {
+            for marker_class in [
+                python.get_type::<PythonTestBagFeederBlock>(),
+                python.get_type::<PythonTestBagCollectorBlock>(),
+            ] {
+                let type_attribute: String =
+                    marker_class.getattr("type").unwrap().extract().unwrap();
+                let resolved =
+                    test_harness_class_import_path(python, marker_class.as_any()).unwrap();
+                assert_eq!(type_attribute, resolved.as_str(), "{marker_class}");
+            }
+        });
     }
 
     /// A byte payload is msgpack `bin` on the wire, and the harness has to
