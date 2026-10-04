@@ -42,11 +42,16 @@ READINESS_TIMEOUT_SECONDS = 20.0
 KEYFRAME_INTERVAL_SECONDS = 1
 
 
-def _add_a_codec_round_trip_with_probes(
-    stream: Stream,
-    encoder_class: "type[streamlib.H264Encoder] | type[streamlib.H265Encoder]",
-    decoder_class: "type[streamlib.H264Decoder] | type[streamlib.H265Decoder]",
-) -> None:
+CODEC_BLOCKS = {
+    "h264": (streamlib.H264Encoder, streamlib.H264Decoder),
+    "h265": (streamlib.H265Encoder, streamlib.H265Decoder),
+}
+
+
+@stream
+def a_codec_round_trip_with_probes(stream: Stream) -> None:
+    """The encoder and decoder pair `argv[1]` names, with the three probes."""
+    encoder_class, decoder_class = CODEC_BLOCKS[sys.argv[1]]
     pattern = stream.add(
         streamlib.TestPatternSource, config={"width": 320, "height": 180}
     )
@@ -73,34 +78,6 @@ def _add_a_codec_round_trip_with_probes(
     )
 
 
-@stream
-def h264_round_trip_with_probes(stream: Stream) -> None:
-    _add_a_codec_round_trip_with_probes(
-        stream, streamlib.H264Encoder, streamlib.H264Decoder
-    )
-
-
-@stream
-def h265_round_trip_with_probes(stream: Stream) -> None:
-    _add_a_codec_round_trip_with_probes(
-        stream, streamlib.H265Encoder, streamlib.H265Decoder
-    )
-
-
-CODEC_BLOCKS = {
-    "h264": (
-        h264_round_trip_with_probes,
-        streamlib.H264Encoder,
-        streamlib.H264Decoder,
-    ),
-    "h265": (
-        h265_round_trip_with_probes,
-        streamlib.H265Encoder,
-        streamlib.H265Decoder,
-    ),
-}
-
-
 def _report_the_codec_nodes_rendered_types(
     marker_class_name_by_node_name: "dict[str, str]",
 ) -> None:
@@ -116,10 +93,9 @@ def _report_the_codec_nodes_rendered_types(
 
 
 def main() -> None:
-    codec = sys.argv[1]
-    stream_function, encoder_class, decoder_class = CODEC_BLOCKS[codec]
+    encoder_class, decoder_class = CODEC_BLOCKS[sys.argv[1]]
 
-    graph = compile_stream_to_graph(stream_function)
+    graph = compile_stream_to_graph(a_codec_round_trip_with_probes)
     runtime = streamlib.Runtime()
     runtime.load(graph)
     runtime.host_control_plane()
