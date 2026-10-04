@@ -52,8 +52,7 @@ def inbound_link_naming_feed_channel_of(feeder_name: str) -> str:
 
 @stream
 def two_feeders_into_one_port(stream: Stream) -> None:
-    """The processor under test, both feeders linked into its one `tracks` port,
-    and a collector on its output."""
+    """Both feeders linked into the one `tracks` port, a collector on its output."""
     sink = stream.add(ReportsWhichLinkEachBagCameFrom)
     for feeder_name in FEEDER_NAMES:
         feeder = stream.add(
