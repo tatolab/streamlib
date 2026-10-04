@@ -3,12 +3,13 @@
 
 """The two processors as a graph sees them.
 
-`rt.add` with no adapter and no engine change is the whole claim of the
-extension model, so it is what these check — over a real `Runtime`, which needs
-no device to build a graph.
+`stream.add` with no adapter and no engine change is the whole claim of the
+extension model, so it is what these check — each stream's graph taken by
+`Runtime.load` on a real `Runtime`, which needs no device to load one.
 """
 
 import os
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -20,7 +21,10 @@ from streamlib import (
     OpusDecoder,
     OpusEncoder,
     RuntimeContextFullAccess,
+    Stream,
+    compile_stream_to_graph,
     log,
+    stream,
 )
 from streamlib._engine import ProcessorLinkDataAccess
 from streamlib._processor_hosting import construct_processor_instance
@@ -39,6 +43,68 @@ from streamlib_webrtc.processors import (
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
 
+@stream
+def the_whip_publisher_alone(stream: Stream) -> None:
+    stream.add(WhipPublisher, config={"url": "https://example.invalid/x"})
+
+
+@stream
+def the_whep_player_alone(stream: Stream) -> None:
+    stream.add(WhepPlayer, config={"url": "https://example.invalid/x"})
+
+
+@stream
+def the_publisher_fed_by_both_encoders(stream: Stream) -> None:
+    video_encoder = stream.add(H264Encoder)
+    audio_encoder = stream.add(OpusEncoder)
+    publisher = stream.add(
+        WhipPublisher, config={"url": "https://example.invalid/whip"}
+    )
+
+    stream.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
+    stream.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+
+
+@stream
+def the_player_feeding_both_decoders(stream: Stream) -> None:
+    player = stream.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
+    video_decoder = stream.add(H264Decoder)
+    audio_decoder = stream.add(OpusDecoder)
+
+    stream.connect(
+        player.output("encoded_video"), video_decoder.input("encoded_video")
+    )
+    stream.connect(
+        player.output("encoded_audio"), audio_decoder.input("encoded_audio")
+    )
+
+
+@stream
+def a_publish_and_play_round_trip(stream: Stream) -> None:
+    encoder = stream.add(H264Encoder)
+    publisher = stream.add(
+        WhipPublisher, config={"url": "https://example.invalid/whip"}
+    )
+    player = stream.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
+    decoder = stream.add(H264Decoder)
+
+    stream.connect(encoder.output("encoded_video"), publisher.input("tracks"))
+    stream.connect(player.output("encoded_video"), decoder.input("encoded_video"))
+
+
+def node_names_loaded_into(
+    runtime: streamlib.Runtime, stream_function: "Callable[[Stream], None]"
+) -> "list[str]":
+    """Load `stream_function`'s graph into `runtime`, and name the nodes it holds.
+
+    `Runtime.load` never suffixes a name, so the compiled names are the names
+    the engine holds.
+    """
+    graph = compile_stream_to_graph(stream_function)
+    runtime.load(graph)
+    return [loaded_node["name"] for loaded_node in graph["nodes"]]
+
+
 @pytest.fixture
 def runtime():
     runtime = streamlib.Runtime()
@@ -48,52 +114,31 @@ def runtime():
         runtime.shutdown()
 
 
-@pytest.mark.parametrize("processor_class", [WhipPublisher, WhepPlayer])
+@pytest.mark.parametrize(
+    ("stream_function", "processor_class"),
+    [(the_whip_publisher_alone, WhipPublisher), (the_whep_player_alone, WhepPlayer)],
+)
 def test_an_installed_extensions_processor_is_added_like_any_other(
-    runtime, processor_class
+    runtime, stream_function, processor_class
 ):
-    added = runtime.add(processor_class, config={"url": "https://example.invalid/x"})
-
-    assert added.display_name == processor_class.__name__.lower()
+    assert node_names_loaded_into(runtime, stream_function) == [
+        processor_class.__name__.lower()
+    ]
 
 
 def test_the_publisher_wires_to_both_encoders_without_an_adapter(runtime):
     """One fan-in port takes both encoders, which is what makes a WHIP session
     with video and audio a matter of wiring rather than of config."""
-    video_encoder = runtime.add(H264Encoder)
-    audio_encoder = runtime.add(OpusEncoder)
-    publisher = runtime.add(
-        WhipPublisher, config={"url": "https://example.invalid/whip"}
-    )
-
-    runtime.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
-    runtime.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+    runtime.load(compile_stream_to_graph(the_publisher_fed_by_both_encoders))
 
 
 def test_the_player_wires_to_both_decoders_without_an_adapter(runtime):
-    player = runtime.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
-    video_decoder = runtime.add(H264Decoder)
-    audio_decoder = runtime.add(OpusDecoder)
-
-    runtime.connect(
-        player.output("encoded_video"), video_decoder.input("encoded_video")
-    )
-    runtime.connect(
-        player.output("encoded_audio"), audio_decoder.input("encoded_audio")
-    )
+    runtime.load(compile_stream_to_graph(the_player_feeding_both_decoders))
 
 
 def test_a_publish_and_play_round_trip_composes_as_published(runtime):
     """The shape the live proof drives: encode, publish, play back, decode."""
-    encoder = runtime.add(H264Encoder)
-    publisher = runtime.add(
-        WhipPublisher, config={"url": "https://example.invalid/whip"}
-    )
-    player = runtime.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
-    decoder = runtime.add(H264Decoder)
-
-    runtime.connect(encoder.output("encoded_video"), publisher.input("tracks"))
-    runtime.connect(player.output("encoded_video"), decoder.input("encoded_video"))
+    runtime.load(compile_stream_to_graph(a_publish_and_play_round_trip))
 
 
 def test_each_codec_names_the_track_it_belongs_on():
@@ -252,9 +297,9 @@ def test_a_publisher_added_with_no_endpoint_at_all_is_refused_by_its_config_clas
 
 @pytest.mark.parametrize("processor_class", [WhipPublisher, WhepPlayer])
 def test_config_reaches_a_processor_as_its_own_config_object(processor_class):
-    """The shape `rt.add(cls, config={...})` actually delivers.
+    """The shape `stream.add(cls, config={...})` actually delivers.
 
-    `rt.add` records the config and the helper constructs the class's config
+    The graph records the config and the helper constructs the class's config
     class from it, so a class whose settings are not on that config class
     passes every graph-building test and then fails in the child on the first
     run. This is the engine's own mapping, called directly.
