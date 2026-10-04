@@ -11,7 +11,7 @@ be `"__main__"` in an app actually launched as one.
 import sys
 
 import streamlib
-from streamlib import node
+from streamlib import Stream, compile_stream_to_graph, node, stream
 
 MARKER_PREFIX = "MARKER:"
 
@@ -27,19 +27,13 @@ def marker(name: str) -> None:
     print(f"{MARKER_PREFIX}{name}", flush=True)
 
 
-def scenario_entry_file_class_is_refused() -> None:
-    runtime = streamlib.Runtime()
-    try:
-        runtime.add(EntryFileProcessor)
-    except ValueError as refusal:
-        marker(f"REFUSED={refusal}".replace("\n", "\\n"))
-    else:
-        marker("ACCEPTED")
-    runtime.shutdown()
-    marker("CLEAN_EXIT")
+@stream
+def entry_file_class(stream: Stream) -> None:
+    stream.add(EntryFileProcessor)
 
 
-def scenario_function_local_class_is_refused() -> None:
+@stream
+def function_local_class(stream: Stream) -> None:
     def build_processor() -> type:
         @node(execution="continuous", interval_ms=1)
         class FunctionLocalProcessor:
@@ -47,23 +41,39 @@ def scenario_function_local_class_is_refused() -> None:
 
         return FunctionLocalProcessor
 
-    runtime = streamlib.Runtime()
+    stream.add(build_processor())
+
+
+@stream
+def importable_class(stream: Stream) -> None:
+    """The same stream, one import line different — the fix the refusal names."""
+    from zero_argument_process_processor import ZeroArgumentProcess
+
+    stream.add(ZeroArgumentProcess)
+
+
+def compile_reporting_its_refusal(stream_function) -> None:
     try:
-        runtime.add(build_processor())
+        compile_stream_to_graph(stream_function)
     except ValueError as refusal:
         marker(f"REFUSED={refusal}".replace("\n", "\\n"))
     else:
         marker("ACCEPTED")
-    runtime.shutdown()
     marker("CLEAN_EXIT")
 
 
-def scenario_importable_class_is_accepted() -> None:
-    """The same app, one import line different — the fix the refusal names."""
-    from zero_argument_process_processor import ZeroArgumentProcess
+def scenario_entry_file_class_is_refused() -> None:
+    compile_reporting_its_refusal(entry_file_class)
 
+
+def scenario_function_local_class_is_refused() -> None:
+    compile_reporting_its_refusal(function_local_class)
+
+
+def scenario_importable_class_is_accepted() -> None:
+    graph = compile_stream_to_graph(importable_class)
     runtime = streamlib.Runtime()
-    runtime.add(ZeroArgumentProcess)
+    runtime.load(graph)
     marker("ACCEPTED")
     runtime.shutdown()
     marker("CLEAN_EXIT")
