@@ -509,16 +509,7 @@ fn the_stream_name_load_was_passed(name: Option<&Bound<'_, PyAny>>) -> PyResult<
 /// with the converter's error as its `__cause__`. An error that refuses no
 /// value — a `MemoryError`, a `KeyboardInterrupt` — passes through unchanged.
 fn graph_is_not_json_data_refusal(python: Python<'_>, converter_refusal: PyErr) -> PyErr {
-    let converter_refusal_type = converter_refusal.get_type(python);
-    let converter_refusal_type_constructs_from_one_str = [
-        PyTypeError::type_object(python),
-        PyValueError::type_object(python),
-    ]
-    .iter()
-    .any(|one_str_exception_type| converter_refusal_type.is(one_str_exception_type));
-    let graph_refusal_type = if converter_refusal_type_constructs_from_one_str {
-        converter_refusal_type
-    } else if converter_refusal.is_instance_of::<PyTypeError>(python) {
+    let graph_refusal_type = if converter_refusal.is_instance_of::<PyTypeError>(python) {
         PyTypeError::type_object(python)
     } else if converter_refusal.is_instance_of::<PyValueError>(python) {
         PyValueError::type_object(python)
@@ -781,20 +772,16 @@ impl PythonRuntimeHandle {
         graph: &Bound<'_, PyAny>,
         name: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        let graph_mapping_and_stream_name_override = the_graph_mapping_load_was_passed(graph)
-            .and_then(|graph_mapping| Ok((graph_mapping, the_stream_name_load_was_passed(name)?)));
-        let (graph_mapping, stream_name_override) = match graph_mapping_and_stream_name_override {
-            Ok(graph_mapping_and_stream_name_override) => graph_mapping_and_stream_name_override,
-            Err(refusal) => {
-                let refusal_text = refusal.value(python).to_string();
+        let (graph_mapping, stream_name_override) = the_graph_mapping_load_was_passed(graph)
+            .and_then(|graph_mapping| Ok((graph_mapping, the_stream_name_load_was_passed(name)?)))
+            .inspect_err(|refusal| {
                 self.graph_load_record()
-                    .record_a_refusal_that_claimed_no_load(&refusal_text);
-                return Err(refusal);
-            }
-        };
+                    .record_a_refusal_that_claimed_no_load(&refusal.value(python).to_string());
+            })?;
         let engine = self.engine_being_built("load a graph")?;
-        let claim = self.graph_load_record().claim_the_one_load();
-        claim.map_err(PyRuntimeError::new_err)?;
+        self.graph_load_record()
+            .claim_the_one_load()
+            .map_err(PyRuntimeError::new_err)?;
 
         RuntimeGraphLoadRecord::run_the_claimed_load(
             &self.graph_load_record,
