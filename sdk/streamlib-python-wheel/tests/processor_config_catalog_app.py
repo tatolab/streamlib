@@ -17,6 +17,7 @@ import threading
 import urllib.request
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib._node_registry import live_nodes
 
 import processor_config_catalog_probes as probes
@@ -29,15 +30,22 @@ def _this_processes_control_url() -> str:
     return next(node.control_url for node in live_nodes() if node.pid == os.getpid())
 
 
-def main() -> None:
-    runtime = streamlib.Runtime()
-    runtime.host_control_plane()
-    runtime.add(probes.TypedDictConfiguredProbe, config={"width": 320})
-    runtime.add(probes.DataclassConfiguredProbe, config={"width": 640, "label": "left"})
-    runtime.add(probes.ModelConfiguredProbe, config={"width": 1280})
-    runtime.add(probes.UnconfiguredProbe)
+@stream
+def four_probes_each_configured_its_own_way(stream: Stream) -> None:
+    """Probes configured by a TypedDict, a dataclass and a model, beside one taking none."""
+    stream.add(probes.TypedDictConfiguredProbe, config={"width": 320})
+    stream.add(probes.DataclassConfiguredProbe, config={"width": 640, "label": "left"})
+    stream.add(probes.ModelConfiguredProbe, config={"width": 1280})
+    stream.add(probes.UnconfiguredProbe)
     # `probes.ImportedButNeverAddedProbe` is deliberately not added: importing
     # the module is what put it in the catalog.
+
+
+def main() -> None:
+    graph = compile_stream_to_graph(four_probes_each_configured_its_own_way)
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.host_control_plane()
 
     def read_the_catalog_this_node_serves() -> None:
         try:

@@ -161,7 +161,7 @@ def test_every_helper_constructed_the_config_class_its_processor_named(
     catalog_app_output,
 ):
     """The half a served document cannot show: the object really arrived in the
-    child, built from the mapping `rt.add` recorded."""
+    child, built from the config the loaded graph carried."""
     constructed = {
         report["processor"]: report["config_type"]
         for report in (
