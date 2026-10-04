@@ -9,7 +9,6 @@ forwarding every child's records ride.
 """
 
 import sys
-from collections.abc import Callable
 
 import streamlib
 from streamlib import Stream, compile_stream_to_graph, stream
@@ -93,16 +92,7 @@ def an_unclaimed_frame_is_recycled(stream: Stream) -> None:
     _add_a_source_holding_its_first_frame_downstream(stream, UnclaimedFrameHoldingSink)
 
 
-def load_and_run(stream_function: Callable[[Stream], None]) -> None:
-    """Compile `stream_function`, load it on a fresh Runtime and run it until interrupted."""
-    graph = compile_stream_to_graph(stream_function)
-    runtime = streamlib.Runtime()
-    runtime.load(graph)
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
-
-
-SCENARIOS = {
+STREAM_BY_SCENARIO = {
     "a_claimed_frame_holds_still": a_claimed_frame_holds_still,
     "an_unclaimed_frame_is_recycled": an_unclaimed_frame_is_recycled,
     "ring_rotation": ring_rotation,
@@ -113,4 +103,8 @@ SCENARIOS = {
 
 
 if __name__ == "__main__":
-    load_and_run(SCENARIOS[sys.argv[1]])
+    graph = compile_stream_to_graph(STREAM_BY_SCENARIO[sys.argv[1]])
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.run()
+    print("MARKER:CLEAN_EXIT", flush=True)

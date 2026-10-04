@@ -9,7 +9,6 @@ log forwarding every child's records ride.
 """
 
 import sys
-from collections.abc import Callable
 
 import streamlib
 from streamlib import Stream, compile_stream_to_graph, stream
@@ -50,20 +49,16 @@ def one_source_into_one_reporting_sink(stream: Stream) -> None:
     )
 
 
-def run_stream_to_a_clean_exit(stream_function: Callable[[Stream], None]) -> None:
-    """Load `stream_function`'s graph on a fresh `Runtime` and run it until stopped."""
+if __name__ == "__main__":
+    scenario = sys.argv[1]
+    if scenario == "configured_probe":
+        stream_function = one_config_probe_with_gain_and_label
+    elif scenario in SOURCE_AND_REPORTING_SINK_CLASS_NAMES_BY_SCENARIO:
+        stream_function = one_source_into_one_reporting_sink
+    else:
+        stream_function = one_capability_context_probe
     graph = compile_stream_to_graph(stream_function)
     runtime = streamlib.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
-
-
-if __name__ == "__main__":
-    scenario = sys.argv[1]
-    if scenario == "configured_probe":
-        run_stream_to_a_clean_exit(one_config_probe_with_gain_and_label)
-    elif scenario in SOURCE_AND_REPORTING_SINK_CLASS_NAMES_BY_SCENARIO:
-        run_stream_to_a_clean_exit(one_source_into_one_reporting_sink)
-    else:
-        run_stream_to_a_clean_exit(one_capability_context_probe)
