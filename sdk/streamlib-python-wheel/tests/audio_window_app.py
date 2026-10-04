@@ -18,18 +18,27 @@ from audio_window_probes import (
     SourceFollowingWindowProbe,
     StereoToneSource,
 )
+from streamlib import Stream, compile_stream_to_graph, stream
 
 
-def run_with(probe_class) -> None:
-    runtime = streamlib.Runtime()
-    microphone = runtime.add(streamlib.MicrophoneSource)
-    probe = runtime.add(probe_class)
-    runtime.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
+def _microphone_into(stream: Stream, probe_class: type) -> None:
+    microphone = stream.add(streamlib.MicrophoneSource)
+    probe = stream.add(probe_class)
+    stream.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 
 
-def run_both_probes_off_one_stereo_source() -> None:
+@stream
+def microphone_into_an_exact_window_probe(stream: Stream) -> None:
+    _microphone_into(stream, ExactWindowProbe)
+
+
+@stream
+def microphone_into_a_rolling_window_probe(stream: Stream) -> None:
+    _microphone_into(stream, RollingWindowProbe)
+
+
+@stream
+def one_stereo_source_into_both_window_probes(stream: Stream) -> None:
     """One stated-format source into two consumers: one that declares no
     channel count and one that declares mono.
 
@@ -37,26 +46,27 @@ def run_both_probes_off_one_stereo_source() -> None:
     that the count follows *the source* — which needs a source whose count the
     test knows.
     """
-    runtime = streamlib.Runtime()
-    source = runtime.add(StereoToneSource)
-    following = runtime.add(SourceFollowingWindowProbe)
-    declared_mono = runtime.add(DeclaredMonoWindowProbe)
-    runtime.connect(source.output("audio"), following.input("audio_from_upstream"))
-    runtime.connect(source.output("audio"), declared_mono.input("audio_from_upstream"))
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
+    source = stream.add(StereoToneSource)
+    following = stream.add(SourceFollowingWindowProbe)
+    declared_mono = stream.add(DeclaredMonoWindowProbe)
+    stream.connect(source.output("audio"), following.input("audio_from_upstream"))
+    stream.connect(source.output("audio"), declared_mono.input("audio_from_upstream"))
 
 
 SCENARIOS = {
-    "contiguous_windows": lambda: run_with(ExactWindowProbe),
-    "rolling_windows": lambda: run_with(RollingWindowProbe),
-    "source_following_windows": run_both_probes_off_one_stereo_source,
+    "contiguous_windows": microphone_into_an_exact_window_probe,
+    "rolling_windows": microphone_into_a_rolling_window_probe,
+    "source_following_windows": one_stereo_source_into_both_window_probes,
 }
 
 
 def main() -> None:
     scenario = sys.argv[1] if len(sys.argv) > 1 else "contiguous_windows"
-    SCENARIOS[scenario]()
+    graph = compile_stream_to_graph(SCENARIOS[scenario])
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.run()
+    print("MARKER:CLEAN_EXIT", flush=True)
 
 
 if __name__ == "__main__":
