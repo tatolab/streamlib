@@ -21,6 +21,7 @@ graph by node name, and it derives it the same way for both arms.
 import argparse
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 
 _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
     "h264": (streamlib.H264Encoder, streamlib.H264Decoder),
@@ -33,7 +34,7 @@ _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
 
-def main() -> None:
+def _parse_fixture_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--codec",
@@ -49,33 +50,43 @@ def main() -> None:
         help="V4L2 node to capture from (default: the first the engine finds)",
     )
     parser.add_argument("--control-plane-port", type=int, default=9000)
-    arguments = parser.parse_args()
+    return parser.parse_args()
 
+
+@stream
+def camera_through_the_codec_into_a_window(stream: Stream) -> None:
+    arguments = _parse_fixture_arguments()
     encoder_marker, decoder_marker = _ENCODER_AND_DECODER_MARKERS_BY_CODEC[
         arguments.codec
     ]
 
-    runtime = streamlib.Runtime(runtime_name="codec-roundtrip-node")
-    camera = runtime.add(
+    camera = stream.add(
         streamlib.CameraSource,
+        name="camera",
         config={"device_id": arguments.camera} if arguments.camera else {},
-        display_name="camera",
     )
-    encoder = runtime.add(
+    encoder = stream.add(
         encoder_marker,
+        name="encoder",
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
-        display_name="encoder",
     )
-    decoder = runtime.add(decoder_marker, display_name="decoder")
-    display = runtime.add(
+    decoder = stream.add(decoder_marker, name="decoder")
+    display = stream.add(
         streamlib.DisplayWindow,
+        name="display",
         config={"title": "streamlib codec round-trip node"},
-        display_name="display",
     )
 
-    runtime.connect(camera.output("video"), encoder.input("video"))
-    runtime.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
-    runtime.connect(decoder.output("video"), display.input("video"))
+    stream.connect(camera.output("video"), encoder.input("video"))
+    stream.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
+    stream.connect(decoder.output("video"), display.input("video"))
+
+
+def main() -> None:
+    arguments = _parse_fixture_arguments()
+    graph = compile_stream_to_graph(camera_through_the_codec_into_a_window)
+    runtime = streamlib.Runtime(runtime_name="codec-roundtrip-node")
+    runtime.load(graph)
 
     # Loopback rather than the default every interface: this node exists to be
     # tapped from the machine it runs on, and it carries no authentication.

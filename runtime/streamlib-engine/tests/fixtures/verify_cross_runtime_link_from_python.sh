@@ -6,8 +6,8 @@
 #
 # `verify_cross_runtime_link.sh` proves the link between two started runtimes
 # from Rust, into a native destination. This proves the other authoring surface
-# and the other placement: the reader is a Python app that spells the remote
-# port with `rt.remote_processor_output(...)`, and its destination is a
+# and the other placement: the reader is a Python app whose `@stream` spells
+# the remote port with `stream.remote_output(...)`, and its destination is a
 # helper-placed Python processor, so the link's name has to survive the
 # parent's wiring envelope into a child interpreter to be read at all.
 #
@@ -58,15 +58,17 @@ if [ ! -x "$PYTHON" ]; then
     PYTHON="$(command -v python3)"
 fi
 # The nodes run whatever `_engine.abi3.so` that interpreter imports, so an
-# extension predating the remote reference would be measured and reported as a
-# PASS for code that is not in the tree. Refused by name instead.
+# extension predating the graph load would be measured and reported as a PASS
+# for code that is not in the tree. Refused by name instead.
 if ! CANNOT_IMPORT="$("$PYTHON" -c '
 import streamlib
 
-streamlib.RemoteProcessorOutputPortReference
-streamlib.Runtime.remote_processor_output
+streamlib.Runtime.load
+streamlib.Stream.remote_output
+streamlib.compile_stream_to_graph
 ' 2>&1)"; then
-    say "SKIP: $PYTHON has no remote port reference. Rebuild the wheel with"
+    say "SKIP: $PYTHON lacks streamlib.Runtime.load, streamlib.Stream.remote_output"
+    say "      or streamlib.compile_stream_to_graph. Rebuild the wheel with"
     say "      \`maturin develop\` — this measures the extension, not the tree."
     say "$CANNOT_IMPORT"
     exit 77
