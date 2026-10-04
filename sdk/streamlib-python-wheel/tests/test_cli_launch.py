@@ -4,9 +4,10 @@
 """`streamlib run` / `dev` booting a real node, end to end.
 
 What these lock is that a Python-launched app is a first-class node: its
-`setup(rt)` built the graph, it published a node-registry entry the observation
-verbs discover, and a clean interrupt takes the entry away again. Booting
-initializes a GPU context, so the whole module needs a device.
+stream's graph was loaded — or its `setup(rt)` built one — it published a
+node-registry entry the observation verbs discover, and a clean interrupt takes
+the entry away again. Booting initializes a GPU context, so the whole module
+needs a device.
 
 The MVP minute is measured here too, with every processor in its own child
 interpreter: what `new` writes runs frame after frame, a graph of helpers goes
@@ -31,6 +32,7 @@ import pytest
 from app_under_test import ENGINE_READY_LOG_LINE
 
 from streamlib import cli
+from streamlib._control_plane_client import call_tool
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -465,13 +467,15 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 ):
     """What `streamlib new` writes must actually run, frame after frame.
 
-    Run exactly as scaffolded — window included, which is why this is rig-only.
-    A registry entry alone proves almost nothing here: it appears whether or not
-    `process()` ever succeeds, so the assertions that carry this test are the
-    ones on the child's own output. `process() failed` catches an effect that
-    raises every frame; the delivered-frame count catches an effect that is
-    correct but so slow the demo is a slideshow — which is what editing the
-    write-combined mapping in place through a strided view produced (~4fps).
+    Run exactly as scaffolded — window included, which is why this is rig-only:
+    `dev` compiles the scaffold's `@stream` and loads the graph it builds, so the
+    graph the control plane renders carries the stream's name and the exposure
+    it declared. A registry entry alone proves almost nothing here: it appears
+    whether or not `process()` ever succeeds, so the assertions that carry this
+    test are the ones on the child's own output. `process() failed` catches an
+    effect that raises every frame; the delivered-frame count catches an effect
+    that is correct but so slow the demo is a slideshow — which is what editing
+    the write-combined mapping in place through a strided view produced (~4fps).
     The meter's line is the logic half of the first minute: a fan-out reader
     that never reports is a graph that shows the picture and drops the rest.
     """
@@ -483,6 +487,20 @@ def test_the_scaffolded_app_reaches_a_running_graph(
         isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
     )
     assert entry["pid"] == node.process.pid
+    node.await_captured_output_containing(ENGINE_READY_LOG_LINE, NODE_READY_TIMEOUT_SECONDS)
+    live_graph = json.loads(call_tool(entry["control_url"], "graph", {}))
+    assert live_graph["stream"] == "main", (
+        f"the node must render the stream it was loaded as; graph was {live_graph}"
+    )
+    assert live_graph["exposed"] == [
+        {"node": "invertingeffect", "port": "video_to_downstream"}
+    ], f"the node must render the exposure the stream declared; graph was {live_graph}"
+    assert {
+        "testpatternsource",
+        "invertingeffect",
+        "brightnessmeter",
+        "displaywindow",
+    } <= {graph_node["name"] for graph_node in live_graph["nodes"]}
 
     # Long enough for the source to have driven many frames through the effect.
     time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)

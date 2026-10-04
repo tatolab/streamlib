@@ -17,10 +17,13 @@ privileged step behind the desktop's own password prompt. The engine never
 runs it; a sink without the permission names it and refuses.
 
 `run` and `dev` are a thin runner over the engine this wheel already exposes.
-They resolve the app's entry file, execute it as `python app.py` would, call its
-`setup(rt)`, and block in `rt.run()` — so the launched app and a hand-run script
-are the same arrangement, not two. `new` writes an app that works before the
-user has written anything.
+They execute the entry file — `stream.py` by convention — as `python stream.py`
+would, pick its `@stream` function, compile it to the stream's graph, and make
+the calls an embedding script makes: `Runtime(...)`, `load(graph)`, `run()`. A
+target names the stream outright: `<file>.py[:<function>]`, or
+`<module>:<function>` imported from the project directory. An `app.py` that
+builds its graph in `setup(rt)` still launches where there is no `stream.py`.
+`new` writes a stream that works before the user has written anything.
 
 streamlib:lint-logging:allow-file — a console script's user-facing output is
 not a log event. `new` never builds an engine, and a `run` that cannot resolve
@@ -34,6 +37,7 @@ asserted here is an open question for `/propose-rule`.
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import platform
 import re
@@ -42,16 +46,23 @@ import shutil
 import subprocess
 import sys
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, TextIO
 
 from . import Runtime
+from . import _stream_graph_builder
 from ._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
 from ._cross_floor_check import (
     check_app_directory_for_floor_bindings,
     render_cross_floor_warning_block,
 )
+from ._exposed_name_cast import (
+    ExposedNameCastsToNothingError,
+    cast_exposed_name_to_url_safe,
+)
 from ._node_registry import UntrustedRuntimeDirectoryError
+from ._stream_graph_builder import compile_stream_to_graph, is_stream_function
 from ._surface_image_exchange import (
     DEFAULT_SURFACE_ID_BAG_FIELD_NAME,
     SampledChannelExchangeReport,
@@ -64,9 +75,12 @@ if TYPE_CHECKING:
 
 __all__ = ["main"]
 
+DEFAULT_STREAM_ENTRY_FILE_NAME = "stream.py"
 DEFAULT_APP_ENTRY_FILE_NAME = "app.py"
 APP_SETUP_FUNCTION_NAME = "setup"
 APP_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_APP_DIRECTORY"
+STREAM_TARGET_FILE_SUFFIX = ".py"
+STREAM_TARGET_FUNCTION_SEPARATOR = ":"
 
 DEFAULT_CONTROL_PLANE_BIND_HOST = "0.0.0.0"
 DEFAULT_CONTROL_PLANE_BIND_PORT = 9000
@@ -103,45 +117,161 @@ def resolve_app_anchor_directory(requested_anchor_directory: Optional[Path]) -> 
 def resolve_app_entry_file(
     verb: str, anchor_directory: Path, requested_entry_file: Optional[Path]
 ) -> Path:
-    """Resolve the entry file whose `setup(rt)` builds the graph.
+    """Resolve the entry file to execute when no target names one.
 
     `requested_entry_file` outright (relative paths against `anchor_directory`),
-    else [`DEFAULT_APP_ENTRY_FILE_NAME`] directly at `anchor_directory`.
+    else [`DEFAULT_STREAM_ENTRY_FILE_NAME`] directly at `anchor_directory`, else
+    [`DEFAULT_APP_ENTRY_FILE_NAME`] there.
     """
     if requested_entry_file is None:
-        conventional_entry_file = anchor_directory / DEFAULT_APP_ENTRY_FILE_NAME
-        if not conventional_entry_file.is_file():
-            raise AppLaunchError(
-                f"no `{DEFAULT_APP_ENTRY_FILE_NAME}` in `{anchor_directory}`\n"
-                f"`streamlib {verb}` reads `{DEFAULT_APP_ENTRY_FILE_NAME}` from this "
-                f"directory only — it never searches parent directories.\n"
-                f"Run it from your app root, point at one with `--dir <app-root>`, or "
-                f"name the entry file with `-f <file>`."
-            )
-        return conventional_entry_file
+        for conventional_entry_file_name in (
+            DEFAULT_STREAM_ENTRY_FILE_NAME,
+            DEFAULT_APP_ENTRY_FILE_NAME,
+        ):
+            conventional_entry_file = anchor_directory / conventional_entry_file_name
+            if conventional_entry_file.is_file():
+                return conventional_entry_file
+        raise AppLaunchError(
+            f"no `{DEFAULT_STREAM_ENTRY_FILE_NAME}` in `{anchor_directory}`\n"
+            f"`streamlib {verb}` reads `{DEFAULT_STREAM_ENTRY_FILE_NAME}` from this "
+            f"directory only — it never searches parent directories — and falls back "
+            f"to an `{DEFAULT_APP_ENTRY_FILE_NAME}` with `{APP_SETUP_FUNCTION_NAME}(rt)` "
+            f"there.\n"
+            f"Run it from your project root, point at one with `--dir <project-root>`, "
+            f"or name the entry file with `-f <file>` or "
+            f"`streamlib {verb} <file>.py[:<function>]`."
+        )
+    return _resolve_named_entry_file(
+        anchor_directory, requested_entry_file, f"-f {requested_entry_file}"
+    )
 
-    if requested_entry_file.is_absolute():
-        resolved_entry_file = requested_entry_file
-    else:
-        resolved_entry_file = anchor_directory / requested_entry_file
+
+def _resolve_named_entry_file(
+    anchor_directory: Path, named_entry_file: Path, named_by: str
+) -> Path:
+    resolved_entry_file = (
+        named_entry_file
+        if named_entry_file.is_absolute()
+        else anchor_directory / named_entry_file
+    )
     if not resolved_entry_file.is_file():
         raise AppLaunchError(
-            f"no entry file at `{resolved_entry_file}` (from `-f {requested_entry_file}`)"
+            f"no entry file at `{resolved_entry_file}` (from `{named_by}`)"
         )
     return resolved_entry_file
 
 
+@dataclass(frozen=True)
+class ResolvedLaunchEntryFile:
+    """An entry file `run` / `dev` executes, and the stream function its target named."""
+
+    entry_file: Path
+    stream_function_name: Optional[str]
+
+    def described_for_the_user(self) -> str:
+        """The entry as a message names it."""
+        return str(self.entry_file)
+
+
+@dataclass(frozen=True)
+class ResolvedLaunchEntryModule:
+    """A `<module>:<function>` target: the module `run` / `dev` imports, and the function."""
+
+    entry_module_name: str
+    stream_function_name: str
+
+    def described_for_the_user(self) -> str:
+        """The entry as a message names it."""
+        return self.entry_module_name
+
+
+def _stream_target_forms(verb: str) -> str:
+    return (
+        f"`streamlib {verb} <file>.py`, `streamlib {verb} <file>.py:<function>` or "
+        f"`streamlib {verb} <module>:<function>`"
+    )
+
+
+def resolve_launch_entry(
+    verb: str,
+    anchor_directory: Path,
+    requested_entry_file: Optional[Path],
+    requested_stream_target: Optional[str],
+) -> "ResolvedLaunchEntryFile | ResolvedLaunchEntryModule":
+    """Resolve the positional target, or `-f` / the convention when there is none.
+
+    A target ending `.py`, with or without `:<function>`, is a file resolved
+    against `anchor_directory`; `<module>:<function>` is a module imported with
+    `anchor_directory` leading the import path.
+    """
+    if requested_stream_target is None:
+        return ResolvedLaunchEntryFile(
+            entry_file=resolve_app_entry_file(
+                verb, anchor_directory, requested_entry_file
+            ),
+            stream_function_name=None,
+        )
+    if requested_entry_file is not None:
+        raise AppLaunchError(
+            f"`-f {requested_entry_file}` and `{requested_stream_target}` both name what "
+            f"to launch — give one: `streamlib {verb} -f <file>`, or "
+            f"{_stream_target_forms(verb)}"
+        )
+
+    named_by = f"streamlib {verb} {requested_stream_target}"
+    before_separator, separator, after_separator = requested_stream_target.rpartition(
+        STREAM_TARGET_FUNCTION_SEPARATOR
+    )
+    if requested_stream_target.endswith(STREAM_TARGET_FILE_SUFFIX):
+        return ResolvedLaunchEntryFile(
+            entry_file=_resolve_named_entry_file(
+                anchor_directory, Path(requested_stream_target), named_by
+            ),
+            stream_function_name=None,
+        )
+    if separator and after_separator.isidentifier():
+        if before_separator.endswith(STREAM_TARGET_FILE_SUFFIX):
+            return ResolvedLaunchEntryFile(
+                entry_file=_resolve_named_entry_file(
+                    anchor_directory, Path(before_separator), named_by
+                ),
+                stream_function_name=after_separator,
+            )
+        if all(part.isidentifier() for part in before_separator.split(".")):
+            return ResolvedLaunchEntryModule(
+                entry_module_name=before_separator,
+                stream_function_name=after_separator,
+            )
+    raise AppLaunchError(
+        f"`{requested_stream_target}` names no stream: a target is a file ending "
+        f"`{STREAM_TARGET_FILE_SUFFIX}`, optionally followed by `:<function>`, or an "
+        f"importable `<module>:<function>` — {_stream_target_forms(verb)}"
+    )
+
+
 def _launcher_source_file_names() -> "frozenset[str]":
-    """The files whose frames are this launcher's, not the app's.
+    """The files whose frames sit between this launcher and the app's own code.
 
     `<frozen runpy>` as well as `runpy.__file__`: since CPython 3.11 runpy is
     frozen into the binary and its frames report the former, so matching only
-    the latter leaves three runpy frames sitting on top of the user's own.
+    the latter leaves three runpy frames sitting on top of the user's own. The
+    importlib frames are the same for a `<module>:<function>` target, and the
+    builder's are the call into the user's `@stream` function.
     """
-    return frozenset({__file__, runpy.__file__, "<frozen runpy>"})
+    return frozenset(
+        {
+            __file__,
+            runpy.__file__,
+            "<frozen runpy>",
+            str(importlib.__file__),
+            "<frozen importlib._bootstrap>",
+            "<frozen importlib._bootstrap_external>",
+            _stream_graph_builder.__file__,
+        }
+    )
 
 
-def print_app_failure(entry_file: Path, app_failure: BaseException) -> None:
+def print_app_failure(entry_file: "Path | str", app_failure: BaseException) -> None:
     """Print an app-side failure as the app's own traceback.
 
     The launcher's frames are dropped from the head so the first line the user
@@ -166,7 +296,7 @@ def execute_app_entry_file(entry_file: Path) -> "dict[str, Any]":
     """Execute the entry file and return its module namespace.
 
     Run under the name `__main__` with its own directory leading `sys.path`,
-    which is what `python app.py` does — so an app that imports its own
+    which is what `python stream.py` does — so an app that imports its own
     `nodes/` package resolves it here exactly as it does there. `sys.argv`
     is narrowed to the entry file for the same reason: the launcher's own flags
     are not the app's, and an app that parses `sys.argv` would otherwise see
@@ -182,6 +312,146 @@ def execute_app_entry_file(entry_file: Path) -> "dict[str, Any]":
         return runpy.run_path(str(entry_file), run_name="__main__")
     finally:
         sys.argv = launcher_argv
+
+
+def import_stream_entry_module(
+    verb: str, anchor_directory: Path, entry_module_name: str, named_by: str
+) -> "dict[str, Any]":
+    """Import a `<module>:<function>` target's module and return its namespace.
+
+    `anchor_directory` leads `sys.path` first, as an entry file's directory does,
+    and before any `Runtime` exists, since a `Runtime` reads that slot once as the
+    directory its child interpreters import the project's modules from.
+    """
+    anchor_import_root = str(anchor_directory)
+    if sys.path[:1] != [anchor_import_root]:
+        sys.path.insert(0, anchor_import_root)
+
+    launcher_argv = sys.argv
+    sys.argv = [entry_module_name]
+    try:
+        return vars(importlib.import_module(entry_module_name))
+    except ModuleNotFoundError as missing_module:
+        if missing_module.name is not None and (
+            entry_module_name == missing_module.name
+            or entry_module_name.startswith(f"{missing_module.name}.")
+        ):
+            raise AppLaunchError(
+                f"no module `{entry_module_name}` is importable from `{anchor_directory}` "
+                f"(from `{named_by}`). A module target imports with the project "
+                f"directory first on the import path; name a file instead with "
+                f"`streamlib {verb} <file>.py:<function>`."
+            ) from missing_module
+        raise
+    finally:
+        sys.argv = launcher_argv
+
+
+def stream_functions_defined_in(
+    entry_namespace: "dict[str, Any]", defining_module_name: str
+) -> "list[Callable[..., Any]]":
+    """The `@stream` functions the entry defines itself, in definition order.
+
+    A stream imported into the entry from another module is that module's, and
+    is launched from there.
+    """
+    return [
+        candidate
+        for candidate in entry_namespace.values()
+        if is_stream_function(candidate)
+        and getattr(candidate, "__module__", None) == defining_module_name
+    ]
+
+
+def _stream_function_listing(stream_functions: "Sequence[Callable[..., Any]]") -> str:
+    listed_lines: "list[str]" = []
+    for stream_function in stream_functions:
+        description = getattr(stream_function, "__streamlib_stream_description__", "")
+        first_description_line = description.splitlines()[0] if description else ""
+        listed_lines.append(
+            f"    {stream_function.__name__}"
+            + (f" — {first_description_line}" if first_description_line else "")
+        )
+    return "\n".join(listed_lines)
+
+
+def _entry_as_typed_for_a_target(
+    resolved_launch_entry: "ResolvedLaunchEntryFile | ResolvedLaunchEntryModule",
+    anchor_directory: Path,
+) -> str:
+    if isinstance(resolved_launch_entry, ResolvedLaunchEntryModule):
+        return resolved_launch_entry.entry_module_name
+    try:
+        return resolved_launch_entry.entry_file.relative_to(anchor_directory).as_posix()
+    except ValueError:
+        return str(resolved_launch_entry.entry_file)
+
+
+def select_stream_function(
+    verb: str,
+    resolved_launch_entry: "ResolvedLaunchEntryFile | ResolvedLaunchEntryModule",
+    anchor_directory: Path,
+    entry_namespace: "dict[str, Any]",
+    stream_functions: "list[Callable[..., Any]]",
+) -> "Callable[..., Any]":
+    """The stream the target named, else the entry's sole `@stream` function."""
+    entry_described = resolved_launch_entry.described_for_the_user()
+    entry_as_typed = _entry_as_typed_for_a_target(resolved_launch_entry, anchor_directory)
+    stream_function_name = resolved_launch_entry.stream_function_name
+    if stream_function_name is None:
+        if len(stream_functions) == 1:
+            return stream_functions[0]
+        raise AppLaunchError(
+            f"`{entry_described}` defines {len(stream_functions)} @stream functions:\n"
+            f"{_stream_function_listing(stream_functions)}\n"
+            f"Name the one to launch: `streamlib {verb} {entry_as_typed}:<function>`."
+        )
+
+    for stream_function in stream_functions:
+        if stream_function.__name__ == stream_function_name:
+            return stream_function
+    named_value = entry_namespace.get(stream_function_name)
+    if is_stream_function(named_value):
+        defining_module_name = getattr(named_value, "__module__", "")
+        raise AppLaunchError(
+            f"`{stream_function_name}` in `{entry_described}` is a @stream imported from "
+            f"`{defining_module_name}`; launch it where it is defined: "
+            f"`streamlib {verb} {defining_module_name}:{stream_function_name}`."
+        )
+    if stream_function_name in entry_namespace:
+        raise AppLaunchError(
+            f"`{stream_function_name}` in `{entry_described}` is not a @stream function: "
+            f"decorate it with `@stream` — a module-level `def "
+            f"{stream_function_name}(stream: Stream) -> None:` that adds its nodes."
+        )
+    defined_streams = (
+        f"it defines:\n{_stream_function_listing(stream_functions)}"
+        if stream_functions
+        else "it defines no @stream function at all."
+    )
+    raise AppLaunchError(
+        f"`{entry_described}` defines no @stream function named "
+        f"`{stream_function_name}`; {defined_streams}"
+    )
+
+
+def _no_stream_defined_refusal(verb: str, entry_described: str) -> AppLaunchError:
+    return AppLaunchError(
+        f"`{entry_described}` defines no @stream function\n"
+        "A stream is a module-level function decorated `@stream` that adds, links and "
+        "exposes its nodes on the `Stream` it is given:\n"
+        "\n"
+        "    from streamlib import CameraSource, DisplayWindow, Stream, stream\n"
+        "\n"
+        "    @stream\n"
+        "    def main(stream: Stream) -> None:\n"
+        "        source = stream.add(CameraSource)\n"
+        "        window = stream.add(DisplayWindow)\n"
+        '        stream.connect(source.output("video"), window.input("video"))\n'
+        "\n"
+        "Name another entry file with `-f <file>`, or the stream itself with "
+        f"{_stream_target_forms(verb)}."
+    )
 
 
 def read_app_setup_function(
@@ -213,11 +483,22 @@ def read_app_setup_function(
     return app_setup_function
 
 
+def _refuse_a_stream_name_that_casts_to_nothing(requested_stream_name: str) -> None:
+    try:
+        cast_exposed_name_to_url_safe(requested_stream_name)
+    except ExposedNameCastsToNothingError as casts_to_nothing:
+        raise AppLaunchError(
+            f"--name {requested_stream_name!r} cannot name a stream: {casts_to_nothing}"
+        ) from casts_to_nothing
+
+
 def launch_app_node(
     verb: str,
     *,
     requested_anchor_directory: Optional[Path],
     requested_entry_file: Optional[Path],
+    requested_stream_target: Optional[str],
+    requested_stream_name: Optional[str],
     bind_host: str,
     bind_port: int,
     runtime_name: Optional[str],
@@ -226,9 +507,14 @@ def launch_app_node(
     mesh_listen_endpoints: Optional[list[str]],
     mesh_multicast_discovery: Optional[bool],
 ) -> int:
-    """Boot the app's node and own its run loop until the user interrupts it."""
+    """Boot the entry's node and own its run loop until the user interrupts it."""
     anchor_directory = resolve_app_anchor_directory(requested_anchor_directory)
-    entry_file = resolve_app_entry_file(verb, anchor_directory, requested_entry_file)
+    resolved_launch_entry = resolve_launch_entry(
+        verb, anchor_directory, requested_entry_file, requested_stream_target
+    )
+    if requested_stream_name is not None:
+        _refuse_a_stream_name_that_casts_to_nothing(requested_stream_name)
+    entry_described = resolved_launch_entry.described_for_the_user()
     # A built-in that names itself to the machine — a virtual camera's default
     # label — keys on the app, not on the shell it was launched from.
     os.environ[APP_DIRECTORY_ENVIRONMENT_VARIABLE] = str(anchor_directory)
@@ -246,51 +532,108 @@ def launch_app_node(
     print(cross_floor_warning_block, end="", flush=True)
 
     try:
-        entry_namespace = execute_app_entry_file(entry_file)
+        if isinstance(resolved_launch_entry, ResolvedLaunchEntryModule):
+            entry_namespace = import_stream_entry_module(
+                verb,
+                anchor_directory,
+                resolved_launch_entry.entry_module_name,
+                f"streamlib {verb} {requested_stream_target}",
+            )
+        else:
+            entry_namespace = execute_app_entry_file(resolved_launch_entry.entry_file)
+    except AppLaunchError:
+        raise
     # SystemExit passes through: an app that calls `sys.exit()` at module scope
     # chose its exit code, and reporting that as a failure would override it.
     except Exception as entry_failure:  # noqa: BLE001 — reported as the app's own
-        print_app_failure(entry_file, entry_failure)
+        print_app_failure(entry_described, entry_failure)
         return 1
 
-    app_setup_function = read_app_setup_function(entry_namespace, entry_file)
+    def construct_the_launched_runtime() -> Runtime:
+        # Constructed only once the app's code has run: a file that cannot even
+        # be executed must not cost an engine on the way to its error message.
+        try:
+            return Runtime(
+                runtime_name=runtime_name,
+                mesh_name=mesh_name,
+                mesh_peer_endpoints=mesh_peer_endpoints,
+                mesh_listen_endpoints=mesh_listen_endpoints,
+                mesh_multicast_discovery=mesh_multicast_discovery,
+            )
+        except RuntimeError as mesh_configuration_failure:
+            # A name the engine cannot address a port with, or an endpoint it
+            # cannot open, came off this command line, so it reads as a launcher
+            # error like every other wiring mistake rather than as a traceback at
+            # a user who typed one flag.
+            raise AppLaunchError(
+                str(mesh_configuration_failure)
+            ) from mesh_configuration_failure
 
-    # Constructed only once the app's code has run: a file that cannot even be
-    # executed must not cost a GPU context and an engine boot on the way to its
-    # error message.
+    def host_and_run_the_launched_runtime(launched_runtime: Runtime) -> int:
+        try:
+            # Only once the graph is built, so an entry that failed to build it
+            # publishes no node entry for `streamlib nodes` to find.
+            launched_runtime.host_control_plane(bind_host=bind_host, bind_port=bind_port)
+            launched_runtime.run()
+        except RuntimeError as engine_failure:
+            # The engine compiles the graph at `run()`, so the failures a user
+            # hits most — a bad config, no camera, no Vulkan ICD — surface here.
+            # They are the app's problem, not a launcher crash, and must not
+            # arrive as a traceback through this file.
+            raise AppLaunchError(str(engine_failure)) from engine_failure
+        return 0
+
+    stream_functions = stream_functions_defined_in(
+        entry_namespace, str(entry_namespace.get("__name__", ""))
+    )
+    if isinstance(resolved_launch_entry, ResolvedLaunchEntryFile):
+        entry_file = resolved_launch_entry.entry_file
+        if stream_functions and callable(entry_namespace.get(APP_SETUP_FUNCTION_NAME)):
+            raise AppLaunchError(
+                f"`{entry_file}` defines both @stream functions ("
+                + ", ".join(f"`{function.__name__}`" for function in stream_functions)
+                + f") and `{APP_SETUP_FUNCTION_NAME}(rt)`, and an entry file builds its "
+                f"graph one way. It is a stream file: remove `{APP_SETUP_FUNCTION_NAME}`."
+            )
+        if not stream_functions and resolved_launch_entry.stream_function_name is None:
+            if APP_SETUP_FUNCTION_NAME not in entry_namespace:
+                raise _no_stream_defined_refusal(verb, entry_described)
+            if requested_stream_name is not None:
+                raise AppLaunchError(
+                    f"--name names a stream; `{entry_file}` builds its graph in "
+                    f"{APP_SETUP_FUNCTION_NAME}(rt)"
+                )
+            app_setup_function = read_app_setup_function(entry_namespace, entry_file)
+            runtime = construct_the_launched_runtime()
+            try:
+                app_setup_function(runtime)
+            except Exception as setup_failure:  # noqa: BLE001 — reported as the app's own
+                print_app_failure(entry_file, setup_failure)
+                runtime.shutdown()
+                return 1
+            return host_and_run_the_launched_runtime(runtime)
+
+    stream_function = select_stream_function(
+        verb, resolved_launch_entry, anchor_directory, entry_namespace, stream_functions
+    )
+    # Compiled before any engine exists, so a stream function that raises costs
+    # none, and its traceback starts on the author's own line.
     try:
-        runtime = Runtime(
-            runtime_name=runtime_name,
-            mesh_name=mesh_name,
-            mesh_peer_endpoints=mesh_peer_endpoints,
-            mesh_listen_endpoints=mesh_listen_endpoints,
-            mesh_multicast_discovery=mesh_multicast_discovery,
-        )
-    except RuntimeError as mesh_configuration_failure:
-        # A name the engine cannot address a port with, or an endpoint it
-        # cannot open, came off this command line, so it reads as a launcher
-        # error like every other wiring mistake rather than as a traceback at a
-        # user who typed one flag.
-        raise AppLaunchError(str(mesh_configuration_failure)) from mesh_configuration_failure
+        stream_graph = compile_stream_to_graph(stream_function, name=requested_stream_name)
+    except Exception as compile_failure:  # noqa: BLE001 — reported as the app's own
+        print_app_failure(entry_described, compile_failure)
+        return 1
+
+    runtime = construct_the_launched_runtime()
     try:
-        app_setup_function(runtime)
-    except Exception as setup_failure:  # noqa: BLE001 — reported as the app's own
-        print_app_failure(entry_file, setup_failure)
+        runtime.load(stream_graph)
+    except (RuntimeError, TypeError, ValueError) as load_refusal:
         runtime.shutdown()
-        return 1
-
-    try:
-        # After `setup`, so an app that failed to build its graph publishes no
-        # node entry for `streamlib nodes` to find.
-        runtime.host_control_plane(bind_host=bind_host, bind_port=bind_port)
-        runtime.run()
-    except RuntimeError as engine_failure:
-        # The engine compiles the graph at `run()`, so the failures a user hits
-        # most — a bad config, no camera, no Vulkan ICD — surface here rather
-        # than from `setup`. They are the app's problem, not a launcher crash,
-        # and must not arrive as a traceback through this file.
-        raise AppLaunchError(str(engine_failure)) from engine_failure
-    return 0
+        raise AppLaunchError(
+            f"the stream `{stream_graph['stream']}` from `{entry_described}` did not "
+            f"load: {load_refusal}"
+        ) from load_refusal
+    return host_and_run_the_launched_runtime(runtime)
 
 
 def _python_distribution_name_for(directory_name: str) -> str:
@@ -311,7 +654,7 @@ SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
 # are stored without their dot so no packaging walk skips them as hidden or
 # reads the template's `.gitignore` as its own ignore rules.
 SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE = {
-    "app.py": DEFAULT_APP_ENTRY_FILE_NAME,
+    "stream.py": DEFAULT_STREAM_ENTRY_FILE_NAME,
     "nodes/__init__.py": "nodes/__init__.py",
     SCAFFOLDED_EFFECT_MODULE_PATH: SCAFFOLDED_EFFECT_MODULE_PATH,
     SCAFFOLDED_METER_MODULE_PATH: SCAFFOLDED_METER_MODULE_PATH,
@@ -327,7 +670,7 @@ def render_scaffold_template_files(
     """Each file `new` writes, keyed by its path in the app, rendered from the templates.
 
     A placeholder is its template's own default value, so the template stays a
-    real, checkable file: the camera variant of `app.py` and a `streamlib-app`
+    real, checkable file: the camera variant of `stream.py` and a `streamlib-app`
     project name.
     """
     source_class_name, source_description = (
@@ -336,16 +679,17 @@ def render_scaffold_template_files(
         else ("CameraSource", "camera")
     )
     streamlib_import_names = ", ".join(
-        sorted([source_class_name, "DisplayWindow", "Runtime"])
+        sorted([source_class_name, "DisplayWindow", "Stream", "stream"])
     )
     substitutions_for_template_file = {
-        "app.py": {
-            "A StreamLib app: camera →": f"A StreamLib app: {source_description} →",
+        "stream.py": {
+            "A StreamLib stream: camera →": f"A StreamLib stream: {source_description} →",
             # The whole line, so each variant's names stay in sorted order.
-            "from streamlib import CameraSource, DisplayWindow, Runtime": (
+            "from streamlib import CameraSource, DisplayWindow, Stream, stream": (
                 f"from streamlib import {streamlib_import_names}"
             ),
-            "rt.add(CameraSource)": f"rt.add({source_class_name})",
+            '"""Camera, inverted,': f'"""{source_description.capitalize()}, inverted,',
+            "stream.add(CameraSource)": f"stream.add({source_class_name})",
         },
         "pyproject.toml": {'name = "streamlib-app"': f'name = "{distribution_name}"'},
     }
@@ -381,7 +725,7 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
     )
 
     # Checked before anything is written: a half-scaffolded directory is worse
-    # than a refusal, and the user's own `app.py` is the file most likely to
+    # than a refusal, and the user's own `stream.py` is the file most likely to
     # already be there.
     already_present = sorted(
         name for name in scaffolded_files if (target_directory / name).exists()
@@ -843,8 +1187,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "new",
         help="Scaffold a new StreamLib app.",
         description=(
-            "Write app.py, nodes/, pyproject.toml, .python-version and .gitignore into "
-            "DIRECTORY — a working camera → effect → window pipeline."
+            "Write stream.py, nodes/, pyproject.toml, .python-version and .gitignore "
+            "into DIRECTORY — one @stream wiring a working camera → effect → window "
+            "pipeline, with a meter on a fan-out."
         ),
     )
     new_command.add_argument(
@@ -877,18 +1222,37 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
 
     for launch_verb, summary in (
-        ("run", "Boot this app as a StreamLib node."),
-        ("dev", "Boot this app as a StreamLib node for development."),
+        ("run", "Boot this stream as a StreamLib node."),
+        ("dev", "Boot this stream as a StreamLib node for development."),
     ):
         launch_command = subcommands.add_parser(
             launch_verb,
             help=summary,
             description=(
-                f"{summary} Reads `{DEFAULT_APP_ENTRY_FILE_NAME}` from the anchor "
+                f"{summary} Executes `{DEFAULT_STREAM_ENTRY_FILE_NAME}` from the anchor "
                 f"directory — `--dir` when given, else the exact CWD, never a "
-                f"parent — or the file named by `-f`, and calls its "
-                f"`{APP_SETUP_FUNCTION_NAME}(rt)`. Runs until interrupted."
+                f"parent — or the file named by `-f` or TARGET, compiles its sole "
+                f"@stream function (or the one TARGET names) to the stream's graph, "
+                f"and loads it. Where there is no `{DEFAULT_STREAM_ENTRY_FILE_NAME}`, "
+                f"an `{DEFAULT_APP_ENTRY_FILE_NAME}` that builds its graph in "
+                f"`{APP_SETUP_FUNCTION_NAME}(rt)` still launches. Runs until "
+                f"interrupted."
             ),
+        )
+        launch_command.add_argument(
+            "requested_stream_target",
+            nargs="?",
+            metavar="TARGET",
+            help=(
+                "The stream to load: `<file>.py[:<function>]` or `<module>:<function>` "
+                f"(default: the sole @stream in {DEFAULT_STREAM_ENTRY_FILE_NAME})."
+            ),
+        )
+        launch_command.add_argument(
+            "--name",
+            dest="requested_stream_name",
+            metavar="NAME",
+            help="Load the stream under this name instead of its function's.",
         )
         launch_command.add_argument(
             "-f",
@@ -898,7 +1262,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
             metavar="FILE",
             help=(
                 f"Entry file to launch, overriding the "
-                f"`{DEFAULT_APP_ENTRY_FILE_NAME}` convention."
+                f"`{DEFAULT_STREAM_ENTRY_FILE_NAME}` convention; not with TARGET."
             ),
         )
         launch_command.add_argument(
@@ -906,7 +1270,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
             dest="anchor_directory",
             type=Path,
             metavar="DIR",
-            help="App root to resolve the entry file against (default: CWD, no walk-up).",
+            help=(
+                "Project root to resolve the entry file or TARGET against (default: CWD, "
+                "no walk-up)."
+            ),
         )
         launch_command.add_argument(
             "--host",
@@ -1420,6 +1787,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             arguments.verb,
             requested_anchor_directory=arguments.anchor_directory,
             requested_entry_file=arguments.entry_file,
+            requested_stream_target=arguments.requested_stream_target,
+            requested_stream_name=arguments.requested_stream_name,
             bind_host=arguments.bind_host,
             bind_port=arguments.bind_port,
             runtime_name=arguments.runtime_name,

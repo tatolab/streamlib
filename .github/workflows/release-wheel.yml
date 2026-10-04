@@ -230,7 +230,7 @@ jobs:
 
           /tmp/wheel-check/bin/streamlib --help
           /tmp/wheel-check/bin/streamlib new /tmp/scaffold-check --test-pattern
-          test -f /tmp/scaffold-check/app.py
+          test -f /tmp/scaffold-check/stream.py
           test -f /tmp/scaffold-check/nodes/inverting_effect.py
           # A node class in the entry file identifies as `__main__:<Type>`
           # and is a wiring error: the entry runs as `__main__`, and the child
@@ -238,8 +238,8 @@ jobs:
           # An explicit `if`, not `! grep` — `set -e` does not abort on a
           # command whose status is inverted with `!`, so the negated form
           # could never have failed this step.
-          if grep -q '@node' /tmp/scaffold-check/app.py; then
-            echo "::error::the scaffold put a node class in app.py — it would identify as __main__:<Type>"
+          if grep -q '@node' /tmp/scaffold-check/stream.py; then
+            echo "::error::the scaffold put a node class in stream.py — it would identify as __main__:<Type>"
             exit 1
           fi
           # The name the engine will spawn the child with must actually resolve.

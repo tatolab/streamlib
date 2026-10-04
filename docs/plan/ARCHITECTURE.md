@@ -82,7 +82,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
 - **DECIDED** — The scaffold models the pathway: pixels on the GPU, logic on the CPU, the
   pixel view explicit. `streamlib new` writes two processors, each in its own module
-  under `processors/` — an `InvertingEffect` over `GlslPixelEffect` (one GLSL `effect`
+  under `nodes/` — an `InvertingEffect` over `GlslPixelEffect` (one GLSL `effect`
   function) in the camera-to-window path, and a numpy `BrightnessMeter` on a fan-out of
   the effect's output that reads the frame through `frame.cpu()` and logs its mean once a
   second, paced on `ctx.time` — with dependencies `streamlib` and `numpy>=2.1`, nothing
