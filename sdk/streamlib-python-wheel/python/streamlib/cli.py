@@ -38,10 +38,12 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import os
 import platform
 import re
 import runpy
+import shlex
 import shutil
 import subprocess
 import sys
@@ -50,8 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, TextIO
 
-from . import Runtime
-from . import _stream_graph_builder
+from . import Runtime, _stream_graph_builder
 from ._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
 from ._cross_floor_check import (
     check_app_directory_for_floor_bindings,
@@ -169,20 +170,32 @@ class ResolvedLaunchEntryFile:
     stream_function_name: Optional[str]
 
     def described_for_the_user(self) -> str:
-        """The entry as a message names it."""
-        return str(self.entry_file)
+        """The entry as a message names it, quoted."""
+        return f"`{self.entry_file}`"
 
 
 @dataclass(frozen=True)
 class ResolvedLaunchEntryModule:
-    """A `<module>:<function>` target: the module `run` / `dev` imports, and the function."""
+    """A `<module>:<function>` target, and its module's file once located."""
 
     entry_module_name: str
     stream_function_name: str
+    entry_module_file: Optional[Path] = None
 
     def described_for_the_user(self) -> str:
-        """The entry as a message names it."""
-        return self.entry_module_name
+        """The entry as a message names it, quoted, with its module's file once found."""
+        if self.entry_module_file is None:
+            return f"`{self.entry_module_name}`"
+        return f"`{self.entry_module_name}` (`{self.entry_module_file}`)"
+
+
+def _launch_command_as_typed(
+    verb: str, requested_anchor_directory: Optional[Path]
+) -> str:
+    """`streamlib <verb>`, keeping the `--dir` a target was resolved against."""
+    if requested_anchor_directory is None:
+        return f"streamlib {verb}"
+    return f"streamlib {verb} --dir {shlex.quote(str(requested_anchor_directory))}"
 
 
 def _stream_target_forms(verb: str) -> str:
@@ -264,6 +277,7 @@ def _launcher_source_file_names() -> "frozenset[str]":
             runpy.__file__,
             "<frozen runpy>",
             str(importlib.__file__),
+            str(importlib.util.__file__),
             "<frozen importlib._bootstrap>",
             "<frozen importlib._bootstrap_external>",
             _stream_graph_builder.__file__,
@@ -271,7 +285,7 @@ def _launcher_source_file_names() -> "frozenset[str]":
     )
 
 
-def print_app_failure(entry_file: "Path | str", app_failure: BaseException) -> None:
+def print_app_failure(entry_described: str, app_failure: BaseException) -> None:
     """Print an app-side failure as the app's own traceback.
 
     The launcher's frames are dropped from the head so the first line the user
@@ -286,7 +300,7 @@ def print_app_failure(entry_file: "Path | str", app_failure: BaseException) -> N
     ):
         app_traceback = app_traceback.tb_next
 
-    print(f"error: `{entry_file}` failed", file=sys.stderr)
+    print(f"error: {entry_described} failed", file=sys.stderr)
     traceback.print_exception(
         type(app_failure), app_failure, app_traceback, file=sys.stderr
     )
@@ -314,15 +328,21 @@ def execute_app_entry_file(entry_file: Path) -> "dict[str, Any]":
         sys.argv = launcher_argv
 
 
-def import_stream_entry_module(
-    verb: str, anchor_directory: Path, entry_module_name: str, named_by: str
-) -> "dict[str, Any]":
-    """Import a `<module>:<function>` target's module and return its namespace.
+def locate_stream_entry_module(
+    verb: str,
+    anchor_directory: Path,
+    requested_anchor_directory: Optional[Path],
+    resolved_launch_entry: ResolvedLaunchEntryModule,
+) -> ResolvedLaunchEntryModule:
+    """Find a `<module>:<function>` target's module file, running only its parent packages.
 
     `anchor_directory` leads `sys.path` first, as an entry file's directory does,
     and before any `Runtime` exists, since a `Runtime` reads that slot once as the
     directory its child interpreters import the project's modules from.
     """
+    entry_module_name = resolved_launch_entry.entry_module_name
+    stream_function_name = resolved_launch_entry.stream_function_name
+    named_by = f"streamlib {verb} {entry_module_name}:{stream_function_name}"
     anchor_import_root = str(anchor_directory)
     if sys.path[:1] != [anchor_import_root]:
         sys.path.insert(0, anchor_import_root)
@@ -330,19 +350,82 @@ def import_stream_entry_module(
     launcher_argv = sys.argv
     sys.argv = [entry_module_name]
     try:
-        return vars(importlib.import_module(entry_module_name))
+        entry_module_spec = importlib.util.find_spec(entry_module_name)
     except ModuleNotFoundError as missing_module:
-        if missing_module.name is not None and (
+        if missing_module.name is None or not (
             entry_module_name == missing_module.name
             or entry_module_name.startswith(f"{missing_module.name}.")
         ):
-            raise AppLaunchError(
-                f"no module `{entry_module_name}` is importable from `{anchor_directory}` "
-                f"(from `{named_by}`). A module target imports with the project "
-                f"directory first on the import path; name a file instead with "
-                f"`streamlib {verb} <file>.py:<function>`."
-            ) from missing_module
-        raise
+            raise
+        entry_module_spec = None
+    finally:
+        sys.argv = launcher_argv
+    if entry_module_spec is None:
+        raise AppLaunchError(
+            f"no module `{entry_module_name}` is importable from `{anchor_directory}` "
+            f"(from `{named_by}`). A module target imports with the project "
+            f"directory first on the import path; name a file instead with "
+            f"`streamlib {verb} <file>.py:<function>`."
+        )
+
+    entry_module_file = (
+        Path(entry_module_spec.origin)
+        if entry_module_spec.has_location and entry_module_spec.origin is not None
+        else None
+    )
+    project_module_file = _project_module_file_named(
+        anchor_directory, entry_module_name
+    )
+    if project_module_file is not None and (
+        entry_module_file is None
+        or not entry_module_file.resolve().is_relative_to(anchor_directory.resolve())
+    ):
+        # The anchor leads the path search, but a built-in module and one already
+        # in `sys.modules` are answered before any path is searched.
+        raise AppLaunchError(
+            f"`{entry_module_name}` (from `{named_by}`) resolves to "
+            f"`{entry_module_spec.origin}`, not to `{project_module_file.as_posix()}` in "
+            f"`{anchor_directory}`: a module built into Python, or one already imported, "
+            f"holds that name first. Rename the project's module, or launch its file "
+            f"instead: `{_launch_command_as_typed(verb, requested_anchor_directory)} "
+            f"{project_module_file.as_posix()}:{stream_function_name}`."
+        )
+    return ResolvedLaunchEntryModule(
+        entry_module_name=entry_module_name,
+        stream_function_name=stream_function_name,
+        entry_module_file=entry_module_file,
+    )
+
+
+def _project_module_file_named(
+    anchor_directory: Path, entry_module_name: str
+) -> Optional[Path]:
+    """The file under `anchor_directory` a dotted module name spells, relative to it."""
+    module_path = Path(*entry_module_name.split("."))
+    for project_module_file in (
+        module_path / "__init__.py",
+        module_path.with_suffix(".py"),
+    ):
+        if (anchor_directory / project_module_file).is_file():
+            return project_module_file
+    return None
+
+
+def import_stream_entry_module(
+    located_launch_entry: ResolvedLaunchEntryModule,
+) -> "dict[str, Any]":
+    """Import a located `<module>:<function>` target's module and return its namespace.
+
+    `sys.argv` is narrowed to the module's file, as `python -m` narrows it.
+    """
+    launcher_argv = sys.argv
+    sys.argv = [
+        str(located_launch_entry.entry_module_file)
+        if located_launch_entry.entry_module_file is not None
+        else located_launch_entry.entry_module_name
+    ]
+    try:
+        return vars(importlib.import_module(located_launch_entry.entry_module_name))
     finally:
         sys.argv = launcher_argv
 
@@ -350,17 +433,19 @@ def import_stream_entry_module(
 def stream_functions_defined_in(
     entry_namespace: "dict[str, Any]", defining_module_name: str
 ) -> "list[Callable[..., Any]]":
-    """The `@stream` functions the entry defines itself, in definition order.
+    """The `@stream` functions the entry defines itself, each once, in definition order.
 
     A stream imported into the entry from another module is that module's, and
-    is launched from there.
+    is launched from there; a second name bound to a stream is still one stream.
     """
-    return [
-        candidate
-        for candidate in entry_namespace.values()
-        if is_stream_function(candidate)
-        and getattr(candidate, "__module__", None) == defining_module_name
-    ]
+    return list(
+        dict.fromkeys(
+            candidate
+            for candidate in entry_namespace.values()
+            if is_stream_function(candidate)
+            and getattr(candidate, "__module__", None) == defining_module_name
+        )
+    )
 
 
 def _stream_function_listing(stream_functions: "Sequence[Callable[..., Any]]") -> str:
@@ -375,69 +460,102 @@ def _stream_function_listing(stream_functions: "Sequence[Callable[..., Any]]") -
     return "\n".join(listed_lines)
 
 
+def _entry_file_as_typed(entry_file: Path, anchor_directory: Path) -> str:
+    try:
+        return entry_file.relative_to(anchor_directory).as_posix()
+    except ValueError:
+        return str(entry_file)
+
+
 def _entry_as_typed_for_a_target(
     resolved_launch_entry: "ResolvedLaunchEntryFile | ResolvedLaunchEntryModule",
     anchor_directory: Path,
 ) -> str:
     if isinstance(resolved_launch_entry, ResolvedLaunchEntryModule):
         return resolved_launch_entry.entry_module_name
-    try:
-        return resolved_launch_entry.entry_file.relative_to(anchor_directory).as_posix()
-    except ValueError:
-        return str(resolved_launch_entry.entry_file)
+    return _entry_file_as_typed(resolved_launch_entry.entry_file, anchor_directory)
 
 
 def select_stream_function(
     verb: str,
     resolved_launch_entry: "ResolvedLaunchEntryFile | ResolvedLaunchEntryModule",
     anchor_directory: Path,
+    requested_anchor_directory: Optional[Path],
     entry_namespace: "dict[str, Any]",
     stream_functions: "list[Callable[..., Any]]",
 ) -> "Callable[..., Any]":
     """The stream the target named, else the entry's sole `@stream` function."""
     entry_described = resolved_launch_entry.described_for_the_user()
     entry_as_typed = _entry_as_typed_for_a_target(resolved_launch_entry, anchor_directory)
+    launch_command = _launch_command_as_typed(verb, requested_anchor_directory)
     stream_function_name = resolved_launch_entry.stream_function_name
     if stream_function_name is None:
         if len(stream_functions) == 1:
             return stream_functions[0]
         raise AppLaunchError(
-            f"`{entry_described}` defines {len(stream_functions)} @stream functions:\n"
+            f"{entry_described} defines {len(stream_functions)} @stream functions:\n"
             f"{_stream_function_listing(stream_functions)}\n"
-            f"Name the one to launch: `streamlib {verb} {entry_as_typed}:<function>`."
+            f"Name the one to launch: `{launch_command} {entry_as_typed}:<function>`."
         )
 
-    for stream_function in stream_functions:
-        if stream_function.__name__ == stream_function_name:
-            return stream_function
     named_value = entry_namespace.get(stream_function_name)
-    if is_stream_function(named_value):
-        defining_module_name = getattr(named_value, "__module__", "")
+    for stream_function in stream_functions:
+        if (
+            stream_function.__name__ == stream_function_name
+            or stream_function is named_value
+        ):
+            return stream_function
+    defining_module_name = getattr(named_value, "__module__", None)
+    if is_stream_function(named_value) and defining_module_name != entry_namespace.get(
+        "__name__"
+    ):
         raise AppLaunchError(
-            f"`{stream_function_name}` in `{entry_described}` is a @stream imported from "
+            f"`{stream_function_name}` in {entry_described} is a @stream imported from "
             f"`{defining_module_name}`; launch it where it is defined: "
-            f"`streamlib {verb} {defining_module_name}:{stream_function_name}`."
+            f"`{launch_command} {defining_module_name}:"
+            f"{getattr(named_value, '__name__', stream_function_name)}`."
         )
     if stream_function_name in entry_namespace:
         raise AppLaunchError(
-            f"`{stream_function_name}` in `{entry_described}` is not a @stream function: "
+            f"`{stream_function_name}` in {entry_described} is not a @stream function: "
             f"decorate it with `@stream` — a module-level `def "
             f"{stream_function_name}(stream: Stream) -> None:` that adds its nodes."
         )
-    defined_streams = (
-        f"it defines:\n{_stream_function_listing(stream_functions)}"
-        if stream_functions
-        else "it defines no @stream function at all."
-    )
+    if stream_functions:
+        raise AppLaunchError(
+            f"{entry_described} defines no @stream function named "
+            f"`{stream_function_name}`; it defines:\n"
+            f"{_stream_function_listing(stream_functions)}\n"
+            f"Name one of them: `{launch_command} {entry_as_typed}:<function>`."
+        )
+    if APP_SETUP_FUNCTION_NAME in entry_namespace:
+        entry_file = (
+            resolved_launch_entry.entry_file
+            if isinstance(resolved_launch_entry, ResolvedLaunchEntryFile)
+            else resolved_launch_entry.entry_module_file
+        )
+        launch_without_a_function = (
+            f"`{launch_command} {_entry_file_as_typed(entry_file, anchor_directory)}`"
+            if entry_file is not None
+            else f"`{launch_command} <file>.py`"
+        )
+        raise AppLaunchError(
+            f"{entry_described} defines no @stream function named "
+            f"`{stream_function_name}`, nor any other: it builds its graph in "
+            f"`{APP_SETUP_FUNCTION_NAME}(rt)`. Launch it without `:<function>`: "
+            f"{launch_without_a_function}."
+        )
     raise AppLaunchError(
-        f"`{entry_described}` defines no @stream function named "
-        f"`{stream_function_name}`; {defined_streams}"
+        f"{entry_described} defines no @stream function named "
+        f"`{stream_function_name}`, nor any other. Make `{stream_function_name}` one: "
+        f"`@stream` above a module-level `def {stream_function_name}(stream: Stream) -> "
+        f"None:` that adds its nodes."
     )
 
 
 def _no_stream_defined_refusal(verb: str, entry_described: str) -> AppLaunchError:
     return AppLaunchError(
-        f"`{entry_described}` defines no @stream function\n"
+        f"{entry_described} defines no @stream function\n"
         "A stream is a module-level function decorated `@stream` that adds, links and "
         "exposes its nodes on the `Stream` it is given:\n"
         "\n"
@@ -533,12 +651,14 @@ def launch_app_node(
 
     try:
         if isinstance(resolved_launch_entry, ResolvedLaunchEntryModule):
-            entry_namespace = import_stream_entry_module(
+            resolved_launch_entry = locate_stream_entry_module(
                 verb,
                 anchor_directory,
-                resolved_launch_entry.entry_module_name,
-                f"streamlib {verb} {requested_stream_target}",
+                requested_anchor_directory,
+                resolved_launch_entry,
             )
+            entry_described = resolved_launch_entry.described_for_the_user()
+            entry_namespace = import_stream_entry_module(resolved_launch_entry)
         else:
             entry_namespace = execute_app_entry_file(resolved_launch_entry.entry_file)
     except AppLaunchError:
@@ -600,21 +720,27 @@ def launch_app_node(
                 raise _no_stream_defined_refusal(verb, entry_described)
             if requested_stream_name is not None:
                 raise AppLaunchError(
-                    f"--name names a stream; `{entry_file}` builds its graph in "
-                    f"{APP_SETUP_FUNCTION_NAME}(rt)"
+                    f"--name names a stream, and `{entry_file}` builds its graph in "
+                    f"`{APP_SETUP_FUNCTION_NAME}(rt)`: drop `--name`, or convert the file "
+                    f"to a `@stream` function."
                 )
             app_setup_function = read_app_setup_function(entry_namespace, entry_file)
             runtime = construct_the_launched_runtime()
             try:
                 app_setup_function(runtime)
             except Exception as setup_failure:  # noqa: BLE001 — reported as the app's own
-                print_app_failure(entry_file, setup_failure)
+                print_app_failure(f"`{entry_file}`", setup_failure)
                 runtime.shutdown()
                 return 1
             return host_and_run_the_launched_runtime(runtime)
 
     stream_function = select_stream_function(
-        verb, resolved_launch_entry, anchor_directory, entry_namespace, stream_functions
+        verb,
+        resolved_launch_entry,
+        anchor_directory,
+        requested_anchor_directory,
+        entry_namespace,
+        stream_functions,
     )
     # Compiled before any engine exists, so a stream function that raises costs
     # none, and its traceback starts on the author's own line.
@@ -630,7 +756,7 @@ def launch_app_node(
     except (RuntimeError, TypeError, ValueError) as load_refusal:
         runtime.shutdown()
         raise AppLaunchError(
-            f"the stream `{stream_graph['stream']}` from `{entry_described}` did not "
+            f"the stream `{stream_graph['stream']}` from {entry_described} did not "
             f"load: {load_refusal}"
         ) from load_refusal
     return host_and_run_the_launched_runtime(runtime)

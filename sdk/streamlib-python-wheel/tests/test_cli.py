@@ -15,6 +15,7 @@ import argparse
 import ast
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -504,18 +505,93 @@ def test_a_module_target_loads_the_stream_its_module_defines(
     assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
 
 
+@pytest.mark.parametrize(
+    "missing_module_name", ["no_such_rig_module", "no_such_rig_package.desk"]
+)
 def test_a_module_target_that_does_not_import_is_refused_naming_the_anchor(
     tmp_path: Path,
     recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
     capsys: pytest.CaptureFixture[str],
+    missing_module_name: str,
 ):
-    exit_code = cli.main(["run", "--dir", str(tmp_path), "no_such_rig_module:main"])
+    exit_code = cli.main(["run", "--dir", str(tmp_path), f"{missing_module_name}:main"])
 
     assert exit_code == 1
     refusal = capsys.readouterr().err
-    assert "no module `no_such_rig_module` is importable" in refusal
+    assert f"no module `{missing_module_name}` is importable" in refusal
     assert str(tmp_path) in refusal
     assert "Traceback (most recent call last)" not in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_module_target_sees_its_own_file_as_argv(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    """`sys.argv` is the module's file while it imports, as `python -m` sets it."""
+    write_app(tmp_path, "argv_probe_rigs/__init__.py", "")
+    write_app(
+        tmp_path,
+        "argv_probe_rigs/desk.py",
+        "import sys\nARGV = list(sys.argv)\n" + MINIMAL_STREAM_SOURCE,
+    )
+    launcher_argv = list(sys.argv)
+
+    assert cli.main(["run", "--dir", str(tmp_path), "argv_probe_rigs.desk:main"]) == 0
+
+    assert sys.modules["argv_probe_rigs.desk"].ARGV == [
+        str(tmp_path / "argv_probe_rigs" / "desk.py")
+    ]
+    assert sys.argv == launcher_argv
+
+
+def test_a_module_target_another_module_shadows_is_refused_naming_both_files(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    """`platform` is already imported, so `import platform` never reaches the project's."""
+    write_app(tmp_path, "platform.py", MINIMAL_STREAM_SOURCE)
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "platform:main"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert (
+        f"`platform` (from `streamlib run platform:main`) resolves to "
+        f"`{platform.__file__}`, not to `platform.py` in `{tmp_path}`"
+    ) in refusal
+    assert "Rename the project's module, or launch its file instead: " in refusal
+    assert f"`streamlib run --dir {tmp_path} platform.py:main`" in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+    assert cli.main(["run", "--dir", str(tmp_path), "platform.py:main"]) == 0
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_module_targets_refusal_names_the_file_its_module_resolved_to(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "refusal_naming_rigs/__init__.py", "")
+    write_app(tmp_path, "refusal_naming_rigs/desk.py", TWO_STREAM_SOURCE)
+
+    exit_code = cli.main(
+        ["run", "--dir", str(tmp_path), "refusal_naming_rigs.desk:side"]
+    )
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert (
+        f"`refusal_naming_rigs.desk` (`{tmp_path / 'refusal_naming_rigs' / 'desk.py'}`) "
+        f"defines no @stream function named `side`"
+    ) in refusal
+    assert (
+        f"Name one of them: `streamlib run --dir {tmp_path} "
+        f"refusal_naming_rigs.desk:<function>`."
+    ) in refusal
     assert recorded_launch_runtime_calls.calls == []
 
 
@@ -584,8 +660,58 @@ def test_several_streams_are_refused_listing_each_with_its_description(
     assert "    front — Front camera, in a window.\n" in refusal
     assert "The second paragraph" not in refusal, "only the description's first line is listed"
     assert "    back\n" in refusal
-    assert "streamlib run stream.py:<function>" in refusal
+    assert f"`streamlib run --dir {tmp_path} stream.py:<function>`" in refusal
     assert recorded_launch_runtime_calls.calls == [], "selection is refused before any engine"
+
+
+def test_the_several_streams_suggestion_quotes_the_dir_it_was_given(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    project_directory = tmp_path / "front rig"
+    write_app(project_directory, "stream.py", TWO_STREAM_SOURCE)
+
+    assert cli.main(["dev", "--dir", str(project_directory)]) == 1
+
+    assert (
+        f"`streamlib dev --dir '{project_directory}' stream.py:<function>`"
+        in capsys.readouterr().err
+    )
+
+
+def test_the_several_streams_suggestion_names_no_dir_when_none_was_given(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    write_app(tmp_path, "stream.py", TWO_STREAM_SOURCE)
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["run"]) == 1
+
+    assert "`streamlib run stream.py:<function>`" in capsys.readouterr().err
+
+
+def test_a_second_name_bound_to_a_stream_is_still_one_stream(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE + "\n\ndefault = main\n")
+
+    assert cli.main(["run", "--dir", str(tmp_path)]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
+
+
+def test_a_target_naming_a_second_name_of_a_stream_defined_in_the_file_selects_it(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    write_app(tmp_path, "stream.py", TWO_STREAM_SOURCE + "\n\ndefault = back\n")
+
+    assert cli.main(["run", "--dir", str(tmp_path), "stream.py:default"]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "back"
 
 
 def test_an_entry_that_defines_no_stream_is_refused_with_a_sample(
@@ -621,6 +747,43 @@ def test_a_named_function_the_file_lacks_is_refused_listing_its_streams(
     assert "defines no @stream function named `side`" in refusal
     assert "    front — Front camera, in a window.\n" in refusal
     assert "    back" in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_a_named_function_in_a_setup_file_is_refused_naming_the_launch_without_it(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "app.py")
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "app.py:main"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert (
+        f"`{tmp_path / 'app.py'}` defines no @stream function named `main`, nor any "
+        f"other: it builds its graph in `setup(rt)`. Launch it without `:<function>`: "
+        f"`streamlib run --dir {tmp_path} app.py`."
+    ) in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_a_named_function_in_a_file_with_no_stream_is_refused_naming_the_decorator(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "stream.py", "PIPELINE = 1\n")
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "stream.py:main"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "defines no @stream function named `main`, nor any other" in refusal
+    assert (
+        "`@stream` above a module-level `def main(stream: Stream) -> None:`" in refusal
+    )
     assert recorded_launch_runtime_calls.calls == []
 
 
@@ -662,7 +825,32 @@ def test_a_stream_imported_into_the_entry_is_launched_where_it_is_defined(
     exit_code = cli.main(["run", "--dir", str(tmp_path), "stream.py:front"])
 
     assert exit_code == 1
-    assert "streamlib run imported_rigs:front" in capsys.readouterr().err
+    assert (
+        f"`streamlib run --dir {tmp_path} imported_rigs:front`"
+        in capsys.readouterr().err
+    )
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_stream_imported_under_another_name_is_launched_by_its_own(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "renamed_import_rigs.py", TWO_STREAM_SOURCE)
+    write_app(
+        tmp_path,
+        "stream.py",
+        "from renamed_import_rigs import front as side\n" + MINIMAL_STREAM_SOURCE,
+    )
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "stream.py:side"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "`side` in" in refusal
+    assert "is a @stream imported from `renamed_import_rigs`" in refusal
+    assert f"`streamlib run --dir {tmp_path} renamed_import_rigs:front`" in refusal
 
 
 def test_an_entry_defining_both_a_stream_and_setup_is_refused(
@@ -691,7 +879,10 @@ def test_name_is_refused_for_an_entry_that_builds_its_graph_in_setup(
     exit_code = cli.main(["run", "--dir", str(tmp_path), "--name", "rig"])
 
     assert exit_code == 1
-    assert "--name names a stream" in capsys.readouterr().err
+    assert (
+        f"--name names a stream, and `{tmp_path / 'app.py'}` builds its graph in "
+        f"`setup(rt)`: drop `--name`, or convert the file to a `@stream` function."
+    ) in capsys.readouterr().err
     assert recorded_launch_runtime_calls.calls == []
 
 
