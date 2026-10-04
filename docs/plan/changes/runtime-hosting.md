@@ -199,17 +199,17 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 
 ## MODIFIED: §Networking — the machine segment
 
-- **Addresses and keys.** `MeshPortAddress` gains the stream; the grammar and
-  `runtime_mesh_key.rs` change in one place each; the token is
-  `streamlib/<mesh>/@machine/<machine>/<machine id>/<host identity>/<pid>`; offered ports, readers,
-  link requests, egress and data keys gain the stream; `InboundLinkName` and the ingress hash follow.
-- **The machine id** — 128 random bits minted once into `machine.json` — rides the token. **The
-  name**: the recorded one, else the hostname, cast (decision 3). The claim reads every `@machine`
-  token: a live holder with another id moves this machine to the next unused `<name>-2`, `-3`…,
-  recorded and said once with `tatolab set --machine-name`; a token with this id from another boot,
-  or a gone pid, is taken over. A failed query is never read as free: the runtime stays off the
-  mesh, `graph.mesh` renders it `claiming`, and it retries on an engine-chosen backoff. Two claims
-  inside one discovery window keep today's residual: both say so, links error.
+> **Amended 2026-10-04** by the moq-on-the-tailnet pivot (`docs/decisions/moq-on-the-tailnet.md`):
+> Zenoh is removed before this change is built, and this change is built minus its mesh parts.
+> Cut wherever this file names them: `tatolabd`'s Zenoh session and joining the mesh; the mesh
+> settings in `machine.json`, the `set --mesh-*` flags and `STREAMLIB_MESH_*`; `graph`'s `mesh`,
+> `peers[]`, `egress_ports[]` and every link-request key; `remote_input`; one ingress per machine
+> for a remote port; the mesh fixtures; the Zenoh token and keys, the machine id on the token, the
+> claim and the `-2` suffix. A machine's name is its tailnet name, read from Tailscale's status,
+> else the hostname, cast. An address naming another machine links nothing until the sharing step.
+
+- ~~**Addresses and keys**, **The machine id**: the Zenoh token and keys gaining the stream, the
+  machine id riding the token, the claim over `@machine` tokens.~~ (Condensed; full text at 107acbc24.)
 - **The builder.** `stream.remote_output(address)` and `remote_input(address)` take the address
   string, right-anchored — `"main/camera/video"` another stream here, `"rig/main/camera/video"`
   another machine — each chunk cast; one casting to empty, `.` or `..` refused where written.

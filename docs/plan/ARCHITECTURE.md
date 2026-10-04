@@ -15,10 +15,10 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-Reading rule since the 2026-10-04 pivot (`[moq-on-the-tailnet]`): Zenoh, the runtime mesh, the
-MoQ extension wheel and the `tap` and `exchange` verbs are removed. An entry describing one of
-them is a fact about the shipped tree until the removal change ships and folds it out — never
-direction, and nothing new is built on it. Off a machine, the direction is §Networking's
+Reading rule since the 2026-10-04 pivot (`[moq-on-the-tailnet]`): Zenoh, the runtime mesh and
+the MoQ extension wheel are removed, and the `tap` and `exchange` verbs go at the sharing step.
+An entry describing one of them is a fact about the shipped tree until the change that removes
+it ships and folds it out — never direction, and nothing new is built on it. Off a machine, the direction is §Networking's
 `[moq-on-the-tailnet]` entries.
 
 ## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
@@ -586,7 +586,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   streams is `tatolab-stream`, importing as `tatolab.stream`. `tatolab.*` is a PEP 420 namespace
   shared by Tatolab's own distributions only: `tatolab.stream`; `tatolab.runtime`, the native
   portion `tatolabd` lends and no user installs; and optional first-party extensions, each
-  `tatolab-<name>` importing as `tatolab.<name>` (`tatolab-moq` → `tatolab.moq`). No
+  `tatolab-<name>` importing as `tatolab.<name>` (`tatolab-webrtc` → `tatolab.webrtc`). No
   distribution ships `tatolab/__init__.py`. A third party's pack uses its own name, never the
   `tatolab` namespace. Which built-ins, extensions and packs ship inside the app or through pip
   is §Packages' packs OPEN. The extensions' entry-point group is `tatolab.extensions`, and the
@@ -3488,7 +3488,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   The decode-back is the lock: `WhepPlayer` / `MoqBroadcastSubscriber` → `H264Decoder` → tap
   and exchange → `xtask psnr channel-means` against the per-codec vivid baseline within
   ±0.05 — the network sits inside a path the codec rig already scored, so a mismatch is the
-  wheel's. [networking-extension-wheels — SHIPPED #2153; amended by moq-on-the-tailnet: the MoQ arm is deleted with its wheel, and the WebRTC arm's decode-back reads frames a test-only node wrote, `tap` and `exchange` being removed]
+  wheel's. [networking-extension-wheels — SHIPPED #2153; amended by moq-on-the-tailnet: the MoQ arm is deleted with its wheel]
   <!-- verify: git ls-files packages/streamlib-moq packages/streamlib-webrtc -->
 - **DECIDED** — A media bag past its deadline is shed rather than delivered late.
   `MoqBroadcastPublisher` takes `delivery_deadline_ms`; a media bag older than it by its
@@ -4027,8 +4027,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   a local output renders that link as this machine, confidently and wrongly, so whatever
   closes this has to correct that reading too and not only add a shared epoch.
   [runtime-mesh; the relay gap named by cross-runtime-links; amended by moq-on-the-tailnet: no runtimes negotiate over a mesh; the question stands for stamps that cross machines over MoQ]
-- **DECIDED** — The runtime decides what leaves the machine: nothing leaves until a port is
-  public (the exposure entry below). ~~It builds its Zenoh session from its own configuration,
+- **DECIDED** — The runtime decides what leaves the machine. ~~It builds its Zenoh session from
+  its own configuration,
   dials routers, and enforces a pushed stream map that refuses links to unexposed ports and
   authenticates peers (sentence 3). Its session is the machine's single Zenoh router: streams
   publish through it, and tools, other processes and relays attach to it (owner, 2026-09-30).~~
@@ -4049,33 +4049,41 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   is a separate program a machine joins for an internet address, never the runtime in a role
   (below). [one-runtime-per-machine; superseded by moq-on-the-tailnet]
 - **DECIDED** — ~~The runtime bundles its own MoQ relay: `moq-relay-ietf`, the relay from the
-  repository the vendored `moq-transport` comes from, at the same draft, publishing its exposed
-  ports into it over loopback; the same bundled relay serves the relay-VM role; a hosted relay
-  is opt-in with the user's own credentials; no MoQ server of streamlib's own is written; `moq`
-  is the first browser form, `whep` a client-side form, `hls` the fallback every browser plays
-  (owner, 2026-09-30).~~ Superseded 2026-10-04: the engine serves MoQ itself on the moq-dev
-  line, no relay is bundled, the vendored `moq-transport` is deleted, and `whep` and `hls` are
-  not built as forms (below). A relay staying opt-in with the user's own credentials, never a
-  default and never a fallback, stands. [one-runtime-per-machine; superseded by
-  moq-on-the-tailnet]
+  repository the vendored `moq-transport` comes from, at the same draft. The runtime publishes
+  its exposed ports into it over loopback the way it publishes to a hosted relay today, and
+  browsers connect to the bundled relay, so a private network terminates MoQ with nothing
+  external and at no cost. The same bundled relay serves the relay-VM role behind a real
+  certificate. A hosted relay — Cloudflare's, or a self-hosted copy on a VM — is opt-in with
+  the user's own credentials, never a default and never a fallback. No MoQ server of
+  streamlib's own is written. `moq` is the first browser form; `whep` stays a client-side form
+  until a user proves the Safari-on-a-LAN gap bites; `hls` is the fallback every browser plays
+  (owner, 2026-09-30). Known: the server half of a session is already in the vendored crate;
+  the relay crate ships as a library and a binary; Safari accepts no self-signed certificate
+  hash, so on a bare LAN it needs a tailnet certificate or `hls`; the one maintained draft-16
+  browser player is young. To verify in the build: the relay crate linking against the
+  vendored `moq-transport`.~~
+  Superseded 2026-10-04: the engine serves MoQ itself on the moq-dev line, no relay is bundled,
+  the vendored `moq-transport` is deleted, and `whep` and `hls` are not built as forms (below).
+  [one-runtime-per-machine; superseded by moq-on-the-tailnet]
 - **DECIDED** — streamlib does not solve every networking problem. Reaching a machine behind
-  NAT, a peer machine's identity, and encryption between machines are left to Tailscale ~~, a
-  VPN, or a relay the machine dials out to~~. streamlib owns what leaves a machine, streams as
-  URLs, and many streams on one runtime ~~, and that must be super simple inside a private
-  network~~ (owner, 2026-09-30). [one-runtime-per-machine; narrowed by moq-on-the-tailnet:
-  the tailnet alone supplies reach, names, encryption, identity and discovery, and nothing is
-  built for a private network without one]
+  NAT, a peer machine's identity, and encryption between machines are left to Tailscale~~, a
+  VPN,~~ or a relay the machine dials out to. streamlib owns what leaves a machine, streams as
+  URLs, and many streams on one runtime~~, and that must be super simple inside a private
+  network~~ (owner, 2026-09-30). ~~Known: Zenoh does no NAT traversal — one side must be
+  reachable, or both dial a router.~~ [one-runtime-per-machine; narrowed by
+  moq-on-the-tailnet: nothing is built for a private network without a tailnet]
 - **DECIDED** — The address is `<machine>/<stream>/<node>/<port>`: the stream takes the place
   of today's runtime name, the runtime is addressed by its machine (default the hostname),
   every existing address maps across with one segment prefixed, and the same string is the
-  address in Python, the CLI, the URL path and the graph; the Zenoh key grammar gains the same
-  segment in one place (owner, 2026-09-30). Collisions (owner, 2026-10-02): a **machine** name
+  address in Python, the CLI, the URL path and the graph~~; the Zenoh key grammar gains the same
+  segment in one place~~ (owner, 2026-09-30). Collisions (owner, 2026-10-02): ~~a **machine** name
   is unique per mesh, settled the way Bonjour (RFC 6762 §9) and Tailscale settle a hostname — the
   first runtime to claim a name keeps it; one that finds its name live on the mesh takes the
   next free `<name>-2`, `<name>-3`…, records it in its state directory, says once what happened
   and how to rename, and keeps it for good, even after the other machine leaves; a runtime
-  restarting on its own machine reclaims its recorded name, and the rule holds through a relay.
-  A second user's runtime on one machine is refused, not suffixed (§Product). A **stream** name
+  restarting on its own machine reclaims its recorded name, and the rule holds through a relay.~~
+  (Superseded 2026-10-04: a machine's name is its tailnet name, the moq-on-the-tailnet entry
+  below.) A second user's runtime on one machine is refused, not suffixed (§Product). A **stream** name
   is unique per machine, defaults to its function's, and a second
   load of a name is refused naming where the first came from, with `--name` the way out, which
   covers two packs that each define a `main`; a **node** name is unique per stream — a
@@ -4093,9 +4101,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
   Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting;
-  amended by moq-on-the-tailnet: a machine's name is its tailnet name, so the machine clause
-  here — unique per mesh, the claim, the `-2` suffix, the recorded name — is deleted, and no
-  Zenoh key grammar exists to gain a segment]
+  amended by moq-on-the-tailnet: the machine clause and the Zenoh key grammar, struck above]
 - **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
   runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
   any node of the stream may link to it, and nothing outside the stream may read it.
@@ -4109,26 +4115,46 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   stream restarts. The engine checks the live exposures wherever a read crosses a stream's
   edge — another stream's link, a reader or URL on the machine, a reader on another machine —
   and a port is read from outside its stream only through exposure: no debugging tap or other
-  door bypasses it, and a stream's own logs are how its insides are seen. Nothing leaves the machine until a port is public; taking a public URL onto
-  the internet is Tailscale serve's or funnel's, never the runtime's. The CLI and the app list
+  door bypasses it, and a stream's own logs are how its insides are seen. Nothing leaves the machine until a port is public~~; taking a public URL onto
+  the internet is Tailscale serve's or funnel's, never the runtime's~~. The CLI and the app list
   every running stream with its private and public ports; an internal port may be listed and
-  is never readable. Discovery is unaffected: a runtime still announces itself and lists its
-  public ports to whoever can reach it. Owner, 2026-10-04, superseding 2026-09-30's binary
+  is never readable. ~~Discovery is unaffected: a runtime still announces itself and lists its
+  public ports to whoever can reach it.~~ Owner, 2026-10-04, superseding 2026-09-30's binary
   exposure and its same-machine rule. [exposure-levels; one-runtime-per-machine; stream-graph;
-  amended by moq-on-the-tailnet: off the machine a public port is read over MoQ on the tailnet,
-  and at a relay once the machine has joined one, so the internet is the relay's for live data
-  and Tailscale serve's or funnel's only for the HTTP; a runtime announces nothing — machines
-  are listed from Tailscale's status and asked for their public ports]
-- **OPEN** — ~~Discovery, the Tailscale analogy applied: Zenoh scouting on one network, a relay
-  as the meeting point, a pushed map carrying the peers a machine may see, presence under a
-  mesh name.~~ Superseded 2026-10-04: discovery is the tailnet's — the engine lists machines
-  from Tailscale's status and asks each for what it exposes. What stays undecided, the verbs'
-  spelling, is the sharing step's (the moq-on-the-tailnet OPEN below).
+  amended by moq-on-the-tailnet, the two struck clauses: off the machine a public port is read
+  over MoQ on the tailnet, and at a relay once the machine has joined one; a runtime announces
+  nothing — machines are listed from Tailscale's status and asked for their public ports]
+- **OPEN** (closed 2026-10-04) — ~~Discovery, the Tailscale analogy applied. Direction (review, not decided): on one
+  machine the local API lists streams and exposed ports, and the URL namespace is listable; on
+  one network, Zenoh scouting finds the other runtimes' routers with nothing configured and
+  each announcement carries the ports it exposes, so `machines` lists runtimes and `streams
+  --machine <name>` lists what one exposes; where multicast does not cross, a peer is named by
+  address, or a relay is the meeting point, listing every machine that dials it with a URL
+  namespace that is the union of theirs; with a control client, the pushed map carries the
+  peers a machine may see — the coordination server's job in Tailscale; a runtime on a tailnet
+  may read its peers from Tailscale's own status as a convenience. Presence is separate from
+  exposure: a machine that exposes nothing still announces itself, still appears to whoever
+  shares its mesh name and can reach it, and still reads others' exposed ports; what peers
+  learn is its presence and the names of what it exposes, never data. With no map, reach plus
+  the mesh name is the visibility rule, and a runtime hides by using another mesh name or by
+  dialing out only; with a map, the peer list is the map's, filtered per machine the way
+  Tailscale filters each node's netmap by its ACLs, a team being a key prefix the relay's
+  router scopes. Undecided: the verbs' spelling, whether multicast discovery stays on by
+  default, and whether a map may hide exposed-port names per peer.~~
+  Superseded 2026-10-04: discovery is the tailnet's — the engine lists machines from
+  Tailscale's status and asks each for what it exposes. The verbs' spelling is the sharing
+  step's (the moq-on-the-tailnet OPEN below).
   [one-runtime-per-machine; superseded by moq-on-the-tailnet]
-- **OPEN** — ~~The stream map's details: who pushes it, how long a map stays valid when its
-  source is unreachable, and how a peer authenticates.~~ Superseded 2026-10-04: no stream map
-  is built and no peer is authenticated by the engine; the exposure levels are the whole of
-  what the runtime enforces, and the tailnet's access rules or a relay's decide who reads.
+- **OPEN** (closed 2026-10-04) — ~~The stream map's details: who pushes it (the local API's `expose`, an external
+  control client — two pushers of one object); how long a map stays valid when its source is
+  unreachable, which needs a wall-clock exception to the monotonic-only rule; and how a peer
+  authenticates. Known: Zenoh's own access control
+  cannot change without restarting the session and sees only the adjacent hop's identity, so a
+  pushed map compiles into it once and the per-stream checks live in the engine at the offer
+  answer, egress creation and link-request application — a check in the link layer alone is
+  bypassable by any subscriber with network reach.~~
+  Superseded 2026-10-04: no stream map is built and the engine authenticates no peer; the
+  exposure levels are the whole of what the runtime enforces.
   [one-runtime-per-machine; superseded by moq-on-the-tailnet]
 - **DECIDED** — Every public port is reachable by URL ~~from any tool~~, and every private port
   from any tool on the machine ~~, in the form that tool wants: a browser, an MCP client, curl,
@@ -4141,8 +4167,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **OPEN** — The URL grammar and the forms. Direction (review, not decided): a machine exports
   one namespace, `/<stream>/<node>/<port>/<form>`, every level listable, an unexposed port
   simply absent from it; the form a child segment, never a query parameter. Since 2026-10-04
-  the forms are `moq` for live data, `page` for the viewer, and the snapshot and bounded-sample
-  forms (`png`, `ndjson`); `ts`, `hls`, raw H.264, fMP4 and `whep` are not forms. Undecided:
+  live data has one form, `moq`, and `ts`, `hls`, raw H.264, fMP4 and `whep` are not forms.
+  Direction for the rest, names undecided: `page` for the viewer, and a snapshot and a
+  bounded-sample form (`png`, `ndjson`). Undecided:
   how a relay prefixes the namespace; whether a stream's description is written by its author,
   generated from the nodes' descriptions and a live sample, or both (it stays documentation,
   never a contract at the port); and the certificate a browser is shown on the engine's QUIC
@@ -4168,7 +4195,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — Off a machine, real-time data travels over MoQ on QUIC and over nothing else.
   On one machine streams share data through shared memory, as today. Each machine's engine
   serves a MoQ endpoint itself, on its tailnet address, and a reader on another machine
-  subscribes to it directly, in one hop: no relay sits between two machines on one tailnet. A
+  subscribes to it directly; no MoQ relay is needed between machines on one tailnet. A
   link between streams on two machines is still pulled by its reader from a public port
   (pull-only, above), and nothing is sent for a port nobody subscribes to. Zenoh is removed —
   no session, no runtime mesh, no mesh name, no multicast discovery, no router. Owner,
@@ -4180,9 +4207,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   never read directly by another machine, and nothing is built for a plain LAN — no discovery,
   no certificate minting, no name claiming, no peer authentication. Who may read a public port
   on the tailnet is Tailscale's access rules: the engine checks the port's exposure and adds no
-  per-reader check, so the stream map and peer authentication are not built. Owner, 2026-10-04,
-  reversing 2026-10-02's "Tailscale is never a requirement" for direct reach between machines,
-  and only for that. [moq-on-the-tailnet]
+  per-reader check, so the stream map and peer authentication are not built. Owner, 2026-10-04.
+  [moq-on-the-tailnet]
 - **DECIDED** — A machine's name is its tailnet name. The engine reads the local Tailscale's
   status for two things: its own machine name, and the list of the tailnet's other machines.
   Whether a listed machine runs Tatolab, and what it exposes, is learned by asking that
@@ -4190,13 +4216,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   tailnet name is accepted in the machine position for a machine shared in from another
   tailnet. With no Tailscale the machine's name is its hostname and matters only on that
   machine. The machine-name collision rule of the address entry above — the claim on the mesh,
-  the `-2` suffix, the recorded suffix — is deleted, the tailnet already keeping names unique;
-  the stream, node and port rules and the cast stand. Owner, 2026-10-04. [moq-on-the-tailnet]
+  the `-2` suffix, the recorded suffix — is deleted; the stream, node and port rules and the
+  cast stand. Owner, 2026-10-04. [moq-on-the-tailnet]
 - **DECIDED** — The engine stands on the moq-dev line of MoQ, the `moq-net` and `moq-tokio`
   crates, pinned to exact versions, and serves sessions itself with no relay program beside it.
-  The vendored draft-16 `moq-transport`, its two recorded patches and its licence carve-out are
-  deleted, never repaired. Known and accepted (2026-10-04): the line has one maintainer and
-  releases often, which the pins contain; its compatibility with Cloudflare's hosted relays is
+  The vendored draft-16 `moq-transport` and its two recorded patches are deleted, never
+  repaired. Known (2026-10-04): the line's compatibility with Cloudflare's hosted relays is
   claimed upstream and unverified here. Owner, 2026-10-04. [moq-on-the-tailnet]
 - **DECIDED** — The internet edge is a relay the machine has joined, and joining is a machine
   setting. A machine joined to a relay offers every one of its public ports there, sending a
@@ -4205,30 +4230,30 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   any relay from an address and a credential and holds nothing else about relays — no account,
   team, directory, signed link or billing, which belong to a separate private service. No relay
   is written or bundled here; a person who wants their own runs an existing open-source relay
-  program. The relay is no longer a role of the runtime. Tailscale Funnel carries TCP only, so
-  it may carry the HTTP below and never live data. Owner, 2026-10-04, superseding 2026-09-30's
+  program. The relay is no longer a role of the runtime. Owner, 2026-10-04, superseding 2026-09-30's
   relay role and bundled `moq-relay-ietf`. [moq-on-the-tailnet]
 - **DECIDED** — HTTP carries only what is not real time: the listing of exposed ports, a
   read-only MCP, snapshots, small samples and the viewer page — never live media, in any
-  browser and for any tool. The runtime serves it on loopback, and on the tailnet through
-  `tailscale serve`, which supplies the HTTPS certificate; the runtime requests and renews none
-  for it. `tatolabd` asks Tailscale to serve that listener, on a port of its own, the first
-  time a port goes public; where Tailscale refuses for lack of rights it says the one command
-  to run once, and it never alters any other serve setting. The live HTTP forms of the
-  2026-09-30 direction — MPEG-TS, HLS, raw H.264, fMP4 and a WHEP form — are not built. Owner,
-  2026-10-04. [moq-on-the-tailnet]
+  browser and for any tool. `tatolabd` asks Tailscale to serve its HTTP, on a port of its own,
+  the first time a port goes public; where Tailscale refuses for lack of rights it says the
+  one command to run once, and it never alters any other serve setting. Off the machine that
+  HTTP shows public ports only, as on any address but loopback (§Control plane, the local
+  API). The 2026-09-30 direction's live forms over HTTP — MPEG-TS, HLS, raw H.264 and fMP4 —
+  and its `whep` form are not built. Owner, 2026-10-04. [moq-on-the-tailnet]
 - **DECIDED** — The viewer page is in the first version of sharing: every public port has a
   page that plays it, served with the HTTP above and built on the MoQ stack's own browser
   player, never one written here. One path serves every browser — QUIC and MoQ. No WebSocket
-  or other TCP fallback is built or enabled, and a browser that cannot play is told so by name.
-  Owner, 2026-10-04. [moq-on-the-tailnet]
+  or other TCP fallback is built or enabled. Owner, 2026-10-04. [moq-on-the-tailnet]
 - **DECIDED** — The removal comes first and is one change: Zenoh and everything that exists for
-  it, the MoQ extension wheel with its vendored tree, and the `tap` and `exchange` verbs with
-  their tools and routes. Between it and the sharing step nothing links one machine to another
-  and the tree holds no MoQ; everything on one machine keeps working. The repo's live
-  verification reads frames from a test-only node inside each fixture stream that writes them
-  to disk, never through a door into a running stream. The WebRTC extension stays as it is.
-  The one-runtime-per-machine sequence then continues through runtime hosting, then
+  it, and the MoQ extension wheel with its vendored tree. Between it and the sharing step
+  nothing links one machine to another and the tree holds no MoQ; everything on one machine
+  keeps working. The WebRTC extension stays as it is. The `tap` and `exchange` verbs, retired
+  by the exposure entry above, stay until the sharing step and are deleted in the change that
+  builds the snapshot and sample forms: from then the repo's live verification reads a port
+  the way a user does — the fixture stream exposes it private, and the check fetches exact,
+  full-resolution snapshots from the machine's local HTTP listing.
+  The one-runtime-per-machine sequence then continues through runtime hosting, its in-flight
+  changes built minus their mesh parts, then
   accelerators optional, then one sharing step — the entries above — in place of that
   sequence's steps 8 and 9, then resources, packs and the app. Owner, 2026-10-04.
   [moq-on-the-tailnet]
@@ -4236,16 +4261,20 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   until then: how groups are cut for data that is not video, without the engine reading a bag;
   what a public port whose bags name a surface serves off the machine, the mesh having sent raw
   pixels where a browser needs encoded video; how a relay is joined and how a machine's ports
-  are named there; the certificate the engine's QUIC listener shows a browser; the read-only
+  are named there; the certificate the engine's QUIC listener shows a browser; how the HTTP
+  that `tailscale serve` fronts shows public ports only, the loopback listener showing private
+  ones too; what a browser that cannot play is told; the read-only
   MCP's tools and who may call it; the verbs that list machines and their public ports; what a
   control client hands the runtime beyond a relay address and a credential; and how a stamp
   taken on another machine's clock is marked once the mesh attachment that carried the clock
   identity is gone. Direction (session's, not decided): a bag stands alone, so each may open
   its own group, video cutting at its keyframes; machine to machine needs no certificate from
-  Tailscale, a tailnet address being authenticated already. Known (2026-10-04):
-  `tailscale serve` proxies no UDP, so the engine listens for QUIC on the tailnet address
-  itself; changing serve settings needs root or Tailscale's operator user, and HTTPS must be
-  switched on for the tailnet; any local user reads Tailscale's status on Linux, the same user
+  Tailscale, a tailnet address being authenticated already; `tailscale serve` supplies the
+  HTTPS certificate for what it fronts, so the runtime requests and renews none. Known
+  (2026-10-04): `tailscale serve` proxies no UDP, so the engine listens for QUIC on the tailnet
+  address itself; changing serve settings needs root, Tailscale's operator user or, on macOS,
+  the admin group, and HTTPS must be switched on for the tailnet; Funnel carries TCP only, on
+  ports 443, 8443 and 10000; any local user reads Tailscale's status on Linux, the same user
   on macOS; the stack's player keeps WebKit on a WebSocket fallback by default, which the entry
   above rules out, so Safari and iOS play only where their own QUIC support holds.
   [moq-on-the-tailnet]
@@ -4510,7 +4539,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   in the tree and gave a helper's link the `pending` state the instructions now explain;
   cross-runtime-links — SHIPPED #2287, #2289 for the mesh arguments and the states the
   instructions explain; reopened by one-runtime-per-machine: the local API; amended by
-  local-api: the tools, resources and prompts speak the graph's words (the entry below); amended by moq-on-the-tailnet: `tap` and `exchange` leave the tool set, and the mesh arguments and states leave `connect`, `disconnect` and the instructions]
+  local-api: the tools, resources and prompts speak the graph's words (the entry below); amended by moq-on-the-tailnet: the mesh arguments and states leave `connect`, `disconnect` and the instructions with Zenoh; `tap` and `exchange` leave the tool set at the sharing step]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
@@ -4533,7 +4562,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the prompts say node — `insert_node_between_linked_nodes` among them. `runtime_name` stays
   until one runtime hosts several streams and the address gains its machine and stream. The
   engine's Rust identifiers keep "processor" until the rename. It ships with the graph's one
-  shape. Owner, 2026-10-02. [local-api; stream-graph; amended by moq-on-the-tailnet: the `runtime_name` link end, `mesh.egress_ports` and `tap`'s channel are deleted with Zenoh and the two verbs]
+  shape. Owner, 2026-10-02. [local-api; stream-graph; amended by moq-on-the-tailnet: the `runtime_name` link end and `mesh.egress_ports` are deleted with Zenoh; `tap`'s channel goes with `tap`, at the sharing step]
 - **DECIDED** — ~~`dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
@@ -4560,7 +4589,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
-  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself; amended by local-api: the `mcp` verb joins; amended by tatolab-names and package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the installer and never in a pip wheel; amended by moq-on-the-tailnet: `tap` and `exchange` leave the CLI, and `nodes` lists no mesh peers]
+  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself; amended by local-api: the `mcp` verb joins; amended by tatolab-names and package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the installer and never in a pip wheel; amended by moq-on-the-tailnet: `nodes` lists no mesh peers once Zenoh is removed; `tap` and `exchange` leave the CLI at the sharing step]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
@@ -4588,7 +4617,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_directory.py -->
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
   bags verbatim, trading completeness for guaranteed non-interference; graph and health
-  inspection ride the same control plane. [control-plane-one-surface; amended by moq-on-the-tailnet: `tap` is deleted; logs, `graph` and health stand]
+  inspection ride the same control plane. [control-plane-one-surface; amended by moq-on-the-tailnet: `tap` is deleted at the sharing step; logs, `graph` and health stand]
 - **DECIDED** — The control plane exposes one composable door for pixels: `exchange`
   takes a published surface id and hands back that frame's image bytes, out of process,
   with no window in the graph and no display server in the path. It is its own verb,
@@ -4603,7 +4632,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   id, and calls `exchange` with that id. The engine therefore still inspects no bag
   content anywhere. This is how verification sees pixels, and equally how any API
   consumer sees them, because the door knows nothing about verification.
-  [control-plane-surface-pixel-exchange — SHIPPED #1972; removed by moq-on-the-tailnet: the `tap` and `exchange` verbs, tools and routes are deleted with Zenoh, and the repo's verification reads frames a test-only node wrote]
+  [control-plane-surface-pixel-exchange — SHIPPED #1972; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-api-server the_tap_tool_schema_is_unchanged_by_the_exchange_joining_the_catalog -->
   <!-- verify: cargo test -p streamlib-engine --lib a_published_pool_frame_exchanges_through_the_runtime_operation_for_its_own_pixels -->
 - **DECIDED** — The exchange is a pool claim, bounded to the copy. Inside one operation
@@ -4616,7 +4645,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   worst, never another processor's cadence. Without the claim a producer could recycle
   the slot mid-copy and the caller would receive a torn frame — half one frame, half the
   next — which is precisely the silent wrongness the surface-id lifetime contract exists
-  to kill. [control-plane-surface-pixel-exchange — SHIPPED #1972; removed by moq-on-the-tailnet: the `tap` and `exchange` verbs, tools and routes are deleted with Zenoh, and the repo's verification reads frames a test-only node wrote]
+  to kill. [control-plane-surface-pixel-exchange — SHIPPED #1972; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-engine --lib sequential_exchanges_of_one_frame_never_pin_more_than_one_hold -->
 - **DECIDED** — Staleness fails loud and composes as a retry, never as wrong pixels. A
   surface id is per-frame (`<slot>#<generation>`), and resolving a retired one is refused
@@ -4627,7 +4656,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   Sample-and-exchange-as-you-go is therefore the intended loop, and temporal sampling
   falls out of composition rather than needing a batched verb. The publish-to-claim
   window is the one every pool consumer already obeys: it rides pool depth, and
-  outwaiting it is an error. [control-plane-surface-pixel-exchange — SHIPPED #1972; removed by moq-on-the-tailnet: the `tap` and `exchange` verbs, tools and routes are deleted with Zenoh, and the repo's verification reads frames a test-only node wrote]
+  outwaiting it is an error. [control-plane-surface-pixel-exchange — SHIPPED #1972; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-engine --lib a_retired_frame_id_is_refused_at_the_exchange_naming_the_recycling -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_on_a_recycled_frame_is_a_tool_error_naming_the_recycling -->
 - **DECIDED** — The engine converts, in the RHI, or the caller gets nothing viewable: a
@@ -4645,7 +4674,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   door is one `ResolvedSurfaceBacking` — and the caller needs no Vulkan device, no surface
   socket and no runtime link.
   [control-plane-surface-pixel-exchange — SHIPPED #1972; opened on macOS by
-  macos-capability-parity — SHIPPED #2406; amended by one-runtime-per-machine: accelerators are optional; removed by moq-on-the-tailnet: the `tap` and `exchange` verbs, tools and routes are deleted with Zenoh, and the repo's verification reads frames a test-only node wrote]
+  macos-capability-parity — SHIPPED #2406; amended by one-runtime-per-machine: accelerators are optional; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-engine --lib a_pooled_rgba_frame_exchanges_for_the_pixels_the_bag_published -->
   <!-- verify: cargo test -p streamlib-engine --lib a_texture_backed_frame_exchanges_for_the_pixels_its_producer_rendered -->
 - **DECIDED** — Two spellings of one operation: MCP tool and REST route serve the same
@@ -4662,7 +4691,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   whatever the auth entry below decides later, it decides for this verb the same as the
   rest. [control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; amended by local-api:
   the auth entry decided that control carries no token, so the bearer gate retires with the
-  network listener; removed by moq-on-the-tailnet: the `tap` and `exchange` verbs, tools and routes are deleted with Zenoh, and the repo's verification reads frames a test-only node wrote]
+  network listener; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route -->
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_rejects_a_missing_token_with_401_when_auth_on -->
@@ -4670,7 +4699,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   proof. Reading a channel no longer requires terminating it in a window, so a mid-graph
   channel is observable in the topology that ships. Window capture survives only where
   the window is genuinely the subject — the present and swapchain path.
-  [control-plane-surface-pixel-exchange — SHIPPED #1972, #1976; removed by moq-on-the-tailnet: with `exchange` deleted, the repo's fixtures carry a test-only node that writes frames to disk — the owner accepting one more node in a fixture graph]
+  [control-plane-surface-pixel-exchange — SHIPPED #1972, #1976; amended by moq-on-the-tailnet: once `exchange` is deleted at the sharing step the same holds through a private port's snapshot — a port is read with no node added to the graph]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-26-control-plane-surface-pixel-exchange.md -->
 - **DECIDED** — Auth and remote-access posture: whoever can open the local API's socket may
   call it — the owning user, by file permission — and nothing off the machine can call it at
@@ -4681,8 +4710,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   serves one local API on a socket in its runtime directory that only the owning user can
   open, carrying today's router and control vocabulary unchanged; no network address serves
   control. The URL forms are a separate listener that changes nothing — private and public ports
-  on loopback, public ports on a LAN or tailnet address when the user asks (levels amended
-  2026-10-04) — because browsers and ffmpeg cannot dial a socket. A runtime is never driven from another machine
+  on loopback, public ports on ~~a LAN or tailnet address when the user asks~~ the tailnet,
+  through `tailscale serve` (levels amended 2026-10-04; the tailnet clause the same day) — because browsers and ffmpeg cannot dial a socket. A runtime is never driven from another machine
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
   client's. Owner, 2026-10-01. [local-api; one-runtime-per-machine; amended by moq-on-the-tailnet: the URL listener serves loopback, and the tailnet through `tailscale serve`; no LAN address is served]

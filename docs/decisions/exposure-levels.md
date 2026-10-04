@@ -61,10 +61,10 @@ changed live.
 
 ## Consequences
 
-- > ~~The `tap` and `exchange` verbs and their MCP tools are retired once a private read can
-  > stand in for them, including the repo's GPU verification. That is a later change.~~ —
-  > Superseded 2026-10-04 by `moq-on-the-tailnet.md`: they are removed with Zenoh, and the repo's
-  > verification reads frames from a test-only node inside each fixture stream.
+- The `tap` and `exchange` verbs and their MCP tools are retired once a private read can stand
+  in for them, including the repo's GPU verification. That is a later change. (Settled
+  2026-10-04 by `moq-on-the-tailnet.md`: the later change is the sharing step, which builds the
+  snapshot and sample forms the repo's verification reads from a private port.)
 
 - The link request (push and third-party wiring) is retired: `request_link_on_remote_input_runtime`,
   the remote-destination spellings in Python and MCP, the link-request queryable, and `graph`'s

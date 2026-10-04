@@ -87,11 +87,10 @@ The owner's later clarifications, the same day:
 
 ## Decided
 
-> Superseded 2026-10-04 by `moq-on-the-tailnet.md`: the four bullets below on the Zenoh session
-> and stream map, "Zenoh between machines; MoQ only as a browser form", the relay as a role, and
-> the bundled `moq-relay-ietf`. In "streamlib does not solve every networking problem", the VPN
-> and relay alternatives to Tailscale are dropped; in "Every exposed port is a URL", "in the form
-> that tool wants" and "inside a private network" are dropped.
+> The bullets struck below were superseded 2026-10-04 by `moq-on-the-tailnet.md`. Also amended
+> by it, in place: the first bullet's "behind the machine's single Zenoh session"; in "streamlib
+> does not solve every networking problem", a VPN as an alternative to Tailscale; in "Every
+> exposed port is a URL", "in the form that tool wants" and "inside a private network".
 
 - **A stream is the unit** a person writes and runs, and **one runtime per machine** runs many
   of them behind the machine's single Zenoh session, owning the accelerator when present, the
@@ -102,19 +101,19 @@ The owner's later clarifications, the same day:
 - **The graph is emitted, never authored,** and the function wins over live edits on the next
   start.
 - **Several streams per project or package,** each a decorated function; `setup` retires.
-- **The runtime decides what leaves the machine.** It builds its Zenoh session from its own
+- **The runtime decides what leaves the machine.** ~~It builds its Zenoh session from its own
   configuration, dials routers, and enforces a pushed stream map that refuses links to
-  unexposed ports and authenticates peers. Its session is the machine's router.
-- **Zenoh between machines; MoQ only as a browser form.** MoQ never carries a link between
-  runtimes, and the MoQ-gateway transport change is not happening.
-- **The relay is a role** of the same runtime software; machines link peer to peer where they
-  can reach each other and through a relay where they cannot.
-- **The runtime bundles its own MoQ relay** (`moq-relay-ietf`, the relay from the repository
+  unexposed ports and authenticates peers. Its session is the machine's router.~~
+- ~~**Zenoh between machines; MoQ only as a browser form.** MoQ never carries a link between
+  runtimes, and the MoQ-gateway transport change is not happening.~~
+- ~~**The relay is a role** of the same runtime software; machines link peer to peer where they
+  can reach each other and through a relay where they cannot.~~
+- ~~**The runtime bundles its own MoQ relay** (`moq-relay-ietf`, the relay from the repository
   the vendored client comes from, at the same draft), publishing into it over loopback; a
   private network terminates MoQ free and with nothing external; the same relay serves the
   relay-VM role; hosted relays are opt-in with the user's own credentials. Owner, 2026-09-30,
   after the research: no MoQ server of our own; a home lab must never cost anyone a hosted
-  relay by accident.
+  relay by accident.~~
 - **End-to-end encryption through a relay is a later change, not a launch requirement.** A
   hosted relay sees content until it lands, said plainly; private and self-hosted relays are
   the user's own. The door stays open by construction: relays never parse payloads, the engine
@@ -312,9 +311,8 @@ step needs decided first, so that `/plan` and every session read one sequence. E
 9. ~~**Streams as URLs** — align the URL grammar and the forms: listing, `ndjson`, `png`, raw
    H.264 and MPEG-TS, then HLS, then `moq` through the bundled relay, the relay role.~~
 
-   > Steps 8 and 9 superseded 2026-10-04 by `moq-on-the-tailnet.md`. The removal of Zenoh, the
-   > MoQ extension wheel and the `tap` and `exchange` verbs comes first, ahead of the rest of
-   > steps 1 to 4. After step 5, one **sharing** step takes the place of both: MoQ on the
+   > Steps 8 and 9 superseded 2026-10-04 by `moq-on-the-tailnet.md`. The removal of Zenoh and
+   > the MoQ extension wheel comes first, ahead of the rest of steps 1 to 4. After step 5, one **sharing** step takes the place of both: MoQ on the
    > tailnet, the relay a machine joins, and the HTTP listing, read-only MCP, snapshots, samples
    > and viewer page. Steps 6, 7 and 10 follow it.
 10. **The app** — `Tatolab.app` with `tatolabd` as its SMAppService agent, the dmg, the

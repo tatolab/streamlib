@@ -31,7 +31,7 @@ Read this before any of the following:
 4. HTTP carries only what is not real time — listing exposed ports, a read-only MCP, snapshots,
    small samples and the viewer page — never live media, in any browser.
 5. Zenoh and the MoQ extension wheel are removed now; the exposure levels and pull-only links
-   decided on 2026-10-04 stand unchanged.
+   decided on 2026-10-04 (PR #2624) stand unchanged.
 
 ## Decided
 
@@ -57,12 +57,13 @@ Read this before any of the following:
   time a port goes public, and says the one command to run when Tailscale refuses for lack of
   rights. It never alters any other serve setting.
 - **The viewer page ships with the first version of sharing,** built on the stack's own
-  player. One path for every browser: QUIC and MoQ. A browser that cannot do that is told so by
-  name; no TCP fallback is built or enabled.
-- **`tap` and `exchange` are removed with Zenoh.** The repo's live verification reads frames
-  from a test-only node inside each fixture stream that writes them to disk.
+  player. One path for every browser: QUIC and MoQ. No TCP fallback is built or enabled.
+- **The repo's live verification reads a port the way a user does.** The fixture stream
+  exposes the port private, and the check fetches exact, full-resolution snapshots from the
+  machine's local HTTP listing. `tap` and `exchange` therefore stay until the sharing step
+  builds the snapshot and sample forms, and are deleted in that change, not in the removal.
 - **The WebRTC extension is untouched.**
-- **Order.** The removal comes first. The one-runtime-per-machine sequence continues through
+- **Order.** The removal of Zenoh and the MoQ extension wheel comes first. The one-runtime-per-machine sequence continues through
   runtime hosting, then accelerators optional, then one sharing step that replaces that
   sequence's steps 8 and 9, then resources, packs and the app.
 
@@ -84,7 +85,7 @@ Each is the sharing step's align to decide; none is built against until then.
   a pushed policy map, a router role and NAT answers were each being designed for machines the
   owner no longer targets. Robotics teams already run ROS and Zenoh and build inside their own
   engines.
-- **A tailnet fills every gap that made MoQ costly a week earlier.** MoQ has no discovery, no
+- **A tailnet fills the gaps that made MoQ costly a week earlier.** MoQ has no discovery, no
   names, no peer-to-peer reach and needs certificates. On a tailnet: status lists machines,
   MagicDNS names them, WireGuard authenticates and encrypts every address, and
   `tailscale serve` terminates HTTPS. What is left for the engine is carrying data.
@@ -99,7 +100,7 @@ Each is the sharing step's align to decide; none is built against until then.
   subscription, and browser players stop at draft-18. The moq-dev line embeds a server, skips a
   stale group and continues, negotiates its own dialect and the IETF drafts 14 to 22, and ships
   a maintained browser player. Its costs are accepted: one maintainer, frequent releases and
-  two crate renames in three months, contained by exact pins; and its compatibility with
+  two crate renames this year, contained by exact pins; and its compatibility with
   Cloudflare's hosted relays is claimed upstream and unverified here.
 - **A relay is the only internet path for live data.** Tailscale Funnel carries TCP only.
 
@@ -121,23 +122,25 @@ Each is the sharing step's align to decide; none is built against until then.
   meet a manual step before a browser shows anything.
 - **A WebSocket fallback for Safari and iOS.** The stack's player keeps WebKit on one; the owner
   ruled for a single path so there is one thing to maintain.
-- **Private-port snapshots as the verification door.** The owner chose a test-only node writing
-  frames to disk, so `tap` and `exchange` go without waiting for an HTTP form.
+- **A test-only node writing frames to disk,** so that `tap` and `exchange` could go at once.
+  Every fixture would test a graph with one more node in it, and nothing in the repo's tests
+  would exercise the path a user or an agent reads through.
 
 ## Consequences
 
 - **Between the removal and the sharing step, nothing links one machine to another,** and no
   MoQ exists in the tree. Everything on one machine keeps working.
 - **This reverses two earlier rulings.** 2026-09-28 and 2026-09-30: Zenoh between machines and
-  MoQ only as a browser form. 2026-10-02: Tailscale is never a requirement — reversed for
-  direct reach between machines, and only for that.
+  MoQ only as a browser form. 2026-10-02, said in a session and written in no plan entry:
+  Tailscale is never a requirement — reversed for direct reach between machines, and only for
+  that.
 - **HTTP forms that carry live media are gone:** MPEG-TS, HLS, raw H.264 and a WHEP form are not
   built. A tool that wants live data speaks MoQ or runs a stream.
 - **The relay stops being a role of the runtime.** It is a separate program the machine joins.
   The bundled `moq-relay-ietf` is not built.
 - **The sequence in `one-runtime-per-machine.md` changes:** its step 8 dissolves, its step 9 is
   reshaped, and both become the one sharing step after accelerators optional.
-- **Fixtures test a graph with one more node in it.** The observer effect the pixel exchange
-  removed returns for verification, accepted by the owner.
-- **Safari and iOS viewers depend on WebKit's QUIC support holding up in long sessions,** which
-  the player's maintainer did not trust on 2026-10-04.
+- **`tap` and `exchange` outlive the removal.** The local-API and native-CLI steps carry both
+  verbs into their new shapes before the sharing step deletes them.
+- **Safari and iOS viewers depend on WebKit's QUIC support holding up in long sessions.** As of
+  2026-10-04 the player's own default keeps WebKit on a WebSocket fallback, citing stalls.

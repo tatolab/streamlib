@@ -104,13 +104,11 @@ it runs. _Avoid_: "visibility" (discovery's word), "export", "publish", "endpoin
 
 **Exposed port** _(crosses)_: a private or public output port. _Avoid_: "shared port", "open port".
 
-**Form** _(user)_: the shape an exposed port is served in — the URL's child chunk (`moq`,
-`page`, `png`, `ndjson`). Live data has one form, `moq`. _Avoid_: "format" (a pixel format),
-"transport".
+**Form** _(user)_: the shape an exposed port is served in — the URL's child chunk. Live data
+has one form, `moq`. _Avoid_: "format" (a pixel format), "transport".
 
 **Relay** _(crosses)_: a separate program a machine joins so its public ports have an internet
-address. Never the runtime, and never between two machines on one tailnet. _Avoid_: "gateway",
-"tower", "router".
+address. Never the runtime. _Avoid_: "gateway", "tower", "router".
 
 **Capability extension**: an extension wheel's support code — declared by a standard entry
 point in its `pyproject.toml` that pip records and the engine runs once at startup, like
@@ -237,10 +235,11 @@ boot-session UUID (`/proc/sys/kernel/random/boot_id`, `kern.bootsessionuuid`), t
 alone, so a container and its host share one. It renders on every link in `graph` as `stamp_clock_identity`, and is read by
 `inbound_link_stamp_clock_identity(port, link)` against
 `this_machines_stamp_clock_identity()`. Two stamps are comparable when their links name the
-same identity **and** neither stamp was restated by a relay: what a link names is the clock
+same identity **and** neither stamp was restated by a node in between: what a link names is the clock
 of the machine that last wrote the bag, not necessarily of the machine that took the reading,
 so a processor restating an upstream stamp on a local output makes its link name this machine
-confidently and wrongly. That is the known relay gap, and it is the common-clock OPEN's to
+confidently and wrongly. That is the known restating gap (the plan's "relay gap", no kin of
+the **relay** a machine joins), and it is the common-clock OPEN's to
 close. _Avoid_: "host identity" (that is the boot id **plus** the pid-namespace inode, and it
 settles duplicate runtime names, never stamps), "boot id" unqualified, "clock id", "epoch".
 

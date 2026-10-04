@@ -17,7 +17,7 @@ runtime becoming a program of its own. After it:
 - the tests divide as the code does — a stream suite with no runtime, a runtime suite with no
   Python node, an integration suite where running both is the point;
 - no package extends the engine: the capability-extension hook is deleted (decision 2);
-- pip publishes `tatolab-stream`, `tatolab-moq`, `tatolab-webrtc`, and no engine.
+- pip publishes `tatolab-stream`, ~~`tatolab-moq`,~~ `tatolab-webrtc`, and no engine (2026-10-04).
 
 Unchanged, mapped below: one stream per runtime process, no service and no installer, the Rust
 crate names of the engine, the `STREAMLIB_*` engine variables.
@@ -226,9 +226,9 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
 
 ## MODIFIED: records re-spelled at the fold
 
-- §Packages `:184-191`, `:226-237`, decision 2's entries, `:281-294` — `tatolab-moq`
-  (`tatolab.moq`), `tatolab-webrtc`, depending on `tatolab-stream`; directories unchanged, since
-  CLAUDE.md's licensing rule cites `packages/streamlib-moq/vendor/moq-transport`.
+- §Packages `:184-191`, `:226-237`, decision 2's entries, `:281-294` — ~~`tatolab-moq`
+  (`tatolab.moq`),~~ `tatolab-webrtc`, depending on `tatolab-stream` (the MoQ wheel is deleted
+  first, 2026-10-04; so are the mesh observation and configuration files the inventory lists).
 - §Product `:21-31`, `:39-46`, `:60-82` (one suite on both floors → three; the closed list
   refuses at load), `:83-98`. §Processor model `:1065-1080`, `:1260-1270`. §Language SDKs
   `:4095-4142` — the GIL-release contract stays for processor interpreters; `rt.run()`'s signal
