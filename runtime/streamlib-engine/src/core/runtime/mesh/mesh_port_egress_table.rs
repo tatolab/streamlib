@@ -363,7 +363,8 @@ fn a_runtime_started_reading(
 /// Why [`how_this_runtime_would_send`] answered no egress for a port.
 #[derive(Debug, PartialEq, Eq)]
 enum WhyThisRuntimeWouldNotSendAPort {
-    /// The port is not in this runtime's offer — not exposed, or not held.
+    /// The port is not in this runtime's offer — not exposed, not held, or held
+    /// and listed as one it cannot send, which the reader was told at the offer.
     ItOffersNoSuchPort,
     /// The port is offered and cannot be sent, for the reason given.
     ItCannotSendIt(String),

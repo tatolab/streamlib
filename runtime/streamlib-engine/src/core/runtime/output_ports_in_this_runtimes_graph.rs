@@ -141,11 +141,14 @@ fn every_exposed_output_port_in(graph: &Graph) -> OutputPortsOfferedOnTheMesh {
     let mut ports = Vec::new();
     let mut ports_it_holds_and_cannot_send = Vec::new();
     for node in graph.traversal().v(()).iter() {
+        let Some(exposed_output_ports) = node.get::<ExposedOutputPortsComponent>() else {
+            continue;
+        };
         for port in node
             .ports
             .outputs
             .iter()
-            .filter(|port| its_stream_exposes(node, &port.name))
+            .filter(|port| exposed_output_ports.exposes(&port.name))
         {
             match the_channel_an_output_port_publishes_to(node.id.as_str(), &port.name) {
                 Ok(_) => ports.push(OutputPortOfferedOnTheMesh {

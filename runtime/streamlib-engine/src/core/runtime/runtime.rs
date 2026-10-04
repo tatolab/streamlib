@@ -1320,9 +1320,9 @@ impl Runner {
     // Graph Load
     // =========================================================================
 
-    /// Load `graph` into this runtime: each node added under its name, each
-    /// link connected by name, the exposures recorded on their nodes, and the
-    /// stream's name recorded on the graph.
+    /// Load `graph` into this runtime: each node added under its name, the
+    /// exposures recorded on their nodes, the stream's name recorded on the
+    /// graph, and each link connected by name.
     ///
     /// A node name already in the graph is refused rather than suffixed — a
     /// loaded graph's names are already resolved. A link whose input is on
@@ -1361,6 +1361,29 @@ impl Runner {
                 .ok_or_else(|| Error::GraphError(format!("the graph holds no node `{node}`")))
         };
 
+        // Before the links: a link pushed to another runtime is answered by a
+        // query of this runtime's offer, which reads these exposures.
+        let mut exposed_ports_by_processor_id: HashMap<ProcessorUniqueId, Vec<String>> =
+            HashMap::new();
+        for exposed in &graph.exposed {
+            exposed_ports_by_processor_id
+                .entry(processor_id_of(&exposed.node)?)
+                .or_default()
+                .push(cast_exposed_name_to_url_safe(&exposed.port)?.into_owned());
+        }
+        self.compiler.scope(|live_graph, _tx| {
+            for (processor_id, exposed_ports) in exposed_ports_by_processor_id {
+                if let Some(node) = live_graph.traversal_mut().v(&processor_id).first_mut() {
+                    node.insert_component_without_rendering_it(ExposedOutputPortsComponent(
+                        exposed_ports,
+                    ));
+                }
+            }
+            if let Some(stream_name) = &graph.stream {
+                live_graph.set_loaded_stream_name(stream_name.clone());
+            }
+        });
+
         for link in &graph.links {
             let from = match link.source.mesh_port_address() {
                 Some(address) => OutputLinkPortRef::on_another_runtime(address?),
@@ -1386,27 +1409,6 @@ impl Runner {
                 }
             }
         }
-
-        let mut exposed_ports_by_processor_id: HashMap<ProcessorUniqueId, Vec<String>> =
-            HashMap::new();
-        for exposed in &graph.exposed {
-            exposed_ports_by_processor_id
-                .entry(processor_id_of(&exposed.node)?)
-                .or_default()
-                .push(cast_exposed_name_to_url_safe(&exposed.port)?.into_owned());
-        }
-        self.compiler.scope(|live_graph, _tx| {
-            for (processor_id, exposed_ports) in exposed_ports_by_processor_id {
-                if let Some(node) = live_graph.traversal_mut().v(&processor_id).first_mut() {
-                    node.insert_component_without_rendering_it(ExposedOutputPortsComponent(
-                        exposed_ports,
-                    ));
-                }
-            }
-            if let Some(stream_name) = &graph.stream {
-                live_graph.set_loaded_stream_name(stream_name.clone());
-            }
-        });
 
         Ok(())
     }

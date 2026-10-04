@@ -99,10 +99,11 @@ pub struct OutputPortThisRuntimeStoppedSending {
 /// The document a runtime answers with when a peer asks what it offers.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OutputPortsOfferedOnTheMesh {
-    /// Every output port in the runtime's graph that it can send, at the moment
-    /// it was asked.
+    /// Every exposed output port in the runtime's graph that it can send, at
+    /// the moment it was asked.
     pub ports: Vec<OutputPortOfferedOnTheMesh>,
-    /// Every output port in that graph it cannot send, each with the reason.
+    /// Every exposed output port in that graph it cannot send, each with the
+    /// reason.
     ///
     /// Absent reads as empty, because that is what it means: a peer that names
     /// no unsendable ports holds none this reader can be told about. It is what
@@ -198,12 +199,13 @@ impl OutputPortsOfferedOnTheMesh {
 /// afterwards — the shape the hosted control plane's endpoint registry already
 /// uses for something the runtime learns after it is on the mesh.
 pub trait WhatThisRuntimeOffersOnTheMesh: Send + Sync {
-    /// Every output port in this runtime's graph right now, split into the ones
-    /// it can send and the ones it holds and cannot.
+    /// Every exposed output port in this runtime's graph right now, split into
+    /// the ones it can send and the ones it holds and cannot.
     fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh;
 
     /// The channel the port at this address publishes to, and the sizing a
-    /// subscriber on it must ask for — or `None` when no such port is wired.
+    /// subscriber on it must ask for — or `None` when no such port is wired or
+    /// the stream does not expose it.
     fn how_to_read_an_offered_output_port(
         &self,
         processor_display_name: &str,
@@ -306,7 +308,7 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
     }
 
     /// How to read one offered port's channel, or `None` while this runtime has
-    /// no graph yet or no such port is wired.
+    /// no graph yet, no such port is wired, or the stream does not expose it.
     ///
     /// Cloned out from under the lock for the same reason
     /// [`Self::output_ports_it_offers_right_now`] is, and more so: this one
