@@ -1433,8 +1433,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   becomes per stream: the event topic, the processor registry, the interpreter a stream's
   nodes start from, the log file, shutdown and its escalation, the teardown watchdog, and the
   process-group table of its processor interpreters — so one stream's shutdown, crash budget
-  or graph change never touches another's. A stream links to any port of another stream on
-  the same machine without exposing it, over the local transport, and surfaces are shared
+  or graph change never touches another's. A stream links to any private or public port of
+  another stream on the same machine (§Networking, exposure; amended 2026-10-04), over the
+  local transport, and surfaces are shared
   across every stream's processor interpreters on both floors, all being the runtime's
   children, so a link between two streams on one machine copies no pixels. Streams needing
   conflicting Python packages each start from their own venv (the package split and the lend,
@@ -4095,14 +4096,25 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
   Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting]
-- **DECIDED** — Nothing leaves the machine until it is exposed. With no stream map pushed, a
-  runtime offers no port to another machine; `expose` on a port makes it readable by any peer
-  that can reach the machine — directly on a LAN or a tailnet, or through a relay — and a
-  pushed map, when there is one, narrows who. Exposure is about leaving the machine (sentence
-  3), so streams on one machine may link to each other's ports without exposing them.
-  Discovery is unaffected: a runtime still announces itself and lists the ports it exposes to
-  whoever can reach it. Owner, 2026-09-30: closed by default, "as long as we can still do peer
-  to peer". [one-runtime-per-machine; stream-graph]
+- **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
+  runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
+  any node of the stream may link to it, and nothing outside the stream may read it.
+  **Private**: any other stream on the machine, and code on the machine, may read it.
+  **Public**: private, plus a URL reachable off the machine, the bundled relay serving it, and
+  other machines reading it over the mesh — directly on a LAN or a tailnet, or through a relay;
+  a pushed stream map, when there is one, narrows which peers. `stream.expose(output)` makes an
+  output private and `stream.expose(output, Exposure.PUBLIC)` public; a level is an enum
+  member, never a string. The stream's function sets where its exposures start; `expose` at
+  the CLI, the app or the local API changes them while the stream runs, the change applies at
+  once — a reader the new level no longer allows is cut off — and neither the runtime nor the
+  stream restarts. The engine checks the live exposures wherever a read crosses a stream's
+  edge: another stream's link, a reader or URL on the machine, the mesh's offer and egress,
+  and the relay. Nothing leaves the machine until a port is public; taking a public URL onto
+  the internet is Tailscale serve's or funnel's, never the runtime's. The CLI and the app list
+  every running stream with its private and public ports; an internal port may be listed and
+  is never readable. Discovery is unaffected: a runtime still announces itself and lists its
+  public ports to whoever can reach it. Owner, 2026-10-04, superseding 2026-09-30's binary
+  exposure and its same-machine rule. [exposure-levels; one-runtime-per-machine; stream-graph]
 - **OPEN** — Discovery, the Tailscale analogy applied. Direction (review, not decided): on one
   machine the local API lists streams and exposed ports, and the URL namespace is listable; on
   one network, Zenoh scouting finds the other runtimes' routers with nothing configured and
@@ -4128,9 +4140,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   pushed map compiles into it once and the per-stream checks live in the engine at the offer
   answer, egress creation and link-request application — a check in the link layer alone is
   bypassable by any subscriber with network reach. [one-runtime-per-machine]
-- **DECIDED** — Every exposed port is reachable by URL from any tool, in the form that tool
-  wants: a browser, an MCP client, curl, ffmpeg, or something that knows how to handle the raw
-  stream. A user with no account can see and use their own streams locally, and the same works
+- **DECIDED** — Every public port is reachable by URL from any tool, and every private port
+  from any tool on the machine, in the form that tool wants: a browser, an MCP client, curl,
+  ffmpeg, or something that knows how to handle the raw stream (levels amended 2026-10-04). A user with no account can see and use their own streams locally, and the same works
   inside a private network (owner, 2026-09-30). [one-runtime-per-machine]
 - **OPEN** — The URL grammar and the forms. Direction (review, not decided): a machine exports
   one namespace, `/<stream>/<node>/<port>/<form>`, every level listable, a relay prefixing
@@ -4585,9 +4597,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The local API is reachable only on its own machine. Each machine's runtime
   serves one local API on a socket in its runtime directory that only the owning user can
   open, carrying today's router and control vocabulary unchanged; no network address serves
-  control. The URL forms are a separate listener that serves only exposed ports and changes
-  nothing — loopback by default, a LAN or tailnet address when the user asks — because
-  browsers and ffmpeg cannot dial a socket. A runtime is never driven from another machine
+  control. The URL forms are a separate listener that changes nothing — private and public ports
+  on loopback, public ports on a LAN or tailnet address when the user asks (levels amended
+  2026-10-04) — because browsers and ffmpeg cannot dial a socket. A runtime is never driven from another machine
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
   client's. Owner, 2026-10-01. [local-api; one-runtime-per-machine]
