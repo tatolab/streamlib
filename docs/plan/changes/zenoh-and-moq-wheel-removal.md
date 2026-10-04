@@ -1,7 +1,7 @@
 # zenoh-and-moq-wheel-removal
 
 > **Approved by the owner, 2026-10-04**, as written, with its stated assumptions; the
-> stamp-clock deletion (assumption 1) confirmed by name.
+> stamp-clock deletion (assumption 1) confirmed by name. Tickets derived 2026-10-04 (below).
 
 The rip-out of the moq-on-the-tailnet pivot (owner, 2026-10-04): the removal that comes first.
 It deletes, and re-homes the little `tap` still needs. After this change:
@@ -254,6 +254,18 @@ is the tracker batch's to apply once this change is approved:
   `runtime_name`, the peers table, the observation session, the mesh suite and its feature, the
   `zenoh` dependencies, notices, CI. Blocked by S2.
 - **S4 — the operating-model PR.** Blocked by S3.
+
+## Tickets
+
+Derived 2026-10-04; milestone #62, *Streams shared over the tailnet*.
+
+1. #2628 — the MoQ extension wheel, its vendored `moq-transport` and its example are gone (S1) —
+   independent; carries the seven wheel bullets.
+2. #2629 — every link has both ends on one runtime (S2) — independent; ultracode; needs the rig.
+3. #2630 — a runtime opens no Zenoh session (S3) — blocked by 2; ultracode; needs the rig.
+4. #2631 — the live-ops skills follow (S4, the operating-model PR) — blocked by 1 and 3.
+
+Waiting on them: #2591 on 1; #2574 on 1 and 2; #2592, #2593, #2604, #2605, #2607, #2615 on 3.
 
 ## REMOVED
 
