@@ -1,5 +1,8 @@
 # zenoh-and-moq-wheel-removal
 
+> **Approved by the owner, 2026-10-04**, as written, with its stated assumptions; the
+> stamp-clock deletion (assumption 1) confirmed by name.
+
 The rip-out of the moq-on-the-tailnet pivot (owner, 2026-10-04): the removal that comes first.
 It only deletes. After this change:
 - the tree holds no Zenoh: no session, no runtime mesh, no mesh name, no discovery, no peers, no
