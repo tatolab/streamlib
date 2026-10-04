@@ -53,7 +53,7 @@ def one_stereo_source_into_both_window_probes(stream: Stream) -> None:
     stream.connect(source.output("audio"), declared_mono.input("audio_from_upstream"))
 
 
-SCENARIOS = {
+STREAM_BY_SCENARIO = {
     "contiguous_windows": microphone_into_an_exact_window_probe,
     "rolling_windows": microphone_into_a_rolling_window_probe,
     "source_following_windows": one_stereo_source_into_both_window_probes,
@@ -62,7 +62,7 @@ SCENARIOS = {
 
 def main() -> None:
     scenario = sys.argv[1] if len(sys.argv) > 1 else "contiguous_windows"
-    graph = compile_stream_to_graph(SCENARIOS[scenario])
+    graph = compile_stream_to_graph(STREAM_BY_SCENARIO[scenario])
     runtime = streamlib.Runtime()
     runtime.load(graph)
     runtime.run()

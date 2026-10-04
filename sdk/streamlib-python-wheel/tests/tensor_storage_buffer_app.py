@@ -103,7 +103,7 @@ def a_kernel_binds_a_tensor_by_surface_id(stream: Stream) -> None:
     stream.add(TensorStorageBufferKernelBindingProbe)
 
 
-SCENARIOS = {
+STREAM_BY_SCENARIO = {
     "a_written_tensor_is_read_by_another_process": (
         a_written_tensor_is_read_by_another_process
     ),
@@ -120,7 +120,7 @@ SCENARIOS = {
 
 
 if __name__ == "__main__":
-    graph = compile_stream_to_graph(SCENARIOS[sys.argv[1]])
+    graph = compile_stream_to_graph(STREAM_BY_SCENARIO[sys.argv[1]])
     runtime = streamlib.Runtime()
     runtime.load(graph)
     runtime.run()
