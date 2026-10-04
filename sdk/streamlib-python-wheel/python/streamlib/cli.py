@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.machinery
 import importlib.util
 import os
 import platform
@@ -268,8 +269,9 @@ def _launcher_source_file_names() -> "frozenset[str]":
     `<frozen runpy>` as well as `runpy.__file__`: since CPython 3.11 runpy is
     frozen into the binary and its frames report the former, so matching only
     the latter leaves three runpy frames sitting on top of the user's own. The
-    importlib frames are the same for a `<module>:<function>` target, and the
-    builder's are the call into the user's `@stream` function.
+    importlib frames are the same for a `<module>:<function>` target —
+    `importlib.util` is frozen from 3.11 too — and the builder's are the call
+    into the user's `@stream` function.
     """
     return frozenset(
         {
@@ -278,6 +280,7 @@ def _launcher_source_file_names() -> "frozenset[str]":
             "<frozen runpy>",
             str(importlib.__file__),
             str(importlib.util.__file__),
+            "<frozen importlib.util>",
             "<frozen importlib._bootstrap>",
             "<frozen importlib._bootstrap_external>",
             _stream_graph_builder.__file__,
@@ -347,6 +350,10 @@ def locate_stream_entry_module(
     if sys.path[:1] != [anchor_import_root]:
         sys.path.insert(0, anchor_import_root)
 
+    launch_command = _launch_command_as_typed(verb, requested_anchor_directory)
+    # `find_spec` imports nothing for a module already imported, so a
+    # `ValueError` it raises then is its own, never one a package raised.
+    entry_module_was_already_imported = entry_module_name in sys.modules
     launcher_argv = sys.argv
     sys.argv = [entry_module_name]
     try:
@@ -358,42 +365,112 @@ def locate_stream_entry_module(
         ):
             raise
         entry_module_spec = None
+    except ValueError:
+        if not entry_module_was_already_imported:
+            raise
+        raise AppLaunchError(
+            f"`{entry_module_name}` (from `{named_by}`) is a module already running "
+            f"with no import spec — the process's own `__main__` is one — so it names "
+            f"no file in `{anchor_directory}`. Name the file that defines the stream "
+            f"instead: `{launch_command} <file>.py:{stream_function_name}`."
+        ) from None
     finally:
         sys.argv = launcher_argv
-    if entry_module_spec is None:
-        raise AppLaunchError(
-            f"no module `{entry_module_name}` is importable from `{anchor_directory}` "
-            f"(from `{named_by}`). A module target imports with the project "
-            f"directory first on the import path; name a file instead with "
-            f"`streamlib {verb} <file>.py:<function>`."
-        )
 
     entry_module_file = (
         Path(entry_module_spec.origin)
-        if entry_module_spec.has_location and entry_module_spec.origin is not None
+        if entry_module_spec is not None
+        and entry_module_spec.has_location
+        and entry_module_spec.origin is not None
         else None
     )
     project_module_file = _project_module_file_named(
         anchor_directory, entry_module_name
     )
-    if project_module_file is not None and (
-        entry_module_file is None
-        or not entry_module_file.resolve().is_relative_to(anchor_directory.resolve())
+    if project_module_file is None:
+        if entry_module_spec is None:
+            raise AppLaunchError(
+                f"no module `{entry_module_name}` is importable from `{anchor_directory}` "
+                f"(from `{named_by}`). A module target imports with the project "
+                f"directory first on the import path; name a file instead with "
+                f"`streamlib {verb} <file>.py:<function>`."
+            )
+    elif entry_module_file is None or not entry_module_file.resolve().is_relative_to(
+        anchor_directory.resolve()
     ):
-        # The anchor leads the path search, but a built-in module and one already
-        # in `sys.modules` are answered before any path is searched.
-        raise AppLaunchError(
-            f"`{entry_module_name}` (from `{named_by}`) resolves to "
-            f"`{entry_module_spec.origin}`, not to `{project_module_file.as_posix()}` in "
-            f"`{anchor_directory}`: a module built into Python, or one already imported, "
-            f"holds that name first. Rename the project's module, or launch its file "
-            f"instead: `{_launch_command_as_typed(verb, requested_anchor_directory)} "
-            f"{project_module_file.as_posix()}:{stream_function_name}`."
+        raise _shadowed_project_module_refusal(
+            anchor_directory,
+            named_by,
+            entry_module_name,
+            entry_module_spec,
+            project_module_file,
+            f"{launch_command} {project_module_file.as_posix()}:{stream_function_name}",
         )
     return ResolvedLaunchEntryModule(
         entry_module_name=entry_module_name,
         stream_function_name=stream_function_name,
         entry_module_file=entry_module_file,
+    )
+
+
+def _shadowed_project_module_refusal(
+    anchor_directory: Path,
+    named_by: str,
+    entry_module_name: str,
+    entry_module_spec: Optional[importlib.machinery.ModuleSpec],
+    project_module_file: Path,
+    launch_of_the_project_module_file: str,
+) -> AppLaunchError:
+    """Refuse a module target whose name something outside the project answers first.
+
+    The anchor leads the path search, but a built-in module and one already in
+    `sys.modules` are answered before any path is searched — for the module
+    itself, or for a parent package it is then searched inside.
+    """
+    project_module_as_typed = project_module_file.as_posix()
+    launch_its_file_instead = (
+        f"or launch its file instead: `{launch_of_the_project_module_file}`."
+    )
+    if entry_module_spec is not None:
+        return AppLaunchError(
+            f"`{entry_module_name}` (from `{named_by}`) resolves to "
+            f"`{entry_module_spec.origin}`, not to `{project_module_as_typed}` in "
+            f"`{anchor_directory}`: a module built into Python, or one already imported, "
+            f"holds that name first. Rename the project's module, {launch_its_file_instead}"
+        )
+    does_not_resolve_to_the_project_module = (
+        f"`{entry_module_name}` (from `{named_by}`) does not resolve to "
+        f"`{project_module_as_typed}` in `{anchor_directory}`"
+    )
+    module_name_parts = entry_module_name.split(".")
+    for parent_depth in range(1, len(module_name_parts)):
+        parent_package_name = ".".join(module_name_parts[:parent_depth])
+        parent_package = sys.modules.get(parent_package_name)
+        if parent_package is None:
+            continue
+        project_package_directory = anchor_directory.joinpath(
+            *module_name_parts[:parent_depth]
+        ).resolve()
+        parent_package_search_directories = {
+            Path(search_directory).resolve()
+            for search_directory in getattr(parent_package, "__path__", [])
+        }
+        if project_package_directory not in parent_package_search_directories:
+            parent_package_file = getattr(parent_package, "__file__", None)
+            parent_package_resolved_to = (
+                f"`{parent_package_file}`"
+                if parent_package_file
+                else "a module with no file"
+            )
+            return AppLaunchError(
+                f"{does_not_resolve_to_the_project_module}: its parent package "
+                f"`{parent_package_name}` resolves to {parent_package_resolved_to}, "
+                f"outside the project, so the project's `{parent_package_name}` is never "
+                f"searched. Rename the project's package, {launch_its_file_instead}"
+            )
+    return AppLaunchError(
+        f"{does_not_resolve_to_the_project_module}: a module outside the project holds "
+        f"a name on its path first. Rename the project's module, {launch_its_file_instead}"
     )
 
 
@@ -461,10 +538,11 @@ def _stream_function_listing(stream_functions: "Sequence[Callable[..., Any]]") -
 
 
 def _entry_file_as_typed(entry_file: Path, anchor_directory: Path) -> str:
+    """The entry file as a command line spells it: relative to the anchor, shell-quoted."""
     try:
-        return entry_file.relative_to(anchor_directory).as_posix()
+        return shlex.quote(entry_file.relative_to(anchor_directory).as_posix())
     except ValueError:
-        return str(entry_file)
+        return shlex.quote(str(entry_file))
 
 
 def _entry_as_typed_for_a_target(
@@ -505,10 +583,8 @@ def select_stream_function(
             or stream_function is named_value
         ):
             return stream_function
-    defining_module_name = getattr(named_value, "__module__", None)
-    if is_stream_function(named_value) and defining_module_name != entry_namespace.get(
-        "__name__"
-    ):
+    if is_stream_function(named_value):
+        defining_module_name = getattr(named_value, "__module__", None)
         raise AppLaunchError(
             f"`{stream_function_name}` in {entry_described} is a @stream imported from "
             f"`{defining_module_name}`; launch it where it is defined: "

@@ -16,6 +16,7 @@ import ast
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -569,6 +570,92 @@ def test_a_module_target_another_module_shadows_is_refused_naming_both_files(
     assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
 
 
+def test_a_module_target_whose_parent_package_is_held_elsewhere_names_that_package(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    """`json` is already imported, so `json.desk` is searched inside the stdlib's
+    `json`, never the project's — though `json/desk.py` is there."""
+    write_app(tmp_path, "json/desk.py", MINIMAL_STREAM_SOURCE)
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "json.desk:main"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert (
+        f"`json.desk` (from `streamlib run json.desk:main`) does not resolve to "
+        f"`json/desk.py` in `{tmp_path}`: its parent package `json` resolves to "
+        f"`{json.__file__}`, outside the project"
+    ) in refusal
+    assert "no module `json.desk` is importable" not in refusal
+    assert (
+        f"Rename the project's package, or launch its file instead: "
+        f"`streamlib run --dir {tmp_path} json/desk.py:main`."
+    ) in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+    assert cli.main(["run", "--dir", str(tmp_path), "json/desk.py:main"]) == 0
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
+
+
+def test_a_module_target_naming_a_module_with_no_import_spec_is_refused_naming_the_file_form(
+    tmp_path: Path,
+):
+    """Under `python -c`, as under the console script, `__main__` runs with no
+    `__spec__`, and `find_spec` refuses it with a `ValueError` of its own."""
+    finished = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\nfrom streamlib import cli\nsys.exit(cli.main(sys.argv[1:]))",
+            "run",
+            "--dir",
+            str(tmp_path),
+            "__main__:main",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=RESOLUTION_FAILURE_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    assert finished.returncode == 1, finished.stderr
+    assert (
+        "error: `__main__` (from `streamlib run __main__:main`) is a module already "
+        "running with no import spec"
+    ) in finished.stderr
+    assert (
+        f"Name the file that defines the stream instead: "
+        f"`streamlib run --dir {tmp_path} <file>.py:main`."
+    ) in finished.stderr
+    assert "Traceback (most recent call last)" not in finished.stderr
+    assert ENGINE_CONSTRUCTED_LOG_LINE not in finished.stdout + finished.stderr
+
+
+def test_a_module_targets_raising_parent_package_is_the_first_frame_of_its_traceback(
+    tmp_path: Path,
+):
+    """Locating a dotted target runs its parent packages through `importlib.util`,
+    frozen since CPython 3.11 — none of those frames may sit above the package's."""
+    write_app(
+        tmp_path, "raising_parent_rigs/__init__.py", "raise ValueError('bad package')\n"
+    )
+    write_app(tmp_path, "raising_parent_rigs/desk.py", MINIMAL_STREAM_SOURCE)
+
+    finished = run_cli("run", "--dir", str(tmp_path), "raising_parent_rigs.desk:main")
+
+    assert finished.returncode == 1, finished.stderr
+    assert "ValueError: bad package" in finished.stderr
+    first_frame = finished.stderr.index("File ")
+    assert finished.stderr.startswith(
+        f'File "{tmp_path / "raising_parent_rigs" / "__init__.py"}", line 1, in <module>',
+        first_frame,
+    ), finished.stderr
+    assert "importlib" not in finished.stderr, finished.stderr
+    assert ENGINE_CONSTRUCTED_LOG_LINE not in finished.stdout + finished.stderr
+
+
 @pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
 def test_a_module_targets_refusal_names_the_file_its_module_resolved_to(
     tmp_path: Path,
@@ -678,6 +765,28 @@ def test_the_several_streams_suggestion_quotes_the_dir_it_was_given(
         f"`streamlib dev --dir '{project_directory}' stream.py:<function>`"
         in capsys.readouterr().err
     )
+
+
+@pytest.mark.parametrize(
+    "launch_arguments",
+    [["my rig.py"], ["my rig.py:side"]],
+    ids=["several-streams", "a-function-the-file-lacks"],
+)
+def test_a_suggestion_quotes_an_entry_file_whose_name_holds_a_space(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+    launch_arguments: "list[str]",
+):
+    write_app(tmp_path, "my rig.py", TWO_STREAM_SOURCE)
+
+    assert cli.main(["run", "--dir", str(tmp_path), *launch_arguments]) == 1
+
+    suggestion = f"streamlib run --dir {tmp_path} 'my rig.py':<function>"
+    assert f"`{suggestion}`" in capsys.readouterr().err
+    _, *suggested_arguments = shlex.split(suggestion.replace("<function>", "back"))
+    assert cli.main(suggested_arguments) == 0
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "back"
 
 
 def test_the_several_streams_suggestion_names_no_dir_when_none_was_given(
