@@ -87,8 +87,8 @@ RESOLVER_IMPORTED_NODE_SOURCE = Path(__file__).with_name(f"{RESOLVER_IMPORTED_NO
 
 GRAPH_IS_NOT_JSON_DATA = "the graph is not JSON data: "
 PLAIN_JSON_DATA_FIX = (
-    "Build the graph from plain dict, list, str, int, float, bool and None, as "
-    "compile_stream_to_graph does."
+    "A graph carries what JSON carries — compile_stream_to_graph always emits plain "
+    "dicts, lists, str, int, float, bool and None, so build the graph with it."
 )
 NESTED_PAST_THE_MAXIMUM = "containers nest more than 128 deep"
 

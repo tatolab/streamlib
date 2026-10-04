@@ -13,7 +13,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
-use pyo3::exceptions::{PyOverflowError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::type_object::PyTypeInfo;
 use pyo3::types::{PyDict, PyMapping, PyString};
@@ -511,7 +511,6 @@ fn graph_is_not_json_data_refusal(python: Python<'_>, converter_refusal: PyErr) 
     let converter_refusal_type_constructs_from_one_str = [
         PyTypeError::type_object(python),
         PyValueError::type_object(python),
-        PyOverflowError::type_object(python),
     ]
     .iter()
     .any(|one_str_exception_type| converter_refusal_type.is(one_str_exception_type));
@@ -527,8 +526,9 @@ fn graph_is_not_json_data_refusal(python: Python<'_>, converter_refusal: PyErr) 
     let graph_refusal = PyErr::from_type(
         graph_refusal_type,
         format!(
-            "the graph is not JSON data: {}. Build the graph from plain dict, list, str, int, \
-             float, bool and None, as compile_stream_to_graph does.",
+            "the graph is not JSON data: {}. A graph carries what JSON carries — \
+             compile_stream_to_graph always emits plain dicts, lists, str, int, float, bool and \
+             None, so build the graph with it.",
             converter_refusal
                 .value(python)
                 .to_string()
@@ -1130,34 +1130,6 @@ mod tests {
     }
 
     #[test]
-    fn a_load_refused_while_another_is_underway_stands_over_that_loads_success() {
-        let mut record = RuntimeGraphLoadRecord::NoGraphLoaded;
-        record.claim_the_one_load().unwrap();
-
-        let refused_while_underway = record.claim_the_one_load().unwrap_err();
-        assert!(
-            refused_while_underway.contains("still underway"),
-            "{refused_while_underway}"
-        );
-        assert!(record.refusal_of_run().unwrap().contains("still underway"));
-        record.record_a_refusal_that_claimed_no_load("Runtime.load takes a graph mapping");
-
-        record.record_the_claimed_load_outcome(Ok(None));
-        assert_eq!(
-            record,
-            RuntimeGraphLoadRecord::GraphLoadRefused {
-                refusal: refused_while_underway.clone()
-            }
-        );
-        assert!(
-            record
-                .refusal_of_run()
-                .unwrap()
-                .contains(&refused_while_underway)
-        );
-    }
-
-    #[test]
     fn a_claimed_load_that_returns_a_refusal_records_it() {
         let graph_load_record = Mutex::new(RuntimeGraphLoadRecord::NoGraphLoaded);
         RuntimeGraphLoadRecord::locked(&graph_load_record)
@@ -1285,6 +1257,8 @@ mod tests {
         );
     }
 
+    /// The first refusal while underway stands over the claimed load's
+    /// success, and a later refusal does not displace it.
     #[test]
     fn a_load_refused_while_the_claimed_one_was_underway_stands_over_its_success() {
         let graph_load_record = graph_load_record_with_its_load_claimed();
@@ -1293,6 +1267,9 @@ mod tests {
             &graph_load_record,
             || {
                 refuse_another_load_while_underway(&graph_load_record);
+                let mut record = RuntimeGraphLoadRecord::locked(&graph_load_record);
+                assert!(record.refusal_of_run().unwrap().contains("still underway"));
+                record.record_a_refusal_that_claimed_no_load("Runtime.load takes a graph mapping");
                 Ok::<_, String>(Some("camera-rig".to_owned()))
             },
             |load_outcome| load_outcome.clone(),
@@ -1304,6 +1281,7 @@ mod tests {
             panic!("a refusal while underway must stand over a success, got {record:?}");
         };
         assert!(refusal.contains("still underway"), "{refusal}");
+        assert!(!refusal.contains("takes a graph mapping"), "{refusal}");
         assert!(record.refusal_of_run().unwrap().contains(refusal.as_str()));
     }
 }
