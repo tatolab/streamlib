@@ -680,6 +680,23 @@ class Runtime:
         that runtime is absent, silent, or refused it by name.
         """
 
+    def load(self, graph: Mapping[str, Any], *, name: str | None = None) -> None:
+        """Load a graph into this Runtime before `run()`.
+
+        `graph` is the mapping `compile_stream_to_graph` returns, or a graph
+        `streamlib graph` rendered; anything not a mapping raises `TypeError`.
+        The stream's name — `name` when given, else the graph's own `stream` —
+        is cast the way a node name is, and one casting to nothing raises
+        `ValueError`. A Runtime takes exactly one `load`: a second raises
+        `RuntimeError` naming the stream already loaded, or the earlier
+        refusal. An empty graph, one that does not parse, and one the engine
+        refuses — an unknown `type`, a taken node name, a link to a port no
+        node has — raise `RuntimeError` with the engine's own text. A refused
+        load can leave part of its graph behind, so after any refused `load`,
+        `run()` raises naming that refusal; construct a new Runtime and load a
+        corrected graph. `add` and `connect` work with or without a load.
+        """
+
     # `bind_host` is `...` rather than its literal default because the binding
     # builds that string at call time, which is what the compiled signature
     # reports — the same shape `__exit__` below has.
