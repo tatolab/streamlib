@@ -5,8 +5,8 @@
 
 What these lock is that a Python-launched app is a first-class node: its
 stream's graph was loaded, it published a node-registry entry the observation
-verbs discover, and a clean interrupt takes the entry away again. Booting initializes a GPU context, so the whole module
-needs a device.
+verbs discover, and a clean interrupt takes the entry away again. Booting
+initializes a GPU context, so the whole module needs a device.
 
 The MVP minute is measured here too, with every processor in its own child
 interpreter: what `new` writes runs frame after frame, a graph of helpers goes
