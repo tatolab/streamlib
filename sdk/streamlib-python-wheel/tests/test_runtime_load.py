@@ -5,8 +5,9 @@
 
 `Runtime()` boots the engine without starting it and `load` only builds the
 graph, so every outcome here is read before anything reaches a device. A graph
-is a literal dict naming its nodes' types through the markers' own `type`, the
-shape `compile_stream_to_graph` returns and `streamlib graph` renders.
+is a literal dict naming its nodes' types through the markers' own `type`, or a
+`@node` class's import path, the shape `compile_stream_to_graph` returns and
+`streamlib graph` renders.
 """
 
 from __future__ import annotations
@@ -73,6 +74,10 @@ MARKERS_THIS_PLATFORM_COMPILES = [
 ]
 
 RUN_REFUSAL_DEADLINE_SECONDS = 20.0
+
+# Imported by nothing but the engine's type resolver, during `load`.
+RESOLVER_IMPORTED_NODE_MODULE = "runtime_load_nodes"
+RESOLVER_IMPORTED_NODE_TYPE = f"{RESOLVER_IMPORTED_NODE_MODULE}:LoadedFrameRelay"
 
 PLAIN_JSON_DATA_FIX = "plain dict, list, str, int, float, bool and None"
 
@@ -225,6 +230,39 @@ def test_a_mapping_or_tuple_nested_in_the_graph_loads_as_a_dict_or_list(
     runtime.load(graph)
 
     assert the_node_name_is_taken(runtime, "displaywindow")
+
+
+def test_a_python_node_type_the_process_never_imported_loads_through_the_resolver(
+    runtime: streamlib.Runtime,
+):
+    assert RESOLVER_IMPORTED_NODE_MODULE not in sys.modules, "only the resolver may import it"
+    assert RESOLVER_IMPORTED_NODE_TYPE not in processor_class_import_paths_in_this_processes_catalog()
+
+    runtime.load(
+        {
+            "stream": "relayed",
+            "nodes": [
+                {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
+                {"name": "loadedframerelay", "type": RESOLVER_IMPORTED_NODE_TYPE, "config": {}},
+                {"name": "displaywindow", "type": DisplayWindow.type, "config": {}},
+            ],
+            "links": [
+                {
+                    "source": {"node": "testpatternsource", "port": "video"},
+                    "target": {"node": "loadedframerelay", "port": "video_from_upstream"},
+                },
+                {
+                    "source": {"node": "loadedframerelay", "port": "video_to_downstream"},
+                    "target": {"node": "displaywindow", "port": "video"},
+                },
+            ],
+            "exposed": [{"node": "loadedframerelay", "port": "video_to_downstream"}],
+        }
+    )
+
+    assert RESOLVER_IMPORTED_NODE_MODULE in sys.modules
+    assert RESOLVER_IMPORTED_NODE_TYPE in processor_class_import_paths_in_this_processes_catalog()
+    assert the_node_name_is_taken(runtime, "loadedframerelay")
 
 
 def test_add_and_connect_still_build_beside_a_loaded_graph(runtime: streamlib.Runtime):
