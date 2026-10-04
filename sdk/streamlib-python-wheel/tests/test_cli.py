@@ -121,7 +121,7 @@ def test_an_app_py_still_launches_where_there_is_no_stream_py(tmp_path: Path):
 
 def test_explicit_entry_file_overrides_the_convention(tmp_path: Path):
     write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
-    write_app(tmp_path, "other.py")
+    write_app(tmp_path, "other.py", MINIMAL_STREAM_SOURCE)
 
     resolved = cli.resolve_app_entry_file("run", tmp_path, Path("other.py"))
 
@@ -129,7 +129,7 @@ def test_explicit_entry_file_overrides_the_convention(tmp_path: Path):
 
 
 def test_explicit_entry_file_may_be_absolute(tmp_path: Path):
-    absolute_entry = write_app(tmp_path, "elsewhere.py")
+    absolute_entry = write_app(tmp_path, "elsewhere.py", MINIMAL_STREAM_SOURCE)
 
     resolved = cli.resolve_app_entry_file("dev", tmp_path, absolute_entry)
 
@@ -268,7 +268,7 @@ def test_the_entry_file_executes_and_yields_its_setup_function(tmp_path: Path):
 
 
 def test_the_entry_runs_as_main_with_its_own_directory_importable(tmp_path: Path):
-    """`streamlib dev` and `python app.py` must be the same arrangement.
+    """`streamlib dev` and `python stream.py` must be the same arrangement.
 
     An app importing its own `nodes/` package is the case that breaks if
     the entry's directory is not what leads `sys.path`.
@@ -277,17 +277,16 @@ def test_the_entry_runs_as_main_with_its_own_directory_importable(tmp_path: Path
     write_app(tmp_path, "nodes/effect.py", "EFFECT_NAME = 'blur'\n")
     entry_file = write_app(
         tmp_path,
-        "app.py",
+        "stream.py",
         "from nodes.effect import EFFECT_NAME\n"
-        "MODULE_NAME = __name__\n"
-        "def setup(rt):\n    pass\n",
+        "MODULE_NAME = __name__\n",
     )
 
     namespace = cli.execute_app_entry_file(entry_file)
 
     assert namespace["EFFECT_NAME"] == "blur"
     assert namespace["MODULE_NAME"] == "__main__", (
-        "the entry must run under the name `python app.py` gives it"
+        "the entry must run under the name `python stream.py` gives it"
     )
 
 
@@ -1149,7 +1148,16 @@ def test_a_syntax_error_prints_the_apps_traceback_and_builds_no_engine(tmp_path:
     Reaching the timeout is the regression this guards: an engine built before
     the entry file ran would boot a node and block instead of exiting.
     """
-    write_app(tmp_path, "app.py", "def setup(rt)\n    pass\n")
+    write_app(
+        tmp_path,
+        "stream.py",
+        "from streamlib import Stream, stream\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream: Stream) -> None\n"
+        "    pass\n",
+    )
 
     finished = run_cli("dev", "--dir", str(tmp_path))
 
@@ -1157,7 +1165,7 @@ def test_a_syntax_error_prints_the_apps_traceback_and_builds_no_engine(tmp_path:
     assert "SyntaxError" in finished.stderr, (
         f"the user's own error must be the headline; stderr was:\n{finished.stderr}"
     )
-    assert "app.py" in finished.stderr, "the traceback must name the file"
+    assert "stream.py" in finished.stderr, "the traceback must name the file"
     assert "Initializing GPU context" not in finished.stdout + finished.stderr, (
         "a file that cannot be executed must not cost an engine boot"
     )
@@ -1195,7 +1203,7 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(
 
 
 def test_a_raise_at_import_time_surfaces_as_the_apps_traceback(tmp_path: Path):
-    write_app(tmp_path, "app.py", "raise ValueError('bad wiring')\n")
+    write_app(tmp_path, "stream.py", "raise ValueError('bad wiring')\n")
 
     finished = run_cli("run", "--dir", str(tmp_path))
 
@@ -1223,7 +1231,7 @@ def test_the_apps_traceback_carries_none_of_the_launchers_frames(tmp_path: Path)
     `<frozen runpy>`, so matching only `runpy.__file__` leaves three of its
     frames sitting on top of the app's.
     """
-    write_app(tmp_path, "app.py", "raise ValueError('bad wiring')\n")
+    write_app(tmp_path, "stream.py", "raise ValueError('bad wiring')\n")
 
     finished = run_cli("run", "--dir", str(tmp_path))
 
@@ -1233,37 +1241,32 @@ def test_the_apps_traceback_carries_none_of_the_launchers_frames(tmp_path: Path)
     assert "cli.py" not in finished.stderr, (
         f"the launcher's own frames must be stripped; stderr was:\n{finished.stderr}"
     )
-    assert "app.py" in finished.stderr
+    assert "stream.py" in finished.stderr
 
 
 def test_the_app_does_not_see_the_launchers_arguments(tmp_path: Path):
     """`sys.argv` belongs to the app, not to `streamlib run`."""
-    write_app(
-        tmp_path,
-        "app.py",
-        "import sys\nARGV = list(sys.argv)\ndef setup(rt):\n    pass\n",
-    )
-    entry_file = tmp_path / "app.py"
+    entry_file = write_app(tmp_path, "stream.py", "import sys\nARGV = list(sys.argv)\n")
 
     namespace = cli.execute_app_entry_file(entry_file)
 
     assert namespace["ARGV"] == [str(entry_file)], (
-        "the app must see only its own path, as `python app.py` gives it"
+        "the app must see only its own path, as `python stream.py` gives it"
     )
 
 
 def test_the_launcher_restores_its_own_argv(tmp_path: Path):
-    write_app(tmp_path, "app.py")
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
     launcher_argv = list(sys.argv)
 
-    cli.execute_app_entry_file(tmp_path / "app.py")
+    cli.execute_app_entry_file(tmp_path / "stream.py")
 
     assert sys.argv == launcher_argv
 
 
 def test_an_app_that_exits_on_purpose_keeps_its_own_exit_code(tmp_path: Path):
     """`sys.exit()` at module scope is a choice, not a failure to report."""
-    write_app(tmp_path, "app.py", "import sys\nsys.exit(3)\n")
+    write_app(tmp_path, "stream.py", "import sys\nsys.exit(3)\n")
 
     finished = run_cli("run", "--dir", str(tmp_path))
 
@@ -1854,7 +1857,7 @@ def test_the_launcher_names_the_apps_directory_for_the_built_ins(tmp_path: Path,
     recorded = tmp_path / "recorded-app-directory.txt"
     write_app(
         tmp_path,
-        "app.py",
+        "stream.py",
         "import os\n"
         f"open({str(recorded)!r}, 'w').write(os.environ.get('STREAMLIB_APP_DIRECTORY', ''))\n"
         "raise RuntimeError('stop before the engine')\n",
@@ -1888,7 +1891,7 @@ def test_a_runtime_name_the_engine_refuses_reads_as_a_launcher_error(tmp_path):
     keeping a second copy of it — it reports what the engine said instead, the
     way it reports a bad config or a missing camera.
     """
-    write_app(tmp_path, "app.py")
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
 
     with pytest.raises(cli.AppLaunchError, match="'/'") as refusal:
         cli.launch_app_node(

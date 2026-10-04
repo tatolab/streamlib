@@ -25,6 +25,7 @@ import pytest
 
 import streamlib
 from inbound_link_naming_processors import ReportsWhichLinkEachBagCameFrom
+from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib._engine import (
     TestBagCollector,
     TestBagFeeder,
@@ -40,18 +41,45 @@ BAG_TIMEOUT_SECONDS = 30.0
 GRAPH_READY_TIMEOUT_SECONDS = 60.0
 ENGINE_TEARDOWN_TIMEOUT_SECONDS = 60.0
 
+FEEDER_NAMES = ("firstfeeder", "secondfeeder")
+INBOUND_LINK_NAMING_ATTRIBUTIONS_CHANNEL = "inbound-link-naming-attributions"
+
+
+def inbound_link_naming_feed_channel_of(feeder_name: str) -> str:
+    """The test-harness channel the feeder named `feeder_name` reads its bags from."""
+    return f"inbound-link-naming-{feeder_name}"
+
+
+@stream
+def two_feeders_into_one_port(stream: Stream) -> None:
+    """Both feeders linked into the one `tracks` port, a collector on its output."""
+    sink = stream.add(ReportsWhichLinkEachBagCameFrom)
+    for feeder_name in FEEDER_NAMES:
+        feeder = stream.add(
+            TestBagFeeder,
+            name=feeder_name,
+            config={"channel": inbound_link_naming_feed_channel_of(feeder_name)},
+        )
+        stream.connect(feeder.output("bags_to_downstream"), sink.input("tracks"))
+    collector = stream.add(
+        TestBagCollector, config={"channel": INBOUND_LINK_NAMING_ATTRIBUTIONS_CHANNEL}
+    )
+    stream.connect(
+        sink.output("attributions_to_downstream"),
+        collector.input("bags_from_upstream"),
+    )
+
 
 class TwoFeedersIntoOnePort:
     """Two `TestBagFeeder`s on one input port, and a collector on the output.
 
     `SingleProcessorTestPipeline` gives every input port exactly one feeder,
-    which is the one arrangement that cannot exercise fan-in — so this builds
-    the graph by hand. Everything else is the harness's own shape: native
+    which is the one arrangement that cannot exercise fan-in — so this loads
+    its own graph. Everything else is the harness's own shape: native
     endpoints in the app process, the processor under test in its own child.
     """
 
-    def __init__(self, feeder_display_names: "list[str]") -> None:
-        self._feeder_display_names = feeder_display_names
+    def __init__(self) -> None:
         self._feed_channels: "dict[str, str]" = {}
         self._collect_channel = ""
         self._runtime: "Optional[streamlib.Runtime]" = None
@@ -67,30 +95,17 @@ class TwoFeedersIntoOnePort:
         return self
 
     def _build_and_start(self) -> None:
+        for feeder_name in FEEDER_NAMES:
+            channel = inbound_link_naming_feed_channel_of(feeder_name)
+            open_test_harness_channel(channel)
+            self._feed_channels[feeder_name] = channel
+        open_test_harness_channel(INBOUND_LINK_NAMING_ATTRIBUTIONS_CHANNEL)
+        self._collect_channel = INBOUND_LINK_NAMING_ATTRIBUTIONS_CHANNEL
+
+        graph = compile_stream_to_graph(two_feeders_into_one_port)
         runtime = streamlib.Runtime()
         self._runtime = runtime
-        sink = runtime.add(ReportsWhichLinkEachBagCameFrom)
-
-        for display_name in self._feeder_display_names:
-            channel = f"inbound-link-naming-{display_name}"
-            open_test_harness_channel(channel)
-            self._feed_channels[display_name] = channel
-            feeder = runtime.add(
-                TestBagFeeder,
-                config={"channel": channel},
-                display_name=display_name,
-            )
-            runtime.connect(feeder.output("bags_to_downstream"), sink.input("tracks"))
-
-        self._collect_channel = "inbound-link-naming-attributions"
-        open_test_harness_channel(self._collect_channel)
-        collector = runtime.add(
-            TestBagCollector, config={"channel": self._collect_channel}
-        )
-        runtime.connect(
-            sink.output("attributions_to_downstream"),
-            collector.input("bags_from_upstream"),
-        )
+        runtime.load(graph)
 
         self._run_loop = threading.Thread(
             target=self._run_until_shut_down, name="inbound-link-naming", daemon=True
@@ -107,8 +122,8 @@ class TwoFeedersIntoOnePort:
         except BaseException as run_failure:  # noqa: BLE001 — re-raised in __exit__
             self._run_failure.put(run_failure)
 
-    def feed(self, feeder_display_name: str, bag: "dict[str, Any]") -> None:
-        feed_test_harness_bag(self._feed_channels[feeder_display_name], bag)
+    def feed(self, feeder_name: str, bag: "dict[str, Any]") -> None:
+        feed_test_harness_bag(self._feed_channels[feeder_name], bag)
 
     def await_bags(self, count: int) -> "list[Any]":
         collected: "list[Any]" = []
@@ -147,7 +162,7 @@ def test_a_helper_placed_processor_tells_two_producers_apart_on_one_port():
     Each feeder's bags come back named by that feeder's own channel, so a bag
     carries no identity of its own and the sink still knows who sent it.
     """
-    with TwoFeedersIntoOnePort(["firstfeeder", "secondfeeder"]) as pipeline:
+    with TwoFeedersIntoOnePort() as pipeline:
         pipeline.feed("firstfeeder", {"value": "from-the-first"})
         pipeline.feed("secondfeeder", {"value": "from-the-second"})
 
@@ -170,7 +185,7 @@ def test_a_helper_placed_processor_tells_two_producers_apart_on_one_port():
 def test_a_sink_learns_its_producers_in_setup_before_any_bag_arrives():
     """Links are wired before `setup()` runs, which is how a many-track sink
     knows how many tracks it owes without waiting for a bag on each."""
-    with TwoFeedersIntoOnePort(["firstfeeder", "secondfeeder"]) as pipeline:
+    with TwoFeedersIntoOnePort() as pipeline:
         pipeline.feed("firstfeeder", {"value": "any"})
         [attribution] = pipeline.await_bags(1)
 

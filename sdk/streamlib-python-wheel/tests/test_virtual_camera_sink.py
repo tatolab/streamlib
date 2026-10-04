@@ -37,6 +37,7 @@ from pathlib import Path
 import pytest
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 
 VIRTUAL_CAMERA_SINK_APP = Path(__file__).parent / "virtual_camera_sink_app.py"
 CONTROL_NODE = Path("/dev/v4l2loopback")
@@ -343,12 +344,18 @@ def test_the_marker_class_cannot_be_instantiated():
         streamlib.VirtualCameraSink()
 
 
+@stream
+def a_virtual_camera_sink_alone(stream: Stream) -> None:
+    stream.add(streamlib.VirtualCameraSink)
+
+
 @pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
-def test_display_name_defaults_to_the_type_name():
+def test_node_name_defaults_to_the_type_name():
+    graph = compile_stream_to_graph(a_virtual_camera_sink_alone)
+    assert [node["name"] for node in graph["nodes"]] == ["virtualcamerasink"]
     runtime = streamlib.Runtime()
     try:
-        sink = runtime.add(streamlib.VirtualCameraSink)
-        assert sink.display_name == "virtualcamerasink"
+        runtime.load(graph)
     finally:
         runtime.shutdown()
 

@@ -11,13 +11,13 @@ app's effects reads.
 """
 
 import json
-import os
 import sys
 import threading
 import urllib.request
 
 import streamlib
-from streamlib._node_registry import live_nodes
+from streamlib import Stream, compile_stream_to_graph, stream
+from this_processes_node_registry_entry import this_processes_control_url
 
 import processor_config_catalog_probes as probes
 
@@ -25,26 +25,29 @@ READ_TIMEOUT_SECONDS = 30.0
 GRAPH_READY_TIMEOUT_SECONDS = 90.0
 
 
-def _this_processes_control_url() -> str:
-    return next(node.control_url for node in live_nodes() if node.pid == os.getpid())
+@stream
+def four_probes_each_configured_its_own_way(stream: Stream) -> None:
+    """Probes configured by a TypedDict, a dataclass and a model, beside one taking none."""
+    stream.add(probes.TypedDictConfiguredProbe, config={"width": 320})
+    stream.add(probes.DataclassConfiguredProbe, config={"width": 640, "label": "left"})
+    stream.add(probes.ModelConfiguredProbe, config={"width": 1280})
+    stream.add(probes.UnconfiguredProbe)
+    # `probes.ImportedButNeverAddedProbe` is deliberately not added: importing
+    # the module is what put it in the catalog.
 
 
 def main() -> None:
+    graph = compile_stream_to_graph(four_probes_each_configured_its_own_way)
     runtime = streamlib.Runtime()
+    runtime.load(graph)
     runtime.host_control_plane()
-    runtime.add(probes.TypedDictConfiguredProbe, config={"width": 320})
-    runtime.add(probes.DataclassConfiguredProbe, config={"width": 640, "label": "left"})
-    runtime.add(probes.ModelConfiguredProbe, config={"width": 1280})
-    runtime.add(probes.UnconfiguredProbe)
-    # `probes.ImportedButNeverAddedProbe` is deliberately not added: importing
-    # the module is what put it in the catalog.
 
     def read_the_catalog_this_node_serves() -> None:
         try:
             runtime.wait_until_every_processor_is_running(
                 timeout=GRAPH_READY_TIMEOUT_SECONDS
             )
-            registry_url = f"{_this_processes_control_url()}/api/registry"
+            registry_url = f"{this_processes_control_url()}/api/registry"
             # A loopback URL this app minted, read back off itself.
             with urllib.request.urlopen(registry_url, timeout=READ_TIMEOUT_SECONDS) as response:
                 served = json.load(response)

@@ -4,7 +4,7 @@
 """Changing a running node's graph over its MCP surface, end to end.
 
 The agent loop this locks: a node is up, a processor class is written to a
-module beside `app.py` *after* launch, and `add_node` / `connect` /
+module beside `stream.py` *after* launch, and `add_node` / `connect` /
 `disconnect` / `remove_node` splice it into and back out of the live
 graph. Every step is asserted from the outside — the `graph` the node reports,
 the bags a `tap` collects, the marker the added processor logs from its own
@@ -48,15 +48,16 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 
 # The node the test launches: one native source and nothing else. Everything
 # downstream of it is added live.
-APP_WITH_ONE_PATTERN_SOURCE = '''\
-from streamlib import Runtime, TestPatternSource
+STREAM_WITH_ONE_PATTERN_SOURCE = '''\
+from streamlib import Stream, TestPatternSource, stream
 
 
-def setup(rt: Runtime) -> None:
-    rt.add(TestPatternSource, config={"width": 320, "height": 180}, display_name="pattern")
+@stream
+def main(stream: Stream) -> None:
+    stream.add(TestPatternSource, name="pattern", config={"width": 320, "height": 180})
 '''
 
-# Written beside `app.py` only after the node is up, which is the shape an
+# Written beside `stream.py` only after the node is up, which is the shape an
 # agent produces: the app process never imported it, and the class is named to
 # the node by its import path alone.
 LIVE_ADDED_EFFECT_MODULE = "processors.live_added_effect"
@@ -220,7 +221,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     """
     app_directory = tmp_path / "app"
     (app_directory / "processors").mkdir(parents=True)
-    (app_directory / "app.py").write_text(APP_WITH_ONE_PATTERN_SOURCE)
+    (app_directory / "stream.py").write_text(STREAM_WITH_ONE_PATTERN_SOURCE)
     (app_directory / "processors" / "__init__.py").write_text("")
 
     node = launch_node("run", app_directory, free_port(), capture_output=True)
@@ -423,7 +424,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     """
     app_directory = tmp_path / "app"
     (app_directory / "processors").mkdir(parents=True)
-    (app_directory / "app.py").write_text(APP_WITH_ONE_PATTERN_SOURCE)
+    (app_directory / "stream.py").write_text(STREAM_WITH_ONE_PATTERN_SOURCE)
     (app_directory / "processors" / "__init__.py").write_text("")
     (app_directory / "processors" / "slowly_importing_sink.py").write_text(
         SLOWLY_IMPORTING_SINK_SOURCE
@@ -503,7 +504,7 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     """
     app_directory = tmp_path / "app"
     app_directory.mkdir()
-    (app_directory / "app.py").write_text(APP_WITH_ONE_PATTERN_SOURCE)
+    (app_directory / "stream.py").write_text(STREAM_WITH_ONE_PATTERN_SOURCE)
 
     node = launch_node("run", app_directory, free_port(), capture_output=True)
     entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)

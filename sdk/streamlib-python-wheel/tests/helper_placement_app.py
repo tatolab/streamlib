@@ -13,9 +13,11 @@ import shutil
 import sys
 import tempfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 from helper_placement_processors import (
     DiesAbruptlyProbe,
     ForksAWorkerThatOutlivesItProbe,
@@ -43,30 +45,115 @@ def marker(name: str) -> None:
     print(f"{MARKER_PREFIX}{name}", flush=True)
 
 
+def _labelled_source_into_sink(
+    stream: Stream, label: str, *, sink_name: "str | None" = None
+) -> None:
+    source = stream.add(ReportsItsOwnProcessSource, config={"label": label})
+    sink = stream.add(ReportsUpstreamProcessSink, name=sink_name)
+    stream.connect(
+        source.output("frames_to_downstream"), sink.input("frames_from_upstream")
+    )
+
+
+@stream
+def first_labelled_source_into_sink(stream: Stream) -> None:
+    """A source labelled `first` into a sink reporting where its bags came from."""
+    _labelled_source_into_sink(stream, "first")
+
+
+@stream
+def only_labelled_source_into_sink(stream: Stream) -> None:
+    """A source labelled `only` into a sink reporting where its bags came from."""
+    _labelled_source_into_sink(stream, "only")
+
+
+@stream
+def reaped_labelled_source_into_sink(stream: Stream) -> None:
+    """A source labelled `reaped` into a sink reporting where its bags came from."""
+    _labelled_source_into_sink(stream, "reaped")
+
+
+@stream
+def two_labelled_sources_each_into_its_own_sink(stream: Stream) -> None:
+    """Two instances of one source class, each into a sink named for its label."""
+    for label in ("first", "second"):
+        _labelled_source_into_sink(stream, label, sink_name=f"{label}Sink")
+
+
+@stream
+def dies_abruptly_beside_a_survivor_pair(stream: Stream) -> None:
+    """A processor that takes its own process down, beside a source-sink pair."""
+    stream.add(DiesAbruptlyProbe)
+    _labelled_source_into_sink(stream, "survivor")
+
+
+@stream
+def stale_build_labelled_source(stream: Stream) -> None:
+    """A lone source labelled `stale`, for a helper made to see another build."""
+    stream.add(ReportsItsOwnProcessSource, config={"label": "stale"})
+
+
+@stream
+def native_test_pattern_into_python_video_sink(stream: Stream) -> None:
+    """A native 64x32 test pattern into a Python sink reporting its own process."""
+    pattern = stream.add(
+        streamlib.TestPatternSource, config={"width": 64, "height": 32}
+    )
+    sink = stream.add(ReportsItsOwnProcessVideoSink)
+    stream.connect(pattern.output("video"), sink.input("video_from_upstream"))
+
+
+@stream
+def one_processor_reporting_its_own_processes_catalog(stream: Stream) -> None:
+    """A processor that reports the catalog of the helper hosting it."""
+    stream.add(ReportsItsOwnProcessesProcessorCatalog)
+
+
+@stream
+def one_probe_sleeping_through_its_own_shutdown(stream: Stream) -> None:
+    """A processor parked in `process()` when shutdown arrives."""
+    stream.add(SleepsThroughItsOwnShutdownProbe)
+
+
+@stream
+def one_probe_forking_a_worker_that_outlives_it(stream: Stream) -> None:
+    """A processor that forks a worker meant to outlive its helper."""
+    stream.add(ForksAWorkerThatOutlivesItProbe)
+
+
+@stream
+def one_probe_sleeping_through_its_own_setup(stream: Stream) -> None:
+    """A processor still inside `setup()` when shutdown arrives."""
+    stream.add(SleepsThroughItsOwnSetupProbe)
+
+
+def _runtime_loaded_with(stream_function: Callable[[Stream], None]) -> streamlib.Runtime:
+    graph = compile_stream_to_graph(stream_function)
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    return runtime
+
+
 def scenario_the_app_never_hosts_the_processor() -> None:
-    """`rt.add` loads nothing into the app's own `sys.modules`.
+    """`runtime.load` imports nothing into the app's own `sys.modules`.
 
     The app's own `from helper_placement_processors import …` is the
     registration import and the only parent-side load there is. What must not
     happen is the engine loading anything more to host an instance —
     `streamlib._helper` constructs the class, and it lives in another process.
     """
-    modules_before_add = set(sys.modules)
-    runtime = streamlib.Runtime()
-    source = runtime.add(ReportsItsOwnProcessSource, config={"label": "first"})
-    sink = runtime.add(ReportsUpstreamProcessSink)
-    runtime.connect(
-        source.output("frames_to_downstream"), sink.input("frames_from_upstream")
-    )
-    marker(f"MODULES_ADDED_BY_ADD={sorted(set(sys.modules) - modules_before_add)}")
+    modules_before_load = set(sys.modules)
+    runtime = _runtime_loaded_with(first_labelled_source_into_sink)
+    marker(f"MODULES_ADDED_BY_LOAD={sorted(set(sys.modules) - modules_before_load)}")
 
-    # Checked again after bags have actually crossed, not only after `rt.add`:
-    # a host that constructed the class lazily — on the first frame rather than
-    # at graph build — would pass the first check and fail this one.
+    # Checked again after bags have actually crossed, not only after
+    # `runtime.load`: a host that constructed the class lazily — on the first
+    # frame rather than at graph build — would pass the first check and fail
+    # this one.
     def report_modules_once_bags_are_flowing() -> None:
         marker(
             f"MODULES_ADDED_WHILE_RUNNING="
-            f"{sorted(set(sys.modules) - modules_before_add)}"
+            f"{sorted(set(sys.modules) - modules_before_load)}"
         )
         marker(f"HELPER_MODULE_IN_APP={'streamlib._helper' in sys.modules}")
         runtime.shutdown()
@@ -78,12 +165,7 @@ def scenario_the_app_never_hosts_the_processor() -> None:
 
 def scenario_a_bag_is_produced_in_another_process() -> None:
     """A source and a sink are two children, and the app is neither."""
-    runtime = streamlib.Runtime()
-    source = runtime.add(ReportsItsOwnProcessSource, config={"label": "only"})
-    sink = runtime.add(ReportsUpstreamProcessSink)
-    runtime.connect(
-        source.output("frames_to_downstream"), sink.input("frames_from_upstream")
-    )
+    runtime = _runtime_loaded_with(only_labelled_source_into_sink)
     marker(f"APP_PID={os.getpid()}")
     # Runs until the test has seen what it came for and interrupts — the
     # children report in milliseconds, so a timer here would only be a guess
@@ -93,14 +175,8 @@ def scenario_a_bag_is_produced_in_another_process() -> None:
 
 
 def scenario_two_instances_of_one_class_get_two_processes() -> None:
-    """Two `rt.add` calls on one class are two children, not two objects."""
-    runtime = streamlib.Runtime()
-    for label in ("first", "second"):
-        source = runtime.add(ReportsItsOwnProcessSource, config={"label": label})
-        sink = runtime.add(ReportsUpstreamProcessSink, display_name=f"{label}Sink")
-        runtime.connect(
-            source.output("frames_to_downstream"), sink.input("frames_from_upstream")
-        )
+    """Two nodes of one class are two children, not two objects."""
+    runtime = _runtime_loaded_with(two_labelled_sources_each_into_its_own_sink)
     marker(f"APP_PID={os.getpid()}")
     # Runs until the test has seen what it came for and interrupts — the
     # children report in milliseconds, so a timer here would only be a guess
@@ -116,12 +192,7 @@ def scenario_a_native_builtin_stays_in_the_app_process() -> None:
     Python sink runs in a child. Nothing spawns for the source, which is the
     observable form of "it runs in the app's process".
     """
-    runtime = streamlib.Runtime()
-    pattern = runtime.add(
-        streamlib.TestPatternSource, config={"width": 64, "height": 32}
-    )
-    sink = runtime.add(ReportsItsOwnProcessVideoSink)
-    runtime.connect(pattern.output("video"), sink.input("video_from_upstream"))
+    runtime = _runtime_loaded_with(native_test_pattern_into_python_video_sink)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")
@@ -133,12 +204,7 @@ def scenario_every_child_is_reaped() -> None:
     The spawn host reports each child's pid as it starts one; the test is what
     checks those pids are gone once the app has exited.
     """
-    runtime = streamlib.Runtime()
-    source = runtime.add(ReportsItsOwnProcessSource, config={"label": "reaped"})
-    sink = runtime.add(ReportsUpstreamProcessSink)
-    runtime.connect(
-        source.output("frames_to_downstream"), sink.input("frames_from_upstream")
-    )
+    runtime = _runtime_loaded_with(reaped_labelled_source_into_sink)
     runtime.run()
     marker("CLEAN_EXIT")
 
@@ -150,14 +216,7 @@ def scenario_a_crashed_helper_leaves_the_pipeline_running() -> None:
     dead one in error, the rest of the pipeline is unaffected, and the frame it
     had in flight is lost rather than silently replayed.
     """
-    runtime = streamlib.Runtime()
-    runtime.add(DiesAbruptlyProbe)
-    survivor_source = runtime.add(ReportsItsOwnProcessSource, config={"label": "survivor"})
-    survivor_sink = runtime.add(ReportsUpstreamProcessSink)
-    runtime.connect(
-        survivor_source.output("frames_to_downstream"),
-        survivor_sink.input("frames_from_upstream"),
-    )
+    runtime = _runtime_loaded_with(dies_abruptly_beside_a_survivor_pair)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")
@@ -175,8 +234,7 @@ def scenario_a_helper_registers_nothing_it_imports() -> None:
         f"APP_CATALOG_HAS_THE_CLASS="
         f"{'helper_placement_processors:ReportsItsOwnProcessesProcessorCatalog' in processor_class_import_paths_in_this_processes_catalog()}"
     )
-    runtime = streamlib.Runtime()
-    runtime.add(ReportsItsOwnProcessesProcessorCatalog)
+    runtime = _runtime_loaded_with(one_processor_reporting_its_own_processes_catalog)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")
@@ -207,8 +265,7 @@ def scenario_a_helper_that_imported_another_engine_build_is_refused() -> None:
         entry for entry in (str(child_startup_directory), inherited_python_path) if entry
     )
 
-    runtime = streamlib.Runtime()
-    runtime.add(ReportsItsOwnProcessSource, config={"label": "stale"})
+    runtime = _runtime_loaded_with(stale_build_labelled_source)
     marker(f"APP_ENGINE_BUILD_ID={engine_build_id_compiled_into_this_extension()}")
 
     def report_whether_the_processor_ever_started() -> None:
@@ -235,8 +292,7 @@ def scenario_a_sleeping_processor_still_runs_its_teardown() -> None:
     after it, and the app exits in about the ladder's own budget rather than
     the thirty seconds the callback asked for.
     """
-    runtime = streamlib.Runtime()
-    runtime.add(SleepsThroughItsOwnShutdownProbe)
+    runtime = _runtime_loaded_with(one_probe_sleeping_through_its_own_shutdown)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")
@@ -249,8 +305,7 @@ def scenario_a_helper_that_forked_a_worker_leaves_nothing_behind() -> None:
     output is exactly the shape that keeps a terminal waiting after the app is
     gone.
     """
-    runtime = streamlib.Runtime()
-    runtime.add(ForksAWorkerThatOutlivesItProbe)
+    runtime = _runtime_loaded_with(one_probe_forking_a_worker_that_outlives_it)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")
@@ -263,8 +318,7 @@ def scenario_a_processor_interrupted_while_still_setting_up_tears_down() -> None
     and the ladder still gives it the `teardown()` the plan owes any callback
     interrupted at shutdown.
     """
-    runtime = streamlib.Runtime()
-    runtime.add(SleepsThroughItsOwnSetupProbe)
+    runtime = _runtime_loaded_with(one_probe_sleeping_through_its_own_setup)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")

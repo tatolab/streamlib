@@ -4,10 +4,9 @@
 """`streamlib run` / `dev` booting a real node, end to end.
 
 What these lock is that a Python-launched app is a first-class node: its
-stream's graph was loaded — or its `setup(rt)` built one — it published a
-node-registry entry the observation verbs discover, and a clean interrupt takes
-the entry away again. Booting initializes a GPU context, so the whole module
-needs a device.
+stream's graph was loaded, it published a node-registry entry the observation
+verbs discover, and a clean interrupt takes the entry away again. Booting
+initializes a GPU context, so the whole module needs a device.
 
 The MVP minute is measured here too, with every processor in its own child
 interpreter: what `new` writes runs frame after frame, a graph of helpers goes
@@ -54,12 +53,13 @@ SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS = SCAFFOLD_OBSERVATION_WINDOW_SE
 # not on a slow machine.
 MINIMUM_FRAMES_FOR_LIVE_VIDEO = 120
 
-APP_WITH_ONE_NATIVE_SOURCE = '''\
-from streamlib import TestPatternSource
+STREAM_WITH_ONE_NATIVE_SOURCE = '''\
+from streamlib import Stream, TestPatternSource, stream
 
 
-def setup(rt):
-    rt.add(TestPatternSource, config={"width": 320, "height": 180})
+@stream
+def main(stream: Stream) -> None:
+    stream.add(TestPatternSource, config={"width": 320, "height": 180})
 '''
 
 # A fleet rather than a pair, and few enough that the rig pays for it in
@@ -83,16 +83,17 @@ FIRST_FRAME_REPORTER_MODULE = Path(__file__).parent / "first_frame_reporter.py"
 # The reporter is copied beside the entry file rather than into a package: that
 # is the other import shape the child's `PYTHONPATH` has to resolve, and the
 # scaffold suite already covers the packaged one.
-APP_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE = '''\
+STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE = '''\
 from first_frame_reporter import ReportsItsProcessOnFirstFrame
-from streamlib import TestPatternSource
+from streamlib import Stream, TestPatternSource, stream
 
 
-def setup(rt):
-    source = rt.add(TestPatternSource, config={"width": 320, "height": 180})
+@stream
+def main(stream: Stream) -> None:
+    source = stream.add(TestPatternSource, config={"width": 320, "height": 180})
     for _ in range(%d):
-        reporter = rt.add(ReportsItsProcessOnFirstFrame)
-        rt.connect(source.output("video"), reporter.input("video_from_upstream"))
+        reporter = stream.add(ReportsItsProcessOnFirstFrame)
+        stream.connect(source.output("video"), reporter.input("video_from_upstream"))
 '''
 
 LIVE_HELPER_MARKER = re.compile(r"MARKER:LIVE (\d+)")
@@ -298,7 +299,7 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     """
     app_directory = tmp_path / "app"
     app_directory.mkdir()
-    (app_directory / "app.py").write_text(APP_WITH_ONE_NATIVE_SOURCE)
+    (app_directory / "stream.py").write_text(STREAM_WITH_ONE_NATIVE_SOURCE)
     runtime_directory = isolated_runtime_directory
 
     node = launch_node(verb, app_directory, free_port())
@@ -333,7 +334,7 @@ def test_a_launched_app_takes_the_runtime_name_its_command_line_gave_it(
     """`--runtime-name` is the name the registry publishes, verbatim."""
     app_directory = tmp_path / "app"
     app_directory.mkdir()
-    (app_directory / "app.py").write_text(APP_WITH_ONE_NATIVE_SOURCE)
+    (app_directory / "stream.py").write_text(STREAM_WITH_ONE_NATIVE_SOURCE)
 
     node = launch_node(
         "run",
@@ -433,22 +434,23 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
 def test_a_native_block_added_without_config_reaches_a_running_graph(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
-    """`rt.add(TestPatternSource)` with no `config` — the spelling the plan
+    """`stream.add(TestPatternSource)` with no `config` — the spelling the plan
     blesses for a block that needs no configuration.
 
     The config travels to the engine as JSON and every field of a built-in's
     config struct carries a serde default, so `{}` deserializes and `null` does
-    not. Sending null made this exact line fail at graph-compile time, which is
-    after `setup` returned and therefore after every Python-side check passed.
+    not. The struct is built at graph compile, after `load` accepted the graph
+    and every Python-side check passed, so only a running graph proves it.
     """
     app_directory = tmp_path / "app"
     app_directory.mkdir()
-    (app_directory / "app.py").write_text(
-        "from streamlib import TestPatternSource\n"
+    (app_directory / "stream.py").write_text(
+        "from streamlib import Stream, TestPatternSource, stream\n"
         "\n"
         "\n"
-        "def setup(rt):\n"
-        "    rt.add(TestPatternSource)\n"
+        "@stream\n"
+        "def main(stream: Stream) -> None:\n"
+        "    stream.add(TestPatternSource)\n"
     )
 
     node = launch_node("run", app_directory, free_port())
@@ -604,10 +606,10 @@ def assert_the_window_showed_live_video(node: LaunchedNode, what_ran: str) -> No
 def write_app_with_helper_placed_processors(
     app_directory: Path, helper_count: int
 ) -> None:
-    """An app wiring `helper_count` copies of the reporter to one native source."""
+    """An app whose `stream.py` wires `helper_count` copies of the reporter to one native source."""
     app_directory.mkdir(parents=True, exist_ok=True)
-    (app_directory / "app.py").write_text(
-        APP_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE % helper_count
+    (app_directory / "stream.py").write_text(
+        STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE % helper_count
     )
     shutil.copy(FIRST_FRAME_REPORTER_MODULE, app_directory / FIRST_FRAME_REPORTER_MODULE.name)
 
@@ -756,16 +758,18 @@ def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
 def test_a_bad_config_is_reported_without_a_launcher_traceback(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
-    """The engine compiles the graph at `run()`, so a bad config surfaces after
-    `setup` returned. It is still the app's problem, not a launcher crash."""
+    """`load` takes a config whose fields it does not check, and the engine builds
+    each node's config as it compiles the graph at `run()` — so a bad config
+    surfaces from `run()`. It is still the app's problem, not a launcher crash."""
     app_directory = tmp_path / "app"
     app_directory.mkdir()
-    (app_directory / "app.py").write_text(
-        "from streamlib import TestPatternSource\n"
+    (app_directory / "stream.py").write_text(
+        "from streamlib import Stream, TestPatternSource, stream\n"
         "\n"
         "\n"
-        "def setup(rt):\n"
-        '    rt.add(TestPatternSource, config={"width": "not a number"})\n'
+        "@stream\n"
+        "def main(stream: Stream) -> None:\n"
+        '    stream.add(TestPatternSource, config={"width": "not a number"})\n'
     )
 
     node = launch_node("run", app_directory, free_port(), capture_output=True)
@@ -778,22 +782,27 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     assert "error:" in output
 
 
-def test_a_setup_that_raises_publishes_no_node(
+def test_a_stream_function_that_raises_publishes_no_node(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
     """A graph that failed to build must not leave a node advertising itself."""
     app_directory = tmp_path / "app"
     app_directory.mkdir()
-    (app_directory / "app.py").write_text(
-        "def setup(rt):\n    raise ValueError('bad wiring')\n"
+    (app_directory / "stream.py").write_text(
+        "from streamlib import Stream, stream\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream: Stream) -> None:\n"
+        "    raise ValueError('bad wiring')\n"
     )
     runtime_directory = isolated_runtime_directory
 
     node = launch_node("dev", app_directory, free_port())
 
     assert node.await_exit(NODE_READY_TIMEOUT_SECONDS) == 1, (
-        "a raising `setup` must exit non-zero"
+        "a raising stream function must exit non-zero"
     )
     assert registry_entry_paths(runtime_directory) == [], (
-        "the control plane must be hosted only after `setup` succeeded"
+        "the control plane must be hosted only after the stream compiled and loaded"
     )

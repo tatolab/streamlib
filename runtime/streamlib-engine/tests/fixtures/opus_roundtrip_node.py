@@ -27,6 +27,8 @@ import os
 
 import known_audio_signal
 import known_audio_signal_source
+import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 
 # What the source will ever publish, derived rather than named so it cannot
 # drift when the signal changes.
@@ -43,6 +45,23 @@ PUBLISHED_SECONDS = (
 # 312 samples at 48 kHz, 120 at `lowdelay` — so the bound gives back one whole
 # 20 ms packet rather than a number that would rot if it changed.
 LONGEST_RECORDABLE_SECONDS = PUBLISHED_SECONDS - 0.02
+
+
+@stream
+def known_signal_through_opus_and_back(stream: Stream) -> None:
+    # Imported here, after main() has exported the environment: the recorder
+    # resolves its window at import.
+    from captured_audio_waveform_recorder import CapturedAudioWaveformRecorder
+    from known_audio_signal_source import KnownAudioSignalSource
+
+    signal = stream.add(KnownAudioSignalSource)
+    encoder = stream.add(streamlib.OpusEncoder)
+    decoder = stream.add(streamlib.OpusDecoder)
+    recorder = stream.add(CapturedAudioWaveformRecorder)
+
+    stream.connect(signal.output("audio"), encoder.input("audio"))
+    stream.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
+    stream.connect(decoder.output("audio"), recorder.input("audio_from_upstream"))
 
 
 def main() -> None:
@@ -80,21 +99,9 @@ def main() -> None:
     os.environ["STREAMLIB_CAPTURED_WAVEFORM"] = arguments.captured_waveform
     os.environ["STREAMLIB_CAPTURED_WAVEFORM_SECONDS"] = str(arguments.record_seconds)
 
-    # Imported after the environment is set: the recorder resolves its window at
-    # import, and this module's own import of it happens in this process too.
-    import streamlib
-    from captured_audio_waveform_recorder import CapturedAudioWaveformRecorder
-    from known_audio_signal_source import KnownAudioSignalSource
-
+    graph = compile_stream_to_graph(known_signal_through_opus_and_back)
     runtime = streamlib.Runtime()
-    signal = runtime.add(KnownAudioSignalSource)
-    encoder = runtime.add(streamlib.OpusEncoder)
-    decoder = runtime.add(streamlib.OpusDecoder)
-    recorder = runtime.add(CapturedAudioWaveformRecorder)
-
-    runtime.connect(signal.output("audio"), encoder.input("audio"))
-    runtime.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
-    runtime.connect(decoder.output("audio"), recorder.input("audio_from_upstream"))
+    runtime.load(graph)
 
     # Loopback rather than the default every interface: this node exists to be
     # tapped from the machine it runs on, and it carries no authentication.

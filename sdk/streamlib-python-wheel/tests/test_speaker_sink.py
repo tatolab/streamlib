@@ -25,6 +25,7 @@ import pytest
 
 import streamlib
 from speaker_sink_named_device_app import UNOPENABLE_DEVICE_ID
+from streamlib import Stream, compile_stream_to_graph, stream
 
 SPEAKER_SINK_APP = Path(__file__).parent / "speaker_sink_app.py"
 NAMED_DEVICE_APP = Path(__file__).parent / "speaker_sink_named_device_app.py"
@@ -49,24 +50,37 @@ def test_the_marker_class_cannot_be_instantiated():
         streamlib.SpeakerSink()
 
 
-def test_display_name_defaults_to_the_type_name():
+@stream
+def one_speaker_sink_left_unnamed(stream: Stream) -> None:
+    stream.add(streamlib.SpeakerSink)
+
+
+def test_node_name_defaults_to_the_type_name():
+    graph = compile_stream_to_graph(one_speaker_sink_left_unnamed)
+    assert [node["name"] for node in graph["nodes"]] == ["speakersink"]
+
     runtime = streamlib.Runtime()
     try:
-        speaker = runtime.add(streamlib.SpeakerSink)
-        assert speaker.display_name == "speakersink"
+        runtime.load(graph)
     finally:
         runtime.shutdown()
 
 
+@stream
+def microphone_wired_straight_into_a_speaker(stream: Stream) -> None:
+    microphone = stream.add(streamlib.MicrophoneSource)
+    speaker = stream.add(streamlib.SpeakerSink)
+    stream.connect(microphone.output("audio"), speaker.input("audio"))
+
+
 def test_the_speaker_declares_the_input_a_microphone_can_be_wired_to():
     """The two audio built-ins have to compose without an adapter between them,
-    which is what makes `rt.connect(mic.output("audio"), speaker.input("audio"))`
-    the whole of wiring audio through."""
+    which is what makes one `stream.connect(microphone.output("audio"),
+    speaker.input("audio"))` the whole of wiring audio through. The builder
+    checks no port names, so the engine accepting the load is the proof."""
     runtime = streamlib.Runtime()
     try:
-        microphone = runtime.add(streamlib.MicrophoneSource)
-        speaker = runtime.add(streamlib.SpeakerSink)
-        runtime.connect(microphone.output("audio"), speaker.input("audio"))
+        runtime.load(compile_stream_to_graph(microphone_wired_straight_into_a_speaker))
     finally:
         runtime.shutdown()
 
@@ -85,14 +99,14 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     probed backend's playback stream, fed over a real link by the capture
     built-in, with no interpreter anywhere in the sample path.
 
-    Added with no `config`, so this is also the added-without-config proof.
+    `stream.add` with no `config` records `{}`, so this is also the
+    added-without-config proof.
 
-    This used to skip on a machine whose default source and default sink
-    disagreed on format — which, on the ALSA arm, is every machine: the capture
-    side asks for mono and the playback side for stereo by construction. The
-    speaker's port now declares `audio_window = match_device`, so the engine
-    converts rather than refusing, and the case that used to be unanswerable is
-    the one this asserts.
+    On the ALSA arm the default source and default sink disagree on format on
+    every machine: the capture side asks for mono and the playback side for
+    stereo by construction. The speaker's port declares `audio_window =
+    match_device`, so the engine converts rather than refusing, and that
+    disagreement is the case this asserts.
     """
     app = start_app_under_test(SPEAKER_SINK_APP)
     app.await_marker("EVERY_PROCESSOR_RUNNING")

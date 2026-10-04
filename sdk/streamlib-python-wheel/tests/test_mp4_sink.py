@@ -3,10 +3,10 @@
 
 """`Mp4Sink` from Python, marker class to a file with two tracks in it.
 
-The marker tests are pure Python — constructing a `Runtime` and wiring a graph
-needs no device, which is why they run in CI. The recording test starts one,
-so it carries `requires_gpu` like every other graph test here and runs nowhere
-in CI: writing an MP4 needs no device, but a running processor does.
+The marker tests are pure Python — constructing a `Runtime` and loading a graph
+into it needs no device, which is why they run in CI. The recording test starts
+one, so it carries `requires_gpu` like every other graph test here and runs
+nowhere in CI: writing an MP4 needs no device, but a running processor does.
 
 No camera and no microphone. What this suite proves is the container and the
 track-per-link rule reached from Python, so both tracks are Opus over a tone
@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 
 import streamlib
-from streamlib import Mp4Sink
+from streamlib import Mp4Sink, Stream, compile_stream_to_graph, stream
 
 MP4_SINK_APP = Path(__file__).parent / "mp4_sink_app.py"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -56,6 +56,10 @@ WIDEST_CREDIBLE_DISAGREEMENT_BETWEEN_THE_TRACKS_SECONDS = 1.0
 # is the source's own publishing lead — it runs ahead of the monotonic clock,
 # so the last stamp it wrote can name an instant a little past now.
 SLACK_OVER_THE_OBSERVED_RUN_SECONDS = 2.0
+
+# The sink opens its file at `setup()`, which a graph loaded and never run does
+# not reach, so nothing is ever written here.
+NEVER_OPENED_RECORDING_PATH = "/nonexistent-streamlib-test/never-opened.mp4"
 
 
 @pytest.fixture(scope="module")
@@ -118,34 +122,46 @@ def test_the_marker_class_cannot_be_instantiated():
         Mp4Sink()
 
 
-def test_display_name_defaults_to_the_type_name(tmp_path):
+@stream
+def one_mp4_sink_left_unnamed(stream: Stream) -> None:
+    stream.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
+
+
+def test_node_name_defaults_to_the_type_name():
+    graph = compile_stream_to_graph(one_mp4_sink_left_unnamed)
+    assert [node["name"] for node in graph["nodes"]] == ["mp4sink"]
+
     runtime = streamlib.Runtime()
     try:
-        block = runtime.add(
-            Mp4Sink, config={"path": str(tmp_path / "recording.mp4")}
-        )
-        assert block.display_name == "mp4sink"
+        runtime.load(graph)
     finally:
         runtime.shutdown()
 
 
-def test_two_encoders_wire_into_the_one_input_without_an_adapter(tmp_path):
+@stream
+def two_microphone_encoder_pairs_into_one_mp4_sink(stream: Stream) -> None:
+    sink = stream.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
+    for _ in range(2):
+        microphone = stream.add(streamlib.MicrophoneSource)
+        encoder = stream.add(streamlib.OpusEncoder)
+        stream.connect(microphone.output("audio"), encoder.input("audio"))
+        stream.connect(encoder.output("encoded_audio"), sink.input("tracks"))
+
+
+def test_two_encoders_wire_into_the_one_input_without_an_adapter():
     """Two producers into `tracks`, and no fan-in machinery between them.
 
     This is the whole authoring surface for a two-track recording: the sink
     declares one input, any number of links may enter it, and each becomes a
-    track. A second `rt.connect` into the same port is the second track.
+    track. A second `stream.connect` into the same port is the second track.
+    The builder checks no port names, so the engine accepting the load is the
+    proof.
     """
     runtime = streamlib.Runtime()
     try:
-        sink = runtime.add(
-            Mp4Sink, config={"path": str(tmp_path / "recording.mp4")}
+        runtime.load(
+            compile_stream_to_graph(two_microphone_encoder_pairs_into_one_mp4_sink)
         )
-        for _ in range(2):
-            microphone = runtime.add(streamlib.MicrophoneSource)
-            encoder = runtime.add(streamlib.OpusEncoder)
-            runtime.connect(microphone.output("audio"), encoder.input("audio"))
-            runtime.connect(encoder.output("encoded_audio"), sink.input("tracks"))
     finally:
         runtime.shutdown()
 

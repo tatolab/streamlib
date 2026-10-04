@@ -11,39 +11,54 @@ log forwarding every child's records ride.
 import sys
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 
 import capability_context_probes
 
-
-def scenario_probe(probe_class_name: str, config: "dict | None" = None) -> None:
-    """One probe, one graph."""
-    runtime = streamlib.Runtime()
-    runtime.add(getattr(capability_context_probes, probe_class_name), config=config)
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
+SOURCE_AND_REPORTING_SINK_CLASS_NAMES_BY_SCENARIO = {
+    "explicit_timestamp": ("ExplicitlyStampedSource", "TimestampCollectingSink"),
+    "default_timestamp": ("DefaultStampedSource", "TimestampCollectingSink"),
+    "worker_thread_source": ("WorkerThreadSource", "WorkerThreadBagSink"),
+}
 
 
-def scenario_source_into_sink(source_class_name: str, sink_class_name: str) -> None:
-    """A source into a sink, where the sink is the one that reports."""
-    runtime = streamlib.Runtime()
-    source = runtime.add(getattr(capability_context_probes, source_class_name))
-    sink = runtime.add(getattr(capability_context_probes, sink_class_name))
-    runtime.connect(
+@stream
+def one_capability_context_probe(stream: Stream) -> None:
+    """The probe class `argv[1]` names, with no config."""
+    stream.add(getattr(capability_context_probes, sys.argv[1]))
+
+
+@stream
+def one_config_probe_with_gain_and_label(stream: Stream) -> None:
+    """A `ConfigProbe` configured with a gain and a label."""
+    stream.add(
+        capability_context_probes.ConfigProbe, config={"gain": 2.5, "label": "left"}
+    )
+
+
+@stream
+def one_source_into_one_reporting_sink(stream: Stream) -> None:
+    """The source `argv[1]` names into the sink that reports what it read."""
+    source_class_name, sink_class_name = (
+        SOURCE_AND_REPORTING_SINK_CLASS_NAMES_BY_SCENARIO[sys.argv[1]]
+    )
+    source = stream.add(getattr(capability_context_probes, source_class_name))
+    sink = stream.add(getattr(capability_context_probes, sink_class_name))
+    stream.connect(
         source.output("bags_to_downstream"), sink.input("bags_from_upstream")
     )
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
 
 
 if __name__ == "__main__":
     scenario = sys.argv[1]
     if scenario == "configured_probe":
-        scenario_probe("ConfigProbe", {"gain": 2.5, "label": "left"})
-    elif scenario == "explicit_timestamp":
-        scenario_source_into_sink("ExplicitlyStampedSource", "TimestampCollectingSink")
-    elif scenario == "default_timestamp":
-        scenario_source_into_sink("DefaultStampedSource", "TimestampCollectingSink")
-    elif scenario == "worker_thread_source":
-        scenario_source_into_sink("WorkerThreadSource", "WorkerThreadBagSink")
+        stream_function = one_config_probe_with_gain_and_label
+    elif scenario in SOURCE_AND_REPORTING_SINK_CLASS_NAMES_BY_SCENARIO:
+        stream_function = one_source_into_one_reporting_sink
     else:
-        scenario_probe(scenario)
+        stream_function = one_capability_context_probe
+    graph = compile_stream_to_graph(stream_function)
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.run()
+    print("MARKER:CLEAN_EXIT", flush=True)

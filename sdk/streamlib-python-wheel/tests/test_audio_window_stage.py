@@ -278,16 +278,17 @@ class WindowedMonoConsumer:
         ctx.inputs.read("audio", into=AudioBlock)
 '''
 
-GAPPED_AUDIO_APP_SOURCE = '''\
-from streamlib import Runtime
+GAPPED_AUDIO_STREAM_SOURCE = '''\
+from streamlib import Stream, stream
 
 from processors.gapped_audio import GappedMonoSource, WindowedMonoConsumer
 
 
-def setup(rt: Runtime) -> None:
-    source = rt.add(GappedMonoSource, display_name="gapped source")
-    consumer = rt.add(WindowedMonoConsumer, display_name="windowed consumer")
-    rt.connect(source.output("audio"), consumer.input("audio"))
+@stream
+def main(stream: Stream) -> None:
+    source = stream.add(GappedMonoSource, name="gapped-source")
+    consumer = stream.add(WindowedMonoConsumer, name="windowed-consumer")
+    stream.connect(source.output("audio"), consumer.input("audio"))
 '''
 
 
@@ -309,17 +310,17 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
     (app_directory / "processors" / "gapped_audio.py").write_text(
         GAPPED_AUDIO_PROCESSORS_SOURCE
     )
-    (app_directory / "app.py").write_text(GAPPED_AUDIO_APP_SOURCE)
+    (app_directory / "stream.py").write_text(GAPPED_AUDIO_STREAM_SOURCE)
     node = launch_node("run", app_directory, free_port(), capture_output=True)
     control_url = await_sole_registry_entry(
         isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
     )["control_url"]
     node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
-    link_id = the_link_into(mcp_json(control_url, "graph", {}), "windowed consumer")
+    link_id = the_link_into(mcp_json(control_url, "graph", {}), "windowed-consumer")
 
     metrics = await_metrics_satisfying(
         control_url,
-        "windowed consumer",
+        "windowed-consumer",
         lambda metrics: metrics.get("discarded_samples_by_link", {}).get(link_id, 0) > 0,
         f"discarded samples on {link_id}",
         node,

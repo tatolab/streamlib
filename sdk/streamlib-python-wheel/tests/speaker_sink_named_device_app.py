@@ -13,14 +13,21 @@ the calling thread until teardown.
 import threading
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 
 UNOPENABLE_DEVICE_ID = "not-a-real-audio-device"
 READINESS_TIMEOUT_SECONDS = 10.0
 
 
+@stream
+def speaker_sink_naming_an_unopenable_device(stream: Stream) -> None:
+    stream.add(streamlib.SpeakerSink, config={"device_id": UNOPENABLE_DEVICE_ID})
+
+
 def main() -> None:
+    graph = compile_stream_to_graph(speaker_sink_naming_an_unopenable_device)
     runtime = streamlib.Runtime()
-    runtime.add(streamlib.SpeakerSink, config={"device_id": UNOPENABLE_DEVICE_ID})
+    runtime.load(graph)
 
     def watch_readiness() -> None:
         try:

@@ -3,10 +3,9 @@
 
 """A microphone wired straight to a speaker, with no Python in the sample path.
 
-Added with no `config` on either end, so this is also the added-without-config
-proof for the playback built-in: the config travels to the engine as JSON and
-every field of a built-in's config struct carries a serde default, so `{}`
-deserializes and `null` does not.
+`stream.add` with no `config` on either end records `{}`, so this is also the
+added-without-config proof for the playback built-in: every field of a
+built-in's config struct carries a serde default, so `{}` deserializes.
 
 The two ends need not agree on rate, channels or dtype, and on a stock machine
 they do not: the ALSA arm asks a capture device for mono and a playback device
@@ -26,34 +25,22 @@ them from the device rather than writing them down.
 """
 
 import json
-import os
 import threading
 
 import streamlib
 from speaker_sink_probes import AudioBlockCountingProbe
+from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib._control_plane_client import call_tool
-from streamlib._node_registry import live_nodes
+from this_processes_node_registry_entry import this_processes_control_url
 
 READINESS_TIMEOUT_SECONDS = 20.0
-
-
-def _this_processes_control_url() -> str:
-    """This run's own control plane, found by pid.
-
-    By pid rather than by "the only live node": another test's app may be up at
-    the same time, and this must never read that one's graph.
-    """
-    for node in live_nodes():
-        if node.pid == os.getpid():
-            return node.control_url
-    raise RuntimeError("this run published no node registry entry")
+SPEAKER_NODE_NAME = "speakersink"
 
 
 def _report_the_speakers_settled_window_contract(speaker_node_name: str) -> None:
     """Print what `graph` renders for the speaker's `audio` port."""
-    graph = json.loads(call_tool(_this_processes_control_url(), "graph", {}))
+    graph = json.loads(call_tool(this_processes_control_url(), "graph", {}))
     for node in graph["nodes"]:
-        # By name, because a marker class exposes no import path to Python.
         if node["name"] != speaker_node_name:
             continue
         audio = next(
@@ -70,15 +57,23 @@ def _report_the_speakers_settled_window_contract(speaker_node_name: str) -> None
     print("MARKER:SPEAKER_AUDIO_WINDOW null", flush=True)
 
 
-def main() -> None:
-    runtime = streamlib.Runtime()
-    runtime.host_control_plane()
-    microphone = runtime.add(streamlib.MicrophoneSource)
-    speaker = runtime.add(streamlib.SpeakerSink)
-    runtime.connect(microphone.output("audio"), speaker.input("audio"))
+@stream
+def microphone_into_a_speaker_and_a_block_counting_probe(stream: Stream) -> None:
+    microphone = stream.add(streamlib.MicrophoneSource)
+    speaker = stream.add(streamlib.SpeakerSink, name=SPEAKER_NODE_NAME)
+    stream.connect(microphone.output("audio"), speaker.input("audio"))
 
-    probe = runtime.add(AudioBlockCountingProbe)
-    runtime.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
+    probe = stream.add(AudioBlockCountingProbe)
+    stream.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
+
+
+def main() -> None:
+    graph = compile_stream_to_graph(
+        microphone_into_a_speaker_and_a_block_counting_probe
+    )
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.host_control_plane()
 
     def watch_readiness() -> None:
         try:
@@ -102,7 +97,7 @@ def main() -> None:
         # itself healthy, which reads as a startup failure this graph did not
         # have.
         try:
-            _report_the_speakers_settled_window_contract(speaker.display_name)
+            _report_the_speakers_settled_window_contract(SPEAKER_NODE_NAME)
         except Exception as unreadable:  # noqa: BLE001 — the marker is the report
             print(f"MARKER:SPEAKER_AUDIO_WINDOW_UNREADABLE {unreadable}", flush=True)
 

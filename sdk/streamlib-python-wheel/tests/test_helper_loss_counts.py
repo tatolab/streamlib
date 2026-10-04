@@ -114,18 +114,19 @@ class NewestSink:
         ctx.inputs.read("bags")
 '''
 
-APP_SOURCE = f'''\
-from streamlib import Runtime
+LOSS_COUNTING_STREAM_SOURCE = f'''\
+from streamlib import Stream, stream
 
 from {LOSS_COUNTING_PROCESSORS_MODULE} import FastBagSource, NewestSink, SlowOrderedSink
 
 
-def setup(rt: Runtime) -> None:
-    source = rt.add(FastBagSource, display_name="source")
-    slow_sink = rt.add(SlowOrderedSink, display_name="slow-sink")
-    oversized_sink = rt.add(NewestSink, display_name="oversized-sink")
-    rt.connect(source.output("bags"), slow_sink.input("bags"))
-    rt.connect(source.output("oversized_bags"), oversized_sink.input("bags"))
+@stream
+def main(stream: Stream) -> None:
+    source = stream.add(FastBagSource, name="source")
+    slow_sink = stream.add(SlowOrderedSink, name="slow-sink")
+    oversized_sink = stream.add(NewestSink, name="oversized-sink")
+    stream.connect(source.output("bags"), slow_sink.input("bags"))
+    stream.connect(source.output("oversized_bags"), oversized_sink.input("bags"))
 '''
 
 SLOW_SINK_PID = re.compile(r"MARKER:SLOW_SINK_PID (\d+)")
@@ -187,15 +188,15 @@ def launch_the_loss_counting_node(
     launch_node,
     monkeypatch: pytest.MonkeyPatch,
 ) -> "tuple[LaunchedNode, str]":
-    """Write the app beside its processors, launch it, and hand back the node and
-    its control URL once it runs."""
+    """Write `stream.py` beside its processors, launch it, and hand back the node
+    and its control URL once it runs."""
     app_directory = tmp_path / "app"
     (app_directory / "processors").mkdir(parents=True)
     (app_directory / "processors" / "__init__.py").write_text("")
     (app_directory / "processors" / "loss_counting.py").write_text(
         LOSS_COUNTING_PROCESSORS_SOURCE
     )
-    (app_directory / "app.py").write_text(APP_SOURCE)
+    (app_directory / "stream.py").write_text(LOSS_COUNTING_STREAM_SOURCE)
     monkeypatch.setenv(
         "STREAMLIB_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION",
         str(HELPER_LINK_CEILING_BYTES),

@@ -5,10 +5,11 @@
 
 `TestPatternSource -> VirtualCameraSink`, and a second sink on the same source
 when `--second-name` is given: two cameras from one graph is a second
-`rt.add` and a second `rt.connect`, nothing more. `--door` is passed straight
-through, and defaults to `v4l2loopback` so a machine without the permission
-refuses by name rather than quietly taking the other door — which is what the
-loopback tests want to observe. The PipeWire test names its door instead.
+`stream.add` and a second `stream.connect`, nothing more. `--door` is passed
+straight through, and defaults to `v4l2loopback` so a machine without the
+permission refuses by name rather than quietly taking the other door — which
+is what the loopback tests want to observe. The PipeWire test names its door
+instead.
 
 Readiness is reported as a marker either way: a refusal at `setup()` reaches
 the test as `MARKER:NOT_EVERY_PROCESSOR_RUNNING` with the sink's own text.
@@ -18,11 +19,12 @@ import argparse
 import threading
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
 
-def main() -> None:
+def _parse_virtual_camera_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", required=True, help="the first camera's name")
     parser.add_argument("--second-name", help="a second camera's name, for two from one graph")
@@ -34,10 +36,13 @@ def main() -> None:
     )
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
-    arguments = parser.parse_args()
+    return parser.parse_args()
 
-    runtime = streamlib.Runtime()
-    pattern = runtime.add(
+
+@stream
+def a_test_pattern_into_virtual_cameras(stream: Stream) -> None:
+    arguments = _parse_virtual_camera_arguments()
+    pattern = stream.add(
         streamlib.TestPatternSource,
         config={"width": arguments.width, "height": arguments.height},
     )
@@ -45,11 +50,17 @@ def main() -> None:
     if arguments.second_name:
         camera_names.append(arguments.second_name)
     for camera_name in camera_names:
-        sink = runtime.add(
+        sink = stream.add(
             streamlib.VirtualCameraSink,
             config={"name": camera_name, "door": arguments.door},
         )
-        runtime.connect(pattern.output("video"), sink.input("video"))
+        stream.connect(pattern.output("video"), sink.input("video"))
+
+
+def main() -> None:
+    graph = compile_stream_to_graph(a_test_pattern_into_virtual_cameras)
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
 
     def watch_readiness() -> None:
         try:

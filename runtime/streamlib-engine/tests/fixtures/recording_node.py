@@ -23,7 +23,7 @@ its own length and then stops, which is a legal recording — a `moof` owes a
 `traf` to no track — so the audio track is shorter than the video one by
 design.
 
-The display names are for reading a run: they are what this node's own log
+The node names are for reading a run: they are what this node's own log
 lines and `streamlib graph` show. Nothing downstream keys on them — a track is
 named by the channel its link subscribed to, which carries the engine-minted
 processor id, so `e2e_fixture_recording.sh` checks the recorded track names by
@@ -31,9 +31,11 @@ their `/encoded_video` and `/encoded_audio` suffixes instead.
 """
 
 import argparse
+import functools
 
 import streamlib
 from known_audio_signal_source import KnownAudioSignalSource
+from streamlib import Stream, compile_stream_to_graph, stream
 
 _VIDEO_ENCODER_MARKERS_BY_CODEC: dict[str, type] = {
     "h264": streamlib.H264Encoder,
@@ -47,7 +49,8 @@ _VIDEO_ENCODER_MARKERS_BY_CODEC: dict[str, type] = {
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
 
-def main() -> None:
+@functools.cache
+def _parse_fixture_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--codec",
@@ -68,36 +71,43 @@ def main() -> None:
         help="the file to record into, created or truncated at startup",
     )
     parser.add_argument("--control-plane-port", type=int, default=9000)
-    arguments = parser.parse_args()
+    return parser.parse_args()
 
-    runtime = streamlib.Runtime(runtime_name="recording-node")
-    recorder = runtime.add(
+
+@stream
+def camera_and_known_signal_recorded_into_one_file(stream: Stream) -> None:
+    arguments = _parse_fixture_arguments()
+
+    recorder = stream.add(
         streamlib.Mp4Sink,
+        name="recorder",
         config={"path": arguments.path},
-        display_name="recorder",
     )
 
-    camera = runtime.add(
+    camera = stream.add(
         streamlib.CameraSource,
+        name="camera",
         config={"device_id": arguments.camera} if arguments.camera else {},
-        display_name="camera",
     )
-    video_encoder = runtime.add(
+    video_encoder = stream.add(
         _VIDEO_ENCODER_MARKERS_BY_CODEC[arguments.codec],
+        name="video_encoder",
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
-        display_name="video_encoder",
     )
-    runtime.connect(camera.output("video"), video_encoder.input("video"))
-    runtime.connect(
-        video_encoder.output("encoded_video"), recorder.input("tracks")
-    )
+    stream.connect(camera.output("video"), video_encoder.input("video"))
+    stream.connect(video_encoder.output("encoded_video"), recorder.input("tracks"))
 
-    signal = runtime.add(KnownAudioSignalSource, display_name="known_signal")
-    audio_encoder = runtime.add(streamlib.OpusEncoder, display_name="audio_encoder")
-    runtime.connect(signal.output("audio"), audio_encoder.input("audio"))
-    runtime.connect(
-        audio_encoder.output("encoded_audio"), recorder.input("tracks")
-    )
+    signal = stream.add(KnownAudioSignalSource, name="known_signal")
+    audio_encoder = stream.add(streamlib.OpusEncoder, name="audio_encoder")
+    stream.connect(signal.output("audio"), audio_encoder.input("audio"))
+    stream.connect(audio_encoder.output("encoded_audio"), recorder.input("tracks"))
+
+
+def main() -> None:
+    arguments = _parse_fixture_arguments()
+    graph = compile_stream_to_graph(camera_and_known_signal_recorded_into_one_file)
+    runtime = streamlib.Runtime(runtime_name="recording-node")
+    runtime.load(graph)
 
     # Loopback rather than the default every interface: this node exists to be
     # watched from the machine it runs on, and it carries no authentication.

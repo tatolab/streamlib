@@ -5,15 +5,22 @@
 
 import streamlib
 from native_builtin_probes import VideoFrameProbe
+from streamlib import Stream, compile_stream_to_graph, stream
+
+
+@stream
+def a_test_pattern_into_a_video_frame_probe(stream: Stream) -> None:
+    pattern = stream.add(
+        streamlib.TestPatternSource, config={"width": 320, "height": 180}
+    )
+    probe = stream.add(VideoFrameProbe)
+    stream.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 
 def main() -> None:
+    graph = compile_stream_to_graph(a_test_pattern_into_a_video_frame_probe)
     runtime = streamlib.Runtime()
-    pattern = runtime.add(
-        streamlib.TestPatternSource, config={"width": 320, "height": 180}
-    )
-    probe = runtime.add(VideoFrameProbe)
-    runtime.connect(pattern.output("video"), probe.input("video_from_upstream"))
+    runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
 

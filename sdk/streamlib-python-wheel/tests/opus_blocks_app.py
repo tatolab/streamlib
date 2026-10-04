@@ -27,27 +27,36 @@ from opus_blocks_probes import (
     EncodedAudioPacketProbe,
     StereoToneSource,
 )
+from streamlib import Stream, compile_stream_to_graph, stream
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
 
-def main() -> None:
-    runtime = streamlib.Runtime()
-    source = runtime.add(StereoToneSource)
-    encoder = runtime.add(streamlib.OpusEncoder)
-    decoder = runtime.add(streamlib.OpusDecoder)
-    encoded_probe = runtime.add(EncodedAudioPacketProbe)
-    decoded_probe = runtime.add(DecodedAudioBlockProbe)
+@stream
+def stereo_tone_through_the_opus_pair_probed_on_both_links(stream: Stream) -> None:
+    source = stream.add(StereoToneSource)
+    encoder = stream.add(streamlib.OpusEncoder)
+    decoder = stream.add(streamlib.OpusDecoder)
+    encoded_probe = stream.add(EncodedAudioPacketProbe)
+    decoded_probe = stream.add(DecodedAudioBlockProbe)
 
-    runtime.connect(source.output("audio"), encoder.input("audio"))
-    runtime.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
-    runtime.connect(
+    stream.connect(source.output("audio"), encoder.input("audio"))
+    stream.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
+    stream.connect(
         encoder.output("encoded_audio"),
         encoded_probe.input("encoded_audio_from_upstream"),
     )
-    runtime.connect(
+    stream.connect(
         decoder.output("audio"), decoded_probe.input("audio_from_upstream")
     )
+
+
+def main() -> None:
+    graph = compile_stream_to_graph(
+        stereo_tone_through_the_opus_pair_probed_on_both_links
+    )
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
 
     def watch_readiness() -> None:
         try:

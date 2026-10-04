@@ -33,6 +33,7 @@ import os
 import streamlib
 from captured_audio_waveform_recorder import CapturedAudioWaveformRecorder
 from known_audio_signal_source import KnownAudioSignalSource
+from streamlib import Stream, compile_stream_to_graph, stream
 
 
 def _this_nodes_output_as_a_capture_device_when_asked(capture_device_id, sink):
@@ -57,13 +58,36 @@ def _this_nodes_output_as_a_capture_device_when_asked(capture_device_id, sink):
     )
 
 
-def main() -> None:
+def _sink_and_capture_device_from_the_environment() -> tuple[str | None, str]:
+    """The sink the speaker plays into, and the device the microphone captures from."""
     sink = os.environ.get("STREAMLIB_AUDIO_SINK")
     # `<sink>.monitor` is the capture endpoint PipeWire already routes for a
     # sink: what is played into it is readable there, which is the whole loop.
     capture_device_id = (
         os.environ.get("STREAMLIB_AUDIO_CAPTURE_DEVICE_ID") or f"{sink}.monitor"
     )
+    return sink, capture_device_id
+
+
+@stream
+def known_signal_played_and_captured_back(stream: Stream) -> None:
+    sink, capture_device_id = _sink_and_capture_device_from_the_environment()
+
+    signal = stream.add(KnownAudioSignalSource)
+    speaker = stream.add(
+        streamlib.SpeakerSink, config={"device_id": sink} if sink else {}
+    )
+    stream.connect(signal.output("audio"), speaker.input("audio"))
+
+    microphone = stream.add(
+        streamlib.MicrophoneSource, config={"device_id": capture_device_id}
+    )
+    recorder = stream.add(CapturedAudioWaveformRecorder)
+    stream.connect(microphone.output("audio"), recorder.input("audio_from_upstream"))
+
+
+def main() -> None:
+    sink, capture_device_id = _sink_and_capture_device_from_the_environment()
 
     with _this_nodes_output_as_a_capture_device_when_asked(
         capture_device_id, sink
@@ -71,21 +95,9 @@ def main() -> None:
         if process_tap is not None:
             print(f"MARKER:COREAUDIO_PROCESS_TAP {process_tap.evidence()}", flush=True)
 
+        graph = compile_stream_to_graph(known_signal_played_and_captured_back)
         runtime = streamlib.Runtime()
-
-        signal = runtime.add(KnownAudioSignalSource)
-        speaker = runtime.add(
-            streamlib.SpeakerSink, config={"device_id": sink} if sink else {}
-        )
-        runtime.connect(signal.output("audio"), speaker.input("audio"))
-
-        microphone = runtime.add(
-            streamlib.MicrophoneSource, config={"device_id": capture_device_id}
-        )
-        recorder = runtime.add(CapturedAudioWaveformRecorder)
-        runtime.connect(
-            microphone.output("audio"), recorder.input("audio_from_upstream")
-        )
+        runtime.load(graph)
 
         # Loopback rather than the default every interface: this node exists to
         # be tapped from the machine it runs on, and it carries no

@@ -11,18 +11,25 @@ the test driving it — over the child→parent log forwarding.
 import sys
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 
 import ray_tracing_kernel_probes
 
 
-def scenario_standalone_probe(probe_class_name: str) -> None:
+def _probe_class_named_on_the_command_line() -> type:
+    return getattr(ray_tracing_kernel_probes, sys.argv[1])
+
+
+@stream
+def one_ray_tracing_kernel_probe(stream: Stream) -> None:
     """A kernel probe needs no upstream: it builds its own acceleration
     structures, acquires its own storage image and reports from `setup`."""
-    runtime = streamlib.Runtime()
-    runtime.add(getattr(ray_tracing_kernel_probes, probe_class_name))
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
+    stream.add(_probe_class_named_on_the_command_line())
 
 
 if __name__ == "__main__":
-    scenario_standalone_probe(sys.argv[1])
+    graph = compile_stream_to_graph(one_ray_tracing_kernel_probe)
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.run()
+    print("MARKER:CLEAN_EXIT", flush=True)

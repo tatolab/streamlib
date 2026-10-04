@@ -312,7 +312,7 @@ and one live probe.
   `the_video_shim_names_every_entry_point_it_expects_rust_to_resolve`,
   `a_pipewire_camera_node_offers_a_modifier_and_a_shared_memory_sibling`.
 - Wheel `tests/test_virtual_camera_sink.py`: `test_the_marker_class_cannot_be_instantiated`,
-  `test_display_name_defaults_to_the_type_name`, and under `requires_gpu`
+  `test_node_name_defaults_to_the_type_name`, and under `requires_gpu`
   `test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown` (the device or
   node with the configured name exists during the run and not after),
   `test_frames_reach_the_loopback_device_and_read_back_as_yuyv` (a capture reader checks

@@ -26,6 +26,7 @@ import pytest
 
 import streamlib
 from microphone_source_named_device_app import UNOPENABLE_DEVICE_ID
+from streamlib import Stream, compile_stream_to_graph, stream
 
 MICROPHONE_SOURCE_APP = Path(__file__).parent / "microphone_source_app.py"
 NAMED_DEVICE_APP = Path(__file__).parent / "microphone_source_named_device_app.py"
@@ -47,11 +48,18 @@ def test_the_marker_class_cannot_be_instantiated():
         streamlib.MicrophoneSource()
 
 
-def test_display_name_defaults_to_the_type_name():
+@stream
+def one_microphone_source_left_unnamed(stream: Stream) -> None:
+    stream.add(streamlib.MicrophoneSource)
+
+
+def test_node_name_defaults_to_the_type_name():
+    graph = compile_stream_to_graph(one_microphone_source_left_unnamed)
+    assert [node["name"] for node in graph["nodes"]] == ["microphonesource"]
+
     runtime = streamlib.Runtime()
     try:
-        microphone = runtime.add(streamlib.MicrophoneSource)
-        assert microphone.display_name == "microphonesource"
+        runtime.load(graph)
     finally:
         runtime.shutdown()
 
@@ -67,9 +75,9 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
     the probed backend capturing in the app process → an `AudioBlock` bag read
     as a numpy view by a Python processor in its own helper process.
 
-    Added with no `config`, so this is also the added-without-config proof: the
-    config travels to the engine as JSON and every field of a built-in's config
-    struct carries a serde default, so `{}` deserializes and `null` does not.
+    `stream.add` with no `config` records `{}`, so this is also the
+    added-without-config proof: every field of a built-in's config struct
+    carries a serde default, so `{}` deserializes.
     """
     app = start_app_under_test(MICROPHONE_SOURCE_APP)
     app.await_output_containing("MARKER:BLOCKS_SEEN", "the probe's first blocks")

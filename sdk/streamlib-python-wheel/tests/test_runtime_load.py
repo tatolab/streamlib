@@ -1,23 +1,30 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`Runtime.load`, and the `type` every native marker carries — none of it needs a GPU.
+"""`Runtime.load`, and the `type` every native marker carries.
 
 `Runtime()` boots the engine without starting it and `load` only builds the
-graph, so every outcome here is read before anything reaches a device. A graph
-is a literal dict naming its nodes' types through the markers' own `type`, or a
-`@node` class's import path, the shape `compile_stream_to_graph` returns and
-`streamlib graph` renders.
+graph, so every outcome here but the rig's is read before anything reaches a
+device. A graph is a literal dict naming its nodes' types through the markers'
+own `type`, or a `@node` class's import path, the shape
+`compile_stream_to_graph` returns and `streamlib graph` renders.
+
+A never-run graph is read through its readiness wait, which returns on an empty
+graph and otherwise lists every processor's id as `Pending`. Where a load lands
+by node name is read on the rig, off a running stream's own control plane.
 """
 
 from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import json
+import os
 import subprocess
 import sys
 import textwrap
 import threading
+import time
 import types
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
@@ -44,9 +51,12 @@ from streamlib import (
     compile_stream_to_graph,
     stream,
 )
+from streamlib._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
 from streamlib._engine import (
     TestBagCollector,
     TestBagFeeder,
+    close_test_harness_channel,
+    open_test_harness_channel,
     processor_class_import_paths_in_this_processes_catalog,
 )
 
@@ -100,6 +110,21 @@ NESTED_PAST_THE_MAXIMUM = "containers nest more than 128 deep"
 CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF = 125
 
 OWN_PROCESS_DEADLINE_SECONDS = 120.0
+
+EVERY_PROCESSOR_THE_READINESS_WAIT_LISTS_AFTER = "every processor: "
+
+RUNTIME_LOADING_A_SOURCE_AT_ITS_OWN_ADDRESS = "runtime-load-own-address"
+RUNTIME_PUSHING_INTO_ANOTHER_RUNTIME = "runtime-load-pushing"
+RUNTIME_REFUSING_A_DESTINATION_AT_ITS_OWN_ADDRESS = "runtime-load-destination-refused"
+RUNTIME_WIRING_A_DESTINATION_AT_ITS_OWN_ADDRESS = "runtime-load-destination-wired"
+
+# A runtime name another live runtime on the mesh holds is refused, so the pid
+# keeps this one apart from any other run on the rig.
+SERVED_GRAPH_RUNTIME_NAME = f"runtime-load-served-graph-{os.getpid()}"
+SERVED_GRAPH_COLLECTOR_CHANNEL = "runtime-load-served-graph"
+SERVED_GRAPH_READY_TIMEOUT_SECONDS = 90.0
+SERVED_GRAPH_CONTROL_PLANE_REGISTRATION_DEADLINE_SECONDS = 30.0
+SERVED_GRAPH_ENGINE_TEARDOWN_TIMEOUT_SECONDS = 30.0
 
 
 @pytest.fixture
@@ -157,14 +182,28 @@ def empty_graph() -> dict[str, Any]:
     return {"stream": "main", "nodes": [], "links": [], "exposed": []}
 
 
-def the_node_name_is_taken(runtime: streamlib.Runtime, node_name: str) -> bool:
-    """Whether the runtime's graph holds `node_name`, read by refusing a typed add of it."""
+def processor_ids_a_never_run_runtimes_readiness_wait_lists(
+    runtime: streamlib.Runtime,
+) -> list[str]:
+    """Every processor id a never-run runtime's readiness wait lists, sorted; none if it returns."""
     try:
-        runtime.add(TestPatternSource, display_name=node_name)
-    except RuntimeError as refusal:
-        assert f"`{node_name}`" in str(refusal), refusal
-        return True
-    return False
+        runtime.wait_until_every_processor_is_running(timeout=0.0)
+    except RuntimeError as readiness_refusal:
+        _, every_processor_listed, listing = str(readiness_refusal).partition(
+            EVERY_PROCESSOR_THE_READINESS_WAIT_LISTS_AFTER
+        )
+        assert every_processor_listed, readiness_refusal
+        processor_id_and_state_pairs = [entry.split("=", 1) for entry in listing.split(", ")]
+        assert all(
+            processor_state == "Pending" for _, processor_state in processor_id_and_state_pairs
+        ), readiness_refusal
+        return sorted(processor_id for processor_id, _ in processor_id_and_state_pairs)
+    return []
+
+
+def the_runtimes_graph_holds_a_processor(runtime: streamlib.Runtime) -> bool:
+    """Whether a never-run runtime's readiness wait lists a processor rather than returning."""
+    return bool(processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime))
 
 
 def pattern_to_window_graph_with_window_scaling(scaling: object) -> dict[str, Any]:
@@ -316,8 +355,9 @@ def test_a_graph_naming_every_compiled_marker_by_its_type_loads(runtime: streaml
             ]
         }
     )
-    for marker in MARKERS_THIS_PLATFORM_COMPILES:
-        assert the_node_name_is_taken(runtime, marker.__name__.lower())
+    assert len(processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime)) == len(
+        MARKERS_THIS_PLATFORM_COMPILES
+    )
 
 
 # ---- loading ----------------------------------------------------------------
@@ -326,15 +366,14 @@ def test_a_graph_naming_every_compiled_marker_by_its_type_loads(runtime: streaml
 def test_a_loaded_graphs_nodes_are_in_the_runtimes_graph(runtime: streamlib.Runtime):
     runtime.load(pattern_to_window_graph(stream_name="pattern-to-window"))
 
-    assert the_node_name_is_taken(runtime, "testpatternsource")
-    assert the_node_name_is_taken(runtime, "displaywindow")
+    assert len(processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime)) == 2
     assert runtime.add(TestPatternSource).display_name == "testpatternsource-2"
 
 
 def test_a_mapping_that_is_not_a_dict_loads(runtime: streamlib.Runtime):
     runtime.load(types.MappingProxyType(pattern_to_window_graph()))
 
-    assert the_node_name_is_taken(runtime, "testpatternsource")
+    assert the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: streamlib.Runtime):
@@ -343,13 +382,13 @@ def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: streamlib.Runtime)
 
     runtime.load(graph)
 
-    assert the_node_name_is_taken(runtime, "displaywindow")
+    assert the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_the_deepest_config_the_builder_compiles_loads(runtime: streamlib.Runtime):
     runtime.load(compile_stream_to_graph(window_with_the_deepest_config_the_builder_compiles))
 
-    assert the_node_name_is_taken(runtime, "displaywindow")
+    assert the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_load(
@@ -373,7 +412,7 @@ def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_l
 
     assert str(refused.value).startswith(GRAPH_IS_NOT_JSON_DATA)
     assert NESTED_PAST_THE_MAXIMUM in str(refused.value)
-    assert not the_node_name_is_taken(runtime, "displaywindow")
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 @pytest.mark.parametrize("not_a_number", [float("nan"), float("inf")], ids=["nan", "infinity"])
@@ -382,7 +421,7 @@ def test_nan_and_infinity_in_a_graph_load_the_way_add_converts_them_in_config(
 ):
     runtime.load(pattern_to_window_graph_with_window_scaling(not_a_number))
 
-    assert the_node_name_is_taken(runtime, "displaywindow")
+    assert the_runtimes_graph_holds_a_processor(runtime)
     runtime.add(DisplayWindow, config={"scaling": not_a_number}, display_name="added-window")
 
 
@@ -416,7 +455,7 @@ def test_a_python_node_type_the_process_never_imported_loads_through_the_resolve
 
     assert RESOLVER_IMPORTED_NODE_MODULE in sys.modules
     assert RESOLVER_IMPORTED_NODE_TYPE in processor_class_import_paths_in_this_processes_catalog()
-    assert the_node_name_is_taken(runtime, "loadedframerelay")
+    assert the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_add_and_connect_still_build_beside_a_loaded_graph(runtime: streamlib.Runtime):
@@ -489,7 +528,7 @@ def test_a_stream_name_that_cannot_be_encoded_is_refused_naming_it_and_the_fix(
     assert "Runtime.load's `name`" in str(refused.value)
     assert "pass a str without lone surrogates" in str(refused.value)
     assert isinstance(refused.value.__cause__, UnicodeEncodeError)
-    assert not the_node_name_is_taken(runtime, "testpatternsource")
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_a_stream_name_casting_to_nothing_is_refused_naming_it(runtime: streamlib.Runtime):
@@ -498,7 +537,7 @@ def test_a_stream_name_casting_to_nothing_is_refused_naming_it(runtime: streamli
 
     assert "`..`" in str(refused.value)
     assert "cannot name anything" in str(refused.value)
-    assert not the_node_name_is_taken(runtime, "testpatternsource")
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 @pytest.mark.parametrize(
@@ -538,7 +577,7 @@ def test_a_graph_holding_what_json_cannot_carry_is_refused_with_the_converters_t
     assert converter_text in str(refused.value)
     assert type(refused.value.__cause__) is cause_type
     assert str(refused.value.__cause__).rstrip(".") in str(refused.value)
-    assert not the_node_name_is_taken(runtime, "testpatternsource")
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_bytes_are_refused_in_adds_config_naming_the_graph_node_and_in_a_graph_naming_none(
@@ -679,13 +718,20 @@ def test_a_second_load_after_a_success_is_refused_naming_the_stream_and_the_fix(
     runtime: streamlib.Runtime,
 ):
     runtime.load(pattern_to_window_graph(stream_name="pattern-to-window"))
+    processor_ids_the_first_load_added = processor_ids_a_never_run_runtimes_readiness_wait_lists(
+        runtime
+    )
 
     with pytest.raises(RuntimeError) as refused:
         runtime.load({"nodes": [{"name": "other", "type": TestPatternSource.type, "config": {}}]})
 
     assert "`pattern-to-window`" in str(refused.value)
     assert "construct another Runtime to load another" in str(refused.value)
-    assert not the_node_name_is_taken(runtime, "other")
+    assert len(processor_ids_the_first_load_added) == 2
+    assert (
+        processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime)
+        == processor_ids_the_first_load_added
+    )
 
 
 def test_a_second_load_after_a_refusal_is_refused_naming_that_refusal(
@@ -699,7 +745,7 @@ def test_a_second_load_after_a_refusal_is_refused_naming_that_refusal(
 
     assert "earlier load was refused" in str(refused.value)
     assert "holds no node" in str(refused.value)
-    assert not the_node_name_is_taken(runtime, "testpatternsource")
+    assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
 def test_load_after_shutdown_is_refused():
@@ -708,6 +754,130 @@ def test_load_after_shutdown_is_refused():
 
     with pytest.raises(RuntimeError, match="has been shut down"):
         shut_down_runtime.load(pattern_to_window_graph())
+
+
+# ---- links: a port no node has, and an end on another runtime ---------------
+
+
+@stream
+def pattern_linked_from_a_port_it_lacks_into_a_window(stream: Stream) -> None:
+    pattern = stream.add(TestPatternSource)
+    window = stream.add(DisplayWindow)
+    stream.connect(pattern.output("no_such_port"), window.input("video"))
+
+
+@stream
+def remote_camera_into_a_local_window(stream: Stream) -> None:
+    window = stream.add(DisplayWindow)
+    stream.connect(
+        stream.remote_output("bench-cam-a1b2", "CameraSource", "video"), window.input("video")
+    )
+
+
+@stream
+def source_at_its_own_address_naming_an_absent_node_into_a_window(stream: Stream) -> None:
+    window = stream.add(DisplayWindow, name="Destination")
+    stream.connect(
+        stream.remote_output(RUNTIME_LOADING_A_SOURCE_AT_ITS_OWN_ADDRESS, "NoSuchNode", "video"),
+        window.input("video"),
+    )
+
+
+@stream
+def local_pattern_pushed_into_a_remote_window(stream: Stream) -> None:
+    pattern = stream.add(TestPatternSource)
+    stream.connect(
+        pattern.output("video"),
+        stream.remote_input("studio-display-9f3c", "DisplayWindow", "video"),
+    )
+
+
+@stream
+def pattern_into_an_absent_node_at_its_own_address(stream: Stream) -> None:
+    pattern = stream.add(TestPatternSource, name="Source")
+    stream.connect(
+        pattern.output("video"),
+        stream.remote_input(
+            RUNTIME_REFUSING_A_DESTINATION_AT_ITS_OWN_ADDRESS, "NoSuchNode", "video"
+        ),
+    )
+
+
+@stream
+def pattern_into_a_held_window_at_its_own_address(stream: Stream) -> None:
+    pattern = stream.add(TestPatternSource, name="Source")
+    stream.add(DisplayWindow, name="Destination")
+    stream.connect(
+        pattern.output("video"),
+        stream.remote_input(
+            RUNTIME_WIRING_A_DESTINATION_AT_ITS_OWN_ADDRESS, "Destination", "video"
+        ),
+    )
+
+
+def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
+    runtime: streamlib.Runtime,
+):
+    with pytest.raises(RuntimeError) as refused:
+        runtime.load(compile_stream_to_graph(pattern_linked_from_a_port_it_lacks_into_a_window))
+
+    assert "`no_such_port`" in str(refused.value)
+
+
+def test_a_remote_source_into_a_local_input_loads_before_run(runtime: streamlib.Runtime):
+    """The link is applied now and resolves later, so a stream naming an absent runtime loads."""
+    runtime.load(compile_stream_to_graph(remote_camera_into_a_local_window))
+
+    assert the_runtimes_graph_holds_a_processor(runtime)
+
+
+def test_a_remote_source_naming_this_runtime_and_a_node_it_lacks_is_refused_by_load():
+    """An address naming this runtime's own name is local, so it meets the local refusal."""
+    runtime = streamlib.Runtime(runtime_name=RUNTIME_LOADING_A_SOURCE_AT_ITS_OWN_ADDRESS)
+    try:
+        with pytest.raises(RuntimeError, match="`nosuchnode`"):
+            runtime.load(
+                compile_stream_to_graph(
+                    source_at_its_own_address_naming_an_absent_node_into_a_window
+                )
+            )
+    finally:
+        runtime.shutdown()
+
+
+def test_a_link_pushed_into_another_runtime_loads_without_waiting_on_it():
+    """The runtime owning an input applies every link into it, so this one only asks."""
+    runtime = streamlib.Runtime(runtime_name=RUNTIME_PUSHING_INTO_ANOTHER_RUNTIME)
+    try:
+        runtime.load(compile_stream_to_graph(local_pattern_pushed_into_a_remote_window))
+
+        assert the_runtimes_graph_holds_a_processor(runtime)
+    finally:
+        runtime.shutdown()
+
+
+def test_a_destination_naming_this_runtime_takes_the_local_path_and_its_refusals():
+    """Asking another runtime never refuses on a node name this one cannot see, so the
+    refusal is the proof the address took the local path. A refused load spends its
+    Runtime's one load, so the node the stream holds wires on a second Runtime."""
+    refusing_runtime = streamlib.Runtime(
+        runtime_name=RUNTIME_REFUSING_A_DESTINATION_AT_ITS_OWN_ADDRESS
+    )
+    try:
+        with pytest.raises(RuntimeError, match="`nosuchnode`"):
+            refusing_runtime.load(
+                compile_stream_to_graph(pattern_into_an_absent_node_at_its_own_address)
+            )
+    finally:
+        refusing_runtime.shutdown()
+
+    wiring_runtime = streamlib.Runtime(runtime_name=RUNTIME_WIRING_A_DESTINATION_AT_ITS_OWN_ADDRESS)
+    try:
+        wiring_runtime.load(compile_stream_to_graph(pattern_into_a_held_window_at_its_own_address))
+
+        assert len(processor_ids_a_never_run_runtimes_readiness_wait_lists(wiring_runtime)) == 2
+    finally:
+        wiring_runtime.shutdown()
 
 
 # ---- run() after a refused load ---------------------------------------------
@@ -779,7 +949,7 @@ def test_a_load_refused_while_another_is_underway_stands_over_its_success_and_ru
 
     assert "still underway on another thread" in str(run_refused_while_underway[0])
     assert held_load_refusal is None
-    assert the_node_name_is_taken(runtime, "loadedframerelay")
+    assert the_runtimes_graph_holds_a_processor(runtime)
     run_refusal = run_expecting_a_refusal(runtime)
     assert str(refused_while_underway[0]) in str(run_refusal)
 
@@ -803,3 +973,85 @@ def test_a_held_loads_own_refusal_stands_over_a_load_refused_while_it_was_underw
     run_refusal = run_expecting_a_refusal(runtime)
     assert str(held_load_refusal) in str(run_refusal)
     assert "still underway" not in str(run_refusal)
+
+
+# ---- a loaded stream, run and read back by name -----------------------------
+
+
+@stream
+def named_pattern_into_a_named_collector(stream: Stream) -> None:
+    pattern = stream.add(
+        TestPatternSource, name="Loaded Pattern", config={"width": 320, "height": 180}
+    )
+    collector = stream.add(
+        TestBagCollector,
+        name="Loaded Collector",
+        config={"channel": SERVED_GRAPH_COLLECTOR_CHANNEL},
+    )
+    stream.connect(pattern.output("video"), collector.input("bags_from_upstream"))
+
+
+def control_url_once_the_registry_lists(runtime_name: str) -> str:
+    """The control URL the node registry lists for `runtime_name`, polled until it lists one."""
+    deadline = time.monotonic() + SERVED_GRAPH_CONTROL_PLANE_REGISTRATION_DEADLINE_SECONDS
+    while True:
+        try:
+            return resolve_control_url(None, runtime_name)
+        except ControlPlaneError:
+            if time.monotonic() >= deadline:
+                raise
+        time.sleep(0.05)
+
+
+@pytest.mark.requires_gpu
+def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_control_plane():
+    open_test_harness_channel(SERVED_GRAPH_COLLECTOR_CHANNEL)
+    runtime = streamlib.Runtime(runtime_name=SERVED_GRAPH_RUNTIME_NAME)
+    run_failures: list[BaseException] = []
+
+    def run_until_shut_down() -> None:
+        try:
+            runtime.run()
+        except BaseException as run_failure:  # noqa: BLE001 — asserted on after the join
+            run_failures.append(run_failure)
+
+    run_loop = threading.Thread(
+        target=run_until_shut_down, name="runtime-load-served-graph", daemon=True
+    )
+    try:
+        runtime.load(compile_stream_to_graph(named_pattern_into_a_named_collector))
+        runtime.host_control_plane()
+        run_loop.start()
+        runtime.wait_until_every_processor_is_running(timeout=SERVED_GRAPH_READY_TIMEOUT_SECONDS)
+        served_graph = json.loads(
+            call_tool(control_url_once_the_registry_lists(SERVED_GRAPH_RUNTIME_NAME), "graph", {})
+        )
+    finally:
+        runtime.shutdown()
+        if run_loop.is_alive():
+            run_loop.join(SERVED_GRAPH_ENGINE_TEARDOWN_TIMEOUT_SECONDS)
+        close_test_harness_channel(SERVED_GRAPH_COLLECTOR_CHANNEL)
+
+    assert not run_loop.is_alive(), (
+        f"the engine did not tear down within {SERVED_GRAPH_ENGINE_TEARDOWN_TIMEOUT_SECONDS}s"
+    )
+    assert run_failures == []
+    assert served_graph["stream"] == "named_pattern_into_a_named_collector"
+    served_node_names = [served_node["name"] for served_node in served_graph["nodes"]]
+    assert "loaded-pattern" in served_node_names, served_node_names
+    assert "loaded-collector" in served_node_names, served_node_names
+    served_link_ends = [
+        (
+            served_link["source"]["node"],
+            served_link["source"]["port"],
+            served_link["target"]["node"],
+            served_link["target"]["port"],
+        )
+        for served_link in served_graph["links"]
+    ]
+    assert (
+        "loaded-pattern",
+        "video",
+        "loaded-collector",
+        "bags_from_upstream",
+    ) in served_link_ends, served_link_ends

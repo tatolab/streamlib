@@ -8,7 +8,7 @@
 `MicrophoneSource -> OpusEncoder -> MoqBroadcastPublisher`, and
 `MoqBroadcastSubscriber -> H264Decoder -> DisplayWindow` beside
 `-> OpusDecoder -> SpeakerSink`. It is `examples/moq-broadcast-roundtrip`
-measured: the same shape, with display names the driving script can find
+measured: the same shape, with node names the driving script can find
 processors by and a control plane it can read them through.
 
 `--container-format streamlib_bag` runs the same graph with a third track: a
@@ -32,11 +32,13 @@ directory either.
 """
 
 import argparse
+import functools
 import os
 from typing import Any
 
 import streamlib
 from moq_live_telemetry_processors import TelemetryBagSink, TelemetryBagSource
+from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber
 
 #: Both containers this wheel writes, each its own arm of the proof. `cmaf` is
@@ -47,7 +49,7 @@ CONTAINER_FORMATS = ("cmaf", "streamlib_bag")
 
 #: What the subscriber asks for under CMAF: the container names media tracks
 #: `{track_id}.m4s`, numbered from one in declaration order — which is
-#: `runtime.connect` order, so wiring video into `tracks` first is what makes
+#: `stream.connect` order, so wiring video into `tracks` first is what makes
 #: video track one.
 CMAF_VIDEO_TRACK_NAME = "1.m4s"
 CMAF_AUDIO_TRACK_NAME = "2.m4s"
@@ -80,7 +82,8 @@ def _relay_url_from_the_environment() -> str:
     return relay_url
 
 
-def main() -> None:
+@functools.cache
+def _parse_fixture_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     # An argument and never an environment variable: a rig carrying both a
     # virtual and a real camera hands the first-enumerated node to a run that
@@ -143,12 +146,15 @@ def main() -> None:
         default=None,
         help="the H.264 encoder's target bitrate (default: constant QP)",
     )
-    arguments = parser.parse_args()
+    return parser.parse_args()
 
+
+@stream
+def moq_broadcast_roundtrip(stream: Stream) -> None:
+    """The round trip this process's argv and relay URL describe."""
+    arguments = _parse_fixture_arguments()
     relay_url = _relay_url_from_the_environment()
     carries_a_data_track = arguments.container_format == "streamlib_bag"
-
-    runtime = streamlib.Runtime(runtime_name="moq-broadcast-roundtrip-node")
 
     publisher_config: "dict[str, Any]" = {
         "relay_url": relay_url,
@@ -178,82 +184,84 @@ def main() -> None:
         )
         subscriber_config["data_track"] = BAG_DATA_TRACK_NAME
 
-    publisher = runtime.add(
-        MoqBroadcastPublisher, config=publisher_config, display_name="publisher"
+    publisher = stream.add(
+        MoqBroadcastPublisher, config=publisher_config, name="publisher"
     )
-    subscriber = runtime.add(
-        MoqBroadcastSubscriber, config=subscriber_config, display_name="subscriber"
+    subscriber = stream.add(
+        MoqBroadcastSubscriber, config=subscriber_config, name="subscriber"
     )
 
-    camera = runtime.add(
+    camera = stream.add(
         streamlib.CameraSource,
         config={"device_id": arguments.camera} if arguments.camera else {},
-        display_name="camera",
+        name="camera",
     )
     video_encoder_config = {"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS}
     if arguments.video_bitrate_bps is not None:
         video_encoder_config["bitrate_bps"] = arguments.video_bitrate_bps
-    video_encoder = runtime.add(
+    video_encoder = stream.add(
         streamlib.H264Encoder,
         config=video_encoder_config,
-        display_name="video_encoder",
+        name="video_encoder",
     )
-    video_decoder = runtime.add(streamlib.H264Decoder, display_name="video_decoder")
+    video_decoder = stream.add(streamlib.H264Decoder, name="video_decoder")
     # A sink per decoder, so each has a subscriber for the whole run — the
     # shape the showcase ships and the shape the codec rig scored. The window
     # is here; the speaker sits with the audio path below.
-    window = runtime.add(
+    window = stream.add(
         streamlib.DisplayWindow,
         config={"title": "streamlib moq broadcast round-trip"},
-        display_name="window",
+        name="window",
     )
 
     # Video into `tracks` first: declaration order is track-id order under CMAF.
-    runtime.connect(camera.output("video"), video_encoder.input("video"))
-    runtime.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
-    runtime.connect(
+    stream.connect(camera.output("video"), video_encoder.input("video"))
+    stream.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
+    stream.connect(
         subscriber.output("encoded_video"), video_decoder.input("encoded_video")
     )
-    runtime.connect(video_decoder.output("video"), window.input("video"))
+    stream.connect(video_decoder.output("video"), window.input("video"))
 
     if not arguments.video_only:
-        microphone = runtime.add(
+        microphone = stream.add(
             streamlib.MicrophoneSource,
             config=(
                 {"device_id": arguments.audio_capture_device}
                 if arguments.audio_capture_device
                 else {}
             ),
-            display_name="microphone",
+            name="microphone",
         )
-        audio_encoder = runtime.add(
-            streamlib.OpusEncoder, display_name="audio_encoder"
-        )
-        audio_decoder = runtime.add(
-            streamlib.OpusDecoder, display_name="audio_decoder"
-        )
-        speaker = runtime.add(streamlib.SpeakerSink, display_name="speaker")
-        runtime.connect(microphone.output("audio"), audio_encoder.input("audio"))
-        runtime.connect(
+        audio_encoder = stream.add(streamlib.OpusEncoder, name="audio_encoder")
+        audio_decoder = stream.add(streamlib.OpusDecoder, name="audio_decoder")
+        speaker = stream.add(streamlib.SpeakerSink, name="speaker")
+        stream.connect(microphone.output("audio"), audio_encoder.input("audio"))
+        stream.connect(
             audio_encoder.output("encoded_audio"), publisher.input("tracks")
         )
-        runtime.connect(
+        stream.connect(
             subscriber.output("encoded_audio"), audio_decoder.input("encoded_audio")
         )
-        runtime.connect(audio_decoder.output("audio"), speaker.input("audio"))
+        stream.connect(audio_decoder.output("audio"), speaker.input("audio"))
 
     if carries_a_data_track:
-        telemetry_source = runtime.add(
-            TelemetryBagSource, display_name="telemetry_source"
-        )
-        telemetry_sink = runtime.add(TelemetryBagSink, display_name="telemetry_sink")
+        telemetry_source = stream.add(TelemetryBagSource, name="telemetry_source")
+        telemetry_sink = stream.add(TelemetryBagSink, name="telemetry_sink")
         # Last into `tracks`, so `track_names` names it last.
-        runtime.connect(
+        stream.connect(
             telemetry_source.output("telemetry"), publisher.input("tracks")
         )
-        runtime.connect(
+        stream.connect(
             subscriber.output("data_bags"), telemetry_sink.input("data_bags")
         )
+
+
+def main() -> None:
+    arguments = _parse_fixture_arguments()
+    graph = compile_stream_to_graph(moq_broadcast_roundtrip)
+
+    runtime = streamlib.Runtime(runtime_name="moq-broadcast-roundtrip-node")
+    runtime.load(graph)
 
     # Loopback rather than the default every interface: this node exists to be
     # tapped from the machine it runs on, and it carries no authentication —

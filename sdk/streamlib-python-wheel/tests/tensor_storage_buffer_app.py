@@ -5,8 +5,10 @@
 placement: two helper processes, the surface id crossing between them."""
 
 import sys
+from typing import Any
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 from tensor_storage_buffer_probes import (
     FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD,
     MINIMUM_INTERVAL_BETWEEN_HELD_TENSOR_PUBLISHES_NS,
@@ -18,49 +20,55 @@ from tensor_storage_buffer_probes import (
 )
 
 
-def _run(source_config: dict, sink_class, sink_config: "dict | None" = None) -> None:
-    runtime = streamlib.Runtime()
-    source = runtime.add(TensorStorageBufferPublishingSource, config=source_config)
-    sink = (
-        runtime.add(sink_class, config=sink_config)
-        if sink_config is not None
-        else runtime.add(sink_class)
-    )
-    runtime.connect(
+def _wire_the_publishing_source_into(
+    stream: Stream,
+    source_config: dict[str, Any],
+    sink_class: type,
+    sink_config: dict[str, Any] | None = None,
+) -> None:
+    source = stream.add(TensorStorageBufferPublishingSource, config=source_config)
+    sink = stream.add(sink_class, config=sink_config)
+    stream.connect(
         source.output("tensors_to_downstream"), sink.input("tensors_from_upstream")
     )
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
 
 
-def scenario_a_written_tensor_is_read_by_another_process() -> None:
+@stream
+def a_written_tensor_is_read_by_another_process(stream: Stream) -> None:
     """Exactly the pool's depth of tensors, so no slot is republished while
     the consumer may still be resolving it."""
-    _run(
+    _wire_the_publishing_source_into(
+        stream,
         {"tensor_name": "model_input", "frames_to_publish": POOL_ROTATION_DEPTH},
         PublishedTensorReadingSink,
         {"tensor_name": "model_input"},
     )
 
 
-def scenario_an_odd_shaped_tensor_round_trips() -> None:
-    _run(
+@stream
+def an_odd_shaped_tensor_round_trips(stream: Stream) -> None:
+    _wire_the_publishing_source_into(
+        stream,
         {"tensor_name": "odd", "frames_to_publish": POOL_ROTATION_DEPTH},
         PublishedTensorReadingSink,
         {"tensor_name": "odd"},
     )
 
 
-def scenario_a_reader_resolving_a_different_id_sees_different_values() -> None:
-    _run(
+@stream
+def a_reader_resolving_a_different_id_sees_different_values(stream: Stream) -> None:
+    _wire_the_publishing_source_into(
+        stream,
         {"tensor_name": "model_input", "frames_to_publish": POOL_ROTATION_DEPTH},
         PublishedTensorReadingSink,
         {"tensor_name": "model_input", "resolve_the_previous_frames_id": True},
     )
 
 
-def scenario_a_held_tensor_is_never_rewritten() -> None:
-    _run(
+@stream
+def a_held_tensor_is_never_rewritten(stream: Stream) -> None:
+    _wire_the_publishing_source_into(
+        stream,
         {
             "tensor_name": "model_input",
             "frames_to_publish": FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD + 1,
@@ -72,10 +80,12 @@ def scenario_a_held_tensor_is_never_rewritten() -> None:
     )
 
 
-def scenario_a_tensor_acquired_after_a_window_opens_round_trips() -> None:
+@stream
+def a_tensor_acquired_after_a_window_opens_round_trips(stream: Stream) -> None:
     """The DEVICE_LOCAL OPAQUE_FD allocation after a swapchain exists — the
     order NVIDIA once answered with a fake out-of-memory."""
-    _run(
+    _wire_the_publishing_source_into(
+        stream,
         {
             "tensor_name": "model_input",
             "frames_to_publish": POOL_ROTATION_DEPTH,
@@ -86,32 +96,32 @@ def scenario_a_tensor_acquired_after_a_window_opens_round_trips() -> None:
     )
 
 
-def scenario_a_kernel_binds_a_tensor_by_surface_id() -> None:
+@stream
+def a_kernel_binds_a_tensor_by_surface_id(stream: Stream) -> None:
     """One helper, no link: the probe acquires its tensors and reports from
     `setup`."""
-    runtime = streamlib.Runtime()
-    runtime.add(TensorStorageBufferKernelBindingProbe)
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
+    stream.add(TensorStorageBufferKernelBindingProbe)
 
 
-SCENARIOS = {
+STREAM_BY_SCENARIO = {
     "a_written_tensor_is_read_by_another_process": (
-        scenario_a_written_tensor_is_read_by_another_process
+        a_written_tensor_is_read_by_another_process
     ),
-    "an_odd_shaped_tensor_round_trips": scenario_an_odd_shaped_tensor_round_trips,
+    "an_odd_shaped_tensor_round_trips": an_odd_shaped_tensor_round_trips,
     "a_reader_resolving_a_different_id_sees_different_values": (
-        scenario_a_reader_resolving_a_different_id_sees_different_values
+        a_reader_resolving_a_different_id_sees_different_values
     ),
-    "a_held_tensor_is_never_rewritten": scenario_a_held_tensor_is_never_rewritten,
+    "a_held_tensor_is_never_rewritten": a_held_tensor_is_never_rewritten,
     "a_tensor_acquired_after_a_window_opens_round_trips": (
-        scenario_a_tensor_acquired_after_a_window_opens_round_trips
+        a_tensor_acquired_after_a_window_opens_round_trips
     ),
-    "a_kernel_binds_a_tensor_by_surface_id": (
-        scenario_a_kernel_binds_a_tensor_by_surface_id
-    ),
+    "a_kernel_binds_a_tensor_by_surface_id": a_kernel_binds_a_tensor_by_surface_id,
 }
 
 
 if __name__ == "__main__":
-    SCENARIOS[sys.argv[1]]()
+    graph = compile_stream_to_graph(STREAM_BY_SCENARIO[sys.argv[1]])
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.run()
+    print("MARKER:CLEAN_EXIT", flush=True)

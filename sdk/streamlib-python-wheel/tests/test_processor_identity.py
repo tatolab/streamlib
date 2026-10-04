@@ -1,13 +1,13 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A processor's identity is its class's import path — and `add` refuses one no
-interpreter could import.
+"""A processor's identity is its class's import path — and `stream.add` refuses one
+no interpreter could import.
 
 Every Python processor runs in its own child process, which reaches the class by
 importing it. A class the child cannot import has no host anywhere, so the
-refusal belongs at `add` — where the author is naming the class — rather than at
-spawn, where it would surface as a failed child.
+refusal belongs at `stream.add` — where the author is naming the class — rather
+than at spawn, where it would surface as a failed child.
 
 The other half is that an accepted name does not move. Identity is what the
 registry, the control plane and the helper spawn all agree on, so one that
@@ -99,9 +99,8 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
-def _derived_identities(app) -> list[str]:
-    """Every identity the engine derived, read off its own log records."""
-    app.await_marker("ADDED")
+def _identities_the_engine_has_logged(app) -> list[str]:
+    """Every identity the engine derived in the output read so far, off its own log records."""
     return [
         found.group(1)
         for line in app.output_lines
@@ -109,24 +108,26 @@ def _derived_identities(app) -> list[str]:
     ]
 
 
-def _derived_identity(app) -> str:
-    """The identity the engine derived, read off its own log record."""
-    derived = _derived_identities(app)
-    if derived:
-        return derived[0]
-    raise AssertionError(
-        f"the engine logged no derived identity; output:\n{app.output}"
-    )
+def _derived_identities(app) -> list[str]:
+    """Every identity the engine derived by the time the app's `load` returned."""
+    app.await_marker("ADDED")
+    return _identities_the_engine_has_logged(app)
 
 
 def _identity_under(launcher, start_app_under_test, *arguments: str) -> str:
     app = start_app_under_test(
         IDENTITY_STABILITY_APP, *arguments, launcher=launcher
     )
-    return _derived_identity(app)
+    # The record itself, not a marker: under `streamlib dev` nothing of the
+    # app's runs after `load`, and a marker printed in the stream body fires at
+    # compile, before the record.
+    app.await_output_containing(
+        'processor_class_import_path="', "the engine's derived identity record"
+    )
+    return _identities_the_engine_has_logged(app)[0]
 
 
-# Every arm is observed at `add`, which is where identity is derived — well
+# Every arm is observed at `load`, which is where identity is derived — well
 # before `run()` would initialize a GPU context. That is what keeps the launcher
 # arm, which does go on to boot a node, off the rig: the fixture reaps its
 # process group, so nothing here waits for a device or a clean exit.

@@ -10,10 +10,19 @@ sees nothing once another test booted an engine first.
 """
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 from zero_argument_process_processor import ZeroArgumentProcess
 
+
+@stream
+def zero_argument_process(stream: Stream) -> None:
+    """The one processor whose `process` takes no ctx."""
+    stream.add(ZeroArgumentProcess)
+
+
 if __name__ == "__main__":
+    graph = compile_stream_to_graph(zero_argument_process)
     runtime = streamlib.Runtime()
-    runtime.add(ZeroArgumentProcess)
+    runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

@@ -11,6 +11,7 @@ forwarding every child's records ride.
 import sys
 
 import streamlib
+from streamlib import Stream, compile_stream_to_graph, stream
 from texture_ring_producer_probes import (
     FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD,
     MINIMUM_INTERVAL_BETWEEN_HELD_FRAME_PUBLISHES_NS,
@@ -23,7 +24,8 @@ from texture_ring_producer_probes import (
 )
 
 
-def scenario_ring_rotation() -> None:
+@stream
+def ring_rotation(stream: Stream) -> None:
     """One frame more than the ring is deep, so the last one wraps onto the
     slot the first published from.
 
@@ -31,42 +33,38 @@ def scenario_ring_rotation() -> None:
     a source alone is not a graph. It resolves nothing: frame 0's id is
     recycled by the wrap, and the sink's pixels are the other scenario's job.
     """
-    runtime = streamlib.Runtime()
-    source = runtime.add(
+    source = stream.add(
         TextureRingPublishingVideoSource,
         config={"frames_to_publish": RING_DEPTH + 1},
     )
-    sink = runtime.add(PublishedFrameIdRecordingSink)
-    runtime.connect(
+    sink = stream.add(PublishedFrameIdRecordingSink)
+    stream.connect(
         source.output("frames_to_downstream"), sink.input("frames_from_upstream")
     )
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
 
 
-def scenario_published_frames_reach_a_downstream_consumer() -> None:
+@stream
+def published_frames_reach_a_downstream_consumer(stream: Stream) -> None:
     """Python source → Python sink, the direction nothing else covers.
 
     Exactly `RING_DEPTH` frames, so no slot is republished while the consumer
     may still be reading it — the ring's documented reuse would otherwise make
     the pixel assertion a race rather than a contract.
     """
-    runtime = streamlib.Runtime()
-    source = runtime.add(
+    source = stream.add(
         TextureRingPublishingVideoSource,
         config={"frames_to_publish": RING_DEPTH},
     )
-    sink = runtime.add(PublishedFramePixelReadingSink)
-    runtime.connect(
+    sink = stream.add(PublishedFramePixelReadingSink)
+    stream.connect(
         source.output("frames_to_downstream"), sink.input("frames_from_upstream")
     )
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
 
 
-def _run_a_source_holding_its_first_frame_downstream(holding_sink_class) -> None:
-    runtime = streamlib.Runtime()
-    source = runtime.add(
+def _add_a_source_holding_its_first_frame_downstream(
+    stream: Stream, holding_sink_class: type
+) -> None:
+    source = stream.add(
         TextureRingPublishingVideoSource,
         config={
             "frames_to_publish": FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD + 1,
@@ -75,34 +73,38 @@ def _run_a_source_holding_its_first_frame_downstream(holding_sink_class) -> None
             ),
         },
     )
-    sink = runtime.add(holding_sink_class)
-    runtime.connect(
+    sink = stream.add(holding_sink_class)
+    stream.connect(
         source.output("frames_to_downstream"), sink.input("frames_from_upstream")
     )
-    runtime.run()
-    print("MARKER:CLEAN_EXIT", flush=True)
 
 
-def scenario_a_claimed_frame_holds_still() -> None:
+@stream
+def a_claimed_frame_holds_still(stream: Stream) -> None:
     """The consumer claims the first frame and holds it while the source
     publishes several times the ring's depth past it."""
-    _run_a_source_holding_its_first_frame_downstream(ClaimedFrameHoldingSink)
+    _add_a_source_holding_its_first_frame_downstream(stream, ClaimedFrameHoldingSink)
 
 
-def scenario_an_unclaimed_frame_is_recycled() -> None:
+@stream
+def an_unclaimed_frame_is_recycled(stream: Stream) -> None:
     """The same schedule with no claim: the first frame's slot is republished."""
-    _run_a_source_holding_its_first_frame_downstream(UnclaimedFrameHoldingSink)
+    _add_a_source_holding_its_first_frame_downstream(stream, UnclaimedFrameHoldingSink)
 
 
-SCENARIOS = {
-    "a_claimed_frame_holds_still": scenario_a_claimed_frame_holds_still,
-    "an_unclaimed_frame_is_recycled": scenario_an_unclaimed_frame_is_recycled,
-    "ring_rotation": scenario_ring_rotation,
+STREAM_BY_SCENARIO = {
+    "a_claimed_frame_holds_still": a_claimed_frame_holds_still,
+    "an_unclaimed_frame_is_recycled": an_unclaimed_frame_is_recycled,
+    "ring_rotation": ring_rotation,
     "published_frames_reach_a_downstream_consumer": (
-        scenario_published_frames_reach_a_downstream_consumer
+        published_frames_reach_a_downstream_consumer
     ),
 }
 
 
 if __name__ == "__main__":
-    SCENARIOS[sys.argv[1]]()
+    graph = compile_stream_to_graph(STREAM_BY_SCENARIO[sys.argv[1]])
+    runtime = streamlib.Runtime()
+    runtime.load(graph)
+    runtime.run()
+    print("MARKER:CLEAN_EXIT", flush=True)

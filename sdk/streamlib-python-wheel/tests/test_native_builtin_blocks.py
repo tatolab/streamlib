@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The native built-in blocks: marker classes resolved by `rt.add`, frames
+"""The native built-in blocks: marker classes resolved by `stream.add`, frames
 produced by native code the interpreter never enters.
 
 The graph tests boot a real engine (GPU required); the marker and
@@ -15,7 +15,13 @@ from pathlib import Path
 import pytest
 
 import streamlib
-from streamlib import TestPatternSource, VideoFrame
+from streamlib import (
+    Stream,
+    TestPatternSource,
+    VideoFrame,
+    compile_stream_to_graph,
+    stream,
+)
 
 PIPELINE_TIMEOUT_SECONDS = 30.0
 ENGINE_TEARDOWN_TIMEOUT_SECONDS = 60.0
@@ -172,10 +178,16 @@ def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
     )
 
 
-def test_display_name_defaults_to_the_type_name():
+@stream
+def a_test_pattern_source_alone(stream: Stream) -> None:
+    stream.add(TestPatternSource)
+
+
+def test_node_name_defaults_to_the_type_name():
+    graph = compile_stream_to_graph(a_test_pattern_source_alone)
+    assert [node["name"] for node in graph["nodes"]] == ["testpatternsource"]
     runtime = streamlib.Runtime()
     try:
-        pattern = runtime.add(TestPatternSource)
-        assert pattern.display_name == "testpatternsource"
+        runtime.load(graph)
     finally:
         runtime.shutdown()
