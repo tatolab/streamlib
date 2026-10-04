@@ -41,13 +41,9 @@ changed live.
   machine two rules: any stream could read any other stream's ports, while the local URL listener
   served only exposed ones. It also left no way for a stream to keep a port to itself on a
   shared machine.
-- **A per-runtime grant created by a stream's own outbound link (PR #2622, unreviewed).** It
-  needed a separate grant table, the asker's self-reported name on the wire, and a lifetime rule.
-  The owner's model has no such grant: the levels are the whole policy.
 
 ## Consequences
 
-- PR #2622's grant mechanism is dropped. Its offer and egress checks are rebuilt against levels.
 - `expose` on the CLI, the app and the local API edits the live map. Whether those live edits
   persist across a restart is the runtime-hosting change's to settle.
 - The URL listener serves private and public ports on loopback, and only public ones on a LAN
