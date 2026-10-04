@@ -114,8 +114,12 @@ fn register_the_one_processor_type_this_peer_adds() {
 #[serde(tag = "command", rename_all = "snake_case")]
 enum WhatTheFixtureAsked {
     /// Load a one-node stream under this display name, exposing the node's
-    /// output, so another runtime can read it across the mesh.
-    Add { display_name: String },
+    /// output unless told not to.
+    Add {
+        display_name: String,
+        #[serde(default = "the_stream_exposes_its_output_unless_told_not_to")]
+        expose: bool,
+    },
     /// Ask another runtime to carry a port into one of its inputs. A source
     /// with no runtime name is one of this runtime's own, named by display
     /// name — which is the push case.
@@ -158,10 +162,17 @@ fn read_every_command_until_stdin_closes(
     });
 }
 
+fn the_stream_exposes_its_output_unless_told_not_to() -> bool {
+    true
+}
+
 /// Do what one command asks and say what came back.
 fn answer_one_command(runtime: &Arc<Runner>, asked: WhatTheFixtureAsked) -> serde_json::Value {
     match asked {
-        WhatTheFixtureAsked::Add { display_name } => {
+        WhatTheFixtureAsked::Add {
+            display_name,
+            expose,
+        } => {
             let one_node_stream = GraphSnapshot {
                 stream: None,
                 nodes: vec![GraphSnapshotNode {
@@ -171,10 +182,13 @@ fn answer_one_command(runtime: &Arc<Runner>, asked: WhatTheFixtureAsked) -> serd
                     config: serde_json::Value::Null,
                 }],
                 links: Vec::new(),
-                exposed: vec![ExposedOutputPortOutput {
-                    node: display_name.clone(),
-                    port: THE_OUTPUT_PORT.to_string(),
-                }],
+                exposed: expose
+                    .then(|| ExposedOutputPortOutput {
+                        node: display_name.clone(),
+                        port: THE_OUTPUT_PORT.to_string(),
+                    })
+                    .into_iter()
+                    .collect(),
             };
             match runtime.load_graph_snapshot(&one_node_stream) {
                 Ok(()) => serde_json::json!({ "added": display_name }),

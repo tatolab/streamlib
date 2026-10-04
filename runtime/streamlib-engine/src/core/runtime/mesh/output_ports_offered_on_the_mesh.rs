@@ -99,11 +99,11 @@ pub struct OutputPortThisRuntimeStoppedSending {
 /// The document a runtime answers with when a peer asks what it offers.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OutputPortsOfferedOnTheMesh {
-    /// Every exposed output port in the runtime's graph that it can send, at
-    /// the moment it was asked.
+    /// Every output port in the runtime's graph the asking runtime may read and
+    /// it can send, at the moment it was asked.
     pub ports: Vec<OutputPortOfferedOnTheMesh>,
-    /// Every exposed output port in that graph it cannot send, each with the
-    /// reason.
+    /// Every output port in that graph the asking runtime may read and it
+    /// cannot send, each with the reason.
     ///
     /// Absent reads as empty, because that is what it means: a peer that names
     /// no unsendable ports holds none this reader can be told about. It is what
@@ -199,17 +199,23 @@ impl OutputPortsOfferedOnTheMesh {
 /// afterwards — the shape the hosted control plane's endpoint registry already
 /// uses for something the runtime learns after it is on the mesh.
 pub trait WhatThisRuntimeOffersOnTheMesh: Send + Sync {
-    /// Every exposed output port in this runtime's graph right now, split into
-    /// the ones it can send and the ones it holds and cannot.
-    fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh;
+    /// Every output port in this runtime's graph the runtime
+    /// `asking_runtime_name` may read right now — the exposed ones, and the
+    /// ones the stream wired into an input on it — split into the ones it can
+    /// send and the ones it holds and cannot.
+    fn output_ports_it_offers_right_now(
+        &self,
+        asking_runtime_name: &str,
+    ) -> OutputPortsOfferedOnTheMesh;
 
     /// The channel the port at this address publishes to, and the sizing a
     /// subscriber on it must ask for — or `None` when no such port is wired or
-    /// the stream does not expose it.
+    /// the runtime `reading_runtime_name` may not read it.
     fn how_to_read_an_offered_output_port(
         &self,
         processor_display_name: &str,
         port_name: &str,
+        reading_runtime_name: &str,
     ) -> Option<HowToReadAnOfferedOutputPort>;
 }
 
@@ -277,15 +283,19 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
         self.why_each_port_stopped_being_sent.lock().remove(port);
     }
 
-    /// Every output port this runtime offers right now.
+    /// Every output port this runtime offers the runtime `asking_runtime_name`
+    /// right now.
     ///
     /// The reader is cloned out from under the lock before it is called: it
     /// reads the graph, which takes the lock a compile holds, and holding this
     /// one across that would queue every other caller behind a compile.
-    pub fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
+    pub fn output_ports_it_offers_right_now(
+        &self,
+        asking_runtime_name: &str,
+    ) -> OutputPortsOfferedOnTheMesh {
         let reader = self.reader.lock().clone();
         let mut offered = reader
-            .map(|reader| reader.output_ports_it_offers_right_now())
+            .map(|reader| reader.output_ports_it_offers_right_now(asking_runtime_name))
             .unwrap_or_default();
         // Only ports the graph still offers: a record for a port whose
         // processor has since been removed would answer a reader about a port
@@ -308,7 +318,8 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
     }
 
     /// How to read one offered port's channel, or `None` while this runtime has
-    /// no graph yet, no such port is wired, or the stream does not expose it.
+    /// no graph yet, no such port is wired, or the runtime
+    /// `reading_runtime_name` may not read it.
     ///
     /// Cloned out from under the lock for the same reason
     /// [`Self::output_ports_it_offers_right_now`] is, and more so: this one
@@ -317,10 +328,15 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
         &self,
         processor_display_name: &str,
         port_name: &str,
+        reading_runtime_name: &str,
     ) -> Option<HowToReadAnOfferedOutputPort> {
         let reader = self.reader.lock().clone();
         reader.and_then(|reader| {
-            reader.how_to_read_an_offered_output_port(processor_display_name, port_name)
+            reader.how_to_read_an_offered_output_port(
+                processor_display_name,
+                port_name,
+                reading_runtime_name,
+            )
         })
     }
 }
@@ -405,7 +421,18 @@ fn answer_one_query(
     answered_key: &str,
     offered: &WhatThisRuntimeOffersOnTheMeshRegistry,
 ) {
-    match offered.output_ports_it_offers_right_now().encode() {
+    // The asker names itself in the query's payload rather than its parameters:
+    // a runtime name may hold `;` and `=`, which the parameters grammar splits
+    // on. A query naming no one is answered as a runtime nothing was wired
+    // into, which no runtime is, since no runtime name is empty.
+    let asking_runtime_name = query
+        .payload()
+        .and_then(|payload| payload.try_to_string().ok())
+        .unwrap_or_default();
+    match offered
+        .output_ports_it_offers_right_now(&asking_runtime_name)
+        .encode()
+    {
         Ok(wire_bytes) => {
             if let Err(reply_failure) = query.reply(answered_key, wire_bytes).wait() {
                 tracing::debug!(
@@ -422,15 +449,18 @@ fn answer_one_query(
     }
 }
 
-/// Ask `runtime_name` which output ports it offers, or `None` when it did not
-/// answer in time or answered something this engine cannot read.
+/// Ask `runtime_name` which output ports it offers the runtime
+/// `asking_runtime_name`, or `None` when it did not answer in time or answered
+/// something this engine cannot read.
 pub(super) fn ask_a_runtime_what_output_ports_it_offers(
     session: &zenoh::Session,
     key_space: &RuntimeMeshKeySpace,
     runtime_name: &str,
+    asking_runtime_name: &str,
 ) -> Option<OutputPortsOfferedOnTheMesh> {
     let answers = session
         .get(key_space.offered_output_ports_key_of(runtime_name))
+        .payload(asking_runtime_name.to_string())
         .timeout(HOW_LONG_A_RUNTIME_HAS_TO_LIST_ITS_PORTS)
         .wait()
         .inspect_err(|query_failure| {
@@ -463,7 +493,10 @@ struct AGraphOfferingExactly(OutputPortsOfferedOnTheMesh);
 
 #[cfg(test)]
 impl WhatThisRuntimeOffersOnTheMesh for AGraphOfferingExactly {
-    fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
+    fn output_ports_it_offers_right_now(
+        &self,
+        _asking_runtime_name: &str,
+    ) -> OutputPortsOfferedOnTheMesh {
         self.0.clone()
     }
 
@@ -471,6 +504,7 @@ impl WhatThisRuntimeOffersOnTheMesh for AGraphOfferingExactly {
         &self,
         _processor_display_name: &str,
         _port_name: &str,
+        _reading_runtime_name: &str,
     ) -> Option<HowToReadAnOfferedOutputPort> {
         None
     }
@@ -667,7 +701,7 @@ mod tests {
         let registry = a_registry_whose_graph_offers(&[("camerasource", "video")]);
         assert!(
             registry
-                .output_ports_it_offers_right_now()
+                .output_ports_it_offers_right_now("bench-rec-e5f6")
                 .ports_it_stopped_sending
                 .is_empty()
         );
@@ -678,7 +712,7 @@ mod tests {
         );
         assert_eq!(
             registry
-                .output_ports_it_offers_right_now()
+                .output_ports_it_offers_right_now("bench-rec-e5f6")
                 .why_it_stopped_being_sent("camerasource", "video"),
             Some("its publisher did not declare")
         );
@@ -686,7 +720,7 @@ mod tests {
         registry.forget_that_it_stopped_sending_an_output_port(&a_port("camerasource", "video"));
         assert!(
             registry
-                .output_ports_it_offers_right_now()
+                .output_ports_it_offers_right_now("bench-rec-e5f6")
                 .ports_it_stopped_sending
                 .is_empty()
         );
@@ -708,7 +742,7 @@ mod tests {
 
         assert!(
             registry
-                .output_ports_it_offers_right_now()
+                .output_ports_it_offers_right_now("bench-rec-e5f6")
                 .ports_it_stopped_sending
                 .is_empty()
         );
@@ -768,10 +802,11 @@ mod tests {
     fn a_registry_nobody_has_filled_offers_nothing() {
         let registry = WhatThisRuntimeOffersOnTheMeshRegistry::default();
         assert_eq!(
-            registry.output_ports_it_offers_right_now(),
+            registry.output_ports_it_offers_right_now("bench-rec-e5f6"),
             OutputPortsOfferedOnTheMesh::default()
         );
-        let how_to_read = registry.how_to_read_an_offered_output_port("camerasource", "video");
+        let how_to_read =
+            registry.how_to_read_an_offered_output_port("camerasource", "video", "bench-rec-e5f6");
         assert!(how_to_read.is_none(), "{how_to_read:?}");
     }
 }

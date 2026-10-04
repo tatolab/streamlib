@@ -522,6 +522,7 @@ fn why_this_address_cannot_be_carried_yet(
         &resolving.session,
         &resolving.key_space,
         &address.runtime_name(),
+        &resolving.this_runtimes_name,
     );
     what_the_offered_ports_say(address, offered.as_ref()).err()
 }
@@ -780,6 +781,7 @@ fn why_the_source_says_it_stopped_sending(
         &resolving.session,
         &resolving.key_space,
         address.runtime_name(),
+        &resolving.this_runtimes_name,
     )?;
     offered
         .why_it_stopped_being_sent(address.processor_display_name(), address.port_name())

@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use crate::core::compiler::Compiler;
 use crate::core::graph::{
-    ExposedOutputPortsComponent, Graph, GraphNodeWithComponents, OutputLinkPortRef, ProcessorNode,
+    ExposedOutputPortsComponent, Graph, GraphNodeWithComponents, OutputLinkPortRef,
+    OutputPortsWiredToAnotherRuntimeComponent, ProcessorNode,
 };
 use crate::core::runtime::mesh::{
     HowToReadAnOfferedOutputPort, OutputPortOfferedOnTheMesh,
@@ -39,15 +40,20 @@ impl OutputPortsInThisRuntimesGraph {
 }
 
 impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
-    fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
-        self.compiler
-            .scope(|graph, _tx| every_exposed_output_port_in(graph))
+    fn output_ports_it_offers_right_now(
+        &self,
+        asking_runtime_name: &str,
+    ) -> OutputPortsOfferedOnTheMesh {
+        self.compiler.scope(|graph, _tx| {
+            every_output_port_the_runtime_may_read_in(graph, asking_runtime_name)
+        })
     }
 
     fn how_to_read_an_offered_output_port(
         &self,
         processor_display_name: &str,
         port_name: &str,
+        reading_runtime_name: &str,
     ) -> Option<HowToReadAnOfferedOutputPort> {
         self.compiler.scope(|graph, _tx| {
             let node = graph
@@ -56,7 +62,9 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
                 .first()?;
             // Checked here as well as in the offer: a reader token is anyone's to
             // declare, and naming a port is no reason to send it.
-            if !node.has_output(port_name) || !its_stream_exposes(node, port_name) {
+            if !node.has_output(port_name)
+                || !its_stream_lets_the_runtime_read(node, port_name, reading_runtime_name)
+            {
                 return None;
             }
             let source_processor_id = node.id.clone();
@@ -116,8 +124,8 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
 /// The one check the offer and the egress both read, so a runtime can never
 /// answer that it offers a port it then declines to send.
 ///
-/// Nameability alone: the offer is answered for every exposed port on every
-/// query, and a sending runtime does no work for a port nobody reads, so this
+/// Nameability alone: the offer is answered for every port the asker may read
+/// on every query, and a sending runtime does no work for a port nobody reads, so this
 /// may touch nothing but the two names. Every other way a port turns out
 /// unsendable is found when its egress starts, by the egress.
 fn the_channel_an_output_port_publishes_to(
@@ -128,27 +136,35 @@ fn the_channel_an_output_port_publishes_to(
         .map_err(|cannot_be_named| format!("its channel cannot be named: {cannot_be_named}"))
 }
 
-/// Whether the stream loaded into this runtime exposes `node`'s output port
-/// `port_name` — the one thing that lets a port leave the machine.
-fn its_stream_exposes(node: &ProcessorNode, port_name: &str) -> bool {
+/// Whether the runtime `reading_runtime_name` may read `node`'s output port
+/// `port_name`: the stream exposes it, or the stream itself wired it into an
+/// input on that runtime.
+fn its_stream_lets_the_runtime_read(
+    node: &ProcessorNode,
+    port_name: &str,
+    reading_runtime_name: &str,
+) -> bool {
     node.get::<ExposedOutputPortsComponent>()
         .is_some_and(|exposed| exposed.exposes(port_name))
+        || node
+            .get::<OutputPortsWiredToAnotherRuntimeComponent>()
+            .is_some_and(|wired| wired.wires_into(port_name, reading_runtime_name))
 }
 
-/// Every exposed output port in `graph`, addressed the way the mesh addresses
-/// one, split into what this runtime can send and what it holds and cannot.
-fn every_exposed_output_port_in(graph: &Graph) -> OutputPortsOfferedOnTheMesh {
+/// Every output port in `graph` the runtime `asking_runtime_name` may read,
+/// addressed the way the mesh addresses one, split into what this runtime can
+/// send and what it holds and cannot.
+fn every_output_port_the_runtime_may_read_in(
+    graph: &Graph,
+    asking_runtime_name: &str,
+) -> OutputPortsOfferedOnTheMesh {
     let mut ports = Vec::new();
     let mut ports_it_holds_and_cannot_send = Vec::new();
     for node in graph.traversal().v(()).iter() {
-        let Some(exposed_output_ports) = node.get::<ExposedOutputPortsComponent>() else {
-            continue;
-        };
-        for port in node
-            .ports
-            .outputs
-            .iter()
-            .filter(|port| exposed_output_ports.exposes(&port.name))
+        for port in
+            node.ports.outputs.iter().filter(|port| {
+                its_stream_lets_the_runtime_read(node, &port.name, asking_runtime_name)
+            })
         {
             match the_channel_an_output_port_publishes_to(node.id.as_str(), &port.name) {
                 Ok(_) => ports.push(OutputPortOfferedOnTheMesh {
@@ -258,6 +274,81 @@ mod tests {
         });
     }
 
+    /// Record that the stream wired `port_name` of the node `display_name` names
+    /// into an input on `input_runtime_name`, as asking that runtime for the
+    /// link does.
+    fn wire_into_another_runtime(
+        compiler: &Compiler,
+        display_name: &str,
+        port_name: &str,
+        input_runtime_name: &str,
+    ) {
+        compiler.scope(|graph, _tx| {
+            let processor_id = graph
+                .traversal()
+                .v_with_node_name(display_name)
+                .first()
+                .expect("the node is in the graph")
+                .id
+                .clone();
+            graph
+                .traversal_mut()
+                .v(&processor_id)
+                .first_mut()
+                .expect("the node is in the graph")
+                .insert_component_without_rendering_it(OutputPortsWiredToAnotherRuntimeComponent(
+                    [crate::core::graph::OutputPortWiredToAnotherRuntime {
+                        port_name: port_name.to_string(),
+                        input_runtime_name: input_runtime_name.to_string(),
+                    }]
+                    .into(),
+                ));
+        });
+    }
+
+    /// A port the stream wired into another runtime is that runtime's to read
+    /// whatever its exposure, and no other runtime's.
+    ///
+    /// Mental-revert: drop the wired arm from `its_stream_lets_the_runtime_read`
+    /// and the wired runtime is refused its own stream's link; read the wiring
+    /// without the runtime's name and every runtime may read the port.
+    #[test]
+    fn a_port_the_stream_wired_into_another_runtime_is_that_runtimes_to_read_and_no_others() {
+        let (compiler, display_name, output_writer) =
+            a_compiler_holding_one_output_only_processor();
+        wire_into_another_runtime(&compiler, &display_name, "out1", "wall-screen-7c1d");
+        let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
+        let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
+
+        assert!(
+            !reads_the_graph
+                .output_ports_it_offers_right_now("bench-rec-e5f6")
+                .offers(&display_name, "out1"),
+            "a runtime the stream never wired the port into is not offered it"
+        );
+        assert!(
+            reads_the_graph
+                .how_to_read_an_offered_output_port(&display_name, "out1", "bench-rec-e5f6")
+                .is_none()
+        );
+        assert!(
+            !output_writer.has_channel_publisher("out1"),
+            "a runtime the port was never wired into opens nothing by naming it"
+        );
+
+        assert!(
+            reads_the_graph
+                .output_ports_it_offers_right_now("wall-screen-7c1d")
+                .offers(&display_name, "out1"),
+            "the runtime the stream wired the port into is offered it"
+        );
+        assert!(
+            reads_the_graph
+                .how_to_read_an_offered_output_port(&display_name, "out1", "wall-screen-7c1d")
+                .is_some()
+        );
+    }
+
     /// Asking how to read an offered port is what opens its channel, because
     /// the mesh's egress is the first consumer a port nothing local reads ever
     /// has.
@@ -280,7 +371,7 @@ mod tests {
         );
 
         let how_to_read = reads_the_graph
-            .how_to_read_an_offered_output_port(&display_name, "out1")
+            .how_to_read_an_offered_output_port(&display_name, "out1", "bench-rec-e5f6")
             .expect("an offered port says how to read it");
 
         assert!(
@@ -306,7 +397,7 @@ mod tests {
         let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
 
-        let offered = reads_the_graph.output_ports_it_offers_right_now();
+        let offered = reads_the_graph.output_ports_it_offers_right_now("bench-rec-e5f6");
         assert!(offered.offers(&display_name, "out1"), "{offered:?}");
         assert!(
             !output_writer.has_channel_publisher("out1"),
@@ -343,7 +434,7 @@ mod tests {
         let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
 
-        let answered = reads_the_graph.output_ports_it_offers_right_now();
+        let answered = reads_the_graph.output_ports_it_offers_right_now("bench-rec-e5f6");
         assert!(
             !answered.offers(&display_name, "outOne"),
             "a port the mesh cannot send is not on offer: {answered:?}"
@@ -366,7 +457,7 @@ mod tests {
         let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
 
-        let answered = reads_the_graph.output_ports_it_offers_right_now();
+        let answered = reads_the_graph.output_ports_it_offers_right_now("bench-rec-e5f6");
         assert!(answered.ports.is_empty(), "{answered:?}");
         assert!(
             answered.ports_it_holds_and_cannot_send.is_empty(),
@@ -389,7 +480,7 @@ mod tests {
 
         assert!(
             reads_the_graph
-                .how_to_read_an_offered_output_port(&display_name, "out1")
+                .how_to_read_an_offered_output_port(&display_name, "out1", "bench-rec-e5f6")
                 .is_none()
         );
         assert!(
@@ -408,12 +499,12 @@ mod tests {
 
         assert!(
             reads_the_graph
-                .how_to_read_an_offered_output_port(&display_name, "no_such_port")
+                .how_to_read_an_offered_output_port(&display_name, "no_such_port", "bench-rec-e5f6")
                 .is_none()
         );
         assert!(
             reads_the_graph
-                .how_to_read_an_offered_output_port("NoSuchProcessor", "out1")
+                .how_to_read_an_offered_output_port("NoSuchProcessor", "out1", "bench-rec-e5f6")
                 .is_none()
         );
     }

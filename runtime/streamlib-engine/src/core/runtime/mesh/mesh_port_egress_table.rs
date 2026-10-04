@@ -288,35 +288,39 @@ fn a_runtime_started_reading(
     if sending.contains_key(&port) {
         return;
     }
-    let how_to_send_the_port =
-        match how_this_runtime_would_send(table.offered, table.this_runtimes_name, &port) {
-            Ok(how_to_send_the_port) => how_to_send_the_port,
-            Err(WhyThisRuntimeWouldNotSendAPort::ItOffersNoSuchPort) => {
-                // Nothing recorded and nothing opened: the reader was already
-                // refused at the offer, and a token naming a port is no reason
-                // to send it.
-                tracing::debug!(
-                    "{} declared a reader token for {port}, which this runtime does not offer",
-                    reader.reading_runtime_name
-                );
-                return;
-            }
-            Err(WhyThisRuntimeWouldNotSendAPort::ItCannotSendIt(why_it_cannot_be_sent)) => {
-                // Said rather than passed over: the reader wired against the
-                // offered-ports answer and will wait on an egress token that
-                // never comes. Recorded as well as logged, because that reader
-                // is on another machine and this log is not.
-                tracing::warn!(
-                    "{} is reading {port} and this runtime cannot send it, so that link waits on \
+    let how_to_send_the_port = match how_this_runtime_would_send(
+        table.offered,
+        table.this_runtimes_name,
+        &port,
+        &reader.reading_runtime_name,
+    ) {
+        Ok(how_to_send_the_port) => how_to_send_the_port,
+        Err(WhyThisRuntimeWouldNotSendAPort::ItOffersNoSuchPort) => {
+            // Nothing recorded and nothing opened: the reader was already
+            // refused at the offer, and a token naming a port is no reason
+            // to send it.
+            tracing::debug!(
+                "{} declared a reader token for {port}, which this runtime does not offer",
+                reader.reading_runtime_name
+            );
+            return;
+        }
+        Err(WhyThisRuntimeWouldNotSendAPort::ItCannotSendIt(why_it_cannot_be_sent)) => {
+            // Said rather than passed over: the reader wired against the
+            // offered-ports answer and will wait on an egress token that
+            // never comes. Recorded as well as logged, because that reader
+            // is on another machine and this log is not.
+            tracing::warn!(
+                "{} is reading {port} and this runtime cannot send it, so that link waits on \
                      an egress that never starts: {why_it_cannot_be_sent}",
-                    reader.reading_runtime_name
-                );
-                table
-                    .offered
-                    .record_why_it_stopped_sending_an_output_port(port, why_it_cannot_be_sent);
-                return;
-            }
-        };
+                reader.reading_runtime_name
+            );
+            table
+                .offered
+                .record_why_it_stopped_sending_an_output_port(port, why_it_cannot_be_sent);
+            return;
+        }
+    };
     let HowThisRuntimeWouldSendAPort {
         addressed,
         how_to_read_the_port,
@@ -363,8 +367,9 @@ fn a_runtime_started_reading(
 /// Why [`how_this_runtime_would_send`] answered no egress for a port.
 #[derive(Debug, PartialEq, Eq)]
 enum WhyThisRuntimeWouldNotSendAPort {
-    /// The port is not in this runtime's offer — not exposed, not held, or held
-    /// and listed as one it cannot send, which the reader was told at the offer.
+    /// The port is not in this runtime's offer to the reader — not one it may
+    /// read, not held, or held and listed as one it cannot send, which the
+    /// reader was told at the offer.
     ItOffersNoSuchPort,
     /// The port is offered and cannot be sent, for the reason given.
     ItCannotSendIt(String),
@@ -377,8 +382,8 @@ struct HowThisRuntimeWouldSendAPort {
     how_to_read_the_port: HowToReadAnOfferedOutputPort,
 }
 
-/// How this runtime would send `port`, or why it cannot — a port it does not
-/// offer, a port whose names do not make a mesh address, or one there is no way
+/// How this runtime would send `port` to the runtime `reading_runtime_name`,
+/// or why it cannot — a port it does not offer that runtime, a port whose names do not make a mesh address, or one there is no way
 /// to read: a port the graph no longer holds, or one whose channel will not open.
 ///
 /// Its own function so the answer is provable without a Zenoh session and an
@@ -388,9 +393,10 @@ fn how_this_runtime_would_send(
     offered: &WhatThisRuntimeOffersOnTheMeshRegistry,
     this_runtimes_name: &str,
     port: &OutputPortOfferedOnTheMesh,
+    reading_runtime_name: &str,
 ) -> std::result::Result<HowThisRuntimeWouldSendAPort, WhyThisRuntimeWouldNotSendAPort> {
     if !offered
-        .output_ports_it_offers_right_now()
+        .output_ports_it_offers_right_now(reading_runtime_name)
         .offers(&port.processor_display_name, &port.port_name)
     {
         return Err(WhyThisRuntimeWouldNotSendAPort::ItOffersNoSuchPort);
@@ -412,7 +418,11 @@ fn how_this_runtime_would_send(
     // whose channel will not open, and cannot say which — so the reason claims
     // neither. Where a channel is what failed, this runtime's own log names it.
     let how_to_read_the_port = offered
-        .how_to_read_an_offered_output_port(&port.processor_display_name, &port.port_name)
+        .how_to_read_an_offered_output_port(
+            &port.processor_display_name,
+            &port.port_name,
+            reading_runtime_name,
+        )
         .ok_or_else(|| {
             WhyThisRuntimeWouldNotSendAPort::ItCannotSendIt(
                 "this runtime answered that it offers that port and then could not open a way \
@@ -655,7 +665,7 @@ mod tests {
         );
         assert!(
             offered
-                .output_ports_it_offers_right_now()
+                .output_ports_it_offers_right_now("bench-rec-e5f6")
                 .ports_it_stopped_sending
                 .is_empty(),
             "a healthy egress must not answer a reader with a dead predecessor's reason"
@@ -690,7 +700,7 @@ mod tests {
 
         assert_eq!(
             offered
-                .output_ports_it_offers_right_now()
+                .output_ports_it_offers_right_now("bench-rec-e5f6")
                 .why_it_stopped_being_sent("KnownAudioSignalSource", "audio"),
             Some("it could not take a destination slot")
         );
@@ -720,6 +730,7 @@ mod tests {
                 &offered,
                 "bench-cam-a1b2",
                 &a_port("camerasource", "video"),
+                "bench-rec-e5f6",
             )
             .err()
         else {
@@ -747,6 +758,7 @@ mod tests {
                 &offered,
                 "a runtime/named illegally",
                 &a_port("camerasource", "video"),
+                "bench-rec-e5f6",
             )
             .err()
         else {
@@ -774,7 +786,13 @@ mod tests {
             a_port("displaywindow", "video"),
         ] {
             assert_eq!(
-                how_this_runtime_would_send(&offered, "bench-cam-a1b2", &unoffered).err(),
+                how_this_runtime_would_send(
+                    &offered,
+                    "bench-cam-a1b2",
+                    &unoffered,
+                    "bench-rec-e5f6"
+                )
+                .err(),
                 Some(WhyThisRuntimeWouldNotSendAPort::ItOffersNoSuchPort),
                 "{unoffered}"
             );
@@ -814,7 +832,7 @@ mod tests {
         assert!(sending.is_empty(), "the last reader takes the egress too");
         assert!(
             offered
-                .output_ports_it_offers_right_now()
+                .output_ports_it_offers_right_now("bench-rec-e5f6")
                 .ports_it_stopped_sending
                 .is_empty()
         );

@@ -555,7 +555,10 @@ struct TheOnePortThisPeerOffers {
 }
 
 impl WhatThisRuntimeOffersOnTheMesh for TheOnePortThisPeerOffers {
-    fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
+    fn output_ports_it_offers_right_now(
+        &self,
+        _asking_runtime_name: &str,
+    ) -> OutputPortsOfferedOnTheMesh {
         OutputPortsOfferedOnTheMesh {
             ports: vec![OutputPortOfferedOnTheMesh {
                 processor_display_name: self.processor_display_name.clone(),
@@ -573,6 +576,7 @@ impl WhatThisRuntimeOffersOnTheMesh for TheOnePortThisPeerOffers {
         &self,
         processor_display_name: &str,
         port_name: &str,
+        _reading_runtime_name: &str,
     ) -> Option<HowToReadAnOfferedOutputPort> {
         if self.refuse_to_say_how_to_read_the_port {
             return None;

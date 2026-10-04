@@ -215,11 +215,23 @@ impl LinkRequestPeerProcess {
         stdin.flush().expect("the command is flushed");
     }
 
-    /// Add a processor under `display_name` and wait for the peer to say so.
+    /// Add a processor under `display_name`, its output exposed, and wait for
+    /// the peer to say so.
     fn add_a_processor_displayed_as(&mut self, display_name: &str) {
+        self.add_a_processor_displayed_as_exposing_its_output_or_not(display_name, true);
+    }
+
+    /// Add a processor under `display_name`, exposing its output only when
+    /// `expose` says so, and wait for the peer to say so.
+    fn add_a_processor_displayed_as_exposing_its_output_or_not(
+        &mut self,
+        display_name: &str,
+        expose: bool,
+    ) {
         self.ask_it_to(serde_json::json!({
             "command": "add",
             "display_name": display_name,
+            "expose": expose,
         }));
         self.wait_until(&format!("the peer to add {display_name}"), || {
             self.everything_it_has_reported().iter().any(|reported| {
@@ -376,6 +388,109 @@ fn a_push_lands_on_the_runtime_that_owns_the_input_naming_the_runtime_that_asked
         sending.the_requests_it_is_waiting_on().is_empty()
     });
 
+    sending.ask_it_to_leave();
+    receiving.ask_it_to_leave();
+}
+
+/// A stream's own wiring runs whatever the port's exposure: a push from a port
+/// the stream does not expose is offered to the runtime it was pushed to, and
+/// a third runtime wiring an unexposed port of the same stream is refused.
+///
+/// What it catches: exposure read as a gate on the stream's own links — the
+/// pushed link refused as an unoffered port, which leaves a stream unable to
+/// send its own output to another machine without making it public — and the
+/// stream's own wiring leaking into an offer to a runtime it never wired.
+///
+/// The control link's refusal is what makes the other half meaningful: both
+/// links are resolved on the same passes, so once the refusal lands the pushed
+/// link has been asked about too.
+#[test]
+#[serial]
+fn a_streams_own_push_from_an_unexposed_port_is_offered_only_to_the_runtime_it_pushed_to() {
+    let mesh_name = a_mesh_name_of_its_own("ownpush");
+    let receiving_endpoint = a_listen_endpoint_of_its_own();
+    let receiving_runtime_directory = a_runtime_directory_of_its_own("op-recv");
+    let sending_runtime_directory = a_runtime_directory_of_its_own("op-send");
+    let wiring_runtime_directory = a_runtime_directory_of_its_own("op-agent");
+
+    let mut receiving = LinkRequestPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "xr-op-receiver".to_string(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![receiving_endpoint.clone()],
+        peer_endpoints: Vec::new(),
+        runtime_directory: receiving_runtime_directory.path().to_path_buf(),
+    });
+    receiving.wait_until_it_is_up();
+    receiving.add_a_processor_displayed_as(THE_DESTINATIONS_DISPLAY_NAME);
+    receiving.add_a_processor_displayed_as("secondwindow");
+
+    let mut sending = LinkRequestPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "xr-op-sender".to_string(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![a_listen_endpoint_of_its_own()],
+        peer_endpoints: vec![receiving_endpoint.clone()],
+        runtime_directory: sending_runtime_directory.path().to_path_buf(),
+    });
+    sending.wait_until_it_is_up();
+    sending
+        .add_a_processor_displayed_as_exposing_its_output_or_not(THE_SOURCES_DISPLAY_NAME, false);
+    sending.add_a_processor_displayed_as_exposing_its_output_or_not("secondsource", false);
+
+    let mut wiring = LinkRequestPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "xr-op-agent".to_string(),
+        mesh_name,
+        listen_endpoints: vec![a_listen_endpoint_of_its_own()],
+        peer_endpoints: vec![receiving_endpoint],
+        runtime_directory: wiring_runtime_directory.path().to_path_buf(),
+    });
+    wiring.wait_until_it_is_up();
+
+    sending.ask_it_to(serde_json::json!({
+        "command": "request_link",
+        "from_display_name": THE_SOURCES_DISPLAY_NAME,
+        "to_runtime_name": "xr-op-receiver",
+        "to_display_name": THE_DESTINATIONS_DISPLAY_NAME,
+    }));
+    wiring.ask_it_to(serde_json::json!({
+        "command": "request_link",
+        "from_runtime_name": "xr-op-sender",
+        "from_display_name": "secondsource",
+        "to_runtime_name": "xr-op-receiver",
+        "to_display_name": "secondwindow",
+    }));
+
+    let the_link_from = |source_node: &str| {
+        receiving
+            .the_links_it_last_reported()
+            .into_iter()
+            .find(|link| link["source"]["node"] == source_node)
+    };
+    receiving.wait_until(
+        "the third party's link from an unexposed port to be refused",
+        || the_link_from("secondsource").is_some_and(|link| link["state"] == "error"),
+    );
+
+    let refused = the_link_from("secondsource").expect("the refused link is still rendered");
+    assert!(
+        refused["error_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("offers no output port secondsource/video")),
+        "a port the stream neither exposes nor wired here is not offered: {refused}"
+    );
+    let pushed = the_link_from(THE_SOURCES_DISPLAY_NAME).expect("the pushed link landed");
+    assert_ne!(
+        pushed["state"], "error",
+        "the stream's own push must never be refused for the port's exposure: {pushed}"
+    );
+    assert!(
+        !pushed["awaiting_remote_reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("offers no output port"),
+        "the stream's own push is offered to the runtime it pushed to: {pushed}"
+    );
+
+    wiring.ask_it_to_leave();
     sending.ask_it_to_leave();
     receiving.ask_it_to_leave();
 }

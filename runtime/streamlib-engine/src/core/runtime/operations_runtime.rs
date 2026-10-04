@@ -13,8 +13,8 @@ use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkRequestUniqueId, LinkUniqueId,
-    MeshPortAddress, PendingDeletionComponent, ProcessorUniqueId, StateComponent,
-    node_names_listed_for_a_refusal,
+    MeshPortAddress, OutputPortWiredToAnotherRuntime, OutputPortsWiredToAnotherRuntimeComponent,
+    PendingDeletionComponent, ProcessorUniqueId, StateComponent, node_names_listed_for_a_refusal,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
@@ -518,6 +518,40 @@ fn this_runtimes_address_for_one_of_its_own_output_ports(
     MeshPortAddress::new(this_runtimes_name, display_name, port_name)
 }
 
+/// Record that the stream wired its own output port at `source_address` into an
+/// input on `input_runtime_name`, so that runtime may read the port.
+fn record_that_this_stream_wired_its_output_port_into_another_runtime(
+    compiler: &Arc<Compiler>,
+    source_address: &MeshPortAddress,
+    input_runtime_name: &str,
+) {
+    compiler.scope(|graph, _tx| {
+        let Some(processor_id) = graph
+            .traversal()
+            .v_with_node_name(source_address.processor_display_name())
+            .first()
+            .map(|node| node.id.clone())
+        else {
+            return;
+        };
+        let Some(node) = graph.traversal_mut().v(&processor_id).first_mut() else {
+            return;
+        };
+        let wired = OutputPortWiredToAnotherRuntime {
+            port_name: source_address.port_name().to_string(),
+            input_runtime_name: input_runtime_name.to_string(),
+        };
+        match node.get_mut::<OutputPortsWiredToAnotherRuntimeComponent>() {
+            Some(wired_ports) => {
+                wired_ports.0.insert(wired);
+            }
+            None => node.insert_component_without_rendering_it(
+                OutputPortsWiredToAnotherRuntimeComponent([wired].into()),
+            ),
+        }
+    });
+}
+
 /// Refuse a destination this graph has no processor or no such input port for,
 /// with the typed error a caller can act on.
 fn refuse_a_destination_this_graph_cannot_take(
@@ -887,8 +921,18 @@ impl RuntimeOperations for Runner {
                 &port_name,
             )?,
         };
-        let link_request_id = LinkRequestUniqueId::new();
         let input_runtime_name = to.runtime_name().to_string();
+        if source_address.names_the_runtime(self.runtime_mesh.runtime_name()) {
+            // Before the request leaves: the input's runtime answers it by asking
+            // this one for the port, and a stream's own wiring runs whatever the
+            // port's exposure.
+            record_that_this_stream_wired_its_output_port_into_another_runtime(
+                &self.compiler,
+                &source_address,
+                &input_runtime_name,
+            );
+        }
+        let link_request_id = LinkRequestUniqueId::new();
         self.runtime_mesh.ask_another_runtime_for_a_link(
             ALinkRequestOnTheMesh::asking_for_a_link(
                 link_request_id.clone(),
