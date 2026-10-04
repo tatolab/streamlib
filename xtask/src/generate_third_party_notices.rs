@@ -1252,7 +1252,7 @@ mod tests {
     #[test]
     fn a_package_directory_outside_the_repository_is_refused_rather_than_baked_in() {
         for rejected in [
-            "/home/someone/streamlib/packages/streamlib-moq",
+            "/home/someone/streamlib/packages/streamlib-webrtc",
             "../elsewhere",
         ] {
             let target = NoticesGenerationTarget::ExtensionPackage {
@@ -1267,7 +1267,7 @@ mod tests {
 
         assert!(
             NoticesGenerationTarget::ExtensionPackage {
-                package_directory: PathBuf::from("packages/streamlib-moq"),
+                package_directory: PathBuf::from("packages/streamlib-webrtc"),
             }
             .ensure_the_package_directory_is_repository_relative()
             .is_ok()

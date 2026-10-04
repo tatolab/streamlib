@@ -14,8 +14,8 @@ use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 use crate::core::runtime::LoadedCapabilityExtension;
 
 /// The processor-identity wire type. Defined in the engine-free
-/// `streamlib-processor-schema` crate so the MoQ catalog and the authoring
-/// chain share one definition; re-exported here so the
+/// `streamlib-processor-schema` crate so the engine and `streamlib-macros`
+/// share one definition; re-exported here so the
 /// `streamlib::sdk::json_schema` facade the API server consumes resolves it.
 /// The `utoipa` feature the engine enables gives it the `utoipa::ToSchema`
 /// derive the aggregate response types below require.

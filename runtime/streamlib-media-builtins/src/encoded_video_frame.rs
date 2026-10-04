@@ -75,7 +75,7 @@ impl EncodedVideoCodec {
 /// Encoded video frame bag: one Annex-B access unit riding the link inline,
 /// described by the codec, ordering pair, and coded extent beside it.
 ///
-/// `group_index` / `sequence_index` are the MoQ-mappable ordering pair:
+/// `group_index` / `sequence_index` are the producer-scoped ordering pair:
 /// `sequence_index` is monotonic in publication order for the life of the
 /// producer — it survives a session re-mint, so a gap is always loss and
 /// never a restart — `group_index` counts sync points, and a consumer that

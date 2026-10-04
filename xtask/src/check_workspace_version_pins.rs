@@ -416,10 +416,9 @@ fn list_scanned_manifest_repo_relative_paths(workspace_root: &Path) -> Result<Ve
         .filter(|repo_relative_path| {
             repo_relative_path == "Cargo.toml" || repo_relative_path.ends_with("/Cargo.toml")
         })
-        // A vendored tree — the vulkanalia fork at the root, the MoQ wheel's
-        // moq-transport under the wheel — is verbatim plus its recorded
-        // patches; nothing in it may be rewritten, and none of its pins name
-        // a workspace-versioned crate anyway.
+        // A vendored tree — the vulkanalia fork at the root — is verbatim
+        // plus its recorded patches; nothing in it may be rewritten, and none
+        // of its pins name a workspace-versioned crate anyway.
         .filter(|repo_relative_path| !is_inside_a_vendored_tree(repo_relative_path))
         .collect())
 }
