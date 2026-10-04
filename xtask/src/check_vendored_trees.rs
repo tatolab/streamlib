@@ -18,9 +18,9 @@
 //! generated `vk` / sys module declaration; a re-vendor must preserve those.
 //!
 //! When it trips on a DELIBERATE re-vendor or documented local patch:
-//! follow the update recipe in the tree's provenance doc and update the
-//! recorded hashes below in the same commit — the hash change in the diff is
-//! the loud signal the vendored tree was touched.
+//! follow the update recipe in `docs/architecture/vendored-vulkanalia.md` and
+//! update the recorded hashes below in the same commit — the hash change in
+//! the diff is the loud signal the vendored tree was touched.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -127,10 +127,9 @@ pub fn run(project_root: &Path) -> Result<()> {
     }
     msg.push_str(
         "If this change is a DELIBERATE re-vendor or a documented local patch, follow the \
-         update recipe in the tree's provenance doc (docs/architecture/vendored-vulkanalia.md) \
-         and update the recorded hashes in xtask/src/check_vendored_trees.rs \
-         (VENDORED_TREES) in the SAME commit, using the \
-         `found` values above. Otherwise revert the vendored-tree edit.",
+         update recipe in docs/architecture/vendored-vulkanalia.md and update the recorded \
+         hashes in xtask/src/check_vendored_trees.rs (VENDORED_TREES) in the SAME commit, \
+         using the `found` values above. Otherwise revert the vendored-tree edit.",
     );
     anyhow::bail!(msg)
 }

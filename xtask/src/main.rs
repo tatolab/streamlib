@@ -1148,8 +1148,8 @@ enum Commands {
     /// crate dir and fails on any byte change vs. the recorded hash — the
     /// guard against accidental in-place edits (a workspace `cargo fmt --all`
     /// sweep is the classic cause). Deliberate re-vendors and recorded patches
-    /// update the hashes in the same commit per the tree's provenance doc
-    /// under `docs/architecture/`.
+    /// update the hashes in the same commit per
+    /// `docs/architecture/vendored-vulkanalia.md`.
     CheckVendoredTrees,
 
     /// CI gate keeping every in-tree `{ path = "…", version = "…" }` requirement
