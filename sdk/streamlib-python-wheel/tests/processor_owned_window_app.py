@@ -22,39 +22,57 @@ import os
 import sys
 
 import streamlib
+from streamlib import NodeReference, Stream, compile_stream_to_graph, stream
 
 import processor_owned_window_probes
 
 
-def _source(runtime: "streamlib.Runtime", source_name: str):
+def _add_source(stream: Stream, source_name: str) -> NodeReference:
     if source_name == "camera":
-        return runtime.add(
+        return stream.add(
             streamlib.CameraSource,
             config={
                 "device_id": os.environ.get("STREAMLIB_CAMERA_DEVICE", "/dev/video0")
             },
         )
     if source_name == "test_pattern":
-        return runtime.add(
+        return stream.add(
             streamlib.TestPatternSource, config={"width": 640, "height": 480}
         )
     raise SystemExit(f"unknown source {source_name!r}: use 'camera' or 'test_pattern'")
 
 
-def scenario_beside_a_display_window(probe_class_name: str, source_name: str) -> None:
+@stream
+def a_probe_window_beside_a_display_window(stream: Stream) -> None:
+    """The source `argv[3]` names into both the probe `argv[2]` names and a `DisplayWindow`."""
+    probe_class_name, source_name = sys.argv[2], sys.argv[3]
+    source = _add_source(stream, source_name)
+    probe = stream.add(getattr(processor_owned_window_probes, probe_class_name))
+    display = stream.add(streamlib.DisplayWindow, config={"title": DISPLAY_TITLE})
+    stream.connect(source.output("video"), probe.input("video_from_upstream"))
+    stream.connect(source.output("video"), display.input("video"))
+
+
+@stream
+def a_probe_window_with_no_display_server(stream: Stream) -> None:
+    """The source `argv[3]` names into the probe `argv[2]` names, alone."""
+    probe_class_name, source_name = sys.argv[2], sys.argv[3]
+    source = _add_source(stream, source_name)
+    probe = stream.add(getattr(processor_owned_window_probes, probe_class_name))
+    stream.connect(source.output("video"), probe.input("video_from_upstream"))
+
+
+def scenario_beside_a_display_window() -> None:
     """The arrangement a debug window is really used in: the pipeline's own
     display up, and a processor's window beside it."""
+    graph = compile_stream_to_graph(a_probe_window_beside_a_display_window)
     runtime = streamlib.Runtime()
-    source = _source(runtime, source_name)
-    probe = runtime.add(getattr(processor_owned_window_probes, probe_class_name))
-    display = runtime.add(streamlib.DisplayWindow, config={"title": DISPLAY_TITLE})
-    runtime.connect(source.output("video"), probe.input("video_from_upstream"))
-    runtime.connect(source.output("video"), display.input("video"))
+    runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
 
 
-def scenario_with_no_display_server(probe_class_name: str, source_name: str) -> None:
+def scenario_with_no_display_server() -> None:
     """The same app on a process that can get no window at all.
 
     Both variables go before anything reads them: winit picks X11 off `DISPLAY`
@@ -65,10 +83,9 @@ def scenario_with_no_display_server(probe_class_name: str, source_name: str) -> 
     """
     os.environ.pop("DISPLAY", None)
     os.environ.pop("WAYLAND_DISPLAY", None)
+    graph = compile_stream_to_graph(a_probe_window_with_no_display_server)
     runtime = streamlib.Runtime()
-    source = _source(runtime, source_name)
-    probe = runtime.add(getattr(processor_owned_window_probes, probe_class_name))
-    runtime.connect(source.output("video"), probe.input("video_from_upstream"))
+    runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
 
@@ -84,4 +101,4 @@ SCENARIOS = {
 
 
 if __name__ == "__main__":
-    SCENARIOS[sys.argv[1]](sys.argv[2], sys.argv[3])
+    SCENARIOS[sys.argv[1]]()
