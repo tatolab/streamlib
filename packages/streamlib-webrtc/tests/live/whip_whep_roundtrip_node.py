@@ -24,6 +24,7 @@ carries the stream key as a path segment, and argv is world-readable through
 """
 
 import argparse
+import functools
 import os
 
 import streamlib
@@ -61,6 +62,7 @@ def _session_configuration(url_variable: str, token_variable: str) -> dict[str, 
     return configuration
 
 
+@functools.cache
 def _parse_fixture_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     # An argument and never an environment variable: a rig carrying both a

@@ -32,6 +32,7 @@ directory either.
 """
 
 import argparse
+import functools
 import os
 from typing import Any
 
@@ -81,6 +82,7 @@ def _relay_url_from_the_environment() -> str:
     return relay_url
 
 
+@functools.cache
 def _parse_fixture_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     # An argument and never an environment variable: a rig carrying both a
