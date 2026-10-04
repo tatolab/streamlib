@@ -1277,7 +1277,7 @@ mod tests {
     /// Every directory under `packages/` whose `pyproject.toml` declares the
     /// extension entry-point group, as a repository-relative path.
     ///
-    /// Discovered rather than listed, so a third extension is covered the day
+    /// Discovered rather than listed, so a second extension is covered the day
     /// its `pyproject.toml` lands. Read off the parsed document rather than by
     /// searching the source text, which would call a package an extension for
     /// naming the group in a comment or a URL.

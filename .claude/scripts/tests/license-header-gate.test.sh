@@ -5,10 +5,9 @@
 # vendored tree's own licence headers alone, and those two pull against each
 # other. The exemption is the side that fails silently: an over-wide pathspec
 # stops covering first-party code and nothing goes red. So every exempt path is
-# paired with at least one sibling a typo would reach: a directory one segment
-# out, a name one suffix longer, or that same name with one more character and
-# no separator at all. The four cases below the vulkanalia block cover the four
-# exempt dirs between them.
+# paired with a sibling a typo would reach: a name one suffix longer, or that
+# same name with one more character and no separator at all. The three sibling
+# cases after the vulkanalia pass case cover the three exempt dirs between them.
 #
 # No toolchain, no network: bash + git. Each case is a throwaway repo, because
 # the gate discovers files with `git ls-files` and would otherwise read the

@@ -255,7 +255,7 @@ def extension_package_directory_names():
     """Every directory under `packages/` that is an extension wheel.
 
     An extension is one whose `pyproject.toml` declares the entry-point group
-    pip records at install — discovered rather than listed, so a third extension
+    pip records at install — discovered rather than listed, so a second extension
     is covered the day its `pyproject.toml` lands.
     """
     names = []
