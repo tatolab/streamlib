@@ -20,11 +20,11 @@ Type "streamlib nodes"
 Enter
 Sleep 2.5s
 
-Type "streamlib graph | jq '.processors[] | {display_name, state}'"
+Type "streamlib graph | jq '.nodes[] | {name, state: .components.state}'"
 Enter
 Sleep 3.5s
 
-Type "streamlib tap CameraSource/video --count 3"
+Type "streamlib tap desk-my-rig-8kq3/camerasource/video --count 3"
 Enter
 Sleep 4s
 

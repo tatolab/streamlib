@@ -1338,8 +1338,12 @@ impl Runner {
             ExposedOutputPortsComponent, GraphNodeWithComponents, cast_exposed_name_to_url_safe,
         };
 
+        for node in &graph.nodes {
+            crate::core::processors::PROCESSOR_REGISTRY
+                .resolve_processor_type_if_unregistered(&node.processor_type)?;
+        }
         graph.validate()?;
-        self.refuse_a_node_name_this_graph_already_holds(graph)?;
+        self.refuse_what_this_runtimes_graph_contradicts(graph)?;
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
@@ -1364,9 +1368,12 @@ impl Runner {
                     OutputLinkPortRef::new(processor_id_of(link.source.node())?, link.source.port())
                 }
             };
-            match link.target.mesh_port_address() {
+            match link.target.mesh_port_address().transpose()? {
+                Some(address) if address.names_the_runtime(self.runtime_mesh.runtime_name()) => {
+                    self.connect(from, InputLinkPortRef::on_another_runtime(address))?;
+                }
                 Some(address) => {
-                    RuntimeOperations::request_link_on_remote_input_runtime(self, from, address?)?;
+                    RuntimeOperations::request_link_on_remote_input_runtime(self, from, address)?;
                 }
                 None => {
                     self.connect(
@@ -1404,20 +1411,45 @@ impl Runner {
         Ok(())
     }
 
-    /// Refuse, before anything is added, a node `graph` names that this
-    /// runtime's graph already holds. With `validate` run first, a load refused
-    /// for anything in the graph itself or for a name it shares adds nothing; a
-    /// link the engine then refuses still leaves the nodes added before it.
-    fn refuse_a_node_name_this_graph_already_holds(
+    /// Refuse, before anything is added, what this runtime's own graph would
+    /// refuse partway through the load: a node name it already holds, and an
+    /// address naming this runtime whose node neither `graph` nor this
+    /// runtime's graph holds. With `validate` run first, a load refused for
+    /// either adds nothing; a link the engine refuses after that still leaves
+    /// the nodes added before it.
+    fn refuse_what_this_runtimes_graph_contradicts(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
     ) -> Result<()> {
+        let this_runtimes_name = self.runtime_mesh.runtime_name();
         self.compiler.scope(|live_graph, _tx| {
-            graph.nodes.iter().try_for_each(|node| {
-                live_graph
-                    .the_requested_node_name_unless_taken(&node.name)
-                    .map(|_| ())
-            })
+            for node in &graph.nodes {
+                live_graph.the_requested_node_name_unless_taken(&node.name)?;
+            }
+            for link in &graph.links {
+                for end in [&link.source, &link.target] {
+                    let Some(address) = end.mesh_port_address().transpose()? else {
+                        continue;
+                    };
+                    if !address.names_the_runtime(this_runtimes_name) {
+                        continue;
+                    }
+                    let named = address.processor_display_name();
+                    let in_the_loaded_graph = graph.nodes.iter().any(|node| {
+                        crate::core::graph::cast_exposed_name_to_url_safe(&node.name)
+                            .is_ok_and(|cast| cast == named)
+                    });
+                    if !in_the_loaded_graph
+                        && !live_graph.traversal().v_with_node_name(named).exists()
+                    {
+                        return Err(Error::ProcessorNotFound(format!(
+                            "{address} names this runtime, and neither the graph being loaded \
+                             nor this runtime holds a node named `{named}`"
+                        )));
+                    }
+                }
+            }
+            Ok(())
         })
     }
 }

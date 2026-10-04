@@ -186,8 +186,8 @@ $ streamlib nodes
 RUNTIME_NAME      RUNTIME_ID                 CONTROL_URL            PID  ALIVE?  HINT
 desk-my-rig-8kq3  Rq1w8xk3m2v0pz7ny4tbd6hsf  http://127.0.0.1:9000  48212  yes     streamlib (/home/you/my-rig)
 
-$ streamlib tap CameraSource/video --count 3
-{"channel": "CameraSource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
+$ streamlib tap desk-my-rig-8kq3/camerasource/video --count 3
+{"channel": "desk-my-rig-8kq3/camerasource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
  "bags": [{"byte_len": 214, "hex_preview": "84aa73...", "hex_truncated": false}, ...]}
 ```
 

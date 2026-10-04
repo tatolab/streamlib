@@ -264,6 +264,48 @@ fn a_load_refused_for_a_missing_link_port_adds_none_of_its_nodes() {
     );
 }
 
+/// An end addressed under this runtime's own name is a local reference: a
+/// target so named wires here, and one naming a node nobody holds is refused
+/// before anything is added.
+#[test]
+#[serial]
+fn an_end_naming_this_runtime_is_a_local_reference() {
+    let camera = register_test_type("SelfAddressedCamera", "frames_in", "video");
+
+    let runtime = Runner::new().unwrap();
+    let this_runtimes_name = the_graph_document_of(&runtime)["mesh"]["runtime_name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let refusal = runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [{"name": "front", "type": camera.as_str()}],
+            "links": [{"source": {"node": "front", "port": "video"},
+                       "target": {"runtime_name": this_runtimes_name, "node": "nobody", "port": "frames_in"}}]
+        })))
+        .expect_err("no node here is named `nobody`")
+        .to_string();
+    assert!(refusal.contains("nobody"), "{refusal}");
+    assert_eq!(
+        the_graph_document_of(&runtime)["nodes"],
+        serde_json::json!([])
+    );
+
+    runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [{"name": "front", "type": camera.as_str()},
+                      {"name": "back", "type": camera.as_str()}],
+            "links": [{"source": {"node": "front", "port": "video"},
+                       "target": {"runtime_name": this_runtimes_name, "node": "Back", "port": "frames_in"}}]
+        })))
+        .expect("a target naming this runtime wires here");
+    assert_eq!(
+        the_graph_document_of(&runtime)["links"][0]["target"],
+        serde_json::json!({"node": "back", "port": "frames_in"})
+    );
+}
+
 #[test]
 #[serial]
 fn an_exposure_named_twice_is_refused() {
