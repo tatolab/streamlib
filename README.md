@@ -103,27 +103,33 @@ streamlib dev               # your camera, live and inverted, in a window
 
 No camera on this machine? `streamlib new my-rig --test-pattern` uses the built-in test source.
 
-`app.py` is wiring and nothing else — no manifest, no `main()`, no registration file. `dev` imports
-it from the working directory and calls `setup(rt)`:
+`stream.py` is wiring and nothing else — no manifest, no registration file. `dev` reads it from the
+working directory, compiles its one `@stream` function to the stream's graph, and loads that graph:
 
 ```python
-from streamlib import CameraSource, DisplayWindow, Runtime
+from streamlib import CameraSource, DisplayWindow, Stream, stream
 
 from nodes.brightness_meter import BrightnessMeter
 from nodes.inverting_effect import InvertingEffect
 
 
-def setup(rt: Runtime) -> None:
-    source = rt.add(CameraSource)
-    effect = rt.add(InvertingEffect)
-    meter = rt.add(BrightnessMeter)
-    window = rt.add(DisplayWindow, config={"title": "StreamLib", "scaling": "fit"})
-
-    rt.connect(source.output("video"), effect.input("video_from_upstream"))
-    # One output, two readers: the window shows the frame, the meter measures it.
-    rt.connect(effect.output("video_to_downstream"), window.input("video"))
-    rt.connect(effect.output("video_to_downstream"), meter.input("video_from_upstream"))
+@stream
+def main(stream: Stream) -> None:
+    """Camera, inverted, in a window; brightness logged once a second."""
+    source = stream.add(CameraSource)
+    effect = stream.add(InvertingEffect)
+    meter = stream.add(BrightnessMeter)
+    window = stream.add(DisplayWindow, config={"title": "StreamLib", "scaling": "fit"})
+    stream.connect(source.output("video"), effect.input("video_from_upstream"))
+    stream.connect(effect.output("video_to_downstream"), window.input("video"))
+    stream.connect(
+        effect.output("video_to_downstream"), meter.input("video_from_upstream")
+    )
+    stream.expose(effect.output("video_to_downstream"))
 ```
+
+One output, two readers: the window shows the frame, the meter measures it. With several streams in
+a file, `streamlib dev stream.py:<function>` picks one.
 
 Pixels stay on the GPU. `nodes/inverting_effect.py` is one shader function:
 
@@ -210,7 +216,7 @@ Served at `POST /mcp`, mounted with the node and sharing its lifecycle — there
 process to run; `streamlib nodes` prints the URL a running node actually bound. The tools are
 `graph`, `tap`, `logs`, `exchange` and `shutdown` to observe, and `add_node`, `connect`,
 `disconnect` and `remove_node` to change the running graph: an agent writes a processor
-class into a module beside `app.py` — or `pip install`s one — names it to the node by its
+class into a module beside `stream.py` — or `pip install`s one — names it to the node by its
 `module:ClassName` path, and splices it into the live pipeline. The class runs in its own
 helper process like every other. The CLI is a pure client of exactly this surface.
 

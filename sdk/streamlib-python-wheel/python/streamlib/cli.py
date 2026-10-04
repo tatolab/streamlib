@@ -654,7 +654,7 @@ SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
 # are stored without their dot so no packaging walk skips them as hidden or
 # reads the template's `.gitignore` as its own ignore rules.
 SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE = {
-    "app.py": DEFAULT_APP_ENTRY_FILE_NAME,
+    "stream.py": DEFAULT_STREAM_ENTRY_FILE_NAME,
     "nodes/__init__.py": "nodes/__init__.py",
     SCAFFOLDED_EFFECT_MODULE_PATH: SCAFFOLDED_EFFECT_MODULE_PATH,
     SCAFFOLDED_METER_MODULE_PATH: SCAFFOLDED_METER_MODULE_PATH,
@@ -670,7 +670,7 @@ def render_scaffold_template_files(
     """Each file `new` writes, keyed by its path in the app, rendered from the templates.
 
     A placeholder is its template's own default value, so the template stays a
-    real, checkable file: the camera variant of `app.py` and a `streamlib-app`
+    real, checkable file: the camera variant of `stream.py` and a `streamlib-app`
     project name.
     """
     source_class_name, source_description = (
@@ -679,16 +679,17 @@ def render_scaffold_template_files(
         else ("CameraSource", "camera")
     )
     streamlib_import_names = ", ".join(
-        sorted([source_class_name, "DisplayWindow", "Runtime"])
+        sorted([source_class_name, "DisplayWindow", "Stream", "stream"])
     )
     substitutions_for_template_file = {
-        "app.py": {
-            "A StreamLib app: camera →": f"A StreamLib app: {source_description} →",
+        "stream.py": {
+            "A StreamLib stream: camera →": f"A StreamLib stream: {source_description} →",
             # The whole line, so each variant's names stay in sorted order.
-            "from streamlib import CameraSource, DisplayWindow, Runtime": (
+            "from streamlib import CameraSource, DisplayWindow, Stream, stream": (
                 f"from streamlib import {streamlib_import_names}"
             ),
-            "rt.add(CameraSource)": f"rt.add({source_class_name})",
+            '"""Camera, inverted,': f'"""{source_description.capitalize()}, inverted,',
+            "stream.add(CameraSource)": f"stream.add({source_class_name})",
         },
         "pyproject.toml": {'name = "streamlib-app"': f'name = "{distribution_name}"'},
     }
@@ -724,7 +725,7 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
     )
 
     # Checked before anything is written: a half-scaffolded directory is worse
-    # than a refusal, and the user's own `app.py` is the file most likely to
+    # than a refusal, and the user's own `stream.py` is the file most likely to
     # already be there.
     already_present = sorted(
         name for name in scaffolded_files if (target_directory / name).exists()
@@ -1186,8 +1187,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "new",
         help="Scaffold a new StreamLib app.",
         description=(
-            "Write app.py, nodes/, pyproject.toml, .python-version and .gitignore into "
-            "DIRECTORY — a working camera → effect → window pipeline."
+            "Write stream.py, nodes/, pyproject.toml, .python-version and .gitignore "
+            "into DIRECTORY — one @stream wiring a working camera → effect → window "
+            "pipeline, with a meter on a fan-out."
         ),
     )
     new_command.add_argument(

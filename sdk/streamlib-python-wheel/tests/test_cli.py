@@ -13,6 +13,7 @@ launch-to-a-live-node half needs a device and lives in `test_cli_launch.py`.
 
 import argparse
 import ast
+import json
 import os
 import shutil
 import subprocess
@@ -832,9 +833,9 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(
 ):
     """The bad save the scaffold actually invites.
 
-    `app.py` holds wiring the user rarely touches; the file they edit is the
+    `stream.py` holds wiring the user rarely touches; the file they edit is the
     node module, which reaches the launcher only as an import from the
-    entry file. So the traceback has to walk through `app.py` and land in the
+    entry file. So the traceback has to walk through `stream.py` and land in the
     module — naming only the entry file would point at the wrong file.
     """
     app_directory = tmp_path / "demo"
@@ -1027,7 +1028,7 @@ def test_the_control_plane_binds_every_interface_by_default():
 # ---------------------------------------------------------------------------
 
 SCAFFOLDED_FILE_NAMES = (
-    "app.py",
+    "stream.py",
     "nodes/__init__.py",
     "nodes/inverting_effect.py",
     "nodes/brightness_meter.py",
@@ -1046,6 +1047,9 @@ def test_new_writes_a_working_app(tmp_path: Path):
         assert (app_directory / file_name).is_file(), f"`new` must write {file_name}"
     assert not (app_directory / "processors").exists(), (
         "a scaffolded app keeps its node classes under `nodes/`"
+    )
+    assert not (app_directory / "app.py").exists(), (
+        "the scaffold's entry is `stream.py`; `app.py` is only a fallback `run` keeps"
     )
     assert (app_directory / ".python-version").read_text().strip() == "3.12", (
         "the scaffold pins the Python version the plan names"
@@ -1130,22 +1134,25 @@ def test_every_scaffold_template_file_is_one_new_writes():
     assert template_files == set(cli.SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE)
 
 
-def test_the_scaffolded_app_parses_and_declares_setup(tmp_path: Path):
-    """The scaffold is the first code the user reads — it must at least parse.
-
-    Parsed rather than executed: importing it would need a GPU and a camera,
-    and what this locks is that `dev` finds a `setup` in what `new` wrote.
-    """
+def test_the_scaffolded_stream_declares_one_stream_named_main(tmp_path: Path):
+    """The scaffold is the first code the user reads — `dev` with no argument
+    loads the sole `@stream` in it, so it must declare exactly one, bare."""
     app_directory = tmp_path / "demo"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
-    entry_source = (app_directory / "app.py").read_text()
+    entry_source = (app_directory / "stream.py").read_text()
     declared = ast.parse(entry_source)
-    top_level_functions = [
-        node.name for node in declared.body if isinstance(node, ast.FunctionDef)
+    stream_functions = [
+        node.name
+        for node in declared.body
+        if isinstance(node, ast.FunctionDef)
+        and [ast.unparse(decorator) for decorator in node.decorator_list] == ["stream"]
     ]
 
-    assert "setup" in top_level_functions, "`dev` finds `setup(rt)` by convention"
+    assert stream_functions == ["main"]
+    assert not any(
+        isinstance(node, ast.FunctionDef) and node.name == "setup" for node in declared.body
+    ), "an entry defining both a stream and `setup` is refused"
     assert "CameraSource" in entry_source
     assert "DisplayWindow" in entry_source
 
@@ -1187,13 +1194,13 @@ def test_each_scaffolded_processor_lives_outside_the_entry_file(
     which is a wiring error — the entry runs as `__main__`, and the child
     interpreter that runs the processor imports its class by name.
 
-    So the scaffold must teach the shape that works: wiring in `app.py`, the
+    So the scaffold must teach the shape that works: wiring in `stream.py`, the
     class in an importable module beside it.
     """
     app_directory = tmp_path / "demo"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
-    entry_source = (app_directory / "app.py").read_text()
+    entry_source = (app_directory / "stream.py").read_text()
     processor_source = (app_directory / module_path).read_text()
     module_name = module_path.removesuffix(".py").replace("/", ".")
 
@@ -1218,7 +1225,7 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu(tmp_path: Pa
     app_directory = tmp_path / "demo"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
-    entry_source = (app_directory / "app.py").read_text()
+    entry_source = (app_directory / "stream.py").read_text()
     effect_source = (app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH).read_text()
     meter_source = (app_directory / cli.SCAFFOLDED_METER_MODULE_PATH).read_text()
 
@@ -1230,13 +1237,115 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu(tmp_path: Pa
         ast.unparse(call.args[1])
         for call in ast.walk(ast.parse(entry_source))
         if isinstance(call, ast.Call)
-        and ast.unparse(call.func) == "rt.connect"
+        and ast.unparse(call.func) == "stream.connect"
         and ast.unparse(call.args[0]) == "effect.output('video_to_downstream')"
     )
     assert readers_of_the_effect_output == [
         "meter.input('video_from_upstream')",
         "window.input('video')",
     ], "the meter reads a fan-out of the effect's output, off the window's path"
+
+
+# Run in a child with the scaffold as its working directory: compiling imports
+# the scaffold's `nodes` package, and a `Runtime` reads `sys.path[0]` once per
+# process, so neither may happen in this one.
+SCAFFOLDED_STREAM_COMPILE_AND_LOAD_SCRIPT = """
+import json
+from pathlib import Path
+
+from streamlib import Runtime, cli, compile_stream_to_graph
+
+entry_namespace = cli.execute_app_entry_file(Path("stream.py").resolve())
+compiled_graph = compile_stream_to_graph(entry_namespace["main"])
+runtime = Runtime()
+try:
+    runtime.load(compiled_graph)
+finally:
+    runtime.shutdown()
+print("COMPILED_GRAPH=" + json.dumps(compiled_graph))
+"""
+
+
+@pytest.mark.parametrize(
+    ("use_test_pattern_source", "source_node_name", "source_node_type"),
+    [
+        (
+            False,
+            "camerasource",
+            "streamlib_media_builtins::camera_source::CameraSource",
+        ),
+        (
+            True,
+            "testpatternsource",
+            "streamlib_media_builtins::test_pattern_source::TestPatternSource",
+        ),
+    ],
+)
+def test_the_scaffolded_stream_compiles_to_its_graph_and_loads_without_a_device(
+    tmp_path: Path,
+    use_test_pattern_source: bool,
+    source_node_name: str,
+    source_node_type: str,
+):
+    """What `new` writes compiles to the one-shape graph and `load` takes it.
+
+    `load` resolves every node's type — the scaffold's own `@node` classes by
+    their import paths — and checks every link's ports and the exposure, all
+    before `run()` would touch a device.
+    """
+    app_directory = tmp_path / "demo"
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=use_test_pattern_source)
+
+    finished = subprocess.run(
+        [sys.executable, "-c", SCAFFOLDED_STREAM_COMPILE_AND_LOAD_SCRIPT],
+        cwd=app_directory,
+        capture_output=True,
+        text=True,
+        timeout=RESOLUTION_FAILURE_TIMEOUT_SECONDS,
+    )
+
+    assert finished.returncode == 0, finished.stdout + finished.stderr
+    (compiled_graph_line,) = [
+        line
+        for line in finished.stdout.splitlines()
+        if line.startswith("COMPILED_GRAPH=")
+    ]
+    assert json.loads(compiled_graph_line.removeprefix("COMPILED_GRAPH=")) == {
+        "stream": "main",
+        "nodes": [
+            {"name": source_node_name, "type": source_node_type, "config": {}},
+            {
+                "name": "invertingeffect",
+                "type": "nodes.inverting_effect:InvertingEffect",
+                "config": {},
+            },
+            {
+                "name": "brightnessmeter",
+                "type": "nodes.brightness_meter:BrightnessMeter",
+                "config": {},
+            },
+            {
+                "name": "displaywindow",
+                "type": "streamlib_media_builtins::display_window::DisplayWindow",
+                "config": {"title": "StreamLib", "scaling": "fit"},
+            },
+        ],
+        "links": [
+            {
+                "source": {"node": source_node_name, "port": "video"},
+                "target": {"node": "invertingeffect", "port": "video_from_upstream"},
+            },
+            {
+                "source": {"node": "invertingeffect", "port": "video_to_downstream"},
+                "target": {"node": "displaywindow", "port": "video"},
+            },
+            {
+                "source": {"node": "invertingeffect", "port": "video_to_downstream"},
+                "target": {"node": "brightnessmeter", "port": "video_from_upstream"},
+            },
+        ],
+        "exposed": [{"node": "invertingeffect", "port": "video_to_downstream"}],
+    }
 
 
 def test_the_scaffold_depends_on_streamlib_and_numpy_only(tmp_path: Path):
@@ -1255,10 +1364,13 @@ def test_the_test_pattern_scaffold_needs_no_capture_device(tmp_path: Path):
 
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
 
-    entry_source = (app_directory / "app.py").read_text()
+    entry_source = (app_directory / "stream.py").read_text()
     ast.parse(entry_source)
     assert "TestPatternSource" in entry_source
     assert "CameraSource" not in entry_source
+    assert "camera" not in entry_source.lower(), (
+        "the test-pattern stream's docstrings describe a test pattern, not a camera"
+    )
     # The nodes are source-agnostic, so the split must not have made them vary.
     ast.parse((app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH).read_text())
     ast.parse((app_directory / cli.SCAFFOLDED_METER_MODULE_PATH).read_text())
@@ -1277,12 +1389,12 @@ def test_the_scaffold_pins_streamlib_to_its_own_index(tmp_path: Path):
 def test_new_refuses_to_overwrite_an_existing_app(tmp_path: Path):
     app_directory = tmp_path / "demo"
     app_directory.mkdir()
-    (app_directory / "app.py").write_text("# the user's own work\n")
+    (app_directory / "stream.py").write_text("# the user's own work\n")
 
-    with pytest.raises(cli.AppLaunchError, match="already has app.py"):
+    with pytest.raises(cli.AppLaunchError, match="already has stream.py"):
         cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
-    assert (app_directory / "app.py").read_text() == "# the user's own work\n", (
+    assert (app_directory / "stream.py").read_text() == "# the user's own work\n", (
         "a refused scaffold must leave the directory untouched"
     )
     assert not (app_directory / "pyproject.toml").exists(), (
