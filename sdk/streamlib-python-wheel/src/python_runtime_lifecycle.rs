@@ -9,14 +9,17 @@
 //! engine thread is joined, or abandoned and named, when CPython finalizes.
 //! Every teardown runs under the engine's watchdog.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::type_object::PyTypeInfo;
+use pyo3::types::{PyDict, PyMapping, PyString};
 use streamlib::engine_internal::core::app_directory::record_the_app_entry_directory_the_language_host_captured;
-use streamlib::sdk::graph::MeshPortAddress;
+use streamlib::sdk::graph::{MeshPortAddress, cast_exposed_name_to_url_safe};
+use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
@@ -29,7 +32,9 @@ use crate::python_added_processor::{
     PythonRemoteProcessorOutputPortReference, the_input_link_port_ref_this_destination_names,
     the_output_link_port_ref_this_source_names,
 };
-use crate::python_bag_conversion::python_object_to_json_value;
+use crate::python_bag_conversion::{
+    python_object_to_json_value, python_object_to_json_value_refusing_what_json_cannot_carry_as,
+};
 use crate::python_processor_registration::register_processor_class;
 
 /// What kind of thing `Runtime.add` was handed, resolved once up front.
@@ -57,7 +62,7 @@ fn classify_processor_class(
         crate::python_test_harness_endpoints::test_harness_class_import_path(
             python,
             processor_class,
-        )
+        )?
     {
         return Ok(AddedProcessorClassKind::NativeBuiltin(harness_class));
     }
@@ -120,6 +125,155 @@ enum PythonRuntimeLifecycleState {
     EngineTornDownWithThreadsJoinedOrAbandoned,
 }
 
+/// What this Runtime's one `load` came to.
+///
+/// `run()` reads it because a load the engine refused partway can leave the
+/// nodes it added before the refusal, and a Runtime must never run half a
+/// graph. The claimed load's own refusal stands; otherwise the first refusal
+/// recorded does.
+#[derive(Debug, Clone, PartialEq)]
+enum RuntimeGraphLoadRecord {
+    NoGraphLoaded,
+    /// A `load` claimed this Runtime's one load and has not returned yet.
+    GraphLoadUnderway {
+        /// The first call refused while the claimed load was underway, which
+        /// stands over the claimed load's success but never over its refusal.
+        first_refusal_while_underway: Option<String>,
+    },
+    GraphLoaded {
+        stream_name: Option<String>,
+    },
+    GraphLoadRefused {
+        refusal: String,
+    },
+}
+
+impl RuntimeGraphLoadRecord {
+    /// Lock `graph_load_record`, recovering it from a poisoned lock.
+    fn locked(graph_load_record: &Mutex<Self>) -> MutexGuard<'_, Self> {
+        graph_load_record
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Claim this Runtime's one load, or record and return why it is spent.
+    fn claim_the_one_load(&mut self) -> Result<(), String> {
+        const ONE_RUNTIME_RUNS_ONE_STREAM: &str = "a Runtime takes exactly one load — one runtime \
+                                                   runs one stream: construct another Runtime to \
+                                                   load another";
+        let refusal = match self {
+            Self::NoGraphLoaded => {
+                *self = Self::GraphLoadUnderway {
+                    first_refusal_while_underway: None,
+                };
+                return Ok(());
+            }
+            Self::GraphLoadUnderway { .. } => format!(
+                "another `load` of this Runtime is still underway, and {ONE_RUNTIME_RUNS_ONE_STREAM}"
+            ),
+            Self::GraphLoaded {
+                stream_name: Some(stream_name),
+            } => format!(
+                "this Runtime already loaded the stream `{stream_name}`, and \
+                 {ONE_RUNTIME_RUNS_ONE_STREAM}"
+            ),
+            Self::GraphLoaded { stream_name: None } => {
+                format!("this Runtime already loaded a graph, and {ONE_RUNTIME_RUNS_ONE_STREAM}")
+            }
+            Self::GraphLoadRefused { refusal } => format!(
+                "this Runtime's earlier load was refused: {refusal}. Construct a new Runtime and \
+                 load a corrected graph into it"
+            ),
+        };
+        self.record_a_refusal_that_claimed_no_load(&refusal);
+        Err(refusal)
+    }
+
+    /// Record a refused `load` that never claimed the load; the first refusal
+    /// stands.
+    fn record_a_refusal_that_claimed_no_load(&mut self, refusal: &str) {
+        match self {
+            Self::NoGraphLoaded | Self::GraphLoaded { .. } => {
+                *self = Self::GraphLoadRefused {
+                    refusal: refusal.to_owned(),
+                }
+            }
+            Self::GraphLoadUnderway {
+                first_refusal_while_underway: first_refusal @ None,
+            } => *first_refusal = Some(refusal.to_owned()),
+            Self::GraphLoadUnderway {
+                first_refusal_while_underway: Some(_),
+            }
+            | Self::GraphLoadRefused { .. } => {}
+        }
+    }
+
+    /// Record how the load a successful claim began ended: its own refusal;
+    /// else the first call refused while it was underway; else the stream
+    /// name it loaded.
+    fn record_the_claimed_load_outcome(&mut self, outcome: Result<Option<String>, String>) {
+        let first_refusal_while_underway = match self {
+            Self::GraphLoadUnderway {
+                first_refusal_while_underway,
+            } => first_refusal_while_underway.take(),
+            _ => None,
+        };
+        *self = match (outcome, first_refusal_while_underway) {
+            (Err(refusal), _) | (Ok(_), Some(refusal)) => Self::GraphLoadRefused { refusal },
+            (Ok(stream_name), None) => Self::GraphLoaded { stream_name },
+        };
+    }
+
+    /// Run the load a successful claim began and record how it ended. A panic
+    /// is recorded as a refusal naming it before it resumes, so the record is
+    /// never left underway.
+    fn run_the_claimed_load<LoadOutcome>(
+        graph_load_record: &Mutex<Self>,
+        claimed_load: impl FnOnce() -> LoadOutcome,
+        how_the_load_ended: impl FnOnce(&LoadOutcome) -> Result<Option<String>, String>,
+    ) -> LoadOutcome {
+        let load_outcome_and_how_it_ended = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let load_outcome = claimed_load();
+            let how_it_ended = how_the_load_ended(&load_outcome);
+            (load_outcome, how_it_ended)
+        }));
+        match load_outcome_and_how_it_ended {
+            Ok((load_outcome, how_it_ended)) => {
+                Self::locked(graph_load_record).record_the_claimed_load_outcome(how_it_ended);
+                load_outcome
+            }
+            Err(panic_payload) => {
+                let panic_message = panic_payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| panic_payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("a panic carrying no message");
+                Self::locked(graph_load_record).record_the_claimed_load_outcome(Err(format!(
+                    "the load panicked: {panic_message}"
+                )));
+                std::panic::resume_unwind(panic_payload)
+            }
+        }
+    }
+
+    /// Why `run()` must refuse, when this record says it must.
+    fn refusal_of_run(&self) -> Option<String> {
+        match self {
+            Self::GraphLoadRefused { refusal } => Some(format!(
+                "cannot run: a `load` on this Runtime was refused — {refusal}. A refused load can \
+                 leave part of its graph behind, so a Runtime whose load was refused does not \
+                 run: construct a new Runtime and load a corrected graph"
+            )),
+            Self::GraphLoadUnderway { .. } => Some(
+                "cannot run: a `load` on this Runtime is still underway on another thread. Call \
+                 run() once it returns"
+                    .to_owned(),
+            ),
+            Self::NoGraphLoaded | Self::GraphLoaded { .. } => None,
+        }
+    }
+}
+
 /// The engine, held by a Python object.
 ///
 /// Single-use by construction: [`run`](PythonRuntimeHandle::run) takes the
@@ -129,6 +283,9 @@ enum PythonRuntimeLifecycleState {
 #[pyclass(name = "Runtime", module = "streamlib", subclass)]
 pub struct PythonRuntimeHandle {
     lifecycle: Mutex<PythonRuntimeLifecycleState>,
+    /// Locked after `lifecycle` wherever both are held, so `run()`'s check of
+    /// the record and `load()`'s claim of it cannot interleave.
+    graph_load_record: Mutex<RuntimeGraphLoadRecord>,
 }
 
 impl PythonRuntimeHandle {
@@ -136,6 +293,10 @@ impl PythonRuntimeHandle {
         self.lifecycle
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn graph_load_record(&self) -> MutexGuard<'_, RuntimeGraphLoadRecord> {
+        RuntimeGraphLoadRecord::locked(&self.graph_load_record)
     }
 
     /// Take a reference to the engine to build the graph, before the run loop
@@ -159,7 +320,14 @@ impl PythonRuntimeHandle {
     /// teardown wait out an in-flight `add`, which reintroduces the wait this
     /// exists to avoid.
     fn engine_being_built(&self, what: &str) -> PyResult<Arc<Runner>> {
-        match &*self.lifecycle() {
+        Self::engine_being_built_in(&self.lifecycle(), what)
+    }
+
+    fn engine_being_built_in(
+        lifecycle: &PythonRuntimeLifecycleState,
+        what: &str,
+    ) -> PyResult<Arc<Runner>> {
+        match lifecycle {
             PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => Ok(engine.clone()),
             PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested(_) => {
                 Err(PyRuntimeError::new_err(format!(
@@ -297,6 +465,128 @@ fn install_unregistered_processor_type_resolver_once() {
     });
 }
 
+/// The mapping `Runtime.load` was passed, as a `dict` — itself when it is one,
+/// else `dict(graph)`; anything that is not a `collections.abc.Mapping` is
+/// refused naming what it is.
+fn the_graph_mapping_load_was_passed<'py>(
+    graph: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyDict>> {
+    if let Ok(graph_dict) = graph.cast::<PyDict>() {
+        return Ok(graph_dict.clone());
+    }
+    if graph.is_instance_of::<PyMapping>() {
+        return Ok(PyDict::type_object(graph.py())
+            .call1((graph,))?
+            .cast_into::<PyDict>()?);
+    }
+    Err(PyTypeError::new_err(format!(
+        "Runtime.load takes a graph mapping, and was passed a `{}`: pass the mapping \
+         compile_stream_to_graph returns, or a graph `streamlib graph` rendered",
+        graph.get_type().name()?
+    )))
+}
+
+/// The stream name `Runtime.load` was passed; anything but a `str` that
+/// encodes as UTF-8 is refused naming the fix.
+fn the_stream_name_load_was_passed(name: Option<&Bound<'_, PyAny>>) -> PyResult<Option<String>> {
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let Ok(name) = name.cast::<PyString>() else {
+        return Err(PyTypeError::new_err(format!(
+            "Runtime.load's `name` names the stream, and was passed a `{}`: pass a str, or leave \
+             `name` out to keep the graph's own `stream`",
+            name.get_type().name()?
+        )));
+    };
+    match name.to_str() {
+        Ok(stream_name) => Ok(Some(stream_name.to_owned())),
+        Err(cannot_be_encoded) => {
+            let python = name.py();
+            let refusal = PyValueError::new_err(format!(
+                "Runtime.load's `name` names the stream, and was passed a str that cannot be \
+                 encoded as UTF-8 ({}): pass a str without lone surrogates",
+                cannot_be_encoded.value(python)
+            ));
+            refusal.set_cause(python, Some(cannot_be_encoded));
+            Err(refusal)
+        }
+    }
+}
+
+/// The converter's refusal of a graph, re-raised naming the graph and the fix,
+/// with the converter's error as its `__cause__`. An error that refuses no
+/// value — a `MemoryError`, a `KeyboardInterrupt` — passes through unchanged.
+fn graph_is_not_json_data_refusal(python: Python<'_>, converter_refusal: PyErr) -> PyErr {
+    let graph_refusal_type = if converter_refusal.is_instance_of::<PyTypeError>(python) {
+        PyTypeError::type_object(python)
+    } else if converter_refusal.is_instance_of::<PyValueError>(python) {
+        PyValueError::type_object(python)
+    } else {
+        return converter_refusal;
+    };
+    let graph_refusal = PyErr::from_type(
+        graph_refusal_type,
+        format!(
+            "the graph is not JSON data: {}. A graph carries what JSON carries — \
+             compile_stream_to_graph always emits plain dicts, lists, str, int, float, bool and \
+             None, so build the graph with it.",
+            converter_refusal
+                .value(python)
+                .to_string()
+                .trim_end_matches('.')
+        ),
+    );
+    graph_refusal.set_cause(python, Some(converter_refusal));
+    graph_refusal
+}
+
+/// Read, name and load the graph a claimed `load` was passed, reporting the
+/// cast stream name it loaded under.
+fn load_the_claimed_graph(
+    python: Python<'_>,
+    engine: &Arc<Runner>,
+    graph_mapping: &Bound<'_, PyDict>,
+    stream_name_override: Option<String>,
+) -> PyResult<Option<String>> {
+    let graph_document = python_object_to_json_value(graph_mapping.as_any())
+        .map_err(|converter_refusal| graph_is_not_json_data_refusal(python, converter_refusal))?;
+    let mut graph_snapshot = GraphSnapshot::from_graph_document(graph_document)
+        .map_err(|does_not_parse| PyRuntimeError::new_err(does_not_parse.to_string()))?;
+
+    graph_snapshot.stream = stream_name_override
+        .or(graph_snapshot.stream.take())
+        .map(|stream_name| {
+            cast_exposed_name_to_url_safe(&stream_name)
+                .map(|cast| cast.into_owned())
+                .map_err(|casts_to_nothing| {
+                    PyValueError::new_err(format!(
+                        "cannot load the graph as the stream `{stream_name}`: {casts_to_nothing}"
+                    ))
+                })
+        })
+        .transpose()?;
+
+    if graph_snapshot.nodes.is_empty() {
+        let what_holds_no_node = match &graph_snapshot.stream {
+            Some(stream_name) => format!("the stream `{stream_name}`"),
+            None => "the graph".to_owned(),
+        };
+        return Err(PyRuntimeError::new_err(format!(
+            "{what_holds_no_node} holds no node — a stream whose function adds nothing compiles \
+             to an empty graph, and there is nothing to run. Add a node with `stream.add(...)`"
+        )));
+    }
+
+    // Detached because the load takes the graph lock, which an engine thread
+    // can hold while it needs this interpreter's GIL; the type resolver
+    // re-attaches for a node whose type it has to import.
+    python
+        .detach(|| engine.load_graph_snapshot(&graph_snapshot))
+        .map_err(|load_failure| PyRuntimeError::new_err(load_failure.to_string()))?;
+    Ok(graph_snapshot.stream)
+}
+
 #[pymethods]
 impl PythonRuntimeHandle {
     /// Boot the engine.
@@ -347,6 +637,7 @@ impl PythonRuntimeHandle {
             lifecycle: Mutex::new(PythonRuntimeLifecycleState::EngineConstructedNotYetRun(
                 engine,
             )),
+            graph_load_record: Mutex::new(RuntimeGraphLoadRecord::NoGraphLoaded),
         })
     }
 
@@ -387,7 +678,15 @@ impl PythonRuntimeHandle {
         // `rt.add(CameraSource)` — the spelling the plan blesses for a block
         // that needs no configuration — fail at graph compile time.
         let configuration = match config {
-            Some(config) => python_object_to_json_value(config.as_any())?,
+            Some(config) => python_object_to_json_value_refusing_what_json_cannot_carry_as(
+                config.as_any(),
+                |convert_failure| {
+                    PyTypeError::new_err(format!(
+                        "config must survive a JSON round trip, because the engine stores it on \
+                         the graph node: {convert_failure}"
+                    ))
+                },
+            )?,
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
@@ -467,6 +766,47 @@ impl PythonRuntimeHandle {
         .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
     }
 
+    /// Load a graph — the mapping `compile_stream_to_graph` returns, or one
+    /// `streamlib graph` rendered — into this Runtime before `run()`.
+    ///
+    /// A Runtime takes exactly one `load`. Every refused call is recorded —
+    /// save one refused because this Runtime is already running or shut down,
+    /// which `run()` refuses anyway — and so is a panic inside the load; `run()`
+    /// then refuses, naming the load's own refusal or panic, else the first
+    /// refusal recorded.
+    #[pyo3(signature = (graph, *, name = None))]
+    fn load(
+        &self,
+        python: Python<'_>,
+        graph: &Bound<'_, PyAny>,
+        name: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let (graph_mapping, stream_name_override) = the_graph_mapping_load_was_passed(graph)
+            .and_then(|graph_mapping| Ok((graph_mapping, the_stream_name_load_was_passed(name)?)))
+            .inspect_err(|refusal| {
+                self.graph_load_record()
+                    .record_a_refusal_that_claimed_no_load(&refusal.value(python).to_string());
+            })?;
+        let engine = {
+            let lifecycle = self.lifecycle();
+            let engine = Self::engine_being_built_in(&lifecycle, "load a graph")?;
+            self.graph_load_record()
+                .claim_the_one_load()
+                .map_err(PyRuntimeError::new_err)?;
+            engine
+        };
+
+        RuntimeGraphLoadRecord::run_the_claimed_load(
+            &self.graph_load_record,
+            move || load_the_claimed_graph(python, &engine, &graph_mapping, stream_name_override),
+            |load_outcome| match load_outcome {
+                Ok(stream_name) => Ok(stream_name.clone()),
+                Err(refusal) => Err(refusal.value(python).to_string()),
+            },
+        )
+        .map(|_stream_name| ())
+    }
+
     /// Host the control plane in this process, so the node is discoverable.
     ///
     /// Opt-in: a runtime that never calls this runs headless and publishes no
@@ -515,6 +855,10 @@ impl PythonRuntimeHandle {
     fn run(&self, python: Python<'_>) -> PyResult<()> {
         let engine = {
             let mut lifecycle = self.lifecycle();
+            let refusal_of_run = self.graph_load_record().refusal_of_run();
+            if let Some(refusal_of_run) = refusal_of_run {
+                return Err(PyRuntimeError::new_err(refusal_of_run));
+            }
             // Replaced with the terminal state first because the running state
             // needs the engine to point at, which is what is being taken here.
             match std::mem::replace(
@@ -711,5 +1055,243 @@ impl Drop for PythonRuntimeHandle {
                 tracing::error!(%teardown_failure);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_runtime_takes_its_one_load_and_runs_after_it_succeeds() {
+        let mut record = RuntimeGraphLoadRecord::NoGraphLoaded;
+        assert_eq!(record.refusal_of_run(), None);
+        record.claim_the_one_load().unwrap();
+        assert_eq!(
+            record,
+            RuntimeGraphLoadRecord::GraphLoadUnderway {
+                first_refusal_while_underway: None
+            }
+        );
+        record.record_the_claimed_load_outcome(Ok(Some("camera-rig".to_owned())));
+        assert_eq!(record.refusal_of_run(), None);
+    }
+
+    #[test]
+    fn a_second_load_after_a_success_is_refused_naming_the_stream_and_the_fix() {
+        let mut record = RuntimeGraphLoadRecord::GraphLoaded {
+            stream_name: Some("camera-rig".to_owned()),
+        };
+        let refusal = record.claim_the_one_load().unwrap_err();
+        assert!(refusal.contains("`camera-rig`"), "{refusal}");
+        assert!(
+            refusal.contains("construct another Runtime to load another"),
+            "{refusal}"
+        );
+        assert_eq!(
+            record,
+            RuntimeGraphLoadRecord::GraphLoadRefused {
+                refusal: refusal.clone()
+            }
+        );
+        assert!(record.refusal_of_run().unwrap().contains(&refusal));
+    }
+
+    #[test]
+    fn a_second_load_of_a_graph_with_no_stream_name_is_refused_all_the_same() {
+        let mut record = RuntimeGraphLoadRecord::GraphLoaded { stream_name: None };
+        let refusal = record.claim_the_one_load().unwrap_err();
+        assert!(refusal.contains("already loaded a graph"), "{refusal}");
+    }
+
+    #[test]
+    fn a_load_after_a_refused_one_names_that_refusal_and_the_first_refusal_stands() {
+        let mut record = RuntimeGraphLoadRecord::NoGraphLoaded;
+        record.claim_the_one_load().unwrap();
+        record.record_the_claimed_load_outcome(Err("the graph holds no node".to_owned()));
+
+        let refusal = record.claim_the_one_load().unwrap_err();
+        assert!(
+            refusal.contains("earlier load was refused: the graph holds no node"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("Construct a new Runtime"), "{refusal}");
+        assert_eq!(
+            record,
+            RuntimeGraphLoadRecord::GraphLoadRefused {
+                refusal: "the graph holds no node".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn run_refuses_after_a_refused_load_naming_the_refusal_and_the_fix() {
+        let mut record = RuntimeGraphLoadRecord::NoGraphLoaded;
+        record.record_a_refusal_that_claimed_no_load("Runtime.load takes a graph mapping");
+        let refusal_of_run = record.refusal_of_run().unwrap();
+        assert!(
+            refusal_of_run.contains("Runtime.load takes a graph mapping"),
+            "{refusal_of_run}"
+        );
+        assert!(
+            refusal_of_run.contains("construct a new Runtime and load a corrected graph"),
+            "{refusal_of_run}"
+        );
+    }
+
+    #[test]
+    fn a_claimed_load_that_returns_a_refusal_records_it() {
+        let graph_load_record = Mutex::new(RuntimeGraphLoadRecord::NoGraphLoaded);
+        RuntimeGraphLoadRecord::locked(&graph_load_record)
+            .claim_the_one_load()
+            .unwrap();
+        let load_outcome = RuntimeGraphLoadRecord::run_the_claimed_load(
+            &graph_load_record,
+            || Err::<(), _>("the graph holds no node"),
+            |load_outcome| load_outcome.map(|()| None).map_err(str::to_owned),
+        );
+        assert_eq!(load_outcome, Err("the graph holds no node"));
+        assert_eq!(
+            *RuntimeGraphLoadRecord::locked(&graph_load_record),
+            RuntimeGraphLoadRecord::GraphLoadRefused {
+                refusal: "the graph holds no node".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_panic_inside_the_claimed_load_is_recorded_as_its_refusal_and_resumes() {
+        let graph_load_record = Mutex::new(RuntimeGraphLoadRecord::NoGraphLoaded);
+        RuntimeGraphLoadRecord::locked(&graph_load_record)
+            .claim_the_one_load()
+            .unwrap();
+
+        let unwound = std::panic::catch_unwind(|| {
+            RuntimeGraphLoadRecord::run_the_claimed_load(
+                &graph_load_record,
+                || -> Result<(), String> { panic!("the type resolver fell over") },
+                |_load_outcome| Ok(None),
+            )
+        });
+
+        let panic_payload = unwound.unwrap_err();
+        assert_eq!(
+            panic_payload.downcast_ref::<&str>(),
+            Some(&"the type resolver fell over")
+        );
+        let record = RuntimeGraphLoadRecord::locked(&graph_load_record);
+        assert_eq!(
+            *record,
+            RuntimeGraphLoadRecord::GraphLoadRefused {
+                refusal: "the load panicked: the type resolver fell over".to_owned()
+            }
+        );
+        assert!(
+            record
+                .refusal_of_run()
+                .unwrap()
+                .contains("the load panicked: the type resolver fell over")
+        );
+    }
+
+    /// A Mutex-held record whose one load is claimed and underway.
+    fn graph_load_record_with_its_load_claimed() -> Mutex<RuntimeGraphLoadRecord> {
+        let graph_load_record = Mutex::new(RuntimeGraphLoadRecord::NoGraphLoaded);
+        RuntimeGraphLoadRecord::locked(&graph_load_record)
+            .claim_the_one_load()
+            .unwrap();
+        graph_load_record
+    }
+
+    /// Another `load` of the same Runtime, refused because the claimed one is
+    /// underway, as a second thread would be.
+    fn refuse_another_load_while_underway(graph_load_record: &Mutex<RuntimeGraphLoadRecord>) {
+        let refused_while_underway = RuntimeGraphLoadRecord::locked(graph_load_record)
+            .claim_the_one_load()
+            .unwrap_err();
+        assert!(
+            refused_while_underway.contains("still underway"),
+            "{refused_while_underway}"
+        );
+    }
+
+    #[test]
+    fn a_claimed_loads_own_refusal_stands_over_a_load_refused_while_it_was_underway() {
+        let graph_load_record = graph_load_record_with_its_load_claimed();
+
+        let load_outcome = RuntimeGraphLoadRecord::run_the_claimed_load(
+            &graph_load_record,
+            || {
+                refuse_another_load_while_underway(&graph_load_record);
+                Err::<(), _>("Unknown processor type `no_such_node`")
+            },
+            |load_outcome| load_outcome.map(|()| None).map_err(str::to_owned),
+        );
+
+        assert_eq!(load_outcome, Err("Unknown processor type `no_such_node`"));
+        let record = RuntimeGraphLoadRecord::locked(&graph_load_record);
+        assert_eq!(
+            *record,
+            RuntimeGraphLoadRecord::GraphLoadRefused {
+                refusal: "Unknown processor type `no_such_node`".to_owned()
+            }
+        );
+        assert!(
+            !record.refusal_of_run().unwrap().contains("still underway"),
+            "{:?}",
+            record.refusal_of_run()
+        );
+    }
+
+    #[test]
+    fn a_claimed_loads_panic_stands_over_a_load_refused_while_it_was_underway() {
+        let graph_load_record = graph_load_record_with_its_load_claimed();
+
+        let unwound = std::panic::catch_unwind(|| {
+            RuntimeGraphLoadRecord::run_the_claimed_load(
+                &graph_load_record,
+                || -> Result<(), String> {
+                    refuse_another_load_while_underway(&graph_load_record);
+                    panic!("the type resolver fell over")
+                },
+                |_load_outcome| Ok(None),
+            )
+        });
+
+        assert!(unwound.is_err());
+        assert_eq!(
+            *RuntimeGraphLoadRecord::locked(&graph_load_record),
+            RuntimeGraphLoadRecord::GraphLoadRefused {
+                refusal: "the load panicked: the type resolver fell over".to_owned()
+            }
+        );
+    }
+
+    /// The first refusal while underway stands over the claimed load's
+    /// success, and a later refusal does not displace it.
+    #[test]
+    fn a_load_refused_while_the_claimed_one_was_underway_stands_over_its_success() {
+        let graph_load_record = graph_load_record_with_its_load_claimed();
+
+        let load_outcome = RuntimeGraphLoadRecord::run_the_claimed_load(
+            &graph_load_record,
+            || {
+                refuse_another_load_while_underway(&graph_load_record);
+                let mut record = RuntimeGraphLoadRecord::locked(&graph_load_record);
+                assert!(record.refusal_of_run().unwrap().contains("still underway"));
+                record.record_a_refusal_that_claimed_no_load("Runtime.load takes a graph mapping");
+                Ok::<_, String>(Some("camera-rig".to_owned()))
+            },
+            |load_outcome| load_outcome.clone(),
+        );
+
+        assert_eq!(load_outcome, Ok(Some("camera-rig".to_owned())));
+        let record = RuntimeGraphLoadRecord::locked(&graph_load_record);
+        let RuntimeGraphLoadRecord::GraphLoadRefused { refusal } = &*record else {
+            panic!("a refusal while underway must stand over a success, got {record:?}");
+        };
+        assert!(refusal.contains("still underway"), "{refusal}");
+        assert!(!refusal.contains("takes a graph mapping"), "{refusal}");
+        assert!(record.refusal_of_run().unwrap().contains(refusal.as_str()));
     }
 }

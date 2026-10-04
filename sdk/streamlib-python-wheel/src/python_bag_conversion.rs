@@ -39,8 +39,11 @@ pub(crate) fn encode_bag_to_msgpack(bag: &Bound<'_, PyAny>) -> PyResult<Vec<u8>>
     })?;
 
     let mut encoded = Vec::new();
-    rmpv::encode::write_value(&mut encoded, &named_map_to_msgpack_value(named_map)?)
-        .map_err(|encode_failure| PyValueError::new_err(encode_failure.to_string()))?;
+    rmpv::encode::write_value(
+        &mut encoded,
+        &named_map_to_msgpack_value(named_map, ContainersEnclosingAValue::OUTERMOST)?,
+    )
+    .map_err(|encode_failure| PyValueError::new_err(encode_failure.to_string()))?;
     Ok(encoded)
 }
 
@@ -49,9 +52,17 @@ pub(crate) fn decode_msgpack_to_python_object<'py>(
     python: Python<'py>,
     encoded: &[u8],
 ) -> PyResult<Bound<'py, PyAny>> {
-    let value = rmpv::decode::read_value(&mut &encoded[..])
-        .map_err(|decode_failure| PyValueError::new_err(decode_failure.to_string()))?;
-    msgpack_value_to_python_object(python, &value)
+    let value = rmpv::decode::read_value_with_max_depth(
+        &mut &encoded[..],
+        RMPV_DEPTH_ADMITTING_THE_MAXIMUM_NESTED_CONTAINERS,
+    )
+    .map_err(|decode_failure| match decode_failure {
+        rmpv::decode::Error::DepthLimitExceeded => {
+            refusal_of_decoded_data_nested_past_the_maximum()
+        }
+        decode_failure => PyValueError::new_err(decode_failure.to_string()),
+    })?;
+    msgpack_value_to_python_object(python, &value, ContainersEnclosingAValue::OUTERMOST)
 }
 
 /// Encode a bag to the msgpack bytes the wire carries, for a caller carrying
@@ -263,40 +274,101 @@ pub(crate) fn python_type_name_for_error_message(
     )
 }
 
-/// Convert a processor's JSON configuration into the mapping its config class
-/// is constructed from.
+/// Convert JSON into ordinary Python data.
 ///
 /// Routed through the same msgpack value tree the data plane uses rather than
-/// growing a second converter: the engine stores configuration as JSON, and one
-/// conversion is one set of edge cases.
+/// growing a second converter: one conversion is one set of edge cases.
 pub(crate) fn json_value_to_python_object<'py>(
     python: Python<'py>,
-    configuration: &serde_json::Value,
+    json_value: &serde_json::Value,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let value = rmpv::ext::to_value(configuration)
+    let value = rmpv::ext::to_value(json_value)
         .map_err(|convert_failure| PyValueError::new_err(convert_failure.to_string()))?;
-    msgpack_value_to_python_object(python, &value)
+    msgpack_value_to_python_object(python, &value, ContainersEnclosingAValue::OUTERMOST)
 }
 
-/// Convert a processor's configuration from Python into the JSON the graph
-/// node stores.
-///
-/// Configuration travels on the node rather than in a closure, so it has to
-/// survive a JSON round trip — which is also what keeps it inspectable in
-/// `streamlib graph`.
+/// Convert ordinary Python data into JSON, refusing what JSON cannot carry.
 pub(crate) fn python_object_to_json_value(
-    configuration: &Bound<'_, PyAny>,
+    python_data: &Bound<'_, PyAny>,
 ) -> PyResult<serde_json::Value> {
-    let value = python_object_to_msgpack_value(configuration)?;
-    rmpv::ext::from_value(value).map_err(|convert_failure| {
+    python_object_to_json_value_refusing_what_json_cannot_carry_as(python_data, |convert_failure| {
         PyTypeError::new_err(format!(
-            "config must survive a JSON round trip, because the engine stores it on the graph \
-             node: {convert_failure}"
+            "the value must survive a JSON round trip: {convert_failure} — carry `bytes` as a \
+             `str` or a list of ints"
         ))
     })
 }
 
-fn python_object_to_msgpack_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+/// [`python_object_to_json_value`], with the caller wording the refusal of data
+/// whose msgpack form JSON cannot carry — `bytes`, or a msgpack extension value.
+pub(crate) fn python_object_to_json_value_refusing_what_json_cannot_carry_as(
+    python_data: &Bound<'_, PyAny>,
+    refusal_of_what_json_cannot_carry: impl FnOnce(rmpv::ext::Error) -> PyErr,
+) -> PyResult<serde_json::Value> {
+    let value = python_object_to_msgpack_value(python_data, ContainersEnclosingAValue::OUTERMOST)?;
+    rmpv::ext::from_value(value).map_err(refusal_of_what_json_cannot_carry)
+}
+
+/// The most containers one value may nest, the outermost counted, as it
+/// crosses the Python boundary in either direction. The walk recurses once per
+/// container, so the bound keeps it inside the thread's stack and turns a
+/// container that holds itself into a refusal; encode and decode share it so
+/// that a bag Python reads is always one it can publish again.
+const MAXIMUM_NESTED_CONTAINER_DEPTH: usize = 128;
+
+/// rmpv's depth budget that admits every value nesting at most
+/// [`MAXIMUM_NESTED_CONTAINER_DEPTH`] containers: rmpv 1.3 spends two levels on
+/// each container and at most three on the leaf inside the innermost, so a
+/// value that exhausts it nests past the maximum, and rmpv's recursion stays
+/// as shallow as the bound.
+const RMPV_DEPTH_ADMITTING_THE_MAXIMUM_NESTED_CONTAINERS: usize =
+    2 * MAXIMUM_NESTED_CONTAINER_DEPTH + 3;
+
+/// How many containers enclose a value being converted across the Python
+/// boundary.
+#[derive(Clone, Copy)]
+struct ContainersEnclosingAValue(usize);
+
+impl ContainersEnclosingAValue {
+    /// The value a conversion starts at, which no container encloses.
+    const OUTERMOST: Self = Self(0);
+
+    /// The count for the entries of a container this many containers enclose,
+    /// or `refusal_past_the_maximum` once the container itself sits
+    /// [`MAXIMUM_NESTED_CONTAINER_DEPTH`] containers deep.
+    fn entered_one_more_container(self, refusal_past_the_maximum: fn() -> PyErr) -> PyResult<Self> {
+        if self.0 < MAXIMUM_NESTED_CONTAINER_DEPTH {
+            Ok(Self(self.0 + 1))
+        } else {
+            Err(refusal_past_the_maximum())
+        }
+    }
+}
+
+/// The refusal of Python data whose containers nest past
+/// [`MAXIMUM_NESTED_CONTAINER_DEPTH`].
+fn refusal_of_python_data_nested_past_the_maximum() -> PyErr {
+    PyValueError::new_err(format!(
+        "containers nest more than {MAXIMUM_NESTED_CONTAINER_DEPTH} deep, the most one value may \
+         — a dict, list or tuple that holds itself nests without end. Break the cycle, or nest \
+         the data at most {MAXIMUM_NESTED_CONTAINER_DEPTH} containers deep"
+    ))
+}
+
+/// The refusal of a value bound for Python whose containers nest past
+/// [`MAXIMUM_NESTED_CONTAINER_DEPTH`].
+fn refusal_of_decoded_data_nested_past_the_maximum() -> PyErr {
+    PyValueError::new_err(format!(
+        "containers nest more than {MAXIMUM_NESTED_CONTAINER_DEPTH} deep in this value, the most \
+         one value may, so Python could not publish it again. Have its producer nest the data at \
+         most {MAXIMUM_NESTED_CONTAINER_DEPTH} containers deep"
+    ))
+}
+
+fn python_object_to_msgpack_value(
+    value: &Bound<'_, PyAny>,
+    containers_enclosing_it: ContainersEnclosingAValue,
+) -> PyResult<Value> {
     if value.is_none() {
         return Ok(Value::Nil);
     }
@@ -328,14 +400,14 @@ fn python_object_to_msgpack_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(mapping) = value.cast::<PyDict>() {
         return match msgpack_extension_from_python_mapping(mapping)? {
             Some(extension) => Ok(extension),
-            None => named_map_to_msgpack_value(mapping),
+            None => named_map_to_msgpack_value(mapping, containers_enclosing_it),
         };
     }
     if let Ok(sequence) = value.cast::<PyList>() {
-        return sequence_to_msgpack_array(sequence.iter());
+        return sequence_to_msgpack_array(sequence.iter(), containers_enclosing_it);
     }
     if let Ok(sequence) = value.cast::<PyTuple>() {
-        return sequence_to_msgpack_array(sequence.iter());
+        return sequence_to_msgpack_array(sequence.iter(), containers_enclosing_it);
     }
     Err(PyTypeError::new_err(format!(
         "cannot put a {} in a bag: a bag is built from dict, list, tuple, str, bytes, int, \
@@ -377,7 +449,12 @@ fn msgpack_extension_from_python_mapping(mapping: &Bound<'_, PyDict>) -> PyResul
 /// msgpack maps allow any key type, but a named map is what every other
 /// language on the wire deserializes into a struct — an int-keyed map would
 /// encode and then fail to read there.
-fn named_map_to_msgpack_value(mapping: &Bound<'_, PyDict>) -> PyResult<Value> {
+fn named_map_to_msgpack_value(
+    mapping: &Bound<'_, PyDict>,
+    containers_enclosing_the_mapping: ContainersEnclosingAValue,
+) -> PyResult<Value> {
+    let containers_enclosing_the_entries = containers_enclosing_the_mapping
+        .entered_one_more_container(refusal_of_python_data_nested_past_the_maximum)?;
     let mut entries = Vec::with_capacity(mapping.len());
     for (key, entry) in mapping.iter() {
         let key = key.cast::<PyString>().map_err(|_| {
@@ -388,7 +465,7 @@ fn named_map_to_msgpack_value(mapping: &Bound<'_, PyDict>) -> PyResult<Value> {
         })?;
         entries.push((
             Value::from(key.to_cow()?.into_owned()),
-            python_object_to_msgpack_value(&entry)?,
+            python_object_to_msgpack_value(&entry, containers_enclosing_the_entries)?,
         ));
     }
     Ok(Value::Map(entries))
@@ -396,9 +473,12 @@ fn named_map_to_msgpack_value(mapping: &Bound<'_, PyDict>) -> PyResult<Value> {
 
 fn sequence_to_msgpack_array<'py>(
     items: impl Iterator<Item = Bound<'py, PyAny>>,
+    containers_enclosing_the_sequence: ContainersEnclosingAValue,
 ) -> PyResult<Value> {
+    let containers_enclosing_the_items = containers_enclosing_the_sequence
+        .entered_one_more_container(refusal_of_python_data_nested_past_the_maximum)?;
     items
-        .map(|item| python_object_to_msgpack_value(&item))
+        .map(|item| python_object_to_msgpack_value(&item, containers_enclosing_the_items))
         .collect::<PyResult<Vec<Value>>>()
         .map(Value::Array)
 }
@@ -406,6 +486,7 @@ fn sequence_to_msgpack_array<'py>(
 fn msgpack_value_to_python_object<'py>(
     python: Python<'py>,
     value: &Value,
+    containers_enclosing_it: ContainersEnclosingAValue,
 ) -> PyResult<Bound<'py, PyAny>> {
     let object = match value {
         Value::Nil => python.None().into_bound(python),
@@ -430,18 +511,28 @@ fn msgpack_value_to_python_object<'py>(
         },
         Value::Binary(bytes) => PyBytes::new(python, bytes).into_any(),
         Value::Array(items) => {
+            let containers_enclosing_the_items = containers_enclosing_it
+                .entered_one_more_container(refusal_of_decoded_data_nested_past_the_maximum)?;
             let converted = items
                 .iter()
-                .map(|item| msgpack_value_to_python_object(python, item))
+                .map(|item| {
+                    msgpack_value_to_python_object(python, item, containers_enclosing_the_items)
+                })
                 .collect::<PyResult<Vec<_>>>()?;
             PyList::new(python, converted)?.into_any()
         }
         Value::Map(entries) => {
+            let containers_enclosing_the_entries = containers_enclosing_it
+                .entered_one_more_container(refusal_of_decoded_data_nested_past_the_maximum)?;
             let mapping = PyDict::new(python);
             for (key, entry) in entries {
                 mapping.set_item(
-                    msgpack_value_to_python_object(python, key)?,
-                    msgpack_value_to_python_object(python, entry)?,
+                    msgpack_value_to_python_object(python, key, containers_enclosing_the_entries)?,
+                    msgpack_value_to_python_object(
+                        python,
+                        entry,
+                        containers_enclosing_the_entries,
+                    )?,
                 )?;
             }
             mapping.into_any()
@@ -998,6 +1089,231 @@ mod tests {
                 original,
                 "an Ext value did not survive decode-then-encode"
             );
+        });
+    }
+
+    /// `containers` lists, each holding the next, the innermost empty.
+    fn lists_nested_containers_deep(python: Python<'_>, containers: usize) -> Bound<'_, PyAny> {
+        let mut nested = PyList::empty(python).into_any();
+        for _ in 1..containers {
+            nested = PyList::new(python, [nested]).unwrap().into_any();
+        }
+        nested
+    }
+
+    fn assert_refused_as_nesting_past_the_maximum(refusal: &PyErr, python: Python<'_>) {
+        assert!(
+            refusal.is_instance_of::<PyValueError>(python),
+            "got: {refusal}"
+        );
+        let refusal_text = refusal.value(python).to_string();
+        assert!(
+            refusal_text.contains(&format!(
+                "containers nest more than {MAXIMUM_NESTED_CONTAINER_DEPTH} deep"
+            )) && refusal_text.contains("holds itself")
+                && refusal_text.contains("Break the cycle"),
+            "got: {refusal_text}"
+        );
+    }
+
+    /// A container holding itself would recurse the conversion off its stack
+    /// and take the process with it; every caller gets a refusal instead.
+    #[test]
+    fn a_container_that_holds_itself_is_refused_rather_than_overflowing_the_stack() {
+        Python::initialize();
+        Python::attach(|python| {
+            let config_holding_itself = PyDict::new(python);
+            config_holding_itself.set_item("title", "loop").unwrap();
+            config_holding_itself
+                .set_item("itself", &config_holding_itself)
+                .unwrap();
+            let refusal = python_object_to_json_value(config_holding_itself.as_any()).unwrap_err();
+            assert_refused_as_nesting_past_the_maximum(&refusal, python);
+
+            let list_holding_itself = PyList::empty(python);
+            list_holding_itself.append(&list_holding_itself).unwrap();
+            let bag_holding_the_list = PyDict::new(python);
+            bag_holding_the_list
+                .set_item("items", &list_holding_itself)
+                .unwrap();
+            let refusal = encode_bag_to_msgpack(bag_holding_the_list.as_any()).unwrap_err();
+            assert_refused_as_nesting_past_the_maximum(&refusal, python);
+        });
+    }
+
+    /// The bound counts every container, the outermost included, on both
+    /// paths: exactly the maximum converts and one more is refused.
+    #[test]
+    fn containers_nested_exactly_the_maximum_deep_convert_and_one_more_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let nested_the_maximum =
+                lists_nested_containers_deep(python, MAXIMUM_NESTED_CONTAINER_DEPTH);
+            python_object_to_json_value(&nested_the_maximum).unwrap();
+            let nested_one_more =
+                lists_nested_containers_deep(python, MAXIMUM_NESTED_CONTAINER_DEPTH + 1);
+            let refusal = python_object_to_json_value(&nested_one_more).unwrap_err();
+            assert_refused_as_nesting_past_the_maximum(&refusal, python);
+
+            let bag_reaching_the_maximum = PyDict::new(python);
+            bag_reaching_the_maximum
+                .set_item(
+                    "nested",
+                    lists_nested_containers_deep(python, MAXIMUM_NESTED_CONTAINER_DEPTH - 1),
+                )
+                .unwrap();
+            encode_bag_to_msgpack(bag_reaching_the_maximum.as_any()).unwrap();
+            let bag_one_past_the_maximum = PyDict::new(python);
+            bag_one_past_the_maximum
+                .set_item(
+                    "nested",
+                    lists_nested_containers_deep(python, MAXIMUM_NESTED_CONTAINER_DEPTH),
+                )
+                .unwrap();
+            let refusal = encode_bag_to_msgpack(bag_one_past_the_maximum.as_any()).unwrap_err();
+            assert_refused_as_nesting_past_the_maximum(&refusal, python);
+        });
+    }
+
+    /// NaN and infinity have no JSON spelling; config and a loaded graph carry
+    /// them as null rather than refusing them.
+    #[test]
+    fn nan_and_infinity_convert_to_json_null() {
+        Python::initialize();
+        Python::attach(|python| {
+            for not_a_number in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let converted =
+                    python_object_to_json_value(PyFloat::new(python, not_a_number).as_any())
+                        .unwrap();
+                assert_eq!(converted, serde_json::Value::Null, "{not_a_number}");
+            }
+        });
+    }
+
+    #[test]
+    fn bytes_are_refused_as_data_json_cannot_carry_whoever_converts_them() {
+        Python::initialize();
+        Python::attach(|python| {
+            let refusal =
+                python_object_to_json_value(PyBytes::new(python, b"fit").as_any()).unwrap_err();
+            assert!(
+                refusal.is_instance_of::<PyTypeError>(python),
+                "got: {refusal}"
+            );
+            let refusal_text = refusal.value(python).to_string();
+            assert!(
+                refusal_text.starts_with("the value must survive a JSON round trip: ")
+                    && refusal_text.ends_with("carry `bytes` as a `str` or a list of ints"),
+                "got: {refusal_text}"
+            );
+        });
+    }
+
+    #[test]
+    fn nesting_far_past_the_maximum_is_refused_rather_than_overflowing_the_stack() {
+        Python::initialize();
+        Python::attach(|python| {
+            let nested_far_past_the_maximum = lists_nested_containers_deep(python, 100_000);
+            let refusal = python_object_to_json_value(&nested_far_past_the_maximum).unwrap_err();
+            assert_refused_as_nesting_past_the_maximum(&refusal, python);
+        });
+    }
+
+    /// msgpack `fixarray` markers: one element, and none.
+    const MSGPACK_ONE_ELEMENT_ARRAY_MARKER: u8 = 0x91;
+    const MSGPACK_EMPTY_ARRAY_MARKER: u8 = 0x90;
+
+    /// `containers` msgpack arrays, each holding the next, the innermost
+    /// empty — written byte by byte, because rmpv's own encoder recurses.
+    fn msgpack_arrays_nested_containers_deep(containers: usize) -> Vec<u8> {
+        let mut encoded = vec![MSGPACK_ONE_ELEMENT_ARRAY_MARKER; containers - 1];
+        encoded.push(MSGPACK_EMPTY_ARRAY_MARKER);
+        encoded
+    }
+
+    /// A bag — `{"nested": …}` — whose containers, itself the outermost, nest
+    /// `containers` deep.
+    fn msgpack_bag_nesting_containers_deep(containers: usize) -> Vec<u8> {
+        const MSGPACK_ONE_ENTRY_MAP_MARKER: u8 = 0x81;
+        const MSGPACK_SIX_BYTE_STRING_MARKER: u8 = 0xa6;
+        let mut encoded = vec![MSGPACK_ONE_ENTRY_MAP_MARKER, MSGPACK_SIX_BYTE_STRING_MARKER];
+        encoded.extend_from_slice(b"nested");
+        encoded.extend(msgpack_arrays_nested_containers_deep(containers - 1));
+        encoded
+    }
+
+    fn assert_decode_refused_as_nesting_past_the_maximum(refusal: &PyErr, python: Python<'_>) {
+        assert!(
+            refusal.is_instance_of::<PyValueError>(python),
+            "got: {refusal}"
+        );
+        let refusal_text = refusal.value(python).to_string();
+        assert!(
+            refusal_text.contains(&format!(
+                "containers nest more than {MAXIMUM_NESTED_CONTAINER_DEPTH} deep"
+            )) && refusal_text.contains("could not publish it again")
+                && refusal_text.contains(&format!(
+                    "Have its producer nest the data at most {MAXIMUM_NESTED_CONTAINER_DEPTH} \
+                     containers deep"
+                )),
+            "got: {refusal_text}"
+        );
+    }
+
+    /// Decode counts containers the way encode does, the outermost included:
+    /// exactly the maximum decodes — holding the leaf rmpv spends most depth
+    /// on — and one more is refused by name, as is a value deep enough to
+    /// exhaust rmpv's own budget.
+    #[test]
+    fn containers_nested_exactly_the_maximum_deep_decode_and_one_more_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            const MSGPACK_ONE_BYTE_STRING_MARKER: u8 = 0xa1;
+            let mut nested_the_maximum_around_a_string =
+                vec![MSGPACK_ONE_ELEMENT_ARRAY_MARKER; MAXIMUM_NESTED_CONTAINER_DEPTH];
+            nested_the_maximum_around_a_string.extend([MSGPACK_ONE_BYTE_STRING_MARKER, b'x']);
+            let decoded =
+                decode_msgpack_to_python_object(python, &nested_the_maximum_around_a_string)
+                    .unwrap();
+            assert!(decoded.is_instance_of::<PyList>());
+
+            let refusal = decode_msgpack_to_python_object(
+                python,
+                &msgpack_arrays_nested_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH + 1),
+            )
+            .unwrap_err();
+            assert_decode_refused_as_nesting_past_the_maximum(&refusal, python);
+
+            let refusal = decode_msgpack_to_python_object(
+                python,
+                &msgpack_arrays_nested_containers_deep(100_000),
+            )
+            .unwrap_err();
+            assert_decode_refused_as_nesting_past_the_maximum(&refusal, python);
+        });
+    }
+
+    /// A passthrough processor forwards what it read, so the deepest bag that
+    /// decodes must encode again, byte for byte.
+    #[test]
+    fn a_bag_nested_to_the_maximum_decodes_and_re_encodes_unchanged() {
+        Python::initialize();
+        Python::attach(|python| {
+            let bag_reaching_the_maximum =
+                msgpack_bag_nesting_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH);
+            let decoded = decode_msgpack_to_python_object(python, &bag_reaching_the_maximum)
+                .expect("a bag nested to the maximum decodes");
+            assert_eq!(
+                encode_bag_to_msgpack(&decoded).expect("and encodes again"),
+                bag_reaching_the_maximum
+            );
+
+            let refusal = decode_msgpack_to_python_object(
+                python,
+                &msgpack_bag_nesting_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH + 1),
+            )
+            .unwrap_err();
+            assert_decode_refused_as_nesting_past_the_maximum(&refusal, python);
         });
     }
 }

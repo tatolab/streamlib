@@ -1,22 +1,28 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `streamlib` console script: entry resolution, `setup(rt)`, and `new`.
+"""The `streamlib` console script: entry resolution, stream selection, `setup(rt)`, and `new`.
 
 Nothing here boots an engine. Entry resolution and scaffolding are pure
-functions over the filesystem, and the failure paths are the point: an app that
-cannot be executed must produce the user's traceback and exit, never a GPU
-context and a stack dump. The launch-to-a-live-node half needs a device and
-lives in `test_cli_launch.py`.
+functions over the filesystem, and the failure paths are the point: an entry
+that cannot be executed must produce the user's traceback and exit, never a GPU
+context and a stack dump. `load` needs no device — only `run()` does — so a
+compiled stream is loaded into a real `Runtime` here, in a child process. The
+launch-to-a-live-node half needs a device and lives in `test_cli_launch.py`.
 """
 
 import argparse
 import ast
+import json
 import os
+import platform
+import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from app_under_test import ENGINE_STARTING_LOG_LINE
@@ -24,6 +30,14 @@ from app_under_test import ENGINE_STARTING_LOG_LINE
 from streamlib import Runtime, _node_registry, cli
 
 MINIMAL_APP_SOURCE = "def setup(rt):\n    pass\n"
+MINIMAL_STREAM_SOURCE = (
+    "from streamlib import Stream, TestPatternSource, stream\n"
+    "\n"
+    "\n"
+    "@stream\n"
+    "def main(stream: Stream) -> None:\n"
+    "    stream.add(TestPatternSource)\n"
+)
 
 # Bounded: a resolution failure exits before anything is built, so a run that
 # reaches this deadline has booted a node instead of failing.
@@ -57,7 +71,9 @@ def write_app(directory: Path, file_name: str, source: str = MINIMAL_APP_SOURCE)
     return entry_file
 
 
-def run_cli(*arguments: str) -> "subprocess.CompletedProcess[str]":
+def run_cli(
+    *arguments: str, environment: "dict[str, str] | None" = None
+) -> "subprocess.CompletedProcess[str]":
     """Drive the console script's module entry in a child interpreter.
 
     `-m streamlib.cli` rather than the installed `streamlib` binary so the test
@@ -69,15 +85,33 @@ def run_cli(*arguments: str) -> "subprocess.CompletedProcess[str]":
         capture_output=True,
         text=True,
         timeout=RESOLUTION_FAILURE_TIMEOUT_SECONDS,
+        env=environment,
     )
 
 
 # ---------------------------------------------------------------------------
-# Entry resolution — the `app.py` convention
+# Entry resolution — the `stream.py` convention, `app.py` where there is none
 # ---------------------------------------------------------------------------
 
 
-def test_no_args_resolves_the_conventional_entry_at_the_anchor(tmp_path: Path):
+def test_no_args_resolves_the_conventional_stream_entry_at_the_anchor(tmp_path: Path):
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
+
+    resolved = cli.resolve_app_entry_file("run", tmp_path, None)
+
+    assert resolved == tmp_path / "stream.py"
+
+
+def test_stream_py_is_read_before_app_py(tmp_path: Path):
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
+    write_app(tmp_path, "app.py")
+
+    resolved = cli.resolve_app_entry_file("dev", tmp_path, None)
+
+    assert resolved == tmp_path / "stream.py"
+
+
+def test_an_app_py_still_launches_where_there_is_no_stream_py(tmp_path: Path):
     write_app(tmp_path, "app.py")
 
     resolved = cli.resolve_app_entry_file("run", tmp_path, None)
@@ -86,7 +120,7 @@ def test_no_args_resolves_the_conventional_entry_at_the_anchor(tmp_path: Path):
 
 
 def test_explicit_entry_file_overrides_the_convention(tmp_path: Path):
-    write_app(tmp_path, "app.py")
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
     write_app(tmp_path, "other.py")
 
     resolved = cli.resolve_app_entry_file("run", tmp_path, Path("other.py"))
@@ -107,10 +141,12 @@ def test_a_missing_conventional_entry_names_the_convention_and_the_anchor(tmp_pa
         cli.resolve_app_entry_file("dev", tmp_path, None)
 
     message = str(resolution_failure.value)
-    assert "app.py" in message, "the error must name the convention"
+    assert "no `stream.py`" in message, "the error must name the convention"
+    assert "app.py" in message, "the error must name the fallback the expand step keeps"
     assert str(tmp_path) in message, "the error must name the anchor it searched"
     assert "streamlib dev" in message, "the error must name the verb the user typed"
     assert "-f " in message, "the error must offer the `-f` escape hatch"
+    assert "--dir <project-root>" in message
 
 
 def test_a_missing_explicit_entry_names_the_path_it_tried(tmp_path: Path):
@@ -119,6 +155,7 @@ def test_a_missing_explicit_entry_names_the_path_it_tried(tmp_path: Path):
 
 
 def test_resolution_never_walks_up_to_a_parent(tmp_path: Path):
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
     write_app(tmp_path, "app.py")
     nested = tmp_path / "nested"
     nested.mkdir()
@@ -128,6 +165,7 @@ def test_resolution_never_walks_up_to_a_parent(tmp_path: Path):
 
 
 def test_a_directory_named_like_the_entry_is_not_an_entry(tmp_path: Path):
+    (tmp_path / "stream.py").mkdir()
     (tmp_path / "app.py").mkdir()
 
     with pytest.raises(cli.AppLaunchError):
@@ -140,6 +178,75 @@ def test_the_anchor_is_the_cwd_when_dir_is_absent():
 
 def test_the_anchor_is_the_dir_flag_when_given(tmp_path: Path):
     assert cli.resolve_app_anchor_directory(tmp_path) == tmp_path
+
+
+# ---------------------------------------------------------------------------
+# The positional target — `<file>.py[:<function>]` or `<module>:<function>`
+# ---------------------------------------------------------------------------
+
+
+def test_a_file_target_resolves_against_the_anchor(tmp_path: Path):
+    write_app(tmp_path, "rigs/front.py", MINIMAL_STREAM_SOURCE)
+
+    resolved = cli.resolve_launch_entry("run", tmp_path, None, "rigs/front.py")
+
+    assert resolved == cli.ResolvedLaunchEntryFile(
+        entry_file=tmp_path / "rigs" / "front.py", stream_function_name=None
+    )
+
+
+def test_a_file_target_may_name_its_function(tmp_path: Path):
+    absolute_entry = write_app(tmp_path, "front.py", MINIMAL_STREAM_SOURCE)
+
+    resolved = cli.resolve_launch_entry("run", tmp_path, None, f"{absolute_entry}:main")
+
+    assert resolved == cli.ResolvedLaunchEntryFile(
+        entry_file=absolute_entry, stream_function_name="main"
+    )
+
+
+def test_a_module_target_names_a_module_and_its_function(tmp_path: Path):
+    resolved = cli.resolve_launch_entry("dev", tmp_path, None, "rigs.front:main")
+
+    assert resolved == cli.ResolvedLaunchEntryModule(
+        entry_module_name="rigs.front", stream_function_name="main"
+    )
+
+
+def test_a_missing_file_target_names_the_path_it_tried(tmp_path: Path):
+    with pytest.raises(cli.AppLaunchError) as resolution_failure:
+        cli.resolve_launch_entry("run", tmp_path, None, "gone.py:main")
+
+    message = str(resolution_failure.value)
+    assert str(tmp_path / "gone.py") in message
+    assert "streamlib run gone.py:main" in message, "the error names what the user typed"
+
+
+@pytest.mark.parametrize(
+    "malformed_target", ["main", "front.py:", ":main", "rigs/front:main", "rigs.front:"]
+)
+def test_a_target_in_no_known_form_is_refused_naming_the_forms(
+    tmp_path: Path, malformed_target: str
+):
+    with pytest.raises(cli.AppLaunchError) as resolution_failure:
+        cli.resolve_launch_entry("run", tmp_path, None, malformed_target)
+
+    message = str(resolution_failure.value)
+    assert f"`{malformed_target}` names no stream" in message
+    assert "streamlib run <file>.py:<function>" in message
+    assert "streamlib run <module>:<function>" in message
+
+
+def test_a_target_and_an_entry_file_together_are_refused_naming_both(tmp_path: Path):
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
+    write_app(tmp_path, "other.py", MINIMAL_STREAM_SOURCE)
+
+    with pytest.raises(cli.AppLaunchError) as resolution_failure:
+        cli.resolve_launch_entry("dev", tmp_path, Path("other.py"), "stream.py:main")
+
+    message = str(resolution_failure.value)
+    assert "`-f other.py`" in message
+    assert "`stream.py:main`" in message
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +306,839 @@ def test_a_non_callable_setup_is_named_rather_than_called(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Selecting and launching a stream
+# ---------------------------------------------------------------------------
+
+# Logged when a `Runtime` is constructed, before any device is touched — its
+# absence is what proves a failure cost no engine at all.
+ENGINE_CONSTRUCTED_LOG_LINE = "Creating Runner named"
+
+FRONT_STREAM_SOURCE = (
+    "from streamlib import DisplayWindow, Stream, TestPatternSource, stream\n"
+    "\n"
+    "\n"
+    "@stream\n"
+    "def front(stream: Stream) -> None:\n"
+    '    """Front camera, in a window.\n'
+    "\n"
+    '    The second paragraph is not listed."""\n'
+    "    source = stream.add(TestPatternSource)\n"
+    "    window = stream.add(DisplayWindow)\n"
+    '    stream.connect(source.output("video"), window.input("video"))\n'
+)
+TWO_STREAM_SOURCE = FRONT_STREAM_SOURCE + (
+    "\n"
+    "\n"
+    "@stream\n"
+    "def back(stream: Stream) -> None:\n"
+    '    stream.add(TestPatternSource, name="Back Pattern")\n'
+)
+
+FRONT_STREAM_GRAPH = {
+    "stream": "front",
+    "nodes": [
+        {
+            "name": "testpatternsource",
+            "type": "streamlib_media_builtins::test_pattern_source::TestPatternSource",
+            "config": {},
+        },
+        {
+            "name": "displaywindow",
+            "type": "streamlib_media_builtins::display_window::DisplayWindow",
+            "config": {},
+        },
+    ],
+    "links": [
+        {
+            "source": {"node": "testpatternsource", "port": "video"},
+            "target": {"node": "displaywindow", "port": "video"},
+        }
+    ],
+    "exposed": [],
+}
+
+
+class RecordedLaunchRuntimeCalls:
+    """What the launcher asked of its `Runtime`, in order — and a load refusal to answer with."""
+
+    def __init__(self) -> None:
+        self.calls: "list[tuple[Any, ...]]" = []
+        self.load_refusal: "str | None" = None
+
+    def call_names(self) -> "list[str]":
+        return [call[0] for call in self.calls]
+
+    def loaded_graph(self) -> "dict[str, Any]":
+        (graph,) = [call[1] for call in self.calls if call[0] == "load"]
+        return graph
+
+
+@pytest.fixture
+def recorded_launch_runtime_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> RecordedLaunchRuntimeCalls:
+    """Stand a recorder in for `Runtime` in the launcher, so no engine is built here.
+
+    A real `Runtime` reads `sys.path[0]` once per process as the directory its
+    child interpreters import from, so constructing one in this process would
+    pin a test's temporary directory for every later suite. The launch also
+    exports the app directory, which is restored with the rest.
+    """
+    recorded = RecordedLaunchRuntimeCalls()
+    monkeypatch.delenv(cli.APP_DIRECTORY_ENVIRONMENT_VARIABLE, raising=False)
+
+    class RecordingLaunchRuntime:
+        def __init__(self, **runtime_keyword_arguments: Any) -> None:
+            recorded.calls.append(("construct", sys.path[0], runtime_keyword_arguments))
+
+        def load(self, graph: "dict[str, Any]", *, name: "str | None" = None) -> None:
+            recorded.calls.append(("load", graph))
+            if recorded.load_refusal is not None:
+                raise RuntimeError(recorded.load_refusal)
+
+        def host_control_plane(self, *, bind_host: str, bind_port: int) -> None:
+            recorded.calls.append(("host_control_plane", bind_host, bind_port))
+
+        def run(self) -> None:
+            recorded.calls.append(("run",))
+
+        def shutdown(self) -> None:
+            recorded.calls.append(("shutdown",))
+
+    monkeypatch.setattr(cli, "Runtime", RecordingLaunchRuntime)
+    return recorded
+
+
+@pytest.fixture
+def forget_the_modules_imported_from_tmp_path(tmp_path: Path):
+    """Drop what a `<module>:<function>` target imported, so no later test finds it cached."""
+    yield
+    for module_name, module in list(sys.modules.items()):
+        module_file = getattr(module, "__file__", None)
+        if module_file is not None and Path(module_file).is_relative_to(tmp_path):
+            del sys.modules[module_name]
+
+
+def test_the_sole_stream_is_compiled_then_loaded_then_hosted_then_run(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    """compile → `Runtime(...)` → `load` → host the control plane → `run()`, in that order."""
+    write_app(tmp_path, "stream.py", FRONT_STREAM_SOURCE)
+
+    exit_code = cli.main(
+        [
+            "dev",
+            "--dir", str(tmp_path),
+            "--host", "127.0.0.1",
+            "--port", "9123",
+            "--runtime-name", "desk-rig",
+        ]
+    )  # fmt: skip
+
+    assert exit_code == 0, capsys.readouterr().err
+    assert recorded_launch_runtime_calls.calls == [
+        (
+            "construct",
+            str(tmp_path),
+            {
+                "runtime_name": "desk-rig",
+                "mesh_name": None,
+                "mesh_peer_endpoints": None,
+                "mesh_listen_endpoints": None,
+                "mesh_multicast_discovery": None,
+            },
+        ),
+        ("load", FRONT_STREAM_GRAPH),
+        ("host_control_plane", "127.0.0.1", 9123),
+        ("run",),
+    ]
+
+
+def test_a_file_target_with_a_function_loads_that_stream(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    write_app(tmp_path, "rig.py", TWO_STREAM_SOURCE)
+
+    assert cli.main(["run", "--dir", str(tmp_path), "rig.py:back"]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph() == {
+        "stream": "back",
+        "nodes": [
+            {
+                "name": "back-pattern",
+                "type": "streamlib_media_builtins::test_pattern_source::TestPatternSource",
+                "config": {},
+            }
+        ],
+        "links": [],
+        "exposed": [],
+    }
+
+
+def test_a_file_target_without_a_function_takes_its_sole_stream(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    write_app(tmp_path, "stream.py", TWO_STREAM_SOURCE)
+    write_app(tmp_path, "solo.py", MINIMAL_STREAM_SOURCE)
+
+    assert cli.main(["run", "--dir", str(tmp_path), "solo.py"]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_module_target_loads_the_stream_its_module_defines(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    """The module imports with the anchor leading `sys.path`, and that is still
+    the slot's value when the `Runtime` is built — the slot it reads once."""
+    write_app(tmp_path, "module_target_rigs/__init__.py", "")
+    write_app(tmp_path, "module_target_rigs/desk.py", TWO_STREAM_SOURCE)
+
+    assert (
+        cli.main(["dev", "--dir", str(tmp_path), "module_target_rigs.desk:front"]) == 0
+    )
+
+    construct_call = recorded_launch_runtime_calls.calls[0]
+    assert construct_call[:2] == ("construct", str(tmp_path))
+    assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
+
+
+@pytest.mark.parametrize(
+    "missing_module_name", ["no_such_rig_module", "no_such_rig_package.desk"]
+)
+def test_a_module_target_that_does_not_import_is_refused_naming_the_anchor(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+    missing_module_name: str,
+):
+    exit_code = cli.main(["run", "--dir", str(tmp_path), f"{missing_module_name}:main"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert f"no module `{missing_module_name}` is importable" in refusal
+    assert str(tmp_path) in refusal
+    assert "Traceback (most recent call last)" not in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_module_target_sees_its_own_file_as_argv(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    """`sys.argv` is the module's file while it imports, as `python -m` sets it."""
+    write_app(tmp_path, "argv_probe_rigs/__init__.py", "")
+    write_app(
+        tmp_path,
+        "argv_probe_rigs/desk.py",
+        "import sys\nARGV = list(sys.argv)\n" + MINIMAL_STREAM_SOURCE,
+    )
+    launcher_argv = list(sys.argv)
+
+    assert cli.main(["run", "--dir", str(tmp_path), "argv_probe_rigs.desk:main"]) == 0
+
+    assert sys.modules["argv_probe_rigs.desk"].ARGV == [
+        str(tmp_path / "argv_probe_rigs" / "desk.py")
+    ]
+    assert sys.argv == launcher_argv
+
+
+def test_a_module_target_another_module_shadows_is_refused_naming_both_files(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    """`platform` is already imported, so `import platform` never reaches the project's."""
+    write_app(tmp_path, "platform.py", MINIMAL_STREAM_SOURCE)
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "platform:main"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert (
+        f"`platform` (from `streamlib run platform:main`) resolves to "
+        f"`{platform.__file__}`, not to `platform.py` in `{tmp_path}`"
+    ) in refusal
+    assert "Rename the project's module, or launch its file instead: " in refusal
+    assert f"`streamlib run --dir {tmp_path} platform.py:main`" in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+    assert cli.main(["run", "--dir", str(tmp_path), "platform.py:main"]) == 0
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
+
+
+def test_a_module_target_whose_parent_package_is_held_elsewhere_names_that_package(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    """`json` is already imported, so `json.desk` is searched inside the stdlib's
+    `json`, never the project's — though `json/desk.py` is there."""
+    write_app(tmp_path, "json/desk.py", MINIMAL_STREAM_SOURCE)
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "json.desk:main"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert (
+        f"`json.desk` (from `streamlib run json.desk:main`) does not resolve to "
+        f"`json/desk.py` in `{tmp_path}`: its parent package `json` resolves to "
+        f"`{json.__file__}`, outside the project"
+    ) in refusal
+    assert "no module `json.desk` is importable" not in refusal
+    assert (
+        f"Rename the project's package, or launch its file instead: "
+        f"`streamlib run --dir {tmp_path} json/desk.py:main`."
+    ) in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+    assert cli.main(["run", "--dir", str(tmp_path), "json/desk.py:main"]) == 0
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
+
+
+def test_a_module_target_naming_a_module_with_no_import_spec_is_refused_naming_the_file_form(
+    tmp_path: Path,
+):
+    """Under `python -c`, as under the console script, `__main__` runs with no
+    `__spec__`, and `find_spec` refuses it with a `ValueError` of its own."""
+    finished = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\nfrom streamlib import cli\nsys.exit(cli.main(sys.argv[1:]))",
+            "run",
+            "--dir",
+            str(tmp_path),
+            "__main__:main",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=RESOLUTION_FAILURE_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+    assert finished.returncode == 1, finished.stderr
+    assert (
+        "error: `__main__` (from `streamlib run __main__:main`) is a module already "
+        "running with no import spec"
+    ) in finished.stderr
+    assert (
+        f"Name the file that defines the stream instead: "
+        f"`streamlib run --dir {tmp_path} <file>.py:main`."
+    ) in finished.stderr
+    assert "Traceback (most recent call last)" not in finished.stderr
+    assert ENGINE_CONSTRUCTED_LOG_LINE not in finished.stdout + finished.stderr
+
+
+def test_a_module_targets_raising_parent_package_is_the_first_frame_of_its_traceback(
+    tmp_path: Path,
+):
+    """Locating a dotted target runs its parent packages through `importlib.util`,
+    frozen since CPython 3.11 — none of those frames may sit above the package's."""
+    write_app(
+        tmp_path, "raising_parent_rigs/__init__.py", "raise ValueError('bad package')\n"
+    )
+    write_app(tmp_path, "raising_parent_rigs/desk.py", MINIMAL_STREAM_SOURCE)
+
+    finished = run_cli("run", "--dir", str(tmp_path), "raising_parent_rigs.desk:main")
+
+    assert finished.returncode == 1, finished.stderr
+    assert "ValueError: bad package" in finished.stderr
+    first_frame = finished.stderr.index("File ")
+    assert finished.stderr.startswith(
+        f'File "{tmp_path / "raising_parent_rigs" / "__init__.py"}", line 1, in <module>',
+        first_frame,
+    ), finished.stderr
+    assert "importlib" not in finished.stderr, finished.stderr
+    assert ENGINE_CONSTRUCTED_LOG_LINE not in finished.stdout + finished.stderr
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_module_targets_refusal_names_the_file_its_module_resolved_to(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "refusal_naming_rigs/__init__.py", "")
+    write_app(tmp_path, "refusal_naming_rigs/desk.py", TWO_STREAM_SOURCE)
+
+    exit_code = cli.main(
+        ["run", "--dir", str(tmp_path), "refusal_naming_rigs.desk:side"]
+    )
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert (
+        f"`refusal_naming_rigs.desk` (`{tmp_path / 'refusal_naming_rigs' / 'desk.py'}`) "
+        f"defines no @stream function named `side`"
+    ) in refusal
+    assert (
+        f"Name one of them: `streamlib run --dir {tmp_path} "
+        f"refusal_naming_rigs.desk:<function>`."
+    ) in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_name_overrides_the_streams_own_name_and_is_cast(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
+
+    assert cli.main(["run", "--dir", str(tmp_path), "--name", "Front Rig"]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "front-rig"
+
+
+def test_a_name_that_casts_to_nothing_is_refused_before_the_entry_runs(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    ran = tmp_path / "entry-ran.txt"
+    write_app(
+        tmp_path,
+        "stream.py",
+        f"open({str(ran)!r}, 'w').write('ran')\n" + MINIMAL_STREAM_SOURCE,
+    )
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "--name", "!!!"])
+
+    assert exit_code == 1
+    assert "--name '!!!' cannot name a stream" in capsys.readouterr().err
+    assert not ran.exists(), "a refused flag must not cost the entry file a run"
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_a_refused_load_shuts_the_runtime_down_and_hosts_nothing(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
+    recorded_launch_runtime_calls.load_refusal = "unknown processor type `nowhere:Nothing`"
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path)])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "error: the stream `main`" in refusal
+    assert "did not load: unknown processor type `nowhere:Nothing`" in refusal
+    assert "Traceback (most recent call last)" not in refusal
+    assert recorded_launch_runtime_calls.call_names() == ["construct", "load", "shutdown"], (
+        "a refused load hosts no control plane and never runs"
+    )
+
+
+def test_several_streams_are_refused_listing_each_with_its_description(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "stream.py", TWO_STREAM_SOURCE)
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path)])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "defines 2 @stream functions" in refusal
+    assert "    front — Front camera, in a window.\n" in refusal
+    assert "The second paragraph" not in refusal, "only the description's first line is listed"
+    assert "    back\n" in refusal
+    assert f"`streamlib run --dir {tmp_path} stream.py:<function>`" in refusal
+    assert recorded_launch_runtime_calls.calls == [], "selection is refused before any engine"
+
+
+def test_the_several_streams_suggestion_quotes_the_dir_it_was_given(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    project_directory = tmp_path / "front rig"
+    write_app(project_directory, "stream.py", TWO_STREAM_SOURCE)
+
+    assert cli.main(["dev", "--dir", str(project_directory)]) == 1
+
+    assert (
+        f"`streamlib dev --dir '{project_directory}' stream.py:<function>`"
+        in capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    "launch_arguments",
+    [["my rig.py"], ["my rig.py:side"]],
+    ids=["several-streams", "a-function-the-file-lacks"],
+)
+def test_a_suggestion_quotes_an_entry_file_whose_name_holds_a_space(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+    launch_arguments: "list[str]",
+):
+    write_app(tmp_path, "my rig.py", TWO_STREAM_SOURCE)
+
+    assert cli.main(["run", "--dir", str(tmp_path), *launch_arguments]) == 1
+
+    suggestion = f"streamlib run --dir {tmp_path} 'my rig.py':<function>"
+    assert f"`{suggestion}`" in capsys.readouterr().err
+    _, *suggested_arguments = shlex.split(suggestion.replace("<function>", "back"))
+    assert cli.main(suggested_arguments) == 0
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "back"
+
+
+def test_the_several_streams_suggestion_names_no_dir_when_none_was_given(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    write_app(tmp_path, "stream.py", TWO_STREAM_SOURCE)
+    monkeypatch.chdir(tmp_path)
+
+    assert cli.main(["run"]) == 1
+
+    assert "`streamlib run stream.py:<function>`" in capsys.readouterr().err
+
+
+def test_a_second_name_bound_to_a_stream_is_still_one_stream(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE + "\n\ndefault = main\n")
+
+    assert cli.main(["run", "--dir", str(tmp_path)]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
+
+
+def test_a_target_naming_a_second_name_of_a_stream_defined_in_the_file_selects_it(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    write_app(tmp_path, "stream.py", TWO_STREAM_SOURCE + "\n\ndefault = back\n")
+
+    assert cli.main(["run", "--dir", str(tmp_path), "stream.py:default"]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "back"
+
+
+def test_an_entry_that_defines_no_stream_is_refused_with_a_sample(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "stream.py", "PIPELINE = 1\n")
+
+    exit_code = cli.main(["dev", "--dir", str(tmp_path)])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "stream.py` defines no @stream function" in refusal
+    assert "    @stream\n    def main(stream: Stream) -> None:\n" in refusal
+    assert "stream.add(CameraSource)" in refusal
+    assert "-f <file>" in refusal
+    assert "streamlib dev <file>.py:<function>" in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_a_named_function_the_file_lacks_is_refused_listing_its_streams(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "stream.py", TWO_STREAM_SOURCE)
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "stream.py:side"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "defines no @stream function named `side`" in refusal
+    assert "    front — Front camera, in a window.\n" in refusal
+    assert "    back" in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_a_named_function_in_a_setup_file_is_refused_naming_the_launch_without_it(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "app.py")
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "app.py:main"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert (
+        f"`{tmp_path / 'app.py'}` defines no @stream function named `main`, nor any "
+        f"other: it builds its graph in `setup(rt)`. Launch it without `:<function>`: "
+        f"`streamlib run --dir {tmp_path} app.py`."
+    ) in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_a_named_function_in_a_file_with_no_stream_is_refused_naming_the_decorator(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "stream.py", "PIPELINE = 1\n")
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "stream.py:main"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "defines no @stream function named `main`, nor any other" in refusal
+    assert (
+        "`@stream` above a module-level `def main(stream: Stream) -> None:`" in refusal
+    )
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_a_named_function_that_is_not_a_stream_is_refused_naming_the_fix(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(
+        tmp_path,
+        "stream.py",
+        MINIMAL_STREAM_SOURCE + "\n\ndef helper(stream: Stream) -> None:\n    pass\n",
+    )
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "stream.py:helper"])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "`helper` in" in refusal and "is not a @stream function" in refusal
+    assert "decorate it with `@stream`" in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_stream_imported_into_the_entry_loads_when_a_target_names_it(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    """An imported stream is never the entry's sole stream, yet a target may name it."""
+    write_app(tmp_path, "imported_rigs.py", TWO_STREAM_SOURCE)
+    write_app(
+        tmp_path, "stream.py", "from imported_rigs import front\n" + MINIMAL_STREAM_SOURCE
+    )
+
+    assert cli.main(["run", "--dir", str(tmp_path)]) == 0
+    assert recorded_launch_runtime_calls.loaded_graph()["stream"] == "main"
+
+    recorded_launch_runtime_calls.calls.clear()
+    assert cli.main(["run", "--dir", str(tmp_path), "stream.py:front"]) == 0
+    assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_stream_imported_under_another_name_loads_by_that_name(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    write_app(tmp_path, "renamed_import_rigs.py", TWO_STREAM_SOURCE)
+    write_app(
+        tmp_path,
+        "stream.py",
+        "from renamed_import_rigs import front as side\n" + MINIMAL_STREAM_SOURCE,
+    )
+
+    assert cli.main(["run", "--dir", str(tmp_path), "stream.py:side"]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_package_target_loads_a_stream_its_init_re_exports(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    """`acme_rover:camera_rig`, where `acme_rover/__init__.py` re-exports it."""
+    write_app(
+        tmp_path,
+        "re_exporting_rover/__init__.py",
+        "from re_exporting_rover.streams import front\n",
+    )
+    write_app(tmp_path, "re_exporting_rover/streams.py", TWO_STREAM_SOURCE)
+
+    assert cli.main(["run", "--dir", str(tmp_path), "re_exporting_rover:front"]) == 0
+
+    assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
+
+
+@pytest.mark.usefixtures("forget_the_modules_imported_from_tmp_path")
+def test_a_package_target_naming_a_value_that_is_not_a_stream_is_refused_naming_the_fix(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(
+        tmp_path,
+        "re_exporting_helper_rover/__init__.py",
+        "from re_exporting_helper_rover.helpers import wire_cameras\n",
+    )
+    write_app(
+        tmp_path,
+        "re_exporting_helper_rover/helpers.py",
+        "def wire_cameras(stream):\n    pass\n",
+    )
+
+    exit_code = cli.main(
+        ["run", "--dir", str(tmp_path), "re_exporting_helper_rover:wire_cameras"]
+    )
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "`wire_cameras` in" in refusal and "is not a @stream function" in refusal
+    assert "decorate it with `@stream`" in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_an_entry_defining_both_a_stream_and_setup_is_refused(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE + "\n\n" + MINIMAL_APP_SOURCE)
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path)])
+
+    assert exit_code == 1
+    refusal = capsys.readouterr().err
+    assert "defines both @stream functions (`main`) and `setup(rt)`" in refusal
+    assert "remove `setup`" in refusal
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_name_is_refused_for_an_entry_that_builds_its_graph_in_setup(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    capsys: pytest.CaptureFixture[str],
+):
+    write_app(tmp_path, "app.py")
+
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "--name", "rig"])
+
+    assert exit_code == 1
+    assert (
+        f"--name names a stream, and `{tmp_path / 'app.py'}` builds its graph in "
+        f"`setup(rt)`: drop `--name`, or convert the file to a `@stream` function."
+    ) in capsys.readouterr().err
+    assert recorded_launch_runtime_calls.calls == []
+
+
+def test_an_app_py_with_setup_still_launches_through_setup(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    """The expand step's fallback: no `stream.py`, an `app.py` with `setup(rt)`."""
+    write_app(
+        tmp_path,
+        "app.py",
+        "SETUP_CALLS = []\ndef setup(rt):\n    SETUP_CALLS.append(type(rt).__name__)\n",
+    )
+
+    assert cli.main(["run", "--dir", str(tmp_path)]) == 0
+
+    assert recorded_launch_runtime_calls.call_names() == [
+        "construct",
+        "host_control_plane",
+        "run",
+    ], "the setup path builds the graph in `setup`, never through `load`"
+
+
+def test_a_stream_that_adds_nothing_is_refused_at_load_and_publishes_no_node(
+    tmp_path: Path,
+):
+    """A real `Runtime`, in a child: `load` refuses the empty graph by name before
+    any control plane is hosted, so no node entry is ever published."""
+    write_app(
+        tmp_path,
+        "stream.py",
+        "from streamlib import Stream, stream\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream: Stream) -> None:\n"
+        "    pass\n",
+    )
+    # Short, as the engine's surface-share socket path must fit `sun_path`.
+    isolated_runtime_directory = Path(tempfile.mkdtemp(prefix="sl-"))
+    try:
+        finished = run_cli(
+            "run",
+            "--dir",
+            str(tmp_path),
+            environment={**os.environ, "XDG_RUNTIME_DIR": str(isolated_runtime_directory)},
+        )
+        published_node_entries = sorted(
+            (isolated_runtime_directory / "streamlib" / "nodes").glob("*.json")
+        )
+    finally:
+        shutil.rmtree(isolated_runtime_directory, ignore_errors=True)
+
+    output = finished.stdout + finished.stderr
+    assert finished.returncode == 1, output
+    assert "error: the stream `main`" in finished.stderr
+    assert "holds no node" in finished.stderr, output
+    assert "Traceback (most recent call last)" not in finished.stderr, output
+    assert ENGINE_STARTING_LOG_LINE not in output, "a refused load never runs the engine"
+    assert published_node_entries == [], "a refused load hosts no control plane"
+
+
+def test_a_raising_stream_function_prints_its_traceback_and_builds_no_engine(
+    tmp_path: Path,
+):
+    write_app(
+        tmp_path,
+        "stream.py",
+        "from streamlib import Stream, stream\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream: Stream) -> None:\n"
+        "    raise ValueError('bad wiring')\n",
+    )
+
+    finished = run_cli("dev", "--dir", str(tmp_path))
+
+    output = finished.stdout + finished.stderr
+    assert finished.returncode == 1, output
+    assert "ValueError: bad wiring" in finished.stderr
+    assert "Traceback (most recent call last)" in finished.stderr
+    assert "cli.py" not in finished.stderr, "the launcher's frames are stripped"
+    assert "_stream_graph_builder.py" not in finished.stderr, (
+        "the compile call into the stream function is the launcher's, not the author's"
+    )
+    assert f'File "{tmp_path / "stream.py"}", line 6, in main' in finished.stderr
+    assert ENGINE_CONSTRUCTED_LOG_LINE not in output, "compiling fails before any engine"
+
+
+def test_a_typed_duplicate_is_refused_on_the_authors_own_line(tmp_path: Path):
+    write_app(
+        tmp_path,
+        "stream.py",
+        "from streamlib import Stream, TestPatternSource, stream\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream: Stream) -> None:\n"
+        '    stream.add(TestPatternSource, name="Pattern")\n'
+        '    stream.add(TestPatternSource, name="pattern")\n',
+    )
+
+    finished = run_cli("run", "--dir", str(tmp_path))
+
+    assert finished.returncode == 1, finished.stderr
+    first_frame = finished.stderr.index("File ")
+    assert finished.stderr.startswith(
+        f'File "{tmp_path / "stream.py"}", line 7, in main', first_frame
+    ), finished.stderr
+    assert "casts to `pattern`" in finished.stderr
+    assert ENGINE_CONSTRUCTED_LOG_LINE not in finished.stdout + finished.stderr
+
+
+# ---------------------------------------------------------------------------
 # The failure surfaces — a bad save must cost nothing
 # ---------------------------------------------------------------------------
 
@@ -228,9 +1168,9 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(
 ):
     """The bad save the scaffold actually invites.
 
-    `app.py` holds wiring the user rarely touches; the file they edit is the
+    `stream.py` holds wiring the user rarely touches; the file they edit is the
     node module, which reaches the launcher only as an import from the
-    entry file. So the traceback has to walk through `app.py` and land in the
+    entry file. So the traceback has to walk through `stream.py` and land in the
     module — naming only the entry file would point at the wrong file.
     """
     app_directory = tmp_path / "demo"
@@ -423,7 +1363,7 @@ def test_the_control_plane_binds_every_interface_by_default():
 # ---------------------------------------------------------------------------
 
 SCAFFOLDED_FILE_NAMES = (
-    "app.py",
+    "stream.py",
     "nodes/__init__.py",
     "nodes/inverting_effect.py",
     "nodes/brightness_meter.py",
@@ -442,6 +1382,9 @@ def test_new_writes_a_working_app(tmp_path: Path):
         assert (app_directory / file_name).is_file(), f"`new` must write {file_name}"
     assert not (app_directory / "processors").exists(), (
         "a scaffolded app keeps its node classes under `nodes/`"
+    )
+    assert not (app_directory / "app.py").exists(), (
+        "the scaffold's entry is `stream.py`; `app.py` is only a fallback `run` keeps"
     )
     assert (app_directory / ".python-version").read_text().strip() == "3.12", (
         "the scaffold pins the Python version the plan names"
@@ -526,22 +1469,25 @@ def test_every_scaffold_template_file_is_one_new_writes():
     assert template_files == set(cli.SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE)
 
 
-def test_the_scaffolded_app_parses_and_declares_setup(tmp_path: Path):
-    """The scaffold is the first code the user reads — it must at least parse.
-
-    Parsed rather than executed: importing it would need a GPU and a camera,
-    and what this locks is that `dev` finds a `setup` in what `new` wrote.
-    """
+def test_the_scaffolded_stream_declares_one_stream_named_main(tmp_path: Path):
+    """The scaffold is the first code the user reads — `dev` with no argument
+    loads the sole `@stream` in it, so it must declare exactly one, bare."""
     app_directory = tmp_path / "demo"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
-    entry_source = (app_directory / "app.py").read_text()
+    entry_source = (app_directory / "stream.py").read_text()
     declared = ast.parse(entry_source)
-    top_level_functions = [
-        node.name for node in declared.body if isinstance(node, ast.FunctionDef)
+    stream_functions = [
+        node.name
+        for node in declared.body
+        if isinstance(node, ast.FunctionDef)
+        and [ast.unparse(decorator) for decorator in node.decorator_list] == ["stream"]
     ]
 
-    assert "setup" in top_level_functions, "`dev` finds `setup(rt)` by convention"
+    assert stream_functions == ["main"]
+    assert not any(
+        isinstance(node, ast.FunctionDef) and node.name == "setup" for node in declared.body
+    ), "an entry defining both a stream and `setup` is refused"
     assert "CameraSource" in entry_source
     assert "DisplayWindow" in entry_source
 
@@ -583,13 +1529,13 @@ def test_each_scaffolded_processor_lives_outside_the_entry_file(
     which is a wiring error — the entry runs as `__main__`, and the child
     interpreter that runs the processor imports its class by name.
 
-    So the scaffold must teach the shape that works: wiring in `app.py`, the
+    So the scaffold must teach the shape that works: wiring in `stream.py`, the
     class in an importable module beside it.
     """
     app_directory = tmp_path / "demo"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
-    entry_source = (app_directory / "app.py").read_text()
+    entry_source = (app_directory / "stream.py").read_text()
     processor_source = (app_directory / module_path).read_text()
     module_name = module_path.removesuffix(".py").replace("/", ".")
 
@@ -614,7 +1560,7 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu(tmp_path: Pa
     app_directory = tmp_path / "demo"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
-    entry_source = (app_directory / "app.py").read_text()
+    entry_source = (app_directory / "stream.py").read_text()
     effect_source = (app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH).read_text()
     meter_source = (app_directory / cli.SCAFFOLDED_METER_MODULE_PATH).read_text()
 
@@ -626,13 +1572,115 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu(tmp_path: Pa
         ast.unparse(call.args[1])
         for call in ast.walk(ast.parse(entry_source))
         if isinstance(call, ast.Call)
-        and ast.unparse(call.func) == "rt.connect"
+        and ast.unparse(call.func) == "stream.connect"
         and ast.unparse(call.args[0]) == "effect.output('video_to_downstream')"
     )
     assert readers_of_the_effect_output == [
         "meter.input('video_from_upstream')",
         "window.input('video')",
     ], "the meter reads a fan-out of the effect's output, off the window's path"
+
+
+# Run in a child with the scaffold as its working directory: compiling imports
+# the scaffold's `nodes` package, and a `Runtime` reads `sys.path[0]` once per
+# process, so neither may happen in this one.
+SCAFFOLDED_STREAM_COMPILE_AND_LOAD_SCRIPT = """
+import json
+from pathlib import Path
+
+from streamlib import Runtime, cli, compile_stream_to_graph
+
+entry_namespace = cli.execute_app_entry_file(Path("stream.py").resolve())
+compiled_graph = compile_stream_to_graph(entry_namespace["main"])
+runtime = Runtime()
+try:
+    runtime.load(compiled_graph)
+finally:
+    runtime.shutdown()
+print("COMPILED_GRAPH=" + json.dumps(compiled_graph))
+"""
+
+
+@pytest.mark.parametrize(
+    ("use_test_pattern_source", "source_node_name", "source_node_type"),
+    [
+        (
+            False,
+            "camerasource",
+            "streamlib_media_builtins::camera_source::CameraSource",
+        ),
+        (
+            True,
+            "testpatternsource",
+            "streamlib_media_builtins::test_pattern_source::TestPatternSource",
+        ),
+    ],
+)
+def test_the_scaffolded_stream_compiles_to_its_graph_and_loads_without_a_device(
+    tmp_path: Path,
+    use_test_pattern_source: bool,
+    source_node_name: str,
+    source_node_type: str,
+):
+    """What `new` writes compiles to the one-shape graph and `load` takes it.
+
+    `load` resolves every node's type — the scaffold's own `@node` classes by
+    their import paths — and checks every link's ports and the exposure, all
+    before `run()` would touch a device.
+    """
+    app_directory = tmp_path / "demo"
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=use_test_pattern_source)
+
+    finished = subprocess.run(
+        [sys.executable, "-c", SCAFFOLDED_STREAM_COMPILE_AND_LOAD_SCRIPT],
+        cwd=app_directory,
+        capture_output=True,
+        text=True,
+        timeout=RESOLUTION_FAILURE_TIMEOUT_SECONDS,
+    )
+
+    assert finished.returncode == 0, finished.stdout + finished.stderr
+    (compiled_graph_line,) = [
+        line
+        for line in finished.stdout.splitlines()
+        if line.startswith("COMPILED_GRAPH=")
+    ]
+    assert json.loads(compiled_graph_line.removeprefix("COMPILED_GRAPH=")) == {
+        "stream": "main",
+        "nodes": [
+            {"name": source_node_name, "type": source_node_type, "config": {}},
+            {
+                "name": "invertingeffect",
+                "type": "nodes.inverting_effect:InvertingEffect",
+                "config": {},
+            },
+            {
+                "name": "brightnessmeter",
+                "type": "nodes.brightness_meter:BrightnessMeter",
+                "config": {},
+            },
+            {
+                "name": "displaywindow",
+                "type": "streamlib_media_builtins::display_window::DisplayWindow",
+                "config": {"title": "StreamLib", "scaling": "fit"},
+            },
+        ],
+        "links": [
+            {
+                "source": {"node": source_node_name, "port": "video"},
+                "target": {"node": "invertingeffect", "port": "video_from_upstream"},
+            },
+            {
+                "source": {"node": "invertingeffect", "port": "video_to_downstream"},
+                "target": {"node": "displaywindow", "port": "video"},
+            },
+            {
+                "source": {"node": "invertingeffect", "port": "video_to_downstream"},
+                "target": {"node": "brightnessmeter", "port": "video_from_upstream"},
+            },
+        ],
+        "exposed": [{"node": "invertingeffect", "port": "video_to_downstream"}],
+    }
 
 
 def test_the_scaffold_depends_on_streamlib_and_numpy_only(tmp_path: Path):
@@ -651,10 +1699,13 @@ def test_the_test_pattern_scaffold_needs_no_capture_device(tmp_path: Path):
 
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
 
-    entry_source = (app_directory / "app.py").read_text()
+    entry_source = (app_directory / "stream.py").read_text()
     ast.parse(entry_source)
     assert "TestPatternSource" in entry_source
     assert "CameraSource" not in entry_source
+    assert "camera" not in entry_source.lower(), (
+        "the test-pattern stream's docstrings describe a test pattern, not a camera"
+    )
     # The nodes are source-agnostic, so the split must not have made them vary.
     ast.parse((app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH).read_text())
     ast.parse((app_directory / cli.SCAFFOLDED_METER_MODULE_PATH).read_text())
@@ -673,12 +1724,12 @@ def test_the_scaffold_pins_streamlib_to_its_own_index(tmp_path: Path):
 def test_new_refuses_to_overwrite_an_existing_app(tmp_path: Path):
     app_directory = tmp_path / "demo"
     app_directory.mkdir()
-    (app_directory / "app.py").write_text("# the user's own work\n")
+    (app_directory / "stream.py").write_text("# the user's own work\n")
 
-    with pytest.raises(cli.AppLaunchError, match="already has app.py"):
+    with pytest.raises(cli.AppLaunchError, match="already has stream.py"):
         cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
-    assert (app_directory / "app.py").read_text() == "# the user's own work\n", (
+    assert (app_directory / "stream.py").read_text() == "# the user's own work\n", (
         "a refused scaffold must leave the directory untouched"
     )
     assert not (app_directory / "pyproject.toml").exists(), (
@@ -813,6 +1864,8 @@ def test_the_launcher_names_the_apps_directory_for_the_built_ins(tmp_path: Path,
         "run",
         requested_anchor_directory=tmp_path,
         requested_entry_file=None,
+        requested_stream_target=None,
+        requested_stream_name=None,
         bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
         bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
         runtime_name=None,
@@ -842,6 +1895,8 @@ def test_a_runtime_name_the_engine_refuses_reads_as_a_launcher_error(tmp_path):
             "run",
             requested_anchor_directory=tmp_path,
             requested_entry_file=None,
+            requested_stream_target=None,
+            requested_stream_name=None,
             bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
             bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
             runtime_name="a/b",

@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 from types import TracebackType
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal, TypeVar, final, overload
+from typing import Any, ClassVar, Literal, TypeVar, final, overload
 
 from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 
@@ -98,7 +98,7 @@ class CameraSource:
     """Native built-in block: live camera capture (V4L2 on Linux, AVFoundation
     on macOS).
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(CameraSource, config={"device_id": "/dev/video0"})`); it is
     never instantiated and its per-frame path never enters the interpreter.
     `device_id` is a V4L2 device path on Linux and an AVFoundation camera's
@@ -118,11 +118,13 @@ class CameraSource:
     refusal names that application and the setting to change.
     """
 
+    type: ClassVar[str]
+
 @final
 class DisplayWindow:
     """Native built-in block: video frames in a vsync'd window.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
     it is never instantiated and its per-frame path never enters the
     interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`. `width` and
@@ -136,13 +138,15 @@ class DisplayWindow:
     anything, so upstream still sees a live consumer.
     """
 
+    type: ClassVar[str]
+
 @final
 class H264Decoder:
     """Native built-in block: H.264 encoded-frame bags to decoded video
     frames via hardware decode — Vulkan Video on Linux, VideoToolbox on
     macOS.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(H264Decoder)`); it is never instantiated and its per-frame path
     never enters the interpreter.
 
@@ -172,12 +176,14 @@ class H264Decoder:
     rather than the graph running with an empty channel.
     """
 
+    type: ClassVar[str]
+
 @final
 class H264Encoder:
     """Native built-in block: video frames to H.264 encoded-frame bags via
     hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(H264Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
@@ -205,13 +211,15 @@ class H264Encoder:
     one error line — no exception reaches Python.
     """
 
+    type: ClassVar[str]
+
 @final
 class H265Decoder:
     """Native built-in block: H.265 encoded-frame bags to decoded video
     frames via hardware decode — Vulkan Video on Linux, VideoToolbox on
     macOS.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(H265Decoder)`); it is never instantiated and its per-frame path
     never enters the interpreter.
 
@@ -241,12 +249,14 @@ class H265Decoder:
     rather than the graph running with an empty channel.
     """
 
+    type: ClassVar[str]
+
 @final
 class H265Encoder:
     """Native built-in block: video frames to H.265 encoded-frame bags via
     hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(H265Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
@@ -274,11 +284,13 @@ class H265Encoder:
     one error line — no exception reaches Python.
     """
 
+    type: ClassVar[str]
+
 @final
 class MicrophoneSource:
     """Native built-in block: audio capture as timestamped sample blocks.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(MicrophoneSource, config={"device_id": "..."})`); it is never
     instantiated and its capture callback never enters the interpreter.
 
@@ -300,12 +312,14 @@ class MicrophoneSource:
     unanswered, names that application and the setting to change.
     """
 
+    type: ClassVar[str]
+
 @final
 class Mp4Sink:
     """Native built-in block: encoded video and audio bags recorded to one
     fragmented MP4 file.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(Mp4Sink, config={"path": "recording.mp4"})`); it is never
     instantiated and its per-bag path never enters the interpreter.
 
@@ -343,12 +357,14 @@ class Mp4Sink:
     written one is dropped and counted, a producer bug on an `ordered` input.
     """
 
+    type: ClassVar[str]
+
 @final
 class OpusDecoder:
     """Native built-in block: Opus encoded-audio-packet bags to decoded audio
     blocks via libopus.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(OpusDecoder)`); it is never instantiated and its per-packet path
     never enters the interpreter. There is no config.
 
@@ -376,12 +392,14 @@ class OpusDecoder:
     derivable from the stamps either side.
     """
 
+    type: ClassVar[str]
+
 @final
 class OpusEncoder:
     """Native built-in block: 20 ms windows of audio to Opus
     encoded-audio-packet bags via libopus.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(OpusEncoder, config={"bitrate_bps": 96000})`); it is never
     instantiated and its per-window path never enters the interpreter.
 
@@ -408,11 +426,13 @@ class OpusEncoder:
     absent meaning `"audio"`. In-band FEC and DTX are off and are not knobs.
     """
 
+    type: ClassVar[str]
+
 @final
 class SpeakerSink:
     """Native built-in block: plays timestamped blocks of interleaved samples.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(SpeakerSink, config={"device_id": "..."})`); it is never
     instantiated and its device callback never enters the interpreter.
 
@@ -439,15 +459,19 @@ class SpeakerSink:
     plugging in headphones moves it there.
     """
 
+    type: ClassVar[str]
+
 @final
 class TestPatternSource:
     """Native built-in block: SMPTE-style color bars, no hardware.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(TestPatternSource, config={"width": 1280, "height": 720})`);
     it is never instantiated and its per-frame path never enters the
     interpreter.
     """
+
+    type: ClassVar[str]
 
     # Keeps pytest from collecting the `Test*`-named class in user suites.
     __test__: Literal[False]
@@ -459,7 +483,7 @@ class VirtualCameraSink:
     processor runs — created at setup, removed at teardown, like a USB camera
     plugged in and pulled out — showing whatever the graph writes into it.
 
-    A marker type — pass the class itself to `Runtime.add`
+    A marker type — pass the class itself to `stream.add` or `Runtime.add`
     (`rt.add(VirtualCameraSink, config={"name": "Desk cam"})`); it is never
     instantiated and its per-frame path never enters the interpreter.
 
@@ -491,6 +515,8 @@ class VirtualCameraSink:
     re-negotiates it.
     """
 
+    type: ClassVar[str]
+
 @final
 class TestBagFeeder:
     """`streamlib.testing`'s feeder endpoint: publishes bags a test queued.
@@ -500,12 +526,16 @@ class TestBagFeeder:
     test reading it does.
     """
 
+    type: ClassVar[str]
+
     # Keeps pytest from collecting the `Test*`-named class in user suites.
     __test__: Literal[False]
 
 @final
 class TestBagCollector:
     """`streamlib.testing`'s collector endpoint: records every bag produced."""
+
+    type: ClassVar[str]
 
     # Keeps pytest from collecting the `Test*`-named class in user suites.
     __test__: Literal[False]
@@ -648,6 +678,36 @@ class Runtime:
         `graph` — and until it does, the request appears in this one's under
         `mesh.link_requests_awaiting_runtime`, with a `reason` saying whether
         that runtime is absent, silent, or refused it by name.
+        """
+
+    def load(self, graph: Mapping[str, Any], *, name: str | None = None) -> None:
+        """Load a graph into this Runtime before `run()`.
+
+        `graph` is the mapping `compile_stream_to_graph` returns, or a graph
+        `streamlib graph` rendered; anything not a mapping raises `TypeError`.
+        It is converted to JSON the way `add`'s `config` is: a tuple reads as a
+        list, NaN and infinity as null, and what JSON cannot carry — a set,
+        bytes, a nested mapping that is not a dict, a key that is not a str, an
+        int wider than 64 bits, a str that cannot be encoded as UTF-8,
+        containers nested more than 128 deep, as one holding itself is —
+        raises `TypeError` or `ValueError` saying the graph is not JSON data,
+        with the converter's own error as `__cause__`. `name`, when given, is a
+        str that encodes as UTF-8. The stream's name — `name` when given, else
+        the graph's own `stream` — is cast the way a node name is, and one
+        casting to nothing raises `ValueError`. A Runtime takes exactly one
+        `load`: a second raises `RuntimeError` naming the stream already
+        loaded, the earlier refusal, or the load still underway on another
+        thread. An empty graph raises `RuntimeError`, naming the stream when it
+        has one; one that does not parse, and one the engine refuses — an
+        unknown `type`, a taken node name, a link to a port no node has — raise
+        `RuntimeError` with the engine's own text. A refused load can leave part
+        of its graph behind, so every refused call is recorded — save one
+        refused because this Runtime is already running or shut down, which
+        `run()` refuses anyway — and so is a panic inside the load; `run()` then
+        raises naming the load's own refusal or panic, else the first refusal
+        recorded, and raises while a load is still underway. Construct a new
+        Runtime and load a corrected graph. `add` and `connect` work with or
+        without a load.
         """
 
     # `bind_host` is `...` rather than its literal default because the binding
@@ -2207,7 +2267,7 @@ def decode_tapped_channel_bag_frame_to_python_object(
     The bytes a tap hands back are the channel's wire bytes verbatim, header
     included; this reads exactly the payload the header declares. Refuses a bag
     shorter than its own declared length rather than returning the prefix that
-    did arrive.
+    did arrive, and one whose containers nest more than 128 deep.
     """
 
 def encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes:
@@ -2217,15 +2277,19 @@ def encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes:
     The engine's one bag codec, reachable: a dict with string keys at every
     level, values from `dict`, `list`, `tuple`, `str`, `bytes`, `int`, `float`,
     `bool` and `None`, `bytes` as msgpack `bin` at 1×. Anything else raises
-    `TypeError`, and an integer wider than 64 bits raises `ValueError`.
+    `TypeError`; an integer wider than 64 bits, and containers nested more than
+    128 deep — the bag itself the outermost, as one holding itself is — raise
+    `ValueError`.
     """
 
 def decode_msgpack_bytes_to_python_object(msgpack_bytes: bytes) -> Any:
     """Decode msgpack bytes into ordinary Python data.
 
     Unlike `decode_tapped_channel_bag_frame_to_python_object` these are payload
-    bytes with no transport frame header in front of them. Nesting is bounded
-    at decode, so bytes from an untrusted peer cannot recurse without limit.
+    bytes with no transport frame header in front of them. A value whose
+    containers nest more than 128 deep raises `ValueError` — the bound
+    `encode_bag_to_msgpack_bytes` keeps, so whatever decodes encodes again, and
+    bytes from an untrusted peer cannot recurse without limit.
     """
 
 def capability_extension_host_for_the_app_process(
