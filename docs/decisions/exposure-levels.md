@@ -35,7 +35,15 @@ changed live.
 - **The internet is not the runtime's.** A public port's URL is what Tailscale serve or funnel
   publishes, so the runtime has nothing to build for internet exposure.
 
+- **Pull, never push.** A source wiring itself into a reader on another machine is a server
+  wiring its URL into a client's browser. The reader's side decides what it consumes: it finds an
+  exposed port and pulls it. This also matches the local-API rule that control never crosses
+  machines, which a link request quietly did.
+
 ## Rejected alternatives
+
+- **Any runtime may push or wire two others (2026-09-14).** It existed so agents could push data
+  dynamically. Under pull-only, an agent pulls on the machine where the data is wanted.
 
 - **Binary exposure, with streams on one machine linking freely (2026-09-30).** It gave the
   machine two rules: any stream could read any other stream's ports, while the local URL listener
@@ -43,6 +51,10 @@ changed live.
   shared machine.
 
 ## Consequences
+
+- The link request (push and third-party wiring) is retired: `request_link_on_remote_input_runtime`,
+  the remote-destination spellings in Python and MCP, the link-request queryable, and `graph`'s
+  `created_by_runtime_name` and `link_requests_awaiting_runtime`. Removing them is a later change.
 
 - `expose` on the CLI, the app and the local API edits the live map. Whether those live edits
   persist across a restart is the runtime-hosting change's to settle.

@@ -3800,49 +3800,26 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   name different ports and the tool cannot know which was meant. `disconnect` takes `link_id`,
   with an optional `input_runtime_name` for a link another runtime holds, or a
   `link_request_id` alone to cancel a request still waiting. A runtime name equal to one's own
-  is a local reference, resolved by display name.
+  is a local reference, resolved by display name. Since 2026-10-04 only a source may be on
+  another runtime: a remote destination, `Runtime.remote_processor_input`,
+  `Runner::request_link_on_remote_input_runtime` and the `to_*` remote pair are retired with the
+  link request (pull-only, below).
   [cross-runtime-links — SHIPPED #2292 for the Rust address and #2287 for the Python and MCP
   spellings; the `to_*` pair with #2289; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by local-api: each end is `<end>_node` and `<end>_port`, with `<end>_runtime_name` for a port on another runtime — a node by its name, never its id (§Control plane, the local API speaks the graph's words)]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_names_a_source_on_another_runtime_by_its_mesh_address -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_refuses_naming_both_a_link_and_a_request_or_neither -->
-- **DECIDED** — Any runtime on the mesh may create a remote link: a receiver pulling another
-  runtime's output into its own input, a sender pushing its output into another runtime's
-  input, or a third runtime wiring two others. The runtime that owns the input end applies the
-  link through the same `connect` operation and the same refusals a local link meets, and the
-  requesting runtime receives that outcome. The request travels over the mesh, so neither end
-  needs a control plane, and `graph` on the input's runtime shows which runtime created the
-  link. Until the security pass, any runtime on the mesh may wire.
-  **The input's runtime always pulls**, so a push and a third-party wiring are one message — a
-  *link request* to the input's runtime, which applies it through `connect` itself with a
-  remote source. One data shape serves all three. The request is a Zenoh query to a queryable
-  under that runtime's own `@runtime/<runtime name>` prefix, sent at `Drop` on the control
-  priority with an engine-chosen timeout; the payload is msgpack carrying the operation, the
-  requester-minted `link_request_id`, the source and destination addresses or the `link_id`,
-  the requester's name and its engine version. The reply is `{link_id, state}` or a refusal by
-  `reply_err`.
-  **Silence is not a refusal, and Zenoh makes the two look identical**: a timed-out query
-  arrives as an error reply carrying the string `Timeout` through the same callback a real
-  `reply_err` uses, so only an error reply whose payload *decodes* as a refusal document
-  counts — everything else is silence, which leaves the request waiting with reason
-  `unanswered` and is resent on an engine-chosen backoff. The input's runtime keeps each
-  applied `link_request_id` on the link it made, for that link's life, so a resend returns the
-  link it already made and never a second one — and a link that goes takes its id with it,
-  leaving nothing to forget. **A refusal about the moment is not a refusal about the request**:
-  a runtime declares this queryable before it has a graph to apply into, and a request landing
-  in that window is refused *for now* and kept by the requester.
-  **`connect` never waits on the mesh** — the owner's helper ruling applied again: it returns
-  `awaiting_remote` or `pending`, and the outcome lands in `graph`. An absent or silent input
-  runtime leaves the request with the requester, rendered with its id under
-  `graph.mesh.link_requests_awaiting_runtime` and sent when that runtime appears; a request
-  dies with its requester, and `disconnect` naming its `link_request_id` cancels it.
-  `disconnect` over the mesh is the same request carrying `link_id`, and needs no idempotence
-  record — it is idempotent by what it asks for. Every link renders `created_by_runtime_name`,
-  its own runtime's name for a local link.
-  [runtime-mesh; cross-runtime-links — SHIPPED #2289; amended by one-runtime-per-machine: the stream map decides which links a runtime accepts]
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_link_requests_two_processes -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::link_requests_applied_into_this_runtimes_graph -->
+- **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
+  creates it, reading a port the source stream has exposed — private on the machine, public off
+  it — and the source is never asked. No runtime pushes its output into another's input, and no
+  runtime wires two others: the *link request* is retired, and `graph` names no
+  `created_by_runtime_name` and no `link_requests_awaiting_runtime`. A machine that wants
+  another's port finds it among that machine's exposed ports and pulls it — from its own stream,
+  from code on the machine, or by opening the port's URL. Owner, 2026-10-04, superseding the
+  2026-09-14 rule that any runtime may push or wire: a source never wires itself into a reader,
+  the way a server never wires its URL into a client's browser. [exposure-levels; runtime-mesh;
+  cross-runtime-links — link requests SHIPPED #2289, retired by this entry]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::link_requests_this_runtime_has_sent -->
 - **DECIDED** — A remote link naming a runtime that is not on the mesh waits and wires when
   that runtime appears; a runtime that is present but offers no such processor or port refuses
