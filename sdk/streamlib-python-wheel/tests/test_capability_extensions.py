@@ -347,7 +347,7 @@ def test_a_raising_hook_in_a_helper_refuses_that_processor_by_name(
     assert "streamlib-helper-raising-extension" in app.output
     assert "helper_raising_extension" in app.output
     assert (
-        "[ReportsTheExtensionItsHelperLoaded] its helper process died before it "
+        "[reportstheextensionitshelperloaded] its helper process died before it "
         "finished setting up" in app.output
     ), app.output
 

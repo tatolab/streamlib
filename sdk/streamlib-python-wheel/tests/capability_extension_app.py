@@ -115,10 +115,15 @@ def scenario_a_helper_runs_the_hook_before_the_processor() -> None:
     """A real helper spawn: the hook runs in the child, before its import."""
     install_fixture_distributions("registering")
     import streamlib
-    from capability_extension_processor import ReportsTheExtensionItsHelperLoaded
+    from capability_extension_reporting_stream import (
+        one_processor_that_reports_its_helpers_extensions,
+    )
 
+    graph = streamlib.compile_stream_to_graph(
+        one_processor_that_reports_its_helpers_extensions
+    )
     runtime = streamlib.Runtime()
-    runtime.add(ReportsTheExtensionItsHelperLoaded)
+    runtime.load(graph)
 
     def stop_once_the_helper_has_reported() -> None:
         runtime.wait_until_every_processor_is_running(timeout=60.0)
@@ -139,10 +144,15 @@ def scenario_a_raising_hook_refuses_the_processor() -> None:
     """
     install_fixture_distributions("helper_raising")
     import streamlib
-    from capability_extension_processor import ReportsTheExtensionItsHelperLoaded
+    from capability_extension_reporting_stream import (
+        one_processor_that_reports_its_helpers_extensions,
+    )
 
+    graph = streamlib.compile_stream_to_graph(
+        one_processor_that_reports_its_helpers_extensions
+    )
     runtime = streamlib.Runtime()
-    runtime.add(ReportsTheExtensionItsHelperLoaded)
+    runtime.load(graph)
 
     def report_whether_the_processor_ever_started() -> None:
         try:
@@ -166,13 +176,18 @@ def scenario_graph_renders_the_registered_capability() -> None:
     """
     install_fixture_distributions("registering")
     import streamlib
-    from capability_extension_processor import ReportsTheExtensionItsHelperLoaded
+    from capability_extension_reporting_stream import (
+        one_processor_that_reports_its_helpers_extensions,
+    )
     from streamlib._control_plane_client import call_tool
     from streamlib._node_registry import live_nodes
 
+    graph = streamlib.compile_stream_to_graph(
+        one_processor_that_reports_its_helpers_extensions
+    )
     runtime = streamlib.Runtime()
+    runtime.load(graph)
     runtime.host_control_plane()
-    runtime.add(ReportsTheExtensionItsHelperLoaded)
 
     def report_the_extensions_the_graph_carries() -> None:
         runtime.wait_until_every_processor_is_running(timeout=60.0)
