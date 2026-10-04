@@ -448,7 +448,8 @@ def compile_stream_to_graph(
 def _cast_name(name: str, what_the_name_names: str) -> str:
     if not isinstance(name, str):
         raise TypeError(
-            f"a {what_the_name_names} is a str; got {name!r}, a {type(name).__name__}"
+            f"a {what_the_name_names} is a str; got {name!r}, of type "
+            f"`{_type_name_as_written(name)}` — pass the name as a str"
         )
     return cast_exposed_name_to_url_safe(name)
 
@@ -533,8 +534,9 @@ def _suggested_module_name(qualname: str) -> str:
 def _refuse_a_runtime_name_the_mesh_cannot_carry(runtime_name: str) -> None:
     if not isinstance(runtime_name, str):
         raise TypeError(
-            f"a runtime name is a str; got {runtime_name!r}, a "
-            f"{type(runtime_name).__name__}"
+            f"a runtime name is a str; got {runtime_name!r}, of type "
+            f"`{_type_name_as_written(runtime_name)}` — pass the name that runtime runs "
+            f"under as a str; `streamlib nodes` lists them"
         )
     reason = _first_reason_this_is_not_one_mesh_address_chunk(runtime_name)
     if reason is not None:
@@ -591,7 +593,8 @@ def _json_object(
         if plain_key in json_object:
             raise ValueError(
                 f"config must be JSON: `{key_path}` has two keys that are both "
-                f"{plain_key!r} as plain strings, and a JSON object holds a key once"
+                f"{plain_key!r} as plain strings, and a JSON object holds a key once — "
+                f"keep one of them, or rename the other"
             )
         json_object[plain_key] = _json_value(
             value, f"{key_path}[{plain_key!r}]", key_paths_of_enclosing_containers_by_id
@@ -623,7 +626,8 @@ def _json_value(
     if enclosing_key_path is not None:
         raise ValueError(
             f"config must be JSON: `{key_path}` is `{enclosing_key_path}`, which holds "
-            f"it — a value holding itself has no JSON form"
+            f"it — a value holding itself has no JSON form. Break the cycle: put the "
+            f"data `{key_path}` should carry there, not the container holding it"
         )
     key_paths_of_enclosing_containers_by_id[id(value)] = key_path
     if isinstance(value, Mapping):
@@ -669,6 +673,6 @@ def _json_float(value: float, key_path: str) -> float:
     if not math.isfinite(plain_float):
         raise ValueError(
             f"config must be JSON: `{key_path}` is {plain_float!r}, which JSON cannot "
-            f"carry"
+            f"carry — pass `None` where there is no value, or carry it as a `str`"
         )
     return plain_float

@@ -348,6 +348,18 @@ def test_a_typed_name_that_is_not_a_string_is_refused() -> None:
         Stream("rig").add(FrameInverter, name=7)  # pyright: ignore[reportArgumentType]
 
 
+def test_a_name_of_a_type_outside_builtins_is_refused_naming_its_module_and_the_fix() -> (
+    None
+):
+    with pytest.raises(TypeError) as refusal:
+        Stream("rig").add(FrameInverter, name=numpy.int64(7))  # pyright: ignore[reportArgumentType]
+
+    assert str(refusal.value) == (
+        "a node name is a str; got np.int64(7), of type `numpy.int64` — pass the name "
+        "as a str"
+    )
+
+
 def test_the_stream_name_is_cast() -> None:
     assert Stream("Camera Rig").name == "camera-rig"
 
@@ -610,8 +622,13 @@ def test_a_config_key_that_is_not_a_string_is_refused_naming_its_path() -> None:
 
 
 def test_a_config_float_json_cannot_carry_is_refused_naming_its_key_path() -> None:
-    with pytest.raises(ValueError, match=r"config\['gain'\]"):
+    with pytest.raises(ValueError) as refusal:
         Stream("rig").add(FrameInverter, config={"gain": math.nan})
+
+    assert str(refusal.value) == (
+        "config must be JSON: `config['gain']` is nan, which JSON cannot carry — pass "
+        "`None` where there is no value, or carry it as a `str`"
+    )
 
 
 def test_config_values_subclassing_str_int_or_float_are_recorded_as_the_base_type() -> (
@@ -657,6 +674,7 @@ def test_config_keys_equal_only_as_plain_strings_are_refused_naming_the_key() ->
     assert message.startswith("config must be JSON:")
     assert "`config['overlay']`" in message
     assert "'gain'" in message
+    assert message.endswith("keep one of them, or rename the other")
 
 
 def test_config_integers_at_the_64_bit_bounds_are_kept() -> None:
@@ -689,6 +707,10 @@ def test_a_config_holding_itself_is_refused_naming_where_it_loops() -> None:
     message = str(refusal.value)
     assert message.startswith("config must be JSON:")
     assert "`config['overlay']['parent']` is `config`" in message
+    assert message.endswith(
+        "Break the cycle: put the data `config['overlay']['parent']` should carry "
+        "there, not the container holding it"
+    )
 
 
 def test_a_list_holding_itself_is_refused_naming_where_it_loops() -> None:
@@ -967,6 +989,21 @@ def test_a_runtime_name_the_mesh_cannot_carry_is_refused_at_the_mint(
         assert f"the runtime name {runtime_name!r}" in message
         assert reason in message
         assert "`streamlib nodes`" in message
+
+
+def test_a_runtime_name_that_is_not_a_string_is_refused_naming_its_type_and_the_fix() -> (
+    None
+):
+    builder = Stream("rig")
+
+    for mint in (builder.remote_output, builder.remote_input):
+        with pytest.raises(TypeError) as refusal:
+            mint(numpy.int64(3), "camera", "video")  # pyright: ignore[reportArgumentType]
+
+        assert str(refusal.value) == (
+            "a runtime name is a str; got np.int64(3), of type `numpy.int64` — pass the "
+            "name that runtime runs under as a str; `streamlib nodes` lists them"
+        )
 
 
 def test_a_remote_node_name_casting_to_nothing_is_refused_naming_it() -> None:
