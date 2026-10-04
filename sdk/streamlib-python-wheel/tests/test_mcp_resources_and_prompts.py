@@ -47,18 +47,19 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 # interpreter launch rather than by the wire.
 ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 
-APP_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
-from streamlib import Runtime, TestPatternSource
+STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
+from streamlib import Stream, TestPatternSource, stream
 
 # Imported and never added: its decorator is what puts it in the catalog.
 from processors.bag_marking_effect import BagMarkingEffect  # noqa: F401
 from processors.marked_bag_sink import MarkedBagSink
 
 
-def setup(rt: Runtime) -> None:
-    source = rt.add(TestPatternSource, config={"width": 320, "height": 180}, display_name="pattern")
-    sink = rt.add(MarkedBagSink, display_name="sink")
-    rt.connect(source.output("video"), sink.input("bags_from_upstream"))
+@stream
+def main(stream: Stream) -> None:
+    source = stream.add(TestPatternSource, name="pattern", config={"width": 320, "height": 180})
+    sink = stream.add(MarkedBagSink, name="sink")
+    stream.connect(source.output("video"), sink.input("bags_from_upstream"))
 '''
 
 # Both `{delivery_profile}` slots are filled per run, so each way the effect's
@@ -222,7 +223,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     (app_directory / "processors" / "marked_bag_sink.py").write_text(
         MARKED_BAG_SINK_SOURCE_TEMPLATE.format(delivery_profile=sink_input_delivery_profile)
     )
-    (app_directory / "app.py").write_text(APP_WITH_A_SOURCE_LINKED_TO_A_SINK)
+    (app_directory / "stream.py").write_text(STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK)
 
     node = launch_node("run", app_directory, free_port(), capture_output=True)
     entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
