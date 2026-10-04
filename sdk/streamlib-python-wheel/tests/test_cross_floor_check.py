@@ -27,6 +27,14 @@ from streamlib._cross_floor_check import (
 WHEEL_PYTHON_PACKAGE_DIRECTORY = Path(__file__).resolve().parents[1] / "python" / "streamlib"
 FIXTURE_FILE = Path("processors/effect.py")
 FIXTURE_MANIFEST = Path("pyproject.toml")
+FLOOR_CLEAN_STREAM_SOURCE = (
+    "from streamlib import Stream, TestPatternSource, stream\n"
+    "\n"
+    "\n"
+    "@stream\n"
+    "def main(stream: Stream) -> None:\n"
+    "    stream.add(TestPatternSource)\n"
+)
 
 requires_tomllib = pytest.mark.skipif(
     sys.version_info < (3, 11), reason="the dependency rule reads pyproject.toml with tomllib"
@@ -220,8 +228,8 @@ def test_a_cuda_method_call_is_named():
 @pytest.mark.parametrize(
     "use, name, peer",
     [
-        ("rt.add(VirtualCameraSink)", "VirtualCameraSink", None),
-        ("rt.add(streamlib.VirtualCameraSink)", "VirtualCameraSink", None),
+        ("stream.add(VirtualCameraSink)", "VirtualCameraSink", None),
+        ("stream.add(streamlib.VirtualCameraSink)", "VirtualCameraSink", None),
         ("ctx.gpu_full_access.create_ray_tracing_kernel(stages, groups)", "create_ray_tracing_kernel", None),
         ("ctx.gpu_full_access.build_triangles_blas(vertices, indices)", "build_triangles_blas", None),
         ("ctx.gpu_full_access.build_tlas(instances)", "build_tlas", None),
@@ -363,7 +371,7 @@ def test_on_a_python_without_tomllib_the_dependency_rule_is_skipped_by_name(
 
 
 def test_the_check_reads_every_layout_and_skips_virtual_environments(tmp_path: Path):
-    (tmp_path / "app.py").write_text("def setup(rt):\n    pass\n")
+    (tmp_path / "stream.py").write_text(FLOOR_CLEAN_STREAM_SOURCE)
     for processor_directory in (
         tmp_path / "processors",
         tmp_path / "src" / "demo" / "processors",
@@ -437,7 +445,7 @@ def test_a_parse_adds_no_warning_of_its_own(tmp_path: Path):
 
 
 def test_a_clean_app_renders_nothing(tmp_path: Path):
-    (tmp_path / "app.py").write_text("def setup(rt):\n    pass\n")
+    (tmp_path / "stream.py").write_text(FLOOR_CLEAN_STREAM_SOURCE)
 
     assert render_cross_floor_warning_block(
         check_app_directory_for_floor_bindings(tmp_path), tmp_path
@@ -512,7 +520,7 @@ def test_the_launch_prints_the_block_before_the_app_runs_and_still_runs_it(
     (tmp_path / "processors" / "effect.py").write_text(
         'import cupy\nimport torch\ndevice = torch.device("cuda")\n'
     )
-    (tmp_path / "app.py").write_text(
+    (tmp_path / "stream.py").write_text(
         f"open({str(ran)!r}, 'w').write('ran')\n"
         "print('the entry file ran')\n"
         "raise RuntimeError('stop before the engine')\n"
@@ -539,7 +547,7 @@ def test_a_check_that_fails_is_reported_and_the_app_still_runs(
 
     monkeypatch.setattr(cli, "check_app_directory_for_floor_bindings", failing_check)
     ran = tmp_path / "entry-ran.txt"
-    (tmp_path / "app.py").write_text(
+    (tmp_path / "stream.py").write_text(
         f"open({str(ran)!r}, 'w').write('ran')\n"
         "raise RuntimeError('stop before the engine')\n"
     )
@@ -554,7 +562,7 @@ def test_a_check_that_fails_is_reported_and_the_app_still_runs(
 def test_a_clean_launch_prints_nothing_extra(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ):
-    (tmp_path / "app.py").write_text("raise RuntimeError('stop before the engine')\n")
+    (tmp_path / "stream.py").write_text("raise RuntimeError('stop before the engine')\n")
 
     launch_until_the_entry_stops_it(tmp_path)
 
