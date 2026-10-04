@@ -124,7 +124,7 @@ one, with no change to the graph, the loader or `graph`.
   decorator stamps the function with its identity (import path, the identity rule nodes already
   follow) and returns it unchanged: no registry, no engine, no side effect, so a stream module
   imports without a runtime in the process. Its name and description follow decision 1.
-- **`Stream`, the builder** (`streamlib.Stream`, pure Python, stub-gated):
+- **`Stream`, the builder** (`streamlib.Stream`, pure Python, ~~stub-gated~~ inline-typed and gated by pyright — superseded 2026-10-03 by #2567's build: stubtest gates only `streamlib._engine`):
   ```python
   class Stream:
       name: str
@@ -136,9 +136,12 @@ one, with no change to the graph, the loader or `graph`.
       def remote_output(self, runtime_name: str, node_name: str, port_name: str) -> RemoteNodeOutputPortReference: ...
       def remote_input(self, runtime_name: str, node_name: str, port_name: str) -> RemoteNodeInputPortReference: ...
   ```
-  `add` records the node's `type` (the class's import path, derived by the seam `rt.add` uses
+  `add` records the node's `type` (the class's import path, ~~derived by the seam `rt.add` uses
   today — `classify_processor_class`, reached from Python through one stub-gated function so a
-  built-in's marker and a `@node` class answer alike), its config as a JSON object, and its name.
+  built-in's marker and a `@node` class answer alike~~ derived in pure Python — a `@node` class's
+  `__module__:__qualname__`, a built-in marker's `type` class attribute; superseded by the owner's
+  2026-10-02 comment on #2567, since the package split deletes the native seam), its config as a
+  JSON object, and its name.
   `connect` records a link; `expose` records an output. Nothing runs: the builder holds data.
 - **Names are resolved by the builder**, because only it knows a typed name from a defaulted one:
   a name is cast to lowercase URL-safe and a defaulted one is the class's short name, cast; a
@@ -151,13 +154,17 @@ one, with no change to the graph, the loader or `graph`.
 - **`compile_stream_to_graph(stream_function, *, name=None) -> dict`** runs the function once
   over a fresh `Stream` and returns the graph. A function that raises propagates; a function
   that adds nothing yields an empty graph, which `load` refuses by name.
-- **`Runtime.load(stream_or_graph, *, name=None) -> None`** takes a `@stream` function or a
-  graph mapping, compiles the former, and loads the graph into the engine before `run()`: each
+- **`Runtime.load(~~stream_or_graph~~ graph, *, name=None) -> None`** takes ~~a `@stream` function or~~ a
+  graph mapping~~, compiles the former,~~ and loads the graph into the engine before `run()`
+  (superseded by the owner's 2026-10-02 comment on #2567: compiling happens in the project's
+  interpreter, so `run` and `dev` compile and `load` takes the graph): each
   node through today's `add_processor` with its resolved name, refusing a name already in the
   graph instead of suffixing it; each link through today's `connect`, a remote end through the
   link request a remote end already takes; each exposure into the exposure set below. A second
-  `load` on one runtime is refused by name: several streams in one runtime process is OPEN
-  (`:1342-1352`), and this change runs one stream per `run`.
+  `load` on one runtime is refused by name: ~~several streams in one runtime process is OPEN
+  (`:1342-1352`), and~~ this change runs one stream per `run` (several streams in one runtime
+  process became DECIDED, `ARCHITECTURE.md:1425-1437`, and runtime hosting builds it). After a
+  refused `load`, `run()` refuses too (owner, 2026-10-04 comment on #2567).
 - **Embedding** is `Runtime(...)`, `load(...)`, `run()`. Live changes after `load` go through
   the control vocabulary as they do for every other client; `Runtime` carries no `add`,
   `connect`, `remote_processor_output` or `remote_processor_input` any more, because a builder

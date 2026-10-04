@@ -40,10 +40,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   PyPI wheel carrying the Python API, the CLI, and the Rust engine (PyO3, the
   pydantic-core model); a StreamLib app is a normal Python codebase — one venv, one
   Python version, ordinary PyPI dependencies, nothing dynamically downloaded;
-  `dev`/`run` find `app.py`'s `setup(rt)` by convention, `-f <file>` overrides;
-  processors are Python classes written in the app or imported from pip-installed
-  packages, and `rt.add` takes the class; the pipeline API is `add`/`connect`.
-  [importable-python-library — SHIPPED #1683, #1707, #1708; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node`; stream-graph builds the authoring clauses]
+  `dev`/`run` load the sole `@stream` in `stream.py` by convention — `run <file>.py:<fn>`
+  or `run <module>:<fn>` loads one, `-f <file>` overrides the file, `--name` the stream's
+  name — falling back to an `app.py`'s `setup(rt)` until #2569 deletes it; nodes are
+  Python classes written in the project or imported from pip-installed packages, and
+  `stream.add` takes the class; the builder's API is `add`/`connect`/`expose`.
+  [importable-python-library — SHIPPED #1683, #1707, #1708; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node`; stream-graph builds the authoring clauses — #2567 built `@stream`, `Stream`, `compile_stream_to_graph`, `Runtime.load` and `stream.py` launching]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
@@ -59,10 +61,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   source-compiled. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — The two floors are one product surface. A Python processor written
   against the wheel's public surface runs on both; where it cannot is a short closed
-  list that refuses by name before a frame flows — at `rt.add()` or in `setup()`,
+  list that refuses by name before a frame flows — at `stream.add()` or `rt.add()`, or in `setup()`,
   naming the platform — never mid-frame: ray-tracing kernels (MoltenVK has no
   `VK_KHR_ray_tracing_pipeline`; each constructor refuses at `setup()` naming the absent
-  tier), `VirtualCameraSink` (refused at `rt.add()`), the CUDA Array Interface, and the
+  tier), `VirtualCameraSink` (refused at `stream.add()` and `rt.add()`), the CUDA Array Interface, and the
   fd-shaped raw handles (`export_dma_buf`, `export_opaque_fd`, `import_dma_buf` exist on
   macOS and refuse pointing at `export_iosurface`). The scaffold and the examples use
   only the portable surface. The guarantee is mechanical, never prose: one
@@ -150,9 +152,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Several streams in one project or package: a stream is a decorated function,
   `@stream def camera_rig(stream: Stream)`, and a file or a package may define as many as it
   likes; the bare `setup(stream)` retires rather than living beside it, and a package may ship
-  both runnable streams and composable nodes (owner, 2026-09-30). Direction (review, not
-  decided): the name defaults to the function's and its docstring is the description an agent
-  reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
+  both runnable streams and composable nodes (owner, 2026-09-30). Decided as stream-graph
+  decision 1 (owner, 2026-10-01) and built by #2567, save the entry-point group: the name
+  defaults to the function's and its docstring is the description an agent reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
   there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one, a
   package declaring its streams under an entry-point group. [one-runtime-per-machine; stream-graph]
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
@@ -249,6 +251,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   existing `encode_bag_to_msgpack` and `decode_msgpack_to_python_object` made reachable,
   with exactly the codec's rules — a dict with string keys at every level, the eight value
   types, `bytes` as `bin` at 1×, refusal by name of anything else — and no new behavior.
+  Since #2567 the codec's rules include one nesting bound: a value nesting more than 128
+  containers is refused by name, on encode and decode alike, where a container holding
+  itself used to overflow the stack.
   This is the first firing of the clause above that engine work an extension needs is done
   as engine code inside the extension's own change: an extension carrying a bag across its
   own transport needs the one codec, and a second one in the wheel would be the parallel
@@ -1317,7 +1322,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   derived mechanically, never authored, and the same string in the registry, in the
   control plane's type field, and for spawning the processor's helper process — which
   is how every Python processor runs. A processor defined in the entry file run as
-  `python app.py` identifies as `__main__:<Type>` and is a wiring error at `rt.add`,
+  `python app.py` identifies as `__main__:<Type>` and is a wiring error at `rt.add` and `stream.add`,
   with an error naming the fix (move the class to an importable module and import it
   from the entry file — one import line). The entry file itself may still run as
   `__main__`; only processor classes may not live there.
@@ -1359,7 +1364,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   does and registers the descriptor alone through `register_descriptor_only`. It passes
   over two classes — one decorated where `STREAMLIB_ENTRYPOINT` is in the environment,
   which is how a helper knows itself, and one with no import path (declared inside a
-  function, or in the entry file), whose refusal stays at `rt.add` with the fix named.
+  function, or in the entry file), whose refusal stays at `rt.add` and `stream.add` with the fix named.
   At first add `ProcessorInstanceFactory::install_constructor_for_registered_descriptor`
   gives the registered descriptor its constructor, refusing a path that already has one
   with the two-classes-one-path text and a path nobody registered by name; the
@@ -1904,7 +1909,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
-  instantiated and configured from Python (`rt.add(CameraSource)`), whose per-frame
+  instantiated and configured from Python (`stream.add(CameraSource)`), whose per-frame
   paths never enter the interpreter. Lag-by-design ends: built-ins ship inside the
   wheel, current by construction. Since 2026-09-04 this names the shipped set, not a
   rule: a further first-party capability is a built-in only under the criterion in
@@ -1917,7 +1922,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   stated rather than deferred: a macOS virtual camera is a CoreMediaIO Camera Extension
   inside a bundled, entitled, notarised app, which the floor rules out under any
   justification, and the DAL plug-in stopped loading in macOS 14.1; on macOS the marker
-  refuses by name at `rt.add()` and `streamlib enable-virtual-camera` refuses by name. As
+  refuses by name at `stream.add()` and `rt.add()`, and `streamlib enable-virtual-camera` refuses by name. As
   many instances as the graph adds — the display's rule. Each instance is one camera that exists only
   while its processor runs: created at `setup()`, removed at `teardown()`, a camera plugged
   in and pulled out from every other application's point of view, whose frames are
@@ -2648,7 +2653,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   camera and display: native built-ins in the engine tree, registered with the other
   media built-ins and surfaced to Python as marker classes beside `CameraSource`,
   configured the one way a built-in is configured
-  (`rt.add(MicrophoneSource, config={"device_id": "..."})`). Both are `execution =
+  (`stream.add(MicrophoneSource, config={"device_id": "..."})`). Both are `execution =
   manual`, the mode `CameraSource` uses for a device that paces itself, with
   `scheduling = realtime` — an audio device callback is the deadline that priority
   exists for. The declaration names that deadline; it does not apply a priority here,
@@ -2683,7 +2688,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — Codec blocks are native built-ins beside camera, display and the audio
   pair: `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder`, `JpegDecoder`,
   `OpusEncoder`, `OpusDecoder`, `Mp4Sink` — instantiated and configured the one way a
-  built-in is configured (`rt.add(H264Encoder)`), per-frame paths never entering an
+  built-in is configured (`stream.add(H264Encoder)`), per-frame paths never entering an
   interpreter, serving Python and Rust apps alike. Video blocks are built on the video
   codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple; JPEG decode is its own backend (`sdk/vulkan-jpeg`; the nvJPEG backend stays
   parked). AV1 and VP9 remain ported but unexposed until a consumer demands them.
@@ -2872,7 +2877,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   floors, since the codec seam made the blocks platform-free and they register
   everywhere. No engine registration was added: the wheel
   already linked all four and already registered them at import, which is what makes
-  this rung five touchpoints and no engine change. The stub docstring is where a
+  this rung five touchpoints and no engine change. Since #2567 the `#[pyclass]`, the `is()`
+  arm, a `type` class attribute and the `add_class` line are one entry in
+  `native_processor_marker_classes!`, so a native built-in owns three touchpoints: that
+  entry, the re-export with its `__all__` line, and the stub entry. The stub docstring is where a
   block's config keys and port names are written down, as it is for every built-in, and
   it states the engine's own behavior rather than an aspiration — the encoder's
   `width`/`height` guardrails that a mismatching frame wins against with a warning, its
