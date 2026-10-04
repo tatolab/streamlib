@@ -94,9 +94,31 @@ def h265_round_trip_into_a_window(stream: Stream) -> None:
 
 
 @stream
-def every_codec_block(stream: Stream) -> None:
-    for marker_class in FOUR_CODEC_MARKERS:
-        stream.add(marker_class)
+def an_h264_encoder_alone(stream: Stream) -> None:
+    stream.add(H264Encoder)
+
+
+@stream
+def an_h264_decoder_alone(stream: Stream) -> None:
+    stream.add(H264Decoder)
+
+
+@stream
+def an_h265_encoder_alone(stream: Stream) -> None:
+    stream.add(H265Encoder)
+
+
+@stream
+def an_h265_decoder_alone(stream: Stream) -> None:
+    stream.add(H265Decoder)
+
+
+ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS = {
+    H264Encoder: an_h264_encoder_alone,
+    H264Decoder: an_h264_decoder_alone,
+    H265Encoder: an_h265_encoder_alone,
+    H265Decoder: an_h265_decoder_alone,
+}
 
 
 CODEC_ROUND_TRIPS = {
@@ -128,7 +150,7 @@ def test_the_marker_class_cannot_be_instantiated(marker_class):
 
 @pytest.mark.parametrize("marker_class", FOUR_CODEC_MARKERS)
 def test_node_name_defaults_to_the_type_name(marker_class):
-    graph = compile_stream_to_graph(every_codec_block)
+    graph = compile_stream_to_graph(ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS[marker_class])
     (codec_node,) = [
         node for node in graph["nodes"] if node["type"] == marker_class.type
     ]

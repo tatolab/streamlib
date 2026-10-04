@@ -76,14 +76,24 @@ def test_the_marker_class_cannot_be_instantiated(marker_class):
 
 
 @stream
-def both_opus_markers(stream: Stream) -> None:
+def an_opus_encoder_alone(stream: Stream) -> None:
     stream.add(OpusEncoder)
+
+
+@stream
+def an_opus_decoder_alone(stream: Stream) -> None:
     stream.add(OpusDecoder)
+
+
+ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS = {
+    OpusEncoder: an_opus_encoder_alone,
+    OpusDecoder: an_opus_decoder_alone,
+}
 
 
 @pytest.mark.parametrize("marker_class", TWO_OPUS_MARKERS)
 def test_node_name_defaults_to_the_type_name(marker_class):
-    graph = compile_stream_to_graph(both_opus_markers)
+    graph = compile_stream_to_graph(ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS[marker_class])
     [marker_node] = [
         node for node in graph["nodes"] if node["type"] == marker_class.type
     ]
