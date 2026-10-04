@@ -9,6 +9,7 @@ the line the author wrote.
 """
 
 import ast
+import functools
 import json
 import math
 import sys
@@ -573,8 +574,29 @@ def test_a_config_value_json_cannot_carry_is_refused_naming_its_key_path() -> No
 
     message = str(refusal.value)
     assert message.startswith("config must be JSON:")
-    assert "config['overlay']['labels'][1]" in message
-    assert "set" in message
+    assert "`config['overlay']['labels'][1]` is of type `set`" in message
+    assert "a collection with `list(...)`" in message
+
+
+@pytest.mark.parametrize(
+    ("value", "type_as_written"),
+    [(numpy.bool_(True), "numpy.bool"), (numpy.int64(7), "numpy.int64")],
+    ids=["numpy-bool", "numpy-int64"],
+)
+def test_a_config_value_of_a_type_outside_builtins_is_refused_naming_its_module(
+    value: object, type_as_written: str
+) -> None:
+    with pytest.raises(TypeError) as refusal:
+        Stream("rig").add(FrameInverter, config={"enabled": value})
+
+    message = str(refusal.value)
+    assert message.startswith(
+        f"config must be JSON: `config['enabled']` is of type `{type_as_written}`, and a "
+        f"graph carries only dict, list, tuple, str, int, float, bool and None"
+    )
+    assert (
+        "convert it with `bool(...)`, `int(...)`, `float(...)` or `str(...)`" in message
+    )
 
 
 def test_a_config_key_that_is_not_a_string_is_refused_naming_its_path() -> None:
@@ -583,8 +605,8 @@ def test_a_config_key_that_is_not_a_string_is_refused_naming_its_path() -> None:
 
     message = str(refusal.value)
     assert message.startswith("config must be JSON:")
-    assert "config['overlay']" in message
-    assert "1" in message
+    assert "`config['overlay']` has the key 1, of type `int`" in message
+    assert "convert it with `str(...)`" in message
 
 
 def test_a_config_float_json_cannot_carry_is_refused_naming_its_key_path() -> None:
@@ -654,10 +676,10 @@ def test_a_config_integer_beyond_64_bits_is_refused_naming_its_key_path(
     with pytest.raises(ValueError) as refusal:
         Stream("rig").add(FrameInverter, config={"limits": [0, integer]})
 
-    message = str(refusal.value)
-    assert message.startswith("config must be JSON:")
-    assert "`config['limits'][1]`" in message
-    assert "-2**63 to 2**64 - 1" in message
+    assert str(refusal.value) == (
+        "config integers must fit the graph's 64-bit range: `config['limits'][1]` is "
+        "outside -2**63 to 2**64 - 1; carry a value that large as a `str`"
+    )
 
 
 def test_a_config_holding_itself_is_refused_naming_where_it_loops() -> None:
@@ -1211,6 +1233,41 @@ def test_what_is_not_callable_is_refused_naming_the_bare_form(
     message = str(refusal.value)
     assert message.startswith("@stream decorates a plain module-level function")
     assert "@stream takes no arguments: the name is the function's" in message
+
+
+@pytest.mark.parametrize(
+    ("class_member_decorator", "descriptor_type_as_written"),
+    [
+        ("classmethod", "classmethod"),
+        ("staticmethod", "staticmethod"),
+        ("property", "property"),
+        ("functools.cached_property", "functools.cached_property"),
+    ],
+    ids=["classmethod", "staticmethod", "property", "cached-property"],
+)
+def test_stream_stacked_over_a_class_member_decorator_is_refused_naming_it(
+    class_member_decorator: str, descriptor_type_as_written: str
+) -> None:
+    namespace: "dict[str, Any]" = {
+        "__name__": "rig_streams",
+        "functools": functools,
+        "stream": stream,
+    }
+
+    with pytest.raises(TypeError) as refusal:
+        exec(
+            f"@stream\n@{class_member_decorator}\ndef main(stream):\n    pass\n",
+            namespace,
+        )
+
+    message = str(refusal.value)
+    assert message.startswith("@stream decorates a plain module-level function")
+    assert (
+        f"is of type `{descriptor_type_as_written}`, which makes a class member of what it "
+        f"wraps. Put `@stream` on a plain module-level `def`, with no "
+        f"`@{descriptor_type_as_written}` under it."
+    ) in message
+    assert "@stream takes no arguments" not in message
 
 
 def test_a_lambda_is_refused_naming_def() -> None:

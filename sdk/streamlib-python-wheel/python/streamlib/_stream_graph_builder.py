@@ -102,14 +102,27 @@ def _stamp_stream_function(candidate: object) -> FunctionType:
 
 def _the_function_unless_it_cannot_be_a_stream(candidate: object) -> FunctionType:
     if not inspect.isfunction(candidate):
-        # Decorating a `def` or a class always passes something callable, so a
-        # value that is not came from a call: `@stream("rig")`.
-        called_with_an_argument = (
+        # What a class-member decorator returns: a descriptor, callable only for
+        # `staticmethod`.
+        if isinstance(candidate, staticmethod) or (
+            hasattr(type(candidate), "__get__") and not callable(candidate)
+        ):
+            descriptor_type_name = _type_name_as_written(candidate)
+            raise TypeError(
+                f"@stream decorates a plain module-level function taking one `Stream`, "
+                f"and {candidate!r} is of type `{descriptor_type_name}`, which makes a class "
+                f"member of what it wraps. Put `@stream` on a plain module-level `def`, "
+                f"with no `@{descriptor_type_name}` under it."
+            )
+        # Stacked over a `def` or a class `@stream` receives something callable,
+        # and over a class-member decorator the descriptor above, so any other
+        # value reached it as an argument: `@stream("rig")`.
+        sentence_naming_the_bare_form_when_called_with_a_value = (
             "" if callable(candidate) else f" {_STREAM_TAKES_NO_ARGUMENTS}"
         )
         raise TypeError(
             f"@stream decorates a plain module-level function taking one `Stream`, and "
-            f"{candidate!r} is not one.{called_with_an_argument}"
+            f"{candidate!r} is not one.{sentence_naming_the_bare_form_when_called_with_a_value}"
         )
     stream_function = candidate
     module = stream_function.__module__
@@ -556,7 +569,7 @@ def _config_as_json_object(config: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(config, Mapping):
         raise TypeError(
             f"config must be a mapping of str keys to JSON values — the object a node's "
-            f"config is; got {config!r}, a {type(config).__name__}"
+            f"config is; got {config!r}, of type `{_type_name_as_written(config)}`"
         )
     return _json_object(config, "config", {id(config): "config"})
 
@@ -570,8 +583,9 @@ def _json_object(
     for key, value in mapping.items():
         if not isinstance(key, str):
             raise TypeError(
-                f"config must be JSON: `{key_path}` has the key {key!r}, a "
-                f"{type(key).__name__}, and a JSON object's keys are strings"
+                f"config must be JSON: `{key_path}` has the key {key!r}, of type "
+                f"`{_type_name_as_written(key)}`, and a JSON object's keys are strings — "
+                f"convert it with `str(...)`"
             )
         plain_key = str.__str__(key)
         if plain_key in json_object:
@@ -600,8 +614,10 @@ def _json_value(
         return _json_float(value, key_path)
     if not isinstance(value, (Mapping, list, tuple)):
         raise TypeError(
-            f"config must be JSON: `{key_path}` is a {type(value).__name__}, and a graph "
-            f"carries only dict, list, tuple, str, int, float, bool and None"
+            f"config must be JSON: `{key_path}` is of type `{_type_name_as_written(value)}`, "
+            f"and a graph carries only dict, list, tuple, str, int, float, bool and None — "
+            f"convert it with `bool(...)`, `int(...)`, `float(...)` or `str(...)`, or a "
+            f"collection with `list(...)`"
         )
     enclosing_key_path = key_paths_of_enclosing_containers_by_id.get(id(value))
     if enclosing_key_path is not None:
@@ -635,10 +651,17 @@ def _json_integer(value: int, key_path: str) -> int:
         # The value is left out: CPython refuses to render an int of more than
         # 4300 digits as text.
         raise ValueError(
-            f"config must be JSON: `{key_path}` is an integer outside -2**63 to "
-            f"2**64 - 1, the range a graph carries one in"
+            f"config integers must fit the graph's 64-bit range: `{key_path}` is outside "
+            f"-2**63 to 2**64 - 1; carry a value that large as a `str`"
         )
     return plain_integer
+
+
+def _type_name_as_written(value: object) -> str:
+    value_type = type(value)
+    if value_type.__module__ == "builtins":
+        return value_type.__qualname__
+    return f"{value_type.__module__}.{value_type.__qualname__}"
 
 
 def _json_float(value: float, key_path: str) -> float:
