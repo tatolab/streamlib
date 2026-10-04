@@ -31,6 +31,7 @@ their `/encoded_video` and `/encoded_audio` suffixes instead.
 """
 
 import argparse
+import functools
 
 import streamlib
 from known_audio_signal_source import KnownAudioSignalSource
@@ -48,6 +49,7 @@ _VIDEO_ENCODER_MARKERS_BY_CODEC: dict[str, type] = {
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
 
+@functools.cache
 def _parse_fixture_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(

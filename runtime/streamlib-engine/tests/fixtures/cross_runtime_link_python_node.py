@@ -26,6 +26,7 @@ each: the reader for the link's state and its tap, the source for
 """
 
 import argparse
+import functools
 
 import streamlib
 from streamlib import Stream, compile_stream_to_graph, stream
@@ -39,6 +40,7 @@ THE_SOURCES_NODE_NAME = "KnownAudioSignalSource"
 THE_PORT = "audio"
 
 
+@functools.cache
 def _parse_fixture_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     end = parser.add_mutually_exclusive_group(required=True)
@@ -62,7 +64,7 @@ def known_signal_offered_to_the_mesh(stream: Stream) -> None:
 
     # Nothing here reads the port: the reader across the mesh is its only
     # consumer, which is the whole of what this end proves (#2344).
-    source = stream.add(KnownAudioSignalSource, name=THE_SOURCES_NODE_NAME)
+    stream.add(KnownAudioSignalSource, name=THE_SOURCES_NODE_NAME)
 
 
 @stream

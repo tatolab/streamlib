@@ -19,6 +19,7 @@ graph by node name, and it derives it the same way for both arms.
 """
 
 import argparse
+import functools
 
 import streamlib
 from streamlib import Stream, compile_stream_to_graph, stream
@@ -34,6 +35,7 @@ _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
 ENCODER_KEYFRAME_INTERVAL_SECONDS = 2
 
 
+@functools.cache
 def _parse_fixture_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
