@@ -1433,8 +1433,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   becomes per stream: the event topic, the processor registry, the interpreter a stream's
   nodes start from, the log file, shutdown and its escalation, the teardown watchdog, and the
   process-group table of its processor interpreters — so one stream's shutdown, crash budget
-  or graph change never touches another's. A stream links to any port of another stream on
-  the same machine without exposing it, over the local transport, and surfaces are shared
+  or graph change never touches another's. A stream links to any private or public port of
+  another stream on the same machine (§Networking, exposure; amended 2026-10-04), over the
+  local transport, and surfaces are shared
   across every stream's processor interpreters on both floors, all being the runtime's
   children, so a link between two streams on one machine copies no pixels. Streams needing
   conflicting Python packages each start from their own venv (the package split and the lend,
@@ -3799,50 +3800,26 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   name different ports and the tool cannot know which was meant. `disconnect` takes `link_id`,
   with an optional `input_runtime_name` for a link another runtime holds, or a
   `link_request_id` alone to cancel a request still waiting. A runtime name equal to one's own
-  is a local reference, resolved by display name.
+  is a local reference, resolved by display name. Since 2026-10-04 only a source may be on
+  another runtime: a remote destination, `Runtime.remote_processor_input`,
+  `Runner::request_link_on_remote_input_runtime` and the `to_*` remote pair are retired with the
+  link request (pull-only, below).
   [cross-runtime-links — SHIPPED #2292 for the Rust address and #2287 for the Python and MCP
   spellings; the `to_*` pair with #2289; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by local-api: each end is `<end>_node` and `<end>_port`, with `<end>_runtime_name` for a port on another runtime — a node by its name, never its id (§Control plane, the local API speaks the graph's words)]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_names_a_source_on_another_runtime_by_its_mesh_address -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_refuses_naming_both_a_link_and_a_request_or_neither -->
-- **DECIDED** — Any runtime on the mesh may create a remote link: a receiver pulling another
-  runtime's output into its own input, a sender pushing its output into another runtime's
-  input, or a third runtime wiring two others. The runtime that owns the input end applies the
-  link through the same `connect` operation and the same refusals a local link meets, and the
-  requesting runtime receives that outcome. The request travels over the mesh, so neither end
-  needs a control plane, and `graph` on the input's runtime shows which runtime created the
-  link. Until the security pass, any runtime on the mesh may wire.
-  **The input's runtime always pulls**, so a push and a third-party wiring are one message — a
-  *link request* to the input's runtime, which applies it through `connect` itself with a
-  remote source. One data shape serves all three. The request is a Zenoh query to a queryable
-  under that runtime's own `@runtime/<runtime name>` prefix, sent at `Drop` on the control
-  priority with an engine-chosen timeout; the payload is msgpack carrying the operation, the
-  requester-minted `link_request_id`, the source and destination addresses or the `link_id`,
-  the requester's name and its engine version. The reply is `{link_id, state}` or a refusal by
-  `reply_err`.
-  **Silence is not a refusal, and Zenoh makes the two look identical**: a timed-out query
-  arrives as an error reply carrying the string `Timeout` through the same callback a real
-  `reply_err` uses, so only an error reply whose payload *decodes* as a refusal document
-  counts — everything else is silence, which leaves the request waiting with reason
-  `unanswered` and is resent on an engine-chosen backoff. The input's runtime keeps each
-  applied `link_request_id` on the link it made, for that link's life, so a resend returns the
-  link it already made and never a second one — and a link that goes takes its id with it,
-  leaving nothing to forget. **A refusal about the moment is not a refusal about the request**:
-  a runtime declares this queryable before it has a graph to apply into, and a request landing
-  in that window is refused *for now* and kept by the requester.
-  **`connect` never waits on the mesh** — the owner's helper ruling applied again: it returns
-  `awaiting_remote` or `pending`, and the outcome lands in `graph`. An absent or silent input
-  runtime leaves the request with the requester, rendered with its id under
-  `graph.mesh.link_requests_awaiting_runtime` and sent when that runtime appears; a request
-  dies with its requester, and `disconnect` naming its `link_request_id` cancels it.
-  `disconnect` over the mesh is the same request carrying `link_id`, and needs no idempotence
-  record — it is idempotent by what it asks for. Every link renders `created_by_runtime_name`,
-  its own runtime's name for a local link.
-  [runtime-mesh; cross-runtime-links — SHIPPED #2289; amended by one-runtime-per-machine: the stream map decides which links a runtime accepts]
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_link_requests_two_processes -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::link_requests_applied_into_this_runtimes_graph -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::link_requests_this_runtime_has_sent -->
+- **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
+  creates it, reading a port the source stream has exposed — private on the machine, public off
+  it — and the source is never asked. No runtime pushes its output into another's input, and no
+  runtime wires two others: the *link request* is retired, and `graph` names no
+  `created_by_runtime_name` and no `link_requests_awaiting_runtime`. A machine that wants
+  another's port finds it among that machine's exposed ports and pulls it — from its own stream,
+  from code on the machine, or by opening the port's URL. Owner, 2026-10-04, superseding the
+  2026-09-14 rule that any runtime may push or wire: a source never wires itself into a reader,
+  the way a server never wires its URL into a client's browser. [exposure-levels; runtime-mesh;
+  cross-runtime-links — link requests SHIPPED #2289, retired by this entry]
 - **DECIDED** — A remote link naming a runtime that is not on the mesh waits and wires when
   that runtime appears; a runtime that is present but offers no such processor or port refuses
   the link by name, listing what it does offer; and a link whose remote runtime leaves returns
@@ -4020,7 +3997,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   node has not had applied, each `awaiting_runtime` while its runtime is absent, `unanswered`
   while it is not replying, or `refused` with that runtime's own words.
   [runtime-mesh — SHIPPED #2283, #2285; the link shape and the two request keys —
-  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by local-api: peers and the `nodes` table drop `control_plane_urls`; a link end renders `{node, port}` or `{runtime_name, node, port}`, and an egress port `{node, port, reader_runtime_names}` (§Control plane, the local API speaks the graph's words)]
+  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by exposure-levels: `link_requests_awaiting_runtime` and a link's `created_by_runtime_name` are retired with the link request (pull-only); amended by local-api: peers and the `nodes` table drop `control_plane_urls`; a link end renders `{node, port}` or `{runtime_name, node, port}`, and an egress port `{node, port, reader_runtime_names}` (§Control plane, the local API speaks the graph's words)]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_port_another_runtime_reads_renders_with_the_runtimes_reading_it -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is -->
@@ -4095,14 +4072,25 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
   Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting]
-- **DECIDED** — Nothing leaves the machine until it is exposed. With no stream map pushed, a
-  runtime offers no port to another machine; `expose` on a port makes it readable by any peer
-  that can reach the machine — directly on a LAN or a tailnet, or through a relay — and a
-  pushed map, when there is one, narrows who. Exposure is about leaving the machine (sentence
-  3), so streams on one machine may link to each other's ports without exposing them.
-  Discovery is unaffected: a runtime still announces itself and lists the ports it exposes to
-  whoever can reach it. Owner, 2026-09-30: closed by default, "as long as we can still do peer
-  to peer". [one-runtime-per-machine; stream-graph]
+- **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
+  runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
+  any node of the stream may link to it, and nothing outside the stream may read it.
+  **Private**: any other stream on the machine, and code on the machine, may read it.
+  **Public**: private, plus a URL reachable off the machine, which other machines and tools
+  pull. `stream.expose(output)` makes an
+  output private and `stream.expose(output, Exposure.PUBLIC)` public; a level is an enum
+  member, never a string. The stream's function sets where its exposures start; `expose` at
+  the CLI, the app or the local API changes them while the stream runs, the change applies at
+  once — a reader the new level no longer allows is cut off — and neither the runtime nor the
+  stream restarts. The engine checks the live exposures wherever a read crosses a stream's
+  edge — another stream's link, a reader or URL on the machine, a reader on another machine —
+  and a port is read from outside its stream only through exposure: no debugging tap or other
+  door bypasses it, and a stream's own logs are how its insides are seen. Nothing leaves the machine until a port is public; taking a public URL onto
+  the internet is Tailscale serve's or funnel's, never the runtime's. The CLI and the app list
+  every running stream with its private and public ports; an internal port may be listed and
+  is never readable. Discovery is unaffected: a runtime still announces itself and lists its
+  public ports to whoever can reach it. Owner, 2026-10-04, superseding 2026-09-30's binary
+  exposure and its same-machine rule. [exposure-levels; one-runtime-per-machine; stream-graph]
 - **OPEN** — Discovery, the Tailscale analogy applied. Direction (review, not decided): on one
   machine the local API lists streams and exposed ports, and the URL namespace is listable; on
   one network, Zenoh scouting finds the other runtimes' routers with nothing configured and
@@ -4128,9 +4116,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   pushed map compiles into it once and the per-stream checks live in the engine at the offer
   answer, egress creation and link-request application — a check in the link layer alone is
   bypassable by any subscriber with network reach. [one-runtime-per-machine]
-- **DECIDED** — Every exposed port is reachable by URL from any tool, in the form that tool
-  wants: a browser, an MCP client, curl, ffmpeg, or something that knows how to handle the raw
-  stream. A user with no account can see and use their own streams locally, and the same works
+- **DECIDED** — Every public port is reachable by URL from any tool, and every private port
+  from any tool on the machine, in the form that tool wants: a browser, an MCP client, curl,
+  ffmpeg, or something that knows how to handle the raw stream (levels amended 2026-10-04). A user with no account can see and use their own streams locally, and the same works
   inside a private network (owner, 2026-09-30). [one-runtime-per-machine]
 - **OPEN** — The URL grammar and the forms. Direction (review, not decided): a machine exports
   one namespace, `/<stream>/<node>/<port>/<form>`, every level listable, a relay prefixing
@@ -4406,7 +4394,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   instructions carry what the new states mean — `awaiting_remote` and its reason,
   `created_by_runtime_name`, `stamp_clock_identity`, and a `connect` whose input is on
   another runtime answering a `link_request_id` rather than a `link_id`, because only the
-  runtime owning an input wires a link into it.
+  runtime owning an input wires a link into it. Since 2026-10-04 links are only pulled, so
+  `created_by_runtime_name`, `link_request_id` and a remote input are retired (§Networking,
+  pull-only).
   [importable-python-library, mcp-served-with-the-node — SHIPPED #1712;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974 for the vocabulary
   sentence; live graph mutation restored by owner ruling 2026-09-06; resources and
@@ -4585,9 +4575,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — The local API is reachable only on its own machine. Each machine's runtime
   serves one local API on a socket in its runtime directory that only the owning user can
   open, carrying today's router and control vocabulary unchanged; no network address serves
-  control. The URL forms are a separate listener that serves only exposed ports and changes
-  nothing — loopback by default, a LAN or tailnet address when the user asks — because
-  browsers and ffmpeg cannot dial a socket. A runtime is never driven from another machine
+  control. The URL forms are a separate listener that changes nothing — private and public ports
+  on loopback, public ports on a LAN or tailnet address when the user asks (levels amended
+  2026-10-04) — because browsers and ffmpeg cannot dial a socket. A runtime is never driven from another machine
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
   client's. Owner, 2026-10-01. [local-api; one-runtime-per-machine]

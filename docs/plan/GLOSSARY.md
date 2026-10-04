@@ -105,9 +105,14 @@ chunks omitted to mean "here"; the same string on every surface, so a link whose
 two machines is spelled by two addresses. _Avoid_: "channel name", "mesh address", "service
 name", "remote link" (retired).
 
-**Exposed port** _(crosses)_: an output a stream lets leave the machine, readable at its URL by
-peers and relays under the stream map. `expose` is the verb — in the stream's function as the
-author's suggestion, at the CLI as the owner's decision. _Avoid_: "export", "publish", "endpoint".
+**Exposure** _(crosses)_: who outside a stream may read one of its output ports — **internal**
+(the default: the stream's own nodes only), **private** (any stream or code on the machine) or
+**public** (private, plus other machines, a URL off the machine and the relay). A live permission
+the runtime checks at the stream's edge, never part of the stream's logic. `expose` is the verb —
+in the stream's function, where the exposures start; at the CLI, the app or the local API, while
+it runs. _Avoid_: "visibility" (discovery's word), "export", "publish", "endpoint".
+
+**Exposed port** _(crosses)_: a private or public output port. _Avoid_: "shared port", "open port".
 
 **Form** _(user)_: the shape an exposed port is served in — the URL's child chunk (`ndjson`,
 `png`, `ts`, `hls`, `whep`, `moq`, `page`). _Avoid_: "format" (a pixel format), "transport".
