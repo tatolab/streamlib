@@ -14,11 +14,25 @@ what these add is the Python surface — the names reachable off `streamlib`, an
 `bytes` arriving back as `bytes` rather than a list of integers.
 """
 
+import subprocess
+import sys
+import textwrap
 from typing import Any
 
 import pytest
 
 import streamlib
+
+MAXIMUM_NESTED_CONTAINER_DEPTH = 128
+NESTED_PAST_THE_MAXIMUM = f"containers nest more than {MAXIMUM_NESTED_CONTAINER_DEPTH} deep"
+
+
+def lists_nested_containers_deep(containers: int) -> list[Any]:
+    """`containers` lists, each holding the next, the innermost empty."""
+    nested: list[Any] = []
+    for _ in range(containers - 1):
+        nested = [nested]
+    return nested
 
 
 def test_a_nested_bag_carrying_binary_round_trips_unchanged() -> None:
@@ -77,3 +91,51 @@ def test_a_top_level_that_is_not_a_named_map_is_refused() -> None:
 def test_a_non_string_key_is_refused() -> None:
     with pytest.raises(TypeError, match="bag keys must be strings"):
         streamlib.encode_bag_to_msgpack_bytes({1: "value"})  # type: ignore[dict-item]
+
+
+def test_a_bag_nested_to_the_maximum_encodes_and_one_container_more_is_refused() -> None:
+    # The bag itself is the outermost container.
+    reaching_the_maximum = {
+        "nested": lists_nested_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH - 1)
+    }
+    one_past_the_maximum = {
+        "nested": lists_nested_containers_deep(MAXIMUM_NESTED_CONTAINER_DEPTH)
+    }
+
+    streamlib.encode_bag_to_msgpack_bytes(reaching_the_maximum)
+    with pytest.raises(ValueError, match=NESTED_PAST_THE_MAXIMUM):
+        streamlib.encode_bag_to_msgpack_bytes(one_past_the_maximum)
+
+
+def test_a_bag_holding_itself_is_refused_rather_than_crashing_the_process() -> None:
+    # In its own process: without the bound the encode recurses off its stack,
+    # which would end this suite rather than fail this test.
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                f"""
+                import streamlib
+
+                bag_holding_itself = {{"label": "loop"}}
+                bag_holding_itself["itself"] = bag_holding_itself
+                try:
+                    streamlib.encode_bag_to_msgpack_bytes(bag_holding_itself)
+                except ValueError as refusal:
+                    assert {NESTED_PAST_THE_MAXIMUM!r} in str(refusal), refusal
+                    assert "holds itself" in str(refusal), refusal
+                else:
+                    raise AssertionError("a bag holding itself encoded")
+                """
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120.0,
+        check=False,
+    )
+
+    assert completed.returncode == 0, (
+        f"exit status {completed.returncode}\n{completed.stderr[-4000:]}"
+    )
