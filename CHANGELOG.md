@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.1](https://github.com/tatolab/streamlib/compare/v0.28.0...v0.28.1) (2026-10-04)
+
+
+### Features
+
+* **sdk:** a stream is a `[@stream](https://github.com/stream)` function that compiles to its graph ([#2618](https://github.com/tatolab/streamlib/issues/2618)) ([6ed658d](https://github.com/tatolab/streamlib/commit/6ed658d869561309b185cf3017abe5249131d5ed))
+
 ## [0.28.0](https://github.com/tatolab/streamlib/compare/v0.27.0...v0.28.0) (2026-10-04)
 
 
