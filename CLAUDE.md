@@ -103,7 +103,7 @@ before implementation. Sessions implement the plan; they never make architecture
   the engine guarantees; never bend a runtime design to fit their existing patterns. Contracts
   are stated in the engine and proven by engine tests and fixtures. Disposition per directory is
   decided in `docs/plan/ARCHITECTURE.md` §Consumers.
-- **A converted consumer** — current-idiom shape: a scaffolded app (`app.py` + `pyproject.toml`)
+- **A converted consumer** — current-idiom shape: a scaffolded project (`stream.py` + `pyproject.toml`)
   or an ordinary Python package — **is the model of the current authoring idiom and ordinary
   editable work.** An engine change that breaks one files tracked backlog at that consumer and
   never blocks the engine change; fixing it in-stream is reserved for the rare case where the
