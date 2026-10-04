@@ -26,9 +26,9 @@ from typing import Any, Iterable, Mapping, Sequence
 # PEP 503: the projects this index serves, normalized. Each is released on its
 # own tag and lands as an asset on its own release, so the generator's only way
 # to tell them apart is the wheel's own name — and a wheel naming a project that
-# is not here is a packaging mistake, not a fourth project to publish. The pages
+# is not here is a packaging mistake, not a third project to publish. The pages
 # are written in sorted order, so this one's is a convenience, not a contract.
-PUBLISHED_PROJECT_NAMES = ("streamlib", "streamlib-moq", "streamlib-webrtc")
+PUBLISHED_PROJECT_NAMES = ("streamlib", "streamlib-webrtc")
 
 WHEEL_FILE_SUFFIX = ".whl"
 

@@ -28,11 +28,6 @@ on:
         type: string
         required: false
         default: ""
-      streamlib_moq_tag_name:
-        description: "Release tag to attach the streamlib-moq wheel to (blank = not released)"
-        type: string
-        required: false
-        default: ""
   # Rebuilding the index alone is the common manual case — a release edited or
   # deleted by hand leaves the index describing files that are not there. Every
   # tag input blank is exactly that: no wheel is built and the index is
@@ -45,10 +40,6 @@ on:
         required: false
       streamlib_webrtc_tag_name:
         description: "Release tag to attach the streamlib-webrtc wheel to"
-        type: string
-        required: false
-      streamlib_moq_tag_name:
-        description: "Release tag to attach the streamlib-moq wheel to"
         type: string
         required: false
 
@@ -268,9 +259,9 @@ jobs:
       release_tag_name: ${{ inputs.tag_name }}
 
   # An extension wheel is a standalone project with its own release cadence, so
-  # each is called out by name and only when its own tag was cut. Two blocks
+  # each is called out by name and only when its own tag was cut. A named block
   # rather than a matrix over a JSON array: an empty `include` is a matrix
-  # expansion failure, and a third extension is six lines here.
+  # expansion failure, and a second extension is six lines here.
   build-streamlib-webrtc-wheel:
     if: inputs.streamlib_webrtc_tag_name != ''
     permissions:
@@ -281,17 +272,6 @@ jobs:
       extension_distribution_name: streamlib-webrtc
       extension_import_package_name: streamlib_webrtc
       tag_name: ${{ inputs.streamlib_webrtc_tag_name }}
-
-  build-streamlib-moq-wheel:
-    if: inputs.streamlib_moq_tag_name != ''
-    permissions:
-      contents: write
-    uses: ./.github/workflows/release-extension-wheel.yml
-    with:
-      extension_package_directory: packages/streamlib-moq
-      extension_distribution_name: streamlib-moq
-      extension_import_package_name: streamlib_moq
-      tag_name: ${{ inputs.streamlib_moq_tag_name }}
 
   publish-simple-index:
     name: PEP 503 simple index
@@ -314,7 +294,6 @@ jobs:
       - build-wheel
       - build-macos-wheel
       - build-streamlib-webrtc-wheel
-      - build-streamlib-moq-wheel
     if: always() && needs.build-wheel.result != 'failure' && needs.build-macos-wheel.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -91,7 +91,7 @@ class CollectingWheelAssets(unittest.TestCase):
 
     def test_a_wheel_for_an_unlisted_project_is_not_published_here(self):
         """The index serves the projects this repo releases; anything else is a
-        packaging mistake, not a fourth project to publish."""
+        packaging mistake, not a third project to publish."""
         collected = collect_wheel_assets(
             [release(assets=[asset("numpy-2.1.0-cp312-cp312-linux_x86_64.whl")])]
         )

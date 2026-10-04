@@ -60,7 +60,6 @@ target/
 Cargo.lock
 !/Cargo.lock
 !/packages/streamlib-webrtc/Cargo.lock
-!/packages/streamlib-moq/Cargo.lock
 
 # Node/Nx
 node_modules/
