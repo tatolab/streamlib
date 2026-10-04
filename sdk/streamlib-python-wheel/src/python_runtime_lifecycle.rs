@@ -62,7 +62,7 @@ fn classify_processor_class(
         crate::python_test_harness_endpoints::test_harness_class_import_path(
             python,
             processor_class,
-        )
+        )?
     {
         return Ok(AddedProcessorClassKind::NativeBuiltin(harness_class));
     }

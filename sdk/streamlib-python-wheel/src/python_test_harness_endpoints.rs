@@ -31,9 +31,7 @@ use streamlib::sdk::schemars::JsonSchema;
 
 use crate::python_bag_conversion::{decode_msgpack_to_python_object, encode_bag_to_msgpack};
 use crate::python_logging::monotonic_clock_now_ns;
-use crate::python_native_builtin_blocks::{
-    NativeProcessorMarkerClass, marker_type_class_attribute,
-};
+use crate::python_native_builtin_blocks::native_processor_marker_classes;
 
 /// Which channel an endpoint reads from or writes to.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -224,70 +222,32 @@ pub(crate) fn register_test_harness_processor_types() {
     streamlib::sdk::processors::PROCESSOR_REGISTRY.register::<TestBagCollector::Processor>();
 }
 
-/// `streamlib.testing`'s feeder, as the marker type `Runtime.add` resolves.
-#[pyclass(name = "TestBagFeeder", module = "streamlib", frozen)]
-pub(crate) struct PythonTestBagFeederBlock;
-
-#[pymethods]
-impl PythonTestBagFeederBlock {
-    /// pytest collects `Test*` classes by name; this tells it not to.
-    #[classattr]
-    #[pyo3(name = "__test__")]
-    fn dunder_test() -> bool {
-        false
-    }
-
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonTestBagFeederBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        TestBagFeeder::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.testing`'s collector, as the marker type `Runtime.add` resolves.
-#[pyclass(name = "TestBagCollector", module = "streamlib", frozen)]
-pub(crate) struct PythonTestBagCollectorBlock;
-
-#[pymethods]
-impl PythonTestBagCollectorBlock {
-    /// pytest collects `Test*` classes by name; this tells it not to.
-    #[classattr]
-    #[pyo3(name = "__test__")]
-    fn dunder_test() -> bool {
-        false
-    }
-
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonTestBagCollectorBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        TestBagCollector::Processor::processor_class_import_path()
-    }
+native_processor_marker_classes! {
+    resolvers: TEST_HARNESS_MARKER_IMPORT_PATH_RESOLVERS,
+    added_to_the_module_by: add_test_harness_marker_classes_to_the_module,
+    markers: [
+        /// `streamlib.testing`'s feeder, as the marker type `Runtime.add` resolves.
+        PythonTestBagFeederBlock as "TestBagFeeder" {
+            dunder_test: false,
+            import_path: TestBagFeeder::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.testing`'s collector, as the marker type `Runtime.add` resolves.
+        PythonTestBagCollectorBlock as "TestBagCollector" {
+            dunder_test: false,
+            import_path: TestBagCollector::Processor::processor_class_import_path(),
+        }
+    ]
 }
 
 /// The harness marker classes, resolved the same way the media built-ins are.
 pub(crate) fn test_harness_class_import_path(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
-) -> Option<ProcessorClassImportPath> {
-    PythonTestBagFeederBlock::native_processor_class_import_path_if_it_is(python, processor_class)
-        .or_else(|| {
-            PythonTestBagCollectorBlock::native_processor_class_import_path_if_it_is(
-                python,
-                processor_class,
-            )
-        })
+) -> PyResult<Option<ProcessorClassImportPath>> {
+    TEST_HARNESS_MARKER_IMPORT_PATH_RESOLVERS
+        .iter()
+        .find_map(|import_path_if_it_is| import_path_if_it_is(python, processor_class))
+        .transpose()
 }
 
 /// Open a harness channel under `channel`.
@@ -384,8 +344,9 @@ mod tests {
             ] {
                 let type_attribute: String =
                     marker_class.getattr("type").unwrap().extract().unwrap();
-                let resolved =
-                    test_harness_class_import_path(python, marker_class.as_any()).unwrap();
+                let resolved = test_harness_class_import_path(python, marker_class.as_any())
+                    .unwrap()
+                    .unwrap();
                 assert_eq!(type_attribute, resolved.as_str(), "{marker_class}");
             }
         });

@@ -8,9 +8,6 @@
 //! object itself and resolves it to the statically-linked native processor —
 //! per-frame paths never enter the interpreter.
 
-// Only the unsupported-platform arms below raise, and they compile away on
-// Linux — where every marker resolves.
-#[cfg(not(target_os = "linux"))]
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::type_object::PyTypeInfo;
@@ -22,17 +19,31 @@ pub(crate) trait NativeProcessorMarkerClass: PyTypeInfo {
     /// every floor, including one where that processor is not compiled in.
     fn native_processor_class_import_path() -> ProcessorClassImportPath;
 
-    /// This marker's import path, when `candidate_class` is this marker's
-    /// type object itself.
+    /// Why `Runtime.add` refuses this marker on this floor, which does not
+    /// compile its native processor in.
+    fn refusal_on_this_floor() -> Option<&'static str> {
+        None
+    }
+
+    /// This marker's import path, or its refusal on this floor, when
+    /// `candidate_class` is this marker's type object itself.
     fn native_processor_class_import_path_if_it_is(
         python: Python<'_>,
         candidate_class: &Bound<'_, PyAny>,
-    ) -> Option<ProcessorClassImportPath> {
-        candidate_class
-            .is(python.get_type::<Self>())
-            .then(Self::native_processor_class_import_path)
+    ) -> Option<PyResult<ProcessorClassImportPath>> {
+        if !candidate_class.is(python.get_type::<Self>()) {
+            return None;
+        }
+        Some(match Self::refusal_on_this_floor() {
+            Some(refusal_on_this_floor) => Err(PyRuntimeError::new_err(refusal_on_this_floor)),
+            None => Ok(Self::native_processor_class_import_path()),
+        })
     }
 }
+
+/// How one marker answers whether a class is it, and with which import path.
+pub(crate) type NativeProcessorClassImportPathIfItIs =
+    fn(Python<'_>, &Bound<'_, PyAny>) -> Option<PyResult<ProcessorClassImportPath>>;
 
 /// The value of a marker's `type` class attribute: the import path a graph
 /// names the marker's native processor by.
@@ -42,69 +53,81 @@ pub(crate) fn marker_type_class_attribute<Marker: NativeProcessorMarkerClass>() 
         .to_owned()
 }
 
-/// `streamlib.TestPatternSource` — SMPTE-style color bars, no hardware.
+/// Declare marker classes, each standing for one native processor, with the
+/// resolver list `Runtime.add` searches and the function adding them to the
+/// module.
 ///
-/// No `#[new]`: instantiating a marker is always a mistake, and PyO3's
+/// No marker has a `#[new]`: instantiating one is always a mistake, and PyO3's
 /// "no constructor defined" error says so.
-#[pyclass(name = "TestPatternSource", module = "streamlib", frozen)]
-pub(crate) struct PythonTestPatternSourceBlock;
+macro_rules! native_processor_marker_classes {
+    (
+        resolvers: $marker_import_path_resolvers:ident,
+        added_to_the_module_by: $add_marker_classes_to_the_module:ident,
+        markers: [$(
+            $(#[$marker_attribute:meta])*
+            $marker:ident as $python_class_name:literal {
+                $(dunder_test: $dunder_test:literal,)?
+                import_path: $import_path:expr,
+                $(#[$floor_refusing_the_marker:meta] refused_on_this_floor: $refusal_on_this_floor:literal,)?
+            }
+        )+]
+    ) => {
+        $(
+            $(#[$marker_attribute])*
+            #[::pyo3::pyclass(name = $python_class_name, module = "streamlib", frozen)]
+            pub(crate) struct $marker;
 
-#[pymethods]
-impl PythonTestPatternSourceBlock {
-    /// The class is named `Test*`, which pytest would otherwise collect as a
-    /// test class; this attribute tells it not to.
-    #[classattr]
-    #[pyo3(name = "__test__")]
-    fn dunder_test() -> bool {
-        false
-    }
+            #[::pyo3::pymethods]
+            impl $marker {
+                $(
+                    /// pytest collects `Test*` classes by name; this tells it not to.
+                    #[classattr]
+                    #[pyo3(name = "__test__")]
+                    fn dunder_test() -> bool {
+                        $dunder_test
+                    }
+                )?
 
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
+                #[classattr]
+                #[pyo3(name = "type")]
+                fn native_processor_type() -> String {
+                    $crate::python_native_builtin_blocks::marker_type_class_attribute::<Self>()
+                }
+            }
+
+            impl $crate::python_native_builtin_blocks::NativeProcessorMarkerClass for $marker {
+                fn native_processor_class_import_path(
+                ) -> ::streamlib::sdk::descriptors::ProcessorClassImportPath {
+                    $import_path
+                }
+
+                $(
+                    #[$floor_refusing_the_marker]
+                    fn refusal_on_this_floor() -> Option<&'static str> {
+                        Some($refusal_on_this_floor)
+                    }
+                )?
+            }
+        )+
+
+        /// Every marker this list declares, by its import-path resolver.
+        const $marker_import_path_resolvers: &[
+            $crate::python_native_builtin_blocks::NativeProcessorClassImportPathIfItIs
+        ] = &[$(
+            <$marker as $crate::python_native_builtin_blocks::NativeProcessorMarkerClass>
+                ::native_processor_class_import_path_if_it_is,
+        )+];
+
+        /// Add every marker class this list declares to the module.
+        pub(crate) fn $add_marker_classes_to_the_module(
+            module: &::pyo3::Bound<'_, ::pyo3::types::PyModule>,
+        ) -> ::pyo3::PyResult<()> {
+            $(::pyo3::types::PyModuleMethods::add_class::<$marker>(module)?;)+
+            Ok(())
+        }
+    };
 }
-
-impl NativeProcessorMarkerClass for PythonTestPatternSourceBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::TestPatternSource::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.CameraSource` — live camera capture through the engine's video
-/// device seam (V4L2 on Linux; a platform with no capture backend refuses at
-/// `setup()`).
-#[pyclass(name = "CameraSource", module = "streamlib", frozen)]
-pub(crate) struct PythonCameraSourceBlock;
-
-#[pymethods]
-impl PythonCameraSourceBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonCameraSourceBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::CameraSource::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.DisplayWindow` — video frames in a vsync'd window.
-#[pyclass(name = "DisplayWindow", module = "streamlib", frozen)]
-pub(crate) struct PythonDisplayWindowBlock;
-
-#[pymethods]
-impl PythonDisplayWindowBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
+pub(crate) use native_processor_marker_classes;
 
 /// The import path `DisplayWindow` registers under where it is compiled in,
 /// for a floor where it is not; held equal to the built-in's own derived path
@@ -116,246 +139,119 @@ impl PythonDisplayWindowBlock {
 const DISPLAY_WINDOW_PROCESSOR_CLASS_IMPORT_PATH: &str =
     "streamlib_media_builtins::display_window::DisplayWindow";
 
-impl NativeProcessorMarkerClass for PythonDisplayWindowBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        return streamlib_media_builtins::DisplayWindow::Processor::processor_class_import_path();
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        return ProcessorClassImportPath::new(DISPLAY_WINDOW_PROCESSOR_CLASS_IMPORT_PATH)
-            .expect("a non-blank literal is a valid import path");
-    }
+native_processor_marker_classes! {
+    resolvers: NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS,
+    added_to_the_module_by: add_native_builtin_marker_classes_to_the_module,
+    markers: [
+        /// `streamlib.TestPatternSource` — SMPTE-style color bars, no hardware.
+        PythonTestPatternSourceBlock as "TestPatternSource" {
+            dunder_test: false,
+            import_path:
+                streamlib_media_builtins::TestPatternSource::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.CameraSource` — live camera capture through the engine's video
+        /// device seam (V4L2 on Linux; a platform with no capture backend refuses at
+        /// `setup()`).
+        PythonCameraSourceBlock as "CameraSource" {
+            import_path:
+                streamlib_media_builtins::CameraSource::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.DisplayWindow` — video frames in a vsync'd window.
+        PythonDisplayWindowBlock as "DisplayWindow" {
+            import_path: {
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                {
+                    streamlib_media_builtins::DisplayWindow::Processor::processor_class_import_path()
+                }
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+                {
+                    ProcessorClassImportPath::new(DISPLAY_WINDOW_PROCESSOR_CLASS_IMPORT_PATH)
+                        .expect("a non-blank literal is a valid import path")
+                }
+            },
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            refused_on_this_floor: "DisplayWindow runs on Linux and macOS; this platform is not \
+                                    supported by the streamlib wheel yet",
+        }
+        /// `streamlib.MicrophoneSource` — audio capture on whichever backend the
+        /// chain probed, silence where none exists.
+        PythonMicrophoneSourceBlock as "MicrophoneSource" {
+            import_path:
+                streamlib_media_builtins::MicrophoneSource::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.SpeakerSink` — audio playback on whichever backend the chain
+        /// probed, discarding where none exists.
+        PythonSpeakerSinkBlock as "SpeakerSink" {
+            import_path:
+                streamlib_media_builtins::SpeakerSink::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.H264Encoder` — video frames to H.264 encoded-frame bags via
+        /// hardware encode, on the platform's video codec arm.
+        PythonH264EncoderBlock as "H264Encoder" {
+            import_path:
+                streamlib_media_builtins::H264Encoder::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.H264Decoder` — H.264 encoded-frame bags to decoded video
+        /// frames via hardware decode, on the platform's video codec arm.
+        PythonH264DecoderBlock as "H264Decoder" {
+            import_path:
+                streamlib_media_builtins::H264Decoder::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.H265Encoder` — video frames to H.265 encoded-frame bags via
+        /// hardware encode, on the platform's video codec arm.
+        PythonH265EncoderBlock as "H265Encoder" {
+            import_path:
+                streamlib_media_builtins::H265Encoder::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.H265Decoder` — H.265 encoded-frame bags to decoded video
+        /// frames via hardware decode, on the platform's video codec arm.
+        PythonH265DecoderBlock as "H265Decoder" {
+            import_path:
+                streamlib_media_builtins::H265Decoder::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.OpusEncoder` — 20 ms windows of audio to Opus
+        /// encoded-audio-packet bags via statically linked libopus, on every
+        /// platform the wheel builds for.
+        PythonOpusEncoderBlock as "OpusEncoder" {
+            import_path:
+                streamlib_media_builtins::OpusEncoder::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.OpusDecoder` — Opus encoded-audio-packet bags to decoded
+        /// audio blocks via statically linked libopus, on every platform the wheel
+        /// builds for.
+        PythonOpusDecoderBlock as "OpusDecoder" {
+            import_path:
+                streamlib_media_builtins::OpusDecoder::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.Mp4Sink` — encoded video and audio bags recorded to one
+        /// fragmented MP4 file, one track per inbound link, on every platform the
+        /// wheel builds for.
+        PythonMp4SinkBlock as "Mp4Sink" {
+            import_path:
+                streamlib_media_builtins::Mp4Sink::Processor::processor_class_import_path(),
+        }
+        /// `streamlib.VirtualCameraSink` — video frames presented as a virtual
+        /// camera any Linux application can select (Linux).
+        PythonVirtualCameraSinkBlock as "VirtualCameraSink" {
+            import_path: {
+                #[cfg(target_os = "linux")]
+                {
+                    streamlib_media_builtins::VirtualCameraSink::Processor::processor_class_import_path()
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    ProcessorClassImportPath::new(
+                        streamlib_api_server::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
+                    )
+                    .expect("a non-blank literal is a valid import path")
+                }
+            },
+            #[cfg(not(target_os = "linux"))]
+            refused_on_this_floor: "VirtualCameraSink is Linux-only today; this platform is not \
+                                    supported by the streamlib wheel yet",
+        }
+    ]
 }
-
-/// `streamlib.MicrophoneSource` — audio capture on whichever backend the
-/// chain probed, silence where none exists.
-#[pyclass(name = "MicrophoneSource", module = "streamlib", frozen)]
-pub(crate) struct PythonMicrophoneSourceBlock;
-
-#[pymethods]
-impl PythonMicrophoneSourceBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonMicrophoneSourceBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::MicrophoneSource::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.SpeakerSink` — audio playback on whichever backend the chain
-/// probed, discarding where none exists.
-#[pyclass(name = "SpeakerSink", module = "streamlib", frozen)]
-pub(crate) struct PythonSpeakerSinkBlock;
-
-#[pymethods]
-impl PythonSpeakerSinkBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonSpeakerSinkBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::SpeakerSink::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.H264Encoder` — video frames to H.264 encoded-frame bags via
-/// hardware encode, on the platform's video codec arm.
-#[pyclass(name = "H264Encoder", module = "streamlib", frozen)]
-pub(crate) struct PythonH264EncoderBlock;
-
-#[pymethods]
-impl PythonH264EncoderBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonH264EncoderBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::H264Encoder::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.H264Decoder` — H.264 encoded-frame bags to decoded video
-/// frames via hardware decode, on the platform's video codec arm.
-#[pyclass(name = "H264Decoder", module = "streamlib", frozen)]
-pub(crate) struct PythonH264DecoderBlock;
-
-#[pymethods]
-impl PythonH264DecoderBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonH264DecoderBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::H264Decoder::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.H265Encoder` — video frames to H.265 encoded-frame bags via
-/// hardware encode, on the platform's video codec arm.
-#[pyclass(name = "H265Encoder", module = "streamlib", frozen)]
-pub(crate) struct PythonH265EncoderBlock;
-
-#[pymethods]
-impl PythonH265EncoderBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonH265EncoderBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::H265Encoder::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.H265Decoder` — H.265 encoded-frame bags to decoded video
-/// frames via hardware decode, on the platform's video codec arm.
-#[pyclass(name = "H265Decoder", module = "streamlib", frozen)]
-pub(crate) struct PythonH265DecoderBlock;
-
-#[pymethods]
-impl PythonH265DecoderBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonH265DecoderBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::H265Decoder::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.OpusEncoder` — 20 ms windows of audio to Opus
-/// encoded-audio-packet bags via statically linked libopus, on every
-/// platform the wheel builds for.
-#[pyclass(name = "OpusEncoder", module = "streamlib", frozen)]
-pub(crate) struct PythonOpusEncoderBlock;
-
-#[pymethods]
-impl PythonOpusEncoderBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonOpusEncoderBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::OpusEncoder::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.OpusDecoder` — Opus encoded-audio-packet bags to decoded
-/// audio blocks via statically linked libopus, on every platform the wheel
-/// builds for.
-#[pyclass(name = "OpusDecoder", module = "streamlib", frozen)]
-pub(crate) struct PythonOpusDecoderBlock;
-
-#[pymethods]
-impl PythonOpusDecoderBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonOpusDecoderBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::OpusDecoder::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.Mp4Sink` — encoded video and audio bags recorded to one
-/// fragmented MP4 file, one track per inbound link, on every platform the
-/// wheel builds for.
-#[pyclass(name = "Mp4Sink", module = "streamlib", frozen)]
-pub(crate) struct PythonMp4SinkBlock;
-
-#[pymethods]
-impl PythonMp4SinkBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonMp4SinkBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        streamlib_media_builtins::Mp4Sink::Processor::processor_class_import_path()
-    }
-}
-
-/// `streamlib.VirtualCameraSink` — video frames presented as a virtual
-/// camera any Linux application can select (Linux).
-#[pyclass(name = "VirtualCameraSink", module = "streamlib", frozen)]
-pub(crate) struct PythonVirtualCameraSinkBlock;
-
-#[pymethods]
-impl PythonVirtualCameraSinkBlock {
-    #[classattr]
-    #[pyo3(name = "type")]
-    fn native_processor_type() -> String {
-        marker_type_class_attribute::<Self>()
-    }
-}
-
-impl NativeProcessorMarkerClass for PythonVirtualCameraSinkBlock {
-    fn native_processor_class_import_path() -> ProcessorClassImportPath {
-        #[cfg(target_os = "linux")]
-        return streamlib_media_builtins::VirtualCameraSink::Processor::processor_class_import_path(
-        );
-        #[cfg(not(target_os = "linux"))]
-        return ProcessorClassImportPath::new(
-            streamlib_api_server::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
-        )
-        .expect("a non-blank literal is a valid import path");
-    }
-}
-
-/// How one marker answers whether a class is it, and with which import path.
-type NativeProcessorClassImportPathIfItIs =
-    fn(Python<'_>, &Bound<'_, PyAny>) -> Option<ProcessorClassImportPath>;
-
-/// Every media built-in marker the wheel exports, by its import-path resolver.
-const NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS: [NativeProcessorClassImportPathIfItIs; 13] = [
-    PythonTestPatternSourceBlock::native_processor_class_import_path_if_it_is,
-    PythonCameraSourceBlock::native_processor_class_import_path_if_it_is,
-    PythonDisplayWindowBlock::native_processor_class_import_path_if_it_is,
-    PythonMicrophoneSourceBlock::native_processor_class_import_path_if_it_is,
-    PythonSpeakerSinkBlock::native_processor_class_import_path_if_it_is,
-    PythonH264EncoderBlock::native_processor_class_import_path_if_it_is,
-    PythonH264DecoderBlock::native_processor_class_import_path_if_it_is,
-    PythonH265EncoderBlock::native_processor_class_import_path_if_it_is,
-    PythonH265DecoderBlock::native_processor_class_import_path_if_it_is,
-    PythonOpusEncoderBlock::native_processor_class_import_path_if_it_is,
-    PythonOpusDecoderBlock::native_processor_class_import_path_if_it_is,
-    PythonMp4SinkBlock::native_processor_class_import_path_if_it_is,
-    PythonVirtualCameraSinkBlock::native_processor_class_import_path_if_it_is,
-];
 
 /// Resolve a Python object to a native built-in's class import path, if it is
 /// one of the wheel-exported marker type objects. On a platform where a
@@ -366,23 +262,10 @@ pub(crate) fn native_builtin_class_import_path(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
 ) -> PyResult<Option<ProcessorClassImportPath>> {
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    if processor_class.is(python.get_type::<PythonDisplayWindowBlock>()) {
-        return Err(PyRuntimeError::new_err(
-            "DisplayWindow runs on Linux and macOS; this platform is not supported by the \
-             streamlib wheel yet",
-        ));
-    }
-    #[cfg(not(target_os = "linux"))]
-    if processor_class.is(python.get_type::<PythonVirtualCameraSinkBlock>()) {
-        return Err(PyRuntimeError::new_err(
-            "VirtualCameraSink is Linux-only today; this platform is not supported by the \
-             streamlib wheel yet",
-        ));
-    }
-    Ok(NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS
+    NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS
         .iter()
-        .find_map(|import_path_if_it_is| import_path_if_it_is(python, processor_class)))
+        .find_map(|import_path_if_it_is| import_path_if_it_is(python, processor_class))
+        .transpose()
 }
 
 /// Register the native built-in processor types on the process-wide registry.
