@@ -50,7 +50,10 @@ for compute the user writes; a codec is not that.
 > retired 2026-09-04 by `extension-model.md`. The seven codec blocks that shipped under it
 > stay; the next codec is a built-in only under the criterion there (a deadline the helper
 > hop cannot meet, or an engine-only primitive, and a named consumer) and is otherwise an
-> extension wheel. `JpegDecoder` is frozen — neither built nor retired.
+> extension wheel. ~~`JpegDecoder` is frozen — neither built nor retired.~~ — Superseded
+> 2026-10-04 by `jpeg-after-the-robotics-cut.md`: `JpegDecoder` is retired unbuilt, the
+> parked nvJPEG backend is deleted, and `sdk/vulkan-jpeg` stays as the decoder for MJPEG
+> capture rather than as a block's backend.
 
 ## Why encoded frames ride inline in bags
 
@@ -138,6 +141,9 @@ and finally gives Linux the audio-in-MP4 path the old writer never had.
 > deleted. `packages/{jpeg,opus,mp4}`, `examples/jpeg-psnr`,
 > `examples/h264-opus-validator` and `examples/camera-audio-recorder` stay held on
 > their own rungs.
+>
+> The JPEG pair never got a rung: decided 2026-10-04 (`jpeg-after-the-robotics-cut.md`),
+> `packages/jpeg` and `examples/jpeg-psnr` delete outright with the retired block.
 
 ## Why the Python surface is four markers and one cast
 
