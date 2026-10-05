@@ -29,15 +29,14 @@ construction.
 
 ## Why it exists
 
-Before this lift, every surface had **one** timeline kernel object with
-**two writers** racing on its next-value computation: the host
-producer signaled it (via `vkQueueSubmit2` or host CPU
-`signal_host`), and the subprocess consumer ALSO signaled it (via
-CPU `signal_host` against the imported timeline). Each side computed
-its next value as `state.current_release_value + 1` from a
-per-process counter; the timeline kernel object was shared. The two
-writers raced on value computation, tripping
-`VUID-VkSemaphoreSignalInfo-value-03258` in production.
+**One** timeline kernel object with **two writers** races on its
+next-value computation. If the host producer signals it (via
+`vkQueueSubmit2` or host CPU `signal_host`) and the subprocess
+consumer ALSO signals it (via CPU `signal_host` against the imported
+timeline), each side computes its next value as
+`current_release_value + 1` from a per-process counter while the
+timeline kernel object is shared. The two writers race on value
+computation and trip `VUID-VkSemaphoreSignalInfo-value-03258`.
 
 The "two timelines, one writer each" shape is what every production
 engine surveyed converged on:
@@ -55,10 +54,10 @@ engine surveyed converged on:
   — states the underlying principle: "the kernel can't atomically
   coordinate two writers, so application protocol picks one."
 
-None of these systems implement multi-writer-per-timeline. The
-streamlib pre-lift shape was an artifact of treating the timeline as
-shared mutable state across the process boundary; lifting to
-two-timelines-one-writer-each is the conventional answer.
+None of these systems implement multi-writer-per-timeline. Treating
+the timeline as shared mutable state across the process boundary is
+the mistake; two timelines with one writer each is the conventional
+answer.
 
 ## The shape
 
@@ -83,9 +82,9 @@ two-timelines-one-writer-each is the conventional answer.
 ```
 
 **Per-process `SurfaceState<P>` fields** (the per-adapter state
-record). The v1 implementation chooses a single per-process signal
-counter — each timeline sees strictly monotonic values from its own
-writer site, which is all VUID-03258 requires:
+record). A single per-process signal counter serves both timelines —
+each timeline sees strictly monotonic values from its own writer
+site, which is all VUID-03258 requires:
 
 ```rust
 produce_done: Arc<P::TimelineSemaphore>,
@@ -117,11 +116,8 @@ signal_sequence: Arc<SurfaceTimelineSignalSequence>,
 Read-side wait targets are derived from the peer-timeline's
 `current_value()` at acquire time (see [Consumer rules](#consumer-rules)
 / [Producer rules](#producer-rules) below), not from a separate
-locally-tracked field. Split counters (`next_produce_value` /
-`next_consume_value`) become useful if a future shape ever needs
-both edges to advance concurrently within the same adapter
-instance; the v1 single-counter shape locks correctness for the
-in-tree usage where the writer code paths are disjoint.
+locally-tracked field. One counter is correct because the writer code
+paths for the two timelines are disjoint within an adapter instance.
 
 The two timelines are independent kernel objects. The producer
 process owns the `produce_done` exportable handle and constructs the
@@ -135,7 +131,7 @@ IPC schema as OPAQUE_FD timeline semaphore handles.
 | Adapter | Producer side | Consumer side | `produce_done` writer | `consume_done` writer |
 |---|---|---|---|---|
 | **cuda** | host (`submit_host_copy_image_to_buffer` does the `vkCmdCopyImageToBuffer` into the OPAQUE_FD staging buffer) | subprocess (CUDA imports the buffer FD + reads via `cudaExternalMemoryGetMappedBuffer`) | host: `vkQueueSubmit2::pSignalSemaphoreInfos` from the trigger submit | subprocess: CPU `signal_host` in `end_read_access` (against the consumer-rhi imported timeline) |
-| **cpu-readback** | host (trigger's `vkCmdCopyImageToBuffer` in `acquire_inner`) | subprocess (mmap-reads the HOST_VISIBLE staging buffer) | host: `vkQueueSubmit2::pSignalSemaphoreInfos` from the trigger submit | subprocess: CPU `signal_host` in `end_read_access` (restored under this lift — was defanged pre-lift because the multi-writer race could not be sound) |
+| **cpu-readback** | host (trigger's `vkCmdCopyImageToBuffer` in `acquire_inner`) | subprocess (mmap-reads the HOST_VISIBLE staging buffer) | host: `vkQueueSubmit2::pSignalSemaphoreInfos` from the trigger submit | subprocess: CPU `signal_host` in `end_read_access` |
 | **vulkan** | the side that calls `begin_write` (host or subprocess, exclusive) | the side that calls `begin_read` | the writer process: CPU `signal_host` in `end_write_access` | the reader process: CPU `signal_host` in `end_read_access` |
 
 For the vulkan adapter, "the side that calls `begin_write`" is the
@@ -144,33 +140,22 @@ process that holds the write lock at the time of release. The
 at a time; the writer process signals `produce_done` from its own
 state.
 
-## The v1 model: one producer process + one consumer process per surface
+## One producer process and one consumer process per surface
 
-This lift declares **one producer process and one consumer process
-per surface**, fixed at registration time. Multi-process concurrent
-consumers (two subprocesses concurrently reading the same surface)
-are out of scope for v1 — the producer process must publish to a
-single consumer process, with fan-out happening at a higher layer
-(pre-fan-out at the producer, or one subprocess with multiple
-internal readers).
+Each surface has **one producer process and one consumer process**,
+fixed at registration time. Multi-process concurrent consumers (two
+subprocesses concurrently reading the same surface) are not
+supported — the producer process publishes to a single consumer
+process, with fan-out happening at a higher layer (pre-fan-out at
+the producer, or one subprocess with multiple internal readers).
 
-This is the model every production engine surveyed uses. The
-"multiple subprocesses concurrently reading the same VkImage"
-pattern that the pre-lift vulkan adapter's
-`concurrent_reads_two_subprocesses` test exercised isn't a pattern
-real engines design for; it was an emergent capability of the
-pre-lift shape, not a designed feature. Same-process concurrent
-reads (multiple Python threads, multiple in-process processors)
-remain fully supported via the existing `read_holders`
-last-reader-out semantics — only one `signal_host(consume_done)`
-fires per release-episode regardless of how many local readers
-participated.
-
-**If a future use case genuinely needs multi-process concurrent
-consumers**, the additive extension is N `consume_done` timelines
-(one per attached consumer process), with the producer waiting on
-ALL of them before re-writing. Lift to that shape when a real
-consumer attests to needing it; don't pre-design.
+This is the model every production engine surveyed uses; multiple
+subprocesses concurrently reading the same VkImage isn't a pattern
+real engines design for. Same-process concurrent reads (multiple
+Python threads, multiple in-process processors) are supported via
+`read_holders` last-reader-out semantics — only one
+`signal_host(consume_done)` fires per release-episode regardless of
+how many local readers participated.
 
 ## Producer rules
 
@@ -203,21 +188,12 @@ consumer attests to needing it; don't pre-design.
    per-process.** Never read or write the producer's
    `next_produce_value`.
 
-2. **Wait on `produce_done` before reading.** Under v1 the consumer
-   reads `produce_done.current_value()` at acquire time and waits on
-   that snapshot — the peer-timeline's kernel counter is the source
-   of truth, no cross-process per-frame value publishing is required.
+2. **Wait on `produce_done` before reading.** The consumer reads
+   `produce_done.current_value()` at acquire time and waits on that
+   snapshot — the peer-timeline's kernel counter is the source of
+   truth, no cross-process per-frame value publishing is required.
    That covers steady-state ordering (each completed producer signal
    advances `current_value()` so the next consumer's wait sees it).
-   If a future use case needs strict per-frame value publishing
-   (e.g. the consumer wants to wait for a specific future frame
-   that's already been queued but not yet signaled), the producer
-   publishes the `produce_done` value alongside the read-side data
-   (typically on the `VideoFrame` IPC payload or the adapter's
-   acquire-acquired record) and the consumer waits on that value
-   instead of `current_value()`. v1 deliberately doesn't ship that
-   IPC plumbing — the kernel-counter snapshot is good enough for
-   every in-tree consumer today.
 
 3. **Signal `consume_done` from exactly one site per release.** For
    subprocess consumers (cuda + cpu-readback), the signal site is
@@ -228,88 +204,70 @@ consumer attests to needing it; don't pre-design.
 
 4. **Last-reader-out semantics inside one consumer process.**
    Multiple concurrent readers within the same process coordinate
-   via the existing `read_holders` counter; only the last reader to
-   release signals `consume_done`. This stays unchanged under the
-   lift.
+   via the `read_holders` counter; only the last reader to release
+   signals `consume_done`.
 
 ## Anti-patterns
 
 These are the failure modes the single-writer rule exists to
-prevent. Each was either tried and rejected, or is the foreseeable
-workaround that future agents would attempt without this doc.
+prevent, and the workarounds a session would reach for without this
+doc.
 
-1. **Multi-writer per timeline.** The pre-lift shape. Two
-   processes signaling the same timeline kernel object from
-   independent per-process counters races on monotonicity. The lift
-   exists to make this unreachable; do not re-introduce it.
+1. **Multi-writer per timeline.** Two processes signaling the same
+   timeline kernel object from independent per-process counters race
+   on monotonicity and trip VUID-03258. Do not introduce it.
 
-2. **Cross-process atomic counter as next-value oracle.** The
-   alternative the issue body ruled out — use shared-memory atomic
-   state for the next-value computation. Adds non-Vulkan IPC,
+2. **Cross-process atomic counter as next-value oracle.** Shared-memory
+   atomic state for the next-value computation. Adds non-Vulkan IPC,
    doesn't match production engines, doesn't generalize to
    additional consumers. Single-writer-per-timeline is the answer.
 
-3. **Safety-net clamp as architectural fallback.** The
-   `signal_host` clamp removed under this lift
-   (`consumer_vulkan_sync.rs` + `vulkan_sync.rs`, both pre-lift)
-   self-corrected to `max(value, current+1)` to dodge VUID-03258.
-   That was correct as a bridge while the multi-writer shape was in
-   place, but it's not an architecture; it's a fault-tolerance
-   patch. Don't re-add it as a "just in case" defense once the lift
-   lands — the right way to enforce single-writer-per-timeline is
-   the type system and the IPC schema, not runtime clamping.
+3. **Safety-net clamp as architectural fallback.** A `signal_host`
+   that self-corrects to `max(value, current+1)` to dodge VUID-03258
+   is not an architecture; it's a fault-tolerance patch. Don't add it
+   as a "just in case" defense — the right way to enforce
+   single-writer-per-timeline is the type system and the IPC schema,
+   not runtime clamping.
 
 4. **Conflating `produce_done` with `consume_done` via a single
    "current value" notion.** A surface has two independent monotonic
-   counters going forward, not one. Code that reaches for a single
-   `current_release_value` to satisfy both edges is re-introducing
-   the multi-writer race in disguise.
+   counters, not one. Code that reaches for a single
+   `current_release_value` to satisfy both edges is introducing the
+   multi-writer race in disguise.
 
 5. **Producer signaling `consume_done` or consumer signaling
    `produce_done`.** Each timeline has exactly one writer process.
    "But just this once" is exactly the failure pattern; don't
    special-case.
 
-6. **Multiple consumer processes attaching to one surface in v1.**
-   Out of scope. If you find yourself needing it, lift to the
-   N-`consume_done`-timelines extension cleanly; don't shoehorn it
-   into the v1 single-consumer shape.
+6. **Multiple consumer processes attaching to one surface.** Two
+   consumer processes signaling one `consume_done` is a multi-writer
+   timeline. Don't shoehorn a second consumer process into the
+   single-consumer shape.
 
 ## Cross-process coordination
 
-Under v1, each side derives the wait value from the peer-timeline's
-kernel counter (`vkGetSemaphoreCounterValue`, exposed on consumer-rhi
-as `VulkanTimelineSemaphoreLike::current_value()`) at acquire time
-and waits on that snapshot. Steady-state ordering holds: a completed
+Each side derives the wait value from the peer-timeline's kernel
+counter (`vkGetSemaphoreCounterValue`, exposed on consumer-rhi as
+`VulkanTimelineSemaphoreLike::current_value()`) at acquire time and
+waits on that snapshot. Steady-state ordering holds: a completed
 producer signal advances `current_value()`, so the next consumer's
-wait sees it; symmetric for `consume_done`.
+wait sees it; symmetric for `consume_done`. No timeline value is
+published per frame, so a consumer cannot wait for a specific frame
+the producer has queued but not yet signaled.
 
-If a future use case needs strict per-frame value publishing — e.g.
-a consumer that wants to wait for a specific future frame the
-producer has already queued but not yet signaled — the producer
-publishes the `produce_done` value alongside the per-frame work item
-(a field on the `VideoFrame` IPC payload or the adapter's
-per-acquire record) and the consumer waits on that value instead of
-`current_value()`. v1 deliberately doesn't ship that IPC plumbing —
-no in-tree consumer needs it today.
-
-No shared-memory state is needed in either shape. Each side's wait
-reads the value (kernel counter or remote-published, depending on
-shape), waits on the local imported timeline, and proceeds.
+No shared-memory state is needed. Each side's wait reads the peer
+timeline's kernel counter, waits on the local imported timeline, and
+proceeds.
 
 ## Race model
 
 Each timeline has exactly one writer *process*, so there is no
-cross-process race on monotonicity.
-
-> ~~next-value computation is a pure function of that process's local
-> state. There is no race on monotonicity.~~ — Superseded 2026-08-22 by
-> `cargo test -p streamlib-adapter-cpu-readback --test
-> concurrent_read_timeline_signals` under `STREAMLIB_VULKAN_VALIDATION=1`.
-> One writer process is not one writer thread. Concurrent readers of one
-> surface are a supported shape, and a next-value computed from state
-> that is only committed after the copy completes hands every reader that
-> starts first the same value.
+cross-process race on monotonicity. One writer process is not one
+writer thread, though. Concurrent readers of one surface are a
+supported shape, and a next-value computed from state that is only
+committed after the copy completes hands the same value to every
+reader that starts before then.
 
 ### Thread model within the writer process
 
@@ -336,46 +294,28 @@ returns while its own copy is still in flight: its read view maps a
 staging buffer the GPU is still writing, and teardown destroys the
 image, buffer and timeline that copy still references.
 
-Only cpu-readback reaches this today — the other two adapters signal
-from sites that are already exclusive, so the registry lock is their
+Only cpu-readback reaches this — the other two adapters signal from
+sites that are already exclusive, so the registry lock is their
 exclusion. An adapter that adds a signalling site reachable from two
 threads at once inherits the requirement.
 
-The cross-process IPC payload publishing `produce_done` /
-`consume_done` values can in principle be observed by the consumer
-before the corresponding signal has actually fired on the GPU — but
-that's what `wait` is for; the consumer's wait blocks until the
-signal materializes. No ordering primitive beyond the timeline
-itself is required.
-
 ## Tests
 
-Per-adapter conformance:
+Per-adapter conformance is a **unit test** exercising concurrent
+producer + consumer acquire/release cycles against a real Vulkan
+device. It asserts:
+- Zero `VUID-VkSemaphoreSignalInfo-value-03258` occurrences (the
+  multi-writer race).
+- `produce_done.current_value()` and `consume_done.current_value()`
+  advance monotonically and independently.
 
-1. **Unit test** exercising concurrent producer + consumer
-   acquire/release cycles against a real Vulkan device. Asserts:
-   - Zero `VUID-VkSemaphoreSignalInfo-value-03258` occurrences (the
-     race the lift exists to fix).
-   - Zero `signal_host` clamp warnings (since the clamp is removed,
-     this collapses to "the test runs without the clamp's safety
-     net").
-   - `produce_done.current_value()` and `consume_done.current_value()`
-     advance monotonically and independently.
-
-   Concurrent *readers within one process* need their own coverage —
-   the single-writer rule says nothing about them. The cpu-readback
-   adapter's `concurrent_read_timeline_signals` test is the shape:
-   release N reader threads onto one surface at once, assert the value
-   handed to each copy is strictly above the one before it, and read
-   `HostVulkanDevice::validation_layer_message_counts()` around both the
-   burst and the adapter's teardown.
-
-2. **E2E** — the pre-pivot `camera-python-display` example through the
-   full multi-process polyglot pipeline with
-   `VK_LOADER_LAYERS_ENABLE=*validation*`, for zero
-   timeline-monotonicity validation errors. That example is retired and
-   this arm has no in-tree stand-in: the surface adapters it drove are no
-   longer wired from any example.
+Concurrent *readers within one process* need their own coverage —
+the single-writer rule says nothing about them. The cpu-readback
+adapter's `concurrent_read_timeline_signals` test is the shape:
+release N reader threads onto one surface at once, assert the value
+handed to each copy is strictly above the one before it, and read
+`HostVulkanDevice::validation_layer_message_counts()` around both the
+burst and the adapter's teardown.
 
 When a new adapter lands, add the same dual-timeline conformance
 coverage to its tests; the single-writer-per-timeline contract is

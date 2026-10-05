@@ -82,8 +82,9 @@ Avoid the two failure modes:
 - [@docs/learnings/vulkanalia-empty-slice-cast.md](vulkanalia-empty-slice-cast.md) —
   Cryptic `Cast` trait error when passing `&[]` to vulkanalia Vulkan methods
 - [@docs/learnings/pubsub-lazy-init-silent-noop.md](pubsub-lazy-init-silent-noop.md) —
-  Test hangs indefinitely because PUBSUB silently no-ops without `init()` (superseded:
-  the in-process bus has no `init()` since #2276)
+  Test hangs forever on `handle.join()` because it published before its spawned
+  listener subscribed — the event is queued for nobody; wait on an observable
+  effect of the subscribe and on `recv_timeout`, never on a bare `join()`
 - [@docs/learnings/cdylib-make-borrow-cached-fields.md](cdylib-make-borrow-cached-fields.md) —
   Plugin pipeline runs end-to-end clean but produces zero/black output
   when host-side `make_*_borrow` helpers leave the PluginAbiObject's cached
@@ -102,12 +103,6 @@ Avoid the two failure modes:
   release/acquire (with `VK_EXT_external_memory_acquire_unmodified` chained
   for content preservation), bridging `UNDEFINED → target` as the fallback
   when extensions are missing
-<!-- polyglot-venv-package-source-env learning removed 2026-07-12 — the
-     hosted-daemon backend it described (and its auth-token / daemon-URL
-     env surface) was dropped when the static file tree became the only
-     package source. The venv build now
-     derives `UV_INDEX` from the tree-root `STREAMLIB_PACKAGE_SOURCE`; the
-     tokenless read shape means there is no token env var to forget. -->
 - [@docs/learnings/sandboxing-demo-content-pending-engine-feature.md](sandboxing-demo-content-pending-engine-feature.md) —
   Recipe for relocating app-specific hot-path content out of the engine
   into an example crate when the right engine primitive is a future
