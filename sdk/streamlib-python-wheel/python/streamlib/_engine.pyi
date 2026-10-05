@@ -5,7 +5,7 @@
 
 A type checker and an editor can read nothing out of `_engine.abi3.so`, so this
 file is the only description of the native surface they get — without it,
-`rt.add` offers no completion and `Runtime` resolves as unknown.
+`Runtime` resolves as unknown and none of its methods offer completion.
 
 Hand-maintained, and kept honest by `mypy.stubtest`, which imports the built
 module and compares it against this file in CI. `pyright --verifytypes` does not
@@ -28,7 +28,6 @@ _BagReadTarget = TypeVar("_BagReadTarget")
 
 __all__ = [
     "AccelerationStructureHandle",
-    "AddedProcessor",
     "ComputeKernel",
     "GraphicsKernel",
     "KernelDispatchBatch",
@@ -43,11 +42,9 @@ __all__ = [
     "LinkOutputDataWriter",
     "MonotonicTimer",
     "OpaqueFdTextureExport",
-    "ProcessorInputPortReference",
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
     "ProcessorLinkDataAccess",
-    "ProcessorOutputPortReference",
     "CameraSource",
     "CapabilityExtensionHost",
     "DisplayWindow",
@@ -92,8 +89,8 @@ class CameraSource:
     """Native built-in block: live camera capture (V4L2 on Linux, AVFoundation
     on macOS).
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(CameraSource, config={"device_id": "/dev/video0"})`); it is
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(CameraSource, config={"device_id": "/dev/video0"})`); it is
     never instantiated and its per-frame path never enters the interpreter.
     `device_id` is a V4L2 device path on Linux and an AVFoundation camera's
     unique ID on macOS; absent, the first camera found — the first built-in
@@ -118,8 +115,8 @@ class CameraSource:
 class DisplayWindow:
     """Native built-in block: video frames in a vsync'd window.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
     it is never instantiated and its per-frame path never enters the
     interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`. `width` and
     `height` (1280 and 720 by default) are the window's initial size in the
@@ -140,8 +137,8 @@ class H264Decoder:
     frames via hardware decode — Vulkan Video on Linux, VideoToolbox on
     macOS.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(H264Decoder)`); it is never instantiated and its per-frame path
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(H264Decoder)`); it is never instantiated and its per-frame path
     never enters the interpreter.
 
     Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
@@ -155,7 +152,7 @@ class H264Decoder:
     buffer-backed, so it reaches a Python kernel through a DLPack landing
     copy, never by bare surface id — the camera's own gap, not a new one.
 
-    Config keys, all optional (`rt.add(H264Decoder)` bare is legal):
+    Config keys, all optional (`stream.add(H264Decoder)` bare is legal):
     `max_width` and `max_height` cap the stream's extent together or not at
     all — a half-specified pair warns and auto-detects both from the
     stream's first SPS, as an absent pair does. On Linux they size the
@@ -177,8 +174,8 @@ class H264Encoder:
     """Native built-in block: video frames to H.264 encoded-frame bags via
     hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(H264Encoder, config={"keyframe_interval_seconds": 2})`); it is
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(H264Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
     Input `video` (`ordered`) takes any published `streamlib.VideoFrame` —
@@ -189,7 +186,7 @@ class H264Encoder:
     keeps running.
 
     Config keys, every one an optional non-negative integer
-    (`rt.add(H264Encoder)` bare is legal): `width` and `height` are
+    (`stream.add(H264Encoder)` bare is legal): `width` and `height` are
     guardrails, not a resize — a mismatching frame wins with a warning;
     `fps` is the fallback rate, resolved frame → config → 60; `bitrate_bps`
     absent means constant-quality encoding at the platform's balanced
@@ -213,8 +210,8 @@ class H265Decoder:
     frames via hardware decode — Vulkan Video on Linux, VideoToolbox on
     macOS.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(H265Decoder)`); it is never instantiated and its per-frame path
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(H265Decoder)`); it is never instantiated and its per-frame path
     never enters the interpreter.
 
     Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
@@ -228,7 +225,7 @@ class H265Decoder:
     buffer-backed, so it reaches a Python kernel through a DLPack landing
     copy, never by bare surface id — the camera's own gap, not a new one.
 
-    Config keys, all optional (`rt.add(H265Decoder)` bare is legal):
+    Config keys, all optional (`stream.add(H265Decoder)` bare is legal):
     `max_width` and `max_height` cap the stream's extent together or not at
     all — a half-specified pair warns and auto-detects both from the
     stream's first SPS, as an absent pair does. On Linux they size the
@@ -250,8 +247,8 @@ class H265Encoder:
     """Native built-in block: video frames to H.265 encoded-frame bags via
     hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(H265Encoder, config={"keyframe_interval_seconds": 2})`); it is
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(H265Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
     Input `video` (`ordered`) takes any published `streamlib.VideoFrame` —
@@ -262,7 +259,7 @@ class H265Encoder:
     keeps running.
 
     Config keys, every one an optional non-negative integer
-    (`rt.add(H265Encoder)` bare is legal): `width` and `height` are
+    (`stream.add(H265Encoder)` bare is legal): `width` and `height` are
     guardrails, not a resize — a mismatching frame wins with a warning;
     `fps` is the fallback rate, resolved frame → config → 60; `bitrate_bps`
     absent means constant-quality encoding at the platform's balanced
@@ -284,8 +281,8 @@ class H265Encoder:
 class MicrophoneSource:
     """Native built-in block: audio capture as timestamped sample blocks.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(MicrophoneSource, config={"device_id": "..."})`); it is never
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(MicrophoneSource, config={"device_id": "..."})`); it is never
     instantiated and its capture callback never enters the interpreter.
 
     The backend chain is probed once per process with no configuration dial;
@@ -313,8 +310,8 @@ class Mp4Sink:
     """Native built-in block: encoded video and audio bags recorded to one
     fragmented MP4 file.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(Mp4Sink, config={"path": "recording.mp4"})`); it is never
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(Mp4Sink, config={"path": "recording.mp4"})`); it is never
     instantiated and its per-bag path never enters the interpreter.
 
     One input, `tracks` (`ordered`), and no output. Any number of links may
@@ -326,7 +323,7 @@ class Mp4Sink:
     track, `"opus"` an audio track, anything else refused by name.
 
     `path` is the one config key and it is required. The file is created or
-    truncated at `setup()` — an app re-run from the same `app.py` overwrites
+    truncated at `setup()` — a stream re-run with the same `path` overwrites
     its last recording — and a path that cannot be opened, or a sink no link
     enters, is refused by name there.
 
@@ -358,8 +355,8 @@ class OpusDecoder:
     """Native built-in block: Opus encoded-audio-packet bags to decoded audio
     blocks via libopus.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(OpusDecoder)`); it is never instantiated and its per-packet path
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(OpusDecoder)`); it is never instantiated and its per-packet path
     never enters the interpreter. There is no config.
 
     Input `encoded_audio` (`ordered`) takes encoded-audio-packet bags in the
@@ -393,8 +390,8 @@ class OpusEncoder:
     """Native built-in block: 20 ms windows of audio to Opus
     encoded-audio-packet bags via libopus.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(OpusEncoder, config={"bitrate_bps": 96000})`); it is never
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(OpusEncoder, config={"bitrate_bps": 96000})`); it is never
     instantiated and its per-window path never enters the interpreter.
 
     Input `audio` (`ordered`) declares
@@ -414,7 +411,7 @@ class OpusEncoder:
     state, not decodability, and `sequence_index` does not reset across it, so
     a consumer still reads a gap as loss and never as a restart.
 
-    Config keys, both optional (`rt.add(OpusEncoder)` bare is legal):
+    Config keys, both optional (`stream.add(OpusEncoder)` bare is legal):
     `bitrate_bps` absent means libopus picks its own rate from the sample rate
     and channel count; `application` is `"audio"`, `"voip"` or `"lowdelay"`,
     absent meaning `"audio"`. In-band FEC and DTX are off and are not knobs.
@@ -426,8 +423,8 @@ class OpusEncoder:
 class SpeakerSink:
     """Native built-in block: plays timestamped blocks of interleaved samples.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(SpeakerSink, config={"device_id": "..."})`); it is never
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(SpeakerSink, config={"device_id": "..."})`); it is never
     instantiated and its device callback never enters the interpreter.
 
     The backend chain is probed once per process with no configuration dial;
@@ -459,8 +456,8 @@ class SpeakerSink:
 class TestPatternSource:
     """Native built-in block: SMPTE-style color bars, no hardware.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(TestPatternSource, config={"width": 1280, "height": 720})`);
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(TestPatternSource, config={"width": 1280, "height": 720})`);
     it is never instantiated and its per-frame path never enters the
     interpreter.
     """
@@ -477,8 +474,8 @@ class VirtualCameraSink:
     processor runs — created at setup, removed at teardown, like a USB camera
     plugged in and pulled out — showing whatever the graph writes into it.
 
-    A marker type — pass the class itself to `stream.add` or `Runtime.add`
-    (`rt.add(VirtualCameraSink, config={"name": "Desk cam"})`); it is never
+    A marker type — pass the class itself to `stream.add`
+    (`stream.add(VirtualCameraSink, config={"name": "Desk cam"})`); it is never
     instantiated and its per-frame path never enters the interpreter.
 
     One input, `video` (`newest`), and no output. Add as many instances as the
@@ -515,8 +512,8 @@ class VirtualCameraSink:
 class TestBagFeeder:
     """`streamlib.testing`'s feeder endpoint: publishes bags a test queued.
 
-    A marker type, like the media built-ins — never instantiated, resolved by
-    `Runtime.add`. Native so that its queue lives in the app process, where the
+    A marker type, like the media built-ins — never instantiated, passed to
+    `stream.add`. Native so that its queue lives in the app process, where the
     test reading it does.
     """
 
@@ -546,7 +543,7 @@ class Runtime:
         """Build the engine, named `runtime_name`.
 
         The name is the first chunk of every tap channel this runtime serves,
-        `<runtime name>/<display name>/<port>`, and the name on its registry
+        `<runtime name>/<node name>/<port>`, and the name on its registry
         row that `--node` matches. It belongs to the runtime and is stable
         across runs of one app. It is non-empty, carries none of `/ * $ # ?`,
         and does not begin with `@`; spaces and unicode are fine. A name
@@ -563,63 +560,34 @@ class Runtime:
         one directory both start — and `--node` refuses a name two live
         runtimes hold, naming both.
         """
-    def add(
-        self,
-        processor_class: type,
-        *,
-        config: dict[str, Any] | None = None,
-        display_name: str | None = None,
-    ) -> AddedProcessor:
-        """Add a processor class to the graph, configured with `config`.
-
-        `config` is the mapping the processor's config type is built from: for
-        a Python class, the class named by the annotation on its `__init__`'s
-        `config` parameter; for a native built-in, its Rust config struct.
-        Either way a processor that declares no config refuses a non-empty one,
-        and the keys it takes — with their types, defaults and descriptions —
-        are published as its config schema in the node catalog.
-
-        `display_name` is cast to lowercase URL-safe (`"Front Camera"` becomes
-        `front-camera`), and refused with `RuntimeError` when a node already
-        has that name or it casts to nothing. Left out, the node takes its
-        class's short name, cast, with the next free `-2`, `-3` … appended.
-        """
-
-    def connect(
-        self,
-        source: ProcessorOutputPortReference,
-        destination: ProcessorInputPortReference,
-    ) -> None:
-        """Link one processor's output port to another's input port on this runtime."""
 
     def load(self, graph: Mapping[str, Any], *, name: str | None = None) -> None:
         """Load a graph into this Runtime before `run()`.
 
         `graph` is the mapping `compile_stream_to_graph` returns, or a graph
         `streamlib graph` rendered; anything not a mapping raises `TypeError`.
-        It is converted to JSON the way `add`'s `config` is: a tuple reads as a
-        list, NaN and infinity as null, and what JSON cannot carry — a set,
-        bytes, a nested mapping that is not a dict, a key that is not a str, an
-        int wider than 64 bits, a str that cannot be encoded as UTF-8,
-        containers nested more than 128 deep, as one holding itself is —
-        raises `TypeError` or `ValueError` saying the graph is not JSON data,
-        with the converter's own error as `__cause__`. `name`, when given, is a
-        str that encodes as UTF-8. The stream's name — `name` when given, else
-        the graph's own `stream` — is cast the way a node name is, and one
-        casting to nothing raises `ValueError`. A Runtime takes exactly one
-        `load`: a second raises `RuntimeError` naming the stream already
-        loaded, the earlier refusal, or the load still underway on another
-        thread. An empty graph raises `RuntimeError`, naming the stream when it
-        has one; one that does not parse, and one the engine refuses — an
-        unknown `type`, a taken node name, a link to a port no node has — raise
-        `RuntimeError` with the engine's own text. A refused load can leave part
-        of its graph behind, so every refused call is recorded — save one
-        refused because this Runtime is already running or shut down, which
-        `run()` refuses anyway — and so is a panic inside the load; `run()` then
-        raises naming the load's own refusal or panic, else the first refusal
-        recorded, and raises while a load is still underway. Construct a new
-        Runtime and load a corrected graph. `add` and `connect` work with or
-        without a load.
+        It is converted to JSON: a tuple reads as a list, NaN and infinity as
+        null, and what JSON cannot carry — a set, bytes, a nested mapping that
+        is not a dict, a key that is not a str, an int wider than 64 bits, a
+        str that cannot be encoded as UTF-8, containers nested more than 128
+        deep, as one holding itself is — raises `TypeError` or `ValueError`
+        saying the graph is not JSON data, with the converter's own error as
+        `__cause__`. `name`, when given, is a str that encodes as UTF-8. The
+        stream's name — `name` when given, else the graph's own `stream` — is
+        cast the way a node name is, and one casting to nothing raises
+        `ValueError`. A Runtime takes exactly one `load`: a second raises
+        `RuntimeError` naming the stream already loaded, the earlier refusal,
+        or the load still underway on another thread. An empty graph raises
+        `RuntimeError`, naming the stream when it has one; one that does not
+        parse, and one the engine refuses — an unknown `type`, a taken node
+        name, a link to a port no node has — raise `RuntimeError` with the
+        engine's own text. A refused load can leave part of its graph behind,
+        so every refused call is recorded — save one refused because this
+        Runtime is already running or shut down, which `run()` refuses anyway
+        — and so is a panic inside the load; `run()` then raises naming the
+        load's own refusal or panic, else the first refusal recorded, and
+        raises while a load is still underway. Construct a new Runtime and
+        load a corrected graph.
         """
 
     # `bind_host` is `...` rather than its literal default because the binding
@@ -655,7 +623,7 @@ class Runtime:
         process with status 130 at once. `shutdown()` is the first step only,
         however often it is called.
 
-        Raises `RuntimeError` naming each processor, by display name and id,
+        Raises `RuntimeError` naming each processor, by node name and id,
         whose thread ignored shutdown past its budget and was abandoned — the
         engine then stays alive beneath it until the process exits. A forced
         shutdown that abandoned nothing returns normally. A teardown still hung
@@ -724,36 +692,6 @@ class CapabilityExtensionHost:
         the app process the registration renders under `extensions` in
         `streamlib graph`; in a helper it is the process's own record.
         """
-
-@final
-class AddedProcessor:
-    """A processor in the graph.
-
-    A port name is cast the way `@node` casts it — lowercased, accents dropped,
-    anything outside a-z 0-9 - . _ ~ turned into `-` — so any spelling that
-    casts to a declared port finds it; one casting to nothing raises `ValueError`.
-    """
-
-    @property
-    def processor_id(self) -> str: ...
-    @property
-    def display_name(self) -> str:
-        """The name the node received — what `graph` renders as its `name`."""
-    def output(self, port_name: str) -> ProcessorOutputPortReference: ...
-    def input(self, port_name: str) -> ProcessorInputPortReference: ...
-    def __repr__(self) -> str: ...
-
-@final
-class ProcessorOutputPortReference:
-    """The producing end of a link."""
-
-    def __repr__(self) -> str: ...
-
-@final
-class ProcessorInputPortReference:
-    """The consuming end of a link."""
-
-    def __repr__(self) -> str: ...
 
 @final
 class ProcessorLinkDataAccess:
@@ -2165,10 +2103,11 @@ def register_declared_processor_class(processor_class: type) -> None:
     """Register the descriptor `@node` has just stamped onto a class.
 
     Called by the decorator and nowhere else, so the class is in the processor
-    catalog from the moment its module is imported; the constructor arrives at
-    the first `Runtime.add`. A class decorated inside a helper process
-    registers nothing — a helper hosts no graph — and so does one no
-    interpreter could import, which `Runtime.add` refuses by name.
+    catalog from the moment its module is imported; the constructor arrives
+    when the engine first resolves a node of the class, as `Runtime.load`
+    does. A class decorated inside a helper process registers nothing — a
+    helper hosts no graph — and so does one no interpreter could import,
+    which `stream.add` refuses by name.
     """
 
 def processor_class_import_paths_in_this_processes_catalog() -> list[str]:
