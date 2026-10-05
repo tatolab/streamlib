@@ -334,7 +334,7 @@ fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
 
 // A windowed audio consumer: the declaration the macro must carry all the way
 // into the emitted descriptor, since that descriptor is what the engine reads
-// at `rt.add` time.
+// when the processor is added to a graph.
 #[streamlib::sdk::processor(
     execution = reactive,
     input(

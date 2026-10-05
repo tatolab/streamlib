@@ -7,14 +7,13 @@
 //! The engine substrate is an empty registry; processors land in
 //! `PROCESSOR_REGISTRY` when a caller registers them, by invoking
 //! `PROCESSOR_REGISTRY.register::<P>()` in process — the wheel does it
-//! for a `@node` class as `rt.add` classifies it.
+//! for a `@node` class when a loaded graph or a control-plane `add_node`
+//! first names it.
 //!
-//! The link-time `inventory::submit!(FactoryRegistration { ... })`
-//! emission the `#[processor]` macro used to do is gone. Anyone
-//! reintroducing it would bypass the dynamic-registration model:
-//! `Runner::new()` would silently grow non-empty in builds that link the
-//! offending crate, and processors would register before any caller asked
-//! for them.
+//! A link-time `inventory::submit!(FactoryRegistration { ... })` emission
+//! would bypass the dynamic-registration model: `Runner::new()` would
+//! silently grow non-empty in builds that link the offending crate, and
+//! processors would register before any caller asked for them.
 //!
 //! This gate scans `.rs` files under `packages/`, `libs/`, and `examples/`
 //! and fails when any non-`#[cfg(test)]` item contains
