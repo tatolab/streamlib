@@ -81,16 +81,20 @@ impl std::fmt::Display for RuntimeName {
 ///
 /// Resolution runs before the runtime's logging is up, so the warning about a
 /// missing host name is carried here and said once logging is.
+#[must_use]
 pub(crate) struct ResolvedRuntimeName {
     /// The name the runtime takes.
-    pub(crate) runtime_name: RuntimeName,
+    runtime_name: RuntimeName,
     /// Whether the default carries [`HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE`].
     default_carries_the_stand_in_for_an_unreported_host_name: bool,
 }
 
 impl ResolvedRuntimeName {
-    /// Warn that the default carries the stand-in host name, when it does.
-    pub(crate) fn warn_when_the_default_carries_the_stand_in_for_an_unreported_host_name(&self) {
+    /// The runtime's name, warning first when its default carries the stand-in
+    /// host name; taken once logging is up.
+    pub(crate) fn take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name(
+        self,
+    ) -> RuntimeName {
         if self.default_carries_the_stand_in_for_an_unreported_host_name {
             tracing::warn!(
                 "this machine reported no host name, so this runtime is named '{}' with \
@@ -98,6 +102,7 @@ impl ResolvedRuntimeName {
                 self.runtime_name
             );
         }
+        self.runtime_name
     }
 }
 
@@ -219,6 +224,7 @@ fn this_hosts_name() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::test_support::CapturedTracingWarnings;
     use std::path::PathBuf;
 
     fn resolved(
@@ -392,6 +398,35 @@ mod tests {
         assert!(!reported.default_carries_the_stand_in_for_an_unreported_host_name);
     }
 
+    /// The stand-in is said once, naming the runtime and the stand-in; a name
+    /// built on a reported host says nothing.
+    #[test]
+    fn taking_a_name_built_on_the_stand_in_warns_once_and_one_built_on_a_reported_host_does_not() {
+        let (runtime_name, warnings) = CapturedTracingWarnings::captured_while(|| {
+            default_runtime_name_on_a_host_that_may_report_no_name(Path::new("/apps/desk"), None)
+                .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name()
+        });
+        let [warning] = warnings.as_slice() else {
+            panic!("the stand-in is said in exactly one warning; got {warnings:?}");
+        };
+        assert!(
+            warning.contains(runtime_name.as_str()) && warning.contains("unknown-host"),
+            "the warning names the runtime and the stand-in; got {warning}"
+        );
+
+        let (_, warnings) = CapturedTracingWarnings::captured_while(|| {
+            default_runtime_name_on_a_host_that_may_report_no_name(
+                Path::new("/apps/desk"),
+                Some("rig".to_string()),
+            )
+            .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name()
+        });
+        assert!(
+            warnings.is_empty(),
+            "a reported host says nothing; got {warnings:?}"
+        );
+    }
+
     /// A stated name never reads the host, so it never carries the stand-in.
     #[test]
     fn a_stated_name_never_carries_the_stand_in() {
@@ -405,10 +440,11 @@ mod tests {
     /// This machine reports a host name that is itself usable in a default.
     #[test]
     fn this_machines_host_name_yields_a_legal_default() {
-        let name = default_runtime_name_for(
+        let name = default_runtime_name_on_a_host_that_may_report_no_name(
             &PathBuf::from("/apps/desk"),
-            &this_hosts_name().expect("this machine reports a host name"),
-        );
+            this_hosts_name(),
+        )
+        .runtime_name;
         assert_eq!(
             first_reason_this_is_not_one_address_chunk(name.as_str()),
             None,

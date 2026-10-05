@@ -246,9 +246,10 @@ impl Runner {
                 Arc::clone(&runtime_id),
             ))
             .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
-        resolved_runtime_name
-            .warn_when_the_default_carries_the_stand_in_for_an_unreported_host_name();
-        let runtime_name = Arc::new(resolved_runtime_name.runtime_name);
+        let runtime_name = Arc::new(
+            resolved_runtime_name
+                .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name(),
+        );
         tracing::info!("Creating Runner named {runtime_name} with ID: {runtime_id}");
 
         let runtime_directory = StreamlibRuntimeDirectory::resolve()?;

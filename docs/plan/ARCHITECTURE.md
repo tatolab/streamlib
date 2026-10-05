@@ -3840,9 +3840,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   [cross-runtime-links — SHIPPED #2292 for the Rust address and #2287 for the Python and MCP
   spellings; the `to_*` pair with #2289; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by local-api: each end is `<end>_node` and `<end>_port`, with `<end>_runtime_name` for a port on another runtime — a node by its name, never its id (§Control plane, the local API speaks the graph's words); removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted; how a link names a port on another machine is the sharing step's to rebuild]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
-  <!-- verify: cargo test -p streamlib-api-server tools_call_connect_names_a_source_on_another_runtime_by_its_mesh_address -->
-  <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_refuses_naming_both_a_link_and_a_request_or_neither -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
 - **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
   creates it, reading a port the source stream has exposed — private on the machine, public off
   it — and the source is never asked. No runtime pushes its output into another's input, and no

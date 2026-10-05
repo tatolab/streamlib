@@ -96,6 +96,12 @@ mod tests {
                 "{candidate:?}"
             );
         }
+        for forbidden in CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN {
+            assert_eq!(
+                first_reason_this_is_not_one_address_chunk(&format!("desk{forbidden}rig")),
+                Some(format!("it contains {forbidden:?}")),
+            );
+        }
     }
 
     /// Everything outside the table passes: punctuation the rule does not
