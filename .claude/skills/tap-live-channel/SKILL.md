@@ -10,11 +10,11 @@ Proof-of-life for a link. A channel is the output port's address, `<runtime_name
 ## Steps
 
 ### 1. Get the channel name from the live graph
-Run `inspect-live-graph` and read `mesh.runtime_name`, the source node's `name`, and its output port under `ports.outputs`, then join them:
+Run `inspect-live-graph` and read the top-level `runtime_name`, the source node's `name`, and its output port under `ports.outputs`, then join them:
 ```
 <runtime_name>/<node>/<port>   e.g.  lab-one/camera/frames
 ```
-A port on another runtime that a link carries here is tapped under that runtime's name — the `runtime_name` on the link's `source`.
+A tap reads a channel on the runtime it targets: a channel naming another runtime is refused, naming that runtime. Tap that runtime's own node instead.
 
 ### 2. Tap a bounded sample
 The channel is a positional argument; `--count` bounds how many bags to collect before returning:

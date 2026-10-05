@@ -18,7 +18,7 @@ Read `docs/rig-profile.local.md` for this machine's video-node / GPU topology, t
 5. **Frame-ordering / timestamp / drop-sensitive?** → **v4l2loopback motion** (a `testsrc2` source with a visible per-frame counter, so a drop/repeat shows by eye).
 6. **Color-path change?** → the **PSNR fixture rigs** (below), with at least one negative-injection mode to prove the gate isn't vacuous.
 7. **Audio — capture, playback, the device seam, an audio built-in?** → not this skill. The **audio loopback rigs** (below) measure a known signal rather than pixels, and `/verify-audio` drives them.
-8. **An extension wheel that carries media over a network — WHIP/WHEP, MoQ?** → the **networking arm** (below). Same decode-back lock as the codec rigs, with a real endpoint in the middle.
+8. **An extension wheel that carries media over a network — WHIP/WHEP?** → the **networking arm** (below). Same decode-back lock as the codec rigs, with a real endpoint in the middle.
 
 When unsure, default to the more demanding scenario (encode/decode also exercises camera + display). Current run commands live in the fixture scripts under the engine's `tests/fixtures/` — read them for the exact invocation (they drift; don't cache them here).
 
@@ -30,7 +30,7 @@ It matters because window capture could only ever read a channel that *terminate
 
 **Ids come from bags, and the engine never reads one for you.** Tap is untouched — it forwards bags verbatim. The consumer decodes the bag, finds the surface id, and exchanges it. `streamlib tap <channel>` shows what a bag actually carries.
 
-**Deriving the channel name.** A channel is the output port's address, `<runtime_name>/<node>/<port>`, all three read off `streamlib graph`: `mesh.runtime_name` for a port on this runtime, the source node's `name`, and the port's name under its `ports.outputs` — e.g. `lab-one/decoder/video`. A node's name is already cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`, a defaulted `CameraSource` is `camerasource`), so copy it out of the graph rather than spelling it from the app source.
+**Deriving the channel name.** A channel is the output port's address, `<runtime_name>/<node>/<port>`, all three read off `streamlib graph`: its top-level `runtime_name`, the source node's `name`, and the port's name under its `ports.outputs` — e.g. `lab-one/decoder/video`. A node's name is already cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`, a defaulted `CameraSource` is `camerasource`), so copy it out of the graph rather than spelling it from the app source.
 
 ### The spelling you will use — CLI, channel form
 
@@ -74,27 +74,21 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 
 ## Networking arm
 
-Two rig-only fixtures, one per extension wheel, each owned by the wheel it proves. They are the codec rigs' decode-back with a network hop inside it: the vivid camera and the microphone out through `H264Encoder` / `OpusEncoder`, back through the wheel's player or subscriber into `H264Decoder` / `OpusDecoder`, and the decoded frames read by tap + exchange and scored with `cargo xtask psnr channel-means` against `psnr_vivid_baseline.tsv` at ±0.05. **The lock is that score, never a liveness check** — the network sits inside a path the codec rig already scored, so drift is the wheel's.
+One rig-only fixture, owned by the extension wheel it proves. It is the codec rigs' decode-back with a network hop inside it: the vivid camera and the microphone out through `H264Encoder` / `OpusEncoder`, back through the wheel's player into `H264Decoder` / `OpusDecoder`, and the decoded frames read by tap + exchange and scored with `cargo xtask psnr channel-means` against `psnr_vivid_baseline.tsv` at ±0.05. **The lock is that score, never a liveness check** — the network sits inside a path the codec rig already scored, so drift is the wheel's.
 
 - **`packages/streamlib-webrtc/tests/live/whip_whep_roundtrip.sh [out]`** — WHIP publish to Cloudflare Stream and WHEP play-back of the same live input.
-- **`packages/streamlib-moq/tests/live/moq_broadcast_roundtrip.sh [out]`** — publish and subscribe through a draft-16 relay, plus the CMAF **interop arm**: `moq-sub`, built from `cloudflare/moq-rs` (`cargo install --git https://github.com/cloudflare/moq-rs moq-sub`), reads the same broadcast. That is the interop proof the owner asked for on 2026-09-05 — a third-party client parsing the catalog, accepting the init segment and decoding the media beats matching a captured reference in-repo. Only an absent `moq-sub` binary or `SKIP_INTEROP=1` downgrades it to a report; a missing subscribe credential is a cannot-run like any other, and a `moq-sub` that runs and refuses fails the run.
 
-  **Two things that arm gets wrong if you rebuild it from scratch**, both found by review after a green run: `moq-sub` fetches `.catalog` only when passed `--catalog`, and without it silently falls back to hardcoded `0.mp4` / `{track_id}.m4s` names — so the catalog writer can be entirely broken and the arm still passes. And `cargo xtask mp4-inspect` bails only on a missing `moov`, so a capture holding just the init segment parses perfectly: the verdict has to read the *fragment* count, not the exit code.
+It takes `SAMPLE_COUNT`, `SAMPLE_EVERY`, `TOLERANCE`, `RUN_SECONDS` and `MEDIA_DEADLINE_SECONDS` from the environment; read the script header for the full list. `MEDIA_DEADLINE_SECONDS` is the one that matters when a run reports no frames — an ingest going live and a WHEP subscribe sit between the graph coming up and the first decoded frame, so the fixture waits for one bag before spending the exchange budget.
 
-  **The MoQ fixture runs both containers**, one node each, in turn: `cmaf` — which is the only one `moq-sub` can read, so the interop arm belongs to it alone — and `streamlib_bag`, which carries a **data arm** beside the media. `CONTAINER_FORMATS` selects them (default `"cmaf streamlib_bag"`); each arm takes the next control port up, its own broadcast name and its own subdirectory of the output. The data arm publishes a telemetry bag per tick through `track_names=["video", "audio", "telemetry"]` and reads it back off the subscriber's `data_bags`. Its verdict is **exact, not tolerant** — every bag says which frame it is, and both its `blob` and its `stamp_ns` are derived from that, so each bag carries its own expected value across the network; `verify_tapped_telemetry_bags.py` recomputes them. A bag that came back a `str` instead of `bytes`, one bag replayed as every bag, and a restamp on the way all fail it, and the stamp is checked twice over — from the payload and from the transport frame's header, which agree only if the producer's instant survived untouched. Several tap rounds are merged because one tap collects over a window of about half a second.
-
-Each takes `SAMPLE_COUNT`, `SAMPLE_EVERY`, `TOLERANCE`, `RUN_SECONDS` and `MEDIA_DEADLINE_SECONDS` from the environment; read the script header for the full list. `MEDIA_DEADLINE_SECONDS` is the one that matters when a run reports no frames — a relay connect and a CMAF init handshake sit between the graph coming up and the first decoded frame, so the fixture waits for one bag before spending the exchange budget.
-
-**Each wheel is measured through its own venv** (`packages/<wheel>/.venv`), which must hold the engine wheel *and* a current `maturin develop` build of the extension. A stale `.so` there would be scored and reported as a pass for code that is not in the tree, so the fixture refuses by name rather than measuring it — `maturin develop` before every run, the same rule `/verify-audio` has.
+**The wheel is measured through its own venv** (`packages/streamlib-webrtc/.venv`), which must hold the engine wheel *and* a current `maturin develop` build of the extension. A stale `.so` there would be scored and reported as a pass for code that is not in the tree, so the fixture refuses by name rather than measuring it — `maturin develop` before every run, the same rule `/verify-audio` has.
 
 ### Credentials — and why absent ones are never a pass
 
-Every endpoint in this arm carries its own credential **in the URL path**: Cloudflare Stream puts the stream key there, and a draft-16 MoQ relay is provisioned per account with its token on the CONNECT `:path`. There is no credential-free draft-16 relay, so the URL *is* the secret.
+Cloudflare Stream carries the stream key **in the URL path**, so each endpoint URL *is* the secret.
 
-- They are read from the environment, with the repo-root gitignored `.env` as the fallback: `CLOUDFLARE_WHIP_URL`, `CLOUDFLARE_WHEP_URL`, `CLOUDFLARE_MOQ_DRAFT_16_URL`, `CLOUDFLARE_MOQ_PUB_SUB_TOKEN`, `CLOUDFLARE_MOQ_SUB_TOKEN`. An exported `STREAMLIB_*` value always wins.
+- They are read from the environment, with the repo-root gitignored `.env` as the fallback: `CLOUDFLARE_WHIP_URL`, `CLOUDFLARE_WHEP_URL`. An exported `STREAMLIB_WHIP_URL` / `STREAMLIB_WHEP_URL` always wins.
 - **Absent credentials exit 77 — cannot-run, never a pass.** Report it as cannot-run in the template's Outcome line.
-- **Never echo one.** The scripts redact the endpoint in their own output; do the same in a report, a PR body, or a log excerpt you paste. `streamlib graph` renders every processor's config, so a MoQ or WHIP node's graph JSON contains the token — read it in a pipe, never save it into the evidence directory and never attach it.
-- **One unavoidable exception, so it is not mistaken for a leak.** `moq-sub` takes its URL positionally and reads no environment variable, so the *subscribe* token sits in that process's `/proc/<pid>/cmdline` for the arm's 25 seconds. It is the subscribe-only token, and the fixture scrubs the tool's stderr before keeping the log.
+- **Never echo one.** The script redacts the endpoints in its own output; do the same in a report, a PR body, or a log excerpt you paste. `streamlib graph` renders every processor's config, so a WHIP or WHEP node's graph JSON contains the key — read it in a pipe, never save it into the evidence directory and never attach it.
 
 
 ## Audio loopback rigs
@@ -129,8 +123,8 @@ Drive these through **`/verify-audio`**, which owns the workflow: it picks the m
 ````markdown
 ### E2E Test Report
 
-- **Scenario**: encoder/decoder | camera+display-only | networking (whip-whep | moq-broadcast cmaf | moq-broadcast streamlib_bag)
-- **App / fixture**: `examples/camera-python-effects` | `examples/camera-display` | `e2e_camera_display.sh` | `whip_whep_roundtrip.sh` | `moq_broadcast_roundtrip.sh`
+- **Scenario**: encoder/decoder | camera+display-only | networking (whip-whep)
+- **App / fixture**: `examples/camera-python-effects` | `examples/camera-display` | `e2e_camera_display.sh` | `whip_whep_roundtrip.sh`
 - **Codec**: h264 | h265 | n/a
 - **Camera device**: `/dev/videoN` (vivid | Cam Link 4K | other)
 - **Resolution**: 1920x1080 | 1280x720 | other
