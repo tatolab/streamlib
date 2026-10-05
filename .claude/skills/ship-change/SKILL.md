@@ -18,9 +18,10 @@ sequence — no improvisation:
 2. Fold each `ADDED`/`MODIFIED` section into `docs/plan/ARCHITECTURE.md`; flip the
    affected sections `IN-FLIGHT` → `SHIPPED`, each with a `<!-- verify: <glob or
    command> -->` marker; delete the plan text the `REMOVED` sections retire. Per
-   `.claude/rules/docs-policy.md`: fold the `amended by` clauses this change builds and
-   drop their pointers and completed history tails; delete a head-of-plan reading rule
-   whose change shipped; re-test each `Rejected:` line it touches; never strike.
+   `.claude/rules/docs-policy.md`, fold the `amended by` / `reopened by` clauses this
+   change builds and drop their pointers and completed history, re-test each `Rejected:`
+   line it touches, and never strike. Delete a head-of-plan reading rule, or the clause
+   of one, this change discharges.
 3. Update `docs/plan/diagrams/*.mmd` to match. (The Excalidraw view, when wanted, is
    regenerated from the `.mmd` via mermaid-to-excalidraw or the Excalidraw app's Mermaid
    import — the `.mmd` is the source and is never edited from the Excalidraw side.)

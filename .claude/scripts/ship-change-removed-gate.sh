@@ -41,7 +41,7 @@ trap 'rm -f "$hits"' EXIT
 #                     that informed a change, is the tree before that change.
 #   docs/plan/**      the plan states what we agreed, not what the tree holds. It also
 #                     breaks a deadlock: /ship-change gates at step 1 but folds
-#                     ARCHITECTURE.md at step 3, so a change whose own plan text names
+#                     ARCHITECTURE.md at step 2, so a change whose own plan text names
 #                     what it removes could never reach the step that retires that text.
 #   examples/**       consumers, never contract sources (ARCHITECTURE.md §Consumers).
 #   packages/<consumer>  the downstream-consumer entries only, same doctrine — see below.
