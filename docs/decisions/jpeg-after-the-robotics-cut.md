@@ -73,7 +73,9 @@ decision cleans up: code held for a consumer nobody had committed to.
 ## Consequences
 
 - Between the removals and the capture build, the decoder's GPU half is compiled and
-  unproven; only its parser, Huffman and colour tests run.
+  unproven. ~~only its parser, Huffman and colour tests run.~~ — Superseded 2026-10-05 by a
+  read of `test.yml`: no CI step runs the crate's tests at all — Linux clippy builds its lib
+  only and macOS compiles its tests without running them; they run locally and nowhere else.
 - The capture build owes 4:2:2 decode, the move into the engine, a mode-selection rule
   that weighs frame rate, and a proof on a real USB 2.0 webcam.
 - The decoder choice is the owner's stated one. Its internals — how much runs on the CPU,
