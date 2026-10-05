@@ -720,7 +720,6 @@ def wire_link_data_access(
             input_link["name"],
             input_link["channel_service_name"],
             input_link["inbound_link_name"],
-            input_link["stamp_clock"],
             input_link["notify_service_name"],
             input_link["read_mode"],
             input_link["channel_service_creation_depth"],

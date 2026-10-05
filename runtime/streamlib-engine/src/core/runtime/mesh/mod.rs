@@ -15,8 +15,6 @@
 mod duplicate_runtime_name_on_the_mesh;
 mod host_identity;
 mod hosted_control_plane_endpoint;
-mod machine_clock_a_remote_link_carries_from;
-mod machine_clock_identity;
 mod resolved_runtime_mesh_configuration;
 mod runtime_mesh_description;
 mod runtime_mesh_endpoint;
@@ -29,18 +27,14 @@ mod zenoh_work_off_any_tokio_runtime;
 
 // Exported because something outside this module names it: the runtime and its
 // context hold the membership and the control-plane cell, `Runner::new()`
-// resolves the configuration, and the platform halves of the host identity and the
-// machine clock identity are in `linux/` and `apple/`. The announced identity and the key space are exported for the
+// resolves the configuration, and the platform halves of the host identity are in
+// `linux/` and `apple/`. The announced identity and the key space are exported for the
 // mesh's own two-process fixture, which has to write the very key the
 // duplicate-name check reads rather than re-spell the grammar beside it.
 // The observation is exported because the wheel's `streamlib nodes` door
 // calls it. Everything else the mesh is built from stays inside it.
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
-pub use machine_clock_a_remote_link_carries_from::{
-    MachineClockARemoteLinkCarriesFrom, WhatNotingABagsClockDid,
-};
-pub use machine_clock_identity::MachineClockIdentity;
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 // Reachable rather than supported: `core::runtime` is a public module, and the
 // key grammar is the mesh's own business.

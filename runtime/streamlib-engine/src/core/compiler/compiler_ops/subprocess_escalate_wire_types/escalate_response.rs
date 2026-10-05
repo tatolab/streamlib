@@ -90,14 +90,6 @@ pub(crate) struct EscalateResponseOk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) close_requested_by_user: Option<bool>,
 
-    /// The machine whose monotonic clock stamped the bags arriving on the
-    /// named inbound link, as the canonical lowercase UUID text of its
-    /// boot-session id. Set on `inbound_link_stamp_clock_identity` responses,
-    /// and absent there when no bag has crossed the link yet or this runtime
-    /// carries nothing from that address.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) stamp_clock_identity: Option<String>,
-
     /// Element type of the acquired tensor storage buffer. Set on
     /// `acquire_storage_buffer` responses.
     #[serde(skip_serializing_if = "Option::is_none")]

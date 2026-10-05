@@ -33,10 +33,9 @@ use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, TheClockAnInboundLinksStampsAreTakenOn,
-    WINDOWED_PORT_SUBSCRIBER_RING_DEPTH, audio_windowing_declared_by_input_port,
-    delivery_profile_for_input_port, effective_channel_chunk_ceiling_bytes,
-    refuse_an_unsettled_match_device_sentinel,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+    audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
+    effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
 };
 use streamlib_ipc_types::{MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION};
 
@@ -208,7 +207,6 @@ pub fn open_iceoryx2_service(
             &dest_port,
             &channel_service_name,
             &InboundLinkName::from(channel_service_name.as_str()),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             &notify_service_name_for_the_destination,
             dest_input_port_delivery,
             channel_sizing,
@@ -225,7 +223,6 @@ pub fn open_iceoryx2_service(
             &dest_port,
             link_id,
             &InboundLinkName::from(channel_service_name.as_str()),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             dest_input_port_delivery,
             &service,
             &notify_service_for_the_destination,
@@ -846,7 +843,6 @@ fn wire_rust_dest(
     dest_port: &str,
     link_id: &LinkUniqueId,
     inbound_link_name: &InboundLinkName,
-    stamp_clock: TheClockAnInboundLinksStampsAreTakenOn,
     dest_input_port_delivery: DeliveryResolution,
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
@@ -891,13 +887,7 @@ fn wire_rust_dest(
     }
 
     let subscriber = service.create_subscriber(subscriber_ring_depth)?;
-    input_inner.add_channel_subscriber(
-        dest_port,
-        link_id.as_str(),
-        inbound_link_name,
-        stamp_clock,
-        subscriber,
-    );
+    input_inner.add_channel_subscriber(dest_port, link_id.as_str(), inbound_link_name, subscriber);
     tracing::debug!(
         "Bound channel subscriber to destination input port '{}'",
         dest_port
@@ -1051,9 +1041,6 @@ fn wire_subprocess_source(
 /// `inbound_link_name` rides the envelope beside `channel_service_name`, and is
 /// the same name.
 ///
-/// `stamp_clock` rides it too, spelled by
-/// [`TheClockAnInboundLinksStampsAreTakenOn::as_the_token_a_far_side_is_wired_with`].
-///
 /// Hands back the cell this end's answer will land in, on the same terms as
 /// [`wire_subprocess_source`].
 #[allow(clippy::too_many_arguments)]
@@ -1064,7 +1051,6 @@ fn wire_subprocess_dest(
     dest_port: &str,
     channel_service_name: &str,
     inbound_link_name: &InboundLinkName,
-    stamp_clock: &TheClockAnInboundLinksStampsAreTakenOn,
     notify_service_name: &str,
     dest_input_port_delivery: DeliveryResolution,
     channel_sizing: ChannelSizing,
@@ -1084,7 +1070,6 @@ fn wire_subprocess_dest(
         "link_id": link_id.to_string(),
         "channel_service_name": channel_service_name,
         "inbound_link_name": inbound_link_name.as_str(),
-        "stamp_clock": stamp_clock.as_the_token_a_far_side_is_wired_with(),
         "notify_service_name": notify_service_name,
         "read_mode": dest_input_port_delivery.drain_order.as_manifest_str(),
         "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
@@ -1315,7 +1300,6 @@ mod tests {
             "in1",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -1678,7 +1662,6 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -1970,7 +1953,6 @@ mod tests {
             "in1",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -2240,7 +2222,6 @@ mod tests {
             "in1",
             &link_id,
             &InboundLinkName::from("psource/out1"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             DeliveryProfile::Newest.resolve(),
             &channel,
             &notify_service,
@@ -2305,7 +2286,6 @@ mod tests {
                 "in1",
                 &link_id,
                 &InboundLinkName::from("psource/out1"),
-                TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                 dest_delivery,
                 &channel,
                 &notify_service,
@@ -3318,7 +3298,6 @@ mod tests {
             "audio",
             &"L-match-device".into(),
             &InboundLinkName::from("psource/audio_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             DeliveryProfile::Ordered.resolve(),
             &channel,
             &notify_service,
@@ -3408,7 +3387,6 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -3461,7 +3439,6 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -3949,7 +3926,6 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -4190,7 +4166,6 @@ mod tests {
             "in1",
             channel_service_name,
             &InboundLinkName::from(channel_service_name),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -4208,8 +4183,7 @@ mod tests {
             .clone()
     }
 
-    /// A helper knows a link by the channel it subscribes to, and is told its
-    /// bags were stamped on this machine rather than inferring it.
+    /// A helper knows a link by the channel it subscribes to.
     #[test]
     fn the_envelope_hands_a_helper_its_channel_as_the_name_it_knows_the_link_by() {
         let entry = one_helper_destinations_recorded_input_entry("pcam/video");
@@ -4219,9 +4193,5 @@ mod tests {
             serde_json::json!("pcam/video")
         );
         assert_eq!(entry["inbound_link_name"], serde_json::json!("pcam/video"));
-        assert_eq!(
-            entry["stamp_clock"],
-            serde_json::json!(crate::iceoryx2::THIS_MACHINE_STAMP_CLOCK_TOKEN)
-        );
     }
 }

@@ -43,9 +43,6 @@ use super::loss_counters::{
 };
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
-use super::the_clock_an_inbound_links_stamps_are_taken_on::{
-    TheClockAnInboundLinksStampsAreTakenOn, WhatIsKnownOfAnInboundLinksStampClock,
-};
 use super::{ChannelDataServiceSubscriber, FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
 
@@ -119,10 +116,6 @@ struct PortBoundSubscriber {
     /// the channel it subscribed to, which is what `graph` and `tap` show for
     /// the same link.
     inbound_link_name: InboundLinkName,
-    /// Which machine's monotonic clock the bags this subscriber delivers were
-    /// stamped on. Never compare a stamp from one link against a stamp from a
-    /// link this does not answer the same way for.
-    stamp_clock: TheClockAnInboundLinksStampsAreTakenOn,
     subscriber: ChannelDataServiceSubscriber,
     /// This link's share of the destination's dropped-bag counts. Every frame
     /// this subscriber delivers is queued holding it, so an eviction names the
@@ -650,7 +643,6 @@ impl InputMailboxesInner {
         local_port: &str,
         link_id: &str,
         inbound_link_name: &InboundLinkName,
-        stamp_clock: TheClockAnInboundLinksStampsAreTakenOn,
         subscriber: ChannelDataServiceSubscriber,
     ) {
         let dropped_bag_counter = self.dropped_bag_counts.counter_for_inbound_link(link_id);
@@ -670,7 +662,6 @@ impl InputMailboxesInner {
                 link_id: link_id.to_string(),
                 local_port: local_port.to_string(),
                 inbound_link_name: inbound_link_name.clone(),
-                stamp_clock,
                 subscriber,
                 dropped_bag_counter,
                 discarded_sample_counter,
@@ -740,26 +731,6 @@ impl InputMailboxesInner {
             .bound_to_local_port(port)
             .map(|bound| bound.inbound_link_name.clone())
             .collect()
-    }
-
-    /// Which machine's monotonic clock the bags arriving on one inbound link
-    /// of `port` were stamped on.
-    ///
-    /// Readable from `setup()` beside [`Self::inbound_link_names`], and worth
-    /// reading again: a link from another runtime names no machine until its
-    /// first bag lands, and names another one when its peer comes back on a
-    /// fresh boot.
-    pub fn inbound_link_stamp_clock_identity(
-        &self,
-        port: &str,
-        inbound_link_name: &InboundLinkName,
-    ) -> WhatIsKnownOfAnInboundLinksStampClock {
-        self.inbound_link_subscribers_and_listener
-            .lock()
-            .bound_to_local_port(port)
-            .find(|bound| &bound.inbound_link_name == inbound_link_name)
-            .map(|bound| bound.stamp_clock.what_is_known_of_it())
-            .unwrap_or(WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort)
     }
 
     /// Whether `stage` is still the stage installed on `port`, and the one link
@@ -1430,26 +1401,6 @@ impl InputMailboxes {
         }
     }
 
-    /// Which machine's monotonic clock the bags arriving on one inbound link
-    /// of `port` were stamped on.
-    ///
-    /// Two stamps from two machines are readings of two unrelated clocks, so a
-    /// destination fanning several links in asks this before it compares one
-    /// link's stamps against another's. A link from this runtime always answers
-    /// this machine; one from another runtime answers nothing until its first
-    /// bag lands, and answers another machine when its peer comes back on a
-    /// fresh boot.
-    pub fn inbound_link_stamp_clock_identity(
-        &self,
-        port: &str,
-        inbound_link_name: &InboundLinkName,
-    ) -> WhatIsKnownOfAnInboundLinksStampClock {
-        match self.host_inner() {
-            Some(inner) => inner.inbound_link_stamp_clock_identity(port, inbound_link_name),
-            None => WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort,
-        }
-    }
-
     /// Whether `port` has been configured — a port has a mailbox only once a
     /// link is wired into it.
     pub fn has_port(&self, port: &str) -> bool {
@@ -1782,14 +1733,12 @@ mod tests {
             "in",
             "L-fanin-a",
             &InboundLinkName::from("pfanin-a/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             sub_a,
         );
         mailboxes.add_channel_subscriber(
             "in",
             "L-fanin-b",
             &InboundLinkName::from("pfanin-b/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             sub_b,
         );
 
@@ -1837,14 +1786,12 @@ mod tests {
             "in",
             "L-first",
             &InboundLinkName::from("pfirst/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber_a,
         );
         mailboxes.add_channel_subscriber(
             "in",
             "L-second",
             &InboundLinkName::from("psecond/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber_b,
         );
 
@@ -1897,7 +1844,6 @@ mod tests {
             "in",
             "L-plain",
             &InboundLinkName::from("pplain/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             plain_subscriber,
         );
         mailboxes
@@ -1925,7 +1871,6 @@ mod tests {
             "audio",
             "L-windowed",
             &InboundLinkName::from("pwindowed/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             windowed_subscriber,
         );
         mailboxes
@@ -2077,7 +2022,6 @@ mod tests {
             "in",
             "L-replaced",
             &InboundLinkName::from("psource/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             channel.create_subscriber(RING_DEPTH).unwrap(),
         );
 
@@ -2112,7 +2056,6 @@ mod tests {
             "in",
             "L-undersized",
             &InboundLinkName::from("psource/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -2141,7 +2084,6 @@ mod tests {
             "in",
             "L-portless",
             &InboundLinkName::from("psource/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -2179,14 +2121,12 @@ mod tests {
             "in",
             "L-camera",
             &InboundLinkName::from("pcamera/video_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             sub_a,
         );
         mailboxes.add_channel_subscriber(
             "in",
             "L-microphone",
             &InboundLinkName::from("pmicrophone/audio_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             sub_b,
         );
 
@@ -2250,14 +2190,12 @@ mod tests {
             "in",
             "L-first",
             &InboundLinkName::from("pfirst/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber_a,
         );
         mailboxes.add_channel_subscriber(
             "in",
             "L-second",
             &InboundLinkName::from("psecond/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber_b,
         );
 
@@ -2322,7 +2260,6 @@ mod tests {
             "in",
             "L-camera",
             &InboundLinkName::from("pcamera/video_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
         publish_one_frame(
@@ -2374,21 +2311,18 @@ mod tests {
             "tracks",
             "L-camera",
             &InboundLinkName::from("pcamera/video_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             sub_a,
         );
         mailboxes.add_channel_subscriber(
             "tracks",
             "L-microphone",
             &InboundLinkName::from("pmicrophone/audio_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             sub_b,
         );
         mailboxes.add_channel_subscriber(
             "control",
             "L-operator",
             &InboundLinkName::from("poperator/commands"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             sub_c,
         );
 
@@ -2415,70 +2349,6 @@ mod tests {
         );
     }
 
-    /// What a many-track sink asks before it compares one link's stamps
-    /// against another's. Every link here is from this runtime, so every
-    /// answer is this machine and the sink may compare all three.
-    #[test]
-    fn every_link_from_this_runtime_answers_this_machines_clock() {
-        let (_publisher_a, sub_a) = open_channel_for_one_link("clock-local/a", 1);
-        let (_publisher_b, sub_b) = open_channel_for_one_link("clock-local/b", 1);
-
-        let mailboxes = InputMailboxesInner::new();
-        mailboxes.add_port("tracks", 8, ReadMode::ReadNextInOrder);
-        mailboxes.add_channel_subscriber(
-            "tracks",
-            "L-camera",
-            &InboundLinkName::from("pcamera/video_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
-            sub_a,
-        );
-        mailboxes.add_channel_subscriber(
-            "tracks",
-            "L-microphone",
-            &InboundLinkName::from("pmicrophone/audio_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
-            sub_b,
-        );
-
-        for link in ["pcamera/video_out", "pmicrophone/audio_out"] {
-            assert_eq!(
-                mailboxes.inbound_link_stamp_clock_identity("tracks", &InboundLinkName::from(link)),
-                WhatIsKnownOfAnInboundLinksStampClock::TheMachine(
-                    crate::core::runtime::mesh::MachineClockIdentity::of_this_machine()
-                ),
-                "{link} was stamped on this machine, and a sink has to be able to say so"
-            );
-        }
-    }
-
-    /// A name no link on the port carries is a different answer from a link
-    /// whose machine is not known: one is a caller's mistake and the other is
-    /// something to ask again about.
-    #[test]
-    fn a_link_name_the_port_does_not_carry_says_so_rather_than_naming_a_machine() {
-        let (_publisher, subscriber) = open_channel_for_one_link("clock-missing/a", 1);
-
-        let mailboxes = InputMailboxesInner::new();
-        mailboxes.add_port("tracks", 8, ReadMode::ReadNextInOrder);
-        mailboxes.add_channel_subscriber(
-            "tracks",
-            "L-camera",
-            &InboundLinkName::from("pcamera/video_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
-            subscriber,
-        );
-
-        for (port, link) in [
-            ("tracks", "pnothing/video_out"),
-            ("unconnected", "pcamera/video_out"),
-        ] {
-            assert_eq!(
-                mailboxes.inbound_link_stamp_clock_identity(port, &InboundLinkName::from(link)),
-                WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort,
-            );
-        }
-    }
-
     /// A window is cut from bags rather than being one, so no queued entry
     /// carries its name — but a windowed port takes exactly one link, so the
     /// port answers for it and the read works there too.
@@ -2496,7 +2366,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("pmicrophone/audio_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -2541,7 +2410,6 @@ mod tests {
             "in",
             "L-first",
             &InboundLinkName::from("pfirst/audio_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             first_subscriber,
         );
         publish_one_frame(
@@ -2572,7 +2440,6 @@ mod tests {
             "in",
             "L-second",
             &InboundLinkName::from("psecond/audio_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             second_subscriber,
         );
         let a_second_later_ns = 1_000_000_000;
@@ -2700,7 +2567,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("ponly/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -2830,7 +2696,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("ponly/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -2886,7 +2751,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("ponly/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -2942,7 +2806,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("ponly/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
         mailboxes
@@ -2999,7 +2862,6 @@ mod tests {
                 "in",
                 "L-only",
                 &InboundLinkName::from("ponly/out"),
-                TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                 subscriber,
             );
             for block in 0..4u64 {
@@ -3232,7 +3094,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("ponly/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -3287,7 +3148,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("ponly/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
         publish_one_frame(
@@ -3324,7 +3184,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("ponly/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -3366,7 +3225,6 @@ mod tests {
                 "in",
                 "L-only",
                 &InboundLinkName::from("ponly/out"),
-                TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                 subscriber,
             );
 
@@ -3423,7 +3281,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("ponly/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -3464,7 +3321,6 @@ mod tests {
             "in",
             "L-only",
             &InboundLinkName::from("ponly/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
 
@@ -3499,14 +3355,12 @@ mod tests {
             "in",
             "L-first",
             &InboundLinkName::from("pfirst/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber_a,
         );
         mailboxes.add_channel_subscriber(
             "in",
             "L-second",
             &InboundLinkName::from("psecond/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber_b,
         );
 
@@ -3542,7 +3396,6 @@ mod tests {
             "in",
             "L-departing",
             &InboundLinkName::from("pdeparting/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             subscriber,
         );
         for _ in 0..3 {
@@ -3606,14 +3459,12 @@ mod tests {
             "in",
             "L-link-a",
             &InboundLinkName::from("plink-a/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             open_subscriber("reclaim/a"),
         );
         inner.add_channel_subscriber(
             "in",
             "L-link-b",
             &InboundLinkName::from("plink-b/out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             open_subscriber("reclaim/b"),
         );
         inner.set_listener(listener);
@@ -3876,7 +3727,6 @@ mod tests {
                         "in",
                         "L-rewired",
                         &inbound_link_name,
-                        TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                         open_the_rewired_channel()
                             .create_subscriber(MAX_QUEUED_MESSAGES)
                             .unwrap(),

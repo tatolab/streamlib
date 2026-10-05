@@ -28,9 +28,7 @@ use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
-    ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN, OutputWriterInner, ReadMode,
-    ResolvedAudioWindowContract, THIS_MACHINE_STAMP_CLOCK_TOKEN,
-    TheClockAnInboundLinksStampsAreTakenOn, WhatIsKnownOfAnInboundLinksStampClock,
+    OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
 };
 
 use crate::python_bag_conversion::{
@@ -252,28 +250,6 @@ impl PythonProcessorLinkDataAccess {
             .map(|inbound_link_name| inbound_link_name.as_str().to_string())
             .collect())
     }
-
-    /// What this process can say about the clock one inbound link of
-    /// `port_name` takes its stamps on.
-    ///
-    /// A link from this runtime answers this machine. A link carrying from
-    /// another runtime answers that only the app process can say: this process
-    /// opens no mesh session, so it knows the link's name and nothing about
-    /// the machine behind it.
-    pub(crate) fn inbound_link_stamp_clock_of_input_port(
-        &self,
-        port_name: &str,
-        inbound_link_name: &str,
-    ) -> PyResult<WhatIsKnownOfAnInboundLinksStampClock> {
-        let port_name = &*declared_port_name_the_spelling_names(port_name)?;
-        let Some(input_mailboxes) = self.input_mailboxes.get() else {
-            return Err(unwired_port_error("input", port_name));
-        };
-        Ok(input_mailboxes.inbound_link_stamp_clock_identity(
-            port_name,
-            &InboundLinkName::from(inbound_link_name),
-        ))
-    }
 }
 
 /// Decode one bag's msgpack and, where `into` names a target, cast into it —
@@ -473,7 +449,6 @@ impl PythonProcessorLinkDataAccess {
         port_name,
         channel_service_name,
         inbound_link_name,
-        stamp_clock,
         notify_service_name,
         read_mode,
         channel_service_creation_depth,
@@ -492,7 +467,6 @@ impl PythonProcessorLinkDataAccess {
         port_name: &str,
         channel_service_name: &str,
         inbound_link_name: &str,
-        stamp_clock: &str,
         notify_service_name: &str,
         read_mode: &str,
         channel_service_creation_depth: usize,
@@ -505,17 +479,6 @@ impl PythonProcessorLinkDataAccess {
         wiring_generation: Option<u64>,
     ) -> PyResult<()> {
         let (node, input_mailboxes) = self.helper_process_input_plane()?;
-        let Some(stamp_clock) =
-            TheClockAnInboundLinksStampsAreTakenOn::of_the_token_a_far_side_was_wired_with(
-                stamp_clock,
-            )
-        else {
-            return Err(PyValueError::new_err(format!(
-                "input port {port_name:?} was wired with stamp clock {stamp_clock:?}; the engine \
-                 sends only {THIS_MACHINE_STAMP_CLOCK_TOKEN:?} or \
-                 {ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN:?}"
-            )));
-        };
         let read_mode = match read_mode {
             "skip_to_latest" => ReadMode::SkipToLatest,
             "read_next_in_order" => ReadMode::ReadNextInOrder,
@@ -564,7 +527,6 @@ impl PythonProcessorLinkDataAccess {
                     port_name,
                     link_id,
                     &InboundLinkName::from(inbound_link_name),
-                    stamp_clock.clone(),
                     channel.create_subscriber(input_port_ring_depth)?,
                 );
                 if let Some((board_writer, (loss_count_slot, wiring_generation))) =
@@ -805,7 +767,6 @@ mod tests {
                     "frames_from_upstream",
                     &channel,
                     &channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -935,7 +896,6 @@ mod tests {
                     "frames_from_upstream",
                     &channel,
                     &channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -1045,7 +1005,6 @@ mod tests {
                     "frames_from_upstream",
                     &second_channel,
                     &second_channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -1122,7 +1081,6 @@ mod tests {
                     "audio_from_upstream",
                     &channel,
                     &channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -1294,7 +1252,6 @@ mod tests {
                     "frames_from_upstream",
                     &channel,
                     &channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "whenever",
                     8,

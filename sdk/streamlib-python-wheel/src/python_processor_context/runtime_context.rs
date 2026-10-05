@@ -92,8 +92,6 @@ impl PythonRuntimeContextFullAccess {
                 PythonLinkInputDataReader {
                     link_data_access: link_data_access.clone_ref(python),
                     gpu_limited_access_context: gpu_limited_access_context.clone_ref(python),
-                    ask_the_parent: escalate_request_to_parent
-                        .map(|requester| requester.clone().unbind()),
                 },
             )?,
             link_output_data_writer: Py::new(

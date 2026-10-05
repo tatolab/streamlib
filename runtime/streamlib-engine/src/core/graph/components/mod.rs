@@ -20,7 +20,6 @@ mod processor_pause_gate_component;
 mod processor_ready_barrier_component;
 mod shutdown_channel_component;
 mod state_component;
-mod the_machine_clock_a_links_stamps_are_taken_on_component;
 mod thread_handle_component;
 
 pub use component_map::*;
@@ -42,5 +41,4 @@ pub use processor_pause_gate_component::*;
 pub use processor_ready_barrier_component::*;
 pub use shutdown_channel_component::*;
 pub use state_component::*;
-pub use the_machine_clock_a_links_stamps_are_taken_on_component::*;
 pub use thread_handle_component::*;

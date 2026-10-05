@@ -30,9 +30,8 @@ pub fn read_this_hosts_identity() -> HostIdentity {
 }
 
 /// The kernel's boot session UUID as this machine reports it, or `None` when
-/// the kernel does not answer. The one read site the machine clock identity
-/// shares; a failure is logged here, once.
-pub fn read_the_kernel_boot_session_uuid() -> Option<String> {
+/// the kernel does not answer; a failure is logged here, once.
+fn read_the_kernel_boot_session_uuid() -> Option<String> {
     let mut answer = [0u8; HOW_MANY_BYTES_A_BOOT_SESSION_UUID_ANSWER_TAKES];
     let mut answer_length = answer.len();
     // SAFETY: the name is a NUL-terminated C string, the buffer and the length
@@ -50,8 +49,8 @@ pub fn read_the_kernel_boot_session_uuid() -> Option<String> {
     };
     if answered != 0 {
         tracing::debug!(
-            "this machine's kernel did not answer kern.bootsessionuuid, so it names neither its \
-             host nor its clock on the mesh: {}",
+            "this machine's kernel did not answer kern.bootsessionuuid, so it does not name its \
+             host on the mesh: {}",
             std::io::Error::last_os_error()
         );
         return None;
@@ -67,8 +66,8 @@ fn the_boot_session_uuid_the_kernel_wrote(written: &[u8]) -> Option<String> {
     let text = written.split(|byte| *byte == 0).next().unwrap_or(&[]);
     let Ok(boot_session_uuid) = std::str::from_utf8(text) else {
         tracing::debug!(
-            "this machine's kern.bootsessionuuid is not text, so it names neither its host nor \
-             its clock on the mesh"
+            "this machine's kern.bootsessionuuid is not text, so it does not name its host on \
+             the mesh"
         );
         return None;
     };
@@ -79,7 +78,6 @@ fn the_boot_session_uuid_the_kernel_wrote(written: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::runtime::mesh::MachineClockIdentity;
 
     /// This kernel identifies itself, and does so the same way twice — the
     /// property a restart racing its predecessor's exit depends on.
@@ -94,10 +92,10 @@ mod tests {
         assert_eq!(identity, read_this_hosts_identity());
     }
 
-    /// The host and the clock are named by one UUID, read at one site: a host
-    /// whose clock identity said another boot would be two machines at once.
+    /// The host is named by exactly the boot session the kernel answers with,
+    /// and that answer is a UUID rather than whatever text the sysctl wrote.
     #[test]
-    fn the_host_identity_is_the_boot_session_the_clock_identity_names() {
+    fn the_host_identity_is_the_boot_session_uuid_the_kernel_answers_with() {
         let HostIdentity::ThisKernelBootSession {
             kernel_boot_session_uuid,
         } = read_this_hosts_identity()
@@ -105,10 +103,12 @@ mod tests {
             panic!("an Apple host must identify itself");
         };
         assert_eq!(
-            MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
-                &kernel_boot_session_uuid
-            ),
-            crate::apple::machine_clock_identity::read_this_machines_clock_identity(),
+            Some(kernel_boot_session_uuid.as_str()),
+            read_the_kernel_boot_session_uuid().as_deref(),
+        );
+        assert!(
+            uuid::Uuid::parse_str(&kernel_boot_session_uuid).is_ok(),
+            "kern.bootsessionuuid answers with a UUID: {kernel_boot_session_uuid}"
         );
     }
 

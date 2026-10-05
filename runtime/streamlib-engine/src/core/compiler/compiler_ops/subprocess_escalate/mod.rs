@@ -24,7 +24,6 @@ pub(super) mod handle_lifecycle;
 mod helper_log_record;
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
 mod hex_encoded_wire_bytes;
-mod inbound_link_stamp_clock_identity;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_shader_stage_source;
 mod processor_owned_window;
@@ -38,7 +37,6 @@ mod tests;
 use self::handle_lifecycle::EscalateHandleRegistry;
 use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestCloseProcessorOwnedWindow, EscalateRequestDrainProcessorOwnedWindowEvents,
-    EscalateRequestInboundLinkStampClockIdentity,
 };
 use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
@@ -71,7 +69,6 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::CopySurfaceToSurface(p) => Some(&p.request_id),
         EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
-        EscalateRequest::InboundLinkStampClockIdentity(p) => Some(&p.request_id),
         EscalateRequest::OpenCpuReadbackStaging(p) => Some(&p.request_id),
         EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::RefillDeviceExportStaging(p) => Some(&p.request_id),
@@ -131,17 +128,6 @@ pub(crate) fn handle_escalate_op(
         ),
         EscalateRequest::CopySurfaceToSurface(req) => Some(
             surface_copy::handle_copy_surface_to_surface(sandbox, rid, req),
-        ),
-        EscalateRequest::InboundLinkStampClockIdentity(
-            EscalateRequestInboundLinkStampClockIdentity {
-                request_id: _,
-                inbound_link_name,
-            },
-        ) => Some(
-            inbound_link_stamp_clock_identity::handle_inbound_link_stamp_clock_identity(
-                rid,
-                &inbound_link_name,
-            ),
         ),
         EscalateRequest::WaitDeviceIdle(req) => {
             Some(device_idle::handle_wait_device_idle(sandbox, rid, req))

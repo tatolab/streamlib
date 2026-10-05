@@ -208,16 +208,6 @@ pub struct LinkOutput {
     /// `state` stays a plain string so a check against `"wired"` is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
-    /// Which machine's monotonic clock the stamps on this link's bags were
-    /// taken on, as the canonical lowercase UUID text of that machine's
-    /// boot-session id.
-    ///
-    /// Every stamp is a machine's monotonic clock, whose epoch is that
-    /// machine's own boot, so two stamps from two of these are readings of two
-    /// unrelated clocks and subtracting them means nothing. A link names this
-    /// machine.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stamp_clock_identity: Option<String>,
     /// Runtime components (dynamic, varies based on link state).
     pub components: serde_json::Map<String, serde_json::Value>,
 }
@@ -518,38 +508,9 @@ impl LinkOutput {
             capacity: link.capacity.get(),
             state: rendered.state,
             error_reason: rendered.error_reason,
-            stamp_clock_identity: the_machine_a_links_stamps_are_taken_on(link),
             components,
         }
     }
-}
-
-/// Which machine's clock a link's stamps are taken on, as `graph` renders it.
-///
-/// Two ways to name no machine, and each is a link a reader must not compare a
-/// stamp against:
-///
-/// - **A link on its way out.** It carries nothing — the same reason the state
-///   beside it reads `disconnecting` rather than `wired`.
-/// - **A machine that named no clock of its own.** Every such machine renders
-///   the same nil id, so rendering it would hand a reader a string two
-///   unrelated clocks match on.
-fn the_machine_a_links_stamps_are_taken_on(link: &crate::core::graph::Link) -> Option<String> {
-    let stamped = link
-        .get::<crate::core::graph::LinkStateComponent>()
-        .map(|state| state.0)
-        .unwrap_or(link.state);
-    if matches!(
-        stamped,
-        crate::core::graph::LinkState::Disconnecting | crate::core::graph::LinkState::Disconnected
-    ) {
-        return None;
-    }
-    crate::iceoryx2::WhatIsKnownOfAnInboundLinksStampClock::from(Some(
-        crate::core::runtime::mesh::MachineClockIdentity::of_this_machine(),
-    ))
-    .the_machine_if_it_is_known()
-    .map(|machine| machine.to_string())
 }
 
 /// What a link reports as its state, and why where that is `error`.
@@ -673,54 +634,6 @@ mod link_rendering_tests {
         GraphEdgeWithComponents, InputLinkPortRef, Link, LinkState, LinkStateComponent,
         OutputLinkPortRef,
     };
-
-    /// A link inside this node was stamped on this machine, so it renders this
-    /// machine's clock with nothing to wait for.
-    #[test]
-    fn a_link_inside_this_node_renders_this_machines_clock() {
-        let link = Link::between(
-            OutputLinkPortRef::new("Psrc", "out1"),
-            InputLinkPortRef::new("Pdst", "in1"),
-        );
-        let rendered = serde_json::to_value(LinkOutput::of_a_link(
-            &link,
-            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
-        ))
-        .unwrap();
-        let this_machine = crate::core::runtime::mesh::MachineClockIdentity::of_this_machine();
-        if this_machine.is_unidentified() {
-            assert_eq!(
-                rendered.get("stamp_clock_identity"),
-                None,
-                "this machine names no clock, and every such machine renders the same nil id"
-            );
-        } else {
-            assert_eq!(rendered["stamp_clock_identity"], this_machine.to_string());
-        }
-    }
-
-    /// A link on its way out names no machine: it carries nothing.
-    #[test]
-    fn a_link_on_its_way_out_names_no_machine() {
-        for going in [LinkState::Disconnecting, LinkState::Disconnected] {
-            let mut link = Link::between(
-                OutputLinkPortRef::new("Psrc", "out1"),
-                InputLinkPortRef::new("Pdst", "in1"),
-            );
-            link.insert(LinkStateComponent(going));
-
-            let rendered = serde_json::to_value(LinkOutput::of_a_link(
-                &link,
-                &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
-            ))
-            .unwrap();
-            assert_eq!(
-                rendered.get("stamp_clock_identity"),
-                None,
-                "a link reading {going:?} carries nothing, so it names no machine"
-            );
-        }
-    }
 
     /// The field is the state a link was created in; wiring records its
     /// outcome on a component. Rendering reads the component first, so a
