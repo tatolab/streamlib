@@ -8,13 +8,11 @@ mod engine_teardown_watchdog;
 mod graph_change_listener;
 mod helper_process_group_registry;
 mod local_processor_type_registration;
-pub mod mesh;
 mod operations;
 mod operations_runtime;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
 #[allow(clippy::module_inception)]
 mod runtime;
-mod runtime_mesh_configuration;
 pub(crate) mod runtime_name;
 mod runtime_shutdown_request;
 mod runtime_unique_id;
@@ -42,13 +40,8 @@ pub(crate) use helper_process_group_registry::kill_every_registered_helper_proce
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
-pub use mesh::{
-    RuntimeMeshMembership, RuntimeMeshObservation, RuntimeMeshObservationRequest,
-    observe_a_runtime_mesh,
-};
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use runtime::Runner;
-pub use runtime_mesh_configuration::RuntimeMeshConfiguration;
 pub use runtime_name::RuntimeName;
 #[cfg(test)]
 pub(crate) use runtime_shutdown_request::RuntimeShutdownEscalationClearedOnDrop;

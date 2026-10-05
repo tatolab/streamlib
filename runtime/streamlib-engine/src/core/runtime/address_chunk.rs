@@ -4,16 +4,12 @@
 //! The grammar every part of a port's address obeys.
 //!
 //! A port is addressed `<runtime name>/<display name>/<port>`, so each part has
-//! to be one chunk on its own. The rule is a Zenoh key chunk's, because the
-//! runtime name is also a key chunk on the runtime mesh.
+//! to be one chunk on its own.
 
-/// The characters a key chunk may not contain: the separator itself, and the
-/// four the key-expression grammar reserves for matching.
+/// The characters an address chunk may not contain.
 pub(crate) const CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] = ['/', '*', '$', '#', '?'];
 
-/// The character a key chunk may not begin with. A leading `@` makes a chunk
-/// verbatim, which `**` never matches, so a runtime name carrying one would be
-/// unreachable by any subscription on the runtime mesh.
+/// The character an address chunk may not begin with.
 pub(crate) const CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH: char = '@';
 
 /// Why `candidate` is not one legal chunk of a port's address — `None` when it
@@ -48,8 +44,8 @@ pub fn what_one_address_chunk_may_be() -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "A port is addressed <runtime name>/<display name>/<port>, so each part is one key \
-         chunk: non-empty, containing none of {listed}, and not beginning with \
+        "A port is addressed <runtime name>/<display name>/<port>, so each part is one \
+         address chunk: non-empty, containing none of {listed}, and not beginning with \
          '{CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH}'"
     )
 }
@@ -60,48 +56,6 @@ mod tests {
 
     fn is_one_legal_address_chunk(candidate: &str) -> bool {
         first_reason_this_is_not_one_address_chunk(candidate).is_none()
-    }
-
-    /// Every character the grammar forbids reads back as the reason, by name.
-    #[test]
-    fn each_forbidden_character_is_named_as_the_reason() {
-        for forbidden in CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN {
-            let candidate = format!("camera{forbidden}one");
-            let reason = first_reason_this_is_not_one_address_chunk(&candidate)
-                .expect("a chunk carrying a forbidden character is not one chunk");
-            assert!(
-                reason.contains(&format!("{forbidden:?}")),
-                "the reason {candidate:?} is not one chunk must name {forbidden:?}: {reason}"
-            );
-        }
-    }
-
-    /// A leading `@` is not one chunk; one anywhere else is.
-    #[test]
-    fn a_leading_at_sign_is_refused_and_an_inner_one_is_not() {
-        let reason = first_reason_this_is_not_one_address_chunk("@runtime")
-            .expect("a chunk beginning with '@' is not one chunk");
-        assert!(reason.contains("begins with '@'"), "{reason}");
-        assert!(is_one_legal_address_chunk("cam@home"));
-    }
-
-    /// An empty name reads as empty, rather than as some character.
-    #[test]
-    fn an_empty_name_reads_as_empty() {
-        let reason = first_reason_this_is_not_one_address_chunk("")
-            .expect("an empty chunk is not one chunk");
-        assert!(reason.contains("it is empty"), "{reason}");
-    }
-
-    /// Spaces and unicode stay legal — a display name is free text otherwise.
-    #[test]
-    fn spaces_and_unicode_stay_legal() {
-        for legal in ["slow sink", "こんにちは", "カメラ 2", "camera-1_a.b"] {
-            assert!(
-                is_one_legal_address_chunk(legal),
-                "{legal:?} must stay a legal address chunk"
-            );
-        }
     }
 
     /// A defaulted node name and its `-2`, `-3` … suffix never produce a
@@ -115,41 +69,62 @@ mod tests {
         }
     }
 
-    /// The grammar is graded by Zenoh rather than by a second reading of the
-    /// spec: a name this module accepts is exactly a name `zenoh-keyexpr` reads
-    /// as one literal chunk a `**` subscription reaches.
+    /// Each refused shape reads back with the reason the rule gives it, the
+    /// forbidden characters checked before the leading `@`.
     #[test]
-    fn the_grammar_agrees_with_zenohs_own_key_expression_rules() {
-        use zenoh_keyexpr::keyexpr;
-
-        let every_key = keyexpr::new("**").expect("`**` is a key expression");
-        let zenoh_reads_it_as_one_reachable_literal_chunk = |candidate: &str| {
-            keyexpr::new(candidate).is_ok_and(|key| {
-                key.chunks().count() == 1 && !key.is_wild() && every_key.includes(key)
-            })
-        };
-
-        let mut candidates = vec![
-            "desk".to_string(),
-            "rig-desk-a1b2".to_string(),
-            "slow sink".to_string(),
-            "こんにちは".to_string(),
-            "cam@home".to_string(),
-            "CameraSource 2".to_string(),
-            "@runtime".to_string(),
-            "@".to_string(),
-            String::new(),
+    fn every_refused_shape_in_the_table_reads_back_with_its_reason() {
+        let refused_with_the_reason = [
+            ("", "it is empty"),
+            ("@", "it begins with '@'"),
+            ("@runtime", "it begins with '@'"),
+            ("/", "it contains '/'"),
+            ("desk/rig", "it contains '/'"),
+            ("*", "it contains '*'"),
+            ("desk*rig", "it contains '*'"),
+            ("$", "it contains '$'"),
+            ("desk$rig", "it contains '$'"),
+            ("#", "it contains '#'"),
+            ("desk#rig", "it contains '#'"),
+            ("?", "it contains '?'"),
+            ("desk?rig", "it contains '?'"),
+            ("@desk/rig", "it contains '/'"),
         ];
-        for forbidden in CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN {
-            candidates.push(format!("desk{forbidden}rig"));
-            candidates.push(forbidden.to_string());
-        }
-
-        for candidate in candidates {
+        for (candidate, expected_reason) in refused_with_the_reason {
             assert_eq!(
-                is_one_legal_address_chunk(&candidate),
-                zenoh_reads_it_as_one_reachable_literal_chunk(&candidate),
-                "the engine and zenoh-keyexpr disagree about {candidate:?}"
+                first_reason_this_is_not_one_address_chunk(candidate).as_deref(),
+                Some(expected_reason),
+                "{candidate:?}"
+            );
+        }
+        for forbidden in CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN {
+            assert_eq!(
+                first_reason_this_is_not_one_address_chunk(&format!("desk{forbidden}rig")),
+                Some(format!("it contains {forbidden:?}")),
+            );
+        }
+    }
+
+    /// Everything outside the table passes: punctuation the rule does not
+    /// name, an inner `@`, spaces and unicode.
+    #[test]
+    fn names_with_unlisted_punctuation_an_inner_at_sign_spaces_and_unicode_pass() {
+        for legal in [
+            "desk",
+            "rig-desk-a1b2",
+            "slow sink",
+            "こんにちは",
+            "カメラ 2",
+            "cam@home",
+            "CameraSource 2",
+            "camera-1_a.b",
+            "desk:rig",
+            "desk%rig",
+            "desk.rig~1",
+            "desk+rig=1",
+        ] {
+            assert!(
+                is_one_legal_address_chunk(legal),
+                "{legal:?} must be one legal address chunk"
             );
         }
     }

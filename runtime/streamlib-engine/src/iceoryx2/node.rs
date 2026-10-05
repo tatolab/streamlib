@@ -1976,9 +1976,8 @@ mod tests {
     }
 
     /// Two domains that differ only by root, sharing one prefix as every
-    /// engine-owned node does, never share a channel — which is what lets the
-    /// two-process mesh fixtures stand each peer up as a runtime of its own with
-    /// nothing but a root.
+    /// engine-owned node does, never share a channel — which is what lets a
+    /// runtime stand up in a domain of its own with nothing but a root.
     ///
     /// Fail-without-fix: iceoryx2 0.9.3 named a service's dynamic config from
     /// the prefix and the service name alone, so creating the channel in the

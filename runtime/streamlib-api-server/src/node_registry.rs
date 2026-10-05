@@ -34,8 +34,8 @@ pub struct NodeRegistryEntry {
     pub schema_version: u32,
     /// The runtime's `RuntimeUniqueId`, verbatim.
     pub runtime_id: String,
-    /// The name the runtime is addressed by on the runtime mesh — stable
-    /// across runs of one app, and what `--node` resolves.
+    /// The name the runtime's tap channels carry — stable across runs of one
+    /// app, and what `--node` resolves.
     pub runtime_name: String,
     /// The control plane's reachable base URL (`http://127.0.0.1:<bound_port>`).
     pub control_url: String,

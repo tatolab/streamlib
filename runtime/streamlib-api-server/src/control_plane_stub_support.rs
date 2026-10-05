@@ -93,7 +93,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
         }
-        fn this_runtimes_name_on_the_mesh(&self) -> &str {
+        fn this_runtimes_name(&self) -> &str {
             $crate::control_plane_stub_support::STUB_RUNTIME_NAME
         }
     };
@@ -133,9 +133,9 @@ pub(crate) const STUB_NODE_ID_SUFFIX: &str = "-id";
 /// The id the stub answers every `connect` with.
 pub(crate) const STUB_CREATED_LINK_ID: &str = "stub-created-link";
 
-/// The name the stub runtime answers `this_runtimes_name_on_the_mesh` with,
-/// and the `mesh.runtime_name` a test arms its graph with — the first part of
-/// a tap's channel.
+/// The name the stub runtime answers `this_runtimes_name` with, and the
+/// top-level `runtime_name` a test arms its graph with — the first part of a
+/// tap's channel.
 pub(crate) const STUB_RUNTIME_NAME: &str = "stub-runtime";
 
 /// What a stub runtime answers an `add_node` with when the test has armed a
@@ -262,7 +262,7 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!("the MCP front end awaits the async op, never the blocking wrapper")
         }
-        fn this_runtimes_name_on_the_mesh(&self) -> &str {
+        fn this_runtimes_name(&self) -> &str {
             $crate::control_plane_stub_support::STUB_RUNTIME_NAME
         }
     };

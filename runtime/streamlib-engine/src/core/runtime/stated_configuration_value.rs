@@ -3,10 +3,9 @@
 
 //! The rules every value a caller can state about a runtime obeys.
 //!
-//! A runtime's name, its mesh's name and its mesh endpoints are all read the
-//! same way — the constructor, then an environment variable, then the engine's
-//! own default — and all refused the same way. Stated once here so the policy
-//! moves as one thing rather than as a copy per value.
+//! A stated value is read from the constructor first, then an environment
+//! variable, then the engine's own default, and a refusal of one names what was
+//! said, where it came from, what is wrong and what a legal one looks like.
 
 use std::ffi::OsString;
 
@@ -38,8 +37,8 @@ pub(crate) fn what_an_environment_door_says(
 /// The refusal a stated configuration value takes: what was said, where it came
 /// from, what is wrong with it, and what a legal one looks like.
 ///
-/// Every caller states all four, because a refusal missing any one of them
-/// leaves the reader hunting for which door the value came through.
+/// A refusal states all four, because one missing any of them leaves the
+/// reader hunting for which door the value came through.
 pub(crate) fn refuse_a_stated_configuration_value(
     what_it_was_meant_to_be: &str,
     stated: &str,
@@ -107,7 +106,7 @@ mod tests {
             "a/b",
             "STREAMLIB_PROBE",
             "it contains '/'",
-            "A runtime name is one key chunk",
+            "A runtime name is one address chunk",
         )
         .to_string();
         for named in [
@@ -115,7 +114,7 @@ mod tests {
             "a/b",
             "STREAMLIB_PROBE",
             "it contains '/'",
-            "one key chunk",
+            "one address chunk",
         ] {
             assert!(refusal.contains(named), "{refusal} must name {named:?}");
         }

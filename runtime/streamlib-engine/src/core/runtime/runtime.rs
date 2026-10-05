@@ -9,7 +9,6 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::RuntimeMeshConfiguration;
 use super::RuntimeName;
 use super::RuntimeOperations;
 use super::RuntimeStatus;
@@ -31,9 +30,6 @@ use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
-use crate::core::runtime::mesh::{
-    HostedControlPlaneEndpointRegistry, ResolvedRuntimeMeshConfiguration, RuntimeMeshMembership,
-};
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
@@ -116,15 +112,8 @@ impl Drop for TokioRuntimeShutDownWithinItsBudget {
 pub struct Runner {
     /// Unique identifier for this runtime instance.
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
-    /// The name this runtime is addressed by on the runtime mesh.
+    /// The name this runtime's tap channels and node-registry row carry.
     pub(crate) runtime_name: Arc<RuntimeName>,
-    /// This runtime's place on the runtime mesh. Joined in `new()`, left at the
-    /// end of `stop()`.
-    pub(crate) runtime_mesh: Arc<RuntimeMeshMembership>,
-    /// Where the control plane this runtime hosts can be reached. Filled in by
-    /// the control plane once it has bound, read by the mesh when a peer asks
-    /// what this runtime is, and handed to every processor's context.
-    pub(crate) hosted_control_plane: Arc<HostedControlPlaneEndpointRegistry>,
     /// Tokio runtime storage - either owned or external handle.
     pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
     /// Compiles graph changes into running processors. Owns the graph and transaction.
@@ -189,15 +178,14 @@ pub struct Runner {
 }
 
 impl Runner {
-    /// Build a runtime with the default mesh configuration.
+    /// Build a runtime named from `STREAMLIB_RUNTIME_NAME` or the default.
     pub fn new() -> Result<Arc<Self>> {
-        Self::new_with_runtime_mesh_configuration(RuntimeMeshConfiguration::default())
+        Self::new_with_runtime_name(None)
     }
 
-    /// Build a runtime told where it sits on the runtime mesh.
-    pub fn new_with_runtime_mesh_configuration(
-        mut runtime_mesh_configuration: RuntimeMeshConfiguration,
-    ) -> Result<Arc<Self>> {
+    /// Build a runtime named `runtime_name`, else from `STREAMLIB_RUNTIME_NAME`,
+    /// else `<host name>-<app directory name>-<id>`.
+    pub fn new_with_runtime_name(runtime_name: Option<String>) -> Result<Arc<Self>> {
         // Cap per-thread timer slack at 1 ns on the calling thread before
         // spawning any worker. Linux defaults to 50 µs grouping for
         // `epoll_wait` / `nanosleep` / `futex` relative timeouts; new
@@ -239,14 +227,10 @@ impl Runner {
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
         // Beside the id, and before the runtime writes anything: a name the
-        // caller cannot use in a port address, or an endpoint this build cannot
-        // open, is a wiring error, and refusing it here costs nothing that has
-        // to be undone.
-        let runtime_name = Arc::new(RuntimeName::from_configuration_environment_or_default(
-            runtime_mesh_configuration.runtime_name.take(),
-        )?);
-        let resolved_runtime_mesh_configuration =
-            ResolvedRuntimeMeshConfiguration::resolve(runtime_mesh_configuration)?;
+        // caller cannot use in a port address is a wiring error, and refusing
+        // it here costs nothing that has to be undone.
+        let resolved_runtime_name =
+            RuntimeName::from_configuration_environment_or_default(runtime_name)?;
 
         // Stand up the runtime's unified logging pathway: `tracing` →
         // bounded lossy channel → drain worker → line-buffered pretty
@@ -262,6 +246,10 @@ impl Runner {
                 Arc::clone(&runtime_id),
             ))
             .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
+        let runtime_name = Arc::new(
+            resolved_runtime_name
+                .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name(),
+        );
         tracing::info!("Creating Runner named {runtime_name} with ID: {runtime_id}");
 
         let runtime_directory = StreamlibRuntimeDirectory::resolve()?;
@@ -284,22 +272,6 @@ impl Runner {
         // before creating the iceoryx2 Node so any iceoryx2 emit at
         // construction time lands in the unified JSONL pipeline.
         crate::core::logging::install_iceoryx2_log_bridge_at_the_engines_configured_level();
-
-        // After logging, so a local-only warning reaches the log, and ahead of
-        // both the surface socket and the iceoryx2 node: a runtime refused its
-        // name builds neither. It sits beside the runtime-id socket refusal
-        // below because this is where a runtime's identity comes up either way,
-        // and it runs first of the two because it is the only one of them that
-        // can refuse over something another machine holds. `Runner::new()`
-        // needs no GPU, so everything here is provable without one.
-        let hosted_control_plane = Arc::new(HostedControlPlaneEndpointRegistry::default());
-        let runtime_mesh = Arc::new(RuntimeMeshMembership::join(
-            &resolved_runtime_mesh_configuration,
-            &runtime_name,
-            runtime_id.as_str(),
-            &crate::core::runtime::runtime_name::this_hosts_name(),
-            &hosted_control_plane,
-        )?);
 
         // Bring up the per-runtime surface-sharing service. Each runtime owns
         // a unique Unix socket in the runtime directory that its polyglot
@@ -345,8 +317,6 @@ impl Runner {
         let runtime = Arc::new(Self {
             runtime_id,
             runtime_name,
-            runtime_mesh,
-            hosted_control_plane,
             tokio_runtime_variant,
             compiler,
             runtime_context,
@@ -413,7 +383,7 @@ impl Runner {
         &self.runtime_id
     }
 
-    /// The name this runtime is addressed by on the runtime mesh.
+    /// The name this runtime's tap channels and node-registry row carry.
     pub fn runtime_name(&self) -> &RuntimeName {
         &self.runtime_name
     }
@@ -595,7 +565,6 @@ impl Runner {
             iceoryx2_node,
             Arc::clone(&audio_clock),
             self.runtime_directory.clone(),
-            Arc::clone(&self.hosted_control_plane),
             #[cfg(target_os = "linux")]
             self.surface_socket_path.clone(),
             #[cfg(target_os = "macos")]
@@ -736,11 +705,6 @@ impl Runner {
                 );
             }
         }
-        // Last, so every processor is down before peers stop seeing this
-        // runtime: the token goes first and the session follows it.
-        crate::core::runtime::note_what_the_engine_teardown_is_waiting_on("the runtime mesh");
-        self.runtime_mesh
-            .leave("this runtime was stopped, which closed its mesh session");
 
         *self.status.lock() = RuntimeStatus::Stopped;
         PUBSUB.publish(
@@ -1208,9 +1172,9 @@ impl Runner {
             .into_iter()
             .map(LoadedCapabilityExtensionOutput::from)
             .collect();
-        let runtime_mesh = self.runtime_mesh.render_for_graph();
+        let runtime_name = self.runtime_name.as_str().to_string();
         self.compiler.scope(|graph, _tx| {
-            serde_json::to_value(graph.to_graph_response(extensions, runtime_mesh))
+            serde_json::to_value(graph.to_graph_response(extensions, runtime_name))
                 .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
         })
     }
@@ -1508,6 +1472,33 @@ mod tests {
             "to_json must render what the process registered, got: {}",
             rendered["extensions"]
         );
+    }
+
+    /// Nothing refuses a runtime name another live runtime already carries:
+    /// two runners named alike both construct, both stay up together, and each
+    /// reports the name it was given wherever the name is read.
+    #[test]
+    #[serial]
+    fn two_runners_given_one_runtime_name_both_construct() {
+        let shared_runtime_name = "one-name-two-runners";
+
+        let first = Runner::new_with_runtime_name(Some(shared_runtime_name.to_string()))
+            .expect("the first runner constructs");
+        let second = Runner::new_with_runtime_name(Some(shared_runtime_name.to_string()))
+            .expect("a second runner given the same name constructs beside the first");
+
+        assert_ne!(first.runtime_id(), second.runtime_id());
+        for runner in [&first, &second] {
+            assert_eq!(runner.runtime_name().as_str(), shared_runtime_name);
+            assert_eq!(
+                <Runner as RuntimeOperations>::this_runtimes_name(runner),
+                shared_runtime_name
+            );
+            assert_eq!(
+                runner.to_json().expect("the graph serializes")["runtime_name"],
+                shared_runtime_name
+            );
+        }
     }
 
     #[cfg(target_os = "linux")]

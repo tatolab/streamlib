@@ -1,11 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The name a runtime is addressed by on the runtime mesh.
+//! The name a runtime's tap channels and node-registry row carry.
 //!
 //! It belongs to the runtime rather than to its control plane, is stable across
 //! runs of one app, and is one chunk of a port's address
-//! `<runtime name>/<display name>/<port>`.
+//! `<runtime name>/<display name>/<port>`. Nothing refuses a name another live
+//! runtime already carries.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -37,7 +38,7 @@ const APP_DIRECTORY_NAME_FOR_A_PATH_WITH_NO_FINAL_COMPONENT: &str = "app";
 /// and 255 on Apple; POSIX allows a longer name to be truncated.
 const HOST_NAME_BUFFER_BYTES: usize = 256;
 
-/// The name a runtime is addressed by on the mesh.
+/// The name a runtime's tap channels and node-registry row carry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeName(String);
 
@@ -48,16 +49,16 @@ impl RuntimeName {
     /// An empty [`RUNTIME_NAME_ENVIRONMENT_VARIABLE`] reads as unset, the way an
     /// empty `XDG_RUNTIME_DIR` does. An empty name the constructor states is
     /// refused, because stating one is asking for it.
-    pub fn from_configuration_environment_or_default(
+    pub(crate) fn from_configuration_environment_or_default(
         configured_runtime_name: Option<String>,
-    ) -> Result<Self> {
+    ) -> Result<ResolvedRuntimeName> {
         resolve_runtime_name(
             configured_runtime_name,
             std::env::var_os(RUNTIME_NAME_ENVIRONMENT_VARIABLE),
             || {
-                default_runtime_name_for(
+                default_runtime_name_on_a_host_that_may_report_no_name(
                     &resolve_the_app_directory_this_runtime_belongs_to(),
-                    &this_hosts_name(),
+                    this_hosts_name(),
                 )
             },
         )
@@ -75,17 +76,47 @@ impl std::fmt::Display for RuntimeName {
     }
 }
 
+/// A runtime's name, and whether its default carries the stand-in for a host
+/// name this machine did not report.
+///
+/// Resolution runs before the runtime's logging is up, so the warning about a
+/// missing host name is carried here and said once logging is.
+#[must_use]
+pub(crate) struct ResolvedRuntimeName {
+    /// The name the runtime takes.
+    runtime_name: RuntimeName,
+    /// Whether the default carries [`HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE`].
+    default_carries_the_stand_in_for_an_unreported_host_name: bool,
+}
+
+impl ResolvedRuntimeName {
+    /// The runtime's name, warning first when its default carries the stand-in
+    /// host name; taken once logging is up.
+    pub(crate) fn take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name(
+        self,
+    ) -> RuntimeName {
+        if self.default_carries_the_stand_in_for_an_unreported_host_name {
+            tracing::warn!(
+                "this machine reported no host name, so this runtime is named '{}' with \
+                 '{HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE}' in its place",
+                self.runtime_name
+            );
+        }
+        self.runtime_name
+    }
+}
+
 /// The resolver with every input named, so each arm is testable without
 /// reaching into the process's environment.
 ///
 /// The default is a closure rather than a value because building one reads the
-/// host name and the working directory, and warns about a host that reports no
-/// name — none of which a runtime that was told its name should do.
+/// host name and the working directory, neither of which a runtime that was
+/// told its name should do.
 fn resolve_runtime_name(
     configured_runtime_name: Option<String>,
     runtime_name_from_the_environment: Option<OsString>,
-    default_runtime_name: impl FnOnce() -> RuntimeName,
-) -> Result<RuntimeName> {
+    default_runtime_name: impl FnOnce() -> ResolvedRuntimeName,
+) -> Result<ResolvedRuntimeName> {
     if let Some(configured) = configured_runtime_name {
         return stated_runtime_name(&configured, "the runtime name it was constructed with");
     }
@@ -99,9 +130,12 @@ fn resolve_runtime_name(
 }
 
 /// A name somebody stated, refused unless it is one address chunk.
-fn stated_runtime_name(stated: &str, where_it_came_from: &str) -> Result<RuntimeName> {
+fn stated_runtime_name(stated: &str, where_it_came_from: &str) -> Result<ResolvedRuntimeName> {
     match first_reason_this_is_not_one_address_chunk(stated) {
-        None => Ok(RuntimeName(stated.to_string())),
+        None => Ok(ResolvedRuntimeName {
+            runtime_name: RuntimeName(stated.to_string()),
+            default_carries_the_stand_in_for_an_unreported_host_name: false,
+        }),
         Some(what_is_wrong) => Err(refuse_a_stated_configuration_value(
             "a runtime name",
             stated,
@@ -109,6 +143,21 @@ fn stated_runtime_name(stated: &str, where_it_came_from: &str) -> Result<Runtime
             &what_is_wrong,
             &what_one_address_chunk_may_be(),
         )),
+    }
+}
+
+/// The default for `app_directory` on a host reporting `host_name`, taking
+/// [`HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE`] when it reports none.
+fn default_runtime_name_on_a_host_that_may_report_no_name(
+    app_directory: &Path,
+    host_name: Option<String>,
+) -> ResolvedRuntimeName {
+    let default_carries_the_stand_in_for_an_unreported_host_name = host_name.is_none();
+    let host_name =
+        host_name.unwrap_or_else(|| HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE.to_string());
+    ResolvedRuntimeName {
+        runtime_name: default_runtime_name_for(app_directory, &host_name),
+        default_carries_the_stand_in_for_an_unreported_host_name,
     }
 }
 
@@ -150,8 +199,8 @@ fn replace_every_character_that_would_stop_this_being_one_chunk(assembled: &str)
         .collect()
 }
 
-/// This machine's host name, or [`HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE`].
-pub(crate) fn this_hosts_name() -> String {
+/// This machine's host name, or `None` when it reports none.
+fn this_hosts_name() -> Option<String> {
     let mut buffer = vec![0u8; HOST_NAME_BUFFER_BYTES];
     // SAFETY: the buffer is `HOST_NAME_BUFFER_BYTES` long and that is the length
     // passed; `gethostname` writes at most that many bytes.
@@ -169,19 +218,13 @@ pub(crate) fn this_hosts_name() -> String {
         .map(|end| String::from_utf8_lossy(&buffer[..end]).into_owned())
         .unwrap_or_else(|| String::from_utf8_lossy(&buffer).into_owned());
 
-    if reported != 0 || host_name.is_empty() {
-        tracing::warn!(
-            "this machine reported no host name; unnamed runtimes take \
-             '{HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE}' in its place"
-        );
-        return HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE.to_string();
-    }
-    host_name
+    (reported == 0 && !host_name.is_empty()).then_some(host_name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::test_support::CapturedTracingWarnings;
     use std::path::PathBuf;
 
     fn resolved(
@@ -192,8 +235,14 @@ mod tests {
         resolve_runtime_name(
             configured.map(str::to_string),
             from_environment.map(OsString::from),
-            || default_runtime_name_for(Path::new(app_directory), "rig"),
+            || {
+                default_runtime_name_on_a_host_that_may_report_no_name(
+                    Path::new(app_directory),
+                    Some("rig".to_string()),
+                )
+            },
         )
+        .map(|resolved| resolved.runtime_name)
     }
 
     /// The constructor's name wins over the environment's, which wins over the
@@ -328,10 +377,74 @@ mod tests {
         );
     }
 
+    /// A host reporting no name gets the stand-in, and the resolution says so
+    /// for the runtime to warn about once its logging is up.
+    #[test]
+    fn a_host_reporting_no_name_takes_the_stand_in_and_says_so() {
+        let resolved =
+            default_runtime_name_on_a_host_that_may_report_no_name(Path::new("/apps/desk"), None);
+        assert!(
+            resolved
+                .runtime_name
+                .as_str()
+                .starts_with("unknown-host-desk-")
+        );
+        assert!(resolved.default_carries_the_stand_in_for_an_unreported_host_name);
+
+        let reported = default_runtime_name_on_a_host_that_may_report_no_name(
+            Path::new("/apps/desk"),
+            Some("rig".to_string()),
+        );
+        assert!(!reported.default_carries_the_stand_in_for_an_unreported_host_name);
+    }
+
+    /// The stand-in is said once, naming the runtime and the stand-in; a name
+    /// built on a reported host says nothing.
+    #[test]
+    fn taking_a_name_built_on_the_stand_in_warns_once_and_one_built_on_a_reported_host_does_not() {
+        let (runtime_name, warnings) = CapturedTracingWarnings::captured_while(|| {
+            default_runtime_name_on_a_host_that_may_report_no_name(Path::new("/apps/desk"), None)
+                .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name()
+        });
+        let [warning] = warnings.as_slice() else {
+            panic!("the stand-in is said in exactly one warning; got {warnings:?}");
+        };
+        assert!(
+            warning.contains(runtime_name.as_str()) && warning.contains("unknown-host"),
+            "the warning names the runtime and the stand-in; got {warning}"
+        );
+
+        let (_, warnings) = CapturedTracingWarnings::captured_while(|| {
+            default_runtime_name_on_a_host_that_may_report_no_name(
+                Path::new("/apps/desk"),
+                Some("rig".to_string()),
+            )
+            .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name()
+        });
+        assert!(
+            warnings.is_empty(),
+            "a reported host says nothing; got {warnings:?}"
+        );
+    }
+
+    /// A stated name never reads the host, so it never carries the stand-in.
+    #[test]
+    fn a_stated_name_never_carries_the_stand_in() {
+        let resolved = resolve_runtime_name(Some("desk".to_string()), None, || {
+            unreachable!("a stated name builds no default")
+        })
+        .expect("a legal stated name resolves");
+        assert!(!resolved.default_carries_the_stand_in_for_an_unreported_host_name);
+    }
+
     /// This machine reports a host name that is itself usable in a default.
     #[test]
     fn this_machines_host_name_yields_a_legal_default() {
-        let name = default_runtime_name_for(&PathBuf::from("/apps/desk"), &this_hosts_name());
+        let name = default_runtime_name_on_a_host_that_may_report_no_name(
+            &PathBuf::from("/apps/desk"),
+            this_hosts_name(),
+        )
+        .runtime_name;
         assert_eq!(
             first_reason_this_is_not_one_address_chunk(name.as_str()),
             None,

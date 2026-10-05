@@ -190,15 +190,12 @@ fn connect_default_id_processors_with_valid_ports_returns_ok() {
 #[test]
 #[serial]
 fn connect_valid_processors_nonexistent_port_returns_port_not_found_not_invalid_link() {
-    // Port-validation now runs BEFORE the channel-name derivation, so a connect
-    // to a port that doesn't exist on a real (default-id) processor surfaces as
-    // the typed `ProcessorPortNotFound`, never a masking `InvalidLink`. The port
-    // name here is also grammar-illegal (`/` is not iceoryx2/keyexpr-safe), which
-    // is exactly what pre-reorder produced an InvalidLink for — real ports are
-    // always grammar-legal, so a grammar-illegal port is always a nonexistent
-    // one, and the port-existence error is the actionable one. Mentally revert
-    // the reorder in `connect_impl` (derive the channel name first) and this
-    // reads as InvalidLink instead.
+    // A connect to a port that does not exist on a real (default-id) processor
+    // surfaces as the typed `ProcessorPortNotFound`, never a masking
+    // `InvalidLink`. The port name here is also grammar-illegal (`/` is the
+    // chunk separator), and a real port is always grammar-legal, so the
+    // port-existence error is the actionable one: if `connect_impl` derived the
+    // channel name before validating the port, this would read as InvalidLink.
     let cam = register_test_type("CameraSource", "_unused_in", "video");
     let sink = register_test_type("DisplaySink", "video_in", "_unused_out");
 

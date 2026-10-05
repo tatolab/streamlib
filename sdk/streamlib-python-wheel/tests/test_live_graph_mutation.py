@@ -198,7 +198,7 @@ def await_node_state(control_url: str, name: str, wanted: str) -> str:
 
 def tap_channel_of(graph: dict, node_name: str, output_port: str) -> str:
     """The channel `tap` takes: the port's address on this runtime."""
-    return f"{graph['mesh']['runtime_name']}/{node_name}/{output_port}"
+    return f"{graph['runtime_name']}/{node_name}/{output_port}"
 
 
 def await_marker(node: LaunchedNode, marker: str) -> None:

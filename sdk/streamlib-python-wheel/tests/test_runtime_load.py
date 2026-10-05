@@ -113,8 +113,9 @@ OWN_PROCESS_DEADLINE_SECONDS = 120.0
 
 EVERY_PROCESSOR_THE_READINESS_WAIT_LISTS_AFTER = "every processor: "
 
-# A runtime name another live runtime on the mesh holds is refused, so the pid
-# keeps this one apart from any other run on the rig.
+# The control plane is found by this name in the registry, and nothing keeps two
+# live runtimes from sharing a name, so the pid keeps this run's row apart from
+# any other run on the rig.
 SERVED_GRAPH_RUNTIME_NAME = f"runtime-load-served-graph-{os.getpid()}"
 SERVED_GRAPH_COLLECTOR_CHANNEL = "runtime-load-served-graph"
 SERVED_GRAPH_READY_TIMEOUT_SECONDS = 90.0

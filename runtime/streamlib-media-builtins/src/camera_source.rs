@@ -155,7 +155,7 @@ fn video_frame_hand_off_publishing_to(
         let frame = video_frame_bag_for(&captured, frames_per_second);
         // A bag carries two stamps — this payload's own and the envelope's —
         // and consumers split across them: the encoder reads the payload, the
-        // MP4 sink and the mesh read the envelope. `write`'s implicit
+        // MP4 sink reads the envelope. `write`'s implicit
         // `MediaClock::now()` would put the publication instant on the
         // envelope, so the capture instant is written to both.
         if let Err(e) = outputs.write_with_timestamp(VIDEO_OUTPUT_PORT, &frame, frame.timestamp_ns)

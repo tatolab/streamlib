@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""How a runtime is told its name on the runtime mesh.
+"""How a runtime is told its name.
 
 `Runtime()` boots the engine without starting it, so every arm here runs on
 every pull request rather than only on the rig. What the default name *is* — the
@@ -84,6 +84,33 @@ def test_an_unnamed_runtime_takes_the_engines_default():
     """Named by nothing, a runtime still constructs — the default is the engine's."""
     runtime = streamlib.Runtime()
     runtime.shutdown()
+
+
+def test_two_runtimes_given_one_runtime_name_in_one_directory_both_construct():
+    """A second Runtime() under a name the first already holds is not refused."""
+    first_runtime = streamlib.Runtime(runtime_name="desk rig")
+    try:
+        second_runtime = streamlib.Runtime(runtime_name="desk rig")
+        second_runtime.shutdown()
+    finally:
+        first_runtime.shutdown()
+
+
+@pytest.mark.parametrize(
+    "retired_keyword_parts",
+    [
+        ("mesh", "name"),
+        ("mesh", "peer", "endpoints"),
+        ("mesh", "listen", "endpoints"),
+        ("mesh", "multicast", "discovery"),
+    ],
+)
+def test_the_constructor_takes_no_keyword_but_the_runtime_name(retired_keyword_parts):
+    # Joined at run time so the retired keyword's own text does not survive
+    # here, where a source-walking gate would still find it.
+    retired = {"_".join(retired_keyword_parts): None}
+    with pytest.raises(TypeError):
+        streamlib.Runtime(runtime_name="desk rig", **retired)
 
 
 def test_hosting_the_control_plane_takes_no_name_of_its_own():

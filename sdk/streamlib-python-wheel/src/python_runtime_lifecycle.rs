@@ -23,8 +23,7 @@ use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
-    ProcessorDisplayNameAndId, Runner, RuntimeMeshConfiguration, request_runtime_shutdown,
-    take_runtime_shutdown_escalation,
+    ProcessorDisplayNameAndId, Runner, request_runtime_shutdown, take_runtime_shutdown_escalation,
 };
 
 use crate::python_added_processor::{
@@ -590,22 +589,8 @@ fn load_the_claimed_graph(
 impl PythonRuntimeHandle {
     /// Boot the engine.
     #[new]
-    #[pyo3(signature = (
-        *,
-        runtime_name = None,
-        mesh_name = None,
-        mesh_peer_endpoints = None,
-        mesh_listen_endpoints = None,
-        mesh_multicast_discovery = None,
-    ))]
-    fn new(
-        python: Python<'_>,
-        runtime_name: Option<String>,
-        mesh_name: Option<String>,
-        mesh_peer_endpoints: Option<Vec<String>>,
-        mesh_listen_endpoints: Option<Vec<String>>,
-        mesh_multicast_discovery: Option<bool>,
-    ) -> PyResult<Self> {
+    #[pyo3(signature = (*, runtime_name = None))]
+    fn new(python: Python<'_>, runtime_name: Option<String>) -> PyResult<Self> {
         // Before the engine, so a processor added to its graph always has an
         // interpreter to be an exec of. This reads the app's own
         // `sys.executable`, which is the promise: one venv, and a processor's
@@ -622,15 +607,7 @@ impl PythonRuntimeHandle {
         }
         install_unregistered_processor_type_resolver_once();
         let engine = python
-            .detach(|| {
-                Runner::new_with_runtime_mesh_configuration(RuntimeMeshConfiguration {
-                    runtime_name,
-                    mesh_name,
-                    mesh_peer_endpoints,
-                    mesh_listen_endpoints,
-                    mesh_multicast_discovery,
-                })
-            })
+            .detach(|| Runner::new_with_runtime_name(runtime_name))
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
         Ok(Self {
             lifecycle: Mutex::new(PythonRuntimeLifecycleState::EngineConstructedNotYetRun(

@@ -1411,7 +1411,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   [processor-class-identity — SHIPPED #1838, #1841; the address-chunk refusal —
   runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment; amended by runtime-hosting decision 3: a name is cast to the address grammar (§Networking, the address) and a defaulted duplicate takes `-2`, superseding spaces, unicode, ` 2` and the character refusals]
   <!-- verify: cargo test -p streamlib-engine --test node_name_test -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_refused_by_name -->
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
@@ -3840,9 +3840,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   [cross-runtime-links — SHIPPED #2292 for the Rust address and #2287 for the Python and MCP
   spellings; the `to_*` pair with #2289; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by local-api: each end is `<end>_node` and `<end>_port`, with `<end>_runtime_name` for a port on another runtime — a node by its name, never its id (§Control plane, the local API speaks the graph's words); removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted; how a link names a port on another machine is the sharing step's to rebuild]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
-  <!-- verify: cargo test -p streamlib-api-server tools_call_connect_names_a_source_on_another_runtime_by_its_mesh_address -->
-  <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_refuses_naming_both_a_link_and_a_request_or_neither -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
 - **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
   creates it, reading a port the source stream has exposed — private on the machine, public off
   it — and the source is never asked. No runtime pushes its output into another's input, and no

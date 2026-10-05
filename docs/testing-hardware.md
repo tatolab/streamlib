@@ -7,7 +7,6 @@ enforced by a Cargo feature so the split can't drift:
 |---|---|---|---|
 | **1 — Unit** | `cargo test` (default) | Pure logic, parsers, state machines, serialization round-trips, mock-backed integration. | Yes — by construction. |
 | **2 — Hardware integration** | `cargo test --features streamlib/hardware-tests,streamlib-media-builtins/hardware-tests` | Tests that construct a real `HostVulkanDevice`, allocate GPU memory, exercise the swapchain, etc. | No — must run with `--test-threads=1`. |
-| **Multi-process mesh end-to-end** | `cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes` | Real runtimes in separate processes over Zenoh on loopback: discovery. | Serial within each suite. |
 
 Tier 1 is parallel-safe by construction — no test inside the tier-1 set
 is allowed to require a GPU device or any other exclusive system
@@ -251,15 +250,6 @@ an empty `main` off Apple. Two exist today:
 `streamlib-media-builtins`' `two_display_windows_on_the_macos_window_server`.
 The second asserts against the window server, so it refuses to run while the
 login session's screen is locked.
-
-## Multi-process end-to-end tests are never a merge gate
-
-A test that launches processes and waits on them to find each other over a
-network depends on start-up timing and discovery, which no bound makes
-deterministic. Such suites are local validations: run them when a change
-touches the mesh, never as a PR gate. CI compiles them with `--no-run` so
-they cannot rot. Engine logic they reach belongs in an in-process unit test
-against a mocked seam, which is what gates a PR.
 
 ## CI
 

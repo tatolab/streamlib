@@ -441,13 +441,7 @@ def test_the_sole_stream_is_compiled_then_loaded_then_hosted_then_run(
         (
             "construct",
             str(tmp_path),
-            {
-                "runtime_name": "desk-rig",
-                "mesh_name": None,
-                "mesh_peer_endpoints": None,
-                "mesh_listen_endpoints": None,
-                "mesh_multicast_discovery": None,
-            },
+            {"runtime_name": "desk-rig"},
         ),
         ("load", FRONT_STREAM_GRAPH),
         ("host_control_plane", "127.0.0.1", 9123),
@@ -1872,10 +1866,6 @@ def test_the_launcher_names_the_apps_directory_for_the_built_ins(tmp_path: Path,
         bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
         bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
         runtime_name=None,
-        mesh_name=None,
-        mesh_peer_endpoints=None,
-        mesh_listen_endpoints=None,
-        mesh_multicast_discovery=None,
     )
 
     assert exit_code == 1, "the entry file stopped the launch on purpose"
@@ -1903,10 +1893,6 @@ def test_a_runtime_name_the_engine_refuses_reads_as_a_launcher_error(tmp_path):
             bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
             bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
             runtime_name="a/b",
-            mesh_name=None,
-            mesh_peer_endpoints=None,
-            mesh_listen_endpoints=None,
-            mesh_multicast_discovery=None,
         )
 
     assert "a/b" in str(refusal.value), (
@@ -1921,16 +1907,6 @@ def test_the_nodes_help_names_every_column_it_prints(capsys):
     printed = capsys.readouterr().out
     for column in ("runtime_name", "runtime_id", "control_url", "pid", "alive?", "hint"):
         assert column in printed, f"`nodes --help` must document {column}"
-
-    # As one phrase rather than four `in` checks: `"host" in printed` is already
-    # satisfied by the word "hosting" in the registry sentence, so a per-column
-    # check would pass with the mesh table's columns undocumented. argparse
-    # rewraps the description, so the phrase is matched with its whitespace
-    # collapsed.
-    assert (
-        "runtime_name, host, control_plane_urls and engine_version"
-        in " ".join(printed.split())
-    ), f"`nodes --help` must document the mesh table's columns: {printed!r}"
 
 
 def _v4l2loopback_is_loaded() -> bool:
