@@ -63,5 +63,4 @@ listener that subscribes from a spawned thread:
 - `runtime/streamlib-engine/src/core/utils/loop_control.rs` — `test_shutdown_event_exits_loop`
 
 ## Reference
-- Fix commit in #252 (ash → vulkanalia migration branch)
 - PUBSUB implementation: `runtime/streamlib-engine/src/core/pubsub/bus.rs`

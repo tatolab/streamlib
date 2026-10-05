@@ -13,7 +13,7 @@ Each record is one file with this shape:
 
 Conventions:
 - One topic per file, `kebab-case-topic.md`.
-- Living documents (per CLAUDE.md's markdown rules): validate and update freely; supersede with a
+- Living documents (per `.claude/rules/docs-policy.md`): validate and update freely; supersede with a
   dated `> ~~old~~ — Superseded YYYY-MM-DD by <evidence>.` strikethrough rather than a silent
   overwrite.
 - No tracker references (issue / PR / milestone numbers) — the record stands on the reasoning.
