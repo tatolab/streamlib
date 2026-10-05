@@ -60,10 +60,6 @@ with ctx.gpu_limited_access.acquire_pixel_buffer(width, height) as surface:
     surface.lock(read_only=False)
 ```
 
-> A "Deno scope binding" example was removed here: the TypeScript `using
-> guard = adapter.acquireWrite(surface)` snippet — the Deno SDK and its
-> native cdylib are gone, and Python is the only authoring runtime.
-
 ### Blocking vs. non-blocking acquire
 
 The Rust trait exposes both flavors:
@@ -158,20 +154,11 @@ boundaries. Vulkan on the helper side is import-side only:
 FD-imported memory via `VkImportMemoryFdInfoKHR` is the sole legal
 allocation path, and everything privileged escalates to the parent.
 
-> An "ABI version gate" section was removed here:
-> `STREAMLIB_ADAPTER_ABI_VERSION` and the `streamlib-plugin-abi`
-> `PluginDeclaration` precedent — the constant exists nowhere in the tree
-> and the plugin-ABI crate was deleted with the plugin cdylibs.
-
 ## Where the code lives
 
 - `adapters/streamlib-surface-adapter/` — the contract crate. Trait,
   descriptor, errors, guards, mock, conformance suite, subprocess
   crash harness.
-> A "Python mirror" bullet was removed here: `sdk/streamlib-
-> python/python/streamlib/surface_adapter.py` — that SDK path is gone (it is
-> `sdk/streamlib-python-wheel/` now) and the wheel ships no
-> `surface_adapter` module.
 - `runtime/streamlib-engine/src/linux/surface_share/` — host-side backing
   store and the Unix-socket service that hands DMA-BUF fds to
   subprocesses.
