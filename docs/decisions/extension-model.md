@@ -37,6 +37,10 @@ below is worded to prevent that.
 5. The twelve shipped built-ins stay; `JpegDecoder` is frozen — neither built nor retired — until
    its drone consumer returns; no new built-in ships without meeting the criterion.
 
+   > ~~`JpegDecoder` is frozen — neither built nor retired — until its drone consumer
+   > returns.~~ — Superseded 2026-10-04 by `jpeg-after-the-robotics-cut.md`: robotics is out
+   > of scope, so the consumer does not return and the block is retired unbuilt.
+
 ## Why
 
 **The engine cannot be the home of every capability, because then every capability builds the

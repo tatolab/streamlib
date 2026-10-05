@@ -710,7 +710,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
 - **DECIDED** — A consumer blocked on an undecided domain is held in-tree until the
   align covering that domain mines it for logic; its deletion rides that change's own
-  ship. Held on codec blocks: `packages/jpeg` and `examples/jpeg-psnr` — `packages/h264`,
+  ship. Held on codec blocks: `packages/jpeg` and `examples/jpeg-psnr`, which delete outright
+  with the retired `JpegDecoder` rather than waiting on a rung — `packages/h264`,
   `packages/h265`, `examples/vulkan-video-roundtrip` and `examples/vulkan-video-psnr`
   resolved this way and are gone, mined and deleted by the change that shipped their
   blocks [codec-roundtrip-reproof — SHIPPED #2087], and `packages/opus`, `packages/mp4`,
@@ -722,7 +723,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   [networking-extension-wheels — SHIPPED #2153]. Held on audio
   plugins: `packages/clap`. Held on screen capture: `packages/screen-capture`,
   `examples/screen-recorder`. [consumer-tree-disposition — SHIPPED #2052; the sweep left
-  every held consumer untouched]
+  every held consumer untouched; amended by jpeg-after-the-robotics-cut: the JPEG pair
+  deletes outright, removal unbuilt]
   <!-- verify: git ls-files packages/clap packages/screen-capture examples/screen-recorder -->
 - **DECIDED** — No additional native-processor *distribution* mechanism is owed
   pre-1.0: an extension wheel is an ordinary Python package on the ordinary index, and
@@ -1923,7 +1925,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   every stream. Undecided: whether the adapter crates move anywhere, and what the
   software-Vulkan bundle costs the Linux wheel. [one-runtime-per-machine]
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ runtime-hosting: Apple permissions through Tatolab.app)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ runtime-hosting: Apple permissions through Tatolab.app; unbuilt: MJPEG capture, the JPEG removals)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -2196,6 +2198,15 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib a_corevideo_420v_surface_imported_as_a_storage_buffer_converts_like_a_copy_and_follows_cpu_writes -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib a_storage_buffer_clone_keeps_the_imported_surface_alive_until_it_drops -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib nv12_starting_past_byte_0_converts_identically_to_the_same_bytes_at_byte_0 -->
+- **DECIDED** — MJPEG capture on Linux (unbuilt). `CameraSource`'s V4L2 arm reads a camera's
+  MJPEG modes beside NV12 and YUYV. The frame is decoded inside the capture path by the
+  in-tree JPEG decoder — `sdk/vulkan-jpeg`, which moves into the engine with the change that
+  builds this and stays a workspace member until then — and lands in the pooled `Rgba32`
+  pixel buffer every capture lands in, so no JPEG reaches a port and no block is involved.
+  The decoder reads the 4:2:2 frames cameras send, not 4:2:0 alone. Which mode the arm
+  picks when a camera offers several is ticket-level. Acceptance is a USB 2.0 webcam on the
+  rig: its mode list recorded, and its MJPEG mode live at the advertised size and rate. The
+  Apple arm is unchanged. Owner, 2026-10-04. [jpeg-after-the-robotics-cut]
 - **DECIDED** — Python-authored media processors (vendor or user) run in their own
   helper process like every other Python processor and are supported where deadlines
   allow: camera-class sources and block-level audio fit within the helper hop's
@@ -2704,12 +2715,13 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   <!-- verify: cargo test -p streamlib-media-builtins --test speaker_sink_matches_its_device a_sixteen_kilohertz_source_reaches_whatever_this_machines_speaker_opened_at -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-29-audio-port-window-contract.md -->
 - **DECIDED** — Codec blocks are native built-ins beside camera, display and the audio
-  pair: `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder`, `JpegDecoder`,
+  pair: `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder`,
   `OpusEncoder`, `OpusDecoder`, `Mp4Sink` — instantiated and configured the one way a
   built-in is configured (`stream.add(H264Encoder)`), per-frame paths never entering an
   interpreter, serving Python and Rust apps alike. Video blocks are built on the video
-  codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple; JPEG decode is its own backend (`sdk/vulkan-jpeg`; the nvJPEG backend stays
-  parked). AV1 and VP9 remain ported but unexposed until a consumer demands them.
+  codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple. There is no JPEG
+  block: `JpegDecoder` is retired unbuilt, the parked nvJPEG backend and its `libnvjpeg`
+  probe are deleted, and JPEG decode exists only inside camera capture. AV1 and VP9 remain ported but unexposed until a consumer demands them.
   Encoder sessions mint lazily from the first frame's dimensions; decoder sessions
   auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
   GOP knobs are ticket-level, like every other built-in's config. The four video blocks
@@ -2725,8 +2737,9 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   #2127, #2128 for `Mp4Sink`, which is a sink rather than a codec and holds no session.
   extension-model — the "native built-ins" clause is the record of these seven and not the
   rule for the next codec, which follows the built-in criterion in §Packages & extension
-  model; `JpegDecoder` is frozen — neither built nor retired — until its drone consumer
-  returns (owner, 2026-09-04); the seam — macos-capability-parity, SHIPPED #2412, #2413]
+  model; `JpegDecoder`, frozen 2026-09-04 for a drone consumer, is retired with robotics out
+  of scope, and the nvJPEG tree and probe go with it (owner, 2026-10-04) —
+  jpeg-after-the-robotics-cut, removal unbuilt; the seam — macos-capability-parity, SHIPPED #2412, #2413]
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_encoder_publishes_the_bag_convention -->
@@ -3205,12 +3218,13 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   <!-- verify: bash runtime/streamlib-engine/tests/fixtures/verify_opus_roundtrip.sh -->
   <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_recording.sh -->
 - **DECIDED** — The held codec consumers resolve through this align, per §Consumers:
-  `packages/{h264,h265,jpeg,opus,mp4}` are mined for their logic (session wiring,
+  `packages/{h264,h265,opus,mp4}` are mined for their logic (session wiring,
   H.273 ↔ VUI translation, Opus framing) and each deletes in the change that ships its
-  block. `examples/vulkan-video-roundtrip`, `examples/vulkan-video-psnr` and
-  `examples/jpeg-psnr` delete into the engine-owned proof rig — their job becomes the
-  rig's job, and a test owns its fixtures. `examples/h264-opus-validator` deletes
-  outright. `examples/camera-audio-recorder` is conversion backlog: the recording
+  block. `examples/vulkan-video-roundtrip` and `examples/vulkan-video-psnr` delete into the
+  engine-owned proof rig — their job becomes the rig's job, and a test owns its fixtures.
+  `examples/h264-opus-validator` deletes outright, and so do `packages/jpeg`,
+  `examples/jpeg-psnr` and the fixture that drives it (`e2e_fixture_psnr_jpeg.sh`): their
+  block is retired, nothing is mined and no rig job is owed. `examples/camera-audio-recorder` is conversion backlog: the recording
   showcase (camera + microphone → codec blocks → `Mp4Sink`) once the blocks exist.
   [codec-blocks — SHIPPED #2087 for the video half: `packages/h264` and `packages/h265`
   mined and deleted, both vulkan-video examples deleted into the rig; the H.265 VUI
@@ -3224,8 +3238,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   mining carried code — the held encoder pushed framing onto an upstream rechunker the
   window contract now does, and `packages/mp4` held no muxer at all, only an ffmpeg
   subprocess and an every-method-TODO Apple tree; the one rule taken is the session
-  epoch. `packages/jpeg` and `examples/jpeg-psnr` are the last two held on their own
-  rung]
+  epoch. jpeg-after-the-robotics-cut — owner, 2026-10-04: `packages/jpeg`,
+  `examples/jpeg-psnr` and the JPEG fixture delete outright, removal unbuilt]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-01-codec-roundtrip-reproof.md -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-03-opus-mp4-recording-rung.md -->
 - **OPEN** — Audio plugins (CLAP / VST3 / LV2): intended, do not build until a
