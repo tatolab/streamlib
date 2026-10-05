@@ -287,26 +287,18 @@ pub(crate) fn json_value_to_python_object<'py>(
     msgpack_value_to_python_object(python, &value, ContainersEnclosingAValue::OUTERMOST)
 }
 
-/// Convert ordinary Python data into JSON, refusing what JSON cannot carry.
+/// Convert ordinary Python data into JSON, refusing what JSON cannot carry —
+/// `bytes`, or a msgpack extension value.
 pub(crate) fn python_object_to_json_value(
     python_data: &Bound<'_, PyAny>,
 ) -> PyResult<serde_json::Value> {
-    python_object_to_json_value_refusing_what_json_cannot_carry_as(python_data, |convert_failure| {
+    let value = python_object_to_msgpack_value(python_data, ContainersEnclosingAValue::OUTERMOST)?;
+    rmpv::ext::from_value(value).map_err(|convert_failure| {
         PyTypeError::new_err(format!(
             "the value must survive a JSON round trip: {convert_failure} — carry `bytes` as a \
              `str` or a list of ints"
         ))
     })
-}
-
-/// [`python_object_to_json_value`], with the caller wording the refusal of data
-/// whose msgpack form JSON cannot carry — `bytes`, or a msgpack extension value.
-pub(crate) fn python_object_to_json_value_refusing_what_json_cannot_carry_as(
-    python_data: &Bound<'_, PyAny>,
-    refusal_of_what_json_cannot_carry: impl FnOnce(rmpv::ext::Error) -> PyErr,
-) -> PyResult<serde_json::Value> {
-    let value = python_object_to_msgpack_value(python_data, ContainersEnclosingAValue::OUTERMOST)?;
-    rmpv::ext::from_value(value).map_err(refusal_of_what_json_cannot_carry)
 }
 
 /// The most containers one value may nest, the outermost counted, as it

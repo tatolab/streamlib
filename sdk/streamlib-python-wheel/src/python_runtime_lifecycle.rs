@@ -20,59 +20,12 @@ use pyo3::types::{PyDict, PyMapping, PyString};
 use streamlib::engine_internal::core::app_directory::record_the_app_entry_directory_the_language_host_captured;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
-use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
     ProcessorDisplayNameAndId, Runner, request_runtime_shutdown, take_runtime_shutdown_escalation,
 };
 
-use crate::python_added_processor::{
-    PythonAddedProcessor, the_input_link_port_ref_this_destination_names,
-    the_output_link_port_ref_this_source_names,
-};
-use crate::python_bag_conversion::{
-    python_object_to_json_value, python_object_to_json_value_refusing_what_json_cannot_carry_as,
-};
-use crate::python_processor_registration::register_processor_class;
-
-/// What kind of thing `Runtime.add` was handed, resolved once up front.
-enum AddedProcessorClassKind {
-    /// A wheel-exported marker for a statically-linked native processor.
-    NativeBuiltin(streamlib::sdk::descriptors::ProcessorClassImportPath),
-    /// A class carrying the `@streamlib.node` declaration.
-    DeclaredPythonClass,
-}
-
-/// Classify `processor_class`, owning the not-a-processor rejection.
-fn classify_processor_class(
-    python: Python<'_>,
-    processor_class: &Bound<'_, PyAny>,
-) -> PyResult<AddedProcessorClassKind> {
-    if let Some(native_class) =
-        crate::python_native_builtin_blocks::native_builtin_class_import_path(
-            python,
-            processor_class,
-        )?
-    {
-        return Ok(AddedProcessorClassKind::NativeBuiltin(native_class));
-    }
-    if let Some(harness_class) =
-        crate::python_test_harness_endpoints::test_harness_class_import_path(
-            python,
-            processor_class,
-        )?
-    {
-        return Ok(AddedProcessorClassKind::NativeBuiltin(harness_class));
-    }
-    if crate::python_processor_declaration::is_declared_processor_class(processor_class) {
-        return Ok(AddedProcessorClassKind::DeclaredPythonClass);
-    }
-    Err(PyRuntimeError::new_err(format!(
-        "{} is not a processor: decorate the class with @streamlib.node, and pass \
-         the class itself rather than an instance of it",
-        processor_class
-    )))
-}
+use crate::python_bag_conversion::python_object_to_json_value;
 
 /// The engine could not be dropped, so its teardown did not finish.
 enum EngineTeardownIncomplete {
@@ -301,8 +254,8 @@ impl PythonRuntimeHandle {
     /// owns it.
     ///
     /// Graph building happens between construction and `run()`; once the run
-    /// loop has taken the engine there is no handle left to add to, which is
-    /// what makes this a lifecycle error rather than a missing feature.
+    /// loop has taken the engine there is no handle left to load into, which
+    /// is what makes this a lifecycle error rather than a missing feature.
     ///
     /// Returns an owned `Arc` rather than lending the guard's contents, so the
     /// lock is released before the caller detaches. Holding it across a
@@ -310,12 +263,12 @@ impl PythonRuntimeHandle {
     /// returns, so this thread would wait for the GIL while holding the lock
     /// that `run()` and `shutdown()` take *with* the GIL held.
     ///
-    /// What that trades away: a `shutdown()` landing while an `add` still holds
+    /// What that trades away: a `shutdown()` landing while a `load` still holds
     /// its clone makes teardown's `Arc::into_inner` return `None` and report an
     /// incomplete teardown. Harmless here and only here — this state is
     /// pre-`start()`, so the engine owns no threads for the report to be about,
-    /// and the adder's clone drops moments later. The alternative is making
-    /// teardown wait out an in-flight `add`, which reintroduces the wait this
+    /// and the loader's clone drops moments later. The alternative is making
+    /// teardown wait out an in-flight `load`, which reintroduces the wait this
     /// exists to avoid.
     fn engine_being_built(&self, what: &str) -> PyResult<Arc<Runner>> {
         Self::engine_being_built_in(&self.lifecycle(), what)
@@ -437,10 +390,10 @@ impl PythonRuntimeHandle {
 }
 
 /// Install, once per process, the registry's resolver for a processor type
-/// named only by its import path — an `add_processor` over the control plane
-/// names a class this interpreter never imported. The resolver imports it here
-/// and registers it exactly as `rt.add` does; the processor itself still runs
-/// in its own helper process.
+/// named only by its import path — every Python node a `Runtime.load` graph or
+/// an `add_processor` over the control plane names, including a class this
+/// interpreter never imported. The resolver imports the class here and installs
+/// its constructor; the processor itself runs in its own helper process.
 fn install_unregistered_processor_type_resolver_once() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
@@ -597,9 +550,10 @@ impl PythonRuntimeHandle {
         // child is the same Python the app is.
         crate::python_helper_process_spawn_host::capture_helper_process_launch_environment(python)?;
         // Hand the engine the entry directory the capture above found, so an
-        // unnamed runtime run as `python app.py` is named after the app rather
-        // than after whatever shell it was launched from. Only the interpreter
-        // knows it; the engine cannot read `sys.path` for itself.
+        // unnamed runtime in a hand-run `python <script>.py` is named after the
+        // script's directory rather than after whatever shell it was launched
+        // from. Only the interpreter knows it; the engine cannot read
+        // `sys.path` for itself.
         if let Some(entry_directory) =
             crate::python_helper_process_spawn_host::captured_app_entry_directory()
         {
@@ -615,85 +569,6 @@ impl PythonRuntimeHandle {
             )),
             graph_load_record: Mutex::new(RuntimeGraphLoadRecord::NoGraphLoaded),
         })
-    }
-
-    /// Add a processor class to the graph.
-    ///
-    /// Takes the class, not an instance. `config` is the mapping the class's
-    /// config class is constructed from — which happens later, on the engine's
-    /// compile thread as `run()` brings the graph up, so a config the class
-    /// refuses surfaces from `run()` rather than from here. Adding the same
-    /// class twice gives two processors, each with its own instance and
-    /// configuration.
-    #[pyo3(signature = (processor_class, *, config = None, display_name = None))]
-    fn add(
-        &self,
-        python: Python<'_>,
-        processor_class: &Bound<'_, PyAny>,
-        config: Option<&Bound<'_, PyDict>>,
-        display_name: Option<String>,
-    ) -> PyResult<PythonAddedProcessor> {
-        let class_kind = classify_processor_class(python, processor_class)?;
-
-        // Before registering: registration writes to the process-global
-        // registry, and a runtime that can no longer be built should not leave
-        // a processor type behind for a node that will never exist.
-        let engine = self.engine_being_built("add a processor")?;
-
-        // Native built-ins were registered at module import; only a Python
-        // class needs registering here.
-        let processor_class_import_path = match class_kind {
-            AddedProcessorClassKind::NativeBuiltin(native_class) => native_class,
-            AddedProcessorClassKind::DeclaredPythonClass => {
-                register_processor_class(python, processor_class)?
-            }
-        };
-        // An omitted `config` is an empty object, never null: a processor's
-        // config type is a struct whose fields carry serde defaults, and a
-        // struct deserializes from `{}` but not from `null`. Sending null made
-        // `rt.add(CameraSource)` — the spelling the plan blesses for a block
-        // that needs no configuration — fail at graph compile time.
-        let configuration = match config {
-            Some(config) => python_object_to_json_value_refusing_what_json_cannot_carry_as(
-                config.as_any(),
-                |convert_failure| {
-                    PyTypeError::new_err(format!(
-                        "config must survive a JSON round trip, because the engine stores it on \
-                         the graph node: {convert_failure}"
-                    ))
-                },
-            )?,
-            None => serde_json::Value::Object(serde_json::Map::new()),
-        };
-
-        // An absent `display_name` stays absent — the graph is the only place
-        // that defaults a name, casts one, or suffixes one.
-        let mut spec = ProcessorSpec::new(processor_class_import_path, configuration);
-        spec.display_name = display_name;
-
-        let added = python
-            .detach(|| engine.add_processor_reporting_its_name(spec))
-            .map_err(|add_failure| PyRuntimeError::new_err(add_failure.to_string()))?;
-        Ok(PythonAddedProcessor::new(
-            added.processor_id.as_str().to_string(),
-            added.name,
-        ))
-    }
-
-    /// Link one processor's output port to another's input port on this runtime.
-    fn connect(
-        &self,
-        python: Python<'_>,
-        source: &Bound<'_, PyAny>,
-        destination: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
-        let from = the_output_link_port_ref_this_source_names(source)?;
-        let to = the_input_link_port_ref_this_destination_names(destination)?;
-        let engine = self.engine_being_built("connect two processors")?;
-        python
-            .detach(|| engine.connect(from, to))
-            .map(|_link_id| ())
-            .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
     }
 
     /// Load a graph — the mapping `compile_stream_to_graph` returns, or one

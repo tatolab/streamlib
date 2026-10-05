@@ -7,7 +7,7 @@
 //! Every Python processor runs in its own child interpreter, which reaches the
 //! class by importing it and nothing else. So an identity that a fresh
 //! interpreter cannot resolve is not a naming inconvenience — it is a class
-//! with no host, and the only place that can be said usefully is `rt.add`.
+//! with no host, refused with the fix named.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -56,7 +56,7 @@ pub(crate) fn processor_class_import_path(processor_class: &Bound<'_, PyAny>) ->
              that exists only for the duration of a call. Every Python processor runs in its \
              own child process, which reaches the class by importing this name.\n\n\
              Move the class to module scope. If it was parameterised by the enclosing \
-             function's arguments, pass those through `rt.add(..., config={{...}})` instead \
+             function's arguments, pass those through `stream.add(..., config={{...}})` instead \
              — config reaches the child, a closure cannot."
         )));
     }
@@ -72,7 +72,7 @@ pub(crate) fn processor_class_import_path(processor_class: &Bound<'_, PyAny>) ->
              \x20   # {module_suggestion}.py\n\
              \x20   @node(...)\n\
              \x20   class {qualname}: ...\n\n\
-             \x20   # app.py\n\
+             \x20   # stream.py\n\
              \x20   from {module_suggestion} import {qualname}\n\n\
              The entry file itself may still run as `__main__`; only processor classes may \
              not live in it.",
