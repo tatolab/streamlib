@@ -14,8 +14,6 @@ recorded patch against its upstream, never a drive-by edit:
 
 - `vendor/tatolab-vulkanalia`, `-sys` and `-vma` — the vulkanalia fork, Apache-2.0. See
   `docs/architecture/vendored-vulkanalia.md`.
-- `packages/streamlib-moq/vendor/moq-transport` — the MoQ wheel's moq-transport, MIT OR
-  Apache-2.0 under Cloudflare's SPDX headers.
 
 The exception is those paths and nothing else; BUSL is not relaxed anywhere a path is not
 listed. Do not modify `LICENSE`, `LICENSES/`, or `docs/license/` without explicit approval.
