@@ -13,8 +13,7 @@
 # closure — `cargo xtask generate-third-party-notices
 # --extension-package-directory <dir>` passes `--config` back to this one file so
 # every wheel ships one licensing posture. The two lists currently name the same
-# identifiers: `CDLA-Permissive-2.0` is on both for `webpki-roots`, which the
-# runtime mesh brings into the workspace closure through Zenoh's QUIC link.
+# identifiers.
 #
 # Nothing is silently omitted if the two drift the other way: a licence in the
 # graph but not in `accepted` makes `cargo about generate` itself exit 1 with no
@@ -41,7 +40,6 @@ accepted = [
     "Zlib",
     "CC0-1.0",
     "Unicode-3.0",
-    "CDLA-Permissive-2.0",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "MPL-2.0",
