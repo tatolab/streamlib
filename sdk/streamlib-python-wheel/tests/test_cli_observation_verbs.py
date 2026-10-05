@@ -1232,7 +1232,9 @@ def test_the_wheel_serves_no_mcp_verb():
 def test_nodes_reports_an_empty_registry_without_failing(isolated_registry, capsys):
     assert cli.main(["nodes"]) == 0
 
-    assert "No running nodes found" in capsys.readouterr().out
+    assert capsys.readouterr().out.splitlines() == [
+        f"No running nodes found in {isolated_registry}."
+    ]
 
 
 def test_nodes_renders_a_live_node_as_a_table(

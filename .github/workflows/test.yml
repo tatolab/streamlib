@@ -243,7 +243,7 @@ jobs:
           # end-to-end half through a helper-placed Python consumer is
           # rig-gated like every other graph test in the wheel.
           # The capability-extension mechanism's engine half: the registry's
-          # duplicate refusal, and `graph`'s third top-level key. The Python
+          # duplicate refusal, and `graph`'s `extensions` key. The Python
           # discovery loop and the two call sites are proven in the wheel's
           # pytest suite; these are the seam it registers through.
           # The JSONL writer's segment rotation and retention, the knobs that

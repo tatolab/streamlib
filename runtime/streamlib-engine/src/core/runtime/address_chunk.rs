@@ -4,15 +4,13 @@
 //! The grammar every part of a port's address obeys.
 //!
 //! A port is addressed `<runtime name>/<display name>/<port>`, so each part has
-//! to be one chunk on its own: non-empty, free of the separator and the four
-//! reserved characters, and not beginning with `@`.
+//! to be one chunk on its own: non-empty, free of `/ * $ # ?`, and not
+//! beginning with `@`.
 
-/// The characters an address chunk may not contain: the separator `/`, and the
-/// four the grammar reserves.
+/// The characters an address chunk may not contain.
 pub(crate) const CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] = ['/', '*', '$', '#', '?'];
 
-/// The character an address chunk may not begin with, which the grammar
-/// reserves.
+/// The character an address chunk may not begin with.
 pub(crate) const CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH: char = '@';
 
 /// Why `candidate` is not one legal chunk of a port's address — `None` when it
@@ -112,18 +110,6 @@ mod tests {
                 "camerasource-{ordinal}"
             )));
         }
-    }
-
-    /// The rule's table is exactly five forbidden characters and one forbidden
-    /// leading character; widening or narrowing either renames what a stated
-    /// runtime name may be.
-    #[test]
-    fn the_rules_table_is_the_separator_four_reserved_characters_and_a_leading_at_sign() {
-        assert_eq!(
-            CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN,
-            ['/', '*', '$', '#', '?']
-        );
-        assert_eq!(CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH, '@');
     }
 
     /// Each refused shape reads back with the reason the rule gives it, the

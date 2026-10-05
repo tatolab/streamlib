@@ -558,11 +558,10 @@ class Runtime:
         one machine differ and every run of one checkout matches. `streamlib
         run` and `dev` pass their `--runtime-name` through to here.
 
-        A name is never auto-suffixed: it is the first chunk of the channels
-        its ports are tapped on, so it may not depend on start order. Nothing
-        refuses a name another runtime already holds — two runs from one
-        directory both start — and `--node` refuses a name two live runtimes
-        hold, naming both.
+        A name is never auto-suffixed, so it does not depend on start order.
+        Nothing refuses a name another runtime already holds — two runs from
+        one directory both start — and `--node` refuses a name two live
+        runtimes hold, naming both.
         """
     def add(
         self,

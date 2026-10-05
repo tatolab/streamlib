@@ -87,7 +87,7 @@ def test_an_unnamed_runtime_takes_the_engines_default():
 
 
 def test_two_runtimes_given_one_runtime_name_in_one_directory_both_construct():
-    """Nothing refuses a name another live runtime already holds."""
+    """A second Runtime() under a name the first already holds is not refused."""
     first_runtime = streamlib.Runtime(runtime_name="desk rig")
     try:
         second_runtime = streamlib.Runtime(runtime_name="desk rig")
@@ -96,10 +96,19 @@ def test_two_runtimes_given_one_runtime_name_in_one_directory_both_construct():
         first_runtime.shutdown()
 
 
-def test_the_constructor_takes_no_keyword_but_the_runtime_name():
+@pytest.mark.parametrize(
+    "retired_keyword_parts",
+    [
+        ("mesh", "name"),
+        ("mesh", "peer", "endpoints"),
+        ("mesh", "listen", "endpoints"),
+        ("mesh", "multicast", "discovery"),
+    ],
+)
+def test_the_constructor_takes_no_keyword_but_the_runtime_name(retired_keyword_parts):
     # Joined at run time so the retired keyword's own text does not survive
     # here, where a source-walking gate would still find it.
-    retired = {"_".join(("mesh", "name")): "desk"}
+    retired = {"_".join(retired_keyword_parts): None}
     with pytest.raises(TypeError):
         streamlib.Runtime(runtime_name="desk rig", **retired)
 

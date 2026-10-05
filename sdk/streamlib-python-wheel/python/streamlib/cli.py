@@ -934,7 +934,7 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
 # ─── Observation verbs ───────────────────────────────────────────────────────
 
 
-def print_discovered_nodes() -> int:
+def print_the_node_registry_table() -> int:
     """`streamlib nodes`: this machine's registered control planes, one aligned row each."""
     from ._node_registry import registry_directory, scan_check_and_prune
 
@@ -1730,7 +1730,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 arguments.directory, use_test_pattern_source=arguments.test_pattern
             )
         if arguments.verb == "nodes":
-            return print_discovered_nodes()
+            return print_the_node_registry_table()
         if arguments.verb == "enable-virtual-camera":
             return enable_virtual_camera(print_only=arguments.print_only)
         if arguments.verb == "graph":

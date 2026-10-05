@@ -185,7 +185,7 @@ Edit a stage, re-run `dev`. Each stage runs `reactive` (the default once it has 
 ## Inspect a device that's already running
 
 Add `--url http://<host>:9000` to any of these and you're debugging the rig instead of your desk;
-`--node <runtime name>` picks a node by its runtime name.
+`--node <runtime name>` picks a node by the `RUNTIME_NAME` column `streamlib nodes` prints.
 
 ```console
 $ streamlib nodes

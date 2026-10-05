@@ -37,8 +37,8 @@ pub(crate) fn what_an_environment_door_says(
 /// The refusal a stated configuration value takes: what was said, where it came
 /// from, what is wrong with it, and what a legal one looks like.
 ///
-/// Every caller states all four, because a refusal missing any one of them
-/// leaves the reader hunting for which door the value came through.
+/// A refusal states all four, because one missing any of them leaves the
+/// reader hunting for which door the value came through.
 pub(crate) fn refuse_a_stated_configuration_value(
     what_it_was_meant_to_be: &str,
     stated: &str,

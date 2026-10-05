@@ -326,9 +326,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_space_and_the_reserved_characters_star_dollar_question_hash() {
-        // Space and `* $ ? #` are none of them chunk-legal. Underscore, hyphen and the cast's `.` and
-        // `~` are NOT in this list — they are transport-legal within a chunk.
+    fn rejects_a_space_and_each_of_star_dollar_question_and_hash() {
+        // Space and `* $ ? #` are none of them chunk-legal. Underscore, hyphen and the cast's
+        // `.` and `~` are NOT in this list — they are transport-legal within a chunk.
         for (n, bad) in [
             ("cam out", ' '),
             ("cam*", '*'),
@@ -349,8 +349,8 @@ mod tests {
 
     #[test]
     fn rejects_leading_at_chunk() {
-        // The per-chunk lowercase-alpha-leading rule excludes a leading `@`. Mental-revert guard: relax
-        // the chunk-leading rule and this stops erroring.
+        // The per-chunk lowercase-alpha-leading rule excludes a leading `@`. Mental-revert
+        // guard: relax the chunk-leading rule and this stops erroring.
         assert!(matches!(
             validate_channel_name("@admin/thing"),
             Err(Error::ChannelNameMustStartWithLowercase(_))
