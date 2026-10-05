@@ -77,9 +77,7 @@ if TYPE_CHECKING:
 __all__ = ["main"]
 
 DEFAULT_STREAM_ENTRY_FILE_NAME = "stream.py"
-# Never launched by convention; a directory holding it and no `stream.py` is
-# refused with the convention spelled out.
-UNCONVENTIONAL_APP_ENTRY_FILE_NAME = "app.py"
+APP_PY_FILE_NAME_REFUSED_WHERE_STREAM_PY_IS_MISSING = "app.py"
 APP_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_APP_DIRECTORY"
 STREAM_TARGET_FILE_SUFFIX = ".py"
 STREAM_TARGET_FUNCTION_SEPARATOR = ":"
@@ -145,13 +143,16 @@ def resolve_app_entry_file(
     conventional_entry_file = anchor_directory / DEFAULT_STREAM_ENTRY_FILE_NAME
     if conventional_entry_file.is_file():
         return conventional_entry_file
-    if (anchor_directory / UNCONVENTIONAL_APP_ENTRY_FILE_NAME).is_file():
+    if (
+        anchor_directory / APP_PY_FILE_NAME_REFUSED_WHERE_STREAM_PY_IS_MISSING
+    ).is_file():
         raise AppLaunchError(
             f"no `{DEFAULT_STREAM_ENTRY_FILE_NAME}` in `{anchor_directory}`, only an "
-            f"`{UNCONVENTIONAL_APP_ENTRY_FILE_NAME}`\n"
+            f"`{APP_PY_FILE_NAME_REFUSED_WHERE_STREAM_PY_IS_MISSING}`\n"
             f"`streamlib {verb}` launches a @stream function from "
             f"`{DEFAULT_STREAM_ENTRY_FILE_NAME}`, and reads "
-            f"`{UNCONVENTIONAL_APP_ENTRY_FILE_NAME}` only when `-f` or a target names it.\n"
+            f"`{APP_PY_FILE_NAME_REFUSED_WHERE_STREAM_PY_IS_MISSING}` "
+            f"only when `-f` or a target names it.\n"
             f"{STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE}"
             f"\n"
             f"Write the stream in `{DEFAULT_STREAM_ENTRY_FILE_NAME}`, or name the file "
