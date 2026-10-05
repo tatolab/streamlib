@@ -28,10 +28,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # No test joins whatever runtime mesh a CI runner happens to sit on. The
-  # engine's own lib tests get this from a test-only default; everything that
-  # runs a built wheel or an integration test gets it from here.
-  STREAMLIB_MESH_MULTICAST_DISCOVERY: "0"
 
 jobs:
   rust-tests-linux:
@@ -465,8 +461,8 @@ jobs:
             core::runtime::capability_extensions::tests::one_distribution_registering_two_capabilities_keeps_both_in_order \
             core::runtime::capability_extensions::tests::two_distributions_registering_one_capability_name_are_refused_naming_both \
             core::runtime::capability_extensions::tests::a_capability_registered_with_an_empty_name_is_refused_naming_its_distribution \
-            core::json_schema::capability_extension_and_mesh_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
-            core::json_schema::capability_extension_and_mesh_rendering_tests::a_registered_extension_renders_its_name_version_and_distribution \
+            core::json_schema::capability_extension_and_runtime_name_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
+            core::json_schema::capability_extension_and_runtime_name_rendering_tests::a_registered_extension_renders_its_name_version_and_distribution \
             core::runtime::runtime::tests::to_json_renders_every_capability_this_process_registered \
             core::logging::writer \
             core::logging::config \
@@ -650,22 +646,19 @@ jobs:
             core::runtime::address_chunk \
             core::runtime::runtime_name \
             core::app_directory \
-            core::json_schema::capability_extension_and_mesh_rendering_tests::an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason \
-            core::json_schema::capability_extension_and_mesh_rendering_tests::a_local_only_runtime_renders_the_reason_its_session_did_not_open \
-            core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has \
-            core::runtime::mesh \
+            core::runtime::runtime::tests::two_runners_given_one_runtime_name_both_start \
+            core::json_schema::capability_extension_and_runtime_name_rendering_tests::the_runtime_name_is_a_top_level_key_and_no_mesh_key_renders \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_envelope_hands_a_helper_its_channel_as_the_name_it_knows_the_link_by \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_native_destination_knows_each_link_by_its_channel \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel \
             core::graph_snapshot \
             core::graph::graph_tests::node_names \
-            core::json_schema::capability_extension_and_mesh_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
+            core::json_schema::capability_extension_and_runtime_name_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
             core::graph::edges \
             core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests \
             iceoryx2::channel_name \
             core::runtime::stated_configuration_value \
-            linux::host_identity \
             linux::surface_share \
             core::context::surface_share_wire_verbs
           # The two arms' own liveness tests are named one by one rather than
@@ -685,13 +678,6 @@ jobs:
           # surface and its fds. GPU-free — the surface is a memfd.
           cargo test --locked -p streamlib-engine \
             --test surface_share_subprocess_crash
-          # The multi-process mesh end-to-end suites, compiled but not run: real
-          # runtimes in separate processes over Zenoh on loopback are a local
-          # validation, never a merge gate (docs/testing-hardware.md). Building
-          # them here is what stops them rotting between local runs.
-          cargo test --locked -p streamlib-engine \
-            --features multi-process-mesh-e2e-tests \
-            --test runtime_mesh_two_processes --no-run
           # streamlib-consumer-rhi was reached by no cargo invocation here for
           # the same reason the built-ins were: the clippy step builds default
           # targets and never its test target. Its unit tests are the no-GPU
@@ -797,13 +783,6 @@ jobs:
           # death seen by the other. IOSurface and Mach need no GPU.
           cargo test --locked -p streamlib-surface-client
           cargo test --locked -p streamlib-engine --test surface_share_over_raw_mach
-          # The multi-process mesh end-to-end suites, compiled but not run: real
-          # runtimes in separate processes over Zenoh on loopback are a local
-          # validation, never a merge gate (docs/testing-hardware.md). Building
-          # them here is what stops them rotting between local runs.
-          cargo test --locked -p streamlib-engine \
-            --features multi-process-mesh-e2e-tests \
-            --test runtime_mesh_two_processes --no-run
           # Compiled but not run: the AVFoundation arm against a real camera,
           # `CameraSource` → `DisplayWindow` on the window server, the
           # VideoToolbox codec arm against Apple's hardware encoder and

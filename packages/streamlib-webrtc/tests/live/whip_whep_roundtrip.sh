@@ -271,7 +271,7 @@ node = next(
 )
 if node is None:
     sys.exit(f"the running graph has no node named `{wanted_node_name}`")
-print(graph["mesh"]["runtime_name"] + "/" + node["name"] + "/" + wanted_port)
+print(graph["runtime_name"] + "/" + node["name"] + "/" + wanted_port)
 ' "$1" "$2"
 }
 

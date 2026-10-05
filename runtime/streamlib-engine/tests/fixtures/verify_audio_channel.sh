@@ -51,7 +51,7 @@ TEMPORARY_DIRECTORY="${TMPDIR:-/tmp}"
 OUTPUT_DIR="$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-channel-XXXXXX")"
 
 # The channel is the port's address, `<runtime_name>/<node>/<port>`, with this
-# runtime's own `mesh.runtime_name` for a port here.
+# runtime's own top-level `runtime_name`.
 # Read into a variable rather than fed to `$(...)` as a heredoc: macOS's bash
 # 3.2 parses a heredoc inside a command substitution for quotes, and the
 # apostrophes below end the script there.
@@ -86,7 +86,7 @@ for node in graph["nodes"]:
         )
     else:
         port = declared[0]
-    print(f"{graph['mesh']['runtime_name']}/{node['name']}/{port}")
+    print(f"{graph['runtime_name']}/{node['name']}/{port}")
     break
 else:
     sys.exit(f"no node named {wanted} in the running graph")

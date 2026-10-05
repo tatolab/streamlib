@@ -453,7 +453,8 @@ for _ in $(seq 1 60); do
 done
 
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
-# runtime's own `mesh.runtime_name`. Read off the live graph rather than guessed.
+# runtime's own top-level `runtime_name`. Read off the live graph rather than
+# guessed.
 DECODED_CHANNEL="$("$STREAMLIB_CLI" graph --url "$REPLAY_CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
@@ -462,7 +463,7 @@ decoder = next(
 )
 if decoder is None:
     sys.exit("the running graph has no node named `decoder`")
-print(graph["mesh"]["runtime_name"] + "/" + decoder["name"] + "/video")
+print(graph["runtime_name"] + "/" + decoder["name"] + "/video")
 ')" || {
     echo "[recording] FAIL: could not read the decoder channel off the replay graph" >&2
     tail -30 "$REPLAY_LOG" >&2

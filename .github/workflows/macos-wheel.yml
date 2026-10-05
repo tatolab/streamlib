@@ -27,7 +27,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  STREAMLIB_MESH_MULTICAST_DISCOVERY: "0"
 
 jobs:
   build-and-prove-macos-wheel:
@@ -148,7 +147,7 @@ jobs:
         run: |
           /tmp/wheel-check/bin/streamlib new /tmp/scaffold-check --test-pattern
           cd /tmp/scaffold-check
-          /tmp/wheel-check/bin/streamlib run --no-mesh-multicast-discovery > /tmp/scaffold-run.log 2>&1 &
+          /tmp/wheel-check/bin/streamlib run > /tmp/scaffold-run.log 2>&1 &
           scaffold_pid=$!
           sleep 20
           kill -INT "$scaffold_pid"

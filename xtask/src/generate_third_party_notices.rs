@@ -15,20 +15,18 @@
 //!
 //! Two halves that no single tool covers. `cargo about generate` walks the
 //! resolve graph and reproduces each crate's licence text; the projects
-//! appended here owe terms it cannot reach — most because they are no package
-//! in that graph at all, and one because what it owes is an upstream `NOTICE`,
-//! which cargo-about collects from no crate. Every one of them ships inside the
-//! wheel. [`PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE`] is the roster;
-//! this doc does not repeat it, because a census in prose goes stale the moment
-//! the table grows.
+//! appended here owe terms it cannot reach, because they are no package in that
+//! graph at all. Every one of them ships inside the wheel.
+//! [`PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE`] is the roster; this doc
+//! does not repeat it, because a census in prose goes stale the moment the table
+//! grows.
 //!
 //! The notice source is an enum because the trees genuinely differ.
 //! `shaderc-sys` extracts its C++ sources into its own build directory, each
 //! with a licence file. The trees `vendor/tatolab-vulkanalia-vma/build.rs`
 //! compiles `wrapper.cpp` against carry no licence file at all — their
 //! copyright line exists only in the comment block heading a header. The
-//! PipeWire/SPA headers are checked in here with their own `COPYING`, and so is
-//! Zenoh's upstream `NOTICE.md`, whose crates ship neither.
+//! PipeWire/SPA headers are checked in here with their own `COPYING`.
 //!
 //! Some of the shaderc-side texts reach the generated half by accident:
 //! `cargo about` scans a crate's own directory for licence files, and finds the
@@ -132,17 +130,15 @@ enum NoticeRosterCargoAboutCannotProduce {
     LinkedThroughOpusicSys,
     CompiledByTheVulkanaliaVmaForksBuildScript,
     CompiledByTheEnginesBuildScript,
-    AnUpstreamNoticeCargoAboutDoesNotCollect,
     CarriedPrebuiltByTheMacOSWheel,
 }
 
 impl NoticeRosterCargoAboutCannotProduce {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 5] = [
         Self::LinkedThroughShadercSys,
         Self::LinkedThroughOpusicSys,
         Self::CompiledByTheVulkanaliaVmaForksBuildScript,
         Self::CompiledByTheEnginesBuildScript,
-        Self::AnUpstreamNoticeCargoAboutDoesNotCollect,
         Self::CarriedPrebuiltByTheMacOSWheel,
     ];
 
@@ -164,10 +160,6 @@ impl NoticeRosterCargoAboutCannotProduce {
                 "Checked into this repository as headers, compiled into the engine by \
                  `runtime/streamlib-engine/build.rs`"
             }
-            Self::AnUpstreamNoticeCargoAboutDoesNotCollect => {
-                "An ordinary Cargo dependency whose upstream `NOTICE` Apache-2.0 §4(d) \
-                 requires propagating, and which `cargo about` does not collect"
-            }
             Self::CarriedPrebuiltByTheMacOSWheel => {
                 "In the macOS wheel only, compiled into the Vulkan loader and MoltenVK \
                  libraries it carries beside the engine (SPIRV-Tools, SPIRV-Headers and \
@@ -181,9 +173,8 @@ impl NoticeRosterCargoAboutCannotProduce {
 ///
 /// One shape per tree because they genuinely differ, not as a convenience: a
 /// build-script crate in the registry checkout ships a licence file, the trees
-/// the vulkanalia VMA fork vendors ship none, `vendor/pipewire-headers/`
-/// carries its own, and Zenoh's crates ship neither a licence nor a notice, so
-/// its upstream `NOTICE.md` is checked in beside them.
+/// the vulkanalia VMA fork vendors ship none, and `vendor/pipewire-headers/`
+/// carries its own.
 enum NoticeSource {
     /// A licence file inside a build-script crate's own registry checkout,
     /// reproduced whole. The path is relative to the crate root rather than to
@@ -219,9 +210,8 @@ struct NoticeSourceTrees {
 }
 
 /// One project whose notice has to travel with the binary and which
-/// `cargo about` cannot produce — because it is not a package in the resolve
-/// graph at all, or because what it owes is an upstream `NOTICE` cargo-about
-/// does not collect.
+/// `cargo about` cannot produce, because it is not a package in the resolve
+/// graph at all.
 struct ProjectWhoseNoticeCargoAboutCannotProduce {
     /// The upstream project's own name, not the directory it lands in.
     display_name: &'static str,
@@ -234,7 +224,7 @@ struct ProjectWhoseNoticeCargoAboutCannotProduce {
     /// Which bullet of the roster this project is named under. Explicit
     /// rather than derived from `notice_source`, because where a notice is
     /// read from and how the code reached the binary are different questions
-    /// — two crates now share one notice source and sit on different bullets.
+    /// — two crates share one notice source and sit on different bullets.
     roster: NoticeRosterCargoAboutCannotProduce,
 }
 
@@ -333,20 +323,6 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_crate_root: "opus/COPYING",
         },
         roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughOpusicSys,
-    },
-    ProjectWhoseNoticeCargoAboutCannotProduce {
-        display_name: "Eclipse zenoh",
-        upstream_repository_url: "https://github.com/eclipse-zenoh/zenoh",
-        // Elected under Apache-2.0, whose §4(d) is what puts this project on
-        // this roster at all: its crates ship no `LICENSE` and no `NOTICE`, and
-        // `cargo about` collects no NOTICE files from any crate. So the
-        // upstream file is checked in and reproduced from here, while the
-        // Apache-2.0 terms themselves come off the generated half above.
-        license_summary: "Apache-2.0 (elected over EPL-2.0), whose full text is reproduced above",
-        notice_source: NoticeSource::VendoredLicenseFile {
-            path_relative_to_workspace_root: "vendor/zenoh-notice/NOTICE.md",
-        },
-        roster: NoticeRosterCargoAboutCannotProduce::AnUpstreamNoticeCargoAboutDoesNotCollect,
     },
     // The five below are what `scripts/stage_macos_bundled_vulkan_driver.sh`
     // puts in the macOS wheel, each notice checked in at the revision the
@@ -661,9 +637,8 @@ fn render_the_appendix_cargo_about_cannot_produce(
          \n\
          Every project below ships inside the wheel and owes terms the generated half above\n\
          cannot carry: most are compiled in from vendored sources and so appear in no resolve\n\
-         graph `cargo about` walks, some ship only in the macOS wheel inside the prebuilt\n\
-         Vulkan driver it carries, and one is an ordinary Cargo dependency whose upstream\n\
-         `NOTICE` cargo-about does not collect. These sections are appended by\n\
+         graph `cargo about` walks, and some ship only in the macOS wheel inside the\n\
+         prebuilt Vulkan driver it carries. These sections are appended by\n\
          `cargo xtask generate-third-party-notices`.\n\
          \n\
          {}",
