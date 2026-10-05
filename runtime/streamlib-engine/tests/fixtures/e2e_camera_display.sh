@@ -1,17 +1,16 @@
 #!/bin/bash
-# E2E test: the `examples/camera-display` Python app on a vivid virtual camera.
+# E2E test: the camera-display stream (`camera_display_stream.py`, beside this
+# script) on a vivid virtual camera.
 #
-# Boots the app with `streamlib run`, proves it live through the control plane,
-# captures its window, and stops it with SIGTERM.
+# Boots the stream with `streamlib run`, proves it live through the control
+# plane, captures its window, and stops it with SIGTERM.
 #
 # Assertions ride the plan's durable contracts — the `graph` tool's JSON, the
-# JSONL log schema, and a captured PNG — never engine tracing prose. The prose
-# this fixture used to grep ("Ring textures created", "First frame captured")
-# was renamed out from under it and the gate went vacuous; contracts do not
-# move that way.
+# JSONL log schema, and a captured PNG — never engine tracing prose, which is
+# renamed without notice and leaves a grep on it passing vacuously.
 #
 # Validates:
-#   - The app's node registers a control plane and answers `graph`
+#   - The stream's node registers a control plane and answers `graph`
 #   - Both native built-ins are in the graph, linked camera → window
 #   - The window renders (PNG captured and non-trivial)
 #   - No Vulkan allocation / device-loss / process() failure in the logs
@@ -28,7 +27,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-APP_DIR="$REPO_ROOT/examples/camera-display"
+STREAM_ENTRY_FILE_NAME="camera_display_stream.py"
 OUTPUT_DIR="${1:-/tmp/streamlib-e2e}"
 # Long enough for the swapchain to settle and several frames to present.
 RUN_SECS="${RUN_SECS:-20}"
@@ -115,22 +114,24 @@ if [ -z "$VIRTUAL_DEVICE" ]; then
 fi
 echo "[e2e] Using vivid capture device: $VIRTUAL_DEVICE"
 
-# ── Boot the app ─────────────────────────────────────────────────────
-# No build step: the wheel carries the engine, and the app is Python. There is
-# nothing between an edit of app.py and this run.
-echo "[e2e] Booting $APP_DIR with \`streamlib run\` (${RUN_SECS}s)..."
+# ── Boot the stream ──────────────────────────────────────────────────
+# No build step: the wheel carries the engine, and the stream is Python. There
+# is nothing between an edit of the stream file and this run. `--dir` anchors
+# the launch at this directory, so the cross-floor check reads these fixtures
+# rather than whatever directory the script was started from.
+echo "[e2e] Booting $SCRIPT_DIR/$STREAM_ENTRY_FILE_NAME with \`streamlib run\` (${RUN_SECS}s)..."
 STREAMLIB_CAMERA_DEVICE="$VIRTUAL_DEVICE" \
 RUST_LOG="${RUST_LOG:-warn,streamlib=info}" \
-    "$STREAMLIB" run --dir "$APP_DIR" >"$LOG_FILE" 2>&1 &
+    "$STREAMLIB" run --dir "$SCRIPT_DIR" "$STREAM_ENTRY_FILE_NAME" >"$LOG_FILE" 2>&1 &
 NODE_PID=$!
 
 # ── Wait for the node to register ────────────────────────────────────
-# The registry entry is published after `setup` builds the graph, so its
-# appearance is the app's own liveness signal — not a fixed sleep.
+# The registry entry is published only once the stream's graph has loaded, so
+# its appearance is the node's own liveness signal — not a fixed sleep.
 RUNTIME_ID=""
 for _ in $(seq 1 "$RUN_SECS"); do
     if ! kill -0 "$NODE_PID" 2>/dev/null; then
-        echo "[e2e] FAIL: the app exited before registering a node"
+        echo "[e2e] FAIL: the stream exited before registering a node"
         tail -30 "$LOG_FILE"
         exit 1
     fi
@@ -263,7 +264,7 @@ fi
 
 echo ""
 echo "══════════════════════════════════════════════════════════════"
-echo "  E2E camera-display (Python app) Results"
+echo "  E2E camera-display (Python stream) Results"
 echo "══════════════════════════════════════════════════════════════"
 echo "  Virtual device:        $VIRTUAL_DEVICE (vivid)"
 echo "  Runtime id:            $RUNTIME_ID"
