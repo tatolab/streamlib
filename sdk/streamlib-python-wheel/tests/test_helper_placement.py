@@ -233,7 +233,7 @@ def helper_process_is_still_alive(pid: int) -> bool:
 
 
 def test_no_helper_survives_the_app(start_app_under_test):
-    """`rt.run()` returning means every child was reaped.
+    """`runtime.run()` returning means every child was reaped.
 
     Asserted against the children's own pids, which the spawn host reports as
     it starts each one. The app's process group cannot answer this: the spawn

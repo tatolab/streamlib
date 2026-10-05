@@ -200,7 +200,7 @@ def scenario_a_native_builtin_stays_in_the_app_process() -> None:
 
 
 def scenario_every_child_is_reaped() -> None:
-    """`rt.run()` returning means no helper outlived it.
+    """`runtime.run()` returning means no helper outlived it.
 
     The spawn host reports each child's pid as it starts one; the test is what
     checks those pids are gone once the app has exited.
