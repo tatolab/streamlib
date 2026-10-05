@@ -621,7 +621,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   only to what the installer put beside the runtime. Undecided: the registry's owner and
   standards, a manager UI, and what the app's own catalog does. [one-runtime-per-machine]
 
-## Consumers — examples & packages — SHIPPED
+## Consumers — examples & packages — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
 
 - **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
@@ -1925,7 +1925,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   every stream. Undecided: whether the adapter crates move anywhere, and what the
   software-Vulkan bundle costs the Linux wheel. [one-runtime-per-machine]
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ runtime-hosting: Apple permissions through Tatolab.app; unbuilt: MJPEG capture, the JPEG removals)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ runtime-hosting: Apple permissions through Tatolab.app; jpeg-after-the-robotics-cut)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
