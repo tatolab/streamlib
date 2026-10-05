@@ -619,10 +619,10 @@ impl ProcessorInstanceFactory {
 fn duplicate_class_import_path(processor_class_import_path: &ProcessorClassImportPath) -> Error {
     Error::Configuration(format!(
         "two processors both identify as `{processor_class_import_path}`, and one import path \
-         names one class. In Python this means the module was loaded twice, so the class object \
-         being added is not the one already registered — `importlib.reload` is the usual cause. \
-         In Rust it means two `#[processor]` types share a module path, which happens when one \
-         is declared inside a function body: a function's name is not part of a module path, so \
+         names one class. In Python this means the module was loaded twice, so this class object \
+         is not the one the registry holds — `importlib.reload` is the usual cause. In Rust it \
+         means two `#[processor]` types share a module path, which happens when one is \
+         declared inside a function body: a function's name is not part of a module path, so \
          neither type is reachable by `use`. Declare processors at module scope."
     ))
 }
