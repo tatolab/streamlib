@@ -48,8 +48,8 @@ pub(crate) fn register_processor_class(
     let declaration = PythonProcessorDeclaration::read_from_class(processor_class)?;
     let identity = declaration.descriptor.processor_class_import_path.clone();
 
-    // Held across the check and the registration, so two threads adding the
-    // same class cannot both get past the engine registry's non-atomic
+    // Held across the check and the registration, so two threads registering
+    // the same class cannot both get past the engine registry's non-atomic
     // read-then-write.
     let mut registered = registered_processor_classes()
         .lock()
@@ -65,15 +65,15 @@ pub(crate) fn register_processor_class(
             // An import path is `__module__` + `__qualname__`, so two classes
             // reach the same one only by being the same declaration executed
             // twice — the module was loaded again and rebuilt its classes. Two
-            // *differently named* classes can no longer collide at all, so
-            // there is nothing to declare that would tell these apart; the fix
-            // is upstream, at the reload.
+            // differently named classes never collide, so there is nothing to
+            // declare that would tell these apart; the fix is upstream, at the
+            // reload.
             Err(PyValueError::new_err(format!(
                 "two different class objects both identify as `{identity}`: {} and {}. One \
                  import path names one class, so these are the same declaration loaded twice \
-                 — `importlib.reload` is the usual cause, and the class object you are adding \
-                 is not the one already registered. Add the class from the module the \
-                 interpreter currently holds, or restart the app.",
+                 — `importlib.reload` is the usual cause, and the class the module holds now \
+                 is not the one this process registered. Restart the app rather than \
+                 reloading a processor module.",
                 class_qualified_name(already_registered.bind(python)),
                 class_qualified_name(processor_class),
             )))
