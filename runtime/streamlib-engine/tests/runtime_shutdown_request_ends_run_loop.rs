@@ -18,9 +18,9 @@
 //!   race — the processor's `start()` runs on its own thread against the
 //!   harness reaching `PUBSUB.subscribe` — so the escalation gets its own
 //!   deterministic test rather than riding on that timing.
-//! - A request issued BEFORE `start()` — where the milestone's `setup(rt)`
-//!   inversion puts a start-script that decides to abort — is honored by the
-//!   run loop rather than silently discarded.
+//! - A request issued BEFORE `start()` — by a host that decides to abort
+//!   before its run begins — is honored by the run loop rather than silently
+//!   discarded.
 //!
 //! Starts a real `Runner` (GPU + iceoryx2), so this runs outside the `--lib`
 //! gate, which never builds `tests/` integration binaries.
@@ -137,11 +137,10 @@ fn a_request_issued_before_the_run_loop_subscribes_still_ends_it() {
     assert_the_run_loop_ends_before_the_watchdog(&runtime, "the unobserved request");
 }
 
-/// A start-script that decides to abort calls `request_runtime_shutdown` from
-/// `setup(rt)`, which runs before the harness calls `start()`. The escalation
-/// is cleared when a run ends, never when one starts, so the request survives
-/// to the run loop instead of being discarded — otherwise the caller gets
-/// `Ok(())` and a runtime that never stops.
+/// A host that decides to abort calls `request_runtime_shutdown` before it
+/// calls `start()`. The escalation is cleared when a run ends, never when one
+/// starts, so the request survives to the run loop instead of being discarded
+/// — otherwise the caller gets `Ok(())` and a runtime that never stops.
 ///
 /// Mental revert: reinstate a `take_runtime_shutdown_escalation()` at the top
 /// of `Runner::start` and the loop runs to the watchdog `Break` — the

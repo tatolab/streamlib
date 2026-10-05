@@ -35,7 +35,7 @@ const SILENT_LINK_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 pub struct Mp4SinkConfig {
     /// The file to write, created or truncated at `setup()`.
     ///
-    /// Truncating is the call: an app is re-run from the same `app.py`, and
+    /// Truncating is the call: an app is re-run from the same `stream.py`, and
     /// wall-clock file naming would be a fifth clock surface the plan bans.
     pub path: PathBuf,
 }

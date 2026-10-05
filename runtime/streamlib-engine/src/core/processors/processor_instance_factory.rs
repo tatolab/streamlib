@@ -213,7 +213,8 @@ pub(crate) struct UnregisteredProcessorTypeRecord {
 
 /// Registers a processor type the registry has never seen, given only its
 /// class import path. The wheel installs one that imports the class in the app
-/// process and registers it exactly as `rt.add` does. Shared, because it runs
+/// process and registers it, which is how a Python node in a loaded graph or a
+/// control-plane `add_node` reaches the registry. Shared, because it runs
 /// outside the registry's locks: what it imports may itself register.
 pub type UnregisteredProcessorTypeResolverFn =
     Arc<dyn Fn(&ProcessorClassImportPath) -> Result<()> + Send + Sync>;

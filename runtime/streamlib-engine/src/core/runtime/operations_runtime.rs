@@ -97,9 +97,9 @@ async fn add_processor_impl(
     };
 
     // A type nobody registered may still be resolvable by name — the wheel
-    // resolves a Python class import path the way `rt.add` would. A resolver
-    // that fails names why; one that is absent leaves the registry miss below
-    // to say the type is unknown.
+    // resolves a Python class import path by importing the class and
+    // registering it. A resolver that fails names why; one that is absent
+    // leaves the registry miss below to say the type is unknown.
     PROCESSOR_REGISTRY.resolve_processor_type_if_unregistered(&spec.name)?;
 
     // Held so a typed `UnknownProcessorType` can name what was asked for —
