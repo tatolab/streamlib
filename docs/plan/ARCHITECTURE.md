@@ -54,6 +54,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `stream.add` takes the class; the builder's API is `add`/`connect`/`expose`.
   [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567, #2569; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node` — stream-graph builds the authoring clauses]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_stream_graph_builder.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
@@ -223,7 +224,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — Two extension mechanisms, recorded as the current best understanding of
   the shape and expected to flex during the align and implementation. A *processor
   extension* is a Python processor class in a pip-installed package whose per-frame work
-  runs in native code the same wheel carries: `stream.add(TheClass)` is its registration, as
+  runs in native code the same wheel carries: `stream.add(TheClass)` adds it, as
   for any Python processor; it runs in its own helper process under the one placement
   rule; and it calls its own package's Rust directly — the engine does not call extension
   code on the data path, and there is no processor-to-engine-to-wheel round trip. A
@@ -1318,11 +1319,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   Decoration inside a helper process registers nothing, because a helper hosts no
   graph. A class decorated twice under one import path meets the existing
   duplicate-path refusal. As built: after stamping, the decorator calls the
-  wheel-internal `register_declared_processor_class`, which reads the class as the registry's
-  import-path resolver does and registers the descriptor alone through `register_descriptor_only`. It passes
-  over two classes — one decorated where `STREAMLIB_ENTRYPOINT` is in the environment,
-  which is how a helper knows itself, and one with no import path (declared inside a
-  function, or in the entry file), whose refusal stays at `stream.add` with the fix named.
+  wheel-internal `register_declared_processor_class`, which reads the class as the
+  unregistered-type resolver does and registers the descriptor alone through
+  `register_descriptor_only`. It passes over two classes — one decorated where
+  `STREAMLIB_ENTRYPOINT` is in the environment, which is how a helper knows itself, and
+  one with no import path (declared inside a function, or in the entry file), whose
+  refusal stays at `stream.add` with the fix named.
   At first add `ProcessorInstanceFactory::install_constructor_for_registered_descriptor`
   gives the registered descriptor its constructor, refusing a path that already has one
   with the two-classes-one-path text and a path nobody registered by name; the
@@ -1340,7 +1342,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   (§Networking), so renaming a processor re-addresses its ports. Being part of that address
   is what bounds it: `add`
   refuses a requested display name that is empty, contains `/`, `*`, `$`, `#` or `?`, or
-  begins with `@`, naming the character and the fix, in Rust, in `stream.add` and in MCP
+  begins with `@`, naming the character and the fix, in Rust and in MCP
   `add_processor` alike. Spaces and unicode stay legal, and a class's short name and the
   engine's ` 2` suffix always pass, so no default display name is ever refused.
   Identity is never derived from it — and neither is the default: a descriptor carries
