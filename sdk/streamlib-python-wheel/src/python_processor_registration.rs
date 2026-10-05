@@ -41,7 +41,7 @@ fn registered_processor_classes() -> &'static Mutex<HashMap<ProcessorClassImport
 /// constructor that spawns its helper process, unless it already has one.
 ///
 /// Returns the class import path a graph names the processor by.
-pub(crate) fn register_processor_class(
+fn register_processor_class(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
 ) -> PyResult<ProcessorClassImportPath> {

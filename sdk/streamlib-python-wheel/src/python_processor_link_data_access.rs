@@ -1353,7 +1353,7 @@ fn not_a_helper_process_data_plane_error() -> PyErr {
 
 /// The declared port an author's spelling names: `@node` cast each declared
 /// name, so a lookup casts its argument and `read("Video")` finds `video`.
-pub(crate) fn declared_port_name_the_spelling_names(port_name: &str) -> PyResult<Cow<'_, str>> {
+fn declared_port_name_the_spelling_names(port_name: &str) -> PyResult<Cow<'_, str>> {
     cast_exposed_name_to_url_safe(port_name)
         .map_err(|names_no_port| PyValueError::new_err(names_no_port.to_string()))
 }
