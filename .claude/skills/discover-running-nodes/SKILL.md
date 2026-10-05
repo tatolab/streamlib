@@ -20,9 +20,10 @@ RUNTIME_NAME      RUNTIME_ID  CONTROL_URL                PID  ALIVE?  HINT
 desk-my-app-8kq3  Rabc123     http://127.0.0.1:9000    12345  yes     python (/path/to/app)
 ```
 
-- `RUNTIME_NAME` — the runtime's name, the first chunk of its tap channels: `--runtime-name`
-  on `run` / `dev`, else `STREAMLIB_RUNTIME_NAME`, else derived from the host and the app
-  directory, so it is stable across runs of one app. Pass it to any control verb as
+- `RUNTIME_NAME` — the runtime's name, the first chunk of its tap channels: the name the app
+  states (`--runtime-name` on `run` / `dev`, `Runtime(runtime_name=...)` in a plain app), else
+  `STREAMLIB_RUNTIME_NAME`, else derived from the host and the app directory, so it is stable
+  across runs of one app. Pass it to any control verb as
   `--node <runtime name>`; `--node` matches a name before an id, so this is the identifier
   to prefer.
 - `RUNTIME_ID` — per-run, and also accepted as `--node <runtime_id>`. Use it to

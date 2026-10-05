@@ -14,7 +14,7 @@ Run `inspect-live-graph` and read the top-level `runtime_name`, the source node'
 ```
 <runtime_name>/<node>/<port>   e.g.  lab-one/camera/frames
 ```
-A tap reads a channel on the runtime it targets: a channel naming another runtime is refused, naming that runtime. Tap that runtime's own node instead.
+A tap reads a channel on the runtime it targets: a channel naming another runtime is refused, naming that runtime. Point the tap at that runtime instead (`--node <its runtime name>` or its `--url`), channel unchanged.
 
 ### 2. Tap a bounded sample
 The channel is a positional argument; `--count` bounds how many bags to collect before returning:

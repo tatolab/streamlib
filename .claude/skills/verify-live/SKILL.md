@@ -80,13 +80,13 @@ One rig-only fixture, owned by the extension wheel it proves. It is the codec ri
 
 It takes `SAMPLE_COUNT`, `SAMPLE_EVERY`, `TOLERANCE`, `RUN_SECONDS` and `MEDIA_DEADLINE_SECONDS` from the environment; read the script header for the full list. `MEDIA_DEADLINE_SECONDS` is the one that matters when a run reports no frames — an ingest going live and a WHEP subscribe sit between the graph coming up and the first decoded frame, so the fixture waits for one bag before spending the exchange budget.
 
-**The wheel is measured through its own venv** (`packages/streamlib-webrtc/.venv`), which must hold the engine wheel *and* a current `maturin develop` build of the extension. A stale `.so` there would be scored and reported as a pass for code that is not in the tree, so the fixture refuses by name rather than measuring it — `maturin develop` before every run, the same rule `/verify-audio` has.
+**The wheel is measured through its own venv** (`packages/streamlib-webrtc/.venv`), which must hold the engine wheel *and* a current `maturin develop` build of the extension. The fixture refuses (exit 77) only when that venv cannot import the wheel beside the engine; a stale `.so` that still imports is scored and reported as a pass for code that is not in the tree — so `maturin develop` before every run, the same rule `/verify-audio` has.
 
 ### Credentials — and why absent ones are never a pass
 
 Cloudflare Stream carries the stream key **in the URL path**, so each endpoint URL *is* the secret.
 
-- They are read from the environment, with the repo-root gitignored `.env` as the fallback: `CLOUDFLARE_WHIP_URL`, `CLOUDFLARE_WHEP_URL`. An exported `STREAMLIB_WHIP_URL` / `STREAMLIB_WHEP_URL` always wins.
+- `STREAMLIB_WHIP_URL` / `STREAMLIB_WHEP_URL` are read first and always win. When either is missing, the repo-root gitignored `.env` is sourced and its `CLOUDFLARE_WHIP_URL` / `CLOUDFLARE_WHEP_URL` fill them in — replacing any `CLOUDFLARE_*` already exported. Export the `STREAMLIB_` names to pin a run.
 - **Absent credentials exit 77 — cannot-run, never a pass.** Report it as cannot-run in the template's Outcome line.
 - **Never echo one.** The script redacts the endpoints in its own output; do the same in a report, a PR body, or a log excerpt you paste. `streamlib graph` renders every processor's config, so a WHIP or WHEP node's graph JSON contains the key — read it in a pipe, never save it into the evidence directory and never attach it.
 
