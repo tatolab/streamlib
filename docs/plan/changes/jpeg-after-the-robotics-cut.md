@@ -1,5 +1,8 @@
 # jpeg-after-the-robotics-cut
 
+> **Approved by the owner, 2026-10-05**, as written, with its stated assumptions. Tickets derived
+> 2026-10-05 (below).
+
 The build of the JPEG align (owner, 2026-10-04): the removals and MJPEG capture, as one change.
 After this change:
 - the tree holds no JPEG block, no nvJPEG backend, no `libnvjpeg` probe, no
@@ -204,19 +207,21 @@ At ship, the entry drops "(unbuilt)" and the workspace-member clause. It then re
      parser, entropy, colour, Annex K and the selector.
    - A `hardware-tests` PSNR test carries `gpu_decode.rs`'s CPU reference, generalised to
      4:2:2, against JPEGs the test encodes itself. It is rig-only, per the GPU-tests rule.
-   - Acceptance is the plan's: a USB 2.0 webcam with its mode list recorded and its MJPEG mode
-     live at the advertised size and rate, through the engine's
-     `codec_roundtrip_rig --source camera --camera <dev>` and `/verify-live`.
+   - Acceptance is the plan's, amended by the owner on 2026-10-05: no USB 2.0 webcam is
+     sought.
+     - The Cam Link's MJPEG mode is opened directly at 1920×1080 and 30 fps through the
+       engine's MJPEG path, and audited through `/verify-live`. Its frames are real 4:2:2
+       UVC bitstreams.
+     - The selector's unit tests carry the USB 2.0 case, over a mode list built from the
+       bandwidth arithmetic: YUYV at 640×480 30, 1280×720 10 and 1920×1080 5; MJPEG at
+       30 for each.
+     - "Opened directly" is a seam, not a test hook. The arm splits choosing a mode from
+       opening one, the way the Apple arm already does, and a `hardware-tests` test calls
+       the second.
 8. **Public text only.**
    - The stub's transport sentence (`_engine.pyi:107-110`) and the processor description
      (`camera_source.rs:52`) say MJPEG is decoded on capture.
    - `stubtest` is unaffected.
-
-## Owner action before ship
-
-**Attach a USB 2.0 webcam to the rig.** The acceptance names one and none is attached. The
-Cam Link is USB 3 and picks NV12 under assumption 2, so it cannot stand in. The removal and
-decoder slices do not wait on this; the capture slice's acceptance does.
 
 ## Expected slices
 
@@ -233,7 +238,7 @@ decoder slices do not wait on this; the capture slice's acceptance does.
 3. **MJPEG capture.**
    - The selector and S_PARM, the MJPG branch, `bytesused`, colour from the bitstream, and the
      public text.
-   - Accepted on the USB 2.0 webcam.
+   - Accepted on the Cam Link's MJPEG mode, opened directly at 1080p30.
    - Blocked by slice 2.
 
 ## Left to later
@@ -242,6 +247,17 @@ decoder slices do not wait on this; the capture slice's acceptance does.
 - 4:4:4 and greyscale JPEG.
 - Progressive JPEG.
 - Parallel entropy decode across restart intervals.
+
+## Tickets
+
+Derived 2026-10-05; milestone #63, *Webcams live over MJPEG*.
+
+1. #2639 — the JPEG block's leftovers are gone (slice 1). Independent; needs no rig. It carries
+   the nvJPEG, consumer and fixture bullets. `nvjpeg` and `nvJPEG` also need #2640.
+2. #2640 — the engine decodes a 4:2:0 or 4:2:2 JPEG through the capture stage (slice 2).
+   Independent; ultracode; needs the GPU rig. It carries the crate's bullets.
+3. #2641 — a Linux camera whose best mode is MJPEG is captured live (slice 3). Blocked by #2640;
+   ultracode; needs the GPU and camera rig (the Cam Link).
 
 ## REMOVED
 

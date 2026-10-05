@@ -49,8 +49,11 @@ decision cleans up: code held for a consumer nobody had committed to.
 - The crate builds against the `streamlib` facade, which sits above the engine, so the
   engine cannot link it where it is. Moving it is part of the build.
 - No USB 2.0 webcam has been on the rig. The capture card is USB 3 and sends uncompressed
-  1080p at 60 fps, so it shows the frame shape and nothing about the bandwidth limit. A
-  real webcam is the build's acceptance check for that reason.
+  1080p at 60 fps, so it shows the frame shape and nothing about the bandwidth limit. ~~A
+  real webcam is the build's acceptance check for that reason.~~ — Superseded 2026-10-05 by
+  the owner: no USB 2.0 webcam will be sought. Acceptance is the capture card's own MJPEG
+  mode, opened directly — a real UVC bitstream through the real path — and the bandwidth
+  case is carried by the mode rule's unit tests over a USB 2.0 camera's mode list.
 - Some MJPEG sources omit their Huffman tables and rely on the standard ones. Whether
   webcams reaching the V4L2 arm do is unmeasured. The decoder refuses a scan with a
   missing table today.
@@ -77,6 +80,7 @@ decision cleans up: code held for a consumer nobody had committed to.
   read of `test.yml`: no CI step runs the crate's tests at all — Linux clippy builds its lib
   only and macOS compiles its tests without running them; they run locally and nowhere else.
 - The capture build owes 4:2:2 decode, the move into the engine, a mode-selection rule
-  that weighs frame rate, and a proof on a real USB 2.0 webcam.
+  that weighs frame rate, and a proof on ~~a real USB 2.0 webcam~~ the capture card's MJPEG
+  mode (superseded 2026-10-05, owner: no USB 2.0 webcam is sought).
 - The decoder choice is the owner's stated one. Its internals — how much runs on the CPU,
   whether default Huffman tables are needed — stay ticket-level.
