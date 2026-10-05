@@ -56,17 +56,12 @@ Exit codes: 0 = pass, 1 = fail, 77 = skipped (prerequisites missing).
 
 ## Assert on contracts, not on tracing prose
 
-> ~~Validates: DMA-BUF pools created, swapchain created, first frame captured.~~
-> — Superseded 2026-08-25. The fixture used to grep engine log prose
-> (`Ring textures created`, `First frame captured`, `Failed to create camera
-> texture`). Those strings were renamed or deleted during the pivot and the
-> gate went vacuous — it would have reported FAIL on a perfectly healthy run,
-> and nobody noticed because the example it built had stopped compiling too.
-
 Gate on things the plan makes durable: the `graph` tool's JSON shape, the JSONL
 log schema, process exit status, and the pixels in a captured PNG. Vulkan error
 strings (`OUT_OF_DEVICE_MEMORY`, `DEVICE_LOST`) are also stable — they come from
-the driver, not from us. Our own `tracing` messages are not a test API.
+the driver, not from us. Our own `tracing` messages are not a test API: they get
+renamed or deleted in refactors, and a gate that greps them then reports FAIL on
+a healthy run.
 
 ## AI-tappable validation
 
@@ -75,16 +70,11 @@ The window capture lands in `$OUTPUT_DIR/png_samples/window.png`, grabbed with
 Read it with the Read tool and describe what it shows.
 
 Because it is a capture of the composited window, it validates the *whole* path
-including the swapchain present — which the retired in-process PNG sampler did
-not (it dumped the source HOST_VISIBLE pixel buffer before rendering).
+including the swapchain present — a dump of the source HOST_VISIBLE pixel buffer,
+taken before rendering, would not.
 
-> ~~Debug env vars read by display.rs: `STREAMLIB_DISPLAY_FRAME_LIMIT`,
-> `STREAMLIB_DISPLAY_PNG_SAMPLE_DIR`, `STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY`.~~
-> — Removed 2026-08-25: the display built-in reads none of them; they went with
-> the pre-pivot display processor. A run self-terminates on SIGTERM (`rt.run()`
-> owns it) and frames are sampled by capturing the window from outside.
-> `STREAMLIB_CAMERA_DEVICE` is unaffected — it is read by `examples/camera-display`'s
-> own `app.py`, not by the engine.
+The fixture selects the camera through `STREAMLIB_CAMERA_DEVICE`, which
+`examples/camera-display/app.py` reads — the engine does not.
 
 ## Troubleshooting
 

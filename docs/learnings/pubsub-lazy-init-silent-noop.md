@@ -1,17 +1,10 @@
-# PUBSUB silently no-ops without init(), causing test hangs
-
-> ~~`PUBSUB` silently no-ops without `init()`.~~ — Superseded 2026-09-17 by #2276. The
-> event bus is an in-process fan-out with no `init()` and no iceoryx2 service: a publish
-> is queued for every live listener subscribed at that moment, with or without a runtime,
-> and is lost only when that listener's queue is full — a drop the bus counts and logs.
-> Neither the hang nor the compound failure below can happen. What survives is part 2 of
-> the fix — wait on a delivered event with a timeout, never on a bare `join()`.
+# A publish before a spawned listener subscribes is lost, causing test hangs
 
 ## Symptom
 
-A test that uses `PUBSUB.subscribe()` + `PUBSUB.publish()` hangs
-indefinitely with no error output. The test thread never exits, no
-panic, no timeout — just blocks forever on `handle.join()`.
+A test that publishes before its spawned listener has subscribed hangs
+forever on `handle.join()` with no output. The test thread never exits,
+no panic, no timeout — just blocks forever.
 
 ```
 running 1 test
@@ -21,45 +14,32 @@ test core::utils::loop_control::tests::test_shutdown_event_exits_loop ...
 
 ## Root cause
 
-`PUBSUB` is a `LazyLock<PubSub>` that uses `OnceLock` for its internal
-`runtime_id` and iceoryx2 `node`. It is only fully functional after
-`PUBSUB.init("name", node)` is called — which happens inside
-`StreamRuntime::new()`.
+`PUBSUB` is an in-process fan-out with no `init()`: a publish is queued
+for every live listener subscribed at that moment, with or without a
+runtime, and is lost when that listener's queue is full — a drop the
+bus counts and logs — or when the listener's receiver has disconnected,
+which removes the subscription without counting a drop. `PUBSUB.subscribe()` returns only once its
+subscriber is registered, so subscribing and then publishing needs no
+wait in between.
 
-Without `init()`:
-- `subscribe()` **buffers the subscription** (does not fail)
-- `publish()` **silently drops the event** (does not fail)
-
-Combined with the common pattern of `thread::spawn(|| subscribe(...))` +
-`publish(event)` + `handle.join()`, this creates an infinite hang:
-- The subscriber thread opens an iceoryx2 service and waits for events
-- The publish drops silently — the event never arrives
+A listener that subscribes from a spawned thread is the exception:
+`thread::spawn` returns before the thread reaches its `subscribe()`
+call. Combined with the common pattern of `thread::spawn(|| subscribe(...))`
++ `publish(event)` + `handle.join()`, this creates an infinite hang:
+- The publish runs before the thread has subscribed — the event is
+  queued for nobody
+- The listener then waits for an event that already went by
 - `join()` blocks forever waiting for the thread to exit
 
 There are zero error messages or warnings. The test looks correct. The
 hang is the only symptom.
 
-## Compound failure (iceoryx2 interaction)
+## Fix (both parts)
 
-Even with PUBSUB initialized, a second failure mode exists: if the
-iceoryx2 service is in `ServiceInCorruptedState` (from parallel test
-teardown), the subscriber thread silently exits without receiving the
-event. The event is published to... nothing. `join()` may complete
-(thread exited) but the expected event was never received.
-
-## Fix (all three parts)
-
-1. > ~~**Initialize PUBSUB in the test** if a `StreamRuntime` isn't being created:~~ —
-   > Superseded 2026-09-17 by #2276: there is no `init()` to call.
-
-   > Removed 2026-09-17: the `PUBSUB.init(...)` example that stood here, because the
-   > call no longer exists.
-
-> ~~`Iceoryx2Node::new()`~~ — Superseded 2026-09-15 by the engine-owned iceoryx2
-> domain (#2261): a node takes a domain root and a name, and a unit test spells
-> this `PUBSUB.init("test-name", Iceoryx2Node::for_this_test_process())`. ~~The
-> lesson — initialize PUBSUB before subscribing — is unchanged.~~ — Superseded
-> 2026-09-17 by #2276: there is nothing to initialize.
+1. **Wait for the spawned thread to reach its `subscribe()` call** — on an
+   observable effect of the thread having got there, never on a duration.
+   `test_shutdown_event_exits_loop` waits for the loop's first iteration,
+   because `shutdown_aware_loop` subscribes before its first callback.
 
 2. **Use `mpsc::channel` + `recv_timeout` instead of `handle.join()`**:
 ```rust
@@ -73,30 +53,15 @@ std::thread::spawn(move || {
 
 match done_rx.recv_timeout(Duration::from_secs(5)) {
     Ok(result) => assert!(result.is_ok()),
-    Err(_) => panic!("loop did not exit within 5s — PUBSUB may not be initialized"),
+    Err(_) => panic!("loop did not exit within 5s after the event was published"),
 }
 ```
 
-3. > ~~**Allow setup time** — `std::thread::sleep(Duration::from_millis(150))`
-   > between spawning the subscriber thread and publishing. The iceoryx2
-   > service open is async; publishing before the subscriber is listening
-   > loses the event.~~ — Superseded 2026-08-15 by #1873. `PUBSUB.subscribe()`
-   > now returns only once its subscriber is registered, so no sleep is needed
-   > between subscribing and publishing. What still needs waiting on is a
-   > *spawned thread reaching* its `subscribe()` call — wait on an observable
-   > effect of the thread having got there, never on a duration. ~~The async-open
-   > premise does still hold for a hand-rolled subscriber built directly on
-   > `Iceoryx2Node` below `PubSub`, as in sections B and C of the pubsub
-   > integration tests.~~ — Superseded 2026-09-17 by #2276: those sections went
-   > with the iceoryx2 event service the bus no longer uses.
-
 ## Where this hits
 
-Any test that uses PUBSUB events (shutdown, reconfigure, etc.) outside
-of a full `StreamRuntime`. Currently:
+Any test that publishes PUBSUB events (shutdown, reconfigure, etc.) to a
+listener that subscribes from a spawned thread:
 - `runtime/streamlib-engine/src/core/utils/loop_control.rs` — `test_shutdown_event_exits_loop`
 
 ## Reference
-- Fix commit in #252 (ash → vulkanalia migration branch)
 - PUBSUB implementation: `runtime/streamlib-engine/src/core/pubsub/bus.rs`
-- iceoryx2 node: `runtime/streamlib-engine/src/iceoryx2/mod.rs`

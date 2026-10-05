@@ -38,14 +38,25 @@ what crashes in production — it's evidence gdb's timing got you past the real
 
 ## What was actually wrong
 
-The drone-racer's normal-run crash was the **iceoryx2 WIRE issue**: a
-destination with multiple input ports shares one per-destination iceoryx2
-service, but each inbound link sized that shared service's subscriber buffer
-from only its own output schema's `max_queued_messages`; a later, deeper link's
-`open_or_create` then failed. Sizing the shared service to the **max** depth
-across the destination's inbound links (plus pinning `max_subscribers = 1`)
-fixes it. After that fix the runner reaches setup and runs clean — **35/35
-cold runs, zero GPU-race manifestations.**
+The drone-racer's normal-run crash was the **iceoryx2 WIRE issue**. iceoryx2
+fixes a service's subscriber buffer size when the service is created, and an
+`open_or_create` that asks for a deeper buffer than the existing service has
+fails with `DoesNotSupportRequestedMinBufferSize`. The drone-racer's
+destination with multiple input ports shared one iceoryx2 service, each inbound
+link sized that service from only its own depth, and a later, deeper link's
+`open_or_create` failed. Once no open asked for more depth than the service was
+created with, the runner reached setup and ran clean — **35/35 cold runs, zero
+GPU-race manifestations.**
+
+The engine's fix shape: a channel's service is created once, at a depth the
+engine chooses before any open — 64 when any of its destinations declares an
+audio window, 16 otherwise — and each subscriber takes its own port's ring
+inside it. A live channel keeps the depth it was created at, read off the
+service a link holds or, with no link behind it, off the service a tap or a
+helper still holds, so a later opener joins at that depth. A windowed consumer
+connected onto a channel created shallower is refused by name before any open.
+`DoesNotSupportRequestedMinBufferSize` cannot arise between two engine-sized
+opens.
 
 The GPU concurrent-setup race is **real but latent**: gdb-provable, but 0/35 in
 normal runs. Its candidate fix is the industry-standard one (funnel all
@@ -71,23 +82,8 @@ doesn't fire.
 
 ## Reference
 
-- > ~~iceoryx2 sizing fix: `core/compiler/compiler_ops/open_iceoryx2_service_op.rs`
-  > (the channel's agreed delivery-profile ring depth) + `iceoryx2/node.rs`
-  > (`max_subscribers`).~~ — Superseded 2026-09-15 by #2263: no channel is sized
-  > from its consumers any more. Every channel service is created at the ordered
-  > depth through `channel_service_creation_depth`, each subscriber takes its own
-  > port's ring, and the link holds the service so a later opener joins it. The
-  > `DoesNotSupportRequestedMinBufferSize` class this learning diagnosed cannot
-  > arise between two engine-sized opens.
-  >
-  > ~~Every channel service is created at the ordered depth through
-  > `channel_service_creation_depth`.~~ — Superseded 2026-09-16 by #2269: a
-  > channel yet to be created is 64 deep when any of its destinations declares an
-  > audio window, and 16 otherwise; a live channel keeps the depth it was created
-  > at, read off the service a link holds or, with no link behind it, off the
-  > service a tap or a helper still holds. A windowed consumer connected onto a
-  > channel created shallower is refused by name before any open, so the error
-  > class still cannot arise between two engine-sized opens.
+- Channel sizing: `core/compiler/compiler_ops/open_iceoryx2_service_op.rs`
+  (`channel_service_creation_depth`).
 - The latent GPU race's mechanism (main-vs-fan-out glcore contention) and the
   funnel candidate fix live in the tracked issue for it, not here — this file
   is the *diagnostic* learning, not the fix proposal.

@@ -1,16 +1,5 @@
 # NVIDIA Linux: OPAQUE_FD allocations are capped after swapchain creation
 
-> **The reproducers below are retired.** Every `camera-python-display`
-> reference in this note names the pre-pivot example, deleted with the module
-> system it was built on; `CameraToCudaCopyProcessor` went with it, and the
-> `STREAMLIB_DISPLAY_FRAME_LIMIT` in each protocol's step 3 went with the
-> in-process display sampler — the engine reads it nowhere. The
-> driver behaviour, the diagnosis, and the sentinel fix in `vulkan_device.rs`
-> all still hold — what has no in-tree stand-in is the run-and-revert
-> protocol, because nothing in tree allocates a consumer-class OPAQUE_FD
-> buffer post-swapchain any more. A Python processor reaches device memory
-> through the wheel's export doors instead.
-
 ## Symptom
 
 `VK_ERROR_OUT_OF_DEVICE_MEMORY` returned from `vmaCreateBuffer` (or
@@ -48,25 +37,19 @@ including OPAQUE_FD: after `vkCreateSwapchainKHR`, the *first* call
 to `vkAllocateMemory` for a handle type that hasn't been allocated
 yet in this process returns `VK_ERROR_OUT_OF_DEVICE_MEMORY`.
 
-> ~~The exact mechanism is internal to NVIDIA's driver. What's
-> empirically observable: a successful `vkAllocateMemory` for the
-> handle type *before* `vkCreateSwapchainKHR` is sufficient to keep
-> the post-swapchain allocation path open, even after that allocation
-> is freed. The reservation appears to be one-way — first allocation
-> initializes some kernel-side state that survives the free.~~ —
-> Superseded 2026-05-03 (issue #637, PR `fix/opaque-fd-export-sentinels-637`).
-> The "drop-and-free is sufficient" claim held for DMA-BUF (the
-> compositor's swapchain DMA-BUF imports keep a live DMA-BUF
-> allocation in the kernel for the process's lifetime, so the
-> per-handle-type state can never observe "no live consumer"). It
-> did NOT hold uniformly for OPAQUE_FD: there is no compositor-
-> equivalent live OPAQUE_FD allocation between the engine pre-warm
-> and the consumer's request, so the per-handle-type state is
-> reclaimable. On Cam Link 4K specifically, the slower MMAP+memcpy
-> camera startup gave the kernel enough time for the state to
-> decay, and the post-swapchain `CameraToCudaCopyProcessor::setup_inner`
-> request flaked intermittently. The fix retains the OPAQUE_FD
-> probe as a long-lived sentinel rather than dropping it.
+The exact mechanism is internal to NVIDIA's driver. What's
+empirically observable: a successful `vkAllocateMemory` for the
+handle type *before* `vkCreateSwapchainKHR` keeps the post-swapchain
+allocation path open only while a live allocation of that handle type
+anchors the per-handle-type state. For DMA-BUF that always holds: the
+compositor's swapchain DMA-BUF imports keep a live DMA-BUF allocation
+in the kernel for the process's lifetime, so the state never observes
+"no live consumer" and a freed probe is enough. For OPAQUE_FD nothing
+equivalent exists between the engine pre-warm and the consumer's
+request, so the state is reclaimable once the probe is freed. On Cam
+Link 4K specifically, the slower MMAP+memcpy camera startup gave the
+kernel enough time for the state to decay, and the consumer's
+post-swapchain OPAQUE_FD allocation flaked intermittently.
 
 This is **not** about VMA block retention. The host RHI's pixel-
 buffer and texture constructors all set
@@ -74,7 +57,7 @@ buffer and texture constructors all set
 allocation is its own `VkDeviceMemory`; the *DMA-BUF* probe still
 issues a real `vkFreeMemory` and what survives is on the
 compositor's side (live swapchain DMA-BUF imports), not on VMA's.
-For OPAQUE_FD the engine now keeps its probe alive permanently,
+For OPAQUE_FD the engine keeps its probe alive permanently,
 since neither the compositor nor any other ambient consumer
 provides a live OPAQUE_FD allocation to anchor the kernel state.
 
@@ -87,7 +70,7 @@ DEVICE_LOCAL buffer, OPAQUE_FD image — strictly before any caller can
 build a `VkSwapchainKHR`.
 
 DMA-BUF probes are **allocate-and-drop** through the standard host
-RHI constructors. This still works because the compositor's
+RHI constructors. This works because the compositor's
 swapchain DMA-BUF imports provide a continuous live consumer for
 the DMA-BUF kernel state.
 
@@ -117,9 +100,9 @@ To the best of our current knowledge the empirical verification
 protocol (sections A/B/C below) cannot be run for the image sentinel
 today: `HostVulkanTexture::new_opaque_fd_export` is the engine
 primitive but no in-tree consumer of OPAQUE_FD `VkImage`s
-post-swapchain exists yet — `camera-python-display` and the existing
-reproducer examples allocate OPAQUE_FD *buffers*, not images. The
-image sentinel is retained out of conservatism: the cap mechanism
+post-swapchain exists yet — the reproducers below allocate OPAQUE_FD
+*buffers*, not images. The image sentinel is retained out of
+conservatism: the cap mechanism
 is spec-level "per-handle-type kernel state", the buffer-side
 evidence makes the same argument for the image side, and a tiny
 sentinel costs ~256 bytes for the device's lifetime. When a real
@@ -134,26 +117,21 @@ data-structure-level test
 which already includes `opaque_fd_image` in its expected-labels
 list when the pool is constructed) becomes the regression lock.
 
-> ~~**Residual flake.** The small-sentinel fix improved the Cam Link 4K
-> cold-shell pass rate to 9/10 in PR `fix/opaque-fd-export-sentinels-637`'s
-> E2E run, but did not eliminate the flake.~~ — **Superseded 2026-05-03**
-> (issue #638, same PR). The hypothesis was confirmed: the camera
-> processor's failed cross-device DMA-BUF import probe perturbs NVIDIA's
-> OPAQUE_FD allocation accounting despite the engine sentinel. The
-> cheap experiment (force-skip the probe on NVIDIA, 10× cold-shell on
-> Cam Link 4K) moved 9/10 → 10/10 without touching anything else.
-> Engine-layer fix:
-> `HostVulkanDevice::supports_cross_device_dma_buf_probe()` capability
-> query returning `false` when `vendor_id == 0x10DE` (NVIDIA), and the
-> camera processor gates its V4L2 DMA-BUF probe on it. Mesa drivers
-> (Intel iris, AMD radeonsi) tolerate the failed probe and still run it.
-> The wider implication: failed `vkAllocateMemory` chained with
-> `VkImportMemoryFdInfoKHR` is NOT side-effect-free on NVIDIA, even when
-> the call returns cleanly — per-handle-type kernel accounting carries
-> forward. To the best of our current knowledge no driver release notes
-> have published this. If a future NVIDIA driver release fixes it, the
-> blocklist is a one-line update at
-> `vulkan_device.rs::HostVulkanDevice::new()`.
+**Failed cross-device DMA-BUF import probes are skipped on NVIDIA.**
+A failed `vkAllocateMemory` chained with `VkImportMemoryFdInfoKHR` is
+NOT side-effect-free on NVIDIA, even when the call returns cleanly —
+per-handle-type kernel accounting carries forward. The camera's failed
+cross-device DMA-BUF import probe perturbs NVIDIA's OPAQUE_FD
+allocation accounting despite the engine sentinel: with the small
+sentinels alone the Cam Link 4K cold-shell pass rate was 9/10, and
+force-skipping the probe on NVIDIA moved it to 10/10 without touching
+anything else. `HostVulkanDevice::supports_cross_device_dma_buf_probe()`
+returns `false` when `vendor_id == 0x10DE` (NVIDIA), and the V4L2
+capture backend gates its DMA-BUF probe on it. Mesa drivers (Intel
+iris, AMD radeonsi) tolerate the failed probe, so it runs there. To the
+best of our current knowledge no driver release notes have published
+this. If a future NVIDIA driver release fixes it, the blocklist is a
+one-line update in `vulkan_device.rs::HostVulkanDevice::new()`.
 
 `new()` returns `Result<Arc<Self>>` so the pre-warm step can call
 back through the public RHI constructors (which take
@@ -169,54 +147,36 @@ dropping.
 
 **Consumers do NOT need to pre-warm.** If you find yourself wanting
 to allocate-and-drop an exportable resource at processor `start()`
-time, you're re-deriving the dead pattern; the engine already did it
-before any of your code ran. See CLAUDE.md's "Engine-wide bugs get
-fixed at the engine layer" and "No bad patterns left behind on engine
-changes" rules.
+time, don't: the engine already did it before any of your code ran.
+See CLAUDE.md's "Engine-wide defects get fixed at the engine layer" rule.
 
 ## Verifying / re-deriving the fix
 
-Two repro shapes, depending on which behavior you want to verify:
+Each protocol reverts one fix, runs a pipeline in which a consumer
+allocates an OPAQUE_FD buffer
+(`HostVulkanBuffer::new_opaque_fd_export_device_local`) after the
+display's swapchain exists, then restores the fix and re-runs. The
+failure is that allocation returning `A device memory allocation has
+failed`. A healthy pre-warm logs `HostVulkanDevice export pool
+sentinel retained: opaque_fd_device_local (256 bytes)` plus
+`HostVulkanDevice export pools pre-warmed`.
 
 ### A. Pre-warm-removed protocol (catches the original #624 bug)
 
-Deterministic on vivid (`/dev/video2`):
-
-1. Edit `vulkan_device.rs` to comment out the
-   `prewarm_export_pools` call inside the
-   `let device = { let mut device = Arc::new(device); ... };` block
-   in `HostVulkanDevice::new()`.
-2. `cargo build --release -p camera-python-display`.
-3. Run with `STREAMLIB_CAMERA_DEVICE=/dev/video2`,
-   `STREAMLIB_DISPLAY_FRAME_LIMIT=180`, `timeout --kill-after=5 30`.
-4. Without the pre-warm: log shows `Setup failed: ... CameraToCudaCopy:
-   new_opaque_fd_export_device_local: ... A device memory allocation
-   has failed.`
-5. Re-enable, rebuild, re-run: log shows `HostVulkanDevice export
-   pool sentinel retained: opaque_fd_device_local (256 bytes)`
-   plus `HostVulkanDevice export pools pre-warmed`, followed by
-   `CameraToCudaCopy: registered cuda OPAQUE_FD DEVICE_LOCAL
-   surface_id=...` — no setup failure.
+Comment out the `prewarm_export_pools` call in
+`HostVulkanDevice::new()`. The consumer's post-swapchain allocation
+fails deterministically on vivid (`/dev/video2`). With the pre-warm
+re-enabled, it succeeds.
 
 ### B. Probe-gate-removed protocol (catches the #638 regression)
 
-Reproduces the intermittent flake on Cam Link 4K (`/dev/video0`) once
-the engine sentinels are intact:
-
-1. Edit `camera.rs` to remove the
-   `supports_cross_device_dma_buf_probe` gate (or change the
-   `HostVulkanDevice::supports_cross_device_dma_buf_probe()` body to
-   always return `true`).
-2. `cargo build --release -p camera-python-display`.
-3. Run with `STREAMLIB_CAMERA_DEVICE=/dev/video0` (Cam Link 4K),
-   `STREAMLIB_DISPLAY_FRAME_LIMIT=180`, `timeout --kill-after=5 35`,
-   10× cold-shell.
-4. Without the gate: at least one of the 10 runs logs
-   `Setup failed: ... CameraToCudaCopy: new_opaque_fd_export_device_local:
-   ... A device memory allocation has failed.` (1/10 rate observed
-   during the original PR `fix/opaque-fd-export-sentinels-637`'s
-   E2E and the #638 retest).
-5. Restore the gate, rebuild, re-run 10×: zero failures.
+With the engine sentinels intact, remove the
+`supports_cross_device_dma_buf_probe` gate in the V4L2 capture backend
+(or change the `HostVulkanDevice::supports_cross_device_dma_buf_probe()`
+body to always return `true`). On Cam Link 4K (`/dev/video0`), at
+least one of 10 cold-shell runs fails (1/10 observed in PR
+`fix/opaque-fd-export-sentinels-637`'s E2E and the #638 retest). With
+the gate restored, 10 runs give zero failures.
 
 Vivid (`/dev/video2`) does NOT reproduce because the
 `is_virtual_device` check skips the probe regardless. Only real UVC
@@ -225,29 +185,19 @@ accounting.
 
 ### C. Sentinels-dropped protocol (catches the #637 regression)
 
-Reproduces the intermittent flake on Cam Link 4K (`/dev/video0`)
-specifically:
+Make `prewarm_export_pools` return `Vec::new()` instead of pushing
+OPAQUE_FD sentinels, OR change the `Drop` impl to take and free the
+sentinels *before* any consumer can allocate (defeating the
+long-lived purpose). Keep the rest of the pre-warm intact (DMA-BUF
+probes still allocate-and-drop). On Cam Link 4K (`/dev/video0`) the
+first cold-shell run fails intermittently, not deterministically:
+10× repeats are needed; expect 1–3 failures in a fresh run. Vivid
+does NOT reproduce. With the sentinels restored, 10 runs give zero
+failures.
 
-1. Edit `vulkan_device.rs` so `prewarm_export_pools` returns
-   `Vec::new()` instead of pushing OPAQUE_FD sentinels, OR change
-   the `Drop` impl to take and free the sentinels *before* any
-   consumer can allocate (defeating the long-lived purpose). Keep
-   the rest of the pre-warm intact (DMA-BUF probes still
-   allocate-and-drop).
-2. `cargo build --release -p camera-python-display`.
-3. Run with `STREAMLIB_CAMERA_DEVICE=/dev/video0` (Cam Link 4K),
-   `STREAMLIB_DISPLAY_FRAME_LIMIT=180`, `timeout --kill-after=5 30`.
-4. Without the sentinels: the first cold-shell run intermittently
-   logs `Setup failed: ... CameraToCudaCopy:
-   new_opaque_fd_export_device_local: ... A device memory allocation
-   has failed.`. Vivid does NOT reproduce — only Cam Link does, and
-   not deterministically. 10× repeats are needed; expect 1–3 failures
-   in a fresh run.
-5. Restore the sentinels, rebuild, re-run 10×: zero failures.
-
-If step 4 stops reproducing the failure on a fresh driver, the
-NVIDIA-side mechanism may have changed and the size-class /
-decay model in this learning is stale. Update accordingly.
+If a fresh driver stops reproducing these failures, the NVIDIA-side
+mechanism may have changed and the size-class / decay model in this
+learning is stale. Update accordingly.
 
 ## Reference
 

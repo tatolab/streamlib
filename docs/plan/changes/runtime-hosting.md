@@ -3,7 +3,7 @@
 Step 4 of the one-runtime-per-machine pivot: one runtime per machine runs many streams, keeps the
 ones it was told to keep, is addressed by its machine, and arrives from an installer. After it:
 - `tatolabd` takes no stream. It is the machine's one runtime process — one engine, one GPU
-  context, ~~one Zenoh session,~~ one local API on one socket — and streams load into it and leave it
+  context, one local API on one socket — and streams load into it and leave it
   without touching each other; each has its own graph, events, registry of node types,
   interpreter, logs, shutdown, watchdog and exposures;
 - every stream action the CLI has — `run`, `run -d`, `stop`, `start`, `rm`, `streams`, `expose` —
@@ -28,8 +28,7 @@ here with decisions 1 to 5, all resolved by the owner.
 `:4027-4031` (own configuration — router mode is step 8's), `:4061-4087` (address, collisions),
 `:4088-4095` (exposure); §Distribution `:4225-4235`; §Control plane `:4415-4431`, `:4575-4583`,
 `:4596-4601`. Not built against: needs `:1417`, resources `:1437`, accelerators optional `:1891`
-(the GPU still initialises at start), packs `:584`, discovery `:4096`, the stream map `:4113`,
-URLs `:4125`, the relay role, the control client. **Sequencing:** after #2592, #2593 and #2566.
+(the GPU still initialises at start), packs `:584`, URLs `:4125`, the control client. **Sequencing:** after #2592, #2593 and #2566.
 
 **Verified against the tree 2026-10-02 (HEAD 65e6c53a7)**, three sweeps; `E` =
 `runtime/streamlib-engine/src`, `A` = `runtime/streamlib-api-server`.
@@ -122,8 +121,8 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 
 - **`Runner` is the engine.** `tatolabd` builds one; the library type stays constructible so the
   runtime suite runs many per test binary. It makes the `GpuContext` once (so
-  `VULKAN_DEVICE_FOR_IMPORT` names the only device), the iceoryx2 node, one tokio runtime, the
-  ~~mesh membership,~~ one surface service keyed by stream, signal ownership, and hosts the local API
+  `VULKAN_DEVICE_FOR_IMPORT` names the only device), the iceoryx2 node, one tokio runtime,
+  one surface service keyed by stream, signal ownership, and hosts the local API
   itself — the `ApiServer` processor and `control_plane_host.rs` go.
 - **`LoadedStreamInThisRuntime`**, keyed by stream name: its `Compiler`, `RuntimeStatus`,
   listener, and a `RuntimeContext` sharing the engine's GPU, node and tokio whose `runtime_ops` is
@@ -139,12 +138,11 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   threads, the runtime exits 124, counted (engineering) as a crash implicating those streams.
 - **Links between streams on one machine** ride iceoryx2 with no exposure; the input's stream owns
   the link; a source stream not loaded leaves it `awaiting_remote`, reason naming it.
-- ~~**A remote port read by several streams** has one ingress per machine that each subscribes to.~~
 
 ## ADDED: §Product — `tatolabd`, the state directory, the verbs
 
-- **`tatolabd`** takes the machine lock, opens the state directory, resolves the machine name, ~~joins
-  the mesh,~~ serves `<runtime dir>/local-api.sock`, and re-loads every kept stream neither stopped
+- **`tatolabd`** takes the machine lock, opens the state directory, resolves the machine name,
+  serves `<runtime dir>/local-api.sock`, and re-loads every kept stream neither stopped
   nor failed (decision 5); one that cannot re-load is `failed`, never deleted. It never detaches.
   Signed on macOS, it loads only its bundled Vulkan loader and MoltenVK, named in
   `VK_ADD_DRIVER_FILES` before the first instance.
@@ -155,7 +153,7 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   any squatter, is refused naming its user, pid and executable (peer credentials, `F_GETLK`); any
   user may take the one runtime first, the decided "whoever started it"; the CLI names it too.
 - **The state directory**: `$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or
-  `~/Library/Application Support/Tatolab/`: `machine.json` (machine id, name~~, mesh settings~~),
+  `~/Library/Application Support/Tatolab/`: `machine.json` (machine id, name),
   `streams/<stream>.json` per kept stream (the graph compiled at load, the environment, `stopped` or
   `failed` and why, its crash count, exposure rulings; mode 0600) and the runtime's own log, which
   belongs to no project. A stream's logs and pipeline cache stay under its project's `.streamlib/`,
@@ -177,40 +175,33 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
   `expose_port {stream, node, port, exposed}` (the owner's ruling,
   recorded for a kept stream; the function's `exposed` is the default for a port without one).
   `dev` is `run` plus a watch re-loading on save and, after a crash, waiting and loading again.
-  `set --machine-name` ~~`| --mesh-name | --mesh-peer | --mesh-listen | --no-mesh-multicast-discovery`~~
-  writes `machine.json`, applied at the next start, said so~~; `tatolabd` flags, then
-  `STREAMLIB_MESH_*`, override it~~ — the flags `run` and `dev` carried today leave them.
+  `set --machine-name` writes `machine.json`, applied at the next start, said so — the flags `run`
+  and `dev` carried today leave them.
 - **Restart.** The service restarts `tatolabd` on failure and kept streams return; criterion
   (#2559's record): `kill -9` on the rig, the kept scaffold stream shows frames again within 10 s.
 
 ## ADDED: §Control plane — every tool names its stream
 
-- `graph {stream?}`: one stream's one-shape graph, loadable, or `{machine, streams: […]}` ~~with `mesh`~~.
+- `graph {stream?}`: one stream's one-shape graph, loadable, or `{machine, streams: […]}`.
   `add_node`, `remove_node`, `connect`, `disconnect`, `tap` and `logs` take `stream`; `exchange`
   takes a surface id, unique on the machine. A link end renders right-anchored — `{node, port}`,
   `{stream, node, port}`, `{machine, stream, node, port}` — and `connect` takes `<end>_machine`,
   `<end>_stream`, `<end>_node`, `<end>_port`, leading parts omitted meaning here; `tap`'s channel
-  is an address. ~~Renamed on the wire: `created_by_machine`, `mesh.machine`, `peers[].machine`,
-  `egress_ports[].readers: [{machine, stream}]`, `link_requests_awaiting_machine` and
-  `awaiting_machine`, `disconnect`'s `input_machine` and `input_stream`, `connect`'s answer
-  `input_machine`, a link request's `requester_machine` and `requester_stream`.~~ The `graph`
+  is an address. The `graph`
   resource, the catalog, instructions and prompts follow. `nodes`, `--node` and the registry go:
-  one socket at a fixed path~~; `graph.mesh` lists peers~~.
+  one socket at a fixed path.
 
 ## MODIFIED: §Networking — the machine segment
 
-> **Amended 2026-10-04** by the moq-on-the-tailnet pivot (`docs/decisions/moq-on-the-tailnet.md`):
-> Zenoh is removed before this change is built, and this change is built minus its mesh parts.
-> Cut wherever this file names them: `tatolabd`'s Zenoh session and joining the mesh; the mesh
-> settings in `machine.json`, the `set --mesh-*` flags and `STREAMLIB_MESH_*`; `graph`'s `mesh`,
-> `peers[]`, `egress_ports[]` and every link-request key; `remote_input`; one ingress per machine
-> for a remote port; the mesh fixtures; the Zenoh token and keys, the machine id on the token, the
-> claim and the `-2` suffix. A machine's name is its tailnet name, read from Tailscale's status,
+> **The mesh is gone (#2643, #2645)**, removed ahead of this change by the moq-on-the-tailnet
+> pivot (`docs/decisions/moq-on-the-tailnet.md`), and this change is built minus its mesh parts.
+> Cut wherever this file still names them: the mesh keys and the announcement (the scale gate);
+> the mesh files the recon lists; the offer and link-request answers and `*ThisRuntimesGraph`
+> (§Processor model, the inventory); §Networking's machine-name claim (`:3565-3592`, claiming)
+> and its `<name>-2` suffix. A machine's name is its tailnet name, read from Tailscale's status,
 > else the hostname, cast. An address naming another machine links nothing until the sharing step.
 
-- ~~**Addresses and keys**, **The machine id**: the Zenoh token and keys gaining the stream, the
-  machine id riding the token, the claim over `@machine` tokens.~~ (Condensed; full text at 107acbc24.)
-- **The builder.** `stream.remote_output(address)` ~~and `remote_input(address)`~~ takes the address
+- **The builder.** `stream.remote_output(address)` takes the address
   string, right-anchored — `"main/camera/video"` another stream here, `"rig/main/camera/video"`
   another machine — each chunk cast; one casting to empty, `.` or `..` refused where written.
 
@@ -247,8 +238,9 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 ## MODIFIED: in-flight change files
 
 - package-split-and-lend: `tatolabd` finds the lend at `../lib/tatolab/lend` or, inside the
-  bundle, through the layout above. stream-graph: the builder's remote references take an address
-  string; its names take decision 3's cast and `-2` (re-spelled in that file).
+  bundle, through the layout above. stream-graph: its names take decision 3's cast and `-2`
+  (re-spelled in that file); its builder's remote references are gone with the mesh (#2643,
+  #2645).
 
 ## MODIFIED: records re-spelled at the fold
 
@@ -269,10 +261,9 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 | `GpuContext` per `start()`; a surface service per `Runner`; the `ApiServer` processor, `control_plane_host.rs`, one `RuntimeOperations` | once per engine | S1 |
 | `*ThisRuntimesGraph` | `*ThisStreamsGraph` | S1 |
 | `tatolabd --stream-graph`; the CLI's compile and spawn; #2592's harness, fixtures and macOS done-proof starting `tatolabd` through `run` | `run_stream`; the harness starts `tatolabd` | S2 |
-| `node_registry.rs`, `nodes`, `--node`, `local-api-<runtime_id>.sock`; `shutdown`; the Quit item~~; `run`/`dev` mesh flags~~ | one socket; `set` | S2 |
+| `node_registry.rs`, `nodes`, `--node`, `local-api-<runtime_id>.sock`; `shutdown`; the Quit item | one socket; `set` | S2 |
 | `runtime_name.rs`, `STREAMLIB_RUNTIME_NAME`, `--runtime-name`, the duplicate check | `machine_name.rs`, `machine.json` | S3 |
-| The three-part address type~~, `@runtime` keys~~, every `*runtime_name*` key in `graph` and MCP~~, requests, ingress, egress~~; `remote_output(runtime_name, node, port)` | four parts | S3 |
-| ~~A `meshlink-` ingress per reader; the mesh fixtures and rigs naming runtimes~~ | ~~one per machine; two machines or two streams~~ | S3 |
+| The three-part address type, every `*runtime_name*` key in `graph` and MCP | four parts | S3 |
 | `.claude/` skills naming `nodes`, `--node`, runtime names | one operating-model PR | after S3 |
 
 ## Left to later changes

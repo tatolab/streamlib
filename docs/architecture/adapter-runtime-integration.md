@@ -145,10 +145,6 @@ with ctx.gpu_limited_access.resolve_surface(surface_id) as surface:
     surface.lock(read_only=False)
 ```
 
-> A "Deno subprocess" code sample was removed here: it showed a TypeScript
-> `adapter.acquireWrite` scope — the Deno SDK and its native cdylib are gone
-> and Python is the only authoring runtime.
-
 The customer never sees DMA-BUF FDs, DRM modifiers, timeline
 semaphores, queue family ownership transitions, or escalate
 request IDs. That's the whole point of the adapter pattern.
@@ -483,11 +479,6 @@ What that cost buys:
   can only flip a compile-time bit. The hook makes the work the
   application has to do for that adapter visible at the call site,
   next to the surface-allocation arguments.
-
-> A "per-adapter install_default" paragraph was removed here: it proposed
-> `streamlib_adapter_cpu_readback::install_default(&runtime, surface_size)`
-> — no adapter crate defines any `install_default`, and architecture docs
-> carry no proposed work.
 
 Don't replace explicit
 registration with implicit feature-flag discovery — the auditability

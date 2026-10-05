@@ -50,36 +50,25 @@ end-to-end via @docs/learnings/camera-display-e2e-validation.md.
 
 2. **The engine pre-warms every export-capable VMA pool at
    `HostVulkanDevice::new()` time** (DMA-BUF buffers, DMA-BUF images
-   linear and tiled, OPAQUE_FD HOST_VISIBLE and DEVICE_LOCAL buffers)
-   by allocating a tiny probe through each pool and dropping it,
-   strictly before any caller can build a `VkSwapchainKHR`. Empirical
-   observation from issue #624: this keeps the post-swapchain
-   allocation path open for that handle type. Note that the host RHI
+   linear and tiled, OPAQUE_FD HOST_VISIBLE, host-cached and DEVICE_LOCAL
+   buffers, and the OPAQUE_FD image pool)
+   by allocating a tiny probe through each pool, strictly before any
+   caller can build a `VkSwapchainKHR`. Empirical observation from
+   issue #624: this keeps the post-swapchain allocation path open for
+   that handle type. DMA-BUF probes are dropped. Note that the host RHI
    pixel-buffer and texture constructors all set
    `vma::AllocationCreateFlags::DEDICATED_MEMORY`, so every export
    allocation is its own `VkDeviceMemory` and dropping the probe
    actually issues `vkFreeMemory` — VMA does not "retain a block"
    for subsequent allocations. The cap-bypass mechanism is internal
-   to NVIDIA's driver (one-way reservation initialized by the first
-   export allocation, surviving the free) rather than VMA-side block
-   retention. Construction either yields a fully pre-warmed
-   `Arc<HostVulkanDevice>` or fails — there is no half-formed
-   instance for callers to observe. Companion learning for
-   OPAQUE_FD: @docs/learnings/nvidia-opaque-fd-after-swapchain.md.
-
-   > ~~**Pre-allocate exportable resources BEFORE creating the
-   > swapchain.** Camera processors should acquire-and-release a
-   > pixel buffer in their `start()` to trigger lazy pool creation
-   > while the budget is freely available. See
-   > `LinuxCameraProcessor::start()` for the exact pattern.~~ —
-   > Superseded 2026-05-02 by engine-level pre-warm in
-   > `HostVulkanDevice::new()` (issue #624). The consumer-level
-   > pattern was load-bearing only because the engine deferred
-   > block materialization to first use; once the engine pre-warms,
-   > consumers no longer need to. The previous pattern persisted in
-   > `camera.rs`, `display.rs`, `h264_decoder.rs`, and `h265_decoder.rs`
-   > and was swept out in the same PR per the "no bad patterns left
-   > behind on engine changes" rule in CLAUDE.md.
+   to NVIDIA's driver rather than VMA-side block retention: the
+   per-handle-type state stays open while a live allocation of that
+   type anchors it, and for DMA-BUF the compositor's swapchain imports
+   are that live allocation. OPAQUE_FD has no ambient anchor, so its
+   probes are retained as long-lived sentinels. Construction either
+   yields a fully pre-warmed `Arc<HostVulkanDevice>` or fails — there
+   is no half-formed instance for callers to observe. Companion
+   learning for OPAQUE_FD: @docs/learnings/nvidia-opaque-fd-after-swapchain.md.
 
 3. **Size per-frame Vulkan resources to MAX_FRAMES_IN_FLIGHT (2), not
    swapchain image_count.** See @docs/learnings/vulkan-frames-in-flight.md.

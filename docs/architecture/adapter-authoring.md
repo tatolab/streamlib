@@ -477,12 +477,8 @@ ambient availability) lives in the *Trade-off* section of
 adapter setup is per-runtime and lifetime-controlled, neither of
 which a Cargo feature can express.
 
-> A "Polyglot coverage" section was removed here: every artifact it named —
-> the `streamlib-python-native` / `streamlib-deno-native` cdylibs, the
-> `sdk/streamlib-python/` adapter mirror, `packages/escalate/schemas/`, and the
-> Deno half of "both Python AND Deno together" — has been deleted. Adapters are
-> statically linked into the wheel, and a helper process imports that same wheel
-> rather than a separate cdylib.
+Adapters are statically linked into the wheel, and a helper process imports
+that same wheel rather than a separate cdylib.
 
 ## Cross-process producer composition
 
@@ -553,13 +549,6 @@ The `initial_layout` becomes the Vulkan adapter's `current_layout`
 at registration time on the cdylib side, so the QFOT release
 barrier issues from the right source layout.
 
-> A "Subprocess customer / producer adapter SDK method" passage was removed
-> here: the Python and Deno `release_for_cross_process` snippets, the thin
-> delegating SDK wrapper, and the `VulkanContext` lazy-registration note —
-> no crate or stub defines `release_for_cross_process`, the wheel exposes no
-> `OpenGLContext` / `VulkanContext`, the Deno SDK is deleted, and there is
-> no `SurfaceHandle` type.
-
 ### Why not add a Vulkan device handle to the producer adapter
 
 Two alternatives were considered and rejected:
@@ -613,11 +602,6 @@ the DMA-BUF / OPAQUE_FD kernel cache). The dual-registration
 pattern (cross-process publish + same-process Path-1 entry when an
 in-process hot-path consumer also reads the surface) applies
 unchanged.
-
-> > A "Reference" section was removed here: `examples/polyglot-opengl-
-> fragment-shader/runner/`, its Python and Deno scenario binaries, and their
-> `release_for_cross_process` calls — the example directory is gone, the
-> Deno SDK is deleted, and no crate defines `release_for_cross_process`.
 
 ## Conformance & tests
 
@@ -722,11 +706,8 @@ believe the single-pattern principle is wrong for it, **stop and
 surface the disagreement before building a parallel shape.** That
 conversation belongs in an issue, not in code.
 
-> A "Hypothetical walkthrough — Metal on macOS via MoltenVK" section was
-> removed here: 70 lines applying the checklist to `streamlib-adapter-
-> metal`, an adapter its own text calls "not yet shipped". On macOS the
-> Vulkan, CPU-readback and Skia adapters build on MoltenVK; OpenGL and CUDA
-> are absent there, each saying so at its crate root.
+On macOS the Vulkan, CPU-readback and Skia adapters build on MoltenVK; OpenGL
+and CUDA are absent there, each saying so at its crate root.
 
 ## Reference adapters
 

@@ -123,10 +123,10 @@ Retired by consolidation change (its own tracked change with tickets, not a side
 
 | Cluster | Today | Becomes |
 |---|---|---|
-| Package/module system (6 docs, 2,367 L, densest supersession zone) | competing, unowned | ~~ARCHITECTURE.md §Module system + at most one reference doc~~ — Superseded 2026-08-02 by `importable-python-library`: the module system is deleted; these docs are removed outright by the rip-out change |
+| Package/module system (6 docs, 2,367 L, densest supersession zone) | competing, unowned | removed outright by the rip-out change, with the module system |
 | Surface adapters (4 docs, 1,931 L) | overlapping | §Adapters + one authoring reference (ABI halves deleted by the pivot; consolidate what survives) |
 | RHI kernels (5 docs, one identical skeleton) | five copies of one template | one reference doc, five sections |
-| Plugin ABI / cdylib (3 docs, 1,425 L) | mixed state+rationale | ~~§Plugin ABI; `cdylib-reachability.md`'s decision-tree content moves to an ADR~~ — Superseded 2026-08-02: the plugin ABI is deleted; these docs are removed outright by the rip-out change |
+| Plugin ABI / cdylib (3 docs, 1,425 L) | mixed state+rationale | removed outright by the rip-out change, with the plugin ABI |
 | `vendored-vulkanalia.md`, logging pair | fine | kept |
 | Root `README.md` | worst-rotted doc in the tree | rewritten against the plan |
 
@@ -185,12 +185,9 @@ ends with a say-back loop, and none of them commits work:
 
 - **Kept unchanged:** the nine live-ops CLI skills (`discover-running-nodes` …
   `teardown-running-node`) — already perfectly shaped (one skill = one CLI verb);
-  `gh-stack`; `local-ci-runner`; `rust-craftsmanship-reviewer`; the five domain experts
-  (with two charter fixes: `polyglot-ipc-expert` still mandates the repealed
-  Python+Deno-together rule; `package-source-expert` aligns to the plan's module-system
-  entry). — Charter-fix note superseded 2026-08-02 by `importable-python-library`:
-  `plugin-abi-expert` and `package-source-expert` retire with their subjects;
-  `polyglot-ipc-expert` re-scopes to helper-process IPC.
+  `gh-stack`; `local-ci-runner`; `rust-craftsmanship-reviewer`; the three domain experts —
+  `gpu-vulkan-expert`, `linux-media-expert`, and `polyglot-ipc-expert`, re-scoped to
+  helper-process IPC.
 - **Consolidated:** `pr-review-gate` + `change-verifier` overlap heavily (both check test
   lock-in, scope, boundaries, naming) and each PR currently runs up to four review
   lenses. Owner review is the bottleneck — one merged `review-pr` lens (plus
@@ -199,7 +196,8 @@ ends with a say-back loop, and none of them commits work:
   runs the pipeline) state opposite primary modes. One is chosen; the other's charter is
   rewritten to match. [NEEDS DECISION — recommend LOOP-RUN primary, handshake fallback,
   matching `verify-live`.]
-- **Retired:** `draft-design` (premise — per-issue design — is now forbidden by
+- **Retired:** `plugin-abi-expert` and `package-source-expert`, with their subjects;
+  `draft-design` (premise — per-issue design — is forbidden by
   docs-policy), `file-issue` for planned work, the external `amos-next` protocol
   (already broken in four places against this repo: deleted `.claude/workflows/` refs,
   repealed sweep step, drifted rule quotes, missing feedback files). The amos CLI
@@ -218,10 +216,10 @@ it or how. The one per-machine knob is the advisory `rig-brake` note: the untrac
 plus glob exceptions) on that machine; the checked-in `.claude/rig-brake.json` is the shared
 baseline.
 
-### Skill invocation is enforced, not hoped for
+### Skill invocation is layered, not hoped for
 
-A model can't be *forced* to invoke a skill — so the system makes the side effects of
-skipping one physically fail, in layers from soft to hard:
+A model can't be *forced* to invoke a skill — so the system layers what it can, from soft
+to hard:
 
 1. **Router text in CLAUDE.md** (always loaded): all work enters through `/plan`; source
    edits happen only inside `/implement` with a confirmed ticket; plan *decisions* happen
@@ -232,11 +230,11 @@ skipping one physically fail, in layers from soft to hard:
 3. **Hooks**: `rig-brake` (an advisory note on rig-consuming Bash; each rule's outcome and
    the owner's glob exceptions live in `.claude/rig-brake.json` and its local / user-level
    siblings, edited with `.claude/scripts/rig-brake`) and `worktree-gc` (post-merge
-   cleanup). The
-   source-edit gate that required `.claude/state/active-ticket.json` was unwired 2026-08-15 —
-   it prompted on every engine edit, which is what taught sessions to click through. Routing
-   source edits through `/implement` is now session-applied doctrine with no enforcement
-   layer. The script is still at `.claude/hooks/plan-gate.sh`, referenced by nothing.
+   cleanup). Routing source edits through `/implement` is session-applied doctrine with no
+   enforcement layer; `.claude/hooks/plan-gate.sh` is referenced by nothing. Rejected: a
+   PreToolUse hook gating source edits on `.claude/state/active-ticket.json` (`plan-gate.sh`)
+   — it prompted on every engine edit and taught sessions to click through (owner,
+   2026-08-15).
 4. **CI backstop**: the PR body must reference a ticket; `review-pr` flags any new public
    trait / module / cross-crate boundary the change proposal doesn't name.
 
@@ -253,26 +251,16 @@ every keystroke under `docs/plan/`:
   can't. A record of what shipped lands with the work; a `DECIDED` / `OPEN` entry moves
   only inside `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
 
-> ~~`settings.json` puts `Edit(docs/plan/**)` on the **ask** list … the PreToolUse hook
-> additionally rejects plan writes unless one of the four plan-editing skills has set its
-> marker.~~ — Superseded 2026-08-11: both are removed, and the `plan-session` marker with
-> them. A path guard sees a path, never an intent, so it prompted identically on a
-> corrected file anchor and on a reversed decision. The factual majority trained the owner
-> to click through without reading — which cost the prompt its meaning on the rare edit
-> that deserved it — and trained sessions to escalate trivia instead of finishing work.
-
 ### Rules have a lifecycle
 
 Rules under `.claude/rules/` shrink to **invariants only** (licensing, naming, RHI
-boundary, comments — the plugin-ABI rule retires with the ABI, 2026-08-02). Process prose migrates into skill gates, which are
+boundary, comments). Process prose migrates into skill gates, which are
 testable; a rule that a skill gate now enforces gets deleted via `/propose-rule`. New
 rules enter only through `/propose-rule` — evidence, draft, owner approval, dedicated
 PR — never accreted mid-session because something annoyed an agent once.
 
 ### Mechanical gates
 
-- The deny rules on consumers (landed 2026-07-29) — agents cannot read or edit
-  distributables and examples.
 - `[NEEDS DECISION]` as a hard stop in `/propose-change` and `/implement`.
 - The REMOVED-grep gate in `/ship-change` — scripts under `.claude/scripts/`, not prose.
 - `review-pr` gains one check: any new public trait, module, or cross-crate boundary in
@@ -284,15 +272,14 @@ PR — never accreted mid-session because something annoyed an agent once.
 
 ## Numeric caps (hard numbers survive agent interpretation; prose doesn't)
 
-- Change proposal ≤ 350 lines (owner decision 2026-08-07, raised from 200); the number is
+- Change proposal ≤ 350 lines (owner decision 2026-08-07); the number is
   never met by dropping file:line citations or worked API spelling. Ticket count per change
   is guidance, not a cap (owner decision 2026-08-02): as few tracer bullets as the change
   honestly needs.
 - Scale gate, decided at entry: bug fix / refactor / test work → **no change artifact at
   all** (the default path); new behavior or changed contract → delta change; anything
   touching the RHI, the IPC wire format, the processor model, or the Python API's
-  public contract → delta + ADR (the plugin-ABI trigger retired 2026-08-02 with the
-  ABI).
+  public contract → delta + ADR.
 
 ## Rollout (MVP-first; each wave usable before the next starts)
 
@@ -318,14 +305,6 @@ PR — never accreted mid-session because something annoyed an agent once.
 3. `verify-live` vs `evidence-verifier` primary mode — recommend session-runs-the-pipeline
    primary (today's "LOOP-RUN" vocabulary gets renamed `self-run`; no relation to the
    retired loop), owner-terminal handshake as fallback.
-4. The three edit-denied docs (`logging-schema.md`, `testing-hardware.md`,
-   `schema-identity-and-packaging.md`) — ~~the last has four supersession blocks and
-   can only rot while frozen. Unfreeze into the consolidation, or keep frozen?~~ —
-   Resolved 2026-08-02 by `importable-python-library`: `schema-identity-and-packaging`
-   is deleted by the rip-out; the question remains only for the first two.
-5. ~~Parked ticket #1624 (retire `.slpkg` for plain `.zip`) — becomes a plan decision
-   in §Distribution; ~650 occurrences hang on it.~~ — Resolved 2026-08-02: `.slpkg` is
-   deleted entirely by `importable-python-library`; #1624 is moot.
-6. Bring the ticket lifecycle in-tree (replace external amos-next protocol with
+4. Bring the ticket lifecycle in-tree (replace external amos-next protocol with
    `/implement`) — recommend yes; it is the single highest-leverage move the inventory
    found.
