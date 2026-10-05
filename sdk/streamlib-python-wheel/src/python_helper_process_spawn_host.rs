@@ -138,14 +138,14 @@ pub(crate) fn captured_app_entry_directory() -> Option<PathBuf> {
 /// The directory a child should import the app's own modules from.
 ///
 /// `sys.path[0]` rather than `sys.argv[0]`'s parent, because it is the one slot
-/// both launch paths agree on: CPython puts the script's directory there for
-/// `python app.py`, and `streamlib run` / `dev` inserts the entry file's
-/// directory there before executing it. `sys.argv` cannot answer this — the
-/// launcher narrows it to the entry file only for the span of that execution
-/// and restores its own argv in a `finally`, and the `Runtime` is constructed
-/// *after* that, by the launcher calling the app's `setup(rt)`. A child would
-/// get the wheel's own package directory and fail to import the app's
-/// processors at all.
+/// both launch paths agree on: CPython puts the script's directory there for a
+/// hand-run `python <script>.py`, and `streamlib run` / `dev` inserts the
+/// directory the entry imports from there before executing it. `sys.argv`
+/// cannot answer this — the launcher narrows it to the entry only for the span
+/// of that execution and restores its own argv in a `finally`, and the
+/// `Runtime` is constructed *after* that, once the launcher has compiled the
+/// entry's `@stream` function. A child would get the wheel's own package
+/// directory and fail to import the app's processors at all.
 ///
 /// Empty is `python -c`'s value for the slot and means the working directory,
 /// which the child inherits anyway.
@@ -1828,7 +1828,7 @@ sys.exit(0)
 
     /// The class the child imports, and the identifiers it reports itself by,
     /// travel in the environment. `STREAMLIB_ENTRYPOINT` *is* the import path
-    /// `rt.add` derived and refused an unimportable class by.
+    /// `stream.add` derived and refused an unimportable class by.
     #[test]
     fn the_child_is_told_which_class_to_import_and_who_it_is() {
         let command = spawn_host_for_test(None).build_helper_process_command(

@@ -62,14 +62,6 @@ impl PythonProcessorDeclaration {
     }
 }
 
-/// Whether a Python class carries the decorator's metadata at all.
-pub(crate) fn is_declared_processor_class(candidate: &Bound<'_, PyAny>) -> bool {
-    candidate.is_instance_of::<pyo3::types::PyType>()
-        && candidate
-            .hasattr("__streamlib_processor_declared__")
-            .unwrap_or(false)
-}
-
 /// The class's short name — what an instance's display name defaults to.
 ///
 /// `__name__` is CPython's own short name for the class (`Inner` for a nested
@@ -566,7 +558,8 @@ class BlurProcessor:
     }
 
     /// Run the real decorator module, run `class_body_source` against it, and
-    /// read the resulting class through the bridge the engine uses at `rt.add`.
+    /// read the resulting class through the bridge the engine reads a declared
+    /// class by.
     ///
     /// A refusal raised at decoration and one raised at the bridge both land
     /// in the `Err` arm, because to an author they are one refusal.
@@ -894,7 +887,8 @@ class AudioConsumer:
         )
     }
 
-    /// Read a hand-built marker through the bridge the engine uses at `rt.add`.
+    /// Read a hand-built marker through the bridge the engine reads a declared
+    /// class by.
     fn read_hand_built_marker(audio_window_fields: &str) -> PyResult<PythonProcessorDeclaration> {
         Python::initialize();
         Python::attach(|python| {
