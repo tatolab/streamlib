@@ -10,7 +10,7 @@
 //! Rust/Python/Deno). To observe a viewable video feed, tap an ENCODED
 //! (h264/h265/jpeg) or container (CMAF/fMP4) channel; a RAW video channel carries
 //! zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels.
-//! It is not a realtime-video transport — that is the WebRTC/MoQ/display processors.
+//! It is not a realtime-video transport — that is the WebRTC/display processors.
 //!
 //! A channel data service is opened with `max_subscribers =
 //! MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL +

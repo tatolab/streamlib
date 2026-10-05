@@ -1252,7 +1252,7 @@ mod tests {
     #[test]
     fn a_package_directory_outside_the_repository_is_refused_rather_than_baked_in() {
         for rejected in [
-            "/home/someone/streamlib/packages/streamlib-moq",
+            "/home/someone/streamlib/packages/streamlib-webrtc",
             "../elsewhere",
         ] {
             let target = NoticesGenerationTarget::ExtensionPackage {
@@ -1267,7 +1267,7 @@ mod tests {
 
         assert!(
             NoticesGenerationTarget::ExtensionPackage {
-                package_directory: PathBuf::from("packages/streamlib-moq"),
+                package_directory: PathBuf::from("packages/streamlib-webrtc"),
             }
             .ensure_the_package_directory_is_repository_relative()
             .is_ok()
@@ -1277,7 +1277,7 @@ mod tests {
     /// Every directory under `packages/` whose `pyproject.toml` declares the
     /// extension entry-point group, as a repository-relative path.
     ///
-    /// Discovered rather than listed, so a third extension is covered the day
+    /// Discovered rather than listed, so a second extension is covered the day
     /// its `pyproject.toml` lands. Read off the parsed document rather than by
     /// searching the source text, which would call a package an extension for
     /// naming the group in a comment or a URL.

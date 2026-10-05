@@ -1144,13 +1144,12 @@ enum Commands {
     CheckBoundedAptInstall,
 
     /// Drift trip-wire for the vendored third-party trees — the vulkanalia
-    /// fork (`vendor/tatolab-vulkanalia{,-sys,-vma}`) and the MoQ wheel's
-    /// `moq-transport` (`packages/streamlib-moq/vendor/moq-transport`): hashes
-    /// each vendored crate dir and fails on any byte change vs. the recorded
-    /// hash — the guard against accidental in-place edits (a workspace `cargo
-    /// fmt --all` sweep is the classic cause). Deliberate re-vendors and
-    /// recorded patches update the hashes in the same commit per the tree's
-    /// provenance doc under `docs/architecture/`.
+    /// fork (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored
+    /// crate dir and fails on any byte change vs. the recorded hash — the
+    /// guard against accidental in-place edits (a workspace `cargo fmt --all`
+    /// sweep is the classic cause). Deliberate re-vendors and recorded patches
+    /// update the hashes in the same commit per
+    /// `docs/architecture/vendored-vulkanalia.md`.
     CheckVendoredTrees,
 
     /// CI gate keeping every in-tree `{ path = "…", version = "…" }` requirement

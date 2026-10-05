@@ -5,10 +5,9 @@
 # vendored tree's own licence headers alone, and those two pull against each
 # other. The exemption is the side that fails silently: an over-wide pathspec
 # stops covering first-party code and nothing goes red. So every exempt path is
-# paired with at least one sibling a typo would reach: a directory one segment
-# out, a name one suffix longer, or that same name with one more character and
-# no separator at all. The four cases below the vulkanalia block cover the four
-# exempt dirs between them.
+# paired with a sibling a typo would reach: a name one suffix longer, or that
+# same name with one more character and no separator at all. The three sibling
+# cases after the vulkanalia pass case cover the three exempt dirs between them.
 #
 # No toolchain, no network: bash + git. Each case is a throwaway repo, because
 # the gate discovers files with `git ls-files` and would otherwise read the
@@ -60,13 +59,6 @@ plant_untracked() {
 busl_rust() { printf '// Copyright (c) 2025 Jonathan Fontanez\n// SPDX-License-Identifier: BUSL-1.1\n\npub fn f() {}\n'; }
 busl_python() { printf '# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\ndef f(): ...\n'; }
 
-# Byte-for-byte the header on moq-transport 0.16.2's `src/lib.rs` and
-# `src/coding/varint.rs`, which are the two paths the exemption cases plant.
-cloudflare_rust() {
-  printf '// SPDX-FileCopyrightText: 2024-2026 Cloudflare Inc., Luke Curley, Mike English and contributors\n'
-  printf '// SPDX-FileCopyrightText: 2023-2024 Luke Curley and contributors\n'
-  printf '// SPDX-License-Identifier: MIT OR Apache-2.0\n\npub fn f() {}\n'
-}
 apache_rust() { printf '// SPDX-License-Identifier: Apache-2.0\n\npub fn f() {}\n'; }
 
 run_gate() {
@@ -163,37 +155,8 @@ apache_rust | plant vendor/tatolab-vulkanalia-vmax/src/lib.rs
 expect_fail_naming "a sibling of the -vma tree, no separator, still fails" Rust \
   "vendor/tatolab-vulkanalia-vmax/src/lib.rs"
 
-new_repo
-cloudflare_rust | plant packages/streamlib-moq/vendor/moq-transport/src/lib.rs
-cloudflare_rust | plant packages/streamlib-moq/vendor/moq-transport/src/coding/varint.rs
-busl_rust | plant packages/streamlib-moq/src/moq_session.rs
-expect_pass "the MoQ wheel's vendored moq-transport keeps its MIT OR Apache-2.0 headers"
-
-new_repo
-cloudflare_rust | plant packages/streamlib-moq/src/moq_session.rs
-expect_fail_naming "the exemption is the vendored tree, not the wheel around it" Rust \
-  "packages/streamlib-moq/src/moq_session.rs"
-
-new_repo
-cloudflare_rust | plant packages/streamlib-moq/vendor/some-other-crate/src/lib.rs
-expect_fail_naming "a second crate under the same vendor/ dir is not exempt by association" Rust \
-  "packages/streamlib-moq/vendor/some-other-crate/src/lib.rs"
-
-# The two cases a dropped trailing `/` would let through. Without them the
-# exclusion can be written `…/moq-transport*` and the whole suite stays green
-# while every `moq-transport`-prefixed dir silently loses BUSL coverage.
-new_repo
-cloudflare_rust | plant packages/streamlib-moq/vendor/moq-transport-extras/src/lib.rs
-expect_fail_naming "a sibling sharing the exempt name's prefix still fails" Rust \
-  "packages/streamlib-moq/vendor/moq-transport-extras/src/lib.rs"
-
-new_repo
-cloudflare_rust | plant packages/streamlib-moq/vendor/moq-transportx/src/lib.rs
-expect_fail_naming "a sibling sharing it with no separator at all still fails" Rust \
-  "packages/streamlib-moq/vendor/moq-transportx/src/lib.rs"
-
-# Every exemption is Rust-only, and deliberately so: neither vendored tree ships
-# a single `.py`, so the Python check buys its simplicity for free.
+# Every exemption is Rust-only, and deliberately so: the vendored fork ships
+# not a single `.py`, so the Python check buys its simplicity for free.
 new_repo
 apache_rust | plant vendor/tatolab-vulkanalia/src/lib.rs
 printf 'def f(): ...\n' | plant vendor/tatolab-vulkanalia/generator/gen.py

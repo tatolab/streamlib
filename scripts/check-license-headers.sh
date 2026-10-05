@@ -68,23 +68,21 @@ failed_language_checks=()
 # Every Rust file in the repo, not an enumerated set of zone dirs: a list of
 # zones silently exempts every zone nobody remembered to add to it.
 #
-# The vendored trees are verbatim third-party copies under their own licences
+# The vendored trees are verbatim third-party copies under their own licence
 # and deliberately carry NO BUSL headers — the vulkanalia fork is Apache-2.0
-# (docs/architecture/vendored-vulkanalia.md), the MoQ wheel's moq-transport is
-# MIT OR Apache-2.0 under Cloudflare's SPDX headers. One exception, listed by
-# path; see CLAUDE.md's licensing section.
+# (docs/architecture/vendored-vulkanalia.md). One exception, listed by path;
+# see CLAUDE.md's licensing section.
 #
 # Exact-dir exclusions, so a sibling one path segment away is still covered: a
-# future vendor/tatolab-vulkanalia-extras/, or a second crate vendored beside
-# moq-transport, would NOT be excluded. Rust only — neither tree ships a `.py`,
-# so the Python check below buys its lack of exemptions for free.
+# future vendor/tatolab-vulkanalia-extras/ would NOT be excluded. Rust only —
+# the fork ships no `.py`, so the Python check below buys its lack of
+# exemptions for free.
 report_files_missing_header \
   "// Copyright (c) 2025 Jonathan Fontanez" Rust \
   '*.rs' \
   ':(exclude)vendor/tatolab-vulkanalia/*' \
   ':(exclude)vendor/tatolab-vulkanalia-sys/*' \
-  ':(exclude)vendor/tatolab-vulkanalia-vma/*' \
-  ':(exclude)packages/streamlib-moq/vendor/moq-transport/*' ||
+  ':(exclude)vendor/tatolab-vulkanalia-vma/*' ||
   failed_language_checks+=("Rust")
 
 report_files_missing_header \

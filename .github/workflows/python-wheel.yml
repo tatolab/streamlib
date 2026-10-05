@@ -205,8 +205,6 @@ jobs:
         include:
           - extension: streamlib-webrtc
             native_module: streamlib_webrtc._native
-          - extension: streamlib-moq
-            native_module: streamlib_moq._native
 
     steps:
       - uses: actions/checkout@v4
@@ -224,7 +222,7 @@ jobs:
         with:
           packages: python3-dev
 
-      # `streamlib-moq` builds `aws-lc-sys`, which needs cmake and a C
+      # `streamlib-webrtc` builds `aws-lc-sys`, which needs cmake and a C
       # compiler. The runner image ships both, and apt-installing cmake here
       # instead costs a 13 MB download through the mirror this repo already had
       # to put a time bound on — a bound that download exceeded. Assert it
@@ -271,15 +269,9 @@ jobs:
 
       # Run before the venv is on PATH so pyo3 resolves the system interpreter,
       # whose dev headers the apt step above installed.
-      #
-      # `--workspace`, not the root package alone: a crate vendored under the
-      # extension (`packages/streamlib-moq/vendor/moq-transport`) is an
-      # automatic member of the extension's workspace, and its own tests are
-      # where the patches it carries are pinned — a `cargo test --lib` from
-      # the root package selects that package alone and runs none of them.
       - name: Extension crate tests
         working-directory: packages/${{ matrix.extension }}
-        run: cargo test --locked --workspace --lib
+        run: cargo test --locked --lib
 
       - name: Clippy
         working-directory: packages/${{ matrix.extension }}
@@ -326,8 +318,6 @@ jobs:
         include:
           - extension: streamlib-webrtc
             native_module: streamlib_webrtc._native
-          - extension: streamlib-moq
-            native_module: streamlib_moq._native
 
     steps:
       - uses: actions/checkout@v4
@@ -381,7 +371,7 @@ jobs:
         working-directory: packages/${{ matrix.extension }}
         env:
           PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
-        run: cargo test --locked --workspace --lib
+        run: cargo test --locked --lib
 
       - name: Clippy
         working-directory: packages/${{ matrix.extension }}

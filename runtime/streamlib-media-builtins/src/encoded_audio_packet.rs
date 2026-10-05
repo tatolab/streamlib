@@ -103,7 +103,7 @@ impl EncodedAudioCodec {
 /// Encoded audio packet bag: one Opus packet riding the link inline,
 /// described by the codec, ordering pair, and stream format beside it.
 ///
-/// `group_index` / `sequence_index` are the same MoQ-mappable ordering pair
+/// `group_index` / `sequence_index` are the same producer-scoped ordering pair
 /// an encoded video frame carries, accounted by the same counter:
 /// `sequence_index` is monotonic in publication order for the life of the
 /// producer — it survives an encoder re-mint, so a gap is always loss and
