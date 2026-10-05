@@ -14,7 +14,7 @@ Run `inspect-live-graph` and read `mesh.runtime_name`, the source node's `name`,
 ```
 <runtime_name>/<node>/<port>   e.g.  lab-one/camera/frames
 ```
-A tap reads a channel on the runtime it asks; a target naming another runtime is refused naming it.
+A port on another runtime that a link carries here is tapped under that runtime's name — the `runtime_name` on the link's `source`.
 
 ### 2. Tap a bounded sample
 The channel is a positional argument; `--count` bounds how many bags to collect before returning:
