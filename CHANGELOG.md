@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.31.0](https://github.com/tatolab/streamlib/compare/v0.30.0...v0.31.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** a runtime opens no Zenoh session — the mesh, its flags and the zenoh dependency are gone ([#2645](https://github.com/tatolab/streamlib/issues/2645))
+
+### Features
+
+* **engine:** a runtime opens no Zenoh session — the mesh, its flags and the zenoh dependency are gone ([#2645](https://github.com/tatolab/streamlib/issues/2645)) ([2a15a66](https://github.com/tatolab/streamlib/commit/2a15a66279bc7d1e5bb6dde351b25b0131541487))
+
 ## [0.30.0](https://github.com/tatolab/streamlib/compare/v0.29.0...v0.30.0) (2026-10-05)
 
 
