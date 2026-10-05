@@ -42,5 +42,6 @@ Conventions:
   warning-free.
 - Platform dirs are conditionally compiled — `core/` is platform-agnostic, `apple/` and `linux/`
   are per-platform. Never put a `#[cfg]` inside a platform-specific directory.
-- macOS / Apple-path changes are cross-compile-verified on Linux (`cargo check --target
-  aarch64-apple-darwin`) before merge.
+- macOS / Apple-path changes merge only with the `Rust Build (macOS)` CI lane green on the
+  PR. That lane is the gate; a cross-compile from Linux is not, because it stops in a
+  dependency's build script that needs Apple's compiler and SDK.
