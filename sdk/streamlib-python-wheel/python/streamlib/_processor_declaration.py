@@ -370,8 +370,9 @@ def node(
     Decorating registers the class's descriptor — identity, description, ports
     and config schema — so the class is in that catalog from the moment its
     module is imported, whether or not anything ever adds it. The constructor
-    arrives at the first `rt.add`. `description` falls back to the class's
-    docstring when it is not given.
+    arrives when the engine first resolves a node of the class, as
+    `Runtime.load` does. `description` falls back to the class's docstring
+    when it is not given.
     """
     if isinstance(processor_class, type):
         return _declare_processor(
@@ -445,9 +446,9 @@ def _config_class_named_by_the_init_annotation(
 ) -> "Optional[type]":
     """The config class `processor_class.__init__` names, or `None` for no config.
 
-    Every other signature is refused here rather than at the first `add`: the
-    decorator runs at import, which is the last moment an author is still
-    looking at the class.
+    Every other signature is refused here rather than when a graph holding the
+    class loads: the decorator runs at import, which is the last moment an
+    author is still looking at the class.
     """
     # A class defining no `__init__` inherits `object`'s, whose signature is
     # `(self, /, *args, **kwargs)` — a shape that would otherwise be refused.
@@ -466,7 +467,7 @@ def _config_class_named_by_the_init_annotation(
         f"declare one parameter named `config`, annotated with the class its settings "
         f"live on — `def __init__(self, config: {processor_class.__name__}Config) -> "
         f"None` — where that class is a TypedDict, a dataclass or a model. "
-        f"`rt.add(cls, config={{...}})` still passes a dict; the helper constructs the "
+        f"`stream.add(cls, config={{...}})` still passes a dict; the helper constructs the "
         f"class from it and hands the object in."
     )
 

@@ -680,8 +680,8 @@ def load_processor_class(import_path: str) -> type:
     """Import the class `import_path` names, as `module:qualname`.
 
     The qualname is walked attribute by attribute, so a class nested inside
-    another resolves — `rt.add` deliberately admits `Outer.Inner`, because a
-    fresh interpreter can reach it.
+    another resolves — `stream.add` deliberately admits `Outer.Inner`, because
+    a fresh interpreter can reach it.
     """
     module_name, _, qualname = import_path.partition(":")
     if not module_name or not qualname:
