@@ -3,10 +3,9 @@
 
 //! The rules every value a caller can state about a runtime obeys.
 //!
-//! A runtime's name, its mesh's name and its mesh endpoints are all read the
-//! same way — the constructor, then an environment variable, then the engine's
-//! own default — and all refused the same way. Stated once here so the policy
-//! moves as one thing rather than as a copy per value.
+//! A stated value is read the constructor first, then an environment variable,
+//! then the engine's own default, and a refusal of one names what was said,
+//! where it came from, what is wrong and what a legal one looks like.
 
 use std::ffi::OsString;
 
@@ -107,7 +106,7 @@ mod tests {
             "a/b",
             "STREAMLIB_PROBE",
             "it contains '/'",
-            "A runtime name is one key chunk",
+            "A runtime name is one address chunk",
         )
         .to_string();
         for named in [
@@ -115,7 +114,7 @@ mod tests {
             "a/b",
             "STREAMLIB_PROBE",
             "it contains '/'",
-            "one key chunk",
+            "one address chunk",
         ] {
             assert!(refusal.contains(named), "{refusal} must name {named:?}");
         }

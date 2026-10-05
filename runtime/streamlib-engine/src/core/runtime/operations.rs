@@ -177,12 +177,12 @@ pub trait RuntimeOperations: Send + Sync {
     // Identity
     // =========================================================================
 
-    /// The name this runtime is addressed by on the runtime mesh.
+    /// The name this runtime's tap channels and node-registry row carry.
     ///
-    /// Spelled at length because `Runner` has an inherent `runtime_name()` of
-    /// its own returning a different type, and a caller holding a `Runner`
+    /// Not `runtime_name()`, because `Runner` has an inherent `runtime_name()`
+    /// of its own returning a different type, and a caller holding a `Runner`
     /// rather than a `dyn RuntimeOperations` would silently get that one.
-    fn this_runtimes_name_on_the_mesh(&self) -> &str;
+    fn this_runtimes_name(&self) -> &str;
 
     // =========================================================================
     // Lifecycle

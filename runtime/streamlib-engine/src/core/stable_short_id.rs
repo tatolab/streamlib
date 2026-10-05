@@ -49,7 +49,7 @@ mod tests {
 
     /// The recipe is pinned: these values are what every caller's ids are built
     /// from, so a change here renames every unnamed virtual camera and every
-    /// unnamed runtime on the mesh.
+    /// unnamed runtime.
     #[test]
     fn the_hash_is_the_published_fnv1a_64_of_the_bytes() {
         assert_eq!(fnv1a_64_hash_of(b""), FNV1A_64_OFFSET_BASIS);

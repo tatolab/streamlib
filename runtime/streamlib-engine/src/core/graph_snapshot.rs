@@ -276,7 +276,7 @@ mod tests {
             ],
             "exposed": [{"node": "camera", "port": "video"}],
             "extensions": [],
-            "mesh": {"mesh_name": "default"}
+            "runtime_name": "rig-desk-a1b2"
         });
 
         let graph = GraphSnapshot::from_graph_document(graph_document).unwrap();

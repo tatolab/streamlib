@@ -549,7 +549,7 @@ impl RuntimeOperations for Runner {
             |graph, _tx| -> Result<(String, crate::iceoryx2::ChannelSizing)> {
                 let source = crate::core::compiler::compiler_ops::find_the_source_a_caller_named(
                     graph,
-                    self.this_runtimes_name_on_the_mesh(),
+                    self.this_runtimes_name(),
                     &channel,
                 )?;
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
@@ -683,8 +683,8 @@ impl RuntimeOperations for Runner {
         }
     }
 
-    fn this_runtimes_name_on_the_mesh(&self) -> &str {
-        self.runtime_mesh.runtime_name()
+    fn this_runtimes_name(&self) -> &str {
+        self.runtime_name.as_str()
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {

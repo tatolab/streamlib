@@ -3,10 +3,9 @@
 
 //! Which directory the app a runtime belongs to was written in.
 //!
-//! Engine code that names something after the app — an unnamed runtime on the
-//! mesh, an unnamed virtual camera — keys on this rather than on the shell's
-//! working directory, so the name follows the app and not where it was
-//! launched from.
+//! Engine code that names something after the app — an unnamed runtime, an
+//! unnamed virtual camera — keys on this rather than on the shell's working
+//! directory, so the name follows the app and not where it was launched from.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

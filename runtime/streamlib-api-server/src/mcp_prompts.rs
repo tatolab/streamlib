@@ -580,7 +580,7 @@ fn look_at_what_a_channel_carries_recipe(
     prompt_arguments: &GraphRecipePromptArguments,
 ) -> RpcResult<GraphRecipe> {
     let (source, from_port) = output_port_named_by_arguments(graph, prompt_arguments)?;
-    let channel = format!("{}/{}/{from_port}", graph.mesh.runtime_name, source.name);
+    let channel = format!("{}/{}/{from_port}", graph.runtime_name, source.name);
 
     Ok(GraphRecipe {
         introduction_text: format!(

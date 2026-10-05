@@ -4,16 +4,15 @@
 //! The grammar every part of a port's address obeys.
 //!
 //! A port is addressed `<runtime name>/<display name>/<port>`, so each part has
-//! to be one chunk on its own. The rule is a Zenoh key chunk's, because the
-//! runtime name is also a key chunk on the runtime mesh.
+//! to be one chunk on its own: non-empty, free of the separator and the four
+//! reserved characters, and not beginning with `@`.
 
-/// The characters a key chunk may not contain: the separator itself, and the
-/// four the key-expression grammar reserves for matching.
+/// The characters an address chunk may not contain: the separator `/`, and the
+/// four the grammar reserves.
 pub(crate) const CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] = ['/', '*', '$', '#', '?'];
 
-/// The character a key chunk may not begin with. A leading `@` makes a chunk
-/// verbatim, which `**` never matches, so a runtime name carrying one would be
-/// unreachable by any subscription on the runtime mesh.
+/// The character an address chunk may not begin with, which the grammar
+/// reserves.
 pub(crate) const CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH: char = '@';
 
 /// Why `candidate` is not one legal chunk of a port's address — `None` when it
@@ -48,8 +47,8 @@ pub fn what_one_address_chunk_may_be() -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "A port is addressed <runtime name>/<display name>/<port>, so each part is one key \
-         chunk: non-empty, containing none of {listed}, and not beginning with \
+        "A port is addressed <runtime name>/<display name>/<port>, so each part is one \
+         address chunk: non-empty, containing none of {listed}, and not beginning with \
          '{CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH}'"
     )
 }
@@ -115,41 +114,67 @@ mod tests {
         }
     }
 
-    /// The grammar is graded by Zenoh rather than by a second reading of the
-    /// spec: a name this module accepts is exactly a name `zenoh-keyexpr` reads
-    /// as one literal chunk a `**` subscription reaches.
+    /// The rule's table is exactly five forbidden characters and one forbidden
+    /// leading character; widening or narrowing either renames what a stated
+    /// runtime name may be.
     #[test]
-    fn the_grammar_agrees_with_zenohs_own_key_expression_rules() {
-        use zenoh_keyexpr::keyexpr;
+    fn the_rules_table_is_the_separator_four_reserved_characters_and_a_leading_at_sign() {
+        assert_eq!(
+            CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN,
+            ['/', '*', '$', '#', '?']
+        );
+        assert_eq!(CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH, '@');
+    }
 
-        let every_key = keyexpr::new("**").expect("`**` is a key expression");
-        let zenoh_reads_it_as_one_reachable_literal_chunk = |candidate: &str| {
-            keyexpr::new(candidate).is_ok_and(|key| {
-                key.chunks().count() == 1 && !key.is_wild() && every_key.includes(key)
-            })
-        };
-
-        let mut candidates = vec![
-            "desk".to_string(),
-            "rig-desk-a1b2".to_string(),
-            "slow sink".to_string(),
-            "こんにちは".to_string(),
-            "cam@home".to_string(),
-            "CameraSource 2".to_string(),
-            "@runtime".to_string(),
-            "@".to_string(),
-            String::new(),
+    /// Each refused shape reads back with the reason the rule gives it, the
+    /// forbidden characters checked before the leading `@`.
+    #[test]
+    fn every_refused_shape_in_the_table_reads_back_with_its_reason() {
+        let refused_with_the_reason = [
+            ("", "it is empty"),
+            ("@", "it begins with '@'"),
+            ("@runtime", "it begins with '@'"),
+            ("/", "it contains '/'"),
+            ("desk/rig", "it contains '/'"),
+            ("*", "it contains '*'"),
+            ("desk*rig", "it contains '*'"),
+            ("$", "it contains '$'"),
+            ("desk$rig", "it contains '$'"),
+            ("#", "it contains '#'"),
+            ("desk#rig", "it contains '#'"),
+            ("?", "it contains '?'"),
+            ("desk?rig", "it contains '?'"),
+            ("@desk/rig", "it contains '/'"),
         ];
-        for forbidden in CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN {
-            candidates.push(format!("desk{forbidden}rig"));
-            candidates.push(forbidden.to_string());
-        }
-
-        for candidate in candidates {
+        for (candidate, expected_reason) in refused_with_the_reason {
             assert_eq!(
-                is_one_legal_address_chunk(&candidate),
-                zenoh_reads_it_as_one_reachable_literal_chunk(&candidate),
-                "the engine and zenoh-keyexpr disagree about {candidate:?}"
+                first_reason_this_is_not_one_address_chunk(candidate).as_deref(),
+                Some(expected_reason),
+                "{candidate:?}"
+            );
+        }
+    }
+
+    /// Everything outside the table passes: punctuation the rule does not
+    /// name, an inner `@`, spaces and unicode.
+    #[test]
+    fn every_name_outside_the_table_passes() {
+        for legal in [
+            "desk",
+            "rig-desk-a1b2",
+            "slow sink",
+            "こんにちは",
+            "cam@home",
+            "CameraSource 2",
+            "camera-1_a.b",
+            "desk:rig",
+            "desk%rig",
+            "desk.rig~1",
+            "desk+rig=1",
+        ] {
+            assert!(
+                is_one_legal_address_chunk(legal),
+                "{legal:?} must be one legal address chunk"
             );
         }
     }

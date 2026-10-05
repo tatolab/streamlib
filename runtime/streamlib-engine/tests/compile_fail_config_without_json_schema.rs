@@ -9,12 +9,9 @@
 //! the compiler over a config type that lacks it, and the note that names the
 //! fix could rot into a bare trait-bound error with every other test green.
 //!
-//! The expectation carries rustc's multiple-versions note, because the engine's
-//! graph holds two `schemars`: ours at 0.8 and the 1.x `zenoh-keyexpr` pulls in
-//! behind its `std` feature. Both are the version each crate chose and neither
-//! type crosses into the other, so the note is what an author genuinely sees —
-//! locked here rather than filtered out, since a filter would also hide a
-//! duplicate that did matter.
+//! The engine's graph holds one `schemars`, so the expectation carries no
+//! multiple-versions note; a dependency that brings a second one back makes
+//! rustc add that note here, and this test fails rather than hiding it.
 //!
 //! Refresh the expected output with `TRYBUILD=overwrite cargo test -p
 //! streamlib-engine --test compile_fail_config_without_json_schema` after a

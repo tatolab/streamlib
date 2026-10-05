@@ -10,17 +10,16 @@
 //! subscribers regardless of how many destinations it feeds. A `connect()` link
 //! is the degenerate 1:1 case of that keying.
 //!
-//! The name is an iceoryx2 service name, and never leaves this host: a port on
-//! the runtime mesh is addressed `<runtime name>/<display name>/<port>`, and a
-//! channel name — which carries a cuid2 processor id another runtime could not
-//! know — reaches no mesh key. It is `/`-separated into chunks; each chunk is
-//! `[a-z][a-z0-9_-]*`, or a port name in the lowercase URL-safe form every
-//! exposed name is cast to. The `/` is a chunk separator, never a within-chunk
-//! character. Underscore and hyphen are transport-legal: iceoryx2 `ServiceName`
-//! imposes no charset restriction beyond non-empty / length / no `iox2://`
-//! prefix. A leading `@` chunk is forbidden — the per-chunk `[a-z]`-leading
-//! rule already excludes it, as the cast does. This module is the single source
-//! of truth for that grammar, and the mesh name obeys its strict form.
+//! The name is an iceoryx2 service name, and never leaves this host: a port is
+//! addressed `<runtime name>/<display name>/<port>`, and a channel name carries
+//! a cuid2 processor id no caller could be expected to spell. It is
+//! `/`-separated into chunks; each chunk is `[a-z][a-z0-9_-]*`, or a port name
+//! in the lowercase URL-safe form every exposed name is cast to. The `/` is a
+//! chunk separator, never a within-chunk character. Underscore and hyphen are
+//! transport-legal: iceoryx2 `ServiceName` imposes no charset restriction beyond
+//! non-empty / length / no `iox2://` prefix. A leading `@` chunk is forbidden —
+//! the per-chunk `[a-z]`-leading rule already excludes it, as the cast does.
+//! This module is the single source of truth for that grammar.
 //!
 //! The `/` between the processor-id chunk and the port chunk makes the mapping
 //! injective: two distinct `(processor, port)` pairs can never collide onto one
@@ -41,9 +40,8 @@ use streamlib_ipc_types::PortKey;
 /// capacity a channel name has to fit through.
 pub const MAX_CHANNEL_NAME_BYTES: usize = PortKey::MAX_NAME_BYTES;
 
-/// The chunk separator — a Zenoh keyexpr segment boundary. Chunks on either
-/// side obey the per-chunk grammar; the separator itself is never a within-chunk
-/// character.
+/// The chunk separator. Chunks on either side obey the per-chunk grammar; the
+/// separator itself is never a within-chunk character.
 pub const CHANNEL_CHUNK_SEPARATOR: char = '/';
 
 /// Number of lowercase-hex characters in the deterministic disambiguating
@@ -90,37 +88,11 @@ impl fmt::Display for ChannelName {
 
 /// The channel / port chunk charset: `[a-z0-9_-]`. Underscore is
 /// transport-legal — iceoryx2 `ServiceName` imposes no charset restriction
-/// beyond non-empty / length / no `iox2://` prefix, and a Zenoh keyexpr segment
-/// forbids only `/ * $ ? #` — so port names like `video_in` cross the wire
-/// intact.
+/// beyond non-empty / length / no `iox2://` prefix — so port names like
+/// `video_in` cross the wire intact.
 fn is_channel_chunk_character(c: char) -> bool {
     matches!(c, 'a'..='z' | '0'..='9' | '-' | '_')
 }
-
-/// Why `candidate` is not one chunk of this grammar — `None` when it is one,
-/// and otherwise the reason, named for a refusal.
-///
-/// The mesh name obeys this grammar too, and reads its reason from here rather
-/// than from a second spelling of the same rule.
-pub fn first_reason_this_is_not_one_channel_name_chunk(candidate: &str) -> Option<String> {
-    match validate_channel_chunk_charset(candidate) {
-        Ok(()) => None,
-        Err(Error::EmptyChannelName) => Some("it is empty".to_string()),
-        Err(Error::ChannelNameMustStartWithLowercase(_)) => {
-            Some("it does not begin with a lowercase letter".to_string())
-        }
-        Err(Error::InvalidChannelNameCharacter { character, .. }) => {
-            Some(format!("it contains {character:?}"))
-        }
-        Err(other) => Some(other.to_string()),
-    }
-}
-
-/// The sentence a refusal of a single chunk ends with, so every caller states
-/// the same rule.
-pub const THE_ONE_CHUNK_GRAMMAR: &str = "One chunk is non-empty, begins with a lowercase letter, \
-                                         and otherwise carries only lowercase letters, digits, \
-                                         '-' and '_'";
 
 /// Validate one `/`-separated chunk's charset grammar (`[a-z][a-z0-9_-]*`)
 /// without any length bound. A `/` inside `s` is itself an invalid character
@@ -146,8 +118,8 @@ fn validate_channel_chunk_charset(s: &str) -> Result<()> {
 
 /// Validate one chunk of a channel name: the `[a-z][a-z0-9_-]*` grammar, or a
 /// name already in the form every exposed name is cast to, which is how a port
-/// is named. Every character the cast keeps is one iceoryx2 and a Zenoh key
-/// chunk carry, so a port is never refused at wiring for its spelling.
+/// is named. Every character the cast keeps is one an iceoryx2 service name
+/// carries, so a port is never refused at wiring for its spelling.
 fn validate_channel_chunk(chunk: &str) -> Result<()> {
     validate_channel_chunk_charset(chunk).or_else(|strict| {
         if crate::core::graph::is_in_exposed_name_cast_form(chunk) {
@@ -174,9 +146,8 @@ fn validate_channel_chunks(s: &str) -> Result<()> {
 
 /// Validate a channel name against the canonical grammar: one or more
 /// `/`-separated chunks, each `[a-z][a-z0-9_-]*` or a cast name, at most
-/// [`MAX_CHANNEL_NAME_BYTES`] UTF-8 bytes total. A leading `@` chunk (Zenoh
-/// admin space) and the Zenoh-reserved wildcard characters `* $ ? #` are
-/// excluded by the per-chunk charset.
+/// [`MAX_CHANNEL_NAME_BYTES`] UTF-8 bytes total. A leading `@` chunk and the
+/// characters `* $ ? #` are excluded by the per-chunk charset.
 pub fn validate_channel_name(s: &str) -> Result<()> {
     if s.len() > MAX_CHANNEL_NAME_BYTES {
         return Err(Error::ChannelNameTooLong {
@@ -355,9 +326,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_zenoh_reserved_and_illegal_charset() {
-        // Space and the Zenoh-reserved wildcard/pipeline chars `* $ ? #` are
-        // none of them chunk-legal. Underscore, hyphen and the cast's `.` and
+    fn rejects_space_and_the_reserved_characters_star_dollar_question_hash() {
+        // Space and `* $ ? #` are none of them chunk-legal. Underscore, hyphen and the cast's `.` and
         // `~` are NOT in this list — they are transport-legal within a chunk.
         for (n, bad) in [
             ("cam out", ' '),
@@ -379,8 +349,7 @@ mod tests {
 
     #[test]
     fn rejects_leading_at_chunk() {
-        // A leading `@` chunk is Zenoh admin space — the per-chunk
-        // lowercase-alpha-leading rule excludes it. Mental-revert guard: relax
+        // The per-chunk lowercase-alpha-leading rule excludes a leading `@`. Mental-revert guard: relax
         // the chunk-leading rule and this stops erroring.
         assert!(matches!(
             validate_channel_name("@admin/thing"),

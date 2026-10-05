@@ -1,11 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The name a runtime is addressed by on the runtime mesh.
+//! The name a runtime's tap channels and node-registry row carry.
 //!
 //! It belongs to the runtime rather than to its control plane, is stable across
 //! runs of one app, and is one chunk of a port's address
-//! `<runtime name>/<display name>/<port>`.
+//! `<runtime name>/<display name>/<port>`. Nothing refuses a name another live
+//! runtime already carries.
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -37,7 +38,7 @@ const APP_DIRECTORY_NAME_FOR_A_PATH_WITH_NO_FINAL_COMPONENT: &str = "app";
 /// and 255 on Apple; POSIX allows a longer name to be truncated.
 const HOST_NAME_BUFFER_BYTES: usize = 256;
 
-/// The name a runtime is addressed by on the mesh.
+/// The name a runtime's tap channels and node-registry row carry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RuntimeName(String);
 

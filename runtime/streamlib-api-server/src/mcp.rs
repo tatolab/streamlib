@@ -271,7 +271,7 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "graph",
-            "description": "Export the current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, the capability extensions loaded in this process, and this runtime's place on the mesh.",
+            "description": "Export the current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, the capability extensions loaded in this process, and this runtime's name (`runtime_name`), the first part of every tap channel.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
         }),
         json!({
@@ -280,7 +280,7 @@ fn tool_definitions() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "channel": { "type": "string", "description": "The output port's address, `<runtime_name>/<node>/<port>`, under this node's own runtime name (`mesh.runtime_name` in `graph`). A port is tappable once a link carries from it." },
+                    "channel": { "type": "string", "description": "The output port's address, `<runtime_name>/<node>/<port>`, under this node's own runtime name (the top-level `runtime_name` in `graph`). A port is tappable once a link carries from it." },
                     "count": { "type": "integer", "minimum": 1, "description": "Number of bags to collect before returning. Defaults to a small sample." },
                     "max_bag_bytes": { "type": "integer", "minimum": 1, "maximum": MAX_TAP_RESPONSE_BAG_BYTES, "description": "Per-bag ceiling on the bytes hex-encoded into the result. A bag over the cap comes back flagged `hex_truncated` and cannot be decoded, so raise this rather than accept one. Defaults high enough to carry any audio block whole." }
                 },
@@ -1544,7 +1544,7 @@ mod tests {
     async fn tools_call_connect_states_the_link_id_and_the_links_state() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         *runtime.exported_graph.lock() = json!({
-            "mesh": { "runtime_name": crate::control_plane_stub_support::STUB_RUNTIME_NAME },
+            "runtime_name": crate::control_plane_stub_support::STUB_RUNTIME_NAME,
             "links": [
                 { "id": "some-other-link", "state": "wired" },
                 { "id": crate::control_plane_stub_support::STUB_CREATED_LINK_ID,
@@ -2459,13 +2459,7 @@ mod tests {
             }],
             "exposed": [],
             "extensions": [],
-            // The prompts parse a real node's answer, and `mesh` is always on one.
-            "mesh": {
-                "mesh_name": "default",
-                "runtime_name": "rig-desk-a1b2",
-                "session": "open",
-                "peers": []
-            }
+            "runtime_name": "rig-desk-a1b2"
         })
     }
 
