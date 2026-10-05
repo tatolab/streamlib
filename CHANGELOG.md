@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.30.0](https://github.com/tatolab/streamlib/compare/v0.29.0...v0.30.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** every link has both ends on one runtime — links between runtimes are gone ([#2643](https://github.com/tatolab/streamlib/issues/2643))
+
+### Features
+
+* **engine:** every link has both ends on one runtime — links between runtimes are gone ([#2643](https://github.com/tatolab/streamlib/issues/2643)) ([d36ce23](https://github.com/tatolab/streamlib/commit/d36ce23d53079cbddad1d41f2faeaf8763fee6ab))
+
 ## [0.29.0](https://github.com/tatolab/streamlib/compare/v0.28.1...v0.29.0) (2026-10-05)
 
 

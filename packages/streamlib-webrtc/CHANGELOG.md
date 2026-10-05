@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.0](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.5.0...streamlib-webrtc-v0.6.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** every link has both ends on one runtime — links between runtimes are gone ([#2643](https://github.com/tatolab/streamlib/issues/2643))
+
+### Features
+
+* **engine:** every link has both ends on one runtime — links between runtimes are gone ([#2643](https://github.com/tatolab/streamlib/issues/2643)) ([d36ce23](https://github.com/tatolab/streamlib/commit/d36ce23d53079cbddad1d41f2faeaf8763fee6ab))
+
 ## [0.5.0](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.4.0...streamlib-webrtc-v0.5.0) (2026-10-04)
 
 
