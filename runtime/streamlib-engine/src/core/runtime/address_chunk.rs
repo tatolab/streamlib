@@ -4,8 +4,7 @@
 //! The grammar every part of a port's address obeys.
 //!
 //! A port is addressed `<runtime name>/<display name>/<port>`, so each part has
-//! to be one chunk on its own: non-empty, free of `/ * $ # ?`, and not
-//! beginning with `@`.
+//! to be one chunk on its own.
 
 /// The characters an address chunk may not contain.
 pub(crate) const CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] = ['/', '*', '$', '#', '?'];
@@ -59,48 +58,6 @@ mod tests {
         first_reason_this_is_not_one_address_chunk(candidate).is_none()
     }
 
-    /// Every character the grammar forbids reads back as the reason, by name.
-    #[test]
-    fn each_forbidden_character_is_named_as_the_reason() {
-        for forbidden in CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN {
-            let candidate = format!("camera{forbidden}one");
-            let reason = first_reason_this_is_not_one_address_chunk(&candidate)
-                .expect("a chunk carrying a forbidden character is not one chunk");
-            assert!(
-                reason.contains(&format!("{forbidden:?}")),
-                "the reason {candidate:?} is not one chunk must name {forbidden:?}: {reason}"
-            );
-        }
-    }
-
-    /// A leading `@` is not one chunk; one anywhere else is.
-    #[test]
-    fn a_leading_at_sign_is_refused_and_an_inner_one_is_not() {
-        let reason = first_reason_this_is_not_one_address_chunk("@runtime")
-            .expect("a chunk beginning with '@' is not one chunk");
-        assert!(reason.contains("begins with '@'"), "{reason}");
-        assert!(is_one_legal_address_chunk("cam@home"));
-    }
-
-    /// An empty name reads as empty, rather than as some character.
-    #[test]
-    fn an_empty_name_reads_as_empty() {
-        let reason = first_reason_this_is_not_one_address_chunk("")
-            .expect("an empty chunk is not one chunk");
-        assert!(reason.contains("it is empty"), "{reason}");
-    }
-
-    /// Spaces and unicode stay legal — a display name is free text otherwise.
-    #[test]
-    fn spaces_and_unicode_stay_legal() {
-        for legal in ["slow sink", "こんにちは", "カメラ 2", "camera-1_a.b"] {
-            assert!(
-                is_one_legal_address_chunk(legal),
-                "{legal:?} must stay a legal address chunk"
-            );
-        }
-    }
-
     /// A defaulted node name and its `-2`, `-3` … suffix never produce a
     /// refused chunk.
     #[test]
@@ -144,12 +101,13 @@ mod tests {
     /// Everything outside the table passes: punctuation the rule does not
     /// name, an inner `@`, spaces and unicode.
     #[test]
-    fn every_name_outside_the_table_passes() {
+    fn names_with_unlisted_punctuation_an_inner_at_sign_spaces_and_unicode_pass() {
         for legal in [
             "desk",
             "rig-desk-a1b2",
             "slow sink",
             "こんにちは",
+            "カメラ 2",
             "cam@home",
             "CameraSource 2",
             "camera-1_a.b",

@@ -3,9 +3,9 @@
 
 //! The rules every value a caller can state about a runtime obeys.
 //!
-//! A stated value is read the constructor first, then an environment variable,
-//! then the engine's own default, and a refusal of one names what was said,
-//! where it came from, what is wrong and what a legal one looks like.
+//! A stated value is read from the constructor first, then an environment
+//! variable, then the engine's own default, and a refusal of one names what was
+//! said, where it came from, what is wrong and what a legal one looks like.
 
 use std::ffi::OsString;
 

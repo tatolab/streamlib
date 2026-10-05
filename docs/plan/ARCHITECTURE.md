@@ -1411,7 +1411,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   [processor-class-identity — SHIPPED #1838, #1841; the address-chunk refusal —
   runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment; amended by runtime-hosting decision 3: a name is cast to the address grammar (§Networking, the address) and a defaulted duplicate takes `-2`, superseding spaces, unicode, ` 2` and the character refusals]
   <!-- verify: cargo test -p streamlib-engine --test node_name_test -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_refused_by_name -->
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new

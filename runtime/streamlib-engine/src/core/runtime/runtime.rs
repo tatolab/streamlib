@@ -229,9 +229,8 @@ impl Runner {
         // Beside the id, and before the runtime writes anything: a name the
         // caller cannot use in a port address is a wiring error, and refusing
         // it here costs nothing that has to be undone.
-        let runtime_name = Arc::new(RuntimeName::from_configuration_environment_or_default(
-            runtime_name,
-        )?);
+        let resolved_runtime_name =
+            RuntimeName::from_configuration_environment_or_default(runtime_name)?;
 
         // Stand up the runtime's unified logging pathway: `tracing` →
         // bounded lossy channel → drain worker → line-buffered pretty
@@ -247,6 +246,9 @@ impl Runner {
                 Arc::clone(&runtime_id),
             ))
             .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
+        resolved_runtime_name
+            .warn_when_the_default_carries_the_stand_in_for_an_unreported_host_name();
+        let runtime_name = Arc::new(resolved_runtime_name.runtime_name);
         tracing::info!("Creating Runner named {runtime_name} with ID: {runtime_id}");
 
         let runtime_directory = StreamlibRuntimeDirectory::resolve()?;
@@ -1476,13 +1478,13 @@ mod tests {
     /// reports the name it was given wherever the name is read.
     #[test]
     #[serial]
-    fn two_runners_given_one_runtime_name_both_start() {
+    fn two_runners_given_one_runtime_name_both_construct() {
         let shared_runtime_name = "one-name-two-runners";
 
         let first = Runner::new_with_runtime_name(Some(shared_runtime_name.to_string()))
-            .expect("the first runner starts");
+            .expect("the first runner constructs");
         let second = Runner::new_with_runtime_name(Some(shared_runtime_name.to_string()))
-            .expect("a second runner given the same name starts beside the first");
+            .expect("a second runner given the same name constructs beside the first");
 
         assert_ne!(first.runtime_id(), second.runtime_id());
         for runner in [&first, &second] {

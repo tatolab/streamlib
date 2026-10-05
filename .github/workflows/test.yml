@@ -646,7 +646,7 @@ jobs:
             core::runtime::address_chunk \
             core::runtime::runtime_name \
             core::app_directory \
-            core::runtime::runtime::tests::two_runners_given_one_runtime_name_both_start \
+            core::runtime::runtime::tests::two_runners_given_one_runtime_name_both_construct \
             core::json_schema::capability_extension_and_runtime_name_rendering_tests::the_runtime_name_is_a_top_level_key_and_no_mesh_key_renders \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_envelope_hands_a_helper_its_channel_as_the_name_it_knows_the_link_by \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_native_destination_knows_each_link_by_its_channel \

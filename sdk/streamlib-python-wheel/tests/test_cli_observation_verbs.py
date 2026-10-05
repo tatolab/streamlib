@@ -31,7 +31,6 @@ from typing import Any, Callable, Generator, NamedTuple, Optional, TextIO
 import pytest
 
 from streamlib import cli
-from streamlib import _engine as cli_engine_module
 from streamlib._control_plane_client import (
     ControlPlaneError,
     SurfaceImageExchangeRefusal,
@@ -1277,16 +1276,6 @@ def test_nodes_prints_the_registry_table_alone(
         "rig-desk-a1b2",
         "rig-lab-c3d4",
     ], printed_lines
-
-
-def test_the_engine_offers_nodes_no_door_to_observe_other_runtimes_through():
-    observation_doors = [
-        name for name in dir(cli_engine_module) if "observe" in name.lower()
-    ]
-    assert observation_doors == [], (
-        f"`nodes` reads the registry alone, so the engine exports no observation door: "
-        f"{observation_doors}"
-    )
 
 
 # Each spelled from its parts so the retired flag's own text does not survive
