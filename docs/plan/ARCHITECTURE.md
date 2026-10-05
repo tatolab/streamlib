@@ -2204,9 +2204,11 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   builds this and stays a workspace member until then — and lands in the pooled `Rgba32`
   pixel buffer every capture lands in, so no JPEG reaches a port and no block is involved.
   The decoder reads the 4:2:2 frames cameras send, not 4:2:0 alone. Which mode the arm
-  picks when a camera offers several is ticket-level. Acceptance is a USB 2.0 webcam on the
-  rig: its mode list recorded, and its MJPEG mode live at the advertised size and rate. The
-  Apple arm is unchanged. Owner, 2026-10-04. [jpeg-after-the-robotics-cut]
+  picks when a camera offers several is ticket-level. Acceptance is the rig's capture card, a
+  real UVC device: its MJPEG mode, opened directly, live at 1920×1080 and 30 fps through the
+  engine's MJPEG path; the mode rule is proven by unit tests over a USB 2.0 camera's mode list,
+  and no USB 2.0 webcam is sought (owner, 2026-10-05). The Apple arm is unchanged. Owner,
+  2026-10-04. [jpeg-after-the-robotics-cut]
 - **DECIDED** — Python-authored media processors (vendor or user) run in their own
   helper process like every other Python processor and are supported where deadlines
   allow: camera-class sources and block-level audio fit within the helper hop's
