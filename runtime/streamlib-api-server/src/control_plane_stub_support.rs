@@ -133,8 +133,9 @@ pub(crate) const STUB_NODE_ID_SUFFIX: &str = "-id";
 /// The id the stub answers every `connect` with.
 pub(crate) const STUB_CREATED_LINK_ID: &str = "stub-created-link";
 
-/// The name the stub runtime answers with — its `this_runtimes_name_on_the_mesh`
-/// and its `graph.mesh.runtime_name`, the first part of a tap's channel.
+/// The name the stub runtime answers `this_runtimes_name_on_the_mesh` with,
+/// and the `mesh.runtime_name` a test arms its graph with — the first part of
+/// a tap's channel.
 pub(crate) const STUB_RUNTIME_NAME: &str = "stub-runtime";
 
 /// What a stub runtime answers an `add_node` with when the test has armed a

@@ -10,11 +10,11 @@ use petgraph::{Direction, visit::EdgeRef};
 /// Every link carrying out of `node_ids` — the digraph's outgoing edges.
 fn every_link_carrying_out_of(
     graph: &DiGraph<ProcessorNode, Link>,
-    node_ids: Vec<NodeIndex>,
+    node_ids: &[NodeIndex],
 ) -> Vec<EdgeIndex> {
     node_ids
-        .into_iter()
-        .flat_map(|node_idx| graph.edges_directed(node_idx, Direction::Outgoing))
+        .iter()
+        .flat_map(|&node_idx| graph.edges_directed(node_idx, Direction::Outgoing))
         .map(|edge| edge.id())
         .collect()
 }
@@ -22,7 +22,7 @@ fn every_link_carrying_out_of(
 impl<'a> ProcessorTraversal<'a> {
     /// Get the outgoing edges.
     pub fn out_e(self) -> LinkTraversal<'a> {
-        let ids = every_link_carrying_out_of(self.graph, self.ids);
+        let ids = every_link_carrying_out_of(self.graph, &self.ids);
         LinkTraversal {
             graph: self.graph,
             ids,
@@ -33,7 +33,7 @@ impl<'a> ProcessorTraversal<'a> {
 impl<'a> ProcessorTraversalMut<'a> {
     /// Get the outgoing edges.
     pub fn out_e(self) -> LinkTraversalMut<'a> {
-        let ids = every_link_carrying_out_of(self.graph, self.ids);
+        let ids = every_link_carrying_out_of(self.graph, &self.ids);
         LinkTraversalMut {
             graph: self.graph,
             ids,

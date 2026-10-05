@@ -10,11 +10,11 @@ use petgraph::{Direction, visit::EdgeRef};
 /// Every link carrying into `node_ids` — the digraph's incoming edges.
 fn every_link_carrying_into(
     graph: &DiGraph<ProcessorNode, Link>,
-    node_ids: Vec<NodeIndex>,
+    node_ids: &[NodeIndex],
 ) -> Vec<EdgeIndex> {
     node_ids
-        .into_iter()
-        .flat_map(|node_idx| graph.edges_directed(node_idx, Direction::Incoming))
+        .iter()
+        .flat_map(|&node_idx| graph.edges_directed(node_idx, Direction::Incoming))
         .map(|edge| edge.id())
         .collect()
 }
@@ -22,7 +22,7 @@ fn every_link_carrying_into(
 impl<'a> ProcessorTraversal<'a> {
     /// Get the incoming edges
     pub fn in_e(self) -> LinkTraversal<'a> {
-        let ids = every_link_carrying_into(self.graph, self.ids);
+        let ids = every_link_carrying_into(self.graph, &self.ids);
         LinkTraversal {
             graph: self.graph,
             ids,
@@ -33,7 +33,7 @@ impl<'a> ProcessorTraversal<'a> {
 impl<'a> ProcessorTraversalMut<'a> {
     /// Get the incoming edges
     pub fn in_e(self) -> LinkTraversalMut<'a> {
-        let ids = every_link_carrying_into(self.graph, self.ids);
+        let ids = every_link_carrying_into(self.graph, &self.ids);
         LinkTraversalMut {
             graph: self.graph,
             ids,
