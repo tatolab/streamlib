@@ -2,23 +2,29 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::graph::{
-    LinkTraversal, LinkTraversalMut, ProcessorTraversal, ProcessorTraversalMut,
+    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
 };
+use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
+
+/// The node each of these links carries from.
+fn every_source_node_of(
+    graph: &DiGraph<ProcessorNode, Link>,
+    links: &[EdgeIndex],
+) -> Vec<NodeIndex> {
+    links
+        .iter()
+        .filter_map(|&edge| graph.edge_endpoints(edge))
+        .map(|(source, _)| source)
+        .collect()
+}
 
 impl<'a> LinkTraversal<'a> {
     /// Get the vertex each link carries from — its source.
     pub fn out_v(self) -> ProcessorTraversal<'a> {
-        let mut outgoing_node_ids = Vec::new();
-        for edge_id in self.ids {
-            match self.graph.edge_endpoints(edge_id) {
-                Some((src, _)) => outgoing_node_ids.push(src),
-                None => continue,
-            }
-        }
-
+        let ids = every_source_node_of(self.graph, &self.ids);
         ProcessorTraversal {
             graph: self.graph,
-            ids: outgoing_node_ids,
+            ids,
         }
     }
 }
@@ -26,17 +32,10 @@ impl<'a> LinkTraversal<'a> {
 impl<'a> LinkTraversalMut<'a> {
     /// Get the vertex each link carries from — its source.
     pub fn out_v(self) -> ProcessorTraversalMut<'a> {
-        let mut outgoing_node_ids = Vec::new();
-        for edge_id in self.ids {
-            match self.graph.edge_endpoints(edge_id) {
-                Some((src, _)) => outgoing_node_ids.push(src),
-                None => continue,
-            }
-        }
-
+        let ids = every_source_node_of(self.graph, &self.ids);
         ProcessorTraversalMut {
             graph: self.graph,
-            ids: outgoing_node_ids,
+            ids,
         }
     }
 }

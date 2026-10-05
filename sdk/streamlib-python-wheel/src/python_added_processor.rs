@@ -106,18 +106,22 @@ impl PythonProcessorInputPortReference {
 pub(crate) fn the_output_link_port_ref_this_source_names(
     source: &Bound<'_, PyAny>,
 ) -> PyResult<OutputLinkPortRef> {
-    if let Ok(on_this_runtime) = source.cast::<PythonProcessorOutputPortReference>() {
-        let on_this_runtime = on_this_runtime.borrow();
-        return Ok(OutputLinkPortRef::new(
-            on_this_runtime.processor_id.clone(),
-            on_this_runtime.port_name.clone(),
-        ));
-    }
-    Err(PyTypeError::new_err(format!(
-        "connect's source must name an output port on this runtime: \
-         `processor.output(port_name)`. Got {}.",
-        source.get_type()
-    )))
+    source
+        .cast::<PythonProcessorOutputPortReference>()
+        .map(|output_port_reference| {
+            let output_port_reference = output_port_reference.borrow();
+            OutputLinkPortRef::new(
+                output_port_reference.processor_id.clone(),
+                output_port_reference.port_name.clone(),
+            )
+        })
+        .map_err(|_| {
+            PyTypeError::new_err(format!(
+                "connect's source must name an output port on this runtime: \
+                 `processor.output(port_name)`. Got {}.",
+                source.get_type()
+            ))
+        })
 }
 
 /// The engine's own reference for the input port `connect`'s destination
@@ -125,18 +129,22 @@ pub(crate) fn the_output_link_port_ref_this_source_names(
 pub(crate) fn the_input_link_port_ref_this_destination_names(
     destination: &Bound<'_, PyAny>,
 ) -> PyResult<InputLinkPortRef> {
-    if let Ok(on_this_runtime) = destination.cast::<PythonProcessorInputPortReference>() {
-        let on_this_runtime = on_this_runtime.borrow();
-        return Ok(InputLinkPortRef::new(
-            on_this_runtime.processor_id.clone(),
-            on_this_runtime.port_name.clone(),
-        ));
-    }
-    Err(PyTypeError::new_err(format!(
-        "connect's destination must name an input port on this runtime: \
-         `processor.input(port_name)`. Got {}.",
-        destination.get_type()
-    )))
+    destination
+        .cast::<PythonProcessorInputPortReference>()
+        .map(|input_port_reference| {
+            let input_port_reference = input_port_reference.borrow();
+            InputLinkPortRef::new(
+                input_port_reference.processor_id.clone(),
+                input_port_reference.port_name.clone(),
+            )
+        })
+        .map_err(|_| {
+            PyTypeError::new_err(format!(
+                "connect's destination must name an input port on this runtime: \
+                 `processor.input(port_name)`. Got {}.",
+                destination.get_type()
+            ))
+        })
 }
 
 #[cfg(test)]

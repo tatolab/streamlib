@@ -206,7 +206,6 @@ pub fn open_iceoryx2_service(
             &dest_proc_id,
             &dest_port,
             &channel_service_name,
-            &InboundLinkName::from(channel_service_name.as_str()),
             &notify_service_name_for_the_destination,
             dest_input_port_delivery,
             channel_sizing,
@@ -222,7 +221,7 @@ pub fn open_iceoryx2_service(
             &dest_processor,
             &dest_port,
             link_id,
-            &InboundLinkName::from(channel_service_name.as_str()),
+            &channel_service_name,
             dest_input_port_delivery,
             &service,
             &notify_service_for_the_destination,
@@ -551,12 +550,7 @@ pub(crate) fn find_the_source_a_caller_named(
         .id
         .clone();
     let source = OutputLinkPortRef::new(processor_id, address.port_name());
-    if graph
-        .traversal()
-        .e(())
-        .iter()
-        .any(|link| *link.from_port() == source)
-    {
+    if every_link_carrying_from(graph, &source).next().is_some() {
         Ok(source)
     } else {
         Err(not_found())
@@ -841,7 +835,7 @@ fn wire_rust_dest(
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_port: &str,
     link_id: &LinkUniqueId,
-    inbound_link_name: &InboundLinkName,
+    channel_service_name: &str,
     dest_input_port_delivery: DeliveryResolution,
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
@@ -886,7 +880,12 @@ fn wire_rust_dest(
     }
 
     let subscriber = service.create_subscriber(subscriber_ring_depth)?;
-    input_inner.add_channel_subscriber(dest_port, link_id.as_str(), inbound_link_name, subscriber);
+    input_inner.add_channel_subscriber(
+        dest_port,
+        link_id.as_str(),
+        &InboundLinkName::from(channel_service_name),
+        subscriber,
+    );
     tracing::debug!(
         "Bound channel subscriber to destination input port '{}'",
         dest_port
@@ -1037,8 +1036,8 @@ fn wire_subprocess_source(
 /// of process, so it opens its own channel subscriber (bound to its local input
 /// port) from the envelope.
 ///
-/// `inbound_link_name` rides the envelope beside `channel_service_name`, and is
-/// the same name.
+/// The envelope's `inbound_link_name` is the channel's own name: a helper
+/// knows each link into it by the channel that carries it.
 ///
 /// Hands back the cell this end's answer will land in, on the same terms as
 /// [`wire_subprocess_source`].
@@ -1049,7 +1048,6 @@ fn wire_subprocess_dest(
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
     channel_service_name: &str,
-    inbound_link_name: &InboundLinkName,
     notify_service_name: &str,
     dest_input_port_delivery: DeliveryResolution,
     channel_sizing: ChannelSizing,
@@ -1068,7 +1066,7 @@ fn wire_subprocess_dest(
         "name": dest_port,
         "link_id": link_id.to_string(),
         "channel_service_name": channel_service_name,
-        "inbound_link_name": inbound_link_name.as_str(),
+        "inbound_link_name": InboundLinkName::from(channel_service_name).as_str(),
         "notify_service_name": notify_service_name,
         "read_mode": dest_input_port_delivery.drain_order.as_manifest_str(),
         "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
@@ -1298,7 +1296,6 @@ mod tests {
             &dest_id.into(),
             "in1",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -1660,7 +1657,6 @@ mod tests {
             &helper_windowed_id.as_str().into(),
             "audio",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -1951,7 +1947,6 @@ mod tests {
             &dest_id.as_str().into(),
             "in1",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -2220,7 +2215,7 @@ mod tests {
             &dest,
             "in1",
             &link_id,
-            &InboundLinkName::from("psource/out1"),
+            "psource/out1",
             DeliveryProfile::Newest.resolve(),
             &channel,
             &notify_service,
@@ -2284,7 +2279,7 @@ mod tests {
                 &dest,
                 "in1",
                 &link_id,
-                &InboundLinkName::from("psource/out1"),
+                "psource/out1",
                 dest_delivery,
                 &channel,
                 &notify_service,
@@ -3296,7 +3291,7 @@ mod tests {
             &dest,
             "audio",
             &"L-match-device".into(),
-            &InboundLinkName::from("psource/audio_out"),
+            "psource/audio_out",
             DeliveryProfile::Ordered.resolve(),
             &channel,
             &notify_service,
@@ -3385,7 +3380,6 @@ mod tests {
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -3437,7 +3431,6 @@ mod tests {
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -3924,7 +3917,6 @@ mod tests {
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -4164,7 +4156,6 @@ mod tests {
             &dest_id.as_str().into(),
             "in1",
             channel_service_name,
-            &InboundLinkName::from(channel_service_name),
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -4192,5 +4183,19 @@ mod tests {
             serde_json::json!("pcam/video")
         );
         assert_eq!(entry["inbound_link_name"], serde_json::json!("pcam/video"));
+    }
+
+    /// A native destination knows a link by the channel it subscribes to.
+    #[test]
+    fn a_native_destination_knows_each_link_by_its_channel() {
+        use crate::core::test_support::MockInputOnlyProcessor;
+
+        let (_source_output, dest_input) =
+            wire_one_test_link::<MockInputOnlyProcessor::Processor>("inbound-link-name", false);
+
+        assert_eq!(
+            dest_input.inbound_link_names("in1"),
+            vec![InboundLinkName::from("psource/out1")]
+        );
     }
 }

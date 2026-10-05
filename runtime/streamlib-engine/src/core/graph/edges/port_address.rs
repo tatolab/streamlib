@@ -25,7 +25,7 @@ const PARTS_OF_A_PORT_ADDRESS: usize = 3;
 ///
 /// Carries no processor id: the runtime that owns the port resolves the node's
 /// name to one of its own nodes at the moment it is asked.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortAddress {
     runtime_name: String,
     processor_display_name: String,
@@ -47,9 +47,7 @@ impl PortAddress {
     pub fn port_name(&self) -> &str {
         &self.port_name
     }
-}
 
-impl PortAddress {
     /// Address a port, casting the node and port names the way every node and
     /// port is named, and refusing by name any part the address grammar cannot
     /// carry.
@@ -62,7 +60,7 @@ impl PortAddress {
             cast_exposed_name_to_url_safe(&part)
                 .map(|cast| cast.into_owned())
                 .map_err(|names_nothing| {
-                    Error::InvalidLink(format!(
+                    Error::InvalidPortAddress(format!(
                         "the {part_name} {part:?} cannot be part of a port address: \
                          {names_nothing}"
                     ))
@@ -82,7 +80,7 @@ impl PortAddress {
             ("port name", &addressed.port_name),
         ] {
             if let Some(reason) = first_reason_this_is_not_one_address_chunk(part) {
-                return Err(Error::InvalidLink(format!(
+                return Err(Error::InvalidPortAddress(format!(
                     "the {part_name} {part:?} in the port address {addressed} cannot be part \
                      of a port address: {reason}. {}",
                     what_one_address_chunk_may_be()
@@ -97,7 +95,7 @@ impl PortAddress {
     pub fn parse(address: &str) -> Result<Self> {
         let parts: Vec<&str> = address.split('/').collect();
         let [runtime_name, processor_display_name, port_name] = parts.as_slice() else {
-            return Err(Error::InvalidLink(format!(
+            return Err(Error::InvalidPortAddress(format!(
                 "{address:?} is not a port address: it has {} parts rather than \
                  {PARTS_OF_A_PORT_ADDRESS}. {}",
                 parts.len(),
@@ -183,7 +181,12 @@ mod tests {
             ("node name", PortAddress::new("lab", "..", "video")),
             ("port name", PortAddress::new("lab", "Cam", "?")),
         ] {
-            let refusal = refused.expect_err("an illegal part is refused").to_string();
+            let refusal = refused.expect_err("an illegal part is refused");
+            assert!(
+                matches!(refusal, Error::InvalidPortAddress(_)),
+                "{refusal:?}"
+            );
+            let refusal = refusal.to_string();
             assert!(refusal.contains(part_name), "{refusal}");
         }
     }
@@ -193,9 +196,12 @@ mod tests {
     #[test]
     fn an_address_that_is_not_three_parts_is_refused_by_count() {
         for wrong in ["bench/CameraSource", "bench/CameraSource/video/extra", ""] {
-            let refusal = PortAddress::parse(wrong)
-                .expect_err("only three parts are an address")
-                .to_string();
+            let refusal = PortAddress::parse(wrong).expect_err("only three parts are an address");
+            assert!(
+                matches!(refusal, Error::InvalidPortAddress(_)),
+                "{wrong:?}: {refusal:?}"
+            );
+            let refusal = refusal.to_string();
             assert!(
                 refusal.contains("parts rather than 3"),
                 "{wrong:?}: {refusal}"

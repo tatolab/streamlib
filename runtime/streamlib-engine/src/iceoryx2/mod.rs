@@ -59,6 +59,8 @@ pub use helper_process_loss_count_board::{
     InboundLinkLossCountBoardSlotMirror, OutputPortRefusedBagCountBoardMirror,
     ProcessorLossCountSnapshot,
 };
+#[cfg(test)]
+pub(crate) use iceoryx2_domain_for_this_test_process::a_notifier_nothing_listens_on;
 #[cfg(any(test, feature = "test-support"))]
 pub use iceoryx2_domain_for_this_test_process::{
     Iceoryx2DomainForThisTestProcess, create_iceoryx2_node_for_this_test_process,

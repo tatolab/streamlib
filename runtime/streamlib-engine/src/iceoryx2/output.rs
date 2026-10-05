@@ -665,21 +665,6 @@ mod tests {
             .expect("open the channel data service")
     }
 
-    /// A notifier on a notify service of its own, for a link whose destination
-    /// no test listens on.
-    fn a_notifier_nothing_listens_on(tag: &str) -> Notifier<ipc::Service> {
-        crate::iceoryx2::create_iceoryx2_node_for_this_test_process()
-            .service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
-            .event()
-            .max_notifiers(1)
-            .max_listeners(1)
-            .open_or_create()
-            .unwrap()
-            .notifier_builder()
-            .create()
-            .unwrap()
-    }
-
     #[test]
     fn write_raw_calls_notifier() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
@@ -1139,7 +1124,9 @@ mod tests {
             inner.add_channel_link(
                 "out",
                 "L-out",
-                a_notifier_nothing_listens_on("mirrored-refusal/notify"),
+                crate::iceoryx2::a_notifier_nothing_listens_on(&unique_suffix(
+                    "mirrored-refusal/notify",
+                )),
             );
             inner
                 .mirror_an_output_ports_refused_bag_count_into(
@@ -1257,7 +1244,7 @@ mod tests {
         inner.add_channel_link(
             "out",
             "L-only",
-            a_notifier_nothing_listens_on("refusals-leave/notify"),
+            crate::iceoryx2::a_notifier_nothing_listens_on(&unique_suffix("refusals-leave/notify")),
         );
         let refused_bag_counts = inner.refused_bag_counts_by_output_port();
         inner.write_raw("out", &[0u8; 128], 0).unwrap_err();

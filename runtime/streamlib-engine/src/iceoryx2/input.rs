@@ -1981,15 +1981,12 @@ mod tests {
                 chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
-        let notifier_nothing_listens_on = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
-            .open_or_create_notify_service(&unique_suffix(&format!("{output_port}/notify")), 1)
-            .unwrap()
-            .create_notifier()
-            .unwrap();
         output_writer.add_channel_link(
             output_port,
             "L-to-the-destination",
-            notifier_nothing_listens_on,
+            crate::iceoryx2::a_notifier_nothing_listens_on(&unique_suffix(&format!(
+                "{output_port}/notify"
+            ))),
         );
     }
 

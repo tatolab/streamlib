@@ -771,6 +771,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has",
                 "core::runtime::mesh",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_envelope_hands_a_helper_its_channel_as_the_name_it_knows_the_link_by",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_native_destination_knows_each_link_by_its_channel",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel",
                 "core::graph_snapshot",

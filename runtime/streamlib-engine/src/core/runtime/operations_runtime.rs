@@ -316,21 +316,7 @@ fn apply_a_link(
             // ProcessorNotFound / ProcessorPortNotFound and never gets masked by an
             // InvalidLink from the wire-name grammar. The `add_e` call still checks
             // defensively; this pre-validation is what gets the typed error out.
-            // Validate source processor + output port.
-            {
-                let from_node = graph
-                    .traversal()
-                    .v(from.processor_id())
-                    .first()
-                    .ok_or_else(|| Error::ProcessorNotFound(from.processor_id().to_string()))?;
-                if !from_node.has_output(from.port_name()) {
-                    return Err(Error::ProcessorPortNotFound {
-                        processor_id: from.processor_id().to_string(),
-                        port_name: from.port_name().to_string(),
-                        direction: PortDirection::Output,
-                    });
-                }
-            }
+            refuse_a_source_this_graph_cannot_take(graph, &from)?;
             refuse_a_destination_this_graph_cannot_take(graph, &to)?;
 
             // The one channel this link's source output port publishes to — keyed
@@ -367,6 +353,27 @@ fn apply_a_link(
         "connect assigned channel"
     );
     Ok(link_id)
+}
+
+/// Refuse a source this graph has no processor or no such output port for,
+/// with the typed error a caller can act on.
+fn refuse_a_source_this_graph_cannot_take(
+    graph: &crate::core::graph::Graph,
+    from: &OutputLinkPortRef,
+) -> Result<()> {
+    let from_node = graph
+        .traversal()
+        .v(from.processor_id())
+        .first()
+        .ok_or_else(|| Error::ProcessorNotFound(from.processor_id().to_string()))?;
+    if !from_node.has_output(from.port_name()) {
+        return Err(Error::ProcessorPortNotFound {
+            processor_id: from.processor_id().to_string(),
+            port_name: from.port_name().to_string(),
+            direction: PortDirection::Output,
+        });
+    }
+    Ok(())
 }
 
 /// Refuse a destination this graph has no processor or no such input port for,

@@ -33,9 +33,31 @@ mod private {
     }
 }
 
+use petgraph::graph::{DiGraph, EdgeIndex};
 use petgraph::visit::EdgeRef;
 
-use crate::core::graph::{LinkTraversal, LinkTraversalMut, TraversalSource, TraversalSourceMut};
+use crate::core::graph::{
+    Link, LinkTraversal, LinkTraversalMut, LinkUniqueId, ProcessorNode, TraversalSource,
+    TraversalSourceMut,
+};
+
+/// The edge of the link with this id, or every edge when no id is given.
+fn every_link_edge_the_filter_selects(
+    graph: &DiGraph<ProcessorNode, Link>,
+    link_id_filter: Option<LinkUniqueId>,
+) -> Vec<EdgeIndex> {
+    match link_id_filter {
+        Some(link_id) => graph
+            .edge_references()
+            .find(|edge_ref| edge_ref.weight().id == link_id)
+            .map(|edge_ref| vec![edge_ref.id()])
+            .unwrap_or_default(),
+        None => graph
+            .edge_references()
+            .map(|edge_ref| edge_ref.id())
+            .collect(),
+    }
+}
 
 impl<'a> TraversalSource<'a> {
     /// Start traversal from edges.
@@ -45,30 +67,10 @@ impl<'a> TraversalSource<'a> {
     /// - `&str` - edge by ID string
     /// - `LinkUniqueId` - edge by ID
     pub fn e(self, filter: impl private::IntoEdgeFilter) -> LinkTraversal<'a> {
-        match filter.into_filter() {
-            Some(id) => self
-                .graph
-                .edge_references()
-                .find(|edge_ref| edge_ref.weight().id == id)
-                .map(|edge_ref| LinkTraversal {
-                    graph: self.graph,
-                    ids: vec![edge_ref.id()],
-                })
-                .unwrap_or_else(|| LinkTraversal {
-                    graph: self.graph,
-                    ids: vec![],
-                }),
-            None => {
-                let ids = self
-                    .graph
-                    .edge_references()
-                    .map(|edge_ref| edge_ref.id())
-                    .collect::<Vec<_>>();
-                LinkTraversal {
-                    graph: self.graph,
-                    ids,
-                }
-            }
+        let ids = every_link_edge_the_filter_selects(self.graph, filter.into_filter());
+        LinkTraversal {
+            graph: self.graph,
+            ids,
         }
     }
 }
@@ -81,29 +83,10 @@ impl<'a> TraversalSourceMut<'a> {
     /// - `&str` - edge by ID string
     /// - `LinkUniqueId` - edge by ID
     pub fn e(self, filter: impl private::IntoEdgeFilter) -> LinkTraversalMut<'a> {
-        match filter.into_filter() {
-            Some(id) => {
-                let found = self
-                    .graph
-                    .edge_references()
-                    .find(|edge_ref| edge_ref.weight().id == id)
-                    .map(|edge_ref| edge_ref.id());
-                LinkTraversalMut {
-                    graph: self.graph,
-                    ids: found.map(|idx| vec![idx]).unwrap_or_default(),
-                }
-            }
-            None => {
-                let ids = self
-                    .graph
-                    .edge_references()
-                    .map(|edge_ref| edge_ref.id())
-                    .collect::<Vec<_>>();
-                LinkTraversalMut {
-                    graph: self.graph,
-                    ids,
-                }
-            }
+        let ids = every_link_edge_the_filter_selects(self.graph, filter.into_filter());
+        LinkTraversalMut {
+            graph: self.graph,
+            ids,
         }
     }
 }

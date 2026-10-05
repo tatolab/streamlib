@@ -5,8 +5,8 @@
 //!
 //! A runtime name is the first part of the address agents and `tap` name a
 //! port by — `<runtime name>/<display name>/<port>` — so two holders of one
-//! name make that address mean two things. The check asks the mesh who holds the name
-//! before this runtime declares anything, and refuses by name.
+//! name make that address mean two things. The check asks the mesh who holds
+//! the name before this runtime declares anything, and refuses by name.
 //!
 //! **The query runs before the token is declared**, because a local liveliness
 //! `get` answers with this session's own tokens too.
@@ -150,10 +150,10 @@ fn why_this_name_is_not_available(
     format!(
         "Runtime name {} is already live on the {mesh_name} mesh, held by {} (pid {}). A runtime \
          name is the first part of the address every port on it is named by, so two runtimes \
-         may not hold one. Either stop that runtime — `streamlib nodes --mesh-name {mesh_name}` lists it wherever \
-         it is running — or start this one under another name: `--runtime-name <name>` \
-         on `streamlib run` / `dev`, the STREAMLIB_RUNTIME_NAME environment variable, or \
-         Runtime(runtime_name=\"<name>\").",
+         may not hold one. Either stop that runtime — `streamlib nodes --mesh-name {mesh_name}` \
+         lists it wherever it is running — or start this one under another name: \
+         `--runtime-name <name>` on `streamlib run` / `dev`, the STREAMLIB_RUNTIME_NAME \
+         environment variable, or Runtime(runtime_name=\"<name>\").",
         holder.runtime_name,
         where_the_holder_is(this_host, &holder.host_identity),
         holder.process_id

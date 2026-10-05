@@ -222,25 +222,16 @@ pub struct LinkPortRefOutput {
 }
 
 impl LinkPortRefOutput {
-    /// The end `port_ref` names, its node named by its name.
-    pub(crate) fn of_an_output_port(
-        port_ref: &crate::core::graph::OutputLinkPortRef,
+    /// The port `port_name` on the processor `processor_id`, its node named by
+    /// its name.
+    fn of_a_port(
+        processor_id: &crate::core::graph::ProcessorUniqueId,
+        port_name: &str,
         node_names: &NodeNamesByProcessorId,
     ) -> Self {
         Self {
-            node: node_names.name_of(port_ref.processor_id()),
-            port: port_ref.port_name().to_string(),
-        }
-    }
-
-    /// The end `port_ref` names, its node named by its name.
-    pub(crate) fn of_an_input_port(
-        port_ref: &crate::core::graph::InputLinkPortRef,
-        node_names: &NodeNamesByProcessorId,
-    ) -> Self {
-        Self {
-            node: node_names.name_of(port_ref.processor_id()),
-            port: port_ref.port_name().to_string(),
+            node: node_names.name_of(processor_id),
+            port: port_name.to_string(),
         }
     }
 }
@@ -503,8 +494,16 @@ impl LinkOutput {
         }
         Self {
             id: link.id.to_string(),
-            source: LinkPortRefOutput::of_an_output_port(&link.source, node_names),
-            target: LinkPortRefOutput::of_an_input_port(&link.target, node_names),
+            source: LinkPortRefOutput::of_a_port(
+                link.source.processor_id(),
+                link.source.port_name(),
+                node_names,
+            ),
+            target: LinkPortRefOutput::of_a_port(
+                link.target.processor_id(),
+                link.target.port_name(),
+                node_names,
+            ),
             capacity: link.capacity.get(),
             state: rendered.state,
             error_reason: rendered.error_reason,

@@ -1241,7 +1241,7 @@ impl Runner {
                 .resolve_processor_type_if_unregistered(&node.processor_type)?;
         }
         graph.validate()?;
-        self.refuse_what_this_runtimes_graph_contradicts(graph)?;
+        self.refuse_a_node_name_this_runtimes_graph_already_holds(graph)?;
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
@@ -1294,7 +1294,7 @@ impl Runner {
     /// already holds, which it would refuse partway through the load. With
     /// `validate` run first, a load refused for it adds nothing; a link the
     /// engine refuses after that still leaves the nodes added before it.
-    fn refuse_what_this_runtimes_graph_contradicts(
+    fn refuse_a_node_name_this_runtimes_graph_already_holds(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
     ) -> Result<()> {
