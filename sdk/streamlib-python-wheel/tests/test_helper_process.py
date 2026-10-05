@@ -111,9 +111,9 @@ def test_a_module_scope_class_loads_from_its_import_path():
 
 
 def test_a_nested_class_resolves_through_the_whole_dotted_qualname():
-    """`rt.add` deliberately admits `Outer.Inner` because a fresh interpreter
-    can reach it — which it only can if the loader walks every segment. A
-    single `getattr` on the joined qualname raises instead."""
+    """`stream.add` deliberately admits `Outer.Inner` because a fresh
+    interpreter can reach it — which it only can if the loader walks every
+    segment. A single `getattr` on the joined qualname raises instead."""
     loaded = load_processor_class(f"{PROBE_MODULE}:OuterProbe.InnerProbe")
     assert loaded.__qualname__ == "OuterProbe.InnerProbe"
 

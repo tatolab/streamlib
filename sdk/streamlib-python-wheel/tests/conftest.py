@@ -82,9 +82,9 @@ def start_app_under_test():
     context, an iceoryx2 node and a socket, silently contaminating every later
     run on the same rig.
 
-    `launcher` picks the launch arrangement — `python app.py` unless a suite
-    names one of `app_under_test`'s others. The reaping is the same whichever
-    it is, which is the point of routing them all through here.
+    `launcher` picks the launch arrangement — `python <script>.py` unless a
+    suite names one of `app_under_test`'s others. The reaping is the same
+    whichever it is, which is the point of routing them all through here.
     """
     started: "list[AppUnderTest]" = []
 

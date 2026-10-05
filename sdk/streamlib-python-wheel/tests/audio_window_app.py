@@ -3,9 +3,9 @@
 
 """The audio built-in feeding a helper-placed consumer that declared a window.
 
-Run as a real `python app.py`: the claim is that the contract crosses the
-parent→child wiring envelope and the child's own stage honours it, which only a
-real child can show.
+Run as its own `python <script>.py` process: the claim is that the contract
+crosses the parent→child wiring envelope and the child's own stage honours it,
+which only a real child can show.
 """
 
 import sys

@@ -3,9 +3,10 @@
 
 """Scenarios that prove where a Python processor actually runs.
 
-Run as a real `python app.py` because the claim is about processes: only a
-parent can see that the app's interpreter never loaded a second copy of the
-processor's module, and that the pid a bag was produced in is not the app's.
+Run as its own `python <script>.py` process because the claim is about
+processes: only a parent can see that the app's interpreter never loaded a
+second copy of the processor's module, and that the pid a bag was produced in
+is not the app's.
 """
 
 import os
@@ -199,7 +200,7 @@ def scenario_a_native_builtin_stays_in_the_app_process() -> None:
 
 
 def scenario_every_child_is_reaped() -> None:
-    """`rt.run()` returning means no helper outlived it.
+    """`runtime.run()` returning means no helper outlived it.
 
     The spawn host reports each child's pid as it starts one; the test is what
     checks those pids are gone once the app has exited.
