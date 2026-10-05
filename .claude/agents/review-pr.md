@@ -52,7 +52,7 @@ yourself.
   a vendored third-party tree (`vendor/tatolab-vulkanalia{,-sys,-vma}`), where adding one
   is the licence violation. Those paths and nothing else — any other tree still carries it.
   Rustdoc one-line, no `# Example` sections. Learnings ship their index line.
-  Supersession is annotated, not overwritten.
+  Retired doc text is deleted, never struck, per `.claude/rules/docs-policy.md`.
 
 ## How you run
 1. Read the ticket, its change proposal if any, and the full diff against the base.

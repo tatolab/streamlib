@@ -32,8 +32,8 @@ trap 'rm -f "$hits"' EXIT
 # artifact by policy or by design, so a hit there is not residue the engine can act on:
 #   CHANGELOG.md      release-please generates it from merged commit subjects; the
 #                     entry announcing a removal is unscrubbable.
-#   docs/decisions/** annotate-don't-overwrite (.claude/rules/docs-policy.md): a
-#                     superseded ADR keeps naming what it retired.
+#   docs/decisions/** decision records keep their text as written
+#                     (.claude/rules/docs-policy.md), so an ADR keeps naming what it retired.
 #   docs/learnings/** empirical-only (same rule): a learning records driver or library
 #                     behaviour that stays true after the thing that surfaced it is gone.
 #   docs/research/**  dated evidence (same rule): a memo answers its question as of the day

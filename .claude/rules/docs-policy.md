@@ -18,14 +18,36 @@ paths:
   the day it was taken, and describes the tree it measured. It is never rewritten to match a tree
   that has since changed: a memo naming something a later change deleted is the record working, not
   residue.
-- **Supersession is annotated, not overwritten:**
+- **Docs say what holds now; retired text is deleted, never struck.** When a decision retires a
+  claim, delete it and repair the sentence around it so it reads as if written that way — no
+  `~~strikethrough~~`, no "Superseded …" note, no in-body narration ("superseding …",
+  "(amended 2026-…)"). Delete a struck span whole, never half. A fact in the deleted text that
+  still bears on a live OPEN moves into that OPEN as `Known (<date>): …`. In
+  `docs/plan/changes/`, a note that voids part of the file's own scope or inventory is deleted
+  only together with every line it voids. `docs/research/`, `docs/decisions/` and
+  `docs/plan/changes/archive/` are records and keep their text as written.
+- **A retired shape survives as one `Rejected:` line, and only when a session without it would
+  plausibly rebuild it** — it is the obvious design, or the owner ruled it out by name — and no
+  live sentence in the same section already names it. Sessions never infer a decision from git
+  history, so a rejection that matters is written down, inside the entry that replaced it, and
+  states no tree state:
 
   ```markdown
-  > ~~Original claim.~~ — Superseded YYYY-MM-DD by <evidence>. <why it's no longer right>.
+  Rejected: <the shape, as a session would propose it> — <why, one clause> (<owner or decision>, YYYY-MM-DD).
   ```
 
-  Outright deletion is allowed when content is provably wrong — leave a one-line marker saying what
-  was removed and why.
+- **A plan history tag says what built the entry and what will change it:**
+  `[<decision>; <change> — SHIPPED #<pr>, #<pr>; amended by <decision or change>: <clause>]`.
+  An `amended by` / `reopened by` pointer stays while its clause is unbuilt, and only the
+  `/ship-change` that builds it folds it into the body — even when the tree already has it. A
+  pointer that only says X is not built, or is deleted, counts as built once the tree lacks X,
+  and is folded now. Completed history is dropped, and so is a change that only removed part of
+  the entry. `narrowed`, `settled`, `superseded` and `retired by` are not tag words. An OPEN
+  carries no SHIPPED token. A lesson inside a tag moves to `docs/learnings/` or is deleted.
+- **Rejection records that already have a form keep it:** the glossary's `_Avoid_` lists and
+  "Retired by" paragraphs, `docs/plan/changes/README.md`'s retired-without-shipping list, and the
+  placement-ban records `.claude/rules/placement.md` and `check-no-in-process-placement`
+  pin, its exempt lines included.
 - **Never create a summary doc of what the code already shows.** If it's derivable from the tree,
   read the tree.
 - Edit markdown with Opus; show the evidence that drove the change in the PR / commit body.
