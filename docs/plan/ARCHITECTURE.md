@@ -16,9 +16,10 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
 Reading rule since the 2026-10-04 pivot (`[moq-on-the-tailnet]`): Zenoh, the runtime mesh and
-the MoQ extension wheel are removed, and the `tap` and `exchange` verbs go at the sharing step.
-An entry describing one of them is a fact about the shipped tree until the change that removes
-it ships and folds it out — never direction, and nothing new is built on it. Off a machine, the direction is §Networking's
+the MoQ extension wheel are gone (zenoh-and-moq-wheel-removal, shipped 2026-10-05), and the
+`tap` and `exchange` verbs go at the sharing step. An entry describing `tap` or `exchange` is a
+fact about the shipped tree until the change that removes them ships and folds it out — never
+direction, and nothing new is built on it. Off a machine, the direction is §Networking's
 `[moq-on-the-tailnet]` entries.
 
 ## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
@@ -108,7 +109,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
   stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
   and one venv; a stream may expose ports. Each machine runs one runtime, which runs many streams — written by different people
-  or teams — behind that machine's single Zenoh session, owns the accelerator when one is
+  or teams — ~~behind that machine's single Zenoh session,~~ owns the accelerator when one is
   present, serves the machine's local API, and schedules across streams. Every Python node
   keeps its own process, and agents keep changing live graphs. Owner, 2026-09-30: sentence 2
   restated after its "daemon" wording was reopened. [one-runtime-per-machine; stream-graph;
@@ -177,7 +178,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [runtime-hosting; one-runtime-per-machine]
 
-## Packages & extension model — IN-FLIGHT (→ package-split-and-lend, zenoh-and-moq-wheel-removal)
+## Packages & extension model — IN-FLIGHT (→ package-split-and-lend)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -439,16 +440,15 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   that reads the bag as a dict. Publish-to-claim transit rides pool depth, and so
   does an untyped read: the strictness dial is also the safety dial — depth bounds
   the window, and outwaiting it is an error, never somebody else's pixels. The
-  engine inspects no bag content anywhere, save the top-level `surface_id` a remote link
-  carries across the runtime mesh (§Networking; that exception is deleted with the mesh,
-  2026-10-04). The producer never waits on a consumer:
+  engine inspects no bag content anywhere. The producer never waits on a consumer:
   the pool skips leased slots and grows to its cap; at cap the producer drops its
   own frame — a slow consumer costs memory, then its own frames, never another
   processor's cadence. A producer-internal transient (a frames-in-flight ring
   texture) never backs a cross-process export: the export blit sources the
   surface's pooled backing whenever one exists, read-only; texture-backed export
   remains for surfaces with no pooled backing (kernel outputs).
-  [surface-id-lifetime-contract — SHIPPED #1868, #1869, #1871, #1877]
+  [surface-id-lifetime-contract — SHIPPED #1868, #1869, #1871, #1877; the remote-link
+  `surface_id` exception deleted by zenoh-and-moq-wheel-removal — SHIPPED #2643]
   <!-- verify: cargo test -p streamlib-engine a_checkout_of_a_retired_frame_id_is_refused_naming_the_recycling -->
   <!-- verify: cargo test -p streamlib-python-wheel claiming_a_recycled_frame_is_refused_naming_the_recycling -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-16-surface-id-lifetime-contract.md -->
@@ -657,7 +657,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   `cuda-fisheye-detection`) rewritten in Python, `camera-compute-kernel` (was
   `camera-plugin-sdk-compute`) and `camera-halftone` (mined from the retired Deno
   example) rebuilt as kernel examples, and `tokio-integration` rewritten as a plain cargo
-  project. `examples/` now stands at fourteen converted beside two held: the two
+  project. `examples/` now stands at thirteen converted beside two held: the two
   vulkan-video examples left the held column into the proof rig,
   `camera-codec-roundtrip` joined the converted one as the codec blocks' showcase — a
   showcase authored in the current idiom is an ordinary addition under the convention
@@ -667,7 +667,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   also fanned to a `DisplayWindow`, Ctrl-C stopping and closing the file. The networking
   move then emptied the held networking column into the converted one:
   `examples/moq-roundtrip` was deleted and rewritten as `examples/moq-broadcast-roundtrip`
-  (publish and subscribe in one app through the relay to a `DisplayWindow`),
+  (publish and subscribe in one app through the relay to a `DisplayWindow`; deleted in turn
+  with the MoQ wheel, its one purpose),
   `examples/webrtc-cloudflare-stream` was replaced by `examples/camera-webrtc-publish`
   (camera and microphone through the codec blocks to `WhipPublisher`, credentials from the
   environment), and `examples/whep-player` — a printed deferral at HEAD — was deleted
@@ -678,8 +679,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   machine and both are gone at Ctrl-C.
   [consumer-tree-disposition — SHIPPED #2053, #2054, #2055, #2056, #2057, #2058, #2059;
   the count restated at codec-roundtrip-reproof #2087, python-codec-block-api #2108,
-  opus-mp4-recording-rung #2129, networking-extension-wheels #2153 and
-  virtual-camera-sink #2198]
+  opus-mp4-recording-rung #2129, networking-extension-wheels #2153,
+  virtual-camera-sink #2198 and zenoh-and-moq-wheel-removal #2633]
   <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection examples/camera-codec-roundtrip examples/camera-virtual-camera -->
   <!-- verify: git ls-files examples/camera-audio-recorder/app.py examples/camera-audio-recorder/pyproject.toml -->
 - **DECIDED** — The GPU examples run on the portable path: `camera-compute-kernel`,
@@ -746,23 +747,21 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting, zenoh-and-moq-wheel-removal)
+## Processor model & scheduling — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
   type declaration, connect never inspects or compares types and never warns, no read
   path examines a tag, and the frame header carries no schema ident. Consuming is a
   cast at read time; a mismatch surfaces as a decode failure at the consuming
-  processor. Two carve-outs, and only two: declaring an audio window contract **is** that
+  processor. One carve-out, and only one: declaring an audio window contract **is** that
   port's opt-in to the engine reading its bags as `AudioBlock`, so the engine inspects a
-  payload on exactly the ports that asked it to; and a remote link reads a bag's top-level
-  `surface_id` to carry the frame across the runtime mesh (§Networking) — reading that one
-  key, never a type, a tag or anything else in the bag; that second carve-out is deleted with
-  the mesh (2026-10-04), leaving the audio one. A link into a port with
+  payload on exactly the ports that asked it to. A link into a port with
   no contract is unchanged in every respect — still pure plumbing, `connect` still
   compares nothing, and the frame header still carries no schema ident.
   [schema-free-ports — SHIPPED #1814; the carve-out — audio-port-window-contract, SHIPPED
-  #2033]
+  #2033; the remote-link `surface_id` carve-out deleted by zenoh-and-moq-wheel-removal —
+  SHIPPED #2643]
   <!-- verify: cargo test -p streamlib-ipc-types frame_header_size_matches_constant -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_bag_carrying_extra_keys_is_read_rather_than_refused -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-11-schema-free-ports.md -->
@@ -780,9 +779,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
 - **DECIDED** — A read can name the inbound link it drained. Beside `read_raw`, a reader
   offers a read that returns the bag, its stamp and the *inbound link* it arrived on,
   named by the source channel name the link subscribed to — `<lowercased producer
-  processor id>/<output port>`, the name `graph` and `tap` already show — or, for a remote
-  link, by its mesh address `<runtime name>/<display name>/<output port>` (§Networking), so a
-  many-track sink fed across the mesh names its tracks the same way on every run. The mailbox
+  processor id>/<output port>`, the name `graph` and `tap` already show. The mailbox
   already queued each frame holding its link's identity for drop attribution; this
   exposes the identity the per-link counters are keyed by, so no frame carries anything
   it did not carry before and counting is unchanged. In Python `LinkInputDataReader`
@@ -794,24 +791,23 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   inbound links at `setup()`
   (`inbound_link_names(port)`), which is how a sink learns how many tracks it owes. A bag
   the port never enumerated a link for is refused by name rather than borrowing one.
-  A helper-placed destination is *told* its link's name rather than deriving it: a link
-  carrying from another runtime rides a channel hashed from the source port's mesh address,
-  so a helper deriving the name from its channel would name its tracks by a hash. The wiring
-  envelope's input entry therefore carries `inbound_link_name` beside `channel_service_name`
-  for every link, and `wire_input_link` takes it as a required positional — not defaulted,
+  A helper-placed destination is *told* its link's name rather than deriving it: the wiring
+  envelope's input entry carries `inbound_link_name` — the channel's own name — beside
+  `channel_service_name` for every link, and `wire_input_link` takes it as a required
+  positional — not defaulted,
   because a default meaning "the channel name" is the back-compat shim the doctrine bans and
   would make a silently wrong name reachable. A helper-protocol change, made safe by the
   build id above.
   [opus-mp4-recording-rung — SHIPPED #2124; the timestamped spelling with
   networking-extension-wheels — #2150; the mesh address and the envelope's link name —
-  cross-runtime-links, SHIPPED #2287; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by moq-on-the-tailnet: the mesh address of a link from another runtime is deleted with Zenoh; naming a link pulled from another machine is the sharing step's]
+  cross-runtime-links, SHIPPED #2287; reopened by one-runtime-per-machine: whether addresses gain a stream level; the mesh address of a link from another runtime deleted by zenoh-and-moq-wheel-removal — SHIPPED #2643; naming a link pulled from another machine is the sharing step's]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::naming_the_inbound_link_a_bag_arrived_on_leaves_the_per_link_drop_counts_alone -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::an_injected_bag_with_no_inbound_link_is_refused_by_name_rather_than_borrowing_one -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_inbound_link_read_with_timestamp.py -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_is_named_by_its_channel_at_home_and_by_its_address_across_the_mesh -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_envelope_hands_a_helper_the_address_beside_the_channel_it_subscribes_to -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_native_destination_knows_each_link_by_its_channel -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_envelope_hands_a_helper_its_channel_as_the_name_it_knows_the_link_by -->
 - **DECIDED** — The delivery profile is the whole of channel policy: one word, declared
   port-locally at the consuming input port. Every input port declares its delivery profile explicitly — there is no default
   and nothing left to infer one from, so an input port without one is a wiring error.
@@ -1071,7 +1067,6 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_class.py::test_the_helper_constructs_the_processor_by_the_config_keyword -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_class.py::test_the_document_is_2020_12_with_no_meta_schema_key -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_catalog.py -->
-  <!-- verify: pytest packages/streamlib-moq/tests/test_processors.py -->
   <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
 - **DECIDED** — Port rendering in the control plane is name, description, delivery
   profile, direction, and — on an audio input that declared one — its window contract; no
@@ -1399,8 +1394,9 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   the class's short name and the engine disambiguates duplicates within one graph (amended by
   one-runtime-per-machine: a duplicate the author typed is refused by name; only a defaulted
   duplicate is still disambiguated). It is
-  also the processor's part of its address on the runtime mesh (§Networking), so renaming a
-  processor re-addresses its ports. Being part of that address is what bounds it: `add`
+  also the processor's part of its port address `<runtime name>/<display name>/<port>`
+  (§Networking), so renaming a processor re-addresses its ports. Being part of that address
+  is what bounds it: `add`
   refuses a requested display name that is empty, contains `/`, `*`, `$`, `#` or `?`, or
   begins with `@`, naming the character and the fix, in Rust, in `rt.add` and in MCP
   `add_processor` alike. Spaces and unicode stay legal, and a class's short name and the
@@ -1409,7 +1405,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   the class's short name as its own validated field rather than the engine splitting one
   out of the import path, because splitting re-invents the grammar this change deleted.
   [processor-class-identity — SHIPPED #1838, #1841; the address-chunk refusal —
-  runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment; amended by runtime-hosting decision 3: a name is cast to the address grammar (§Networking, the address) and a defaulted duplicate takes `-2`, superseding spaces, unicode, ` 2` and the character refusals]
+  runtime-mesh, SHIPPED #2282, the address re-homed off the mesh by zenoh-and-moq-wheel-removal #2643; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment; amended by runtime-hosting decision 3: a name is cast to the address grammar (§Networking, the address) and a defaulted duplicate takes `-2`, superseding spaces, unicode, ` 2` and the character refusals]
   <!-- verify: cargo test -p streamlib-engine --test node_name_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_refused_by_name -->
@@ -1447,8 +1443,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   nothing enumerates every possible device up front. Decided with the resources entry below.
   [one-runtime-per-machine]
 - **DECIDED** — Several streams in one runtime process. The runtime keeps, once for the
-  machine: the one `GpuContext` every stream shares, signal ownership, the Zenoh session, the
-  local API and the bundled relay. Everything else the tree keeps once per process today
+  machine: the one `GpuContext` every stream shares, signal ownership, ~~the Zenoh session,~~ the
+  local API ~~and the bundled relay~~. Everything else the tree keeps once per process today
   becomes per stream: the event topic, the processor registry, the interpreter a stream's
   nodes start from, the log file, shutdown and its escalation, the teardown watchdog, and the
   process-group table of its processor interpreters — so one stream's shutdown, crash budget
@@ -1467,7 +1463,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   and remembered; a control client reads the same list and never has to predict it.
   [one-runtime-per-machine]
 - **DECIDED** — Failure isolation: one engine for every stream on the machine. A native crash
-  in a built-in — camera, codec, display, the mesh's copy path — ends every stream on the
+  in a built-in — camera, codec, display ~~, the mesh's copy path~~ — ends every stream on the
   machine, and the runtime restarts and re-loads every kept stream neither stopped nor failed
   from its persisted graph, while an attached stream ends with its `run` (§Product); a hang is
   bounded per node by the existing abandon budget and ends only that stream; Python crashes and hangs
@@ -2062,7 +2058,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   (`VideoCaptureInstantResolver`), and `CameraSource` assigns it to the frame's own
   `timestamp_ns` **and** passes the same value to `write_with_timestamp` — never the implicit
   write, whose `MediaClock::now()` stamps publication, and never the call swap alone, which
-  sets only the envelope. The encoder reads the payload's stamp, `Mp4Sink` and the mesh the
+  sets only the envelope. The encoder reads the payload's stamp, `Mp4Sink` the
   envelope's; both name the instant of capture on both floors. A device stamp is trusted only
   when it is on the machine's monotonic clock and non-zero — V4L2's dequeued-buffer stamp with
   its timestamp flags, AVFoundation's sample presentation stamp converted from the session's
@@ -3264,143 +3260,82 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   prompt's exact wording under `SMAppService` is an acceptance check of the installer change.
   Owner, 2026-10-01, on #2560's research. [runtime-hosting; one-runtime-per-machine]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ stream-graph, local-api, runtime-hosting, zenoh-and-moq-wheel-removal)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ stream-graph, local-api, runtime-hosting)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
-- **DECIDED** — Networking is the next work and the first extension: WebRTC and MoQ ship
-  as extension wheels under §Packages & extension model rather than as built-ins — not
-  every app needs them, and a capability with a consumer is what proves the extension
-  model. The scope is those two, and both are moves of code the tree already holds:
-  `runtime/streamlib-moq` (sessions and catalog on `moq-transport`) leaves the runtime
-  workspace into the MoQ extension wheel, and the held `packages/{moq,webrtc}` are mined
-  into the two wheels' Rust with their processors rewritten as ordinary processor
-  extensions. The one expected exception to "leaves the runtime" is a runtime capability
-  the moved code turns out to need, which is exposed as engine code — a split of concerns,
-  expected to be rare. Zenoh is new work rather than a move and is its own later change;
-  the runtime mesh is decided below. MoQ and WebRTC are edge source/sink processors
-  ingesting and egressing external streams at a runtime boundary; they are not the
-  runtime mesh. The held consumers `packages/{moq,webrtc}` and
-  `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}` resolved through this
-  change and are gone — mined, replaced or deleted per §Consumers.
-  [extension-model; networking-extension-wheels — SHIPPED #2153; amended by moq-on-the-tailnet: the MoQ wheel is deleted and MoQ becomes the engine's own transport off the machine; the WebRTC wheel stands]
-- **DECIDED** — Both wheels sit on the encoded side of the codec blocks and touch no
-  raw frame, surface or GPU: `WhipPublisher` and `MoqBroadcastPublisher` consume
-  `EncodedVideoFrame` and `EncodedAudioPacket` bags downstream of `H264Encoder` and
-  `OpusEncoder`; `WhepPlayer` and `MoqBroadcastSubscriber` emit the same bags upstream of
-  `H264Decoder` and `OpusDecoder`. Audio is in scope for both from the first rung. The
-  four are ordinary processor extensions — `@processor` classes in the wheel calling the
-  wheel's own Rust — each in its own helper, on the tokio runtime the wheel's support
-  hook brought up. The MoQ pair was named `MoqPublishTrack` / `MoqSubscribeTrack` here
-  until the build: under the `Mp4Sink` shape a publisher carries a broadcast of many
-  tracks, so a name saying one track fails the zero-context test.
-  [extension-model; renamed at networking-extension-wheels — SHIPPED #2151; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
-- **DECIDED** — The ordering pair never rides the transport's own identifiers. Both are
-  reachable — a subscriber can read `SubgroupReader::group_id` and
-  `SubgroupObjectReader::object_id` — but neither can carry the producer's: the publisher
-  must open groups with `append`, whose id is the library's own monotonic counter rather
-  than the bag's `group_index`, and the received object id is a per-subgroup local counter
-  with the wire value discarded before an application sees it. Under `streamlib_bag` the
-  pair therefore travels inside the object as ordinary bag keys and the subscriber writes
-  it back unchanged; a CMAF fragment carries neither and the subscriber mints its own, so
-  downstream of a CMAF hop a gapless `sequence_index` is not evidence of a lossless stream
-  and cross-track alignment is not recoverable from it. The pair and the stamp are
-  producer-scoped, not end-to-end. A group is cut by a **video** sync point and the cut
-  applies to every track at once; the cut is keyed on the video track alone, never on
-  whichever bag happens to carry `is_sync_point` — every Opus packet carries it, and the
-  library retains only a track's newest subgroup, so cutting on audio would leave one
-  packet per group and lose all but the newest. A data track has no producer pair — the
-  engine mints none for an arbitrary bag — so the publisher mints one `sequence_index` per
-  data track, monotonic for that track's life, carried in the envelope and never written
-  into the bag; and a data bag never cuts a group, for audio's reason. A broadcast with no
-  video never reaches the video cut and rides two backstops instead:
-  `HIGHEST_OBJECTS_IN_ONE_GROUP = 128` objects in one group, and an open group older than
-  one second on the publisher's own monotonic clock, cut on the next bag's arrival rather
-  than by a timer. A broadcast with video reaches neither. What a late joiner replays is
-  therefore the open group — MoQ's behavior and media's, accepted rather than masked,
-  bounded to about a second of production while the publisher is writing (owner,
-  2026-09-05). The bound is what the age backstop can give without a timer, and it is worth
-  stating exactly: a publisher that stops writing holds its last group open until it writes
-  again or closes, so a joiner arriving during an idle stretch still replays that group
-  however old the idle has made it. An idle close would need a timer, which no processor
-  here owns; a downstream that wants only the live edge filters on the stamp it already
-  receives.
-  [extension-model; the data pair and the age backstop at moq-data-tracks — SHIPPED #2172; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-- **DECIDED** — Many tracks follow the `Mp4Sink` shape: a publisher takes one track per
-  inbound link and derives its catalog or session media description from them. The
-  container names the tracks: under `cmaf` they are `.catalog`, an init track `0.mp4`
-  carrying `ftyp` and `moov`, and `{track_id}.m4s` media tracks, because a subscriber not
-  asked to fetch a catalog hardcodes exactly those; under `streamlib_bag` each is its
-  link's channel name, unless the publisher was given `track_names` — positional in wiring
-  order. Both subscribers expose one output per track kind — `encoded_video`,
-  `encoded_audio`, and on `MoqBroadcastSubscriber` a third, `data_bags` — never one port per
-  track: ports are declared statically
-  by decorator, and a decoder downstream wants a port it can name at wiring time. Which
-  track feeds which port is config only where the transport cannot say: `MoqBroadcastSubscriber`
-  takes `video_track`, `audio_track` and `data_track`, because a MoQ broadcast may carry any
-  number of tracks and a subscriber picks, and one naming none of the three is refused;
-  `WhepPlayer` takes neither media name, because a WHEP answer names
-  the session's media and there is nothing left to choose. Endpoint and credential
-  configuration is ticket-level, as for every built-in's config.
+- **DECIDED** — WebRTC ships as an extension wheel under §Packages & extension model rather
+  than as a built-in — not every app needs it, and a capability with a consumer is what proves
+  the extension model. It is a move of code the tree already held: the held `packages/webrtc`
+  is mined into the wheel's Rust with its processors rewritten as ordinary processor
+  extensions. A runtime capability the moved code turns out to need is exposed as engine
+  code — a split of concerns, expected to be rare. WebRTC is an edge source/sink processor
+  pair ingesting and egressing external streams at a runtime boundary. The held consumers
+  `packages/{moq,webrtc}` and
+  `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}` resolved through the move
+  and are gone — mined, replaced or deleted per §Consumers.
+  [extension-model; networking-extension-wheels — SHIPPED #2153; the MoQ wheel the move also
+  built is deleted by zenoh-and-moq-wheel-removal — SHIPPED #2633, MoQ becoming the engine's
+  own transport off the machine at the sharing step]
+- **DECIDED** — The wheel sits on the encoded side of the codec blocks and touches no raw
+  frame, surface or GPU: `WhipPublisher` consumes `EncodedVideoFrame` and
+  `EncodedAudioPacket` bags downstream of `H264Encoder` and `OpusEncoder`; `WhepPlayer` emits
+  the same bags upstream of `H264Decoder` and `OpusDecoder`. Audio is in scope from the first
+  rung. Both are ordinary processor extensions — `@processor` classes in the wheel calling the
+  wheel's own Rust — each in its own helper, on the tokio runtime the wheel's support hook
+  brought up. [extension-model; networking-extension-wheels — SHIPPED #2151; the MoQ half
+  deleted by zenoh-and-moq-wheel-removal — SHIPPED #2633]
+- **DECIDED** — Many tracks follow the `Mp4Sink` shape: the publisher takes one track per
+  inbound link and derives its session media description from them. The player exposes one
+  output per track kind — `encoded_video` and `encoded_audio` — never one port per track:
+  ports are declared statically by decorator, and a decoder downstream wants a port it can
+  name at wiring time. `WhepPlayer` takes no media name, because a WHEP answer names the
+  session's media and there is nothing left to choose. Endpoint and credential configuration
+  is ticket-level, as for every built-in's config.
   [extension-model; port shape narrowed and the player's track config corrected at
-  networking-extension-wheels — SHIPPED #2150, #2151; the data port and name at
-  moq-data-tracks — SHIPPED #2172, #2173; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
+  networking-extension-wheels — SHIPPED #2150, #2151; the MoQ half deleted by
+  zenoh-and-moq-wheel-removal — SHIPPED #2633]
 - **DECIDED** — The control plane keeps nothing from the move. Its one use of
   `runtime/streamlib-moq` — a `/api/moq/catalog` route behind a `moq` feature no crate
   enables — read a process-global session registry that, with the publisher in a helper,
-  the app process could never see; the route and the feature delete with the crate, and
-  a broadcast's catalog is the MoQ wheel's to serve. The "rare exception" did not fire:
-  the runtime needed nothing from the moved code that survives the move.
-  `runtime/streamlib-moq` leaves the workspace whole once its logic is in the wheel, its
-  `deny.toml` entry with it; whether the wheel's Rust is also published as a crate for a
-  Rust app waits for a Rust app that wants it. More generally, the coupling was the
-  mistake and not the route: the control plane carries no optional capability's routes
-  natively, and an extension that needs an endpoint contributes it through `host`, served
-  by the one control plane in the app process and seeing only what the app process sees
-  (§Control plane & observability). The move owes no catalog route; the first consumer
-  that wants one adds it through that door. [extension-model]
+  the app process could never see; the route, the feature and the crate are deleted, with its
+  `deny.toml` entry. The rare case did not fire: the runtime needed nothing from the moved
+  code. More generally, the coupling was the mistake and not the route: the control
+  plane carries no optional capability's routes natively, and an extension that needs an
+  endpoint contributes it through `host`, served by the one control plane in the app process
+  and seeing only what the app process sees (§Control plane & observability); the first
+  consumer that wants one adds it through that door. [extension-model]
 - **DECIDED** — The moved processors are typed, and the Python surface gains no raw byte
-  port for them: a publisher reads `EncodedVideoFrame` / `EncodedAudioPacket` and hands
-  the bitstream to the wheel's Rust; a player or subscriber writes the bag literal
-  against the wire contract, filling every required key from the stream itself — the
-  extent from the SPS, the ordering pair from its own counters (for MoQ under
-  `streamlib_bag`, from the object payload; under `cmaf` minted by the subscriber), a
-  sync point from the access unit, the audio parameters from
-  the session description — rather than from config. The old processors' opaque envelope
-  forwarding does not carry over: what crosses a network on a **media** track is a
-  bitstream and the keys a decoder needs, not a serialised link payload. That clause
-  scopes to media, which is what it was deciding — on a data track the object *is* the
-  bag, whole and nested, because for data the bag is the payload. It is the opposite of
-  opaque forwarding either way: the old processors restamped on receive, and a data track
-  carries the user's own keys byte-exact under the producer's own stamp.
-  [extension-model; narrowed to media at moq-data-tracks — SHIPPED #2172, #2173; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
-- **DECIDED** — What the move carries and what it leaves: `runtime/streamlib-moq`'s
-  catalog shape is mined, not moved, and its session logic was rewritten for draft-16;
-  from `packages/webrtc` the RFC 6184
+  port for them: the publisher reads `EncodedVideoFrame` / `EncodedAudioPacket` and hands
+  the bitstream to the wheel's Rust; the player writes the bag literal against the wire
+  contract, filling every required key from the stream itself — the extent from the SPS, the
+  ordering pair from its own counters, a sync point from the access unit, the audio
+  parameters from the session description — rather than from config. The old processors'
+  opaque envelope forwarding does not carry over: what crosses a network on a media track is a
+  bitstream and the keys a decoder needs, not a serialised link payload.
+  [extension-model; narrowed to media at moq-data-tracks — SHIPPED #2172, #2173; the MoQ half
+  and its data-track clause deleted by zenoh-and-moq-wheel-removal — SHIPPED #2633]
+- **DECIDED** — What the move carries and what it leaves: from `packages/webrtc` the RFC 6184
   depacketiser and the WHIP/WHEP signalling logic are mined, and its dead second RTP path
-  (`streaming/session.rs`, constructed nowhere) is not; `packages/{moq,webrtc}` have not
-  built since the plugin SDK was deleted and their bag types share no key with today's
-  wire contract, so that half is a rewrite against mined logic — the conversion doctrine
-  as usual. A received stream reaches the bag through the proven manual-source shape: the
-  wheel's Rust receives on its own runtime and a processor-owned thread writes, so no
-  engine seam is added for it. Two budgets the wheels live inside, ticket-level but named
-  here: a helper stops on the shutdown ladder §Processor model states, whose `teardown()`
-  budget is five seconds, so a WHIP `DELETE` or a QUIC close must fit inside it; and
-  connecting inside `setup()` spends the sixty-second registration budget.
-  [extension-model; the ladder — local-transport-hardening, SHIPPED #2264, #2266; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
+  (`streaming/session.rs`, constructed nowhere) is not; `packages/webrtc` had not built since
+  the plugin SDK was deleted and its bag types shared no key with today's wire contract, so
+  that half is a rewrite against mined logic — the conversion doctrine as usual. A received
+  stream reaches the bag through the proven manual-source shape: the wheel's Rust receives on
+  its own runtime and a processor-owned thread writes, so no engine seam is added for it. Two
+  budgets the wheel lives inside, ticket-level but named here: a helper stops on the shutdown
+  ladder §Processor model states, whose `teardown()` budget is five seconds, so a WHIP
+  `DELETE` must fit inside it; and connecting inside `setup()` spends the sixty-second
+  registration budget.
+  [extension-model; the ladder — local-transport-hardening, SHIPPED #2264, #2266; the MoQ
+  half deleted by zenoh-and-moq-wheel-removal — SHIPPED #2633]
 - **DECIDED** — The proof bar is the codec blocks' two halves. CI-run, GPU-free and
   endpoint-free: RTP packetising and depacketising round trips, SDP construction and
-  parsing, MoQ catalog and object bytes, and the bag literal a player writes checked
-  against the wire contract. Live, rig-only: WHIP publish to Cloudflare Stream and WHEP
-  play back from it, and MoQ publish and subscribe through a Cloudflare relay —
-  provisioned per account and authenticating, the token riding the CONNECT `:path`;
-  there is no credential-free draft-16 relay, and the URL is a credential that must
-  never reach a log or an error message — with credentials outside the tree, in the
-  fixture-script shape the codec rig set (owner, 2026-09-04). The move re-verifies
-  against current library versions rather than the pins the held code carried: `webrtc`,
-  `moq-transport`, `quinn` and `rustls` have moved since the freeze, and the patches the
-  old MoQ path carried for TLS and for newer draft versions may now be upstream — whoever
-  moves it checks first. [extension-model; amended by moq-on-the-tailnet: the MoQ half is deleted with its wheel]
+  parsing, and the bag literal the player writes checked against the wire contract. Live,
+  rig-only: WHIP publish to Cloudflare Stream and WHEP play back from it, with credentials
+  outside the tree, in the fixture-script shape the codec rig set (owner, 2026-09-04). The
+  move re-verifies against current library versions rather than the pins the held code
+  carried — `webrtc` and `rustls` have moved since the freeze. [extension-model; the MoQ half
+  deleted by zenoh-and-moq-wheel-removal — SHIPPED #2633]
 - **DECIDED** — `packages/streamlib-webrtc/`: a standalone maturin project — own
   `Cargo.toml` (`[workspace]` root, `[lib] name = "_native"`, `crate-type = ["cdylib"]`,
   `pyo3` on `abi3-py310`, `webrtc 0.14`, `tokio`, `hyper` + `hyper-rustls`, `rustls`,
@@ -3423,424 +3358,83 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   session is minted in `setup()`, and a refused connect is retried rather than ending the
   stream** (2026-09-05, found by the live proof): a WHEP endpoint answers `409 Conflict`
   while the input it fronts has not started publishing, the ordinary state of a player
-  brought up beside its publisher, so the player carries the same bounded backoff as
-  `MoqBroadcastSubscriber` — a fresh session per attempt, since a closed peer connection
+  brought up beside its publisher, so the player carries a bounded backoff — a fresh session
+  per attempt, since a closed peer connection
   cannot be dialled again. A bag the engine refuses is the one failure not retried: it names
   its port and ends the thread, because reconnecting would spend an endpoint's session
   forever on a bag refused every time. [networking-extension-wheels — SHIPPED #2150]
-- **DECIDED** — `packages/streamlib-moq/`: the same standalone shape on `moq-transport`,
-  `quinn`, `rustls` and `rustls-native-certs`, with its session and catalog **mined** from
-  `runtime/streamlib-moq` rather than moved — the old document attributed tracks to
-  processor import paths and has no relation to the draft-ietf-moq-catalogformat-01 JSON a
-  player reads, and the process-global `RUNTIME_SESSIONS` registry and `sessions_for_runtime`
-  did not come either, since one processor owns one session. The relay URL is config
-  carrying the relay's auth token in its path and therefore has no default: a draft-16
-  relay is provisioned per account, so no address this wheel could ship would reach one.
-  `extension.py:load` brings up the runtime and registers `moq`. The version check
-  §Networking asked for was made (2026-09-04): `moq-transport` 0.16.2, the draft-16
-  revision, because Cloudflare deploys draft-16 and it carries the acknowledgement and
-  namespace machinery draft-14 lacks — owner ruling, superseding the original draft-14
-  default. Draft-16 requires authentication, so no credential-free public relay remains.
-  [networking-extension-wheels — SHIPPED #2151; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-- **DECIDED** — `MoqBroadcastPublisher`: `@processor`, one fan-in input `tracks`, one MoQ
-  track per inbound link, the catalog derived from them; config `relay_url` (required),
-  `broadcast` (default `streamlib/<runtime_id>`), `container_format`, `track_names` and
-  `delivery_deadline_ms`.
-  `MoqBroadcastSubscriber`: `@processor(execution = "manual")`, outputs `encoded_video`,
-  `encoded_audio` and `data_bags`, config `relay_url`, `broadcast`, `video_track`,
-  `audio_track`, `data_track`,
-  `container_format`; the processor-owned thread writes each received object as a bag
-  literal. Naming the MoQ group from the bag's `group_index` was the original design and did
-  not survive contact: `SubgroupsWriter::create` hands back a live writer for a group id at
-  or below the latest and then drops every object written to it with no error on either
-  side — hence `append` and the library's own counter, and the ordering pair riding the
-  object as §Networking's rule above already requires.
-  [networking-extension-wheels — SHIPPED #2151; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-- **DECIDED** — Two container formats, selected by `container_format` on each processor and
-  declared per track in the catalog's own `packaging` field. `"cmaf"` is the default,
-  because interop is the point: the broadcast is laid out as `moq-pub` lays one out — a
-  `.catalog` track carrying draft-ietf-moq-catalogformat-01 JSON, an init track carrying
-  `ftyp` + `moov`, media tracks whose objects are self-contained `moof` + `mdat` fragments —
-  so `moq-js` and `moq-sub` can play it. `"streamlib_bag"` is the msgpack envelope, kept
-  because CMAF is lossy against the bag contract: the ordering pair becomes container
-  timing, `pre_skip` becomes the `dOps` box, colour goes into the VUI, and only the envelope
-  can write the producer's pair back unchanged. The wheel builds CMAF on `mp4-atom`, the
-  same crate the engine's own fMP4 writer is built on, carrying its own Annex-B conversion
-  and sample entries. It is not a port of `Mp4FragmentedFileWriter`, whose growing file,
-  shared `moov` and cross-track epoch are file-shaped and wrong here. Owner ruling,
-  2026-09-04: MoQ had never been finished, and finished means interoperable.
-  `streamlib_bag` is also the only container a data track
-  rides, and the only one whose track names the app chooses: a `cmaf` broadcast refuses a
-  data bag by name at its first bag, before any hold, and refuses `track_names` and
-  `data_track` at `setup()`. A mixed broadcast — CMAF media a `moq-js` reads beside a bag
-  data track — needs per-track `packaging` in the catalog and its own `moq-sub` check, and
-  is named here as a later rung rather than built.
-  [networking-extension-wheels — SHIPPED #2151; the data container at moq-data-tracks —
-  SHIPPED #2172, #2173; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-- **DECIDED** — `python-wheel.yml` carries an `extension-wheels` job over a matrix of the
-  two directories: install the just-built `streamlib` wheel into the venv, `maturin develop`
-  the extension, `cargo test` its crate, `mypy.stubtest` over its `_native`, pyright over
-  its Python, pytest with `-m "not requires_gpu"`, and the portability gate over its `.so`.
-  `release-please-config.json` carries a package entry per wheel (independent versions and
-  tags); the release workflow builds and attaches each wheel on its own tag;
-  `build_simple_index.py` is multi-project — a set of published names, one PEP 503 directory
-  each — with its tests. [networking-extension-wheels — SHIPPED #2152; the independent
-  versions and tags amended by package-split-and-lend: one version for everything released
-  from this repository (§Distribution & versioning); amended by moq-on-the-tailnet: the matrix holds the WebRTC wheel alone]
-- **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by each wheel:
+- **DECIDED** — `python-wheel.yml` carries an `extension-wheels` job over a matrix holding
+  `packages/streamlib-webrtc`: install the just-built `streamlib` wheel into the venv,
+  `maturin develop` the extension, `cargo test` its crate, `mypy.stubtest` over its
+  `_native`, pyright over its Python, pytest with `-m "not requires_gpu"`, and the
+  portability gate over its `.so`. `release-please-config.json` carries a package entry per
+  wheel (independent versions and tags); the release workflow builds and attaches each wheel
+  on its own tag; `build_simple_index.py` is multi-project — a set of published names, one
+  PEP 503 directory each, `streamlib-webrtc` the one extension among them — with its tests.
+  The index no longer lists the deleted `streamlib-moq`; its released wheels stay on their
+  GitHub releases. [networking-extension-wheels — SHIPPED #2152; the independent versions and
+  tags amended by package-split-and-lend: one version for everything released from this
+  repository (§Distribution & versioning); the matrix, the release entry and the index names
+  narrowed to the WebRTC wheel by zenoh-and-moq-wheel-removal — SHIPPED #2633]
+- **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by the wheel:
   the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
-  cases), SDP offer construction and answer parsing, MoQ catalog and object encoding, and
-  each player's bag literal checked against the wire contract on the `wired_link` fixture
-  pattern. Live, rig-only, under `/verify-live` with a networking arm: WHIP publish of the
-  vivid camera and the known signal to Cloudflare Stream and WHEP play-back of the same
-  stream, and MoQ publish and subscribe through a Cloudflare draft-16 relay — credentials
-  read from the environment, absent ones reported as cannot-run, never as pass. **The CMAF
-  arm's interop proof is a live third-party read, not an in-repo fixture comparison**
-  (owner, 2026-09-05): `moq-sub`, built from `cloudflare/moq-rs`, subscribes to the same
-  broadcast and must parse the catalog, accept the init segment and decode the media. That
-  is stronger than matching a captured reference — it is the reference client reading the
-  real broadcast — and weaker in one way worth stating: it is rig-only, so CI protects the
-  container's shape through `mp4-atom` round trips and the `moq-catalog` parse oracle alone.
-  The decode-back is the lock: `WhepPlayer` / `MoqBroadcastSubscriber` → `H264Decoder` → tap
-  and exchange → `xtask psnr channel-means` against the per-codec vivid baseline within
-  ±0.05 — the network sits inside a path the codec rig already scored, so a mismatch is the
-  wheel's. [networking-extension-wheels — SHIPPED #2153; amended by moq-on-the-tailnet: the MoQ arm is deleted with its wheel]
-  <!-- verify: git ls-files packages/streamlib-moq packages/streamlib-webrtc -->
-- **DECIDED** — A media bag past its deadline is shed rather than delivered late.
-  `MoqBroadcastPublisher` takes `delivery_deadline_ms`; a media bag older than it by its
-  own monotonic stamp is never written, and the rest of its group is shed with it, ending
-  at the next sync point. A sync point is always written, so a shed never outlives one
-  group; every Opus packet is a sync point, so audio is never shed; a data object is never
-  shed. `MEDIA_TRACK_PRIORITY` split into `AUDIO_MEDIA_TRACK_PRIORITY = 126` and
-  `VIDEO_MEDIA_TRACK_PRIORITY = 127`, read in draft-16 §10.4.2's direction and never
-  checked against a relay, which is free to ignore it; a data track rides video's rung as a
-  stated placeholder until a consumer asks otherwise. Absent, the publisher is the shipped
-  baseline and every bag is written however late. Both of the deadline's readings are
-  subtractions against the publisher's own machine's clock, so the stamp-age arm reads only a
-  track whose stamps are taken on that clock — which a mesh-fed track may well be, two runtimes
-  on one machine sharing a boot session and so an epoch. A track stamped on another machine, or
-  naming no clock at all, has no age here at any offset, is never shed for one, and — where a
-  deadline is configured, there being no other reader to act on it — is said once in the log
-  naming both machines, while its uplink backlog is still read from the instant each object
-  reached the transport. What defeats it is a stamp whose clock the link cannot report: a relay
-  restating an upstream stamp on a local link reads as local here too, which the common-clock
-  OPEN below owns, and `MoqBroadcastSubscriber` feeding `MoqBroadcastPublisher` is that case
-  inside this wheel.
-  [moq-data-tracks — SHIPPED #2159; the cross-clock arm — cross-runtime-links, SHIPPED #2340; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-- **DECIDED** — The deadline alone cannot see the uplink, because `moq-transport` never
-  blocks and never pre-empts: a bag hands off to a forwarder and the writer learns nothing
-  of the backlog behind it. So the wheel vendors `moq-transport` 0.16.2 at
-  `packages/streamlib-moq/vendor/moq-transport` as a path dependency on the vulkanalia
-  precedent — MIT OR Apache-2.0 under its own headers, pinned by
-  `cargo xtask check-vendored-trees`, its patches recorded in
-  `docs/architecture/vendored-moq-transport.md` — for exactly two of them:
-  `SubgroupWriter::abandon` honoured ahead of already-buffered objects and raced by the
-  forwarder against every chunk write, resetting the stream with a draft-16 code
-  (`DeliveryTimeout` reachable at last); and the forwarder's cursor in shared state, so a
-  writer can read how many of its objects have not left the process. On those, the deadline
-  fires on the oldest unforwarded object's stamp as well as on the arriving bag's own, and
-  a cut abandons the superseded group of every media track whose backlog is past the
-  deadline — video and audio, never data, never the open group. The QUIC send window is
-  bounded to 512 KiB so the cursor can fall behind at all rather than the stack swallowing
-  the backlog silently, and the shed and the abandon are counted per link and said with the
-  QUIC path's readings. Vendored rather than patched from git because a path dependency
-  reaches the manylinux release build and the draft-16 line is frozen upstream; the patches
-  stay ours and are never sent upstream (owner, 2026-09-06).
-  [moq-data-tracks — SHIPPED #2179, #2180; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-  <!-- verify: cargo xtask check-vendored-trees -->
-- **DECIDED** — A MoQ broadcast carries data tracks beside video and audio, under
-  `streamlib_bag` only. `MoqBroadcastPublisher` classifies each inbound link by its first
-  bag: a bag carrying a `bitstream` key is encoded media and takes the typed path
-  unchanged; a bag without one is data, and that link is a data track for the publisher's
-  life — a later media bag on it is refused by name, as a codec change on a media link
-  already is. `bitstream` is the encoded wire contract's defining key, which both media bag
-  types require, so a user data bag that happens to name one is refused as media with a
-  message naming the key and the user renames it. The publisher mints a per-track monotonic
-  `sequence_index`, builds the object in Python as `{"sequence_index": int,
-  "timestamp_ns": int, "bag": <the bag>}` with the user's map nested whole under `bag`
-  rather than flattened — nesting
-  reserves no name in the user's namespace where flattening would reserve four — encodes it
-  with `streamlib.encode_bag_to_msgpack_bytes` and hands the bytes to
-  `_native.MoqBroadcastPublishingSession.publish_data_object`, whose Rust writes them as
-  the object payload and handles no engine object. `MoqBroadcastSubscriber` reads a
-  `ReceivedDataObject` (`track_name`, `payload`) on its `data_bags` output, decodes the
-  envelope, refuses one missing any of the three keys by name, and writes `bag` verbatim
-  with `timestamp_ns` as the stamp; `sequence_index` never enters the written bag, and a
-  jump in it is counted and reported through the Python log at the progress cadence. One
-  data track per subscriber — two data tracks are two subscribers, which keeps the bag
-  verbatim where a demux key would be pollution. The catalog is unchanged: a data track's
-  entry is the entry every `streamlib_bag` track already gets, `codec` the literal
-  `streamlib-bag` with every media field empty, because the catalog is written at connect
-  before any bag has said what it is. [moq-data-tracks — SHIPPED #2172, #2173; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-- **DECIDED** — Track names under `streamlib_bag` are the app's to choose.
-  `MoqBroadcastPublisher` takes `track_names`, positional in wiring order — the order
-  `runtime.connect` ran, which is the order `cmaf` already numbers `{track_id}.m4s` by. A
-  count unequal to the inbound links is refused by name at `setup()`, and so is a repeated
-  name — `Tracks::create` overwrites a track of the same name without saying so, orphaning
-  its subscribers, so the duplicate is caught before the session can. Absent, a track is
-  its link's channel name as before. That name is `{processor_id}/{port}` on a cuid2 minted
-  at `add`, which a subscriber in another node cannot know — so before `track_names` the
-  only broadcast a second node could name was `cmaf`, and the live fixture ran `cmaf` for
-  that reason and said so. It no longer needs to. [moq-data-tracks — SHIPPED #2172; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-- **DECIDED** — The wheel's oversize warning is charged against what the link charges: the
-  **framed** encoded bag, header included, against the helper-link ceiling — not
-  `len(bitstream)`, which under-reported by the bag's other keys and by the frame header.
-  The media path's guard is corrected to the same measure. The exact measure is an encode,
-  so it is taken only once a cheap prefilter says the bag is near enough to the ceiling for
-  the answer to be in doubt. The ceiling itself stays the engine's and unexported; the
-  wheel's copy stays a warning that lands at the wrong size on drift, never a failing test.
-  [moq-data-tracks — SHIPPED #2172; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-- **DECIDED** — The data track's proof. CI-run, GPU-free, endpoint-free, owned by the
-  wheel: the envelope round trip on the `wired_link` fixture — a nested bag with a `bytes`
-  value crosses the publisher's encode, the subscriber's decode and a real link, and
-  arrives `==` with `bytes` still `bytes`; a `cmaf` broadcast refusing a data bag by name
-  at its first bag with no hold entered; the `track_names` count mismatch and the `cmaf`
-  refusals by name; a publisher classifying a bitstream-less bag as data and a later media
-  bag on that link as a refusal; and a video-free publisher fed two data bags stamped more
-  than the age backstop apart cutting a group between them, and one fed bags inside it not
-  cutting. Live, rig-only, under `/verify-live`'s networking arm: the MoQ round-trip
-  fixture runs both containers, and its `streamlib_bag` arm carries video, audio and a
-  telemetry data track with `track_names` set through the Cloudflare draft-16 relay — the
-  data bags received `==` and stamped as sent, the media decode-back locking PSNR as
-  before. The `cmaf` arm and its `moq-sub` read are unchanged.
-  [moq-data-tracks — SHIPPED #2174; removed by moq-on-the-tailnet: the MoQ extension wheel is deleted]
-  <!-- verify: pytest packages/streamlib-moq/tests/test_data_track_round_trip.py -->
-- **DECIDED** — Runtimes on different machines form a runtime mesh over Zenoh, and the mesh
-  is engine transport: always on, beside iceoryx2, in the app process. It is not a processor,
-  not a built-in, not an extension wheel, and never upstream iceoryx2's tunnel or gateway.
-  Every runtime opens one Zenoh session when it starts and closes it inside the shutdown
-  budget; helper processes never open one. A link carries the same way wherever its ends
-  are: a link whose ends share a runtime rides iceoryx2, a link between runtimes rides Zenoh,
-  chosen by the engine from the link's ends, and no processor can tell which. A runtime
-  that cannot open its session runs local-only and says so once; the mesh never fails a
-  runtime's start. Easy, automatic data exchange between runtimes is runtime capability.
-  Five readings the build settled. **The session opens in `Runner::new()`**, after logging
-  and before the iceoryx2 node, beside the runtime-id socket refusal — so a refused runtime
-  builds no iceoryx2 node and no surface socket, and the duplicate refusal and discovery are
-  both provable with no GPU. It costs `Runtime()` about 500 ms more while multicast discovery
-  is on, which is Zenoh's own scouting delay: engine-chosen, not authorable, and paid again
-  by `dev`'s warm restart. **The session is built from defaults, never from a Zenoh config
-  file or a `ZENOH_*` variable** — peer mode, one listener on `udp/[::]:0?rel=1` (QUIC over
-  UDP, a stream per priority) unless the runtime names others, multicast scouting on its
-  default group, and no Zenoh `namespace` because the mesh name is a key prefix the engine
-  writes itself. That is the engine-owned-domain precedent applied to a second transport.
-  **Local-only means the open failed**, which in peer mode is a bind failure: the runtime
-  warns once naming the reason, runs on, and never retries for its life. A runtime with
-  discovery off and no peers is *isolated* rather than local-only, and `graph` says which one
-  it is. **The session closes at the end of `stop()`**, token undeclared first so peers see
-  the runtime leave at once; an engine the shutdown ladder leaks is closed by process exit,
-  whose kernel-closed TCP peers see within milliseconds, and no Zenoh call ever runs on one of
-  the engine's current-thread tokio runtimes. And **a helper opens no session**, because it
-  never constructs a `Runner` and Zenoh's thread pool starts on first use.
-  [runtime-mesh — SHIPPED #2283; the defaults clause superseded by one-runtime-per-machine: the runtime builds its session from its own configuration; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::resolved_runtime_mesh_configuration::tests::the_zenoh_configuration_carries_peer_mode_and_exactly_these_endpoints -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_local_only_runtime_renders_the_reason_its_session_did_not_open -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason -->
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
-- **DECIDED** — A runtime's name and mesh come from its constructor, its environment or the
-  CLI, and nowhere else. Five optional values configure it — the runtime name, the mesh name,
-  peer endpoints, listen endpoints and whether multicast discovery runs — reachable four ways:
-  keyword-only on `Runtime()` and stub-gated; `Runner::new_with_runtime_mesh_configuration`
-  in Rust, with `Runner::new()` taking the defaults; `STREAMLIB_RUNTIME_NAME`,
-  `STREAMLIB_MESH_NAME`, `STREAMLIB_MESH_PEER_ENDPOINTS`, `STREAMLIB_MESH_LISTEN_ENDPOINTS`
-  and `STREAMLIB_MESH_MULTICAST_DISCOVERY` for anything the constructor leaves unset, read in
-  the engine so a Rust app and a container get it too; and `streamlib run` / `dev`'s
-  `--runtime-name`, `--mesh-name`, `--mesh-peer`, `--mesh-listen` and
-  `--no-mesh-multicast-discovery`. An endpoint is a Zenoh locator and a router is named the
-  way a peer is; a malformed one — a transport this build lacks, or plain `udp/` — is refused
-  at construction by name, the caller's wiring error as a wrong `device_id` is, while an
-  endpoint that is merely unreachable never fails the runtime.
-  `streamlib run` constructs `Runtime()` before `setup(rt)`, so a CLI-launched app is named
-  on its command line or in its environment and never in `app.py` — and most apps need
-  neither, the default being stable. Rejected: `setup(rt)` naming the runtime, which makes
-  mesh configuration mutable state on a constructed runtime and moves both proofs behind the
-  GPU in `start()`; and a `[tool.streamlib]` table in `pyproject.toml`, the first
-  streamlib-specific file an app would author, which the zero-ceremony bar rules out. Owner,
-  2026-09-14. [runtime-mesh — SHIPPED #2282, #2283; superseded by one-runtime-per-machine: the runtime builds its session from its own configuration; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::resolved_runtime_mesh_configuration -->
+  cases), SDP offer construction and answer parsing, and the player's bag literal checked
+  against the wire contract on the `wired_link` fixture pattern. Live, rig-only, under
+  `/verify-live` with a networking arm: WHIP publish of the vivid camera and the known signal
+  to Cloudflare Stream and WHEP play-back of the same stream — credentials read from the
+  environment, absent ones reported as cannot-run, never as pass. The decode-back is the
+  lock: `WhepPlayer` → `H264Decoder` → tap and exchange → `xtask psnr channel-means` against
+  the per-codec vivid baseline within ±0.05 — the network sits inside a path the codec rig
+  already scored, so a mismatch is the wheel's. [networking-extension-wheels — SHIPPED #2153;
+  the MoQ arm deleted by zenoh-and-moq-wheel-removal — SHIPPED #2633]
+  <!-- verify: git ls-files packages/streamlib-webrtc -->
+  <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
+- **DECIDED** — A runtime has a name, and a port is addressed `<runtime name>/<display name>/<port>`
+  — the string `tap` spells a channel with. The name belongs to the runtime rather than to its
+  control plane and is a field of `Runner`, taken from `Runtime(runtime_name=…)` — keyword-only,
+  the constructor's only keyword, stub-gated, and what `run` / `dev`'s `--runtime-name` fills —
+  or `Runner::new_with_runtime_name` in Rust, else `STREAMLIB_RUNTIME_NAME`, else the default
+  `<hostname>-<app directory name>-<id>`: every forbidden character replaced by `-`, the id four
+  base-36 characters of an FNV-1a hash over the app directory's full path — the virtual camera's
+  own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else the wheel's captured entry directory
+  for a hand-run `python app.py`, else the working directory. A host that reports no name takes a
+  stand-in, said once. Each part of an address is one address chunk — non-empty, no `/`, `*`,
+  `$`, `#` or `?`, not beginning with `@`, spaces and unicode legal — checked against the rule's
+  own table, and an explicit runtime name that breaks it is refused at construction naming the
+  character. The type is `PortAddress` (`core/graph/edges/port_address.rs`, the rule in
+  `core/runtime/address_chunk.rs`); `tap` resolves a channel naming this runtime only and
+  refuses another runtime's name by name. The registry entry, `--node`, `tap`'s channel and
+  `graph`'s top-level `runtime_name` read the one name. Nothing refuses a duplicate: two runs
+  from one directory both start, and a `--node` name two live registry rows hold is refused
+  naming both. `run` and `dev` take no other naming flag. `runtime_id` stays per-run — logs,
+  the registry file, iceoryx2 names — and is never an address.
+  [runtime-mesh — SHIPPED #2282, #2284 for the name and the address; re-homed onto the runtime
+  by zenoh-and-moq-wheel-removal — SHIPPED #2643 for `PortAddress` and the tap refusal, #2645
+  for the name and its flags; reopened by one-runtime-per-machine: whether addresses gain a
+  stream level; amended by runtime-hosting: the runtime name gives way to the machine name
+  (the address entry below)]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_mesh_peer_this_build_cannot_dial_is_a_usage_error -->
-- **DECIDED** — A runtime announces itself on the mesh and discovers other runtimes
-  automatically: peer-to-peer discovery is on by default, and explicit peers or a Zenoh
-  router serve networks that multicast discovery does not cross. The announcement is a
-  liveliness token plus a description queryable, both under
-  `streamlib/<mesh name>/@runtime/<runtime name>`. A token carries no payload, so the token
-  *key* carries the only things a dead runtime must still answer for — its host identity and
-  its pid — while the queryable answers a msgpack document holding `runtime_id`, `host_name`,
-  `pid`, `engine_version` and `control_plane_urls`, read from the runtime's state at query
-  time so a control plane hosted after construction still shows up. `control_plane_urls` is
-  one `http://<address>:<port>` per non-loopback, non-link-local interface address the bind
-  covers, an IPv6 literal bracketed, and empty with no control plane. The `@runtime` chunk is
-  verbatim in Zenoh's grammar, so no `**` subscription over a mesh's port addresses ever
-  matches it, and since a display name may not begin with `@` no address can collide with it.
-  Discovery is a liveliness subscriber with history plus one description query per runtime
-  that appears, and a runtime that leaves is removed; `graph` reads the peer table lock-free
-  and never waits. Multicast discovery is proven by the two-process fixture's multicast arm,
-  run beside its explicit-peer arms with scouting pinned to loopback — a local end-to-end
-  tier, compiled on both CI lanes and never a merge gate.
-  [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the runtime dials routers from its own configuration; what a runtime with no stream map discovers on a LAN is OPEN; amended by local-api: the description drops `control_plane_urls`; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes two_runtimes_discovering_by_multicast_each_list_the_other -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has -->
-- **DECIDED** — Everything a runtime puts on the mesh lives under a mesh name, `default`
-  unless the runtime names another, so runtimes join everything reachable out of the box and
-  groups sharing one network separate by naming different meshes. There is no switch that
-  turns the mesh off; a runtime is isolated by a mesh name, explicit peers, or discovery
-  turned off. Stated as the posture for now, not a permanent default. The mesh name is one
-  chunk of the channel-name grammar, `[a-z][a-z0-9_-]*`. What separation by mesh name does
-  and does not buy is worth stating exactly: runtimes in different meshes on one network may
-  still connect at the transport and exchange nothing, and unrelated Zenoh traffic — ROS 2's
-  `rmw_zenoh`, say — may connect the same way. Separation is of what is announced and read,
-  never of what dials whom. [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the runtime authenticates peers and enforces the stream map; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::runtime_mesh_name -->
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
-- **DECIDED** — A port on the mesh is addressed `<runtime name>/<display name>/<port>`. The
-  runtime name belongs to the runtime rather than to its control plane; defaults to
-  `<hostname>-<app directory name>-<id>`, the id hashed from the directory's full path so two
-  checkouts differ and reruns match; is never auto-suffixed; and is unique within a mesh: a
-  runtime whose name is already live on the mesh refuses to start by name, except over one on
-  the same host whose process is gone. The display name — already unique within a graph — is
-  the processor's part of the address, so renaming re-addresses it; identity stays the class
-  import path. Processor ids and cuid2 channel names never appear on the mesh.
-  Three readings the build settled. **The grammar is one legal Zenoh key chunk** — non-empty,
-  no `/`, `*`, `$`, `#` or `?`, not beginning with `@` — and otherwise free text like a
-  display name, validated against the real key-expression rules; an explicit name that breaks
-  it is refused at construction naming the character. **The default is
-  `<hostname>-<app directory name>-<id>`** with every forbidden character replaced by `-`,
-  the id four base-36 characters of an FNV-1a hash over the app directory's full path — the
-  virtual camera's own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else the wheel's
-  captured entry directory for a hand-run `python app.py`, else the working directory, which
-  is what a Rust app gets. Where never-auto-suffixed bites is stated rather than discovered: a
-  second run from one directory is refused until given `--runtime-name`, and moving the
-  directory renames the runtime, as it relabels its unnamed virtual cameras. **The duplicate
-  check is a query before the token is declared** — discovery is on, so `open` has already
-  waited out the scouting delay, and the query then waits at most an engine-chosen bound for
-  connected peers to answer. Any token refuses `Runtime()`, naming the runtime name and the
-  holder's host and pid (both on the token key) and offering both fixes — stop it, or start
-  under another name — unless the holder's host identity is this host's and its pid is gone.
-  Host identity on Linux is the kernel boot id plus the pid-namespace inode, so a container on
-  the same kernel is never mistaken for its host. On Apple it is the kernel's boot session
-  UUID, `kern.bootsessionuuid`, and nothing else: Darwin has no pid namespaces, so every
-  process on one boot shares one process table. The two shapes are different key chunks,
-  `kernel.<boot id>.<inode>` and `bootsession.<uuid>`, so a Linux host and an Apple host never
-  read as one; a platform reporting neither is `unidentified`, which is never this host.
-  Pid-is-gone is one native probe on both floors — `kill(pid, 0)` answering `ESRCH`, and only
-  that — so a crashed `streamlib dev` on a Mac restarts under its own name, as on Linux.
-  Apple reads the boot session at one site, `apple/host_identity.rs`, which the machine clock
-  identity shares, as Linux shares its boot id. `runtime_id` stays
-  per-run — logs, the registry file, iceoryx2 names, the description — and is never an
-  address.
-  Stated residual: two runtimes that start inside one discovery window, or that meet when a
-  partition heals, are not refused. Both keep running, each says so once naming the other's
-  host, and `graph` lists both. Which one a remote link reaches is settled below: neither —
-  the link is `error` naming both hosts and carries from neither until one leaves, because a
-  link that picked one could feed the wrong machine.
-  [runtime-mesh — SHIPPED #2282, #2284; the residual settled by cross-runtime-links #2292;
-  the Apple host identity and native liveness — macos-platform-floor, SHIPPED #2363; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by runtime-hosting: the runtime name gives way to the machine name, which takes a recorded suffix on a clash rather than refusing the start; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::duplicate_runtime_name_on_the_mesh -->
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::host_identity -->
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes a_token_left_by_a_dead_process_on_this_host_is_taken_over_and_a_live_one_is_not -->
-- **DECIDED** — The mesh runs on both floors and is proven on each rather than assumed. Zenoh
-  builds for `aarch64-apple-darwin` with the engine's own feature set unchanged; the Apple arm
-  is the host identity above and nothing else. PR CI keeps it honest hermetically: the macOS
-  lane runs the engine's whole lib suite — serialised, because its iceoryx2 child-process
-  tests race in parallel — which carries the host-identity shapes, the duplicate-name
-  decision table and the liveness probe on Apple. The three multi-process suites —
-  `runtime_mesh_two_processes`, `cross_runtime_links_two_processes`,
-  `cross_runtime_link_requests_two_processes` — sit behind `multi-process-mesh-e2e-tests`,
-  compile on both lanes with `--no-run` so they cannot rot, and run locally: process
-  start-up and network discovery decide their result, so no bound makes them a merge gate
-  (owner, at #2468). They pass on macOS, the reclaim arm included. A Mac and a Linux box on
-  one LAN found each other by multicast alone and exchanged bags both ways with no hop loss,
-  each link's `stamp_clock_identity` naming the other machine's boot, and each refused a
-  name the other held, naming host and pid. The arms wait for what they assert rather than
-  asking once: a freshly opened look-only session can answer its first liveliness `get`
-  before it has learned the tokens, and a recreated producer's burst is held until the
-  reader has the replacement's baseline. Each peer is its own iceoryx2 domain under its own
-  root sharing the engine's `sl<uid>_` prefix, which holds only from iceoryx2 0.10.0: 0.9.3
-  named a service's dynamic config from prefix and service name alone, so two such domains
-  opening one channel name shared it and the egress went quiet.
-  Where it bites, stated: macOS Local Network privacy can silently cut a terminal-launched
-  runtime off the LAN (measured under iTerm2: every dial `No route to host`, visible only at
-  `debug`), so discovery finds nobody and a duplicate goes unrefused.
-  [macos-platform-floor — SHIPPED #2363; the arms' waits #2450, #2457; shared-prefix domains
-  #2529; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::node::tests::two_domains_sharing_a_prefix_never_share_a_channel -->
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes --test cross_runtime_links_two_processes --test cross_runtime_link_requests_two_processes -->
-- **DECIDED** — A bag's top-level `surface_id` crosses the mesh transparently, for now: the
-  sending runtime resolves it locally and sends the frame's pixels with what the receiver
-  needs to rebuild them, and the receiving runtime writes the pixels into a freshly minted
-  local surface and hands the bag on carrying that local `surface_id`. No surface id, lease,
-  lifetime state or write-back crosses. The `surface_id` key is a stand-in the general
-  mechanism replaces in a later release.
-  As built: the message is `[pixel description][bag][pixel bytes]`, and the attachment carries
-  the description's length — zero for a bag naming no surface, which therefore still crosses
-  verbatim. The sender's copy door is per floor: `SurfaceExportStaging` at host-visible
-  residency on Linux; on macOS the frame's own IOSurface, read through its host mapping under
-  `IOSurfaceLock` read-only, with rows packed and a padded stride stripped, and no staging or
-  GPU copy. The macOS read is ordered by publication, not a timeline: a producer publishes an
-  id only after its write has retired on the host, so one that published with its GPU
-  submission still in flight would be read early there, where Linux's same-queue staging copy
-  would have waited. Both doors resolve the backing through one `ResolvedSurfaceBacking`,
-  shared with the exchange. Either way the read is held under a check-out claim that spans
-  the copy alone, so a slow network never pins the producer's pool slot. The description's format, extent and byte length are read from the
-  backing, never from the bag, which names no format at all. Each refusal is counted and said
-  once per port or per source by its own name: a recycled frame, a multi-plane format, a pool
-  at its cap, and a source offering more than the four format-and-extent pairs one may mint
-  pools of (pools are never freed). On macOS a backing with no IOSurface behind it is refused
-  by name — today that is `GpuContext::acquire_output_texture`, which allocates
-  non-importable.
-  Where it bites, stated rather than discovered. A texture-backed frame — a kernel output —
-  lands buffer-backed on the far side, inheriting the camera's existing gap: a bare-id kernel
-  dispatch refuses it, and the display's buffer fallback draws only RGBA correctly. An sRGB
-  texture label collapses to its linear buffer format. A bag's `texture_layout` crosses
-  verbatim, since the engine reads no other key, and is inert there: a pooled id never takes
-  the import path that reads it. And bandwidth is the reason encoded bags are the path for
-  ordinary links — 1080p RGBA is 8.3 MB, which must queue inside the transport's own window,
-  so raw frames over 1 GbE mostly drop and are counted.
-  [cross-runtime-links — SHIPPED #2290; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_bags_top_level_surface_id -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_on_the_mesh -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_written_into_a_local_surface -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_read_out_for_the_mesh -->
-- **DECIDED** — The mesh carries no authentication or access control in this work; security
-  is its own later pass, and the auth posture OPEN under §Control plane & observability owns
-  it. What shipped holds the line: `zenoh` is built with `default-features = false` and
-  exactly `transport_tcp` and `transport_udp`, so the QUIC-over-UDP link runs unencrypted on
-  a self-signed key Zenoh makes itself — nothing to provision — and `transport_quic`, which
-  needs a provisioned key and certificate, waits for that security pass.
-  [runtime-mesh — SHIPPED #2283; amended by one-runtime-per-machine: the security pass is the stream map and peer authentication; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: grep -n "transport_udp" runtime/streamlib-engine/Cargo.toml -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
-- **DECIDED** — How a remote link is spelled. In Python,
-  `Runtime.remote_processor_output(runtime_name, display_name, port_name)` and
-  `Runtime.remote_processor_input(...)` mint `RemoteProcessorOutputPortReference` and
-  `RemoteProcessorInputPortReference`, stub-gated, and `connect(source, destination)` takes a
-  local or a remote reference on each end, before `run()` as today. The address is checked at
-  the mint, so a chunk the mesh cannot carry raises where the author wrote it rather than at a
-  wiring call several lines on, and the read goes straight into the engine's own
-  `OutputLinkPortRef` — there is no Python-side shadow type. In Rust, `OutputLinkPortRef` and
-  `InputLinkPortRef` each gained a variant carrying a `MeshPortAddress { runtime_name,
-  display_name, port_name }` — the existing types extended, never a parallel pair — with
-  `Runner::connect` applying a link on this runtime and
-  `Runner::request_link_on_remote_input_runtime` asking another runtime to apply one. Over
-  MCP, each end of `connect` is named one of two ways: `from_processor_id` / `to_processor_id`
-  for a port on this node, or `<end>_runtime_name` with `<end>_processor_display_name` for a
-  port on another runtime — the display name, because processor ids never appear on the mesh.
-  Giving both forms for one end, or neither, is refused by name and reaches no op: the two
-  name different ports and the tool cannot know which was meant. `disconnect` takes `link_id`,
-  with an optional `input_runtime_name` for a link another runtime holds, or a
-  `link_request_id` alone to cancel a request still waiting. A runtime name equal to one's own
-  is a local reference, resolved by display name. Since 2026-10-04 only a source may be on
-  another runtime: a remote destination, `Runtime.remote_processor_input`,
-  `Runner::request_link_on_remote_input_runtime` and the `to_*` remote pair are retired with the
-  link request (pull-only, below).
-  [cross-runtime-links — SHIPPED #2292 for the Rust address and #2287 for the Python and MCP
-  spellings; the `to_*` pair with #2289; reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by local-api: each end is `<end>_node` and `<end>_port`, with `<end>_runtime_name` for a port on another runtime — a node by its name, never its id (§Control plane, the local API speaks the graph's words); removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted; how a link names a port on another machine is the sharing step's to rebuild]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_given_one_runtime_name_both_construct -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_name.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_verb_targets_a_node_by_its_runtime_name -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_verb_given_a_name_two_live_runtimes_hold_is_refused_naming_both -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_retired_flag_is_a_usage_error -->
+- **DECIDED** — A link's ends are both on this runtime. `OutputLinkPortRef` and
+  `InputLinkPortRef` name a port of this runtime's graph and nothing else, and the graph holds
+  one link collection, which every traversal walks; `LinkState` has no state that waits on
+  another runtime. A snapshot whose link end names a runtime is refused by name at load rather
+  than read as a local end. In Python `connect(source, destination)` takes a reference minted by this
+  stream's builder on each end, and a value of any other kind is refused naming the spelling
+  that would work. The engine reads no bag key to carry a link. Linking to another machine is the
+  sharing step's (the moq-on-the-tailnet entries below).
+  [zenoh-and-moq-wheel-removal — SHIPPED #2643]
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_link_end_naming_a_runtime_is_refused_naming_that_runtime -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_load.py::test_a_link_end_naming_a_runtime_is_refused_by_load_naming_it -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_source_that_is_not_an_output_reference_names_the_spelling_that_would_work -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
 - **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
   creates it, reading a port the source stream has exposed — private on the machine, public off
   it — and the source is never asked. No runtime pushes its output into another's input, and no
@@ -3850,197 +3444,28 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   from code on the machine, or by opening the port's URL. Owner, 2026-10-04, superseding the
   2026-09-14 rule that any runtime may push or wire: a source never wires itself into a reader,
   the way a server never wires its URL into a client's browser. [exposure-levels; runtime-mesh;
-  cross-runtime-links — link requests SHIPPED #2289, retired by this entry]
-- **DECIDED** — A remote link naming a runtime that is not on the mesh waits and wires when
-  that runtime appears; a runtime that is present but offers no such processor or port refuses
-  the link by name, listing what it does offer; and a link whose remote runtime leaves returns
-  to waiting and restarts its loss count when the runtime returns. A sending runtime does no
-  network work and copies no frame for a port until a remote link to that port exists.
-  **States.** `LinkState` gained `awaiting_remote`, rendered with an `awaiting_remote_reason`
-  naming the runtime or the port, beside the `pending`, `wired` and `error` a local link
-  already has. Unlike `error` it is not final: the link wires itself the moment what the
-  reason names turns up.
-  **The source runtime appears.** The input's runtime queries its offered output ports,
-  answered at query time off the source's own graph and never announced. A missing port is
-  `error` listing what *is* offered; so is a different `engine_version`, naming both (pre-1.0:
-  no cross-version wire). The runtime then declares a reader liveliness token under
-  `@runtime/<source name>/@readers/…`, subscribes to the port's mesh key, and reads `wired`
-  once that subscriber and the local destination are.
-  **The offer is only what the source can send.** A port the source holds and cannot send —
-  one whose names make no mesh address — is answered beside the offer under
-  `ports_it_holds_and_cannot_send` with the reason in the source's own words, and the reading
-  runtime refuses such a link by name rather than leaving it waiting on an egress that could
-  never start. The check is nameability alone, deliberately: a check that opened a channel
-  would be exactly the work the laziness rule above forbids.
-  **A port a runtime offers and stopped sending says why.** The offered-ports answer carries a
-  sibling list, `ports_it_stopped_sending`, one entry per such port carrying — in the source's
-  own words — why this runtime's last attempt to send it ended: an egress that stopped, and
-  equally one that was never started. It is never folded into
-  `ports_it_holds_and_cannot_send`, because that list reads as `error`. A reader whose ingress
-  is open over a port nothing is arriving on asks for it each resolution pass and puts it on
-  the link, beside the plain statement that nothing is retrying it while that link keeps
-  reading. The link stays `awaiting_remote`: the port is still offered, a runtime beginning to
-  read a port nothing is sending starts a fresh egress, and almost none of these failures are
-  provably permanent — so marking it final would end the one recovery there is. A source that
-  says nothing keeps the still-coming-up sentence, which is the pair a waiting reader could not
-  tell apart before. Owner direction 2026-09-20 at #2379, which settled it over an align;
-  whether anything retries, and on what cadence, is untouched and remains undecided.
-  **Leaving.** The source's token going returns the link to `awaiting_remote`; so does its
-  egress token going while the runtime stays, naming the port. A return re-wires and restarts
-  the count. **A name two live runtimes hold** makes the link `error` naming both hosts,
-  carrying from neither until one leaves — a link that picked one could feed the wrong machine,
-  which is the residual §Networking's runtime-name entry left for this change.
-  **Ingress.** One per remote source address on a runtime, shared by every link from it. Its
-  Zenoh callback only hands off into a bounded ring that evicts the oldest; the ingress's own
-  thread writes into a local channel as that channel's single publisher, with the carried stamp.
-  The channel is engine-named, hashed from the address, and its sizing, profile and caps read
-  the local destinations, never a missing source node. **Egress.** A source runtime watches the
-  reader tokens under its own name. The first reader of an existing output port creates one
-  egress, which takes one ordinary destination slot on that channel; the last reader's leave
-  removes it, so with no reader a runtime holds no subscriber, no publisher and no token. It
-  drains FIFO on its own OS thread and puts at `CongestionControl::Drop` on one priority for
-  its life — `Priority::DataLow` when its first bag carries a top-level `surface_id`,
-  `Priority::Data` otherwise, because two priorities are two QUIC streams, which would reorder
-  one port's sequence and read as gaps. Requests and tokens ride above both. A Python-authored
-  source is pulled the same way: the parent asks its helper for the publisher over the wiring
-  envelope a link would use, with no notify service and a hold id of the port's own, so the
-  primary authoring surface is not excluded from the mesh. **Tap** resolves a remote link's
-  local channel by the link's mesh address, because that channel is hashed from it and is
-  nothing a caller could spell.
-  [runtime-mesh; cross-runtime-links — SHIPPED #2292, #2287; the offer's split #2345, the
-  Python-authored source #2344, the forgotten egress #2346, and the stopped-sending reason
-  #2379; reopened by one-runtime-per-machine: how a runtime and a stream's processor interpreters agree on a build; settled by package-split-and-lend: the lend gives both one build by construction; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_links_two_processes -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::output_ports_offered_on_the_mesh -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_port_egress -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_link_ingress -->
-- **DECIDED** — Stamps cross the mesh unchanged — the frame header's and every stamp in the
-  bag — carrying the identity of the clock that produced them, and a stamp is never compared
-  against one from another clock. The one monotonic clock of §Media I/O is therefore one
-  clock per machine.
-  A **clock identity** is the kernel's boot-session UUID — `/proc/sys/kernel/random/boot_id` on
-  Linux, `kern.bootsessionuuid` on macOS — the boot alone and never the pid-namespace inode
-  Linux's duplicate-name `HostIdentity` pairs it with (on Apple the two identities are one
-  read of one sysctl), because a container and its host share a
-  kernel and so share one monotonic epoch. It rides each mesh message's attachment. The frame
-  header does not change.
-  **The inbound link carries it, and the relay gap is recorded as known** (owner, 2026-09-14).
-  `graph` renders `stamp_clock_identity` on every link entry — on every link, not only a remote
-  one, so a reader comparing two links compares two strings instead of having to know which
-  crossed a mesh. A link inside this node names this machine; one whose source is on another
-  runtime names nothing until a bag has crossed it, and nothing again while its source runtime
-  is away, so a reader reads it again rather than caching it. The link-naming read surface
-  gained `inbound_link_stamp_clock_identity(port, link)` in Rust and Python, and the wheel
-  exports the other half of that comparison as `this_machines_stamp_clock_identity() -> str |
-  None` — a link's identity settles nothing without a local one to test it against, and a
-  helper whose only link is mesh-fed has no local link to read one off. A helper opens no mesh
-  session, so it asks the runtime over the escalate bridge for a link carrying from another
-  runtime and is answered in process for a local one; the design's claim that the wiring
-  envelope could carry it was falsified in the build — a remote link's destination is wired
-  before its source runtime is ever known, and nothing re-issues a helper's `wire_input_link`
-  afterwards — so the envelope carries only the local-vs-remote decision the engine makes,
-  rather than letting the helper infer it from two names being equal.
-  A peer returning with a new identity re-wires every link from that address afresh, with the
-  hop count back to zero — both the gap baseline and the total `graph` renders — because what a
-  link lost under the machine that has gone describes a hop that no longer exists. `Mp4Sink`
-  compares first stamps across tracks, so it takes its clock from the first track to deliver
-  and stops by name, through its existing per-track latch, a track whose link names another
-  machine or changes machine mid-recording, while every other track keeps recording.
-  **Known gap:** a relay — a decoder, an encoder, any Python `write(…, timestamp_ns=)` —
-  restates an upstream stamp on a local output, where it now renders as a confident "this
-  machine" rather than as an absent key, so mixing machines downstream of a relay goes uncaught
-  until the common-clock OPEN below closes. Rejected: the identity on every bag, in the user
-  header beside the sequence number, which covers relays but changes every timestamped read and
-  write signature in both languages. **Zenoh's own timestamps were rechecked** at the owner's
-  request and are not the answer: a hybrid logical clock of wall time plus a counter and the
-  session id, off for peers by default, refusing a stamp too far ahead and adjusting no clock.
-  They order events between hosts that already share NTP time and cannot map a remote monotonic
-  stamp onto ours.
-  [runtime-mesh; cross-runtime-links — SHIPPED #2288 for the carried identity and #2291 for its
-  reads, rendering and the `Mp4Sink` refusal; the MoQ deadline's arm #2340; the shared Apple
-  read — macos-platform-floor, SHIPPED #2363; amended by moq-on-the-tailnet: the mesh attachment that carried a clock identity between machines is deleted with Zenoh; one monotonic clock per machine stands, and how a stamp from another machine is marked is the sharing step's OPEN]
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::machine_clock_identity -->
-  <!-- verify: cargo test -p streamlib-engine --lib apple::host_identity::tests::the_host_identity_is_the_boot_session_the_clock_identity_names -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::machine_clock_a_remote_link_carries_from -->
+  cross-runtime-links — link requests SHIPPED #2289, retired by this entry and deleted from the
+  tree by zenoh-and-moq-wheel-removal — SHIPPED #2643]
+- **DECIDED** — Every stamp in the tree is this machine's. The one monotonic clock of §Media I/O
+  is one clock per machine, and a stamp is never compared against one from another clock. No
+  link can carry a stamp from another machine, so nothing reads or renders a clock identity —
+  no key on a link in `graph`, no read on the link-naming surface, no export from the wheel, no
+  escalate op and no wiring key — and `Mp4Sink` compares first stamps across tracks with no
+  another-machine refusal. How a stamp taken on another machine's clock is marked is the sharing
+  step's OPEN below.
+  [runtime-mesh; cross-runtime-links — SHIPPED #2288, #2291; the read surface deleted by
+  zenoh-and-moq-wheel-removal — SHIPPED #2643]
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_inbound_link_stamp_clock.py -->
-  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-21-cross-runtime-links.md -->
-- **DECIDED** — No link ever blocks a producer across the mesh either: a send the network
-  cannot take is dropped rather than waited for, and every bag lost between two runtimes is
-  counted on its remote link in `graph`, beside the drops its ports already count. Notify
-  services, the runtime event bus, request-response and blackboard never cross the mesh.
-  **The number is the one `loss-visibility` already mints**, carried end to end rather than a
-  second numbering minted at the egress. Egress copies each sample's user-header sequence
-  number into a fixed little-endian attachment — `{timestamp_ns i64, sequence_number u64,
-  publisher_generation u64, clock_identity [u8; 16], frame_pixel_description_bytes u32}`, every
-  offset pinned by a golden-bytes test — where `timestamp_ns` is the frame header's stamp, and
-  bumps the generation when the sample's `origin()` changes. The fifth field is the surface
-  entry's: how many bytes of the payload describe a frame's pixels, and zero for a bag naming
-  no surface, which therefore still crosses verbatim. The attachment is the engine's
-  append-extensible side channel, and this record's own rule is that a later field may join its
-  end.
-  **Ingress counts the gap** after its ring, on its writing thread rather than in its Zenoh
-  callback — which is what puts its own ring's evictions inside the jump. One gap therefore
-  covers the sending channel's ring, the bags the egress never sent, Zenoh's silent drops, the
-  network and the ingress ring: everything between the producer's send and the local write. A
-  new publisher generation is a baseline, never a gap.
-  **It counts on both profiles**, since nothing on the hop skips by design — a `newest`
-  destination's hop loss is loss, while its own port passing over bags stays uncounted.
-  **Rendering** is `metrics.mesh_hop_dropped_bags_by_link: {link_id: n}` on the destination
-  node, beside `dropped_bags_by_link` and never inside it, and only where a remote link exists
-  to have lost anything. The ingress runs in the app process wherever the destination runs, so
-  a helper-placed destination's hop count reaches `graph` with no blackboard while its ports'
-  own counts still come off its helper's board.
-  [runtime-mesh; cross-runtime-links — SHIPPED #2288; removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_data_message_attachment -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processors_metrics_render_mesh_hop_loss_beside_its_ports_own_and_never_inside_it -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processor_with_no_remote_link_renders_no_mesh_hop_key_rather_than_an_empty_one -->
-  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_links_two_processes -->
-- **DECIDED** — `graph` carries the runtime's mesh peers, and `streamlib nodes` lists mesh
-  peers beside the nodes in the local registry. A runtime that hosts no control plane still
-  joins the mesh and carries remote links; it is not drivable remotely.
-  `graph` gains a fourth top-level key, `mesh`, always present, holding `mesh_name`,
-  `runtime_name`, `session` (`open` or `local_only`), `local_only_reason` only when the
-  session did not open, and `peers` sorted by name. A peer carries `runtime_name` always —
-  it is on the liveliness token — and `runtime_id`, `host_name`, `engine_version` and
-  `control_plane_urls` each only once the description answers, so every one of the four is
-  optional on the peer type and both shapes are covered by the key-list test, the strict
-  fixture and the schema. No peer carries a last-seen time: a wall-clock one would be a
-  fourth surface the clock entry bans, and a monotonic one means nothing to another machine.
-  `streamlib nodes` puts `RUNTIME_NAME` first and `--node` takes a runtime name or a runtime
-  id; below the registry table it prints a mesh-peers table of
-  `RUNTIME_NAME HOST CONTROL_PLANE_URLS ENGINE_VERSION`, whose rows come from a short-lived
-  observe-only session reached through a stub-gated `_engine` function and taking
-  `--mesh-name`, `--mesh-peer` and `--no-mesh-multicast-discovery`. A peer that is already a
-  registry row is not repeated, and the cost is about a second more per `nodes` call — the
-  scouting delay plus the query bound. `nodes` stays a registry surface rather than a tool,
-  so the CLI is still a pure JSON-RPC client for every tool there is.
-  A link's own rendering follows: its `source` or `target` is one of two shapes — a
-  `processor_id` for a port on this node, or `{runtime_name, processor_display_name,
-  port_name}` for a port on another runtime — with the schema, the MCP prompt fixture and the
-  generated schemas following. Beside the peers, `mesh` gained `egress_ports:
-  [{processor_display_name, port_name, reader_runtime_names}]` — every output port another
-  runtime is pulling, with the runtimes reading it, because every other sign of a remote link
-  lives on the runtime that owns the *input*, so without it an agent driving the sending node
-  cannot tell that anybody is pulling from it. One entry per live egress, never per reader: a
-  port this runtime cannot send has readers and no egress, and rendering it would claim a send
-  that is not happening. And `mesh.link_requests_awaiting_runtime` carries the requests this
-  node has not had applied, each `awaiting_runtime` while its runtime is absent, `unanswered`
-  while it is not replying, or `refused` with that runtime's own words.
-  [runtime-mesh — SHIPPED #2283, #2285; the link shape and the two request keys —
-  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-runtime-per-machine: the local API; amended by exposure-levels: `link_requests_awaiting_runtime` and a link's `created_by_runtime_name` are retired with the link request (pull-only); amended by local-api: peers and the `nodes` table drop `control_plane_urls`; a link end renders `{node, port}` or `{runtime_name, node, port}`, and an egress port `{node, port, reader_runtime_names}` (§Control plane, the local API speaks the graph's words); removed by moq-on-the-tailnet: Zenoh and the runtime mesh are deleted]
-  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests -->
-  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_port_another_runtime_reads_renders_with_the_runtimes_reading_it -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_an_empty_mesh_says_so_and_names_the_mesh -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_verb_targets_a_node_by_its_runtime_name -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
-  runtimes on a mesh negotiate a shared network time (PTP, NTP or similar) so stamps from
-  different machines become comparable; until then the per-clock rule above stands. It also
-  owns the relay gap the per-link identity leaves: a processor restating an upstream stamp on
-  a local output renders that link as this machine, confidently and wrongly, so whatever
-  closes this has to correct that reading too and not only add a shared epoch.
-  [runtime-mesh; the relay gap named by cross-runtime-links; amended by moq-on-the-tailnet: no runtimes negotiate over a mesh; the question stands for stamps that cross machines over MoQ]
+  machines negotiate a shared network time (PTP, NTP or similar) so stamps from different
+  machines become comparable; until then the per-clock rule above stands. A relay — a
+  decoder, an encoder, any Python `write(…, timestamp_ns=)` — restates an upstream stamp on a
+  local output, so whatever closes this also says how a restated stamp keeps the machine it
+  was taken on. [runtime-mesh; the relay gap named by cross-runtime-links; amended by
+  moq-on-the-tailnet: the question stands for stamps that cross machines over MoQ; the
+  per-link clock identity the relay gap was stated against deleted by
+  zenoh-and-moq-wheel-removal — SHIPPED #2643]
 - **DECIDED** — The runtime decides what leaves the machine. ~~It builds its Zenoh session from
   its own configuration,
   dials routers, and enforces a pushed stream map that refuses links to unexposed ports and
@@ -4270,7 +3695,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   changes built minus their mesh parts, then
   accelerators optional, then one sharing step — the entries above — in place of that
   sequence's steps 8 and 9, then resources, packs and the app. Owner, 2026-10-04.
-  [moq-on-the-tailnet]
+  [moq-on-the-tailnet; zenoh-and-moq-wheel-removal — SHIPPED #2633, #2643, #2645, #2649]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
 - **OPEN** — The sharing step's details, decided at its own align and built against by nothing
   until then: which versions of `moq-net` and `moq-tokio` are pinned; how groups are cut for
   data that is not video, without the engine reading a bag;
@@ -4355,7 +3781,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sighup_tears_the_graph_down_gracefully -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
-## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend, runtime-hosting, zenoh-and-moq-wheel-removal)
+## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend, runtime-hosting)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
 
 - **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
@@ -4370,7 +3796,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
   ships — `tatolabd`, the `tatolab` CLI, the desktop app and `tatolab.runtime` — and the
-  first-party extensions (`tatolab-moq`, `tatolab-webrtc`) carry one version and are released
+  first-party extensions (`tatolab-webrtc` today) carry one version and are released
   together, every piece at every release, whether or not it changed. An extension still depends
   on `tatolab-stream` by a minimum version, as a third party's package does, and an extension
   that leaves this repository takes its own number. The number is for people, never a
@@ -4378,8 +3804,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   runtime version, and nothing compares versions to admit a stream. A runtime at least as new
   as a stream's `tatolab-stream` runs it; an older one refuses what it lacks by name, and the
   refusal names the runtime's own version. Owner, 2026-10-02. [package-split-and-lend; amended
-  by moq-on-the-tailnet: `tatolab-webrtc` is the one first-party extension, `tatolab-moq` being
-  deleted before it is renamed]
+  by moq-on-the-tailnet: `tatolab-webrtc` is the one first-party extension, `streamlib-moq`
+  deleted by zenoh-and-moq-wheel-removal — SHIPPED #2633 before it was renamed]
 - **DECIDED** — Wheel portability model: what the host may supply is stated per platform,
   and nothing else is linked. On Linux, system libraries (Vulkan loader, window system,
   libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape.
@@ -4488,7 +3914,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   custom module system is needed. [one-runtime-per-machine; the two packages and the lend
   decided 2026-10-02 — package-split-and-lend, §Packages]
 
-## Control plane & observability — IN-FLIGHT (→ local-api, stream-graph, runtime-hosting, zenoh-and-moq-wheel-removal)
+## Control plane & observability — IN-FLIGHT (→ local-api, stream-graph, runtime-hosting)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
@@ -4500,8 +3926,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   their test stubs — the one coupling of this kind — are deleted with the networking move,
   and `graph` gained the `extensions` key in their place: what loaded, one entry per
   capability with its name, version and distribution. The door's spelling is the first
-  extension's to bring when it needs one, and neither of the first two wheels needed it —
-  a broadcast's catalog is the MoQ wheel's to serve.
+  extension's to bring when it needs one, and no wheel has needed it yet.
   [extension-model; networking-extension-wheels — SHIPPED #2149, #2153]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-05-networking-extension-wheels.md -->
 
@@ -4537,24 +3962,18 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   `insert_processor_between_linked_processors`, `fan_output_to_another_consumer`,
   `show_channel_on_virtual_camera` and `look_at_what_a_channel_carries` — whose every
   step is a call to a served tool: a prompt is text, never a mutation path, so the tool
-  set stays the whole of the control vocabulary. The vocabulary does not grow for the
-  mesh: `connect` and `disconnect` gained arguments rather than gaining siblings
-  (§Networking), so a caller drives a remote link with the verbs it already had, and the
-  instructions carry what the new states mean — `awaiting_remote` and its reason,
-  `created_by_runtime_name`, `stamp_clock_identity`, and a `connect` whose input is on
-  another runtime answering a `link_request_id` rather than a `link_id`, because only the
-  runtime owning an input wires a link into it. Since 2026-10-04 links are only pulled, so
-  `created_by_runtime_name`, `link_request_id` and a remote input are retired (§Networking,
-  pull-only).
+  set stays the whole of the control vocabulary.
   [importable-python-library, mcp-served-with-the-node — SHIPPED #1712;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974 for the vocabulary
   sentence; live graph mutation restored by owner ruling 2026-09-06; resources and
   prompts — SHIPPED #2232, the catalog they serve from agent-readable-processor-catalog;
   local-transport-hardening — SHIPPED #2263, #2265 made the late-joiner sizing clause true
   in the tree and gave a helper's link the `pending` state the instructions now explain;
-  cross-runtime-links — SHIPPED #2287, #2289 for the mesh arguments and the states the
-  instructions explain; reopened by one-runtime-per-machine: the local API; amended by
-  local-api: the tools, resources and prompts speak the graph's words (the entry below); amended by moq-on-the-tailnet: the mesh arguments and states leave `connect`, `disconnect` and the instructions with Zenoh; `tap` and `exchange` leave the tool set at the sharing step]
+  cross-runtime-links — SHIPPED #2287, #2289 for the mesh arguments and states, deleted from
+  `connect`, `disconnect` and the instructions by zenoh-and-moq-wheel-removal — SHIPPED #2643;
+  reopened by one-runtime-per-machine: the local API; amended by local-api: the tools,
+  resources and prompts speak the graph's words (the entry below); amended by
+  moq-on-the-tailnet: `tap` and `exchange` leave the tool set at the sharing step]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
@@ -4563,21 +3982,40 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth -->
 - **DECIDED** — The local API speaks the graph's words: a tool's argument is spelled as `graph`
   renders the same thing, and no tool, result, resource or prompt says "processor" or "display
-  name". `graph` renders a node's `name`, and each link end as `{node, port}`, or
-  `{runtime_name, node, port}` for a port on another runtime, with no `processor_id` beside
-  it; `mesh.egress_ports` entries are `{node, port, reader_runtime_names}`. The graph-mutation
-  tools are `add_node(type, config, name)`, answering the name the node received;
-  `remove_node(name)`; `connect`, each end given as `<end>_node` and `<end>_port`, with
-  `<end>_runtime_name` for a port on another runtime; and `disconnect` as it stands. Every tool
+  name". `graph` renders a node's `name`, and each link end as `{node, port}`, with no
+  `processor_id` beside it. The graph-mutation tools are `add_node(type, config, name)`,
+  answering the name the node received; `remove_node(name)`; `connect`, each end given as
+  `<end>_node` and `<end>_port`, answering a `link_id`; and `disconnect`, taking a `link_id`.
+  Every tool
   addresses a node by its name within its stream, never by an id; `graph` still renders a
   node's `id` as a live key. While a runtime holds one stream, the name alone is the node; once
   one runtime hosts several, every tool that names or adds a node also names its stream, as the
-  address does, spelled with the stream actions by the change that builds them. `tap`'s channel is `<runtime_name>/<node>/<port>`; the catalog resource is
+  address does, spelled with the stream actions by the change that builds them. `tap`'s
+  channel is `<runtime_name>/<node>/<port>`, the name read from `graph`'s top-level
+  `runtime_name`; the catalog resource is
   `node-catalog`, listing `nodes`, each under the `type` `add_node` takes; the instructions and
   the prompts say node — `insert_node_between_linked_nodes` among them. `runtime_name` stays
   until one runtime hosts several streams and the address gains its machine and stream. The
   engine's Rust identifiers keep "processor" until the rename. It ships with the graph's one
-  shape. Owner, 2026-10-02. [local-api; stream-graph; amended by moq-on-the-tailnet: the `runtime_name` link end and `mesh.egress_ports` are deleted with Zenoh; `tap`'s channel goes with `tap`, at the sharing step]
+  shape. Owner, 2026-10-02. [local-api; stream-graph; the `runtime_name` link end and
+  `mesh.egress_ports` deleted, and `connect` and `disconnect` given these ends, by
+  zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645; amended by moq-on-the-tailnet: `tap`'s channel goes
+  with `tap`, at the sharing step]
+  <!-- verify: cargo test -p streamlib-api-server tools_call_connect_states_the_link_id_and_the_links_state -->
+  <!-- verify: cargo test -p streamlib-api-server tools_call_connect_resolves_each_ends_node_by_its_cast_name -->
+  <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_takes_a_link_id_alone -->
+- **DECIDED** — `graph` carries the runtime's name as a top-level key, `runtime_name`, beside
+  `nodes`, `links` and `extensions` — in the OpenAPI schema, the MCP tool, the generated schema
+  and the prompt fixture — because `tap`'s channel is spelled from it and `tap` stays until the
+  sharing step. It renders no `mesh` key; a link renders no `awaiting_remote_reason`,
+  `created_by_runtime_name` or `stamp_clock_identity`; and a node's metrics render no
+  `mesh_hop_dropped_bags_by_link`. `streamlib nodes` prints the registry table alone. Every
+  channel reserves one subscriber slot beyond its fixed cap, `tap`'s, and no other. The key
+  goes with the runtime name at runtime hosting. [zenoh-and-moq-wheel-removal — SHIPPED #2643,
+  #2645]
+  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_runtime_name_rendering_tests::the_runtime_name_is_a_top_level_key_and_no_mesh_key_renders -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_the_taps_reservation_and_refuses_past_it -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_nodes_prints_the_registry_table_alone -->
 - **DECIDED** — ~~`dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
@@ -4604,7 +4042,7 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
-  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself; amended by local-api: the `mcp` verb joins; amended by tatolab-names and package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the installer and never in a pip wheel; amended by moq-on-the-tailnet: `nodes` lists no mesh peers once Zenoh is removed; `tap` and `exchange` leave the CLI at the sharing step]
+  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself; amended by local-api: the `mcp` verb joins; amended by tatolab-names and package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the installer and never in a pip wheel; `nodes` lists no mesh peers since zenoh-and-moq-wheel-removal — SHIPPED #2645; amended by moq-on-the-tailnet: `tap` and `exchange` leave the CLI at the sharing step]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
@@ -4685,8 +4123,8 @@ it ships and folds it out — never direction, and nothing new is built on it. O
   macOS it runs the same conversion under MoltenVK, a pooled frame's IOSurface pages reaching
   the GPU through their host-pointer import, never a CPU read of the surface — so `streamlib
   tap` → `exchange`, and the repo's own live verification with it, answer on a Mac. No new
-  surface-resolution path exists — the backing resolution it shares with the mesh's copy-out
-  door is one `ResolvedSurfaceBacking` — and the caller needs no Vulkan device, no surface
+  surface-resolution path exists — the backing resolution is the one `ResolvedSurfaceBacking`
+  — and the caller needs no Vulkan device, no surface
   socket and no runtime link.
   [control-plane-surface-pixel-exchange — SHIPPED #1972; opened on macOS by
   macos-capability-parity — SHIPPED #2406; amended by one-runtime-per-machine: accelerators are optional; retired by exposure-levels and deleted at the sharing step, when the repo's verification reads a private port's snapshot instead (moq-on-the-tailnet)]
