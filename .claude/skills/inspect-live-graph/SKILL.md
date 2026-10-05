@@ -23,7 +23,7 @@ The result is the `graph` MCP tool's JSON (pretty-printed): `stream` (once one i
 ### 2. Read what you need out of it
 - **Node names** — each node's `name`, which instances the runtime actually stood up, and under which `type`. A name is cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`; a defaulted `CameraSource` is `camerasource`, a second one `camerasource-2`).
 - **Port names** — the exact input / output port names each node declares under `ports`, as the runtime reports them rather than as the source reads.
-- **Links** — each end is `{node, port}` for a port here, or `{runtime_name, node, port}` for a port on another runtime.
+- **Links** — each end is `{node, port}`; both ends are on this runtime.
 - **Channel names** — form the tap target `<runtime_name>/<node>/<port>` from `mesh.runtime_name`, the source node's `name` and its output port; feed it to `tap-live-channel`.
 - **States / metrics** — confirm a node is running and moving data (non-zero counters) rather than merely instantiated.
 

@@ -572,8 +572,8 @@ class Runtime:
         run` and `dev` pass their `--runtime-name` through to here.
 
         A name is unique within a mesh, and never auto-suffixed: it is the
-        address other runtimes wire against, so it may not depend on start
-        order. A name another live runtime already holds is refused here,
+        first part of the address its ports are named by, so it may not depend
+        on start order. A name another live runtime already holds is refused here,
         naming that runtime's host and pid and both ways out — stop it, or start
         this one under another name. `streamlib nodes --mesh-name <mesh>` lists
         it wherever it is running: the mesh table carries every runtime on the
