@@ -13,7 +13,8 @@ The only skill that flips a plan section OPEN → DECIDED.
 2. Run `batch-grilling` over the section's open decisions, with the `glossary` skill
    active for term drift.
 3. As each decision lands, edit immediately (don't batch):
-   - The section entry: DECIDED entries state WHAT, never why. Rationale goes to a
+   - The section entry: DECIDED entries state WHAT, never why — a `Rejected:` line's one
+     clause excepted (`.claude/rules/docs-policy.md`). Rationale goes to a
      `docs/decisions/` ADR that the entry links as `[ADR-name]`.
    - `docs/plan/diagrams/*.mmd` in the same breath, when the decision changes structure.
    - Nothing prompts on a plan edit. The gate is this skill's own contract — the owner's

@@ -11,7 +11,9 @@ Only the owner invokes a pivot. Never propose one mid-implementation.
 1. Run `grilling` until the new direction is stated in five sentences or fewer and the
    owner confirms them verbatim.
 2. **Plan first**: rewrite the affected ARCHITECTURE.md sections — new DECIDED entries,
-   invalidated sections back to OPEN, diagrams updated. Rationale goes to an ADR.
+   invalidated sections back to OPEN, diagrams updated. Superseded entries are retired
+   by deletion, with a `Rejected:` line only where `.claude/rules/docs-policy.md` allows
+   one. Rationale goes to an ADR.
 3. **Inventory the legacy** (read-only sweep): the code paths, docs, rules, skills,
    tickets, and milestones the old direction leaves behind. Present the inventory —
    under this model legacy is deleted, never kept running in parallel with the new

@@ -21,7 +21,7 @@ disable-model-invocation: true
    comment on the ticket with the options and your recommendation, and **stop**. Never
    decide inline; never infer a decision from existing code.
 4. **Staleness check**: verify the ticket's load-bearing claims against the current
-   tree; if drifted, correct the body via `gh issue edit` with strikethroughs preserved.
+   tree; if drifted, correct the body via `gh issue edit`, rewritten to current intent.
 5. **Announce** the refined plan — goal, files, the seams tests will exercise, scope —
    and **wait for the owner's confirmation**. Hard stop.
 6. On yes: `mkdir -p .claude/state` and write `.claude/state/active-ticket.json`
