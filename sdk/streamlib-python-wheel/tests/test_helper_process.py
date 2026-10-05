@@ -319,38 +319,6 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     assert every_bag_read(deep_destination) == list(range(bags_published_while_neither_reads))
 
 
-def test_a_helper_publishes_with_no_notifier_where_no_listener_waits():
-    """An empty `dest_notify_service_name` is the engine saying no listener
-    waits on the other end — the mesh's egress, pulling a port nothing local
-    reads, which polls its subscriber.
-
-    The helper must wire the link for data only: a notify service opened on
-    the empty name fails the child's whole `setup` on an invalid iceoryx2
-    service name.
-    """
-    from streamlib import ProcessorLinkDataAccess
-
-    link_id = "L-no-notify"
-    destination = ProcessorLinkDataAccess()
-    _helper.wire_link_data_access(
-        destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
-    )
-
-    source = ProcessorLinkDataAccess()
-    source_wiring = engine_shaped_link_wiring("output", link_id)
-    source_wiring["dest_notify_service_name"] = ""
-    _helper.wire_link_data_access(source, {"outputs": [source_wiring]})
-
-    source.write_to_output_port("frames_to_downstream", {"frame_index": 12})
-
-    assert destination.any_input_port_has_data(), (
-        "dropping the notifier must not touch data delivery"
-    )
-    assert destination.read_from_input_port("frames_from_upstream") == {
-        "frame_index": 12
-    }
-
-
 def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     """The child half of #1554: a disconnect must release the ports this
     process opened, or the same link cannot be wired a second time.

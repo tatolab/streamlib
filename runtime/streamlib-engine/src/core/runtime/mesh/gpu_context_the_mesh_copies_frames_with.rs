@@ -5,11 +5,10 @@
 //! has one.
 //!
 //! A runtime joins its mesh in `Runner::new()`, which needs no GPU; the
-//! context is built in `Runner::start()`. Every egress and every ingress
-//! therefore reads it through this cell rather than being handed one: an
-//! egress holds a port for as long as another runtime reads it, and one whose
-//! reader arrived before `start()` would otherwise carry no frame for the
-//! rest of the run.
+//! context is built in `Runner::start()`. Every ingress therefore reads it
+//! through this cell rather than being handed one: an ingress carries a port
+//! for as long as a link reads it, and one started before `start()` would
+//! otherwise carry no frame for the rest of the run.
 //!
 //! Cleared when the runtime stops, so a mesh outliving its context — a
 //! membership dropped after the runtime's own teardown — never keeps a GPU

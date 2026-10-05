@@ -19,21 +19,7 @@
 //! every other surface in the engine speaks, and a private numbering here
 //! would be a second one to keep in step.
 
-// The writing half — the offsets, `to_wire_bytes` and the builder — belongs
-// to a sending runtime, and the door a frame's pixels are copied out through
-// exists on Linux and macOS only. A build for another platform reads these
-// messages and never writes one.
-#![cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
-
 use streamlib_consumer_rhi::PixelFormat;
-
-/// Where each fixed field begins, and how long the fixed part of a description
-/// is. The layout is the wire contract, little-endian like the attachment's.
-const WIDTH_OFFSET: usize = 0;
-const HEIGHT_OFFSET: usize = WIDTH_OFFSET + size_of::<u32>();
-const PIXEL_BYTE_LENGTH_OFFSET: usize = HEIGHT_OFFSET + size_of::<u32>();
-const FORMAT_WIRE_NAME_LENGTH_OFFSET: usize = PIXEL_BYTE_LENGTH_OFFSET + size_of::<u64>();
-const FORMAT_WIRE_NAME_OFFSET: usize = FORMAT_WIRE_NAME_LENGTH_OFFSET + size_of::<u16>();
 
 /// What a receiving runtime needs to rebuild a frame it is handed the pixels
 /// of — all of it read from the sending backing, none of it from the bag.
@@ -46,29 +32,6 @@ pub struct AFramesPixelDescriptionOnTheMesh {
     pub pixel_byte_length: u64,
 }
 
-/// One mesh message carrying a frame, built and ready to put.
-pub struct AMeshMessageCarryingAFramesPixels {
-    pub message_bytes: Vec<u8>,
-    /// How many of `message_bytes` describe the frame — what rides in the
-    /// attachment, so the reading runtime can split the three parts again.
-    pub description_bytes: u32,
-}
-
-/// Its length rather than its bytes: a 1080p frame is 8.3 MB, and a panic or
-/// a log line that printed them would bury whatever it was reporting.
-impl std::fmt::Debug for AMeshMessageCarryingAFramesPixels {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("AMeshMessageCarryingAFramesPixels")
-            .field(
-                "message_bytes",
-                &format_args!("<{} bytes>", self.message_bytes.len()),
-            )
-            .field("description_bytes", &self.description_bytes)
-            .finish()
-    }
-}
-
 /// One mesh message carrying a frame, as the reading runtime takes it apart.
 pub struct AFramesPixelsOffTheMesh<'a> {
     pub description: AFramesPixelDescriptionOnTheMesh,
@@ -77,21 +40,6 @@ pub struct AFramesPixelsOffTheMesh<'a> {
 }
 
 impl AFramesPixelDescriptionOnTheMesh {
-    /// This description on the wire.
-    pub fn to_wire_bytes(self) -> Vec<u8> {
-        let format_wire_name = self.pixel_format.wire_name().as_bytes();
-        let mut wire_bytes = Vec::with_capacity(FORMAT_WIRE_NAME_OFFSET + format_wire_name.len());
-        wire_bytes.extend_from_slice(&self.width.to_le_bytes());
-        wire_bytes.extend_from_slice(&self.height.to_le_bytes());
-        wire_bytes.extend_from_slice(&self.pixel_byte_length.to_le_bytes());
-        // The engine's own vocabulary is short enough that this cannot
-        // truncate; the cast is bounded by `PixelFormat::wire_name`, not by a
-        // peer's bytes.
-        wire_bytes.extend_from_slice(&(format_wire_name.len() as u16).to_le_bytes());
-        wire_bytes.extend_from_slice(format_wire_name);
-        wire_bytes
-    }
-
     /// Read a description off the wire, or `None` when the bytes are not one.
     ///
     /// Every step is fallible rather than an index that cannot fail: these are
@@ -112,32 +60,6 @@ impl AFramesPixelDescriptionOnTheMesh {
             height: u32::from_le_bytes(*height),
             pixel_byte_length: u64::from_le_bytes(*pixel_byte_length),
         })
-    }
-}
-
-/// Build the message one frame crosses as.
-///
-/// `pixel_bytes` is read once, straight into the bytes that go on the wire:
-/// the sender's staging hands out a contiguous borrow, and at 1080p RGBA any
-/// second pass over it — an intermediate buffer, or zeroing a tail before
-/// overwriting it — would be another 8.3 MB per frame per reading runtime.
-/// The one allocation is sized for all three parts up front for the same
-/// reason.
-pub fn a_mesh_message_carrying_a_frames_pixels(
-    description: AFramesPixelDescriptionOnTheMesh,
-    bag_bytes: &[u8],
-    pixel_bytes: &[u8],
-) -> AMeshMessageCarryingAFramesPixels {
-    let described = description.to_wire_bytes();
-    let mut message_bytes =
-        Vec::with_capacity(described.len() + bag_bytes.len() + pixel_bytes.len());
-    message_bytes.extend_from_slice(&described);
-    message_bytes.extend_from_slice(bag_bytes);
-    message_bytes.extend_from_slice(pixel_bytes);
-    AMeshMessageCarryingAFramesPixels {
-        message_bytes,
-        // Bounded by the format vocabulary above, not by anything a peer sends.
-        description_bytes: described.len() as u32,
     }
 }
 
@@ -162,6 +84,53 @@ pub fn a_frames_pixels_off_the_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where each fixed field begins, and how long the fixed part of a
+    /// description is. The layout is the wire contract, little-endian like the
+    /// attachment's.
+    const WIDTH_OFFSET: usize = 0;
+    const HEIGHT_OFFSET: usize = WIDTH_OFFSET + size_of::<u32>();
+    const PIXEL_BYTE_LENGTH_OFFSET: usize = HEIGHT_OFFSET + size_of::<u32>();
+    const FORMAT_WIRE_NAME_LENGTH_OFFSET: usize = PIXEL_BYTE_LENGTH_OFFSET + size_of::<u64>();
+    const FORMAT_WIRE_NAME_OFFSET: usize = FORMAT_WIRE_NAME_LENGTH_OFFSET + size_of::<u16>();
+
+    impl AFramesPixelDescriptionOnTheMesh {
+        /// This description on the wire, as a sending peer lays it out.
+        fn to_wire_bytes(self) -> Vec<u8> {
+            let format_wire_name = self.pixel_format.wire_name().as_bytes();
+            let mut wire_bytes =
+                Vec::with_capacity(FORMAT_WIRE_NAME_OFFSET + format_wire_name.len());
+            wire_bytes.extend_from_slice(&self.width.to_le_bytes());
+            wire_bytes.extend_from_slice(&self.height.to_le_bytes());
+            wire_bytes.extend_from_slice(&self.pixel_byte_length.to_le_bytes());
+            wire_bytes.extend_from_slice(&(format_wire_name.len() as u16).to_le_bytes());
+            wire_bytes.extend_from_slice(format_wire_name);
+            wire_bytes
+        }
+    }
+
+    /// One message carrying a frame, as a sending peer lays it out.
+    struct AMeshMessageCarryingAFramesPixels {
+        message_bytes: Vec<u8>,
+        description_bytes: u32,
+    }
+
+    fn a_mesh_message_carrying_a_frames_pixels(
+        description: AFramesPixelDescriptionOnTheMesh,
+        bag_bytes: &[u8],
+        pixel_bytes: &[u8],
+    ) -> AMeshMessageCarryingAFramesPixels {
+        let described = description.to_wire_bytes();
+        let mut message_bytes =
+            Vec::with_capacity(described.len() + bag_bytes.len() + pixel_bytes.len());
+        message_bytes.extend_from_slice(&described);
+        message_bytes.extend_from_slice(bag_bytes);
+        message_bytes.extend_from_slice(pixel_bytes);
+        AMeshMessageCarryingAFramesPixels {
+            message_bytes,
+            description_bytes: described.len() as u32,
+        }
+    }
 
     fn a_description() -> AFramesPixelDescriptionOnTheMesh {
         AFramesPixelDescriptionOnTheMesh {

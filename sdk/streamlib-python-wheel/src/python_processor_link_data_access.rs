@@ -360,10 +360,7 @@ impl PythonProcessorLinkDataAccess {
     ///
     /// One call per link. The publisher is installed once — the first link out
     /// of a port creates it and every later link only appends itself — because
-    /// iceoryx2 admits exactly one publisher per channel. An empty
-    /// `dest_notify_service_name` means no listener waits on the other end —
-    /// the mesh's egress, which polls — so the link opens no notifier and
-    /// carries data only.
+    /// iceoryx2 admits exactly one publisher per channel.
     #[pyo3(signature = (
         port_name,
         channel_service_name,
@@ -441,19 +438,15 @@ impl PythonProcessorLinkDataAccess {
                         )?;
                     }
                 }
-                // An empty name is the engine saying no listener waits on the
-                // other end, so there is nothing to wake and the link is wired
-                // for data only.
-                let notifier = if dest_notify_service_name.is_empty() {
-                    None
-                } else {
-                    let notify_service = node.open_or_create_notify_service(
-                        dest_notify_service_name,
-                        notify_max_notifiers,
-                    )?;
-                    Some(notify_service.create_notifier()?)
-                };
-                output_writer.add_channel_link(port_name, link_id, notifier);
+                let notify_service = node.open_or_create_notify_service(
+                    dest_notify_service_name,
+                    notify_max_notifiers,
+                )?;
+                output_writer.add_channel_link(
+                    port_name,
+                    link_id,
+                    Some(notify_service.create_notifier()?),
+                );
                 Ok(())
             })
             .map_err(|wiring_failure| {
@@ -474,9 +467,8 @@ impl PythonProcessorLinkDataAccess {
     /// name from the channel would hand a many-track sink a hash instead of
     /// the address. They are equal for a link from this runtime.
     ///
-    /// `notify_service_name` is always a real name here, unlike the output
-    /// side's: a helper-hosted destination opens its listener whatever
-    /// execution mode the class declares.
+    /// A helper-hosted destination opens its listener whatever execution mode
+    /// the class declares.
     ///
     /// One call per link. The mailbox and the destination-keyed listener are
     /// installed once — fan-in appends subscribers to the same port, and
@@ -965,7 +957,7 @@ mod tests {
                     python,
                     "frames_to_downstream",
                     &format!("{channel}_onward"),
-                    "",
+                    &format!("{notify}_onward"),
                     64,
                     1024,
                     8,
@@ -1080,7 +1072,7 @@ mod tests {
                     python,
                     "frames_to_downstream",
                     &format!("{channel}_onward_again"),
-                    "",
+                    &format!("{notify}_onward_again"),
                     64,
                     1024,
                     8,

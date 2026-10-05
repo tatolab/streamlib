@@ -31,11 +31,9 @@ use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
-use crate::core::runtime::OutputPortsInThisRuntimesGraph;
 use crate::core::runtime::mesh::{
     GpuContextTheMeshCopiesFramesWith, HostedControlPlaneEndpointRegistry, MeshLinkIngressTable,
     ResolvedRuntimeMeshConfiguration, RuntimeMeshMembership,
-    WhatThisRuntimeOffersOnTheMeshRegistry,
 };
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
@@ -160,9 +158,6 @@ pub struct Runner {
     /// Listener for graph changes that triggers compilation.
     /// Stored to keep subscription alive for runtime lifetime.
     _graph_change_listener: Arc<Mutex<dyn EventListener>>,
-    /// How the mesh reads this runtime's graph, held so it outlives the
-    /// queryable and the egresses that read it.
-    _offered_on_the_mesh: Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
     /// Every port on another runtime this runtime links from. Handed to the
     /// mesh, which resolves each and opens its ingress, and to every
     /// `RuntimeContext`, through which the wiring op reaches it.
@@ -376,29 +371,15 @@ impl Runner {
         // Subscribe to graph changes
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))?;
 
-        // The mesh joined before the graph and the iceoryx2 node existed, so
-        // this is where it learns to read them: what this runtime offers a peer
-        // that asks, and how to reach one of those ports' channels when another
-        // runtime starts reading it.
-        let offered_on_the_mesh = Arc::new(WhatThisRuntimeOffersOnTheMeshRegistry::default());
-        offered_on_the_mesh.record_how_to_read_this_runtimes_graph(
-            OutputPortsInThisRuntimesGraph::of(&compiler, &iceoryx2_node),
-        );
-        // Both halves of the mesh's frame carrying read this one cell: a
-        // surface id names a frame in this machine's pools, so a sender copies
-        // its pixels out and a receiver mints a local surface for them, and
-        // neither has a GPU context to do it with until `start()`.
+        // A surface id names a frame in this machine's pools, so a frame
+        // arriving from another runtime needs a local surface minted for its
+        // pixels, and there is no GPU context to mint one with until `start()`.
         let gpu_context_the_mesh_copies_frames_with =
             Arc::new(GpuContextTheMeshCopiesFramesWith::default());
-        runtime_mesh.start_serving_this_runtimes_output_ports(
-            &offered_on_the_mesh,
-            &iceoryx2_node,
-            &gpu_context_the_mesh_copies_frames_with,
-        );
 
-        // The other half: every port on another runtime this one links from.
-        // `connect` notes a link here and the mesh resolves it afterwards, so
-        // nothing about a remote link waits on a network call.
+        // Every port on another runtime this one links from. `connect` notes a
+        // link here and the mesh resolves it afterwards, so nothing about a
+        // remote link waits on a network call.
         let mesh_link_ingress_table = MeshLinkIngressTable::of_this_runtime(
             &iceoryx2_node,
             &gpu_context_the_mesh_copies_frames_with,
@@ -415,7 +396,6 @@ impl Runner {
             runtime_context,
             status,
             _graph_change_listener: listener,
-            _offered_on_the_mesh: offered_on_the_mesh,
             mesh_link_ingress_table,
             gpu_context_the_mesh_copies_frames_with,
             iceoryx2_node,
@@ -589,10 +569,8 @@ impl Runner {
             tracing::info!("[start] SurfaceStore initialized against runtime-internal broker");
         }
 
-        // The mesh's own half of "fully live": an egress reads a frame out
-        // through this context and an ingress mints one with it. After the
-        // SurfaceStore, because the claim an egress takes over a frame it is
-        // copying is recorded in that store's lease table.
+        // The mesh's own half of "fully live": an ingress mints a local
+        // surface for an arriving frame with this context.
         self.gpu_context_the_mesh_copies_frames_with
             .record_the_runtimes_gpu_context(&gpu);
         // Everything below here can leave early, and a host is under no

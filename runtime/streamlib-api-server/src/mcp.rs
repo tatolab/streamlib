@@ -2562,18 +2562,12 @@ mod tests {
             }],
             "exposed": [],
             "extensions": [],
-            // A runtime that is on its mesh and sending one port to one reader:
-            // the prompts parse a real node's answer, and `mesh` is always on one.
+            // The prompts parse a real node's answer, and `mesh` is always on one.
             "mesh": {
                 "mesh_name": "default",
                 "runtime_name": "rig-desk-a1b2",
                 "session": "open",
-                "peers": [],
-                "egress_ports": [{
-                    "node": "pattern",
-                    "port": "video",
-                    "reader_runtime_names": ["studio-display-9f3c"]
-                }]
+                "peers": []
             }
         })
     }

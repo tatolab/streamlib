@@ -6,9 +6,9 @@
 //! The one key the engine reads inside a bag on the way across the mesh, and it
 //! reads no other: a surface id names a frame in this machine's own pools, so a
 //! runtime on another machine cannot resolve it. §Processor model states the
-//! carve-out; §Networking states what happens to the frame — the sender copies
-//! its pixels out, and the receiver mints a local surface and hands the bag on
-//! naming that one instead.
+//! carve-out; §Networking states what happens to the frame — the receiver
+//! mints a local surface for its pixels and hands the bag on naming that one
+//! instead.
 //!
 //! The walk decodes the top-level map's keys and nothing else — it steps over
 //! every value rather than building it, so a bag carrying megabytes of pixels
@@ -35,17 +35,11 @@ const LONGEST_MSGPACK_STRING_HEADER_BYTES: usize = 5;
 /// A bag's top-level `surface_id`, and where its value sits in the bag's bytes.
 pub struct ATopLevelSurfaceIdInABag<'a> {
     bag_bytes: &'a [u8],
-    surface_id: &'a str,
     /// The id's msgpack value, marker included — what a rewrite splices over.
     value_span: Range<usize>,
 }
 
-impl<'a> ATopLevelSurfaceIdInABag<'a> {
-    /// The surface this bag names.
-    pub fn surface_id(&self) -> &'a str {
-        self.surface_id
-    }
-
+impl ATopLevelSurfaceIdInABag<'_> {
     /// The same bag naming `local_surface_id` instead.
     ///
     /// Errs only for an id msgpack cannot spell, which the engine never mints;
@@ -92,10 +86,9 @@ pub fn the_top_level_surface_id_of_a_bag(bag_bytes: &[u8]) -> Option<ATopLevelSu
         };
         let value_begins_at = walk.at;
         if this_key_is_the_surface_id {
-            let surface_id = walk.read_a_string()?;
+            walk.read_a_string()?;
             return Some(ATopLevelSurfaceIdInABag {
                 bag_bytes,
-                surface_id,
                 value_span: value_begins_at..walk.at,
             });
         }
@@ -273,7 +266,10 @@ mod tests {
     }
 
     fn the_surface_named_by(bag_bytes: &[u8]) -> Option<&str> {
-        the_top_level_surface_id_of_a_bag(bag_bytes).map(|named| named.surface_id())
+        let named = the_top_level_surface_id_of_a_bag(bag_bytes)?;
+        let (surface_id, _) =
+            rmp::decode::read_str_from_slice(&bag_bytes[named.value_span]).ok()?;
+        Some(surface_id)
     }
 
     /// A video frame names its surface at the top level, which is the one key

@@ -76,11 +76,12 @@ pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
 };
 
+pub(crate) use node::ChannelSizing;
 pub use node::{
-    ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelSizing,
-    ChannelTapSubscribeError, ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES,
-    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node, Iceoryx2NotifyService,
-    Iceoryx2Service, create_iceoryx2_node_in_engine_owned_domain, engine_owned_iceoryx2_config,
+    ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelTapSubscribeError,
+    ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+    Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service,
+    create_iceoryx2_node_in_engine_owned_domain, engine_owned_iceoryx2_config,
     engine_owned_iceoryx2_prefix_for_this_user, reclaim_dead_iceoryx2_nodes_in_engine_owned_domain,
 };
 pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
@@ -88,8 +89,8 @@ pub use payload::{
     ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelBagSequenceNumberUserHeader,
     FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE, FrameHeader,
     MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, PortKey,
-    RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
-    TRUSTED_CHANNEL_CHUNK_CEILING_BYTES, UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
 };
 pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
 pub use read_mode::ReadMode;

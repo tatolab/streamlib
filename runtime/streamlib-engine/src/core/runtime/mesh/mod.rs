@@ -14,7 +14,6 @@
 
 mod a_bags_top_level_surface_id;
 mod a_frames_pixels_on_the_mesh;
-mod a_frames_pixels_read_out_for_the_mesh;
 mod a_frames_pixels_written_into_a_local_surface;
 mod duplicate_runtime_name_on_the_mesh;
 mod gpu_context_the_mesh_copies_frames_with;
@@ -25,10 +24,6 @@ mod machine_clock_identity;
 mod mesh_data_message_attachment;
 mod mesh_link_ingress;
 mod mesh_link_ingress_table;
-mod mesh_port_egress;
-mod mesh_port_egress_table;
-mod output_ports_offered_on_the_mesh;
-mod output_ports_other_runtimes_are_reading;
 mod resolved_runtime_mesh_configuration;
 mod runtime_mesh_description;
 mod runtime_mesh_endpoint;
@@ -61,18 +56,6 @@ pub use mesh_data_message_attachment::{
 pub use mesh_link_ingress_table::MeshLinkIngressTable;
 #[cfg(test)]
 pub(crate) use mesh_link_ingress_table::a_mesh_link_ingress_table_carrying_nothing;
-// Reachable rather than supported, like the key grammar above: the
-// cross-runtime-link fixture stands two runtimes' mesh halves up without a
-// `Runner`, because CI has no GPU to start one with.
-#[doc(hidden)]
-pub use output_ports_offered_on_the_mesh::{
-    HowToReadAnOfferedOutputPort, WhatThisRuntimeOffersOnTheMesh,
-    WhatThisRuntimeOffersOnTheMeshRegistry,
-};
-pub use output_ports_offered_on_the_mesh::{
-    OutputPortOfferedOnTheMesh, OutputPortThisRuntimeHoldsAndCannotSend,
-    OutputPortThisRuntimeStoppedSending, OutputPortsOfferedOnTheMesh,
-};
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 // Reachable rather than supported: `core::runtime` is a public module, and the
 // key grammar is the mesh's own business.
