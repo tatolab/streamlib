@@ -192,10 +192,8 @@ ends with a say-back loop, and none of them commits work:
   lock-in, scope, boundaries, naming) and each PR currently runs up to four review
   lenses. Owner review is the bottleneck — one merged `review-pr` lens (plus
   `rust-craftsmanship-reviewer` as the quality lens) replaces them.
-- **Reconciled:** `verify-live` (loop runs the pipeline) vs `evidence-verifier` (never
-  runs the pipeline) state opposite primary modes. One is chosen; the other's charter is
-  rewritten to match. [NEEDS DECISION — recommend LOOP-RUN primary, handshake fallback,
-  matching `verify-live`.]
+- **Reconciled:** `verify-live` self-runs the pipeline as its primary mode, with the
+  owner-terminal handshake as fallback, and `evidence-verifier`'s charter matches.
 - **Retired:** `plugin-abi-expert` and `package-source-expert`, with their subjects;
   `draft-design` (premise — per-issue design — is forbidden by
   docs-policy), `file-issue` for planned work, the external `amos-next` protocol
@@ -297,14 +295,3 @@ PR — never accreted mid-session because something annoyed an agent once.
    kill-list), then the docs-consolidation
    change (retiring `docs/architecture/`) as the first big change run through the new
    system — the system migrates the old docs, proving itself on its own bootstrap.
-
-## Decisions for owner
-
-1. The MVP sentence (§Product) — first item of the plan session; everything traces to it.
-2. Consolidate the four review lenses into `review-pr` + craftsmanship — yes/no.
-3. `verify-live` vs `evidence-verifier` primary mode — recommend session-runs-the-pipeline
-   primary (today's "LOOP-RUN" vocabulary gets renamed `self-run`; no relation to the
-   retired loop), owner-terminal handshake as fallback.
-4. Bring the ticket lifecycle in-tree (replace external amos-next protocol with
-   `/implement`) — recommend yes; it is the single highest-leverage move the inventory
-   found.

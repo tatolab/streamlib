@@ -56,8 +56,9 @@ and the MCP 2026-07-28 specification, fetched live.
   `ApiServerControlPlaneHostConfig { bind_host, bind_port }` (`src/control_plane_host.rs:13-18`).
 - Defaults `0.0.0.0` / `9000`: `cli.py:71-72` (used `:914`, `:923`),
   `src/python_runtime_lifecycle.rs:475`, `_engine.pyi:650-658`; `--control-plane-port 9000` in
-  the rigs (`codec_roundtrip_rig.rs:836`, `cross_runtime_link_rig.rs:79`), six engine fixtures and
-  the two packages' live nodes; `CONTROL_PORT` falls back to 9000 in `audio_capture_node.py:40`,
+  the rig (`codec_roundtrip_rig.rs:836`; `cross_runtime_link_rig.rs` is gone with the mesh,
+  #2643, #2645), six engine fixtures and the WebRTC package's live nodes (the MoQ wheel is gone,
+  #2633); `CONTROL_PORT` falls back to 9000 in `audio_capture_node.py:40`,
   `audio_loopback_node.py:107`.
 
 **The router, the client, the registry**
