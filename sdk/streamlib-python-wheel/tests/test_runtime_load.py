@@ -363,7 +363,6 @@ def test_a_loaded_graphs_nodes_are_in_the_runtimes_graph(runtime: streamlib.Runt
     runtime.load(pattern_to_window_graph(stream_name="pattern-to-window"))
 
     assert len(processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime)) == 2
-    assert runtime.add(TestPatternSource).display_name == "testpatternsource-2"
 
 
 def test_a_mapping_that_is_not_a_dict_loads(runtime: streamlib.Runtime):
@@ -412,13 +411,12 @@ def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_l
 
 
 @pytest.mark.parametrize("not_a_number", [float("nan"), float("inf")], ids=["nan", "infinity"])
-def test_nan_and_infinity_in_a_graph_load_the_way_add_converts_them_in_config(
+def test_nan_and_infinity_in_a_graphs_config_load(
     runtime: streamlib.Runtime, not_a_number: float
 ):
     runtime.load(pattern_to_window_graph_with_window_scaling(not_a_number))
 
     assert the_runtimes_graph_holds_a_processor(runtime)
-    runtime.add(DisplayWindow, config={"scaling": not_a_number}, display_name="added-window")
 
 
 def test_a_python_node_type_the_process_never_imported_loads_through_the_resolver(
@@ -452,14 +450,6 @@ def test_a_python_node_type_the_process_never_imported_loads_through_the_resolve
     assert RESOLVER_IMPORTED_NODE_MODULE in sys.modules
     assert RESOLVER_IMPORTED_NODE_TYPE in processor_class_import_paths_in_this_processes_catalog()
     assert the_runtimes_graph_holds_a_processor(runtime)
-
-
-def test_add_and_connect_still_build_beside_a_loaded_graph(runtime: streamlib.Runtime):
-    runtime.load(pattern_to_window_graph())
-
-    source = runtime.add(TestPatternSource, display_name="second-pattern")
-    window = runtime.add(DisplayWindow, display_name="second-window")
-    runtime.connect(source.output("video"), window.input("video"))
 
 
 def test_the_name_given_to_load_replaces_the_graphs_and_is_cast(runtime: streamlib.Runtime):
@@ -576,19 +566,10 @@ def test_a_graph_holding_what_json_cannot_carry_is_refused_with_the_converters_t
     assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
-def test_bytes_are_refused_in_adds_config_naming_the_graph_node_and_in_a_graph_naming_none(
-    runtime: streamlib.Runtime,
-):
-    with pytest.raises(TypeError) as refused_by_add:
-        runtime.add(DisplayWindow, config={"title": b"fit"})
+def test_bytes_in_a_graph_are_refused_naming_how_to_carry_bytes(runtime: streamlib.Runtime):
     with pytest.raises(TypeError) as refused_by_load:
         runtime.load(pattern_to_window_graph_with_window_scaling(b"fit"))
 
-    assert str(refused_by_add.value) == (
-        "config must survive a JSON round trip, because the engine stores it on the graph "
-        "node: error while decoding value: invalid type: byte array, expected any valid "
-        "JSON value"
-    )
     assert str(refused_by_load.value) == (
         f"{GRAPH_IS_NOT_JSON_DATA}the value must survive a JSON round trip: error while "
         f"decoding value: invalid type: byte array, expected any valid JSON value — carry "
@@ -651,33 +632,14 @@ GRAPH_NESTED_FAR_PAST_THE_MAXIMUM_REFUSED_IN_ITS_OWN_PROCESS = f"""
         runtime.shutdown()
 """
 
-CONFIG_HOLDING_ITSELF_REFUSED_BY_ADD_IN_ITS_OWN_PROCESS = f"""
-    import streamlib
-    from streamlib import DisplayWindow
-
-    config_holding_itself = {{"title": "add"}}
-    config_holding_itself["itself"] = config_holding_itself
-    runtime = streamlib.Runtime()
-    try:
-        runtime.add(DisplayWindow, config=config_holding_itself)
-    except ValueError as refusal:
-        assert {NESTED_PAST_THE_MAXIMUM!r} in str(refusal), refusal
-        assert "holds itself" in str(refusal), refusal
-    else:
-        raise AssertionError("add accepted a config holding itself")
-    finally:
-        runtime.shutdown()
-"""
-
 
 @pytest.mark.parametrize(
     "script",
     [
         GRAPH_HOLDING_ITSELF_REFUSED_IN_ITS_OWN_PROCESS,
         GRAPH_NESTED_FAR_PAST_THE_MAXIMUM_REFUSED_IN_ITS_OWN_PROCESS,
-        CONFIG_HOLDING_ITSELF_REFUSED_BY_ADD_IN_ITS_OWN_PROCESS,
     ],
-    ids=["load-graph-holding-itself", "load-graph-nested-100000-deep", "add-config-holding-itself"],
+    ids=["load-graph-holding-itself", "load-graph-nested-100000-deep"],
 )
 def test_a_container_holding_itself_or_nested_past_the_maximum_is_refused_rather_than_crashing(
     script: str,
@@ -818,8 +780,7 @@ def test_run_after_a_refused_load_refuses_naming_it_and_never_starts(
 
     assert str(load_refused.value) in str(run_refusal)
     assert "construct a new Runtime and load a corrected graph" in str(run_refusal)
-    added_after_the_refused_run = runtime.add(TestPatternSource, display_name="still-building")
-    assert added_after_the_refused_run.display_name == "still-building"
+    assert processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime) == []
 
 
 def test_run_after_a_refused_second_load_refuses_too(runtime: streamlib.Runtime):

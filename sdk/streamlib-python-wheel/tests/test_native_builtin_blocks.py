@@ -39,18 +39,6 @@ def test_the_marker_class_cannot_be_instantiated():
         TestPatternSource()
 
 
-def test_an_undecorated_class_is_still_rejected_by_add():
-    class NotAProcessor:
-        pass
-
-    runtime = streamlib.Runtime()
-    try:
-        with pytest.raises(RuntimeError, match="not a processor"):
-            runtime.add(NotAProcessor)
-    finally:
-        runtime.shutdown()
-
-
 # ---- VideoFrame cast (no GPU) ----------------------------------------------
 
 
