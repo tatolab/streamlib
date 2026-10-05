@@ -29,7 +29,7 @@ blocks were settled by `/align` on 2026-10-01 (PR #2570): the router over the so
 **Scale gate — this skill, plus an ADR (`docs/decisions/local-api.md`, already written).** The
 Python API's public contract moves (`Runtime.host_control_plane` loses `bind_host` and
 `bind_port`; the CLI loses `--host`, `--port`, `--url` and gains `mcp`); the wire moves (the mesh
-description loses a field; the MCP revision changes); the control transport moves.
+description loses a field — the mesh is gone, #2643, #2645; the MCP revision changes); the control transport moves.
 
 **Precondition.** Every entry this delta builds is DECIDED: §Control plane & observability
 `ARCHITECTURE.md:4438-4442` (auth: whoever can open the socket), `:4443-4451` (reachable only on
@@ -161,7 +161,7 @@ against.
 
 ## MODIFIED: §Networking `:3528-3545`, `:3889-3910` — the announcement
 
-The mesh is gone (#2643, #2645), and this section with it has nothing left to edit.
+The mesh is gone (#2643, #2645), so this section has nothing left to edit.
 
 - The description drops `control_plane_urls`; so do `graph.mesh.peers[]`, the observe-only
   session, `_engine.pyi:2270` and the `nodes` peers table (`RUNTIME_NAME HOST ENGINE_VERSION`).
@@ -178,8 +178,8 @@ The mesh is gone (#2643, #2645), and this section with it has nothing left to ed
   `--local-api-socket <path>` where they take `--control-plane-port`, `CONTROL_PORT`,
   `CONTROL_PLANE_URL` or `http://127.0.0.1:$PORT` today; the e2e scripts curl with
   `--unix-socket`. Engine: the two rigs, `runtime/streamlib-engine/tests/fixtures/` (six Python
-  nodes, nine scripts). Packages: `packages/streamlib-moq/tests/live/`,
-  `packages/streamlib-webrtc/tests/live/` — the gate does not search them.
+  nodes, nine scripts). Packages: `packages/streamlib-webrtc/tests/live/` — the gate does not
+  search it.
 - **Tests pinned to TCP** move to the socket: `free_port` / `launch_node`
   (`test_cli_launch.py:110`, `:238-283`), `test_the_control_plane_binds_every_interface_by_default`
   (`test_cli.py:413`), `StubControlPlane` (`test_cli_observation_verbs.py:90-180`, an `AF_UNIX`
@@ -236,8 +236,8 @@ ship gate runs, since the gate searches `.claude/`.
 Derived 2026-10-01; milestone #60, *Local API*. S1 split expand–migrate–contract so CI stays green
 while the fixtures move.
 
-1. #2578 — a runtime stops announcing control-plane URLs on the mesh (S2) — independent; carries
-   the six announcement bullets.
+1. #2578 — a runtime stops announcing control-plane URLs on the mesh (S2) — closed not planned:
+   the mesh is gone (#2643, #2645), and the six announcement bullets with it.
 2. #2572 — the runtime speaks MCP 2026-07-28 and nothing earlier (S3) — independent; carries
    `2025-06-18`, `initialize_result`, `notifications/initialized`.
 3. #2573 — the local API is served on a user-only socket, and the CLI talks through it (S1

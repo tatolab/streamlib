@@ -203,6 +203,7 @@ one, with no change to the graph, the loader or `graph`.
 - **`NodeOutputPortReference`, `NodeInputPortReference`, `RemoteNodeOutputPortReference`,
   `RemoteNodeInputPortReference`** replace the four `Processor…PortReference` classes; a local
   reference carries the node's name and the port, a remote one the three-part address of today.
+  The remote references are gone with the mesh (#2643, #2645).
 - The engine's Rust identifiers, the wire between runtime process and processor interpreter, and
   the processor registry keep the word "processor", as the glossary states until the rename.
 
@@ -223,11 +224,12 @@ one, with no change to the graph, the loader or `graph`.
   `name` is the node's resolved name and the key links use; a remote end is today's three-part
   address under the keys `graph` already renders for one. `validate()` keeps its checks — names
   unique, every link end present or remote, every `type` registered — and gains: every exposed
-  port names a node and an output it has.
+  port names a node and an output it has. A remote end is gone with the mesh (#2643, #2645): a
+  loaded end naming a runtime is refused by name.
 - **`graph` renders exactly these keys plus the live ones**: `stream` at the top (absent until a
   load), `exposed` always; a node carries `name` where it carried `display_name`, beside `id`,
   `type`, `config`, `config_checksum`, `ports`, `components`; a link's local end is `{node,
-  port}` with `processor_id` beside it, a remote end unchanged; `links[].id`, `state`, counters,
+  port}` with `processor_id` beside it, a remote end gone with the mesh; `links[].id`, `state`, counters,
   and `extensions` as today, the mesh being gone (#2643, #2645). A loader reads the spec keys and ignores the rest, so
   `streamlib graph`'s output is a loadable graph; `save_graph_snapshot` and its path form are
   deleted, since the render is the export. The OpenAPI schema, the generated schemas, the MCP
@@ -258,7 +260,7 @@ control vocabulary in this change.
 | Not here | Because | Lands with |
 |---|---|---|
 | The `<machine>/` address segment (`:3969-3985`); the Zenoh key is gone with the mesh (#2643, #2645) | With one engine per `run` process there is no machine to name but today's runtime name; adding the segment now would refuse the second stream on a machine | the change that makes one runtime host several streams |
-| Machine and stream names in the same entry | the node-name cast and `-2` are built here (runtime-hosting decision 3) | runtime hosting, with remote addresses |
+| Machine and stream names in the same entry | one engine per `run` process has no machine or stream to name; the node-name cast and `-2` are built here (runtime-hosting decision 3) | runtime hosting, with remote addresses |
 | `graph` returning several streams; `load`, `unload`, `streams`, `expose` as verbs; MCP argument spellings (`display_name` and friends) | the local API OPEN at approval | the verbs: runtime hosting, step 4 (decided 2026-10-01); the MCP argument spellings: the local-API change did not take them — to `/align`, 2026-10-02 (#2565's comment) |
 | The stream's environment (venv path) in the graph; needs derived from nodes | OPEN `:1334-1341` at approval | the environment: the package split (#2590), recorded beside the graph, never in it (decided 2026-10-02); needs: resources, step 6 |
 | Persisting loaded graphs in a state directory; re-load on restart | OPEN `:114-125` at approval; the one-engine entry's state directory | runtime hosting, step 4 (decided 2026-10-01) |
@@ -266,8 +268,8 @@ control vocabulary in this change.
 | `ProcessorLinkDataAccess`, `ProcessorOwnedWindow`, `ProcessorOwnedWindowEvents`, `ProcessorOutputTextureRing` | per-node capability classes, not the stream-building surface | the namespace rename, which re-spells every public name at once — no change owns these names yet: the package split moves import paths only; to `/align`, 2026-10-02 |
 
 The ripout change's inventory table (`one-runtime-per-machine-ripout.md:236-246`, a file that became
-`local-api.md` on 2026-10-01) mapped the three-part address to this change — `PortAddress`, the
-mesh being gone (#2643, #2645); it moves to the hosting change for the reason above.
+`local-api.md` on 2026-10-01) mapped the three-part address (`PortAddress` in the tree) to this
+change; it moves to the hosting change for the reason above.
 
 ## Assumptions stated, not asked
 

@@ -28,8 +28,7 @@ here with decisions 1 to 5, all resolved by the owner.
 `:4027-4031` (own configuration — router mode is step 8's), `:4061-4087` (address, collisions),
 `:4088-4095` (exposure); §Distribution `:4225-4235`; §Control plane `:4415-4431`, `:4575-4583`,
 `:4596-4601`. Not built against: needs `:1417`, resources `:1437`, accelerators optional `:1891`
-(the GPU still initialises at start), packs `:584`, discovery `:4096`, the stream map `:4113`,
-URLs `:4125`, the relay role, the control client. **Sequencing:** after #2592, #2593 and #2566.
+(the GPU still initialises at start), packs `:584`, URLs `:4125`, the control client. **Sequencing:** after #2592, #2593 and #2566.
 
 **Verified against the tree 2026-10-02 (HEAD 65e6c53a7)**, three sweeps; `E` =
 `runtime/streamlib-engine/src`, `A` = `runtime/streamlib-api-server`.
@@ -122,7 +121,7 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 
 - **`Runner` is the engine.** `tatolabd` builds one; the library type stays constructible so the
   runtime suite runs many per test binary. It makes the `GpuContext` once (so
-  `VULKAN_DEVICE_FOR_IMPORT` names the only device), the iceoryx2 node, one tokio runtime, the
+  `VULKAN_DEVICE_FOR_IMPORT` names the only device), the iceoryx2 node, one tokio runtime,
   one surface service keyed by stream, signal ownership, and hosts the local API
   itself — the `ApiServer` processor and `control_plane_host.rs` go.
 - **`LoadedStreamInThisRuntime`**, keyed by stream name: its `Compiler`, `RuntimeStatus`,
@@ -196,11 +195,10 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 
 > **The mesh is gone (#2643, #2645)**, removed ahead of this change by the moq-on-the-tailnet
 > pivot (`docs/decisions/moq-on-the-tailnet.md`), and this change is built minus its mesh parts.
-> Cut wherever this file names them: `tatolabd`'s Zenoh session and joining the mesh; the mesh
-> settings in `machine.json`, the `set --mesh-*` flags and `STREAMLIB_MESH_*`; `graph`'s `mesh`,
-> `peers[]`, `egress_ports[]` and every link-request key; `remote_input`; one ingress per machine
-> for a remote port; the mesh fixtures; the Zenoh token and keys, the machine id on the token, the
-> claim and the `-2` suffix. A machine's name is its tailnet name, read from Tailscale's status,
+> Cut wherever this file still names them: the mesh keys and the announcement (the scale gate);
+> the mesh files the recon lists; the offer and link-request answers and `*ThisRuntimesGraph`
+> (§Processor model, the inventory); §Networking's machine-name claim (`:3565-3592`, claiming)
+> and its `<name>-2` suffix. A machine's name is its tailnet name, read from Tailscale's status,
 > else the hostname, cast. An address naming another machine links nothing until the sharing step.
 
 - **The builder.** `stream.remote_output(address)` takes the address
@@ -240,8 +238,9 @@ apps/tatolab-macos/                           Tatolab.app, a menu-bar app carryi
 ## MODIFIED: in-flight change files
 
 - package-split-and-lend: `tatolabd` finds the lend at `../lib/tatolab/lend` or, inside the
-  bundle, through the layout above. stream-graph: the builder's remote references take an address
-  string; its names take decision 3's cast and `-2` (re-spelled in that file).
+  bundle, through the layout above. stream-graph: its names take decision 3's cast and `-2`
+  (re-spelled in that file); its builder's remote references are gone with the mesh (#2643,
+  #2645).
 
 ## MODIFIED: records re-spelled at the fold
 
@@ -264,7 +263,7 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 | `tatolabd --stream-graph`; the CLI's compile and spawn; #2592's harness, fixtures and macOS done-proof starting `tatolabd` through `run` | `run_stream`; the harness starts `tatolabd` | S2 |
 | `node_registry.rs`, `nodes`, `--node`, `local-api-<runtime_id>.sock`; `shutdown`; the Quit item | one socket; `set` | S2 |
 | `runtime_name.rs`, `STREAMLIB_RUNTIME_NAME`, `--runtime-name`, the duplicate check | `machine_name.rs`, `machine.json` | S3 |
-| The three-part address type, every `*runtime_name*` key in `graph` and MCP; `remote_output(runtime_name, node, port)` | four parts | S3 |
+| The three-part address type, every `*runtime_name*` key in `graph` and MCP | four parts | S3 |
 | `.claude/` skills naming `nodes`, `--node`, runtime names | one operating-model PR | after S3 |
 
 ## Left to later changes

@@ -185,9 +185,9 @@ ends with a say-back loop, and none of them commits work:
 
 - **Kept unchanged:** the nine live-ops CLI skills (`discover-running-nodes` …
   `teardown-running-node`) — already perfectly shaped (one skill = one CLI verb);
-  `gh-stack`; `local-ci-runner`; `rust-craftsmanship-reviewer`; the domain experts, with
-  `plugin-abi-expert` and `package-source-expert` retiring with their subjects and
-  `polyglot-ipc-expert` re-scoped to helper-process IPC.
+  `gh-stack`; `local-ci-runner`; `rust-craftsmanship-reviewer`; the three domain experts —
+  `gpu-vulkan-expert`, `linux-media-expert`, and `polyglot-ipc-expert`, re-scoped to
+  helper-process IPC.
 - **Consolidated:** `pr-review-gate` + `change-verifier` overlap heavily (both check test
   lock-in, scope, boundaries, naming) and each PR currently runs up to four review
   lenses. Owner review is the bottleneck — one merged `review-pr` lens (plus
@@ -196,7 +196,8 @@ ends with a say-back loop, and none of them commits work:
   runs the pipeline) state opposite primary modes. One is chosen; the other's charter is
   rewritten to match. [NEEDS DECISION — recommend LOOP-RUN primary, handshake fallback,
   matching `verify-live`.]
-- **Retired:** `draft-design` (premise — per-issue design — is forbidden by
+- **Retired:** `plugin-abi-expert` and `package-source-expert`, with their subjects;
+  `draft-design` (premise — per-issue design — is forbidden by
   docs-policy), `file-issue` for planned work, the external `amos-next` protocol
   (already broken in four places against this repo: deleted `.claude/workflows/` refs,
   repealed sweep step, drifted rule quotes, missing feedback files). The amos CLI
@@ -230,7 +231,10 @@ skipping one physically fail, in layers from soft to hard:
    the owner's glob exceptions live in `.claude/rig-brake.json` and its local / user-level
    siblings, edited with `.claude/scripts/rig-brake`) and `worktree-gc` (post-merge
    cleanup). Routing source edits through `/implement` is session-applied doctrine with no
-   enforcement layer; `.claude/hooks/plan-gate.sh` is referenced by nothing.
+   enforcement layer; `.claude/hooks/plan-gate.sh` is referenced by nothing. Rejected: a
+   PreToolUse hook gating source edits on `.claude/state/active-ticket.json` (`plan-gate.sh`)
+   — it prompted on every engine edit and taught sessions to click through (owner,
+   2026-08-15).
 4. **CI backstop**: the PR body must reference a ticket; `review-pr` flags any new public
    trait / module / cross-crate boundary the change proposal doesn't name.
 
@@ -250,15 +254,13 @@ every keystroke under `docs/plan/`:
 ### Rules have a lifecycle
 
 Rules under `.claude/rules/` shrink to **invariants only** (licensing, naming, RHI
-boundary, comments — the plugin-ABI rule retires with the ABI, 2026-08-02). Process prose migrates into skill gates, which are
+boundary, comments). Process prose migrates into skill gates, which are
 testable; a rule that a skill gate now enforces gets deleted via `/propose-rule`. New
 rules enter only through `/propose-rule` — evidence, draft, owner approval, dedicated
 PR — never accreted mid-session because something annoyed an agent once.
 
 ### Mechanical gates
 
-- The deny rules on consumers (landed 2026-07-29) — agents cannot read or edit
-  distributables and examples.
 - `[NEEDS DECISION]` as a hard stop in `/propose-change` and `/implement`.
 - The REMOVED-grep gate in `/ship-change` — scripts under `.claude/scripts/`, not prose.
 - `review-pr` gains one check: any new public trait, module, or cross-crate boundary in
@@ -277,8 +279,7 @@ PR — never accreted mid-session because something annoyed an agent once.
 - Scale gate, decided at entry: bug fix / refactor / test work → **no change artifact at
   all** (the default path); new behavior or changed contract → delta change; anything
   touching the RHI, the IPC wire format, the processor model, or the Python API's
-  public contract → delta + ADR (the plugin-ABI trigger retired 2026-08-02 with the
-  ABI).
+  public contract → delta + ADR.
 
 ## Rollout (MVP-first; each wave usable before the next starts)
 
@@ -304,8 +305,6 @@ PR — never accreted mid-session because something annoyed an agent once.
 3. `verify-live` vs `evidence-verifier` primary mode — recommend session-runs-the-pipeline
    primary (today's "LOOP-RUN" vocabulary gets renamed `self-run`; no relation to the
    retired loop), owner-terminal handshake as fallback.
-4. The two edit-denied docs (`logging-schema.md`, `testing-hardware.md`) — unfreeze into
-   the consolidation, or keep frozen?
-5. Bring the ticket lifecycle in-tree (replace external amos-next protocol with
+4. Bring the ticket lifecycle in-tree (replace external amos-next protocol with
    `/implement`) — recommend yes; it is the single highest-leverage move the inventory
    found.
