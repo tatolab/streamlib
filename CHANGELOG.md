@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.29.0](https://github.com/tatolab/streamlib/compare/v0.28.1...v0.29.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** the MoQ extension wheel, its vendored moq-transport and its example are gone ([#2633](https://github.com/tatolab/streamlib/issues/2633))
+
+### Miscellaneous
+
+* **packages:** the MoQ extension wheel, its vendored moq-transport and its example are gone ([#2633](https://github.com/tatolab/streamlib/issues/2633)) ([a361cf0](https://github.com/tatolab/streamlib/commit/a361cf017457d5a8bc8cb957244acda6276e4e52))
+
 ## [0.28.1](https://github.com/tatolab/streamlib/compare/v0.28.0...v0.28.1) (2026-10-04)
 
 
