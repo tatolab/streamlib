@@ -1,4 +1,4 @@
 {
-  ".": "0.29.0",
-  "packages/streamlib-webrtc": "0.5.0"
+  ".": "0.30.0",
+  "packages/streamlib-webrtc": "0.6.0"
 }
