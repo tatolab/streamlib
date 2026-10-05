@@ -495,10 +495,6 @@ def launch_until_the_entry_stops_it(app_directory: Path) -> int:
         bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
         bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
         runtime_name=None,
-        mesh_name=None,
-        mesh_peer_endpoints=None,
-        mesh_listen_endpoints=None,
-        mesh_multicast_discovery=None,
     )
 
 

@@ -40,7 +40,7 @@ class NodeRegistryEntry(NamedTuple):
 
     schema_version: int
     runtime_id: str
-    #: The name the runtime is addressed by on the runtime mesh — stable across
+    #: The runtime's name — the first chunk of its tap channels, stable across
     #: runs of one app, and what `--node` resolves alongside the id.
     runtime_name: str
     control_url: str

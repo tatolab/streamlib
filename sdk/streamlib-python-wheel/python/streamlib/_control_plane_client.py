@@ -184,9 +184,9 @@ def _sole_node_matching(
 ) -> str:
     """The control URL of the one live node `--node` names, or an error.
 
-    Names are matched before ids because a name is what an app chose; a name is
-    unique on a mesh but nothing stops two runtimes here from having been given
-    the same one, so a tie names both rather than picking the first.
+    Names are matched before ids because a name is what an app chose. Nothing
+    makes a name unique, so a tie names every match and refuses rather than
+    picking one.
     """
     for matching in (
         [node for node in nodes if node.runtime_name == requested_node],

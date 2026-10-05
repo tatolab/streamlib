@@ -80,9 +80,6 @@ __all__ = [
     "feed_test_harness_bag",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log_event",
-    "_ObservedRuntimeMesh",
-    "_ObservedRuntimeMeshPeer",
-    "_observe_the_runtime_mesh",
     "monotonic_now_ns",
     "open_test_harness_channel",
     "processor_class_import_paths_in_this_processes_catalog",
@@ -545,25 +542,15 @@ class Runtime:
         cls,
         *,
         runtime_name: str | None = None,
-        mesh_name: str | None = None,
-        mesh_peer_endpoints: list[str] | None = None,
-        mesh_listen_endpoints: list[str] | None = None,
-        mesh_multicast_discovery: bool | None = None,
     ) -> Self:
-        """Build the engine, named `runtime_name` on the `mesh_name` mesh.
+        """Build the engine, named `runtime_name`.
 
-        The engine opens one Zenoh session here, beside iceoryx2 — it announces
-        itself under its mesh name, finds the other runtimes with nothing
-        configured, and closes the session when the runtime stops. A session
-        that cannot open leaves the runtime local-only: it says so once and runs
-        on, and `graph`'s `mesh` key says which it is. With discovery on this
-        costs about half a second, Zenoh's own scouting delay.
-
-        The name belongs to the runtime, is stable across runs of one app, and
-        is one chunk of a port's address `<runtime name>/<display
-        name>/<port>` — so it is non-empty, carries none of `/ * $ # ?`, and
-        does not begin with `@`; spaces and unicode are fine. A name breaking
-        that is refused here, naming the character.
+        The name is the first chunk of every tap channel this runtime serves,
+        `<runtime name>/<display name>/<port>`, and the name on its registry
+        row that `--node` matches. It belongs to the runtime and is stable
+        across runs of one app. It is non-empty, carries none of `/ * $ # ?`,
+        and does not begin with `@`; spaces and unicode are fine. A name
+        breaking that is refused here, naming the character.
 
         Left out, the engine reads `STREAMLIB_RUNTIME_NAME`, and failing that
         names the runtime `<hostname>-<app directory name>-<id>`, where the id
@@ -571,44 +558,11 @@ class Runtime:
         one machine differ and every run of one checkout matches. `streamlib
         run` and `dev` pass their `--runtime-name` through to here.
 
-        A name is unique within a mesh, and never auto-suffixed: it is the
-        first part of the address its ports are named by, so it may not depend
-        on start order. A name another live runtime already holds is refused here,
-        naming that runtime's host and pid and both ways out — stop it, or start
-        this one under another name. `streamlib nodes --mesh-name <mesh>` lists
-        it wherever it is running: the mesh table carries every runtime on the
-        mesh, on any machine, control plane or not.
-
-        The one exception is a runtime on this very machine whose process is
-        gone, so restarting an app that was killed is never refused. "This
-        machine" means the same kernel boot and the same process-id namespace,
-        so a runtime in a container does not count as being on its host's
-        machine and neither takes the other's name over. Only Linux can tell
-        one host from another at all: on macOS a killed app's name stays
-        refused until its announcement leaves the mesh.
-
-        Two runtimes that start at the same instant, before either can see the
-        other, both run and each says so once: `graph` then lists both.
-
-        `mesh_name` is one chunk of the channel-name grammar — non-empty,
-        beginning with a lowercase letter and otherwise carrying only lowercase
-        letters, digits, `-` and `_`. Left out, the engine reads
-        `STREAMLIB_MESH_NAME`, and failing that joins the `default` mesh; two
-        groups sharing one network separate by naming different meshes.
-
-        `mesh_peer_endpoints` names runtimes to dial for a network multicast
-        does not cross, and `mesh_listen_endpoints` replaces the engine's own
-        ephemeral QUIC-over-UDP listener. Each is a Zenoh locator,
-        `udp/<host>:<port>?rel=1` or `tcp/<host>:<port>`; anything else — a
-        transport this build does not carry, or plain best-effort `udp/` — is
-        refused here by name. An endpoint nothing answers on never fails the
-        runtime. Left out, the engine reads `STREAMLIB_MESH_PEER_ENDPOINTS` and
-        `STREAMLIB_MESH_LISTEN_ENDPOINTS`, each a comma-separated list.
-
-        `mesh_multicast_discovery` turns peer discovery by multicast off. Left
-        out, the engine reads `STREAMLIB_MESH_MULTICAST_DISCOVERY` (`0` or `1`)
-        and otherwise discovers. A runtime with discovery off and no peers is
-        isolated, not local-only: its session is open and reaches nobody.
+        A name is never auto-suffixed: it is the first chunk of the channels
+        its ports are tapped on, so it may not depend on start order. Nothing
+        refuses a name another runtime already holds — two runs from one
+        directory both start — and `--node` refuses a name two live runtimes
+        hold, naming both.
         """
     def add(
         self,
@@ -2238,88 +2192,6 @@ def engine_build_id_compiled_into_this_extension() -> str:
     A helper process compares it with the id its parent handed it in
     `STREAMLIB_ENGINE_BUILD_ID` and refuses to start on any difference, so two
     builds of one commit are still two ids.
-    """
-
-@final
-class _ObservedRuntimeMeshPeer:
-    """One runtime seen on a mesh by `_observe_the_runtime_mesh`.
-
-    `runtime_name` is always known — it is on the runtime's own announcement.
-    The other four are what the runtime answered when asked what it is, so each
-    is `None` until it does; a peer that did not answer in time renders its name
-    alone rather than a guess.
-    """
-
-    @property
-    def runtime_name(self) -> str: ...
-    @property
-    def runtime_id(self) -> str | None: ...
-    @property
-    def host_name(self) -> str | None: ...
-    @property
-    def engine_version(self) -> str | None: ...
-    @property
-    def control_plane_urls(self) -> list[str] | None:
-        """Where another machine could reach this runtime's control plane.
-
-        Empty when it hosts none: on the mesh, and not drivable. That is a
-        different answer from `None`, which means the runtime has not said yet.
-        """
-
-    def __repr__(self) -> str: ...
-
-@final
-class _ObservedRuntimeMesh:
-    """One look at one mesh, taken from outside it."""
-
-    @property
-    def mesh_name(self) -> str:
-        """The mesh that was looked at, resolved — so a caller that named none
-        can still say which one it read."""
-
-    @property
-    def peers(self) -> list[_ObservedRuntimeMeshPeer]:
-        """Every runtime announced on it, sorted by name."""
-
-    def __repr__(self) -> str: ...
-
-def _observe_the_runtime_mesh(
-    *,
-    mesh_name: str | None = None,
-    mesh_peer_endpoints: list[str] | None = None,
-    mesh_multicast_discovery: bool | None = None,
-) -> _ObservedRuntimeMesh:
-    """Look at a runtime mesh without joining it — what `streamlib nodes` reads.
-
-    Internal, and `_`-prefixed to say so. An app that wants its own runtime's
-    mesh peers reads `graph`, which answers from the session that runtime
-    already holds; this is for a process that holds no runtime at all.
-
-    The session it opens **announces nothing** — no liveliness token, no
-    description queryable, and no listener — so looking at a mesh takes no
-    runtime name, is refused by no duplicate-name check, and is invisible to
-    every runtime on it.
-
-    The three values resolve exactly as `Runtime()`'s do, `STREAMLIB_MESH_NAME`,
-    `STREAMLIB_MESH_PEER_ENDPOINTS` and `STREAMLIB_MESH_MULTICAST_DISCOVERY`
-    included. `runtime_name` and `mesh_listen_endpoints` have no counterpart
-    here: an observer is addressed by nobody.
-
-    Costs about a second and a half with discovery on: the session scouts for a
-    fixed window before it asks, because `zenoh::open` returns as soon as the
-    peers it has already heard from have answered, and a runtime whose hello
-    arrives after that is one this would never report. With discovery off and
-    no endpoint named it is near-instant; each `mesh_peer_endpoints` entry that
-    answers nothing at all costs up to two seconds more, in turn. It runs with
-    the GIL released throughout.
-
-    A look is a snapshot of an eventually-consistent discovery, not a census:
-    on a busy multicast network a runtime still connecting is missed, and the
-    next look finds it.
-
-    Raises `ValueError` for a value it will not take (a `quic/` endpoint, a
-    mesh name outside the grammar) and `RuntimeError` when the session will not
-    open at all.
     """
 
 def monotonic_now_ns() -> int:

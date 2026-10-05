@@ -34,11 +34,6 @@ import pytest
 # compiled into those two dylibs — MoltenVK, SPIRV-Cross, cereal, Vulkan-Loader
 # and the loader's cJSON — have their notices checked in under
 # `vendor/macos-bundled-vulkan-driver-notices/` and appended the same way.
-#
-# Eclipse zenoh is the one entry that *is* an ordinary Cargo dependency: its
-# crates ship no `LICENSE` and no `NOTICE`, and `cargo about` collects no NOTICE
-# file from any crate, so the Apache-2.0 §4(d) obligation is met by the same
-# appending mechanism.
 NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "shaderc",
     "glslang",
@@ -48,7 +43,6 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "VulkanMemoryAllocator",
     "Vulkan-Headers",
     "PipeWire",
-    "Eclipse zenoh",
     "MoltenVK",
     "SPIRV-Cross",
     "cereal",
@@ -58,10 +52,10 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
 
 # A thin sample of the Rust closure, one per link shape: the same-host IPC
 # transport, the binding layer this wheel is built on, the GLSL compiler that
-# pulled the vendored C++ in, and the runtime mesh's own transport. Enough to
+# pulled the vendored C++ in, and the control plane's HTTP server. Enough to
 # catch a notices file generated against the wrong manifest; not so many that a
 # dependency swap fails an unrelated test.
-SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "shaderc", "zenoh")
+SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "shaderc", "axum")
 
 NOTICES_LICENSE_FILE_NAME = "THIRD-PARTY-NOTICES.md"
 BUSL_LICENSE_FILE_NAME = "LICENSE"
