@@ -97,7 +97,7 @@ where
             end.node, end.port
         )));
     }
-    Ok(LinkPortRefOutput::OnThisRuntime {
+    Ok(LinkPortRefOutput {
         node: end.node,
         port: end.port,
     })
@@ -156,16 +156,16 @@ impl GraphSnapshot {
                 (&link.target, PortDirection::Input),
             ] {
                 let Some(node) =
-                    nodes_by_cast_name.get(cast_exposed_name_to_url_safe(end.node())?.as_ref())
+                    nodes_by_cast_name.get(cast_exposed_name_to_url_safe(&end.node)?.as_ref())
                 else {
                     return Err(Error::GraphError(format!(
                         "a link names node `{}`, which the graph does not hold. The graph \
                          holds: {}",
-                        end.node(),
+                        &end.node,
                         the_names_the_graph_holds()
                     )));
                 };
-                refuse_a_port_the_node_does_not_have(end.node(), node, end.port(), direction)?;
+                refuse_a_port_the_node_does_not_have(&end.node, node, &end.port, direction)?;
             }
         }
 
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(graph.nodes[0].config, serde_json::json!({"fps": 30}));
         assert_eq!(
             graph.links[0].source,
-            LinkPortRefOutput::OnThisRuntime {
+            LinkPortRefOutput {
                 node: "camera".into(),
                 port: "video".into()
             }

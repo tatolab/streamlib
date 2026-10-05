@@ -1,12 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A port on another runtime, as a link names it.
+//! A port's address, as `tap` names it.
 //!
-//! `<runtime name>/<node>/<port>` — the one address a port has on the
-//! runtime mesh, and the only way a link reaches out of this runtime. Processor
-//! ids and cuid2 channel names never appear on the mesh, so the middle chunk is
-//! the node's name, which is why renaming a node re-addresses its ports.
+//! `<runtime name>/<node>/<port>`. Processor ids and cuid2 channel names never
+//! appear in it, so the middle chunk is the node's name, which is why renaming
+//! a node re-addresses its ports.
 //!
 //! Each of the three parts is one legal key chunk on its own, checked against
 //! the grammar `core::runtime::mesh_address_chunk` states rather than a second

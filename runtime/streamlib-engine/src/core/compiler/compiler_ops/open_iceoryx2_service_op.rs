@@ -73,8 +73,7 @@ pub fn open_iceoryx2_service(
         (link.from_port().clone(), link.to_port().clone())
     };
 
-    // Refused before any service is opened, so nothing is left half-wired.
-    let source_proc_id = the_source_processor_on_this_runtime(&from_port)?.clone();
+    let source_proc_id = from_port.processor_id().clone();
     let source_port = from_port.port_name();
     let channel_service_name = channel_service_name(&from_port)?;
     let dest_proc_id = to_port.processor_id().clone();
@@ -291,10 +290,10 @@ pub fn open_iceoryx2_service(
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
 
-    let Some((source_on_this_runtime, source_port, dest_proc_id, dest_port)) =
+    let Some((source_proc_id, source_port, dest_proc_id, dest_port)) =
         graph.traversal_mut().e(link_id).first().map(|link| {
             (
-                link.from_port().processor_id_on_this_runtime().cloned(),
+                link.from_port().processor_id().clone(),
                 link.from_port().port_name().to_string(),
                 link.to_port().processor_id().clone(),
                 link.to_port().port_name().to_string(),
@@ -309,29 +308,25 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
     };
 
     // Source side: drop this link's destination notifier (and the channel
-    // publisher when this was the source port's last outbound link). A source
-    // on another runtime was never wired, so it has none of that here.
-    if let Some(source_proc_id) = source_on_this_runtime.as_ref() {
-        if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, source_proc_id) {
-            unwire_out_of_process_endpoint(
-                &source_link_wiring,
-                crate::core::PortDirection::Output,
-                source_proc_id,
-                &source_port,
-                link_id,
+    // publisher when this was the source port's last outbound link).
+    if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, &source_proc_id) {
+        unwire_out_of_process_endpoint(
+            &source_link_wiring,
+            crate::core::PortDirection::Output,
+            &source_proc_id,
+            &source_port,
+            link_id,
+        );
+    } else if let Some(source_processor) = processor_to_reclaim_from(graph, &source_proc_id) {
+        let source_guard = source_processor.lock();
+        if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
+            let channel_released = output_inner.remove_channel_link(&source_port, link_id.as_str());
+            tracing::debug!(
+                source = %source_proc_id,
+                port = %source_port,
+                channel_released,
+                "Reclaimed source-side egress for disconnected link"
             );
-        } else if let Some(source_processor) = processor_to_reclaim_from(graph, source_proc_id) {
-            let source_guard = source_processor.lock();
-            if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
-                let channel_released =
-                    output_inner.remove_channel_link(&source_port, link_id.as_str());
-                tracing::debug!(
-                    source = %source_proc_id,
-                    port = %source_port,
-                    channel_released,
-                    "Reclaimed source-side egress for disconnected link"
-                );
-            }
         }
     }
 
@@ -371,17 +366,6 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 // Internal helpers
 // ============================================================================
 
-/// The processor a link's source port is on, refusing a port on another
-/// runtime by name: this runtime receives nothing from another runtime.
-fn the_source_processor_on_this_runtime(source: &OutputLinkPortRef) -> Result<&ProcessorUniqueId> {
-    source.processor_id_on_this_runtime().ok_or_else(|| {
-        Error::InvalidLink(format!(
-            "'{source}' is a port on another runtime, and this runtime receives nothing from \
-             another runtime"
-        ))
-    })
-}
-
 /// The channel service name a link's bags ride on:
 /// `{source_processor}/{source_output_port}`
 /// ([`crate::iceoryx2::source_channel_name`], the single source of truth for
@@ -389,7 +373,7 @@ fn the_source_processor_on_this_runtime(source: &OutputLinkPortRef) -> Result<&P
 /// grammar-illegal port name surfaces as a named [`Error::Configuration`] here
 /// rather than an opaque iceoryx2 `Invalid service name` deep in the FFI.
 pub(crate) fn channel_service_name(source: &OutputLinkPortRef) -> Result<String> {
-    let processor_id = the_source_processor_on_this_runtime(source)?;
+    let processor_id = source.processor_id();
     let port_name = source.port_name();
     crate::iceoryx2::source_channel_name(processor_id.as_str(), port_name)
         .map(|name| name.into_string())
@@ -412,10 +396,6 @@ fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
 
 /// Every `connect()` link carrying from `source` — the links of the one channel
 /// that source publishes to, since a channel keys on its source.
-///
-/// Walks every link rather than the source node's out-edges, because a source
-/// on another runtime has no node here to walk out of and its links must still
-/// be counted.
 fn every_link_carrying_from<'a>(
     graph: &'a Graph,
     source: &'a OutputLinkPortRef,
@@ -4107,12 +4087,7 @@ mod tests {
             &format!("bench-cam-a1b2/{source_node_name}/out1"),
         )
         .expect("a wired port on this runtime resolves by its address");
-        assert_eq!(
-            resolved
-                .processor_id_on_this_runtime()
-                .map(|id| id.as_str()),
-            Some(src_id.as_str())
-        );
+        assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
         assert_eq!(resolved.port_name(), "out1");
 
         let its_channel = crate::iceoryx2::source_channel_name(&src_id, "out1")
@@ -4248,67 +4223,5 @@ mod tests {
             entry["stamp_clock"],
             serde_json::json!(crate::iceoryx2::THIS_MACHINE_STAMP_CLOCK_TOKEN)
         );
-    }
-
-    mod a_link_whose_source_is_on_another_runtime {
-        use super::*;
-
-        /// This runtime receives nothing from another runtime, so wiring a link
-        /// whose source is on one is refused by name and opens nothing.
-        #[test]
-        fn wiring_it_is_refused_by_name_and_opens_nothing() {
-            use crate::core::test_support::MockInputOnlyProcessor;
-
-            let address = crate::core::graph::MeshPortAddress::new(
-                "bench-cam-refused",
-                "Camera Source 2",
-                "video",
-            )
-            .expect("a legal address");
-            let mut graph = Graph::new();
-            let dest_id = add_mock_input_only(&mut graph);
-            let (_, _, dest_input) =
-                attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
-            let link_id = graph
-                .traversal_mut()
-                .add_link_from_another_runtime(
-                    address.clone(),
-                    InputLinkPortRef::new(&dest_id, "in1"),
-                )
-                .first()
-                .expect("the link is kept")
-                .id
-                .clone();
-
-            let refused =
-                open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
-                    .expect_err("a link from another runtime must not wire");
-
-            assert!(
-                matches!(refused, Error::InvalidLink(_)),
-                "refused as an invalid link, got {refused:?}"
-            );
-            assert!(
-                refused.to_string().contains(&address.to_string()),
-                "the refusal names the port it will not receive from: {refused}"
-            );
-            assert!(
-                dest_input
-                    .expect("the mock destination has input mailboxes")
-                    .inbound_link_names("in1")
-                    .is_empty(),
-                "the destination subscribed to nothing"
-            );
-            assert!(
-                graph
-                    .traversal()
-                    .e(&link_id)
-                    .first()
-                    .expect("the link is still in the graph")
-                    .get::<Iceoryx2ServicesHeldOpenForLinkComponent>()
-                    .is_none(),
-                "the link holds no service open"
-            );
-        }
     }
 }

@@ -45,9 +45,6 @@ from ._engine import ProcessorLinkDataAccess as ProcessorLinkDataAccess
 from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReference
 from ._engine import ProcessorOwnedWindow as ProcessorOwnedWindow
 from ._engine import ProcessorOwnedWindowEvents as ProcessorOwnedWindowEvents
-from ._engine import (
-    RemoteProcessorOutputPortReference as RemoteProcessorOutputPortReference,
-)
 from ._engine import CameraSource as CameraSource
 from ._engine import DisplayWindow as DisplayWindow
 from ._engine import H264Decoder as H264Decoder
@@ -84,9 +81,6 @@ from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
 )
 from ._stream_graph_builder import NodeReference as NodeReference
-from ._stream_graph_builder import (
-    RemoteNodeOutputPortReference as RemoteNodeOutputPortReference,
-)
 from ._stream_graph_builder import Stream as Stream
 from ._stream_graph_builder import compile_stream_to_graph as compile_stream_to_graph
 from ._stream_graph_builder import stream as stream
@@ -172,8 +166,6 @@ __all__ = [
     "ProcessorOutputTextureRing",
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
-    "RemoteNodeOutputPortReference",
-    "RemoteProcessorOutputPortReference",
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",

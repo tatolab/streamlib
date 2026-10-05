@@ -48,7 +48,6 @@ __all__ = [
     "ProcessorOwnedWindowEvents",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
-    "RemoteProcessorOutputPortReference",
     "CameraSource",
     "CapabilityExtensionHost",
     "DisplayWindow",
@@ -634,33 +633,12 @@ class Runtime:
         class's short name, cast, with the next free `-2`, `-3` … appended.
         """
 
-    def remote_processor_output(
-        self, runtime_name: str, display_name: str, port_name: str
-    ) -> RemoteProcessorOutputPortReference:
-        """Name an output port on another runtime, to pull it over the mesh.
-
-        A port on the mesh is addressed `<runtime name>/<node>/<port>` — the
-        node's name, never its id, so renaming a node re-addresses its ports.
-        The node and port names are cast as every name is; a part the mesh
-        cannot carry, or one casting to nothing, raises `ValueError` here
-        rather than at `connect`.
-
-        A `runtime_name` equal to this runtime's own is a local reference,
-        resolved by node name when the link is applied.
-        """
-
     def connect(
         self,
-        source: ProcessorOutputPortReference | RemoteProcessorOutputPortReference,
+        source: ProcessorOutputPortReference,
         destination: ProcessorInputPortReference,
     ) -> None:
-        """Link one processor's output port to another's input port on this runtime.
-
-        The source may name a port on another runtime; the engine chooses the
-        transport from the link's ends and no processor can tell which. A link
-        from another runtime reads `awaiting_remote` in this runtime's `graph`
-        until that runtime is on the mesh and offers the port.
-        """
+        """Link one processor's output port to another's input port on this runtime."""
 
     def load(self, graph: Mapping[str, Any], *, name: str | None = None) -> None:
         """Load a graph into this Runtime before `run()`.
@@ -822,16 +800,6 @@ class ProcessorOutputPortReference:
 @final
 class ProcessorInputPortReference:
     """The consuming end of a link."""
-
-    def __repr__(self) -> str: ...
-
-@final
-class RemoteProcessorOutputPortReference:
-    """The producing end of a link, on another runtime.
-
-    Minted by `Runtime.remote_processor_output`, which is where its address is
-    checked; there is nothing to read off it that `repr` does not show.
-    """
 
     def __repr__(self) -> str: ...
 

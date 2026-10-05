@@ -9,7 +9,7 @@
 
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
-use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress, OutputLinkPortRef};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 
 use crate::python_processor_link_data_access::declared_port_name_the_spelling_names;
 
@@ -101,34 +101,8 @@ impl PythonProcessorInputPortReference {
     }
 }
 
-/// The producing end of a link, on another runtime.
-///
-/// Holds the address the mesh checked at the mint, so `connect` never has to
-/// re-check it and an illegal chunk is refused where the author typed it.
-#[pyclass(
-    name = "RemoteProcessorOutputPortReference",
-    module = "streamlib",
-    frozen
-)]
-pub(crate) struct PythonRemoteProcessorOutputPortReference {
-    pub(crate) address: MeshPortAddress,
-}
-
-#[pymethods]
-impl PythonRemoteProcessorOutputPortReference {
-    fn __repr__(&self) -> String {
-        format!("RemoteProcessorOutputPortReference({})", self.address)
-    }
-}
-
-/// The engine's own reference for whichever end `connect`'s source names: a
-/// port on this runtime, or one on another runtime over the mesh.
-///
-/// Reads straight into `OutputLinkPortRef`, which is already those two shapes,
-/// rather than through a Python-side enum that would shadow it. Hand-written
-/// rather than `#[derive(FromPyObject)]` for the refusal: the derive's names
-/// the Rust variants it tried, which a Python author has no way to act on,
-/// where this names the two spellings that would have worked.
+/// The engine's own reference for the output port `connect`'s source names,
+/// which is always on this runtime.
 pub(crate) fn the_output_link_port_ref_this_source_names(
     source: &Bound<'_, PyAny>,
 ) -> PyResult<OutputLinkPortRef> {
@@ -139,15 +113,9 @@ pub(crate) fn the_output_link_port_ref_this_source_names(
             on_this_runtime.port_name.clone(),
         ));
     }
-    if let Ok(on_another_runtime) = source.cast::<PythonRemoteProcessorOutputPortReference>() {
-        return Ok(OutputLinkPortRef::on_another_runtime(
-            on_another_runtime.borrow().address.clone(),
-        ));
-    }
     Err(PyTypeError::new_err(format!(
-        "connect's source must name an output port: `processor.output(port_name)` for a \
-         port on this runtime, or `runtime.remote_processor_output(runtime_name, \
-         display_name, port_name)` for one on another runtime. Got {}.",
+        "connect's source must name an output port on this runtime: \
+         `processor.output(port_name)`. Got {}.",
         source.get_type()
     )))
 }

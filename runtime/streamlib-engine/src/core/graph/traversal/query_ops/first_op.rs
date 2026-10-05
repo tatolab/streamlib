@@ -5,8 +5,6 @@ use crate::core::graph::{
     Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
 };
 
-use super::super::traversal_source::{link_at, link_at_mut};
-
 impl<'a> ProcessorTraversal<'a> {
     pub fn first(self) -> Option<&'a ProcessorNode> {
         self.ids
@@ -18,8 +16,10 @@ impl<'a> ProcessorTraversal<'a> {
 
 impl<'a> LinkTraversal<'a> {
     pub fn first(self) -> Option<&'a Link> {
-        let at = self.ids.into_iter().next()?;
-        link_at(self.graph, self.links_from_another_runtime, &at)
+        self.ids
+            .into_iter()
+            .next()
+            .and_then(|idx| self.graph.edge_weight(idx))
     }
 }
 
@@ -41,12 +41,16 @@ impl<'a> ProcessorTraversalMut<'a> {
 
 impl<'a> LinkTraversalMut<'a> {
     pub fn first(self) -> Option<&'a Link> {
-        let at = self.ids.into_iter().next()?;
-        link_at(self.graph, self.links_from_another_runtime, &at)
+        self.ids
+            .into_iter()
+            .next()
+            .and_then(|idx| self.graph.edge_weight(idx))
     }
 
     pub fn first_mut(self) -> Option<&'a mut Link> {
-        let at = self.ids.into_iter().next()?;
-        link_at_mut(self.graph, self.links_from_another_runtime, &at)
+        self.ids
+            .into_iter()
+            .next()
+            .and_then(|idx| self.graph.edge_weight_mut(idx))
     }
 }

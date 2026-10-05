@@ -2451,46 +2451,6 @@ mod tests {
         }
     }
 
-    /// A link from another runtime names no machine until a bag crosses it,
-    /// then names whatever machine stamped that bag — the cell the ingress
-    /// writes, read through the binding.
-    #[test]
-    fn a_link_from_another_runtime_answers_whatever_the_mesh_is_carrying_from() {
-        let (_publisher, subscriber) = open_channel_for_one_link("clock-remote/a", 1);
-        let carries_from =
-            Arc::new(crate::core::runtime::mesh::MachineClockARemoteLinkCarriesFrom::default());
-
-        let mailboxes = InputMailboxesInner::new();
-        mailboxes.add_port("tracks", 8, ReadMode::ReadNextInOrder);
-        mailboxes.add_channel_subscriber(
-            "tracks",
-            "L-remote-camera",
-            &InboundLinkName::from("bench-cam-a1b2/Camera Source/video"),
-            TheClockAnInboundLinksStampsAreTakenOn::WhicheverMachineTheMeshIsCarryingFrom(
-                Arc::clone(&carries_from),
-            ),
-            subscriber,
-        );
-        let the_link = InboundLinkName::from("bench-cam-a1b2/Camera Source/video");
-
-        assert_eq!(
-            mailboxes.inbound_link_stamp_clock_identity("tracks", &the_link),
-            WhatIsKnownOfAnInboundLinksStampClock::NothingHasCrossedItYet,
-        );
-
-        let another_machine =
-            crate::core::runtime::mesh::MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
-                "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c",
-            );
-        carries_from.note_the_machine_a_bag_was_stamped_on(another_machine);
-
-        assert_eq!(
-            mailboxes.inbound_link_stamp_clock_identity("tracks", &the_link),
-            WhatIsKnownOfAnInboundLinksStampClock::TheMachine(another_machine),
-            "the binding reads the ingress's cell, so it follows the mesh without being re-wired"
-        );
-    }
-
     /// A name no link on the port carries is a different answer from a link
     /// whose machine is not known: one is a caller's mistake and the other is
     /// something to ask again about.

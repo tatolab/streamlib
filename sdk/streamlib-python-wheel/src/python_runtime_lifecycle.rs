@@ -18,7 +18,7 @@ use pyo3::prelude::*;
 use pyo3::type_object::PyTypeInfo;
 use pyo3::types::{PyDict, PyMapping, PyString};
 use streamlib::engine_internal::core::app_directory::record_the_app_entry_directory_the_language_host_captured;
-use streamlib::sdk::graph::{MeshPortAddress, cast_exposed_name_to_url_safe};
+use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
@@ -28,8 +28,8 @@ use streamlib::sdk::runtime::{
 };
 
 use crate::python_added_processor::{
-    PythonAddedProcessor, PythonRemoteProcessorOutputPortReference,
-    the_input_link_port_ref_this_destination_names, the_output_link_port_ref_this_source_names,
+    PythonAddedProcessor, the_input_link_port_ref_this_destination_names,
+    the_output_link_port_ref_this_source_names,
 };
 use crate::python_bag_conversion::{
     python_object_to_json_value, python_object_to_json_value_refusing_what_json_cannot_carry_as,
@@ -703,26 +703,7 @@ impl PythonRuntimeHandle {
         ))
     }
 
-    /// Name an output port on another runtime, to pull it over the mesh.
-    ///
-    /// The address is checked here rather than at `connect`, so a chunk the
-    /// mesh cannot carry is refused where the author wrote it.
-    fn remote_processor_output(
-        &self,
-        runtime_name: &str,
-        display_name: &str,
-        port_name: &str,
-    ) -> PyResult<PythonRemoteProcessorOutputPortReference> {
-        MeshPortAddress::new(runtime_name, display_name, port_name)
-            .map(|address| PythonRemoteProcessorOutputPortReference { address })
-            .map_err(|not_an_address| PyValueError::new_err(not_an_address.to_string()))
-    }
-
     /// Link one processor's output port to another's input port on this runtime.
-    ///
-    /// The source may be a port on this runtime or one on another runtime; the
-    /// engine chooses the transport from the link's ends, and a source naming
-    /// this runtime's own name is the ordinary local link.
     fn connect(
         &self,
         python: Python<'_>,

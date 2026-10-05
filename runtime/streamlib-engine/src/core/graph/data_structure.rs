@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use crate::core::error::Result;
 
-use super::edges::{Link, LinksFromAnotherRuntime};
+use super::edges::Link;
 use super::nodes::ProcessorNode;
 use petgraph::graph::DiGraph;
 
@@ -35,11 +35,6 @@ pub struct Graph {
     /// The petgraph DiGraph storing processors as nodes and links as edges.
     digraph: DiGraph<ProcessorNode, Link>,
 
-    /// The links carrying from a port on another runtime, which have no local
-    /// node to hang an edge on. Every link traversal but `out_e()` reads them
-    /// beside the digraph's edges.
-    links_from_another_runtime: LinksFromAnotherRuntime,
-
     /// The name of the stream this graph was loaded as, until then `None`.
     loaded_stream_name: Option<String>,
 
@@ -61,7 +56,6 @@ impl Graph {
     pub fn new() -> Self {
         Self {
             digraph: DiGraph::new(),
-            links_from_another_runtime: LinksFromAnotherRuntime::default(),
             loaded_stream_name: None,
             compiled_at: None,
             state: GraphState::Idle,
@@ -74,12 +68,12 @@ impl Graph {
 
     /// Start a traversal on the graph.
     pub fn traversal(&self) -> TraversalSource<'_> {
-        TraversalSource::new(&self.digraph, &self.links_from_another_runtime)
+        TraversalSource::new(&self.digraph)
     }
 
     /// Start a mutable traversal on the graph.
     pub fn traversal_mut(&mut self) -> TraversalSourceMut<'_> {
-        TraversalSourceMut::new(&mut self.digraph, &mut self.links_from_another_runtime)
+        TraversalSourceMut::new(&mut self.digraph)
     }
 
     // =========================================================================
@@ -181,7 +175,6 @@ impl Graph {
                 .digraph
                 .edge_indices()
                 .map(|idx| &self.digraph[idx])
-                .chain(self.links_from_another_runtime.every_link())
                 .map(|link| LinkOutput::of_a_link(link, &node_names))
                 .collect(),
             exposed: self

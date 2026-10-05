@@ -6,8 +6,6 @@ use crate::core::graph::{
 };
 use crate::core::{LinkUniqueId, ProcessorUniqueId};
 
-use super::super::traversal_source::link_at;
-
 impl<'a> ProcessorTraversal<'a> {
     pub fn ids(self) -> Vec<ProcessorUniqueId> {
         self.ids
@@ -25,8 +23,11 @@ impl<'a> LinkTraversal<'a> {
     pub fn ids(self) -> Vec<LinkUniqueId> {
         self.ids
             .iter()
-            .filter_map(|at| link_at(self.graph, self.links_from_another_runtime, at))
-            .map(|link| link.id.clone())
+            .filter_map(|&edge_index| {
+                self.graph
+                    .edge_weight(edge_index)
+                    .map(|link| link.id.clone())
+            })
             .collect()
     }
 }
@@ -48,8 +49,11 @@ impl<'a> LinkTraversalMut<'a> {
     pub fn ids(self) -> Vec<LinkUniqueId> {
         self.ids
             .iter()
-            .filter_map(|at| link_at(self.graph, self.links_from_another_runtime, at))
-            .map(|link| link.id.clone())
+            .filter_map(|&edge_index| {
+                self.graph
+                    .edge_weight(edge_index)
+                    .map(|link| link.id.clone())
+            })
             .collect()
     }
 }

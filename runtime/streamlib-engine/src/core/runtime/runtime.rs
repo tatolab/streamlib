@@ -1224,8 +1224,7 @@ impl Runner {
     /// stream's name recorded on the graph.
     ///
     /// A node name already in the graph is refused rather than suffixed — a
-    /// loaded graph's names are already resolved. A link whose input names
-    /// another runtime is refused by name. Every `type` must already be
+    /// loaded graph's names are already resolved. Every `type` must already be
     /// registered.
     pub fn load_graph_snapshot(
         &self,
@@ -1261,23 +1260,10 @@ impl Runner {
         };
 
         for link in &graph.links {
-            let from = match link.source.mesh_port_address() {
-                Some(address) => OutputLinkPortRef::on_another_runtime(address?),
-                None => {
-                    OutputLinkPortRef::new(processor_id_of(link.source.node())?, link.source.port())
-                }
-            };
-            let to = match link.target.mesh_port_address().transpose()? {
-                Some(address) => InputLinkPortRef::new(
-                    RuntimeOperations::the_node_named(self, address.processor_display_name())?
-                        .processor_id,
-                    address.port_name(),
-                ),
-                None => {
-                    InputLinkPortRef::new(processor_id_of(link.target.node())?, link.target.port())
-                }
-            };
-            self.connect(from, to)?;
+            self.connect(
+                OutputLinkPortRef::new(processor_id_of(&link.source.node)?, &link.source.port),
+                InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port),
+            )?;
         }
 
         let mut exposed_ports_by_processor_id: HashMap<ProcessorUniqueId, Vec<String>> =
@@ -1304,52 +1290,17 @@ impl Runner {
         Ok(())
     }
 
-    /// Refuse, before anything is added, what this runtime's own graph would
-    /// refuse partway through the load: a node name it already holds, and an
-    /// address naming this runtime whose node neither `graph` nor this
-    /// runtime's graph holds. With `validate` run first, a load refused for
-    /// either adds nothing; a link the engine refuses after that still leaves
-    /// the nodes added before it.
+    /// Refuse, before anything is added, a node name this runtime's own graph
+    /// already holds, which it would refuse partway through the load. With
+    /// `validate` run first, a load refused for it adds nothing; a link the
+    /// engine refuses after that still leaves the nodes added before it.
     fn refuse_what_this_runtimes_graph_contradicts(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
     ) -> Result<()> {
-        let this_runtimes_name = self.runtime_mesh.runtime_name();
         self.compiler.scope(|live_graph, _tx| {
             for node in &graph.nodes {
                 live_graph.the_requested_node_name_unless_taken(&node.name)?;
-            }
-            for link in &graph.links {
-                if let Some(address) = link.target.mesh_port_address().transpose()?
-                    && !address.names_the_runtime(this_runtimes_name)
-                {
-                    return Err(Error::InvalidLink(format!(
-                        "the link into {address} names the runtime `{}`, and a link's input is \
-                         on the runtime that loads it",
-                        address.runtime_name()
-                    )));
-                }
-                for end in [&link.source, &link.target] {
-                    let Some(address) = end.mesh_port_address().transpose()? else {
-                        continue;
-                    };
-                    if !address.names_the_runtime(this_runtimes_name) {
-                        continue;
-                    }
-                    let named = address.processor_display_name();
-                    let in_the_loaded_graph = graph.nodes.iter().any(|node| {
-                        crate::core::graph::cast_exposed_name_to_url_safe(&node.name)
-                            .is_ok_and(|cast| cast == named)
-                    });
-                    if !in_the_loaded_graph
-                        && !live_graph.traversal().v_with_node_name(named).exists()
-                    {
-                        return Err(Error::ProcessorNotFound(format!(
-                            "{address} names this runtime, and neither the graph being loaded \
-                             nor this runtime holds a node named `{named}`"
-                        )));
-                    }
-                }
             }
             Ok(())
         })

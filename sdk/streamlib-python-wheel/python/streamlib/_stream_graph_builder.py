@@ -28,7 +28,6 @@ __all__ = [
     "NodeInputPortReference",
     "NodeOutputPortReference",
     "NodeReference",
-    "RemoteNodeOutputPortReference",
     "Stream",
     "compile_stream_to_graph",
     "is_stream_function",
@@ -51,11 +50,6 @@ _NATIVE_MARKER_TYPE_ATTRIBUTE = "type"
 _ENTRY_FILE_MODULE = "__main__"
 # CPython puts this in `__qualname__` for anything defined inside a function.
 _FUNCTION_LOCAL_MARKER = "<locals>"
-
-# A mesh address is `<runtime name>/<node>/<port>`, each part one Zenoh key
-# chunk; the engine's twin is `core/runtime/mesh_address_chunk.rs`.
-_CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN = ("/", "*", "$", "#", "?")
-_CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH = "@"
 
 # The engine reads a config integer as an i64, else a u64
 # (`python_bag_conversion.rs`); a graph carries no wider one.
@@ -205,20 +199,6 @@ class NodeInputPortReference:
 
 
 @dataclass(frozen=True, slots=True)
-class RemoteNodeOutputPortReference:
-    """An output port of a node on another runtime, addressed over the mesh; names cast."""
-
-    runtime_name: str
-    node_name: str
-    port_name: str
-
-    def __post_init__(self) -> None:
-        _refuse_a_runtime_name_the_mesh_cannot_carry(self.runtime_name)
-        object.__setattr__(self, "node_name", _cast_name(self.node_name, "node name"))
-        object.__setattr__(self, "port_name", _cast_name(self.port_name, "port name"))
-
-
-@dataclass(frozen=True, slots=True)
 class NodeReference:
     """A node `Stream.add` recorded, under the cast name links and exposures name it by."""
 
@@ -293,17 +273,14 @@ class Stream:
 
     def connect(
         self,
-        source: NodeOutputPortReference | RemoteNodeOutputPortReference,
+        source: NodeOutputPortReference,
         destination: NodeInputPortReference,
     ) -> None:
         """Record a link from `source` to `destination`."""
-        if not isinstance(
-            source, (NodeOutputPortReference, RemoteNodeOutputPortReference)
-        ):
+        if not isinstance(source, NodeOutputPortReference):
             raise TypeError(
-                f"connect's source must name an output port: `node.output(port_name)` for "
-                f"a node this stream added, or `stream.remote_output(runtime_name, "
-                f"node_name, port_name)` for one on another runtime. Got {source!r}."
+                f"connect's source must name an output port of a node this stream "
+                f"added: `node.output(port_name)`. Got {source!r}."
             )
         if not isinstance(destination, NodeInputPortReference):
             raise TypeError(
@@ -332,12 +309,6 @@ class Stream:
                 f"`{output.node_name}`; an output is exposed once"
             )
         self._exposed_output_ports.append(exposed_output_port)
-
-    def remote_output(
-        self, runtime_name: str, node_name: str, port_name: str
-    ) -> RemoteNodeOutputPortReference:
-        """Name an output port on another runtime, to connect into this stream."""
-        return RemoteNodeOutputPortReference(runtime_name, node_name, port_name)
 
     def _typed_name_unless_taken(self, typed_name: str) -> str:
         cast = _cast_name(typed_name, "node name")
@@ -374,17 +345,8 @@ class Stream:
             )
 
     def _link_end(
-        self,
-        end: NodeOutputPortReference
-        | NodeInputPortReference
-        | RemoteNodeOutputPortReference,
+        self, end: NodeOutputPortReference | NodeInputPortReference
     ) -> dict[str, str]:
-        if isinstance(end, RemoteNodeOutputPortReference):
-            return {
-                "runtime_name": end.runtime_name,
-                "node": end.node_name,
-                "port": end.port_name,
-            }
         self._refuse_a_node_this_stream_does_not_hold(end.node_name)
         return {"node": end.node_name, "port": end.port_name}
 
@@ -508,40 +470,6 @@ def _suggested_module_name(qualname: str) -> str:
         else:
             snake_characters.append(character)
     return "".join(snake_characters) or "nodes"
-
-
-def _refuse_a_runtime_name_the_mesh_cannot_carry(runtime_name: str) -> None:
-    if not isinstance(runtime_name, str):
-        raise TypeError(
-            f"a runtime name is a str; got {runtime_name!r}, of type "
-            f"`{_type_name_as_written(runtime_name)}` — pass the name that runtime runs "
-            f"under as a str; `streamlib nodes` lists them"
-        )
-    reason = _first_reason_this_is_not_one_mesh_address_chunk(runtime_name)
-    if reason is not None:
-        listed = ", ".join(
-            repr(character)
-            for character in _CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN
-        )
-        raise ValueError(
-            f"the runtime name {runtime_name!r} cannot be addressed on the mesh: "
-            f"{reason}. A port on another runtime is addressed <runtime name>/<node>/"
-            f"<port>, so the runtime name is one key chunk: non-empty, containing none "
-            f"of {listed}, and not beginning with "
-            f"{_CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH!r}. Pass the name that "
-            f"runtime runs under — `streamlib nodes` lists them."
-        )
-
-
-def _first_reason_this_is_not_one_mesh_address_chunk(candidate: str) -> str | None:
-    if not candidate:
-        return "it is empty"
-    for character in candidate:
-        if character in _CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN:
-            return f"it contains {character!r}"
-    if candidate.startswith(_CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH):
-        return f"it begins with {_CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH!r}"
-    return None
 
 
 def _config_as_json_object(config: Mapping[str, Any] | None) -> dict[str, Any]:

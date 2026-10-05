@@ -5,15 +5,14 @@ use std::sync::Arc;
 
 use super::Runner;
 use super::RuntimeStatus;
-use super::mesh::RuntimeMeshMembership;
 use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, MeshPortAddress,
-    PendingDeletionComponent, ProcessorUniqueId, StateComponent, node_names_listed_for_a_refusal,
+    GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
+    ProcessorUniqueId, StateComponent, node_names_listed_for_a_refusal,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
@@ -236,26 +235,18 @@ async fn remove_processor_impl(
 /// A link is pure plumbing. Connect inspects no type, compares no type, and
 /// never warns — a mismatch surfaces as a decode failure at the consuming
 /// processor's read.
-///
-/// A source naming a port on another runtime is held in the graph,
-/// `awaiting_remote`, and never wired.
 #[tracing::instrument(
     name = "runtime.connect",
-    skip(compiler, live, runtime_mesh),
+    skip(compiler, live),
     fields(from = %from, to = %to),
 )]
 async fn connect_impl(
     compiler: Arc<Compiler>,
     live: LiveCommitContext,
-    runtime_mesh: Arc<RuntimeMeshMembership>,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
-    // An address naming this runtime's own name is a local reference, resolved
-    // by node name — so an app can spell one of its own ports the way a peer
-    // spells it and get the ordinary local link.
-    let from = resolve_a_source_addressing_this_runtimes_own_port(&compiler, &runtime_mesh, from)?
-        .with_its_port_name_cast()?;
+    let from = from.with_its_port_name_cast()?;
     let to = to.with_its_port_name_cast()?;
 
     PUBSUB.publish(
@@ -266,15 +257,7 @@ async fn connect_impl(
         }),
     );
 
-    let link_id = match from.clone() {
-        OutputLinkPortRef::OnAnotherRuntime(address) => {
-            apply_a_link_from_another_runtime(&compiler, address, to.clone())?
-        }
-        OutputLinkPortRef::OnThisRuntime {
-            processor_id,
-            port_name,
-        } => apply_a_link_from_this_runtime(&compiler, processor_id, port_name, to.clone())?,
-    };
+    let link_id = apply_a_link(&compiler, from.clone(), to.clone())?;
 
     commit_live_graph_change(&compiler, live).await?;
 
@@ -295,34 +278,10 @@ async fn connect_impl(
     Ok(link_id)
 }
 
-/// Turn a mesh address naming this runtime's own name into the local reference
-/// it means, and leave every other source alone.
-///
-/// Refused by name when this runtime holds no processor under that display
-/// name, listing the ones it does — the local half of the offered-port refusal
-/// a peer gets.
-fn resolve_a_source_addressing_this_runtimes_own_port(
-    compiler: &Arc<Compiler>,
-    runtime_mesh: &RuntimeMeshMembership,
-    from: OutputLinkPortRef,
-) -> Result<OutputLinkPortRef> {
-    let Some(address) = from.mesh_port_address() else {
-        return Ok(from);
-    };
-    if !address.names_the_runtime(runtime_mesh.runtime_name()) {
-        return Ok(from);
-    }
-    let node = the_node_this_runtime_names(compiler, address.processor_display_name())?;
-    Ok(OutputLinkPortRef::new(
-        node.processor_id,
-        address.port_name(),
-    ))
-}
-
 /// The node `node_name` names on this runtime once cast.
 ///
 /// Refused by name when this runtime holds no node by that name, listing the
-/// ones it does — the local half of the offered-port refusal a peer gets.
+/// ones it does.
 fn the_node_this_runtime_names(
     compiler: &Arc<Compiler>,
     node_name: &str,
@@ -344,12 +303,10 @@ fn the_node_this_runtime_names(
     })
 }
 
-/// Apply a link both of whose ends are on this runtime — the path every local
-/// link has always taken.
-fn apply_a_link_from_this_runtime(
+/// Add the link from `from` to `to` to the graph and queue it for wiring.
+fn apply_a_link(
     compiler: &Arc<Compiler>,
-    from_processor: ProcessorUniqueId,
-    from_port: String,
+    from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
     let (link_id, channel) =
@@ -363,13 +320,13 @@ fn apply_a_link_from_this_runtime(
             {
                 let from_node = graph
                     .traversal()
-                    .v(&from_processor)
+                    .v(from.processor_id())
                     .first()
-                    .ok_or_else(|| Error::ProcessorNotFound(from_processor.to_string()))?;
-                if !from_node.has_output(&from_port) {
+                    .ok_or_else(|| Error::ProcessorNotFound(from.processor_id().to_string()))?;
+                if !from_node.has_output(from.port_name()) {
                     return Err(Error::ProcessorPortNotFound {
-                        processor_id: from_processor.to_string(),
-                        port_name: from_port.clone(),
+                        processor_id: from.processor_id().to_string(),
+                        port_name: from.port_name().to_string(),
                         direction: PortDirection::Output,
                     });
                 }
@@ -385,12 +342,15 @@ fn apply_a_link_from_this_runtime(
             // `source_channel_name`; underscore is legal and rides through. Deriving
             // inside the transaction means an illegal port name rolls the pending
             // link back rather than committing a half-built edge.
-            let channel = crate::iceoryx2::source_channel_name(from_processor.as_str(), &from_port)
-                .map_err(|source| Error::InvalidLink(source.to_string()))?;
+            let channel = crate::iceoryx2::source_channel_name(
+                from.processor_id().as_str(),
+                from.port_name(),
+            )
+            .map_err(|source| Error::InvalidLink(source.to_string()))?;
 
             let link_id = graph
                 .traversal_mut()
-                .add_e(OutputLinkPortRef::new(from_processor, from_port), to)
+                .add_e(from, to)
                 .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
                 .first()
                 .map(|link| link.id.clone())
@@ -407,39 +367,6 @@ fn apply_a_link_from_this_runtime(
         "connect assigned channel"
     );
     Ok(link_id)
-}
-
-/// Apply a link carrying from a port on another runtime.
-///
-/// It is held in the graph, `awaiting_remote`, and never queued for the
-/// compiler: this runtime receives nothing from another runtime, so nothing
-/// wires it. The destination is validated now, with the same typed refusals a
-/// local link meets.
-fn apply_a_link_from_another_runtime(
-    compiler: &Arc<Compiler>,
-    source: MeshPortAddress,
-    to: InputLinkPortRef,
-) -> Result<LinkUniqueId> {
-    compiler.scope(|graph, _tx| -> Result<_> {
-        refuse_a_destination_this_graph_cannot_take(graph, &to)?;
-
-        let link = graph
-            .traversal_mut()
-            .add_link_from_another_runtime(source.clone(), to)
-            .first_mut()
-            .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
-        link.state = crate::core::graph::LinkState::AwaitingRemote;
-        link.insert(crate::core::graph::LinkStateComponent(
-            crate::core::graph::LinkState::AwaitingRemote,
-        ));
-        link.insert_component_without_rendering_it(
-            crate::core::graph::RemoteLinkResolutionComponent::awaiting_remote(format!(
-                "'{source}' is a port on another runtime, and this runtime receives nothing \
-                 from another runtime"
-            )),
-        );
-        Ok(link.id.clone())
-    })
 }
 
 /// Refuse a destination this graph has no processor or no such input port for,
@@ -586,8 +513,7 @@ impl RuntimeOperations for Runner {
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
         let compiler = Arc::clone(&self.compiler);
         let live = self.live_commit_context();
-        let runtime_mesh = Arc::clone(&self.runtime_mesh);
-        Box::pin(connect_impl(compiler, live, runtime_mesh, from, to))
+        Box::pin(connect_impl(compiler, live, from, to))
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -739,10 +665,9 @@ impl RuntimeOperations for Runner {
             TokioRuntimeVariant::ExternalTokioHandle(handle) => {
                 let compiler = Arc::clone(&self.compiler);
                 let live = self.live_commit_context();
-                let runtime_mesh = Arc::clone(&self.runtime_mesh);
                 let (tx, rx) = std::sync::mpsc::channel();
                 handle.spawn(async move {
-                    let result = connect_impl(compiler, live, runtime_mesh, from, to).await;
+                    let result = connect_impl(compiler, live, from, to).await;
                     let _ = tx.send(result);
                 });
                 rx.recv()
@@ -831,13 +756,15 @@ mod connect_wires_without_inspecting_a_port_tests {
 
     use parking_lot::Mutex;
 
-    use super::{RuntimeMeshMembership, connect_impl, disconnect_impl, remove_processor_impl};
+    use super::{
+        connect_impl, disconnect_impl, remove_processor_impl, the_node_this_runtime_names,
+    };
     use crate::core::compiler::{Compiler, PendingOperation};
     use crate::core::descriptors::ProcessorClassImportPath;
     use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
     use crate::core::graph::{
-        GraphEdgeWithComponents, InputLinkPortRef, LinkUniqueId, MeshPortAddress,
-        OutputLinkPortRef, PendingDeletionComponent, ProcessorUniqueId,
+        GraphEdgeWithComponents, InputLinkPortRef, LinkUniqueId, OutputLinkPortRef,
+        PendingDeletionComponent, ProcessorUniqueId,
     };
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
@@ -889,19 +816,6 @@ mod connect_wires_without_inspecting_a_port_tests {
         });
     }
 
-    /// A membership naming this runtime and its mesh, on no network — enough
-    /// for `connect` to tell an address naming this runtime from one naming
-    /// another.
-    fn a_membership_off_any_mesh() -> Arc<RuntimeMeshMembership> {
-        Arc::new(RuntimeMeshMembership::that_never_reached_its_mesh(
-            THIS_RUNTIMES_NAME,
-            "a-test-mesh",
-        ))
-    }
-
-    /// The name the membership above answers to.
-    const THIS_RUNTIMES_NAME: &str = "this-runtime";
-
     /// Fresh compiler holding one producer and one consumer node, plus the
     /// wiring refs for the producer's `out` and the consumer's `in`.
     fn compiler_holding_a_producer_and_consumer_node()
@@ -942,13 +856,7 @@ mod connect_wires_without_inspecting_a_port_tests {
             tokio::runtime::Builder::new_current_thread()
                 .build()
                 .expect("current-thread runtime")
-                .block_on(connect_impl(
-                    compiler,
-                    None,
-                    a_membership_off_any_mesh(),
-                    from,
-                    to,
-                ))
+                .block_on(connect_impl(compiler, None, from, to))
         });
 
         result.expect("connect must wire any two ports — a link is pure plumbing");
@@ -973,13 +881,7 @@ mod connect_wires_without_inspecting_a_port_tests {
             .expect("current-thread runtime");
 
         let link_id = runtime
-            .block_on(connect_impl(
-                Arc::clone(&compiler),
-                None,
-                a_membership_off_any_mesh(),
-                from,
-                to,
-            ))
+            .block_on(connect_impl(Arc::clone(&compiler), None, from, to))
             .expect("the link is created");
         runtime
             .block_on(remove_processor_impl(
@@ -1028,13 +930,7 @@ mod connect_wires_without_inspecting_a_port_tests {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("current-thread runtime")
-            .block_on(connect_impl(
-                Arc::clone(compiler),
-                None,
-                a_membership_off_any_mesh(),
-                from,
-                to,
-            ))
+            .block_on(connect_impl(Arc::clone(compiler), None, from, to))
     }
 
     /// The display name the graph gave one of the fixture's nodes.
@@ -1061,76 +957,19 @@ mod connect_wires_without_inspecting_a_port_tests {
             .block_on(disconnect_impl(Arc::clone(compiler), None, link_id))
     }
 
-    /// An address naming this runtime's own name is a local reference: it
-    /// resolves by display name and the link is an ordinary edge, wired by the
-    /// compiler like any other.
-    #[test]
-    fn an_address_naming_this_runtime_is_resolved_by_display_name() {
-        register_producer_and_consumer_descriptors();
-        let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
-        let producer = from
-            .processor_id_on_this_runtime()
-            .cloned()
-            .expect("the fixture's source is local");
-        let displayed = the_display_name_the_graph_gave(&compiler, &producer);
-
-        let link_id = connect_on_this_thread(
-            &compiler,
-            OutputLinkPortRef::on_another_runtime(
-                MeshPortAddress::new(THIS_RUNTIMES_NAME, displayed, "out")
-                    .expect("a legal address"),
-            ),
-            to,
-        )
-        .expect("an address naming this runtime wires locally");
-
-        compiler.scope(|graph, _tx| {
-            let link = graph
-                .traversal()
-                .e(&link_id)
-                .first()
-                .expect("the link is in the graph");
-            assert_eq!(
-                link.from_port().processor_id_on_this_runtime(),
-                Some(&producer),
-                "the address must resolve to the node the display name labels"
-            );
-        });
-        assert!(
-            compiler
-                .logged_pending_operations()
-                .iter()
-                .any(|op| matches!(op, PendingOperation::AddLink(id) if *id == link_id)),
-            "a link resolved locally is wired by the compiler like any other"
-        );
-    }
-
     /// A node name this runtime does not hold is refused by name, listing the
-    /// names it holds — the local half of the offered-port refusal.
+    /// names it holds.
     #[test]
     fn a_node_name_this_runtime_does_not_hold_is_refused_listing_what_it_holds() {
         register_producer_and_consumer_descriptors();
-        let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
-        let displayed = the_display_name_the_graph_gave(
-            &compiler,
-            &from
-                .processor_id_on_this_runtime()
-                .cloned()
-                .expect("the fixture's source is local"),
-        );
+        let (compiler, from, _to) = compiler_holding_a_producer_and_consumer_node();
+        let displayed = the_display_name_the_graph_gave(&compiler, from.processor_id());
 
-        let refusal = connect_on_this_thread(
-            &compiler,
-            OutputLinkPortRef::on_another_runtime(
-                MeshPortAddress::new(THIS_RUNTIMES_NAME, "NoSuchProcessor", "out")
-                    .expect("a legal address"),
-            ),
-            to,
-        )
-        .expect_err("a node name this runtime does not hold is refused")
-        .to_string();
+        let refusal = the_node_this_runtime_names(&compiler, "NoSuchProcessor")
+            .expect_err("a node name this runtime does not hold is refused")
+            .to_string();
 
-        assert!(refusal.contains("nosuchprocessor"), "{refusal}");
+        assert!(refusal.contains("NoSuchProcessor"), "{refusal}");
         assert!(refusal.contains(&displayed), "{refusal}");
     }
 
@@ -1196,27 +1035,25 @@ mod connect_wires_without_inspecting_a_port_tests {
         }
     }
 
-    /// A destination this runtime does not hold is refused the same way for a
-    /// remote source as for a local one — `connect`'s own refusals, unchanged.
+    /// A destination this runtime does not hold, or a port it does not have,
+    /// is refused with the typed error a caller can act on.
     #[test]
-    fn a_remote_source_meets_the_same_destination_refusals_a_local_one_does() {
+    fn a_destination_this_runtime_cannot_take_is_refused_with_a_typed_error() {
         register_producer_and_consumer_descriptors();
-        let (compiler, _from, to) = compiler_holding_a_producer_and_consumer_node();
-        let source = || {
-            OutputLinkPortRef::on_another_runtime(
-                MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video")
-                    .expect("a legal address"),
-            )
-        };
+        let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
 
         assert!(matches!(
-            connect_on_this_thread(&compiler, source(), InputLinkPortRef::new("Pnobody", "in")),
+            connect_on_this_thread(
+                &compiler,
+                from.clone(),
+                InputLinkPortRef::new("Pnobody", "in")
+            ),
             Err(Error::ProcessorNotFound(_))
         ));
         assert!(matches!(
             connect_on_this_thread(
                 &compiler,
-                source(),
+                from,
                 InputLinkPortRef::new(to.processor_id().clone(), "no_such_port")
             ),
             Err(Error::ProcessorPortNotFound { .. })

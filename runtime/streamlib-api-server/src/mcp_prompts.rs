@@ -391,29 +391,10 @@ fn insert_node_between_linked_nodes_recipe(
                 "no link with id `{link_id}` is in the graph; `graph` lists the links"
             ))
         })?;
-    // The recipe re-wires the link's source into the inserted node, which needs
-    // a source this node can name in `connect` without a runtime name. A link
-    // carrying from another runtime has none, so it is refused rather than
-    // rendered against whichever local node happens to sit nearby.
-    let source_node_name = link.source.node_on_this_runtime().ok_or_else(|| {
-        RpcError::invalid_params(format!(
-            "link `{link_id}` carries from a port on another runtime, and a node cannot be \
-             inserted into one from here"
-        ))
-    })?;
-    let source = node_named(graph, source_node_name)?;
-    // The engine only ever renders a target on this node, so this is defence
-    // against a graph document that came from somewhere else rather than a
-    // shape this runtime produces.
-    let target_node_name = link.target.node_on_this_runtime().ok_or_else(|| {
-        RpcError::invalid_params(format!(
-            "link `{link_id}` carries into a port on another runtime, and a node cannot be \
-             inserted into one from here"
-        ))
-    })?;
-    let target = node_named(graph, target_node_name)?;
-    let source_port = link.source.port();
-    let target_port = link.target.port();
+    let source = node_named(graph, &link.source.node)?;
+    let target = node_named(graph, &link.target.node)?;
+    let source_port = link.source.port.as_str();
+    let target_port = link.target.port.as_str();
     let source_name = source.name.as_str();
     let target_name = target.name.as_str();
 
