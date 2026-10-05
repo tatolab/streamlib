@@ -4,11 +4,9 @@
 //! Reading loss off a producer's own numbering.
 //!
 //! Every bag carries a number its producer gave it, so a jump in what a reader
-//! receives names exactly the bags that never reached it. Two readers ask this:
-//! a channel subscriber, whose ring overwrites under pressure, and a remote
-//! link's ingress, whose numbers arrive from another runtime. They differ only
-//! in what identifies one unbroken run of numbering — the publishing port's id
-//! locally, the generation the sending runtime carried across the mesh.
+//! receives names exactly the bags that never reached it. A channel subscriber,
+//! whose ring overwrites under pressure, asks this, with the publishing port's
+//! id identifying one unbroken run of numbering.
 
 /// The last number one reader received, and the run it belonged to.
 #[derive(Clone, Copy)]

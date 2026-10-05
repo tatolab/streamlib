@@ -12,18 +12,11 @@
 //! nodes` reads it through [`observe_a_runtime_mesh`], on a session that
 //! announces nothing.
 
-mod a_bags_top_level_surface_id;
-mod a_frames_pixels_on_the_mesh;
-mod a_frames_pixels_written_into_a_local_surface;
 mod duplicate_runtime_name_on_the_mesh;
-mod gpu_context_the_mesh_copies_frames_with;
 mod host_identity;
 mod hosted_control_plane_endpoint;
 mod machine_clock_a_remote_link_carries_from;
 mod machine_clock_identity;
-mod mesh_data_message_attachment;
-mod mesh_link_ingress;
-mod mesh_link_ingress_table;
 mod resolved_runtime_mesh_configuration;
 mod runtime_mesh_description;
 mod runtime_mesh_endpoint;
@@ -42,20 +35,12 @@ mod zenoh_work_off_any_tokio_runtime;
 // duplicate-name check reads rather than re-spell the grammar beside it.
 // The observation is exported because the wheel's `streamlib nodes` door
 // calls it. Everything else the mesh is built from stays inside it.
-pub use gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
 pub use machine_clock_a_remote_link_carries_from::{
     MachineClockARemoteLinkCarriesFrom, WhatNotingABagsClockDid,
 };
 pub use machine_clock_identity::MachineClockIdentity;
-pub use mesh_data_message_attachment::{
-    MESH_DATA_MESSAGE_ATTACHMENT_BYTES, MeshDataMessageAttachment,
-};
-#[doc(hidden)]
-pub use mesh_link_ingress_table::MeshLinkIngressTable;
-#[cfg(test)]
-pub(crate) use mesh_link_ingress_table::a_mesh_link_ingress_table_carrying_nothing;
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 // Reachable rather than supported: `core::runtime` is a public module, and the
 // key grammar is the mesh's own business.

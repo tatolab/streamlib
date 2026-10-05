@@ -1489,11 +1489,11 @@ mod tests {
             out_inner.add_channel_link(
                 "out",
                 link_id,
-                Some(notify.create_notifier().expect(
+                notify.create_notifier().expect(
                     "create_notifier must fit the notify service's max_notifiers cap — a \
                      leaked notifier from the previous connect would trip \
                      ExceedsMaxSupportedNotifiers here",
-                )),
+                ),
             );
 
             if !in_inner.has_port("in") {

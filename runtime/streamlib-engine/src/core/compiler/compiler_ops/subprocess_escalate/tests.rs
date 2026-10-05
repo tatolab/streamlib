@@ -13,7 +13,6 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
     EscalateRequest, EscalateResponse,
 };
-use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
 #[test]
 fn try_parse_rejects_lifecycle_traffic() {
@@ -187,13 +186,8 @@ fn handle_escalate_op_end_to_end() {
         height: 240,
         format: "bgra".to_string(),
     });
-    let response = handle_escalate_op(
-        &sandbox,
-        &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
-        acquire,
-    )
-    .expect("acquire_pixel_buffer must produce a response");
+    let response = handle_escalate_op(&sandbox, &registry, acquire)
+        .expect("acquire_pixel_buffer must produce a response");
     let buffer_handle_id = match response {
         EscalateResponse::Ok(ref ok) => {
             assert_eq!(ok.request_id, "req-1");
@@ -218,13 +212,8 @@ fn handle_escalate_op_end_to_end() {
         processor_output_pool: None,
         usage: vec!["texture_binding".to_string(), "copy_src".to_string()],
     });
-    let response = handle_escalate_op(
-        &sandbox,
-        &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
-        acquire_tex,
-    )
-    .expect("acquire_texture must produce a response");
+    let response = handle_escalate_op(&sandbox, &registry, acquire_tex)
+        .expect("acquire_texture must produce a response");
     let texture_handle_id = match response {
         EscalateResponse::Ok(ref ok) => {
             assert_eq!(ok.request_id, "req-tex");
@@ -254,13 +243,8 @@ fn handle_escalate_op_end_to_end() {
         request_id: "req-tex-rel".to_string(),
         handle_id: texture_handle_id.clone(),
     });
-    match handle_escalate_op(
-        &sandbox,
-        &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
-        release_tex,
-    )
-    .expect("release_handle must produce a response")
+    match handle_escalate_op(&sandbox, &registry, release_tex)
+        .expect("release_handle must produce a response")
     {
         EscalateResponse::Ok(ok) => {
             assert_eq!(ok.request_id, "req-tex-rel");
@@ -276,13 +260,8 @@ fn handle_escalate_op_end_to_end() {
         request_id: "req-2".to_string(),
         handle_id: buffer_handle_id.clone(),
     });
-    let response = handle_escalate_op(
-        &sandbox,
-        &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
-        release,
-    )
-    .expect("release_handle must produce a response");
+    let response = handle_escalate_op(&sandbox, &registry, release)
+        .expect("release_handle must produce a response");
     match response {
         EscalateResponse::Ok(ok) => {
             assert_eq!(ok.request_id, "req-2");
@@ -296,13 +275,8 @@ fn handle_escalate_op_end_to_end() {
         request_id: "req-3".to_string(),
         handle_id: "never-existed".to_string(),
     });
-    match handle_escalate_op(
-        &sandbox,
-        &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
-        release_unknown,
-    )
-    .expect("release_handle must produce a response")
+    match handle_escalate_op(&sandbox, &registry, release_unknown)
+        .expect("release_handle must produce a response")
     {
         EscalateResponse::Err(err) => {
             assert_eq!(err.request_id, "req-3");
@@ -356,13 +330,8 @@ fn every_staging_op_and_acquire_image_refuse_on_macos_naming_the_reason() {
         let op_name = frame["op"].as_str().unwrap_or_default().to_string();
         let op = parse_op_for_tests(&frame)
             .unwrap_or_else(|failure| panic!("{op_name} decodes: {failure}"));
-        let response = handle_escalate_op(
-            &sandbox,
-            &registry,
-            &a_mesh_link_ingress_table_carrying_nothing(),
-            op,
-        )
-        .unwrap_or_else(|| panic!("{op_name} is request/response"));
+        let response = handle_escalate_op(&sandbox, &registry, op)
+            .unwrap_or_else(|| panic!("{op_name} is request/response"));
         let EscalateResponse::Err(refusal) = response else {
             panic!("{op_name} must refuse on macOS, got {response:?}");
         };

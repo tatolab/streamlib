@@ -32,14 +32,6 @@ const MESH_KEY_ROOT_CHUNK: &str = "streamlib";
 /// it, and a display name may not begin with `@`, so no address collides.
 const RUNTIME_ANNOUNCEMENT_CHUNK: &str = "@runtime";
 
-/// The chunk under a runtime's own name where the runtimes reading its ports
-/// hold their tokens: `@readers/<display name>/<port>/<reader's runtime name>`.
-const READERS_CHUNK: &str = "@readers";
-
-/// The chunk under a runtime's own name where it holds one token per port it is
-/// currently sending: `@egress/<display name>/<port>`.
-const EGRESS_CHUNK: &str = "@egress";
-
 /// What a runtime's own announcement is named by. Every field is on the token
 /// key, so a peer reads all three off a token whose runtime is already gone.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -89,54 +81,6 @@ impl RuntimeMeshKeySpace {
             announced.runtime_name,
             announced.host_identity.as_one_key_chunk(),
             announced.process_id
-        )
-    }
-
-    /// The token a runtime declares to say it is reading one port of
-    /// `source_runtime_name`.
-    pub fn reader_token_key(
-        &self,
-        source_runtime_name: &str,
-        processor_display_name: &str,
-        port_name: &str,
-        reading_runtime_name: &str,
-    ) -> String {
-        format!(
-            "{}/{source_runtime_name}/{READERS_CHUNK}/{processor_display_name}/{port_name}/\
-             {reading_runtime_name}",
-            self.runtime_announcement_root()
-        )
-    }
-
-    /// The token that says `source_runtime_name` is sending one port.
-    ///
-    /// A reader watches this: the token going while the runtime stays says the
-    /// port stopped being sent, which returns the link to waiting.
-    pub fn egress_token_key(
-        &self,
-        source_runtime_name: &str,
-        processor_display_name: &str,
-        port_name: &str,
-    ) -> String {
-        format!(
-            "{}/{source_runtime_name}/{EGRESS_CHUNK}/{processor_display_name}/{port_name}",
-            self.runtime_announcement_root()
-        )
-    }
-
-    /// The key one port's bags ride on.
-    ///
-    /// Outside the `@runtime` subtree, because this is the port's own address:
-    /// `streamlib/<mesh name>/<runtime name>/<display name>/<port>`.
-    pub fn data_key(
-        &self,
-        source_runtime_name: &str,
-        processor_display_name: &str,
-        port_name: &str,
-    ) -> String {
-        format!(
-            "{MESH_KEY_ROOT_CHUNK}/{}/{source_runtime_name}/{processor_display_name}/{port_name}",
-            self.mesh_name
         )
     }
 
@@ -387,50 +331,5 @@ mod tests {
                 "{foreign:?} must read as no identity"
             );
         }
-    }
-
-    /// The announcement subscription never reaches the reader or egress keys:
-    /// each hangs under a chunk beginning `@`, which no wildcard matches.
-    #[test]
-    fn the_at_chunks_keep_every_subtree_out_of_every_others_subscription() {
-        let key_space = a_key_space("lab");
-        let announcements = keyexpr::new(key_space.every_announcement_key().as_str())
-            .expect("a key expression")
-            .to_owned();
-
-        for out_of_reach in [
-            key_space.reader_token_key("bench", "camerasource", "video", "desk"),
-            key_space.egress_token_key("bench", "camerasource", "video"),
-        ] {
-            assert!(
-                !announcements
-                    .includes(keyexpr::new(out_of_reach.as_str()).expect("a key expression")),
-                "{announcements} must not reach {out_of_reach}"
-            );
-            assert_eq!(
-                key_space.read_an_announcement_key(&out_of_reach),
-                None,
-                "{out_of_reach} must not read as an announcement"
-            );
-        }
-    }
-
-    /// A port's own bags ride outside the `@runtime` subtree, at the address
-    /// the port is named by — so the data key is the address and nothing else.
-    #[test]
-    fn a_ports_bags_ride_at_the_address_the_port_is_named_by() {
-        let key_space = a_key_space("lab");
-        let data_key = key_space.data_key("bench-cam-a1b2", "camera-source-2", "video");
-        assert_eq!(
-            data_key,
-            "streamlib/lab/bench-cam-a1b2/camera-source-2/video"
-        );
-        keyexpr::new(data_key.as_str()).expect("the data key is a key expression");
-
-        assert_eq!(
-            a_key_space("other").data_key("bench-cam-a1b2", "camera-source-2", "video"),
-            "streamlib/other/bench-cam-a1b2/camera-source-2/video",
-            "two meshes never share a port's data key"
-        );
     }
 }

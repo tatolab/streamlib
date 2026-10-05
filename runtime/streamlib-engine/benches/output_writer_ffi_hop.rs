@@ -162,7 +162,7 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
     let listener = notify.create_listener().unwrap();
 
     let inner = Arc::new(output_writer_inner_publishing_to(publisher));
-    inner.add_channel_link("out", "L-bench-ffi-hop", Some(notifier));
+    inner.add_channel_link("out", "L-bench-ffi-hop", notifier);
 
     BenchFixture {
         inner,
@@ -269,7 +269,7 @@ fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture 
             .unwrap();
         let notifier = notify.create_notifier().unwrap();
         let listener = notify.create_listener().unwrap();
-        inner.add_channel_link("out", &format!("L-bench-fanout-{i}"), Some(notifier));
+        inner.add_channel_link("out", &format!("L-bench-fanout-{i}"), notifier);
         listeners.push(listener);
     }
 
@@ -337,7 +337,12 @@ fn build_round_trip(tag: &str) -> RoundTripFixture {
     let subscriber = subscribers.pop().unwrap();
 
     let output_writer_inner = output_writer_inner_publishing_to(publisher);
-    output_writer_inner.add_channel_link("out", "L-bench-round-trip", None);
+    let notifier_nothing_listens_on = node
+        .open_or_create_notify_service(&unique_suffix(&format!("{tag}/notify")), 1)
+        .unwrap()
+        .create_notifier()
+        .unwrap();
+    output_writer_inner.add_channel_link("out", "L-bench-round-trip", notifier_nothing_listens_on);
 
     let input_mailboxes_inner = InputMailboxesInner::new();
     input_mailboxes_inner.add_port("in", 8, ReadMode::ReadNextInOrder);

@@ -237,8 +237,8 @@ async fn remove_processor_impl(
 /// never warns — a mismatch surfaces as a decode failure at the consuming
 /// processor's read.
 ///
-/// A source naming a port on another runtime never waits on the mesh: the link
-/// is applied here and now, `awaiting_remote` until that runtime turns up.
+/// A source naming a port on another runtime is held in the graph,
+/// `awaiting_remote`, and never wired.
 #[tracing::instrument(
     name = "runtime.connect",
     skip(compiler, live, runtime_mesh),
@@ -268,7 +268,7 @@ async fn connect_impl(
 
     let link_id = match from.clone() {
         OutputLinkPortRef::OnAnotherRuntime(address) => {
-            apply_a_link_from_another_runtime(&compiler, &runtime_mesh, address, to.clone())?
+            apply_a_link_from_another_runtime(&compiler, address, to.clone())?
         }
         OutputLinkPortRef::OnThisRuntime {
             processor_id,
@@ -411,27 +411,16 @@ fn apply_a_link_from_this_runtime(
 
 /// Apply a link carrying from a port on another runtime.
 ///
-/// Its destination side is queued for the compiler like any other link's: the
-/// channel it subscribes to is derived from the address, so it is wired whether
-/// or not that runtime is here. Only the source side waits — the mesh opens the
-/// ingress that publishes onto that channel once the runtime turns up and says
-/// it offers the port. The destination is validated now, with the same typed
-/// refusals a local link meets.
+/// It is held in the graph, `awaiting_remote`, and never queued for the
+/// compiler: this runtime receives nothing from another runtime, so nothing
+/// wires it. The destination is validated now, with the same typed refusals a
+/// local link meets.
 fn apply_a_link_from_another_runtime(
     compiler: &Arc<Compiler>,
-    runtime_mesh: &RuntimeMeshMembership,
     source: MeshPortAddress,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
-    // Deliberately says nothing about the runtime it names: whether that one is
-    // absent, silent or perfectly healthy is not known until the mesh has
-    // looked, and this end may be the one that is off the mesh. The first
-    // resolution pass overwrites it with what it actually found.
-    let waiting_on = format!(
-        "this link has just been applied and the {} mesh has not resolved it yet",
-        runtime_mesh.mesh_name()
-    );
-    let (link_id, how_far_it_has_got) = compiler.scope(|graph, tx| -> Result<_> {
+    compiler.scope(|graph, _tx| -> Result<_> {
         refuse_a_destination_this_graph_cannot_take(graph, &to)?;
 
         let link = graph
@@ -439,28 +428,18 @@ fn apply_a_link_from_another_runtime(
             .add_link_from_another_runtime(source.clone(), to)
             .first_mut()
             .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
-        // Wired like any other link: the destination subscribes to the
-        // engine-named channel the address derives, which the ingress publishes
-        // onto once the source runtime turns up. The state the link *reports*
-        // stays `awaiting_remote` until it does, off the cell below, because
-        // nothing carries before then.
         link.state = crate::core::graph::LinkState::AwaitingRemote;
         link.insert(crate::core::graph::LinkStateComponent(
             crate::core::graph::LinkState::AwaitingRemote,
         ));
-        let resolution =
-            crate::core::graph::RemoteLinkResolutionComponent::awaiting_remote(waiting_on);
-        let how_far_it_has_got = resolution.its_cell();
-        link.insert_component_without_rendering_it(resolution);
-        let link_id = link.id.clone();
-        tx.log(PendingOperation::AddLink(link_id.clone()));
-        Ok((link_id, how_far_it_has_got))
-    })?;
-
-    // The mesh takes it from here: it resolves the address, refuses by name
-    // what it cannot carry, and opens the ingress when it can.
-    runtime_mesh.note_a_link_from_another_runtime(source, link_id.clone(), how_far_it_has_got);
-    Ok(link_id)
+        link.insert_component_without_rendering_it(
+            crate::core::graph::RemoteLinkResolutionComponent::awaiting_remote(format!(
+                "'{source}' is a port on another runtime, and this runtime receives nothing \
+                 from another runtime"
+            )),
+        );
+        Ok(link.id.clone())
+    })
 }
 
 /// Refuse a destination this graph has no processor or no such input port for,
@@ -631,9 +610,8 @@ impl RuntimeOperations for Runner {
         // it, and that source's iceoryx2 sizing, from the live graph BEFORE
         // spawning: the same derivation the compiler op used to open the
         // service, so the tap's publisher-free reopen requests identical,
-        // iceoryx2-verified parameters. Neither channel name — a source's
-        // processor id, or the hash of a remote port's address — is anything a
-        // caller could be expected to spell.
+        // iceoryx2-verified parameters. A channel name carries a source's
+        // processor id, which is nothing a caller could be expected to spell.
         let resolved = self.compiler.scope(
             |graph, _tx| -> Result<(String, crate::iceoryx2::ChannelSizing)> {
                 let source = crate::core::compiler::compiler_ops::find_the_source_a_caller_named(
@@ -647,18 +625,8 @@ impl RuntimeOperations for Runner {
                     &self.iceoryx2_node,
                     &source,
                 )?;
-                let channel_service_name = match &source {
-                    OutputLinkPortRef::OnAnotherRuntime(address) => {
-                        crate::iceoryx2::mesh_ingress_channel_name(&address.to_string())
-                            .into_string()
-                    }
-                    OutputLinkPortRef::OnThisRuntime {
-                        processor_id,
-                        port_name,
-                    } => {
-                        crate::iceoryx2::source_channel_name(processor_id, port_name)?.into_string()
-                    }
-                };
+                let channel_service_name =
+                    crate::core::compiler::compiler_ops::channel_service_name(&source)?;
                 Ok((channel_service_name, sizing))
             },
         );
@@ -1227,72 +1195,6 @@ mod connect_wires_without_inspecting_a_port_tests {
             assert_eq!(from_port, from.to_string(), "the source end names `out`");
             assert_eq!(to_port, to.to_string(), "the destination end names `in`");
         }
-    }
-
-    /// A source on another runtime lands `awaiting_remote` while its
-    /// destination side is queued for the compiler like any other link's — the
-    /// channel it subscribes to is derived from the address, and nothing about
-    /// it needs that runtime to be here.
-    ///
-    /// This runtime is off any mesh, so what it is waiting on is *itself*. A
-    /// reason naming the source runtime would report a peer that may be
-    /// perfectly healthy as the thing that is missing.
-    #[test]
-    fn a_source_on_another_runtime_waits_on_this_runtimes_own_mesh_while_its_destination_wires() {
-        register_producer_and_consumer_descriptors();
-        let (compiler, _from, to) = compiler_holding_a_producer_and_consumer_node();
-
-        let link_id = connect_on_this_thread(
-            &compiler,
-            OutputLinkPortRef::on_another_runtime(
-                MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video")
-                    .expect("a legal address"),
-            ),
-            to,
-        )
-        .expect("connect never waits on the mesh");
-
-        let rendered = compiler.scope(|graph, _tx| {
-            crate::core::json_schema::LinkOutput::of_a_link(
-                graph
-                    .traversal()
-                    .e(&link_id)
-                    .first()
-                    .expect("the link is in the graph"),
-                &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
-            )
-        });
-        assert_eq!(
-            serde_json::to_value(&rendered.state).expect("the state renders"),
-            serde_json::json!("awaiting_remote")
-        );
-        let waiting_on = rendered
-            .awaiting_remote_reason
-            .expect("a waiting link says what it is waiting on");
-        assert!(
-            waiting_on.contains("this runtime is not on the"),
-            "a runtime off its own mesh says so rather than blaming the source: {waiting_on}"
-        );
-        assert!(
-            !waiting_on.contains("bench-cam-a1b2"),
-            "nothing has looked for that runtime yet, so nothing may be said about it:              {waiting_on}"
-        );
-        assert_eq!(
-            serde_json::to_value(&rendered.source).expect("the source renders"),
-            serde_json::json!({
-                "runtime_name": "bench-cam-a1b2",
-                "node": "camerasource",
-                "port": "video",
-            })
-        );
-        assert!(
-            compiler
-                .logged_pending_operations()
-                .iter()
-                .any(|op| matches!(op, PendingOperation::AddLink(id) if *id == link_id)),
-            "the destination wires onto the channel the address derives, whether or not the \
-             source runtime is here yet"
-        );
     }
 
     /// A destination this runtime does not hold is refused the same way for a

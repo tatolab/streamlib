@@ -909,10 +909,7 @@ class ProcessorLinkDataAccess:
         """Open this processor's subscriber for one link into `port_name`.
 
         `channel_service_name` is what this end subscribes to;
-        `inbound_link_name` is what a read hands back as the link's name. They
-        differ for a link carrying from another runtime, which rides a channel
-        hashed from the source port's mesh address, and are equal for a link
-        from this runtime.
+        `inbound_link_name` is what a read hands back as the link's name.
 
         `stamp_clock` says which machine's clock this link's stamps are taken
         on — `"this_machine"`, or `"a_machine_only_the_app_process_can_name"`
@@ -1050,9 +1047,7 @@ class LinkInputDataReader:
         separate producer. This is how a many-input processor tells them
         apart: the name is the source channel the link subscribed to —
         `{source processor id}/{source output port}`, the name `graph` and
-        `tap` show — or, for a link carrying from another runtime, that port's
-        mesh address `{runtime name}/{display name}/{output port}`. Either way
-        the engine knows it and a producer cannot misstate it.
+        `tap` show. The engine knows it and a producer cannot misstate it.
 
         Bags from one link arrive in that link's order. Nothing is promised
         about how two links interleave, so a reader that needs time order

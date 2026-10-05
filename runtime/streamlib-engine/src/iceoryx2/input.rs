@@ -115,12 +115,9 @@ struct PortBoundSubscriber {
     /// one must go.
     link_id: String,
     local_port: String,
-    /// The name a read hands back for every frame this subscriber delivers.
-    ///
-    /// The channel it subscribed to for a link from this runtime, which is
-    /// what `graph` and `tap` show for the same link; the source port's mesh
-    /// address for one carrying from another runtime, whose channel is hashed
-    /// from that address.
+    /// The name a read hands back for every frame this subscriber delivers:
+    /// the channel it subscribed to, which is what `graph` and `tap` show for
+    /// the same link.
     inbound_link_name: InboundLinkName,
     /// Which machine's monotonic clock the bags this subscriber delivers were
     /// stamped on. Never compare a stamp from one link against a stamp from a
@@ -1393,9 +1390,8 @@ impl InputMailboxes {
     ///
     /// What a destination taking many links on one port reads with: each
     /// inbound link is one producer, named by the source channel name it
-    /// subscribed to — or, for a link carrying from another runtime, by that
-    /// port's mesh address — so a sink can tell N streams apart without the
-    /// producers having to identify themselves in their bags.
+    /// subscribed to, so a sink can tell N streams apart without the producers
+    /// having to identify themselves in their bags.
     ///
     /// Bags from one link keep that link's order; no interleaving is promised
     /// between two links. A bag no link delivered is refused by name, and the
@@ -2040,7 +2036,16 @@ mod tests {
                 chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
-        output_writer.add_channel_link(output_port, "L-to-the-destination", None);
+        let notifier_nothing_listens_on = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
+            .open_or_create_notify_service(&unique_suffix(&format!("{output_port}/notify")), 1)
+            .unwrap()
+            .create_notifier()
+            .unwrap();
+        output_writer.add_channel_link(
+            output_port,
+            "L-to-the-destination",
+            notifier_nothing_listens_on,
+        );
     }
 
     fn dropped_bag_counts_of(

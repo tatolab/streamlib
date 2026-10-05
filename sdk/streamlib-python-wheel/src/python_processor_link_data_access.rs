@@ -445,7 +445,7 @@ impl PythonProcessorLinkDataAccess {
                 output_writer.add_channel_link(
                     port_name,
                     link_id,
-                    Some(notify_service.create_notifier()?),
+                    notify_service.create_notifier()?,
                 );
                 Ok(())
             })
@@ -461,11 +461,7 @@ impl PythonProcessorLinkDataAccess {
     /// one listener every input shares.
     ///
     /// `channel_service_name` is what this end subscribes to and
-    /// `inbound_link_name` is what the link is known by in a read — two names
-    /// rather than one because a link carrying from another runtime rides a
-    /// channel hashed from the source port's mesh address, so deriving the
-    /// name from the channel would hand a many-track sink a hash instead of
-    /// the address. They are equal for a link from this runtime.
+    /// `inbound_link_name` is what the link is known by in a read.
     ///
     /// A helper-hosted destination opens its listener whatever execution mode
     /// the class declares.

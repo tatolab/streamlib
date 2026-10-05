@@ -161,10 +161,6 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
         "name": "frames_from_upstream",
         "link_id": link_id,
         "channel_service_name": channel_service_name,
-        # Equal to the channel for a link whose source is on this runtime,
-        # which is every link this suite wires; they differ only for one
-        # carrying from another runtime, whose channel is hashed from the
-        # source port's mesh address.
         "inbound_link_name": channel_service_name,
         # Every link this suite wires has its source on this runtime, so every
         # bag it carries was stamped here.

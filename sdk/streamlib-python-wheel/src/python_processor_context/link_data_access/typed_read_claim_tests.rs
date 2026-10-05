@@ -69,8 +69,6 @@ fn wire_one_link_into_a_reader(
             (
                 INPUT_PORT,
                 &channel_service_name,
-                // The link's name is its channel here: this source is on
-                // this runtime. The two differ only across the mesh.
                 &channel_service_name,
                 streamlib::sdk::iceoryx2::THIS_MACHINE_STAMP_CLOCK_TOKEN,
                 &notify_service_name,

@@ -46,7 +46,6 @@ use crate::core::context::GpuContextLimitedAccess;
 #[cfg(test)]
 use crate::core::error::{Error, Result};
 use crate::core::logging::push_polyglot_record;
-use crate::core::runtime::mesh::MeshLinkIngressTable;
 
 /// Wire tag marking a message as an escalate request. Bridges demux on this
 /// before falling through to lifecycle dispatch.
@@ -111,7 +110,6 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
-    mesh_link_ingress_table: &MeshLinkIngressTable,
     op: EscalateRequest,
 ) -> Option<EscalateResponse> {
     let rid = request_id(&op).map(str::to_string).unwrap_or_default();
@@ -141,7 +139,6 @@ pub(crate) fn handle_escalate_op(
             },
         ) => Some(
             inbound_link_stamp_clock_identity::handle_inbound_link_stamp_clock_identity(
-                mesh_link_ingress_table,
                 rid,
                 &inbound_link_name,
             ),
@@ -318,14 +315,13 @@ impl EscalateParseError {
 pub(crate) fn process_bridge_message(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
-    mesh_link_ingress_table: &MeshLinkIngressTable,
     value: &serde_json::Value,
 ) -> Option<serde_json::Value> {
     let parsed = try_parse_escalate_request(value)?;
     let response = match parsed {
         // Fire-and-forget ops (log) return `None` from the handler — no
         // reply is written back to the subprocess.
-        Ok(op) => handle_escalate_op(sandbox, registry, mesh_link_ingress_table, op)?,
+        Ok(op) => handle_escalate_op(sandbox, registry, op)?,
         Err(err) => err.into_response(),
     };
     Some(envelope_response(response))

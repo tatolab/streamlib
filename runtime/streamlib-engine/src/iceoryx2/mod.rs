@@ -35,7 +35,6 @@ pub(crate) use audio_window::{
     AudioWindowDeclarationOfAnInputPort, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
     audio_windowing_declared_by_input_port, refuse_an_unsettled_match_device_sentinel,
 };
-pub(crate) use bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
 pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
     effective_channel_chunk_ceiling_bytes,
@@ -46,8 +45,8 @@ pub use channel_idle_poll_backoff::{
 };
 pub use channel_name::{
     CHANNEL_CHUNK_SEPARATOR, ChannelName, InboundLinkName, MAX_CHANNEL_NAME_BYTES,
-    THE_ONE_CHUNK_GRAMMAR, first_reason_this_is_not_one_channel_name_chunk,
-    mesh_ingress_channel_name, source_channel_name, validate_channel_name,
+    THE_ONE_CHUNK_GRAMMAR, first_reason_this_is_not_one_channel_name_chunk, source_channel_name,
+    validate_channel_name,
 };
 pub(crate) use child_process_start_outside_listener_binds::bind_an_iceoryx2_listener_outside_every_child_process_start;
 pub use child_process_start_outside_listener_binds::spawn_outside_every_iceoryx2_listener_bind;
@@ -68,9 +67,7 @@ pub use iceoryx2_domain_for_this_test_process::{
 };
 pub use input::{InputMailboxes, InputMailboxesInner};
 pub use loss_counters::{
-    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
-    MeshHopDroppedBagCountsByRemoteInboundLink, RefusedBagCountsByOutputPort,
-    RemoteInboundLinkMeshHopDroppedBagCounter,
+    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort,
 };
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
