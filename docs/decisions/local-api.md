@@ -86,8 +86,9 @@ the words. Shipped as it stood, one conversation would mix two vocabularies: an 
 
 Decision: every argument is spelled as `graph` renders the same thing, so whatever an agent reads
 it can type back. The mutation tools are `add_node`, `remove_node`, `connect` and `disconnect`;
-a link end is a node and a port, with a runtime name for a port on another runtime, in a tool
-and in `graph` alike; the catalog, the prompts and the instructions say node. The re-spelling
+a link end is a node and a port~~, with a runtime name for a port on another runtime~~, in a
+tool and in `graph` alike (the runtime-name clause superseded 2026-10-05 by #2629: every link
+has both ends on one runtime); the catalog, the prompts and the instructions say node. The re-spelling
 ships with the graph's one shape, so `graph` and the tools change together. Owner, 2026-10-02.
 
 Rejected:
@@ -105,6 +106,7 @@ Consequences:
   the node; once one runtime hosts several, every tool that names or adds a node also names its
   stream, as the address `<machine>/<stream>/<node>/<port>` does, spelled with the stream
   actions by the change that builds them.
-- `runtime_name` stays the remote half of an end until one runtime hosts several streams and the
-  address gains its machine and stream.
+- ~~`runtime_name` stays the remote half of an end until one runtime hosts several streams and
+  the address gains its machine and stream.~~ — Superseded 2026-10-05 by #2629: a link end has
+  no remote half; both ends are on one runtime.
 - The engine's Rust identifiers keep "processor" until the rename step.

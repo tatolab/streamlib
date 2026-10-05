@@ -77,9 +77,11 @@ Added by `docs/plan/changes/loss-visibility.md`, against iceoryx2 0.9.3.
 - The iceoryx2 wire gains 8 bytes per sample and a user-header type every opener shares. The
   engine and the wheel change together.
 - A loss after a link's last receive and before its disconnect stays uncounted.
-- A remote link counts its hop losses the same way, by a gap in a sequence number. The
+- ~~A remote link counts its hop losses the same way, by a gap in a sequence number. The
   sending runtime carries that number in each mesh message's own metadata, never in the bag,
   with the sending runtime and port as its identity and a fresh baseline whenever the remote
-  link re-wires. Its exact encoding is the runtime-mesh change's to specify.
+  link re-wires. Its exact encoding is the runtime-mesh change's to specify.~~ — Superseded
+  2026-10-05 by #2629: links between runtimes are deleted with the runtime mesh
+  (`moq-on-the-tailnet.md`), so no hop loss is counted.
 - A windowed port connected live onto a small channel is refused until overwrite counting has
   shipped, then revisited.
