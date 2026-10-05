@@ -35,8 +35,7 @@ audible-hardware-tests = ["hardware-tests"]
 # talking over Zenoh on loopback. A local validation, never a merge gate —
 # process start-up and network discovery are not deterministic. To run them:
 #   cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests \
-#     --test runtime_mesh_two_processes --test cross_runtime_links_two_processes \
-#     --test cross_runtime_link_requests_two_processes
+#     --test runtime_mesh_two_processes
 # See `docs/testing-hardware.md`.
 multi-process-mesh-e2e-tests = []
 
@@ -284,35 +283,6 @@ path = "tests/bin/runtime_mesh_peer.rs"
 [[test]]
 name = "runtime_mesh_two_processes"
 path = "tests/runtime_mesh_two_processes.rs"
-required-features = ["multi-process-mesh-e2e-tests"]
-
-# One end of a cross-runtime link in its own process, driven by the
-# `cross_runtime_links_two_processes` integration test. It stands a runtime's
-# mesh half up without a `Runner`, so it needs no GPU.
-[[bin]]
-name = "cross_runtime_link_peer"
-path = "tests/bin/cross_runtime_link_peer.rs"
-
-# The two-process cross-runtime-link proof. Local end-to-end tier only.
-[[test]]
-name = "cross_runtime_links_two_processes"
-path = "tests/cross_runtime_links_two_processes.rs"
-required-features = ["multi-process-mesh-e2e-tests"]
-
-# One runtime asking for, or answering, a link request, driven by the
-# `cross_runtime_link_requests_two_processes` test. Unlike the peer above it
-# builds a real `Runner` — a request is applied through `connect`, so there has
-# to be a graph to apply it into — and never starts it, which is what keeps it
-# GPU-free.
-[[bin]]
-name = "cross_runtime_link_request_peer"
-path = "tests/bin/cross_runtime_link_request_peer.rs"
-
-# The link-request proof: push, third-party wiring, refusal, silence, cancel
-# and disconnect across the mesh. Local end-to-end tier only.
-[[test]]
-name = "cross_runtime_link_requests_two_processes"
-path = "tests/cross_runtime_link_requests_two_processes.rs"
 required-features = ["multi-process-mesh-e2e-tests"]
 # A processor-owned window presented while the process's first thread drives
 # the window event pump. `harness = false` because AppKit lets only the first

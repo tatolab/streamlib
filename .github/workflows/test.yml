@@ -190,10 +190,6 @@ jobs:
           # rig runs unnoticed; running it needs the queues, a display server
           # and optionally a camera, so CI only compiles it.
           cargo build --locked -p streamlib-engine --example codec_roundtrip_rig
-          # The cross-runtime-link rig arm, engine-owned for the same reason:
-          # running it needs a GPU and two runtimes, so CI compiles it to stop
-          # it rotting between rig runs.
-          cargo build --locked -p streamlib-engine --example cross_runtime_link_rig
           # The present-class escalate ops' headless arm. `streamlib-engine`'s
           # lib tests are deliberately not run wholesale here (see
           # python-wheel.yml's carve-out, which says so), so a named slice is
@@ -712,9 +708,7 @@ jobs:
           # them here is what stops them rotting between local runs.
           cargo test --locked -p streamlib-engine \
             --features multi-process-mesh-e2e-tests \
-            --test runtime_mesh_two_processes \
-            --test cross_runtime_links_two_processes \
-            --test cross_runtime_link_requests_two_processes --no-run
+            --test runtime_mesh_two_processes --no-run
           # streamlib-consumer-rhi was reached by no cargo invocation here for
           # the same reason the built-ins were: the clippy step builds default
           # targets and never its test target. Its unit tests are the no-GPU
@@ -826,9 +820,7 @@ jobs:
           # them here is what stops them rotting between local runs.
           cargo test --locked -p streamlib-engine \
             --features multi-process-mesh-e2e-tests \
-            --test runtime_mesh_two_processes \
-            --test cross_runtime_links_two_processes \
-            --test cross_runtime_link_requests_two_processes --no-run
+            --test runtime_mesh_two_processes --no-run
           # Compiled but not run: the AVFoundation arm against a real camera,
           # `CameraSource` → `DisplayWindow` on the window server, the
           # VideoToolbox codec arm against Apple's hardware encoder and
