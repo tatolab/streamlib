@@ -17,7 +17,7 @@ runtime becoming a program of its own. After it:
 - the tests divide as the code does — a stream suite with no runtime, a runtime suite with no
   Python node, an integration suite where running both is the point;
 - no package extends the engine: the capability-extension hook is deleted (decision 2);
-- pip publishes `tatolab-stream`, ~~`tatolab-moq`,~~ `tatolab-webrtc`, and no engine (2026-10-04).
+- pip publishes `tatolab-stream`, `tatolab-webrtc`, and no engine.
 
 Unchanged, mapped below: one stream per runtime process, no service and no installer, the Rust
 crate names of the engine, the `STREAMLIB_*` engine variables.
@@ -74,7 +74,7 @@ be rewritten by S5 — re-pointing it at the native CLI is a tracker call for `/
   (`runtime/streamlib-consumer-rhi/src/vulkan_loader_library.rs:66-95`).
 - One venv runs everything: CI `maturin develop`s and runs pytest there
   (`python-wheel.yml:103-110`, `test.yml:862-867`); `build_simple_index.py:31` publishes
-  `streamlib`, `streamlib-moq`, `streamlib-webrtc`.
+  `streamlib` and `streamlib-webrtc`.
 
 ---
 
@@ -88,7 +88,7 @@ runtime serves every stream on the machine, and code inside it could crash, read
 every stream's data. A package does its own setup where its nodes run, at import or on first
 use (the shipped two install a TLS provider and a network thread pool); a node's lifecycle
 methods are unchanged; an outside program watches the local API's events. An engine-grade
-capability enters as a built-in under `:211-225`. Superseded at the fold: `:192-210` (two
+capability enters as a built-in under `:211-225`. Replaced at the fold: `:192-210` (two
 mechanisms), `:239-258`, `:259-275`, `:276-280`, the hook half of `:281-294`, and `graph`'s
 `extensions` key. Retired as residue, the questions they asked having no subject left: the
 OPENs `:295-298` (how an extension's engine-grade capability is reached) and `:299-304`
@@ -226,9 +226,9 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
 
 ## MODIFIED: records re-spelled at the fold
 
-- §Packages `:184-191`, `:226-237`, decision 2's entries, `:281-294` — ~~`tatolab-moq`
-  (`tatolab.moq`),~~ `tatolab-webrtc`, depending on `tatolab-stream` (the MoQ wheel is deleted
-  first, 2026-10-04; so are the mesh observation and configuration files the inventory lists).
+- §Packages `:184-191`, `:226-237`, decision 2's entries, `:281-294` — `tatolab-webrtc`,
+  depending on `tatolab-stream`. The MoQ wheel is gone (#2633), and the mesh with the mesh
+  observation and configuration files the inventory lists (#2643, #2645).
 - §Product `:21-31`, `:39-46`, `:60-82` (one suite on both floors → three; the closed list
   refuses at load), `:83-98`. §Processor model `:1065-1080`, `:1260-1270`. §Language SDKs
   `:4095-4142` — the GIL-release contract stays for processor interpreters; `rt.run()`'s signal

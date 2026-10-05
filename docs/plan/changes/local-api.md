@@ -3,11 +3,11 @@
 > **Approved by the owner, 2026-10-01**, as written, with its stated assumptions. Tickets
 > derived 2026-10-01 (below).
 >
-> **Amended 2026-10-04** by the moq-on-the-tailnet pivot (`docs/decisions/moq-on-the-tailnet.md`):
-> Zenoh is removed before the rest of this change is built. S2, the announcement (#2578), has
-> nothing left to edit — no description, peer table or mesh-peers listing exists once the mesh is
-> gone — and `nodes` lists the local registry alone. `tap` and `exchange` are carried as written;
-> the sharing step deletes them.
+> **The mesh is gone (#2643, #2645)**, removed ahead of the rest of this change by the
+> moq-on-the-tailnet pivot (`docs/decisions/moq-on-the-tailnet.md`). S2, the announcement
+> (#2578), has nothing left to edit — no description, peer table or mesh-peers listing exists —
+> and `nodes` lists the local registry alone. `tap` and `exchange` are carried as written; the
+> sharing step deletes them.
 
 Step 2 of the one-runtime-per-machine pivot: control leaves the network, and MCP hosts reach it by
 launching a command. After this change:
@@ -16,7 +16,8 @@ launching a command. After this change:
 - the TCP listener, its all-interfaces default, the port walk from 9000, `--host`, `--port`,
   `--url`, the registry's `control_url` and the bearer gate are gone, with no TCP path kept beside
   the socket;
-- a runtime stops announcing control URLs on the mesh, and `nodes` stops printing them;
+- a runtime stops announcing control URLs on the mesh, and `nodes` stops printing them (the mesh
+  is gone, #2643, #2645);
 - the runtime speaks MCP 2026-07-28 and nothing earlier;
 - an MCP host is configured as `claude mcp add streamlib -- streamlib mcp`, and `ssh <machine>
   streamlib mcp` reaches another machine's runtime.
@@ -33,7 +34,7 @@ description loses a field; the MCP revision changes); the control transport move
 **Precondition.** Every entry this delta builds is DECIDED: §Control plane & observability
 `ARCHITECTURE.md:4438-4442` (auth: whoever can open the socket), `:4443-4451` (reachable only on
 its machine), `:4452-4463` (the `mcp` verb; 2026-07-28 only), `:4247-4296` (one vocabulary, its
-`/mcp` clause superseded), `:4310-4326` (the CLI, `mcp` joining); §Networking `:3528-3545` and
+`/mcp` clause replaced), `:4310-4326` (the CLI, `mcp` joining); §Networking `:3528-3545` and
 `:3889-3910` (the announcement and `graph`'s peers, whose `control_plane_urls` clauses this
 removes). Not built against: the rest of the local API `:4464-4468` (stream verbs, machine or
 user — §Product `:114-125`), and the URL forms' listener, whose grammar and forms are §Networking's
@@ -97,7 +98,8 @@ and the MCP 2026-07-28 specification, fetched live.
 - Bearer gating (`src/auth.rs`, `handlers.rs:94-132`) is never switched on by a shipped path;
   `README.md:206` tells users `claude mcp add --transport http streamlib http://127.0.0.1:9000/mcp`.
 
-**The mesh**
+**The mesh** — gone (#2643, #2645); the anchors below are the tree this change was verified
+against.
 - `HostedControlPlaneEndpointRegistry` (`mesh/hosted_control_plane_endpoint.rs:21`) derives
   `control_plane_urls` from `getifaddrs` (`:51-162`); the description's `control_plane_urls`
   (`runtime_mesh_description.rs:42`, no serde default) is wire; it is rendered by
@@ -159,6 +161,8 @@ and the MCP 2026-07-28 specification, fetched live.
 
 ## MODIFIED: §Networking `:3528-3545`, `:3889-3910` — the announcement
 
+The mesh is gone (#2643, #2645), and this section with it has nothing left to edit.
+
 - The description drops `control_plane_urls`; so do `graph.mesh.peers[]`, the observe-only
   session, `_engine.pyi:2270` and the `nodes` peers table (`RUNTIME_NAME HOST ENGINE_VERSION`).
 - `hosted_control_plane_endpoint.rs`, `HostedControlPlaneEndpointRegistry` and their threading
@@ -212,7 +216,8 @@ ship gate runs, since the gate searches `.claude/`.
 - `POST /mcp` stays beside `/mcp/stdio` because the CLI's one-shot calls are simplest as HTTP and
   "today's router unchanged" is decided; both framings call one `dispatch_jsonrpc`.
 - `ttlMs` is 0 for `resources/read` of the live graph and one hour for the static lists.
-- Registry v3 ships with no migration; `nodes` keeps listing peers read from the mesh.
+- Registry v3 ships with no migration; `nodes` lists the local registry alone, the mesh being
+  gone (#2643, #2645).
 
 ## Expected slices
 
@@ -220,7 +225,7 @@ ship gate runs, since the gate searches `.claude/`.
   the bearer gate deleted, rigs and fixtures, tests, README's nodes and auth text. Touches the
   fixtures #2568 migrates — sequenced after it.
 - **S2 — the announcement.** `control_plane_urls` leaves the description, `graph`, `nodes` and
-  the schemas. Independent of S1.
+  the schemas. Independent of S1. The mesh is gone (#2643, #2645), so nothing is left to edit.
 - **S3 — MCP 2026-07-28.** The revision on `POST /mcp`, the CLI client's headers and `_meta`,
   the tests. Independent of S1 (it runs over TCP until S1 lands).
 - **S4 — the `mcp` verb.** `/mcp/stdio`, the verb, its live test, README's MCP setup. Blocked by

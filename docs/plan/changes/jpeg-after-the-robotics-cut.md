@@ -207,8 +207,7 @@ At ship, the entry drops "(unbuilt)" and the workspace-member clause. It then re
      parser, entropy, colour, Annex K and the selector.
    - A `hardware-tests` PSNR test carries `gpu_decode.rs`'s CPU reference, generalised to
      4:2:2, against JPEGs the test encodes itself. It is rig-only, per the GPU-tests rule.
-   - Acceptance is the plan's, amended by the owner on 2026-10-05: no USB 2.0 webcam is
-     sought.
+   - Acceptance is the plan's (owner, 2026-10-05): no USB 2.0 webcam is sought.
      - The Cam Link's MJPEG mode is opened directly at 1920×1080 and 30 fps through the
        engine's MJPEG path, and audited through `/verify-live`. Its frames are real 4:2:2
        UVC bitstreams.

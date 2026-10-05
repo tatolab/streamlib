@@ -15,11 +15,11 @@ machine offers. After this change:
   on `Runtime` are gone;
 - a typed duplicate node name is refused where it is written; a defaulted one takes `-2`, every
   name cast to lowercase URL-safe (runtime-hosting decision 3);
-- a port is read from outside its stream only at the level the stream exposes it (amended
-  2026-10-04: three levels, and no mesh to offer or send — the §Networking delta below).
+- a port is read from outside its stream only at the level the stream exposes it, one of three
+  (the §Networking delta below); the mesh is gone (#2643, #2645), so nothing is offered or sent.
 
 Unchanged and left to later changes, each mapped below: one engine per `run` process, today's
-runtime name as the first chunk of a mesh address, the environment a node runs from, the local
+runtime name as the first chunk of an address (the mesh is gone, #2643, #2645), the environment a node runs from, the local
 API's verbs, persistence across restarts.
 
 **Scale gate — this skill, plus the existing ADR.** The Python API's public contract moves
@@ -37,7 +37,7 @@ duplicate amendment), `:1322-1327` (a graph is data), `:1328-1333` (emitted, nev
 §Networking `:3986-3993` (nothing leaves until exposed). The OPENs beside them are not built
 against: loading and keeping a stream `:114-125`, composition `:134-140`, what the graph holds
 beyond nodes, links and exposures `:1334-1341`, several streams in one runtime process
-`:1342-1352`, resources `:1353-1358`, discovery `:3994-4010`, the stream map `:4011-4018`, the
+`:1342-1352`, resources `:1353-1358`, the
 URL grammar `:4023-4034`, the local API `:4437-4444`. The address entry `:3969-3985` is DECIDED
 and deliberately untouched here; "Left to later changes" says why. Since approval, loading and
 keeping a stream, composition, several streams in one runtime process and the local API were
@@ -55,7 +55,8 @@ DECIDED (#2570, #2580) and the environment by the package split (#2583); none is
   aliases from the live graph and refuses a graph holding any remote link (`:1432-1526`). Callers:
   engine tests only (`tests/graph_snapshot_round_trip_test.rs:71-82`); nothing in the api-server,
   the wheel or the CLI calls either.
-- `graph` renders `GraphResponse { nodes, links, extensions, mesh }`
+- `graph` renders `GraphResponse { nodes, links, extensions, mesh }` (the mesh is gone, #2643,
+  #2645)
   (`core/json_schema.rs:30-41`): a node is `id`, `type`, `display_name`, `config`,
   `config_checksum`, `ports`, `components` (`:210-227`); a link end is a `processor_id` or
   `{runtime_name, processor_display_name, port_name}` (`:272-300`).
@@ -89,8 +90,8 @@ DECIDED (#2570, #2580) and the environment by the package split (#2583); none is
 **Exposure today**
 - The offered-ports answer lists every output of every processor
   (`core/runtime/output_ports_in_this_runtimes_graph.rs:127-146`); an egress is created for any
-  port the first remote reader token names (`core/runtime/mesh/mesh_port_egress.rs:4-18`); no
-  `expose` surface exists in `runtime/` or `sdk/`.
+  port the first remote reader token names (`core/runtime/mesh/mesh_port_egress.rs:4-18`, gone
+  with the mesh, #2643, #2645); no `expose` surface exists in `runtime/` or `sdk/`.
 
 ---
 
@@ -125,7 +126,7 @@ one, with no change to the graph, the loader or `graph`.
   decorator stamps the function with its identity (import path, the identity rule nodes already
   follow) and returns it unchanged: no registry, no engine, no side effect, so a stream module
   imports without a runtime in the process. Its name and description follow decision 1.
-- **`Stream`, the builder** (`streamlib.Stream`, pure Python, ~~stub-gated~~ inline-typed and gated by pyright — superseded 2026-10-03 by #2567's build: stubtest gates only `streamlib._engine`):
+- **`Stream`, the builder** (`streamlib.Stream`, pure Python, inline-typed and gated by pyright; stubtest gates only `streamlib._engine`):
   ```python
   class Stream:
       name: str
@@ -137,17 +138,16 @@ one, with no change to the graph, the loader or `graph`.
       def remote_output(self, runtime_name: str, node_name: str, port_name: str) -> RemoteNodeOutputPortReference: ...
       def remote_input(self, runtime_name: str, node_name: str, port_name: str) -> RemoteNodeInputPortReference: ...
   ```
-  `add` records the node's `type` (the class's import path, ~~derived by the seam `rt.add` uses
-  today — `classify_processor_class`, reached from Python through one stub-gated function so a
-  built-in's marker and a `@node` class answer alike~~ derived in pure Python — a `@node` class's
-  `__module__:__qualname__`, a built-in marker's `type` class attribute; superseded by the owner's
-  2026-10-02 comment on #2567, since the package split deletes the native seam), its config as a
-  JSON object, and its name.
+  The remote references are gone with the mesh (#2643, #2645).
+  `add` records the node's `type` (the class's import path, derived in pure Python — a `@node`
+  class's `__module__:__qualname__`, a built-in marker's `type` class attribute — since the
+  package split deletes the native seam; owner, 2026-10-02, on #2567), its config as a JSON
+  object, and its name.
   `connect` records a link; `expose` records an output. Nothing runs: the builder holds data.
 - **Names are resolved by the builder**, because only it knows a typed name from a defaulted one:
   a name is cast to lowercase URL-safe and a defaulted one is the class's short name, cast; a
-  defaulted duplicate takes the next unused `-2`, `-3` … (runtime-hosting decision 3, amending
-  ` 2`); a typed duplicate — two typed names casting alike — raises at the `add` that typed it,
+  defaulted duplicate takes the next unused `-2`, `-3` … (runtime-hosting decision 3); a typed
+  duplicate — two typed names casting alike — raises at the `add` that typed it,
   naming both, on the author's own line; `@node` refuses two ports casting alike. The emitted graph therefore carries resolved,
   unique names, and a link names its ends by them. The engine keeps its own defaulting for a live
   `add_processor` that names nothing, and gains the same cast, `-2` and typed-duplicate refusal; one rule, two
@@ -155,16 +155,15 @@ one, with no change to the graph, the loader or `graph`.
 - **`compile_stream_to_graph(stream_function, *, name=None) -> dict`** runs the function once
   over a fresh `Stream` and returns the graph. A function that raises propagates; a function
   that adds nothing yields an empty graph, which `load` refuses by name.
-- **`Runtime.load(~~stream_or_graph~~ graph, *, name=None) -> None`** takes ~~a `@stream` function or~~ a
-  graph mapping~~, compiles the former,~~ and loads the graph into the engine before `run()`
-  (superseded by the owner's 2026-10-02 comment on #2567: compiling happens in the project's
-  interpreter, so `run` and `dev` compile and `load` takes the graph): each
+- **`Runtime.load(graph, *, name=None) -> None`** takes a graph mapping and loads it into the
+  engine before `run()` — compiling happens in the project's interpreter, so `run` and `dev`
+  compile and `load` takes the graph (owner, 2026-10-02, on #2567): each
   node through today's `add_processor` with its resolved name, refusing a name already in the
-  graph instead of suffixing it; each link through today's `connect`, a remote end through the
-  link request a remote end already takes; each exposure into the exposure set below. A second
-  `load` on one runtime is refused by name: ~~several streams in one runtime process is OPEN
-  (`:1342-1352`), and~~ this change runs one stream per `run` (several streams in one runtime
-  process became DECIDED, `ARCHITECTURE.md:1425-1437`, and runtime hosting builds it). After a
+  graph instead of suffixing it; each link through today's `connect`; each exposure into the
+  exposure set below. A second
+  `load` on one runtime is refused by name: this change runs one stream per `run` (several
+  streams in one runtime process are DECIDED, `ARCHITECTURE.md:1425-1437`, and runtime hosting
+  builds them). After a
   refused `load`, `run()` refuses too (owner, 2026-10-04 comment on #2567).
 - **Embedding** is `Runtime(...)`, `load(...)`, `run()`. Live changes after `load` go through
   the control vocabulary as they do for every other client; `Runtime` carries no `add`,
@@ -172,7 +171,8 @@ one, with no change to the graph, the loader or `graph`.
   beside a runtime that also builds is the two-ways-of-working the ADR rejected.
 - **`run` and `dev`** find the entry file — `stream.py` by convention, `-f` overriding — execute
   it as today, pick the stream per decision 1, `compile_stream_to_graph`, `Runtime(...)`,
-  `load`, host the control plane, `run()`. The mesh flags, `--host` and `--port` are untouched.
+  `load`, host the control plane, `run()`. `--host` and `--port` are untouched; the mesh flags
+  are gone with the mesh (#2643, #2645).
   `dev`'s edit loop is the same restart over the same path.
 - **The scaffold** writes `stream.py` with one `@stream` over the two nodes it writes today,
   each under `nodes/` instead of `processors/`, and exposes the effect's output:
@@ -228,7 +228,7 @@ one, with no change to the graph, the loader or `graph`.
   load), `exposed` always; a node carries `name` where it carried `display_name`, beside `id`,
   `type`, `config`, `config_checksum`, `ports`, `components`; a link's local end is `{node,
   port}` with `processor_id` beside it, a remote end unchanged; `links[].id`, `state`, counters,
-  `extensions` and `mesh` as today. A loader reads the spec keys and ignores the rest, so
+  and `extensions` as today, the mesh being gone (#2643, #2645). A loader reads the spec keys and ignores the rest, so
   `streamlib graph`'s output is a loadable graph; `save_graph_snapshot` and its path form are
   deleted, since the render is the export. The OpenAPI schema, the generated schemas, the MCP
   instructions and the strict fixture follow.
@@ -236,15 +236,13 @@ one, with no change to the graph, the loader or `graph`.
   builder and the render. `load` accepts a mapping because the render is one; nothing documents
   hand-writing it.
 
-## MODIFIED: §Networking — exposure (superseded)
+## MODIFIED: §Networking — exposure
 
-> ~~Exposure gates what leaves: a binary exposure set, the mesh's offer answering exposed ports
-> only, an egress created for an exposed port only, the mesh fixtures exposing what they wire.~~
-> — Superseded 2026-10-04, twice. The exposure align made exposure three levels checked where a
-> read crosses a stream's edge (`docs/decisions/exposure-levels.md`), and the pivot removed Zenoh,
-> so no offer or egress exists to gate (`docs/decisions/moq-on-the-tailnet.md`). What S4 builds
-> is §Networking's exposure entry: the live map and the check at the stream's edge on one
-> machine. No `expose` verb joins the control vocabulary in this change, as before.
+Exposure gates reads across a stream's edge: three levels, checked where a read crosses the edge
+(`docs/decisions/exposure-levels.md`). The mesh is gone (#2643, #2645), so no offer or egress
+exists to gate (`docs/decisions/moq-on-the-tailnet.md`). What S4 builds is §Networking's exposure
+entry: the live map and the check at the stream's edge on one machine. No `expose` verb joins the
+control vocabulary in this change.
 
 ## MODIFIED: §Product `:39-46`, `:83-98` and §Processor model `:1253-1318` — records re-spelled
 
@@ -259,8 +257,8 @@ one, with no change to the graph, the loader or `graph`.
 
 | Not here | Because | Lands with |
 |---|---|---|
-| The `<machine>/` address segment and the stream in the Zenoh key (`:3969-3985`) | With one engine per `run` process there is no machine to name but today's runtime name; adding the segment now would refuse the second stream on a machine | the change that makes one runtime host several streams |
-| ~~The name grammar in the same entry~~ | built here since runtime-hosting decision 3: the cast and `-2` for node names | this change; machine and stream names and remote addresses with runtime hosting |
+| The `<machine>/` address segment (`:3969-3985`); the Zenoh key is gone with the mesh (#2643, #2645) | With one engine per `run` process there is no machine to name but today's runtime name; adding the segment now would refuse the second stream on a machine | the change that makes one runtime host several streams |
+| Machine and stream names in the same entry | the node-name cast and `-2` are built here (runtime-hosting decision 3) | runtime hosting, with remote addresses |
 | `graph` returning several streams; `load`, `unload`, `streams`, `expose` as verbs; MCP argument spellings (`display_name` and friends) | the local API OPEN at approval | the verbs: runtime hosting, step 4 (decided 2026-10-01); the MCP argument spellings: the local-API change did not take them — to `/align`, 2026-10-02 (#2565's comment) |
 | The stream's environment (venv path) in the graph; needs derived from nodes | OPEN `:1334-1341` at approval | the environment: the package split (#2590), recorded beside the graph, never in it (decided 2026-10-02); needs: resources, step 6 |
 | Persisting loaded graphs in a state directory; re-load on restart | OPEN `:114-125` at approval; the one-engine entry's state directory | runtime hosting, step 4 (decided 2026-10-01) |
@@ -268,8 +266,8 @@ one, with no change to the graph, the loader or `graph`.
 | `ProcessorLinkDataAccess`, `ProcessorOwnedWindow`, `ProcessorOwnedWindowEvents`, `ProcessorOutputTextureRing` | per-node capability classes, not the stream-building surface | the namespace rename, which re-spells every public name at once — no change owns these names yet: the package split moves import paths only; to `/align`, 2026-10-02 |
 
 The ripout change's inventory table (`one-runtime-per-machine-ripout.md:236-246`, a file that became
-`local-api.md` on 2026-10-01) mapped the three-part `MeshPortAddress` to this change; it moves to
-the hosting change for the reason above.
+`local-api.md` on 2026-10-01) mapped the three-part address to this change — `PortAddress`, the
+mesh being gone (#2643, #2645); it moves to the hosting change for the reason above.
 
 ## Assumptions stated, not asked
 
@@ -277,7 +275,7 @@ the hosting change for the reason above.
   not looked for.
 - `Runtime.load` refuses a second load; one stream per `run` until `:1342-1352` is decided
   (decided 2026-10-01, #2580; runtime hosting builds it).
-- Exposure gates the mesh in this change rather than being recorded and inert: closed by default
+- Exposure gates reads across a stream's edge in this change rather than being recorded and inert: closed by default
   is decided, and a recorded `expose` that gated nothing would be the no-op surface the doctrine
   forbids. Owner, 2026-10-01: keep it here; S4 stays in this change.
 - The extension wheels' four processors move to `@node` inside S1, as the canary §Consumers
@@ -297,7 +295,7 @@ the hosting change for the reason above.
   `compile_stream_to_graph`, `Runtime.load`, `rt.add`/`connect`/remote references deleted, `run`
   and `dev` over `stream.py`, the scaffold's `stream.py`, the forty fixtures. Blocked by S1, S2.
 - **S4 — exposure.** The live exposure map and the check at the stream's edge on one machine
-  (superseded as written; see the §Networking delta above). Blocked by S2.
+  (as the §Networking delta above states). Blocked by S2.
 
 Restart time stays an acceptance criterion of the hosting change, not this one (#2559's record).
 
