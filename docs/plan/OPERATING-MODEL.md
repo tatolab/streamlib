@@ -216,10 +216,10 @@ it or how. The one per-machine knob is the advisory `rig-brake` note: the untrac
 plus glob exceptions) on that machine; the checked-in `.claude/rig-brake.json` is the shared
 baseline.
 
-### Skill invocation is enforced, not hoped for
+### Skill invocation is layered, not hoped for
 
-A model can't be *forced* to invoke a skill — so the system makes the side effects of
-skipping one physically fail, in layers from soft to hard:
+A model can't be *forced* to invoke a skill — so the system layers what it can, from soft
+to hard:
 
 1. **Router text in CLAUDE.md** (always loaded): all work enters through `/plan`; source
    edits happen only inside `/implement` with a confirmed ticket; plan *decisions* happen

@@ -301,13 +301,15 @@ threads at once inherits the requirement.
 
 ## Tests
 
-Per-adapter conformance is a **unit test** exercising concurrent
-producer + consumer acquire/release cycles against a real Vulkan
-device. It asserts:
-- Zero `VUID-VkSemaphoreSignalInfo-value-03258` occurrences (the
-  multi-writer race).
-- `produce_done.current_value()` and `consume_done.current_value()`
-  advance monotonically and independently.
+Every adapter runs the shared conformance suite,
+`streamlib_surface_adapter::testing::run_conformance`: acquire and drop
+for read and write, two concurrent reads, a write contending with a live
+read or write, the non-blocking acquires under contention, and parallel
+readers from several threads. It asserts guard behaviour, not timeline
+values. The Vulkan adapter's `sync_correctness` test asserts the timeline
+side: dropping a write guard advances `produce_done`, dropping the last
+read guard advances `consume_done`, and downstream observers see the
+post-release value.
 
 No in-tree graph drives these adapters across processes under validation layers, so the unit
 tests are the whole coverage.

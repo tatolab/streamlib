@@ -50,7 +50,8 @@ end-to-end via @docs/learnings/camera-display-e2e-validation.md.
 
 2. **The engine pre-warms every export-capable VMA pool at
    `HostVulkanDevice::new()` time** (DMA-BUF buffers, DMA-BUF images
-   linear and tiled, OPAQUE_FD HOST_VISIBLE and DEVICE_LOCAL buffers)
+   linear and tiled, OPAQUE_FD HOST_VISIBLE, host-cached and DEVICE_LOCAL
+   buffers, and the OPAQUE_FD image pool)
    by allocating a tiny probe through each pool, strictly before any
    caller can build a `VkSwapchainKHR`. Empirical observation from
    issue #624: this keeps the post-swapchain allocation path open for

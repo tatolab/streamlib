@@ -16,8 +16,9 @@ test core::utils::loop_control::tests::test_shutdown_event_exits_loop ...
 
 `PUBSUB` is an in-process fan-out with no `init()`: a publish is queued
 for every live listener subscribed at that moment, with or without a
-runtime, and is lost only when that listener's queue is full — a drop
-the bus counts and logs. `PUBSUB.subscribe()` returns only once its
+runtime, and is lost when that listener's queue is full — a drop the
+bus counts and logs — or when the listener's receiver has disconnected,
+which removes the subscription without counting a drop. `PUBSUB.subscribe()` returns only once its
 subscriber is registered, so subscribing and then publishing needs no
 wait in between.
 
