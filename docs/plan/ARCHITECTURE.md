@@ -51,7 +51,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   name — falling back to an `app.py`'s `setup(rt)` until #2569 deletes it; nodes are
   Python classes written in the project or imported from pip-installed packages, and
   `stream.add` takes the class; the builder's API is `add`/`connect`/`expose`.
-  [importable-python-library — SHIPPED #1683, #1707, #1708; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node` — stream-graph builds the authoring clauses]
+  [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node` — stream-graph builds the authoring clauses]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
@@ -167,8 +167,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   both runnable streams and composable nodes (owner, 2026-09-30). Decided as stream-graph
   decision 1 (owner, 2026-10-01): the name
   defaults to the function's and its docstring is the description an agent reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
-  there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one, a
-  package declaring its streams under an entry-point group. [one-runtime-per-machine; stream-graph]
+  there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one. A
+  package declaring its streams under an entry-point group is the packs OPEN's.
+  [one-runtime-per-machine; stream-graph — SHIPPED #2567]
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
   adds nodes, connects them and returns port references is a reusable fragment. The graph
   stays flat and addresses stay `<machine>/<stream>/<node>/<port>`; no group label and no nested
@@ -247,7 +248,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and in every case (d) a named consumer exists. Everything else is an
   extension. What an extension needs and the engine does not yet expose is engine work,
   done as engine code inside the extension's own change, rather than by the extension
-  reaching past the surface. [extension-model; virtual-camera-sink — SHIPPED #2196, #2197, #2198]
+  reaching past the surface. Codec sessions are not exported to Python; an extension that
+  needs one brings that export as engine work. [extension-model; virtual-camera-sink —
+  SHIPPED #2196, #2197, #2198]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_virtual_camera_sink.py -->
 - **DECIDED** — The `streamlib` wheel exports its bag codec as two module-level functions
   with stub entries: `encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes` and
@@ -1782,7 +1785,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the compute path's entry scope does, so it waits on the one queue for a display's in-flight
   compose of that slot. Owner, 2026-09-22, over a wheel ring asking a "still held?" op per
   rotation, which would be a second system deciding slot reuse.
-  [engine-steps — SHIPPED #2427, #2429, #2503; the draw barrier — SHIPPED #2546; amended by
+  [engine-steps — SHIPPED #2427, #2429, #2503, #2546; amended by
   tatolab-names: on the Python surface the two acquire methods become
   `…_from_node_output_pool` and the ring `NodeOutputTextureRing` (§Packages, no public Python
   name says "processor")]
@@ -2154,8 +2157,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and ALSA driver stamps carry on Linux and CoreAudio's `mHostTime` and AVFoundation's
   host-time-converted presentation stamps carry on Apple, comparable across every node on a host — and on that host
   alone, since the epoch is that machine's own boot: two stamps from two machines are
-  readings of two unrelated clocks, which is why every link names the machine its bags were
-  stamped on (§Networking). No
+  readings of two unrelated clocks, so a stamp is never compared against one taken on another
+  machine's clock (§Networking). No
   process-relative epoch anywhere, and each language exports exactly one name for it. The
   wheel's name reads the engine's own `MediaClock`, so on macOS a helper's
   `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
@@ -2274,7 +2277,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   BUSL header. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
 - **DECIDED** — The portability gate is the design's pass/fail: the shipped
-  `_engine.abi3.so` names only the five permitted host libraries. No name is added to the permitted-host-library list — an audio
+  `_engine.abi3.so` names five host libraries, every one on the permitted-host-library list,
+  and audio adds none. No name is added to the permitted-host-library list — an audio
   library appearing there is the failure this design exists to prevent, not a fix for
   it. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
@@ -2577,8 +2581,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   Overwrite counting is shipped (§Processor model); until this is decided the connect is
   refused as the entry above states. [loss-visibility]
 - **DECIDED** — The resampler is `rubato` — pure Rust, MIT, adding no `DT_NEEDED` entry —
-  and the portability gate is the pass/fail: the shipped `_engine.abi3.so` names only the
-  five permitted host libraries. Its three adapter
+  and the portability gate is the pass/fail: the resampler adds no host library to the five
+  the shipped `_engine.abi3.so` names. Its three adapter
   obligations are the stage's to meet: fixed input-chunk sizes, planar rather than
   interleaved buffers (de-interleave after the channel convert), and the group-delay and
   reset seams the stamp and flush clauses bind. Hand-rolling a polyphase resampler was
@@ -2631,10 +2635,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   sink plays. It has no refusal of a block whose rate, channels or dtype the device cannot
   take, because the mic-to-speaker mismatch the two built-ins have by construction
   (capture prefers mono, playback prefers stereo) is the plainest case the window contract
-  exists to fix.
+  exists to fix. Conditioning and immediate cancel are a later rung.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1992;
-  audio-port-window-contract — SHIPPED #2034; conditioning and immediate cancel are a later
-  rung]
+  audio-port-window-contract — SHIPPED #2034]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_microphone_source.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_speaker_sink.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_speaker_sink.py::test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured -->
@@ -2787,8 +2790,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — On the rig the decoder enters at `sequence_index=0` with zero frames
   discarded, and the encoder writes parameter sets on every IDR, so even a late subscriber re-enters within
   one GOP. A failed header extraction refuses rather than degrading to an empty header, and
-  the minted header is checked with the engine's own NAL reader. Under sustained decoder lag,
-  an H.265 shutdown race is worth re-running on the rig rather than assumed fixed.
+  the minted header is checked with the engine's own NAL reader. Cam Link capture ran 18
+  clean runs across release and debug at 1080p60 and 4K30 with no `DEVICE_LOST`. Decode runs
+  at 3.75 ms/frame, so the decoder lag that triggered the H.265 shutdown race is absent; if
+  sustained decoder lag reappears, re-run that scenario on the rig rather than assuming it
+  fixed.
   [codec-blocks — SHIPPED #2084, #2085, #2086]
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
 - **DECIDED** — The four video blocks reach Python as marker classes beside
@@ -2929,7 +2935,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   bundled libopus builds static by default; libopus's notice joins `VENDORED_CPP_PROJECTS`
   read from the crate's own `COPYING` in the registry checkout — the `shaderc-sys` shape
   generalised to a second build-script crate rather than a parallel mechanism — and the
-  portability gate is the pass/fail, naming only the five permitted host libraries.
+  portability gate is the pass/fail: Opus adds no host library to the five the shipped
+  `_engine.abi3.so` names.
   [codec-blocks; opus-mp4-recording-rung — SHIPPED #2125]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
@@ -3185,10 +3192,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [extension-model]
 - **DECIDED** — `packages/streamlib-webrtc/`: a standalone maturin project — own
   `Cargo.toml` (`[workspace]` root, `[lib] name = "_native"`, `crate-type = ["cdylib"]`,
-  `pyo3` on `abi3-py310`, `webrtc 0.14`, `tokio`, `hyper` + `hyper-rustls`, `rustls`,
-  `bytes`; no engine crate), own lockfile, `pyproject.toml` depending on `streamlib` by
-  version, `python/streamlib_webrtc/` with `_native.pyi` and `py.typed`. `src/` carries the
-  WHIP and WHEP clients, `h264_rtp.rs` with its tests, and `rtp.rs`'s sample conversion.
+  `pyo3` on `abi3-py310`, `webrtc 0.17`, `tokio`, `hyper` + `hyper-util` + `hyper-rustls`,
+  `rustls`, `bytes`; no engine crate), own lockfile, `pyproject.toml` depending on `streamlib`
+  by version, `python/streamlib_webrtc/` with `_native.pyi` and `py.typed`. `src/` carries the
+  WHIP and WHEP sessions (`whip_session.rs`, `whep_session.rs`, over `http_signalling.rs`) and
+  the RFC 6184 depacketiser `h264_rtp_depacketiser.rs` with its tests.
   `extension.py:load` brings up the tokio runtime and the rustls provider once and
   registers `webrtc`. [networking-extension-wheels — SHIPPED #2150]
 - **DECIDED** — `WhipPublisher`: `@processor`, one fan-in input `tracks` (`ordered`), the
@@ -3286,8 +3294,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [exposure-levels]
 - **DECIDED** — Every stamp in the tree is this machine's. The one monotonic clock of §Media I/O
   is one clock per machine, and a stamp is never compared against one from another clock. No
-  link can carry a stamp from another machine, so nothing reads or renders a clock identity.
-  How a stamp taken on another machine's clock is marked is the sharing step's OPEN below.
+  link can carry a stamp from another machine, so nothing reads or renders a clock identity,
+  and `Mp4Sink` compares first stamps across tracks with no another-machine refusal. How a stamp taken on another machine's clock is marked is the sharing step's OPEN below.
   [runtime-mesh; zenoh-and-moq-wheel-removal — SHIPPED #2643]
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
@@ -3310,8 +3318,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   of today's runtime name, the runtime is addressed by its machine (default the hostname),
   every existing address maps across with one segment prefixed, and the same string is the
   address in Python, the CLI, the URL path and the graph (owner, 2026-09-30). Collisions (owner,
-  2026-10-02): a **machine** name is its tailnet name (the moq-on-the-tailnet entry below). A
-  second user's runtime on one machine is refused, not suffixed (§Product). A **stream** name
+  2026-10-02): a second user's runtime on one machine is refused, not suffixed (§Product). A **stream** name
   is unique per machine, defaults to its function's, and a second
   load of a name is refused naming where the first came from, with `--name` the way out, which
   covers two packs that each define a `main`; a **node** name is unique per stream — a
@@ -3329,7 +3336,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   files, imports, the string passed — is never constrained; a node's `type` stays its import
   path. Uniqueness is of the cast name: two typed names casting alike are a typed duplicate.
   Owner, 2026-10-02 (runtime-hosting decision 3). [one-runtime-per-machine; runtime-hosting;
-  moq-on-the-tailnet]
+  amended by moq-on-the-tailnet: a machine name is its tailnet name (the entry below)]
 - **DECIDED** — Exposure: every output port of a stream is internal, private or public, and the
   runtime enforces it at the stream's edge, never inside the stream. **Internal**, the default:
   any node of the stream may link to it, and nothing outside the stream may read it.
@@ -3701,7 +3708,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `show_channel_on_virtual_camera` and `look_at_what_a_channel_carries` — whose every
   step is a call to a served tool: a prompt is text, never a mutation path, so the tool
   set stays the whole of the control vocabulary.
-  [importable-python-library; mcp-served-with-the-node — SHIPPED #1712, #2232;
+  [importable-python-library; mcp-served-with-the-node — SHIPPED #1712;
+  agent-readable-processor-catalog — SHIPPED #2232;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; local-transport-hardening —
   SHIPPED #2263, #2265; reopened by one-runtime-per-machine: the local API; amended by
   local-api: the tools, resources and prompts speak the graph's words, and an MCP host

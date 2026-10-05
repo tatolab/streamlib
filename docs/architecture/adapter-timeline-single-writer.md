@@ -309,6 +309,9 @@ device. It asserts:
 - `produce_done.current_value()` and `consume_done.current_value()`
   advance monotonically and independently.
 
+No in-tree graph drives these adapters across processes under validation layers, so the unit
+tests are the whole coverage.
+
 Concurrent *readers within one process* need their own coverage —
 the single-writer rule says nothing about them. The cpu-readback
 adapter's `concurrent_read_timeline_signals` test is the shape:
