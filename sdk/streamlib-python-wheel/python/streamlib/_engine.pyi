@@ -543,7 +543,7 @@ class Runtime:
         """Build the engine, named `runtime_name`.
 
         The name is the first chunk of every tap channel this runtime serves,
-        `<runtime name>/<display name>/<port>`, and the name on its registry
+        `<runtime name>/<node name>/<port>`, and the name on its registry
         row that `--node` matches. It belongs to the runtime and is stable
         across runs of one app. It is non-empty, carries none of `/ * $ # ?`,
         and does not begin with `@`; spaces and unicode are fine. A name
@@ -623,7 +623,7 @@ class Runtime:
         process with status 130 at once. `shutdown()` is the first step only,
         however often it is called.
 
-        Raises `RuntimeError` naming each processor, by display name and id,
+        Raises `RuntimeError` naming each processor, by node name and id,
         whose thread ignored shutdown past its budget and was abandoned — the
         engine then stays alive beneath it until the process exits. A forced
         shutdown that abandoned nothing returns normally. A teardown still hung
