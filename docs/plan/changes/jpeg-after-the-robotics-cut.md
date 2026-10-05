@@ -1,5 +1,8 @@
 # jpeg-after-the-robotics-cut
 
+> **Approved by the owner, 2026-10-05**, as written, with its stated assumptions. Tickets derived
+> 2026-10-05 (below).
+
 The build of the JPEG align (owner, 2026-10-04): the removals and MJPEG capture, as one change.
 After this change:
 - the tree holds no JPEG block, no nvJPEG backend, no `libnvjpeg` probe, no
@@ -242,6 +245,17 @@ decoder slices do not wait on this; the capture slice's acceptance does.
 - 4:4:4 and greyscale JPEG.
 - Progressive JPEG.
 - Parallel entropy decode across restart intervals.
+
+## Tickets
+
+Derived 2026-10-05; milestone #63, *Webcams live over MJPEG*.
+
+1. #2639 — the JPEG block's leftovers are gone (slice 1). Independent; needs no rig. It carries
+   the nvJPEG, consumer and fixture bullets. `nvjpeg` and `nvJPEG` also need #2640.
+2. #2640 — the engine decodes a 4:2:0 or 4:2:2 JPEG through the capture stage (slice 2).
+   Independent; ultracode; needs the GPU rig. It carries the crate's bullets.
+3. #2641 — a Linux camera whose best mode is MJPEG is captured live (slice 3). Blocked by #2640;
+   ultracode; needs the GPU rig and a USB 2.0 webcam.
 
 ## REMOVED
 
