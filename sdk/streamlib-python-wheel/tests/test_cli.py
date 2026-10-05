@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `streamlib` console script: entry resolution, stream selection, `setup(rt)`, and `new`.
+"""The `streamlib` console script: entry resolution, stream selection, launching, and `new`.
 
 Nothing here boots an engine. Entry resolution and scaffolding are pure
 functions over the filesystem, and the failure paths are the point: an entry
@@ -22,14 +22,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from app_under_test import ENGINE_STARTING_LOG_LINE
 
-from streamlib import Runtime, _node_registry, cli
+from streamlib import _node_registry, cli
 
-MINIMAL_APP_SOURCE = "def setup(rt):\n    pass\n"
 MINIMAL_STREAM_SOURCE = (
     "from streamlib import Stream, TestPatternSource, stream\n"
     "\n"
@@ -38,6 +37,7 @@ MINIMAL_STREAM_SOURCE = (
     "def main(stream: Stream) -> None:\n"
     "    stream.add(TestPatternSource)\n"
 )
+APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION = "def setup(runtime):\n    pass\n"
 
 # Bounded: a resolution failure exits before anything is built, so a run that
 # reaches this deadline has booted a node instead of failing.
@@ -64,7 +64,7 @@ def restore_the_launchers_import_path():
         sys.path[:] = launcher_import_path
 
 
-def write_app(directory: Path, file_name: str, source: str = MINIMAL_APP_SOURCE) -> Path:
+def write_app(directory: Path, file_name: str, source: str) -> Path:
     entry_file = directory / file_name
     entry_file.parent.mkdir(parents=True, exist_ok=True)
     entry_file.write_text(source, encoding="utf-8")
@@ -90,7 +90,7 @@ def run_cli(
 
 
 # ---------------------------------------------------------------------------
-# Entry resolution — the `stream.py` convention, `app.py` where there is none
+# Entry resolution — the `stream.py` convention
 # ---------------------------------------------------------------------------
 
 
@@ -102,21 +102,37 @@ def test_no_args_resolves_the_conventional_stream_entry_at_the_anchor(tmp_path: 
     assert resolved == tmp_path / "stream.py"
 
 
-def test_stream_py_is_read_before_app_py(tmp_path: Path):
+def test_stream_py_resolves_beside_an_app_py(tmp_path: Path):
     write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
-    write_app(tmp_path, "app.py")
+    write_app(tmp_path, "app.py", APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION)
 
     resolved = cli.resolve_app_entry_file("dev", tmp_path, None)
 
     assert resolved == tmp_path / "stream.py"
 
 
-def test_an_app_py_still_launches_where_there_is_no_stream_py(tmp_path: Path):
-    write_app(tmp_path, "app.py")
+def test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag(
+    tmp_path: Path,
+):
+    write_app(tmp_path, "app.py", APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION)
 
-    resolved = cli.resolve_app_entry_file("run", tmp_path, None)
+    with pytest.raises(cli.AppLaunchError) as resolution_failure:
+        cli.resolve_app_entry_file("dev", tmp_path, None)
 
-    assert resolved == tmp_path / "app.py"
+    message = str(resolution_failure.value)
+    assert f"no `stream.py` in `{tmp_path}`, only an `app.py`" in message
+    assert (
+        "`streamlib dev` launches a @stream function from `stream.py`, and reads "
+        "`app.py` only when `-f` or a target names it." in message
+    )
+    assert "    @stream\n    def main(stream: Stream) -> None:\n" in message, (
+        "the refusal must show the shape `stream.py` holds"
+    )
+    assert "-f <file>" in message, "the refusal must offer the `-f` override"
+    assert "streamlib dev <file>.py[:<function>]" in message
+    assert "--dir <project-root>" not in message, (
+        "the directory is the project root; only its entry file is wrong"
+    )
 
 
 def test_explicit_entry_file_overrides_the_convention(tmp_path: Path):
@@ -141,11 +157,13 @@ def test_a_missing_conventional_entry_names_the_convention_and_the_anchor(tmp_pa
         cli.resolve_app_entry_file("dev", tmp_path, None)
 
     message = str(resolution_failure.value)
-    assert "no `stream.py`" in message, "the error must name the convention"
-    assert "app.py" in message, "the error must name the fallback the expand step keeps"
-    assert str(tmp_path) in message, "the error must name the anchor it searched"
+    assert f"no `stream.py` in `{tmp_path}`\n" in message, (
+        "the error must name the convention and the anchor it searched"
+    )
+    assert "app.py" not in message, "a directory with no `app.py` hears nothing of one"
     assert "streamlib dev" in message, "the error must name the verb the user typed"
-    assert "-f " in message, "the error must offer the `-f` escape hatch"
+    assert "-f <file>" in message, "the error must offer the `-f` escape hatch"
+    assert "streamlib dev <file>.py[:<function>]" in message
     assert "--dir <project-root>" in message
 
 
@@ -156,7 +174,6 @@ def test_a_missing_explicit_entry_names_the_path_it_tried(tmp_path: Path):
 
 def test_resolution_never_walks_up_to_a_parent(tmp_path: Path):
     write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
-    write_app(tmp_path, "app.py")
     nested = tmp_path / "nested"
     nested.mkdir()
 
@@ -168,8 +185,10 @@ def test_a_directory_named_like_the_entry_is_not_an_entry(tmp_path: Path):
     (tmp_path / "stream.py").mkdir()
     (tmp_path / "app.py").mkdir()
 
-    with pytest.raises(cli.AppLaunchError):
+    with pytest.raises(cli.AppLaunchError) as resolution_failure:
         cli.resolve_app_entry_file("run", tmp_path, None)
+
+    assert "only an `app.py`" not in str(resolution_failure.value)
 
 
 def test_the_anchor_is_the_cwd_when_dir_is_absent():
@@ -250,21 +269,8 @@ def test_a_target_and_an_entry_file_together_are_refused_naming_both(tmp_path: P
 
 
 # ---------------------------------------------------------------------------
-# Executing the entry — the `setup(rt)` convention
+# Executing the entry
 # ---------------------------------------------------------------------------
-
-
-def test_the_entry_file_executes_and_yields_its_setup_function(tmp_path: Path):
-    entry_file = write_app(
-        tmp_path, "app.py", "def setup(rt):\n    return 'called'\n"
-    )
-
-    namespace = cli.execute_app_entry_file(entry_file)
-    app_setup_function = cli.read_app_setup_function(namespace, entry_file)
-
-    # The runtime this `setup` never touches: what is under test is that the
-    # entry file's own function came back, not what it does with the argument.
-    assert app_setup_function(cast(Runtime, None)) == "called"
 
 
 def test_the_entry_runs_as_main_with_its_own_directory_importable(tmp_path: Path):
@@ -288,20 +294,6 @@ def test_the_entry_runs_as_main_with_its_own_directory_importable(tmp_path: Path
     assert namespace["MODULE_NAME"] == "__main__", (
         "the entry must run under the name `python stream.py` gives it"
     )
-
-
-def test_an_entry_without_setup_names_the_convention(tmp_path: Path):
-    entry_file = write_app(tmp_path, "app.py", "PIPELINE = 1\n")
-
-    with pytest.raises(cli.AppLaunchError, match="defines no `setup"):
-        cli.read_app_setup_function({"PIPELINE": 1}, entry_file)
-
-
-def test_a_non_callable_setup_is_named_rather_than_called(tmp_path: Path):
-    entry_file = write_app(tmp_path, "app.py", "setup = 3\n")
-
-    with pytest.raises(cli.AppLaunchError, match="not a function"):
-        cli.read_app_setup_function({"setup": 3}, entry_file)
 
 
 # ---------------------------------------------------------------------------
@@ -852,23 +844,22 @@ def test_a_named_function_the_file_lacks_is_refused_listing_its_streams(
     assert recorded_launch_runtime_calls.calls == []
 
 
-def test_a_named_function_in_a_setup_file_is_refused_naming_the_launch_without_it(
+def test_an_app_py_named_by_the_file_flag_that_defines_only_setup_defines_no_stream(
     tmp_path: Path,
     recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
     capsys: pytest.CaptureFixture[str],
 ):
-    write_app(tmp_path, "app.py")
+    write_app(tmp_path, "app.py", APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION)
 
-    exit_code = cli.main(["run", "--dir", str(tmp_path), "app.py:main"])
+    exit_code = cli.main(["run", "--dir", str(tmp_path), "-f", "app.py"])
 
     assert exit_code == 1
     refusal = capsys.readouterr().err
-    assert (
-        f"`{tmp_path / 'app.py'}` defines no @stream function named `main`, nor any "
-        f"other: it builds its graph in `setup(rt)`. Launch it without `:<function>`: "
-        f"`streamlib run --dir {tmp_path} app.py`."
-    ) in refusal
-    assert recorded_launch_runtime_calls.calls == []
+    assert f"`{tmp_path / 'app.py'}` defines no @stream function\n" in refusal
+    assert "    @stream\n    def main(stream: Stream) -> None:\n" in refusal
+    assert recorded_launch_runtime_calls.calls == [], (
+        "a file with no stream costs no engine"
+    )
 
 
 def test_a_named_function_in_a_file_with_no_stream_is_refused_naming_the_decorator(
@@ -988,56 +979,20 @@ def test_a_package_target_naming_a_value_that_is_not_a_stream_is_refused_naming_
     assert recorded_launch_runtime_calls.calls == []
 
 
-def test_an_entry_defining_both_a_stream_and_setup_is_refused(
+def test_a_directory_holding_only_an_app_py_launches_nothing(
     tmp_path: Path,
     recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
     capsys: pytest.CaptureFixture[str],
 ):
-    write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE + "\n\n" + MINIMAL_APP_SOURCE)
+    write_app(tmp_path, "app.py", MINIMAL_STREAM_SOURCE)
 
     exit_code = cli.main(["run", "--dir", str(tmp_path)])
 
     assert exit_code == 1
-    refusal = capsys.readouterr().err
-    assert "defines both @stream functions (`main`) and `setup(rt)`" in refusal
-    assert "remove `setup`" in refusal
-    assert recorded_launch_runtime_calls.calls == []
-
-
-def test_name_is_refused_for_an_entry_that_builds_its_graph_in_setup(
-    tmp_path: Path,
-    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
-    capsys: pytest.CaptureFixture[str],
-):
-    write_app(tmp_path, "app.py")
-
-    exit_code = cli.main(["run", "--dir", str(tmp_path), "--name", "rig"])
-
-    assert exit_code == 1
-    assert (
-        f"--name names a stream, and `{tmp_path / 'app.py'}` builds its graph in "
-        f"`setup(rt)`: drop `--name`, or convert the file to a `@stream` function."
-    ) in capsys.readouterr().err
-    assert recorded_launch_runtime_calls.calls == []
-
-
-def test_an_app_py_with_setup_still_launches_through_setup(
-    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
-):
-    """The expand step's fallback: no `stream.py`, an `app.py` with `setup(rt)`."""
-    write_app(
-        tmp_path,
-        "app.py",
-        "SETUP_CALLS = []\ndef setup(rt):\n    SETUP_CALLS.append(type(rt).__name__)\n",
+    assert "only an `app.py`" in capsys.readouterr().err
+    assert recorded_launch_runtime_calls.calls == [], (
+        "the convention never launches `app.py`, even one that defines a stream"
     )
-
-    assert cli.main(["run", "--dir", str(tmp_path)]) == 0
-
-    assert recorded_launch_runtime_calls.call_names() == [
-        "construct",
-        "host_control_plane",
-        "run",
-    ], "the setup path builds the graph in `setup`, never through `load`"
 
 
 def test_a_stream_that_adds_nothing_is_refused_at_load_and_publishes_no_node(
@@ -1207,11 +1162,11 @@ def test_a_raise_at_import_time_surfaces_as_the_apps_traceback(tmp_path: Path):
 
 
 def test_a_missing_entry_exits_without_a_python_traceback(tmp_path: Path):
-    """A missing `app.py` is a usage error, not an internal failure."""
+    """A missing `stream.py` is a usage error, not an internal failure."""
     finished = run_cli("dev", "--dir", str(tmp_path))
 
     assert finished.returncode == 1
-    assert "app.py" in finished.stderr
+    assert "no `stream.py`" in finished.stderr
     assert "never searches parent directories" in finished.stderr
     assert "Traceback (most recent call last)" not in finished.stderr, (
         f"a usage error must not print a launcher traceback; stderr was:\n{finished.stderr}"
@@ -1270,13 +1225,29 @@ def test_an_app_that_exits_on_purpose_keeps_its_own_exit_code(tmp_path: Path):
     )
 
 
-def test_a_setup_that_exits_on_purpose_keeps_its_own_exit_code(tmp_path: Path):
-    """The same on the `setup` path, which builds an engine first."""
-    write_app(tmp_path, "app.py", "import sys\ndef setup(rt):\n    sys.exit(4)\n")
+def test_a_stream_function_that_exits_on_purpose_keeps_its_own_exit_code(
+    tmp_path: Path,
+):
+    """The same from inside the `@stream` function, which runs at compile time."""
+    write_app(
+        tmp_path,
+        "stream.py",
+        "import sys\n"
+        "\n"
+        "from streamlib import Stream, stream\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream: Stream) -> None:\n"
+        "    sys.exit(4)\n",
+    )
 
     finished = run_cli("run", "--dir", str(tmp_path))
 
     assert finished.returncode == 4, f"stderr was:\n{finished.stderr}"
+    assert "error:" not in finished.stderr, (
+        f"a deliberate exit must not be reported as a failure; stderr was:\n{finished.stderr}"
+    )
 
 
 def test_the_observation_verbs_are_served_by_this_wheel(
@@ -1381,7 +1352,7 @@ def test_new_writes_a_working_app(tmp_path: Path):
         "a scaffolded app keeps its node classes under `nodes/`"
     )
     assert not (app_directory / "app.py").exists(), (
-        "the scaffold's entry is `stream.py`; `app.py` is only a fallback `run` keeps"
+        "the scaffold's entry is `stream.py`, the file `run` and `dev` read"
     )
     assert (app_directory / ".python-version").read_text().strip() == "3.12", (
         "the scaffold pins the Python version the plan names"
@@ -1482,9 +1453,6 @@ def test_the_scaffolded_stream_declares_one_stream_named_main(tmp_path: Path):
     ]
 
     assert stream_functions == ["main"]
-    assert not any(
-        isinstance(node, ast.FunctionDef) and node.name == "setup" for node in declared.body
-    ), "an entry defining both a stream and `setup` is refused"
     assert "CameraSource" in entry_source
     assert "DisplayWindow" in entry_source
 
