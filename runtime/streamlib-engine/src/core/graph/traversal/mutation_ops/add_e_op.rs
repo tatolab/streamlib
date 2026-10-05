@@ -5,28 +5,17 @@ use crate::core::graph::{
     InputLinkPortRef, Link, LinkTraversalMut, OutputLinkPortRef, TraversalSourceMut,
 };
 
-use super::super::traversal_source::{LinkLocation, node_index_of};
+use super::super::traversal_source::node_index_of;
 
 impl<'a> TraversalSourceMut<'a> {
     /// Add a new edge (link) between two ports.
     ///
     /// Type-safe: `from` must be an output port, `to` must be an input port.
     pub fn add_e(self, from: OutputLinkPortRef, to: InputLinkPortRef) -> LinkTraversalMut<'a> {
-        // A source on another runtime has no node here to hang an edge on;
-        // `add_link_from_another_runtime` is the door for one.
-        let Some(source_on_this_runtime) = from.processor_id_on_this_runtime().cloned() else {
+        let Some(from_idx) = node_index_of(self.graph, from.processor_id()) else {
             return self.no_link();
         };
-        let Some(from_idx) = node_index_of(self.graph, &source_on_this_runtime) else {
-            return self.no_link();
-        };
-        // A destination on another runtime has no node here either, and no
-        // door: the runtime that owns an input is the one that applies the
-        // link, so a remote destination is a link *request* and never an edge.
-        let Some(destination_on_this_runtime) = to.processor_id_on_this_runtime().cloned() else {
-            return self.no_link();
-        };
-        let Some(to_idx) = node_index_of(self.graph, &destination_on_this_runtime) else {
+        let Some(to_idx) = node_index_of(self.graph, to.processor_id()) else {
             return self.no_link();
         };
 
@@ -43,8 +32,7 @@ impl<'a> TraversalSourceMut<'a> {
 
         LinkTraversalMut {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
-            ids: vec![LinkLocation::OnAnEdgeOfTheDigraph(edge_idx)],
+            ids: vec![edge_idx],
         }
     }
 }

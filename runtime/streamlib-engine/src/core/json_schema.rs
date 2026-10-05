@@ -65,99 +65,6 @@ pub struct RuntimeMeshOutput {
     /// The other runtimes this one currently sees, sorted by name. A session
     /// that is `open` with no peers is isolated rather than local-only.
     pub peers: Vec<RuntimeMeshPeerOutput>,
-    /// The output ports of this runtime that other runtimes are reading over
-    /// the mesh. Always present, and empty until one is — a sending runtime
-    /// does no network work for a port until a remote link reads it.
-    pub egress_ports: Vec<MeshEgressPortOutput>,
-    /// Every link this runtime has asked another runtime to apply, and that
-    /// runtime has not. Always present, and empty when there are none.
-    ///
-    /// A request leaves this list when the runtime that owns the input applies
-    /// it — the link is then that runtime's to render. One it refused stays,
-    /// because asking never waits and a refusal has nowhere else to land.
-    pub link_requests_awaiting_runtime: Vec<LinkRequestAwaitingARuntimeOutput>,
-}
-
-/// One link this runtime has asked another runtime for, still unapplied.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct LinkRequestAwaitingARuntimeOutput {
-    /// The id this runtime minted for the request. `disconnect` takes it to
-    /// cancel the request.
-    pub link_request_id: String,
-    /// What the request asks for.
-    pub operation: LinkRequestOperationOutput,
-    /// The runtime being asked — the one that owns the input.
-    pub input_runtime_name: String,
-    /// The port the link would carry from, as `<runtime>/<display name>/<port>`.
-    /// Absent on a request asking for a link to go.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    /// The port the link would carry into, spelled the same way. Absent on a
-    /// request asking for a link to go.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub destination: Option<String>,
-    /// The link a request asking for one to go names. Absent otherwise.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub link_id: Option<String>,
-    /// How far the request has got.
-    pub state: LinkRequestStateOutput,
-    /// What that state is about, in terms the author who asked can act on.
-    pub reason: String,
-}
-
-/// What a link request asks the runtime that owns the input to do.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum LinkRequestOperationOutput {
-    /// Apply a link into one of that runtime's inputs.
-    Connect,
-    /// Remove a link that runtime holds.
-    Disconnect,
-}
-
-impl From<crate::core::runtime::mesh::WhichOperationALinkRequestNames>
-    for LinkRequestOperationOutput
-{
-    fn from(operation: crate::core::runtime::mesh::WhichOperationALinkRequestNames) -> Self {
-        match operation {
-            crate::core::runtime::mesh::WhichOperationALinkRequestNames::Connect => Self::Connect,
-            crate::core::runtime::mesh::WhichOperationALinkRequestNames::Disconnect => {
-                Self::Disconnect
-            }
-        }
-    }
-}
-
-/// How far a link request this runtime made has got.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum LinkRequestStateOutput {
-    /// The runtime it names is not on the mesh, so it has not been sent. Not
-    /// final: it is sent the moment that runtime appears.
-    AwaitingRuntime,
-    /// It was sent and nothing came back. Not final either — a request sent at
-    /// `Drop`, or its reply, can go missing with nothing said — so it is sent
-    /// again on a backoff.
-    Unanswered,
-    /// The runtime it names refused it. Final: a resend would be refused in
-    /// the same words. `reason` is that runtime's own.
-    Refused,
-}
-
-/// One output port of this runtime that the mesh is sending, and to whom.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct MeshEgressPortOutput {
-    /// The name of the node that owns the port — the middle chunk of the port's
-    /// mesh address.
-    pub node: String,
-    /// The port's own name on that node.
-    pub port: String,
-    /// Every runtime currently reading it, sorted by name.
-    pub reader_runtime_names: Vec<String>,
 }
 
 /// Whether a runtime reached its mesh at all.
@@ -224,7 +131,7 @@ pub struct ProcessorNodeOutput {
     #[serde(rename = "type")]
     pub processor_type: ProcessorClassImportPath,
     /// The node's name, unique in its graph and cast to lowercase URL-safe —
-    /// what a link end, an exposure and a mesh address name it by.
+    /// what a link end, an exposure and a port address name it by.
     pub name: String,
     /// Processor configuration as JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -293,13 +200,6 @@ pub struct LinkOutput {
     /// Current state of the link.
     #[serde(default)]
     pub state: LinkStateOutput,
-    /// The runtime that asked for this link — this node's own name for a link
-    /// its own app or control plane wired, and the asking runtime's name for
-    /// one another runtime pushed here or wired on its behalf.
-    ///
-    /// Always present, so a reader never has to tell "nobody asked" from "this
-    /// engine predates the key".
-    pub created_by_runtime_name: String,
     /// Why the link is in the `error` state, in the words of whoever refused
     /// it — today always the helper process that could not open its port.
     ///
@@ -308,146 +208,30 @@ pub struct LinkOutput {
     /// `state` stays a plain string so a check against `"wired"` is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
-    /// What a link in the `awaiting_remote` state is waiting on — the source
-    /// runtime, which is not on the mesh, or the port, which the runtime that
-    /// is here does not offer.
-    ///
-    /// Absent in every other state. Unlike `error_reason` this is not final:
-    /// the link wires itself the moment what it names turns up.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub awaiting_remote_reason: Option<String>,
-    /// Which machine's monotonic clock the stamps on this link's bags were
-    /// taken on, as the canonical lowercase UUID text of that machine's
-    /// boot-session id.
-    ///
-    /// Every stamp is a machine's monotonic clock, whose epoch is that
-    /// machine's own boot, so two stamps from two of these are readings of two
-    /// unrelated clocks and subtracting them means nothing. A link inside this
-    /// node always names this machine; one from another runtime names whatever
-    /// machine the mesh is carrying it from, and is absent until its first bag
-    /// lands or while its source runtime is away.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stamp_clock_identity: Option<String>,
     /// Runtime components (dynamic, varies based on link state).
     pub components: serde_json::Map<String, serde_json::Value>,
 }
 
-/// One end of a link: `{node, port}` for a port in this graph, or
-/// `{runtime_name, node, port}` for a port on another runtime, addressed
-/// `<runtime name>/<node>/<port>`.
-///
-/// Told apart by their keys and not by a tag.
+/// One end of a link: a port on a node this graph holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-#[serde(untagged)]
-pub enum LinkPortRefOutput {
-    // First, because an untagged enum takes the first variant that fits and
-    // ignores unknown keys: `{node, port}` would swallow a remote end whole.
-    /// A port on a node another runtime holds.
-    OnAnotherRuntime {
-        /// The name the owning runtime is addressed by on the mesh.
-        runtime_name: String,
-        /// The name of the node that owns the port, there.
-        node: String,
-        /// The port's own name on that node.
-        port: String,
-    },
-    /// A port on a node this graph holds.
-    OnThisRuntime {
-        /// The node's name.
-        node: String,
-        /// The port's own name on that node.
-        port: String,
-    },
+pub struct LinkPortRefOutput {
+    /// The node's name.
+    pub node: String,
+    /// The port's own name on that node.
+    pub port: String,
 }
 
 impl LinkPortRefOutput {
-    /// The node this port belongs to when this graph holds it, and `None` for
-    /// a port on another runtime.
-    pub fn node_on_this_runtime(&self) -> Option<&str> {
-        match self {
-            Self::OnThisRuntime { node, .. } => Some(node),
-            Self::OnAnotherRuntime { .. } => None,
-        }
-    }
-
-    /// The node's name, wherever the node lives.
-    pub fn node(&self) -> &str {
-        match self {
-            Self::OnThisRuntime { node, .. } | Self::OnAnotherRuntime { node, .. } => node,
-        }
-    }
-
-    /// The mesh address a port on another runtime is named by, and `None` for
-    /// a port in this graph.
-    pub fn mesh_port_address(
-        &self,
-    ) -> Option<crate::core::Result<crate::core::graph::MeshPortAddress>> {
-        match self {
-            Self::OnAnotherRuntime {
-                runtime_name,
-                node,
-                port,
-            } => Some(crate::core::graph::MeshPortAddress::new(
-                runtime_name.as_str(),
-                node.as_str(),
-                port.as_str(),
-            )),
-            Self::OnThisRuntime { .. } => None,
-        }
-    }
-
-    /// The port's own name, wherever the port lives.
-    pub fn port(&self) -> &str {
-        match self {
-            Self::OnThisRuntime { port, .. } | Self::OnAnotherRuntime { port, .. } => port,
-        }
-    }
-
-    /// The end `port_ref` names, with a port on this runtime named by its
-    /// node's name.
-    pub(crate) fn of_an_output_port(
-        port_ref: &crate::core::graph::OutputLinkPortRef,
+    /// The port `port_name` on the processor `processor_id`, its node named by
+    /// its name.
+    fn of_a_port(
+        processor_id: &crate::core::graph::ProcessorUniqueId,
+        port_name: &str,
         node_names: &NodeNamesByProcessorId,
     ) -> Self {
-        match port_ref {
-            crate::core::graph::OutputLinkPortRef::OnThisRuntime {
-                processor_id,
-                port_name,
-            } => Self::OnThisRuntime {
-                node: node_names.name_of(processor_id),
-                port: port_name.clone(),
-            },
-            crate::core::graph::OutputLinkPortRef::OnAnotherRuntime(address) => {
-                Self::of_a_mesh_port_address(address)
-            }
-        }
-    }
-
-    /// The end `port_ref` names, with a port on this runtime named by its
-    /// node's name.
-    pub(crate) fn of_an_input_port(
-        port_ref: &crate::core::graph::InputLinkPortRef,
-        node_names: &NodeNamesByProcessorId,
-    ) -> Self {
-        match port_ref {
-            crate::core::graph::InputLinkPortRef::OnThisRuntime {
-                processor_id,
-                port_name,
-            } => Self::OnThisRuntime {
-                node: node_names.name_of(processor_id),
-                port: port_name.clone(),
-            },
-            crate::core::graph::InputLinkPortRef::OnAnotherRuntime(address) => {
-                Self::of_a_mesh_port_address(address)
-            }
-        }
-    }
-
-    fn of_a_mesh_port_address(address: &crate::core::graph::MeshPortAddress) -> Self {
-        Self::OnAnotherRuntime {
-            runtime_name: address.runtime_name().to_string(),
-            node: address.processor_display_name().to_string(),
-            port: address.port_name().to_string(),
+        Self {
+            node: node_names.name_of(processor_id),
+            port: port_name.to_string(),
         }
     }
 }
@@ -504,9 +288,6 @@ pub enum LinkStateOutput {
     /// Link exists in graph but not yet wired.
     #[default]
     Pending,
-    /// The link's source is a port on another runtime and nothing carries yet.
-    /// `awaiting_remote_reason` says what is missing.
-    AwaitingRemote,
     /// Link is actively wired with a ring buffer channel.
     Wired,
     /// Link is being disconnected.
@@ -696,14 +477,9 @@ impl From<crate::core::graph::PortKind> for PortKindOutput {
 }
 
 impl LinkOutput {
-    /// Render `link` as the runtime named `this_runtimes_name` sees it.
-    ///
-    /// The renderer's own name is what a link carries no room for: a link this
-    /// runtime wired was asked for here, and only a link another runtime
-    /// requested carries a name of its own to render instead.
-    pub(crate) fn of_a_link_on_the_runtime_named(
+    /// Render `link` with each end on this runtime named by its node's name.
+    pub(crate) fn of_a_link(
         link: &crate::core::graph::Link,
-        this_runtimes_name: &str,
         node_names: &NodeNamesByProcessorId,
     ) -> Self {
         let rendered = RenderedLinkState::of(link);
@@ -718,73 +494,28 @@ impl LinkOutput {
         }
         Self {
             id: link.id.to_string(),
-            source: LinkPortRefOutput::of_an_output_port(&link.source, node_names),
-            target: LinkPortRefOutput::of_an_input_port(&link.target, node_names),
+            source: LinkPortRefOutput::of_a_port(
+                link.source.processor_id(),
+                link.source.port_name(),
+                node_names,
+            ),
+            target: LinkPortRefOutput::of_a_port(
+                link.target.processor_id(),
+                link.target.port_name(),
+                node_names,
+            ),
             capacity: link.capacity.get(),
             state: rendered.state,
             error_reason: rendered.error_reason,
-            awaiting_remote_reason: rendered.awaiting_remote_reason,
-            created_by_runtime_name: link
-                .get::<crate::core::graph::TheRequestThatAppliedThisLinkComponent>()
-                .map(|applied| applied.requester_runtime_name.clone())
-                .unwrap_or_else(|| this_runtimes_name.to_string()),
-            stamp_clock_identity: the_machine_a_links_stamps_are_taken_on(link),
             components,
         }
     }
 }
 
-/// Which machine's clock a link's stamps are taken on, as `graph` renders it.
-///
-/// Three ways to name no machine, and each is a link a reader must not compare
-/// a stamp against:
-///
-/// - **A link on its way out.** It carries nothing, and the cell it still holds
-///   a clone of may name the machine another link is carrying from — the same
-///   reason the state beside it reads `disconnecting` rather than `wired`.
-/// - **A link whose source is on another runtime and is not wired yet.** The
-///   cell is attached when the link is wired, and such a link is in the graph
-///   from the moment `connect` applies it. Keyed on the source rather than on
-///   the cell being there, or it would claim this machine for its whole
-///   `awaiting_remote` life.
-/// - **A machine that named no clock of its own**, on either arm. Every such
-///   machine renders the same nil id, so rendering it would hand a reader a
-///   string two unrelated clocks match on.
-fn the_machine_a_links_stamps_are_taken_on(link: &crate::core::graph::Link) -> Option<String> {
-    let stamped = link
-        .get::<crate::core::graph::LinkStateComponent>()
-        .map(|state| state.0)
-        .unwrap_or(link.state);
-    if matches!(
-        stamped,
-        crate::core::graph::LinkState::Disconnecting | crate::core::graph::LinkState::Disconnected
-    ) {
-        return None;
-    }
-    if link.source.mesh_port_address().is_none() {
-        return crate::iceoryx2::WhatIsKnownOfAnInboundLinksStampClock::from(Some(
-            crate::core::runtime::mesh::MachineClockIdentity::of_this_machine(),
-        ))
-        .the_machine_if_it_is_known()
-        .map(|machine| machine.to_string());
-    }
-    link.get::<crate::core::graph::TheMachineClockALinksStampsAreTakenOnComponent>()
-        .and_then(|machine_clock| machine_clock.as_uuid_text())
-}
-
-impl LinkStateOutput {
-    /// The state `graph` renders for `link`.
-    pub(crate) fn of_a_link_as_graph_renders_it(link: &crate::core::graph::Link) -> Self {
-        RenderedLinkState::of(link).state
-    }
-}
-
-/// What a link reports as its state, and why where that is `error` or
-/// `awaiting_remote`.
+/// What a link reports as its state, and why where that is `error`.
 struct RenderedLinkState {
     state: LinkStateOutput,
     error_reason: Option<String>,
-    awaiting_remote_reason: Option<String>,
 }
 
 impl RenderedLinkState {
@@ -794,10 +525,8 @@ impl RenderedLinkState {
     /// link was created in. A link handed to an out-of-process end sits at
     /// `Pending` there until that end answers — the answer lands on a cell its
     /// bridge's reader thread fills, which holds no graph lock — so a link still
-    /// carrying those cells reads its state off them instead. A link whose
-    /// source is on another runtime reads its own cell the same way, which the
-    /// mesh writes as the source runtime appears, offers the port, and leaves.
-    /// Once the disconnect path has moved the component past `Pending`, that
+    /// carrying those cells reads its state off them instead. Once the
+    /// disconnect path has moved the component past `Pending`, that
     /// stamp is the answer: a link on its way out is not `wired` because a
     /// helper once said so.
     fn of(link: &crate::core::graph::Link) -> Self {
@@ -805,9 +534,6 @@ impl RenderedLinkState {
             .get::<crate::core::graph::LinkStateComponent>()
             .map(|state| state.0)
             .unwrap_or(link.state);
-        if let Some(resolution) = link.get::<crate::core::graph::RemoteLinkResolutionComponent>() {
-            return Self::of_a_link_from_another_runtime(stamped, resolution);
-        }
         if stamped != crate::core::graph::LinkState::Pending {
             return Self::plain(LinkStateOutput::from(stamped));
         }
@@ -825,36 +551,6 @@ impl RenderedLinkState {
             crate::core::graph::OutOfProcessLinkWireProgress::AnEndRefused { reason } => Self {
                 state: LinkStateOutput::Error,
                 error_reason: Some(reason),
-                awaiting_remote_reason: None,
-            },
-        }
-    }
-
-    /// A link whose source is on another runtime, read off the cell the mesh
-    /// writes — except once the disconnect path has stamped it, which outranks
-    /// a mesh answer the same way it outranks a helper's.
-    fn of_a_link_from_another_runtime(
-        stamped: crate::core::graph::LinkState,
-        resolution: &crate::core::graph::RemoteLinkResolutionComponent,
-    ) -> Self {
-        if matches!(
-            stamped,
-            crate::core::graph::LinkState::Disconnecting
-                | crate::core::graph::LinkState::Disconnected
-        ) {
-            return Self::plain(LinkStateOutput::from(stamped));
-        }
-        match resolution.how_far_it_has_got() {
-            crate::core::graph::RemoteLinkResolution::AwaitingRemote { reason } => Self {
-                state: LinkStateOutput::AwaitingRemote,
-                error_reason: None,
-                awaiting_remote_reason: Some(reason),
-            },
-            crate::core::graph::RemoteLinkResolution::Wired => Self::plain(LinkStateOutput::Wired),
-            crate::core::graph::RemoteLinkResolution::Refused { reason } => Self {
-                state: LinkStateOutput::Error,
-                error_reason: Some(reason),
-                awaiting_remote_reason: None,
             },
         }
     }
@@ -863,7 +559,6 @@ impl RenderedLinkState {
         Self {
             state,
             error_reason: None,
-            awaiting_remote_reason: None,
         }
     }
 }
@@ -872,7 +567,6 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
     fn from(state: crate::core::graph::LinkState) -> Self {
         match state {
             crate::core::graph::LinkState::Pending => LinkStateOutput::Pending,
-            crate::core::graph::LinkState::AwaitingRemote => LinkStateOutput::AwaitingRemote,
             crate::core::graph::LinkState::Wired => LinkStateOutput::Wired,
             crate::core::graph::LinkState::Disconnecting => LinkStateOutput::Disconnecting,
             crate::core::graph::LinkState::Disconnected => LinkStateOutput::Disconnected,
@@ -940,207 +634,6 @@ mod link_rendering_tests {
         OutputLinkPortRef,
     };
 
-    /// The name of the runtime these tests render against.
-    const A_RENDERING_RUNTIME: &str = "rig-desk-a1b2";
-
-    /// Every link says who asked for it, and a link this runtime wired says
-    /// this runtime — which is what makes the key readable without a reader
-    /// having to know whether the mesh was involved.
-    #[test]
-    fn a_link_this_runtime_wired_is_created_by_this_runtime() {
-        let link = Link::between(
-            OutputLinkPortRef::new("Psrc", "out1"),
-            InputLinkPortRef::new("Pdst", "in1"),
-        );
-        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
-            &link,
-            A_RENDERING_RUNTIME,
-            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
-        ))
-        .unwrap();
-        assert_eq!(rendered["created_by_runtime_name"], A_RENDERING_RUNTIME);
-    }
-
-    /// A link inside this node was stamped on this machine, so it renders this
-    /// machine's clock with nothing to wait for. Every link renders the key,
-    /// not only a remote one: a reader comparing two links' stamps compares two
-    /// strings rather than having to know which of them crossed a mesh.
-    #[test]
-    fn a_link_inside_this_node_renders_this_machines_clock() {
-        let link = Link::between(
-            OutputLinkPortRef::new("Psrc", "out1"),
-            InputLinkPortRef::new("Pdst", "in1"),
-        );
-        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
-            &link,
-            A_RENDERING_RUNTIME,
-            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
-        ))
-        .unwrap();
-        let this_machine = crate::core::runtime::mesh::MachineClockIdentity::of_this_machine();
-        if this_machine.is_unidentified() {
-            assert_eq!(
-                rendered.get("stamp_clock_identity"),
-                None,
-                "this machine names no clock, and every such machine renders the same nil id"
-            );
-        } else {
-            assert_eq!(rendered["stamp_clock_identity"], this_machine.to_string());
-        }
-    }
-
-    /// A link whose source is on another runtime names no machine before it is
-    /// wired — which is its whole `awaiting_remote` life, because `connect`
-    /// puts it in the graph and the wiring op attaches the mesh's cell only
-    /// afterwards.
-    ///
-    /// Fail-without-fix: read the absence of the cell as "stamped here" and
-    /// every remote link claims this machine's clock from the moment it is
-    /// connected until the moment it wires — the one answer that lets a reader
-    /// compare it against a local stamp.
-    #[test]
-    fn a_link_from_another_runtime_names_no_machine_before_it_is_wired() {
-        let link = Link::between(
-            OutputLinkPortRef::on_another_runtime(
-                crate::core::graph::MeshPortAddress::new(
-                    "bench-cam-a1b2",
-                    "Camera Source",
-                    "video",
-                )
-                .expect("a legal address"),
-            ),
-            InputLinkPortRef::new("Pdst", "in1"),
-        );
-        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
-            &link,
-            A_RENDERING_RUNTIME,
-            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
-        ))
-        .unwrap();
-
-        assert_eq!(
-            rendered.get("stamp_clock_identity"),
-            None,
-            "nothing has said which machine stamps this link's bags, and this node is not it"
-        );
-    }
-
-    /// A link on its way out names no machine, whichever end its source is on.
-    ///
-    /// It carries nothing, and for a remote one the cell it still holds a clone
-    /// of may name the machine a *surviving* link is carrying from — so the key
-    /// would outlive the link that earned it.
-    #[test]
-    fn a_link_on_its_way_out_names_no_machine() {
-        use crate::core::graph::TheMachineClockALinksStampsAreTakenOnComponent;
-        use crate::core::runtime::mesh::{
-            MachineClockARemoteLinkCarriesFrom, MachineClockIdentity,
-        };
-
-        for going in [LinkState::Disconnecting, LinkState::Disconnected] {
-            let mut local = Link::between(
-                OutputLinkPortRef::new("Psrc", "out1"),
-                InputLinkPortRef::new("Pdst", "in1"),
-            );
-            local.insert(LinkStateComponent(going));
-
-            let mut remote = Link::between(
-                OutputLinkPortRef::on_another_runtime(
-                    crate::core::graph::MeshPortAddress::new(
-                        "bench-cam-a1b2",
-                        "Camera Source",
-                        "video",
-                    )
-                    .expect("a legal address"),
-                ),
-                InputLinkPortRef::new("Pdst", "in1"),
-            );
-            let carries_from = std::sync::Arc::new(MachineClockARemoteLinkCarriesFrom::default());
-            carries_from.note_the_machine_a_bag_was_stamped_on(
-                MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
-                    "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c",
-                ),
-            );
-            remote.insert(LinkStateComponent(going));
-            remote.insert_component_without_rendering_it(
-                TheMachineClockALinksStampsAreTakenOnComponent(carries_from),
-            );
-
-            for link in [&local, &remote] {
-                let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
-                    link,
-                    A_RENDERING_RUNTIME,
-                    &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
-                ))
-                .unwrap();
-                assert_eq!(
-                    rendered.get("stamp_clock_identity"),
-                    None,
-                    "a link reading {going:?} carries nothing, so it names no machine"
-                );
-            }
-        }
-    }
-
-    /// A link from another runtime renders the machine the mesh is carrying it
-    /// from, and renders no key at all until a bag has crossed it — an absent
-    /// key is "nobody has said", which is not the same as this machine.
-    ///
-    /// Fail-without-fix: render this machine's clock for every link and a sink
-    /// fed one local track and one remote one is told the two are comparable.
-    #[test]
-    fn a_link_from_another_runtime_renders_the_machine_the_mesh_is_carrying_from() {
-        use crate::core::graph::TheMachineClockALinksStampsAreTakenOnComponent;
-        use crate::core::runtime::mesh::{
-            MachineClockARemoteLinkCarriesFrom, MachineClockIdentity,
-        };
-
-        let mut link = Link::between(
-            OutputLinkPortRef::on_another_runtime(
-                crate::core::graph::MeshPortAddress::new(
-                    "bench-cam-a1b2",
-                    "Camera Source",
-                    "video",
-                )
-                .expect("a legal address"),
-            ),
-            InputLinkPortRef::new("Pdst", "in1"),
-        );
-        let carries_from = std::sync::Arc::new(MachineClockARemoteLinkCarriesFrom::default());
-        link.insert_component_without_rendering_it(TheMachineClockALinksStampsAreTakenOnComponent(
-            std::sync::Arc::clone(&carries_from),
-        ));
-        let rendered = |link: &Link| {
-            serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
-                link,
-                A_RENDERING_RUNTIME,
-                &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
-            ))
-            .unwrap()
-        };
-
-        assert_eq!(
-            rendered(&link).get("stamp_clock_identity"),
-            None,
-            "nothing has crossed it, so no machine has been named"
-        );
-
-        let another_machine = MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
-            "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c",
-        );
-        carries_from.note_the_machine_a_bag_was_stamped_on(another_machine);
-
-        assert_eq!(
-            rendered(&link)["stamp_clock_identity"],
-            "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c",
-            "the rendering reads the ingress's cell, so it follows what arrives"
-        );
-        assert_ne!(
-            rendered(&link)["stamp_clock_identity"],
-            MachineClockIdentity::of_this_machine().to_string(),
-        );
-    }
-
     /// The field is the state a link was created in; wiring records its
     /// outcome on a component. Rendering reads the component first, so a
     /// `graph` read after a connect says `wired` at the top level rather than
@@ -1152,9 +645,8 @@ mod link_rendering_tests {
             InputLinkPortRef::new("Pdst", "in1"),
         );
         let rendered = |link: &Link| {
-            serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+            serde_json::to_value(LinkOutput::of_a_link(
                 link,
-                A_RENDERING_RUNTIME,
                 &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
             ))
             .unwrap()
@@ -1186,9 +678,8 @@ mod link_rendering_tests {
             std::sync::Arc::clone(&helpers_answer),
         ]));
         let rendered = |link: &Link| {
-            serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+            serde_json::to_value(LinkOutput::of_a_link(
                 link,
-                A_RENDERING_RUNTIME,
                 &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
             ))
             .unwrap()
@@ -1223,9 +714,8 @@ mod link_rendering_tests {
             helpers_answer,
         ]));
 
-        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+        let rendered = serde_json::to_value(LinkOutput::of_a_link(
             &link,
-            A_RENDERING_RUNTIME,
             &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         ))
         .unwrap();
@@ -1246,9 +736,8 @@ mod link_rendering_tests {
             InputLinkPortRef::new("Pdst", "in1"),
         );
         link.insert(LinkStateComponent(LinkState::Wired));
-        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+        let rendered = serde_json::to_value(LinkOutput::of_a_link(
             &link,
-            A_RENDERING_RUNTIME,
             &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         ))
         .unwrap();
@@ -1603,8 +1092,6 @@ mod capability_extension_and_mesh_rendering_tests {
             session: RuntimeMeshSessionOutput::Open,
             local_only_reason: None,
             peers: Vec::new(),
-            egress_ports: Vec::new(),
-            link_requests_awaiting_runtime: Vec::new(),
         }
     }
 
@@ -1634,45 +1121,8 @@ mod capability_extension_and_mesh_rendering_tests {
                 "runtime_name": "rig-desk-a1b2",
                 "session": "open",
                 "peers": [],
-                "egress_ports": [],
-                "link_requests_awaiting_runtime": [],
             })
         );
-    }
-
-    /// A port another runtime is reading renders under the node name the mesh
-    /// addresses it by, with every reader — so an agent on the sending
-    /// node can see who is pulling from it without asking the other end.
-    #[test]
-    fn a_port_another_runtime_reads_renders_with_the_runtimes_reading_it() {
-        let rendered = serde_json::to_value(Graph::new().to_graph_response(
-            Vec::new(),
-            RuntimeMeshOutput {
-                egress_ports: vec![MeshEgressPortOutput {
-                    node: "camerasource".to_string(),
-                    port: "video".to_string(),
-                    reader_runtime_names: vec![
-                        "bench-fx-c3d4".to_string(),
-                        "bench-rec-e5f6".to_string(),
-                    ],
-                }],
-                ..an_isolated_mesh()
-            },
-        ))
-        .unwrap();
-
-        assert_eq!(
-            rendered["mesh"]["egress_ports"],
-            serde_json::json!([{
-                "node": "camerasource",
-                "port": "video",
-                "reader_runtime_names": ["bench-fx-c3d4", "bench-rec-e5f6"],
-            }])
-        );
-
-        let read_back: GraphResponse =
-            serde_json::from_value(rendered).expect("an egress entry deserializes");
-        assert_eq!(read_back.mesh.egress_ports.len(), 1);
     }
 
     /// A peer that has not answered yet renders its name alone, and the whole

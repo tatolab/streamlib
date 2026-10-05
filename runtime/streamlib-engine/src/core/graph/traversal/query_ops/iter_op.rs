@@ -5,8 +5,6 @@ use crate::core::graph::{
     Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
 };
 
-use super::super::traversal_source::link_at;
-
 // =============================================================================
 // ProcessorTraversal (immutable)
 // =============================================================================
@@ -22,7 +20,7 @@ impl<'a> IntoIterator for ProcessorTraversal<'a> {
     type IntoIter = std::vec::IntoIter<&'a ProcessorNode>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let ProcessorTraversal { graph, ids, .. } = self;
+        let ProcessorTraversal { graph, ids } = self;
         ids.into_iter()
             .filter_map(|idx| graph.node_weight(idx))
             .collect::<Vec<&ProcessorNode>>()
@@ -45,13 +43,9 @@ impl<'a> IntoIterator for LinkTraversal<'a> {
     type IntoIter = std::vec::IntoIter<&'a Link>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let LinkTraversal {
-            graph,
-            links_from_another_runtime,
-            ids,
-        } = self;
-        ids.iter()
-            .filter_map(|at| link_at(graph, links_from_another_runtime, at))
+        let LinkTraversal { graph, ids } = self;
+        ids.into_iter()
+            .filter_map(|idx| graph.edge_weight(idx))
             .collect::<Vec<&Link>>()
             .into_iter()
     }
@@ -72,7 +66,7 @@ impl<'a> IntoIterator for ProcessorTraversalMut<'a> {
     type IntoIter = std::vec::IntoIter<&'a ProcessorNode>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let ProcessorTraversalMut { graph, ids, .. } = self;
+        let ProcessorTraversalMut { graph, ids } = self;
         ids.into_iter()
             .filter_map(|idx| graph.node_weight(idx))
             .collect::<Vec<&ProcessorNode>>()
@@ -95,13 +89,9 @@ impl<'a> IntoIterator for LinkTraversalMut<'a> {
     type IntoIter = std::vec::IntoIter<&'a Link>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let LinkTraversalMut {
-            graph,
-            links_from_another_runtime,
-            ids,
-        } = self;
-        ids.iter()
-            .filter_map(|at| link_at(graph, links_from_another_runtime, at))
+        let LinkTraversalMut { graph, ids } = self;
+        ids.into_iter()
+            .filter_map(|idx| graph.edge_weight(idx))
             .collect::<Vec<&Link>>()
             .into_iter()
     }

@@ -507,16 +507,12 @@ impl PixelBufferPoolManager {
             format,
             POOL_MAX_BUFFER_COUNT
         );
-        // A named variant rather than a message: a caller that has to tell
-        // "the pool is full" apart from every other refusal — the mesh
-        // ingress counts one as a bag the hop lost — would otherwise be
-        // matching on prose.
-        Err(Error::EveryPixelBufferInThePoolIsInUse {
-            width,
-            height,
-            pixel_format: format.wire_name().to_string(),
-            pool_capacity: POOL_MAX_BUFFER_COUNT,
-        })
+        Err(Error::BufferError(format!(
+            "every one of the {POOL_MAX_BUFFER_COUNT} pixel buffers in this runtime's \
+             {width}x{height} {} pool is in use, so a frame is dropped rather than overwriting \
+             one something is still reading",
+            format.wire_name()
+        )))
     }
 
     /// Swap the slot's `buffer_cache` entry to the id just minted: the

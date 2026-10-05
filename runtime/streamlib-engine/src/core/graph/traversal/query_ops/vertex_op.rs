@@ -62,7 +62,6 @@ impl<'a> TraversalSource<'a> {
         };
         ProcessorTraversal {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids,
         }
     }
@@ -70,9 +69,9 @@ impl<'a> TraversalSource<'a> {
     /// Start traversal from the node `node_name` names once cast — empty when
     /// no node has that name, or it casts to nothing.
     ///
-    /// A node's name is unique within a graph and is its part of its mesh
-    /// address, which is what a peer names a port by — so this is how an
-    /// address is turned back into one of this runtime's own nodes.
+    /// A node's name is unique within a graph and is its part of a port's
+    /// address — so this is how an address is turned back into one of this
+    /// runtime's own nodes.
     pub fn v_with_node_name(self, node_name: &str) -> ProcessorTraversal<'a> {
         let ids = crate::core::graph::cast_exposed_name_to_url_safe(node_name)
             .ok()
@@ -85,7 +84,6 @@ impl<'a> TraversalSource<'a> {
             .unwrap_or_default();
         ProcessorTraversal {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids,
         }
     }
@@ -114,7 +112,6 @@ impl<'a> TraversalSourceMut<'a> {
         };
         ProcessorTraversalMut {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids,
         }
     }

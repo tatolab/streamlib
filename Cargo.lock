@@ -5621,7 +5621,6 @@ dependencies = [
  "petgraph",
  "png",
  "raw-window-handle",
- "rmp",
  "rmp-serde",
  "rspirv-reflect",
  "rubato",

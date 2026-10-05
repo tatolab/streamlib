@@ -29,20 +29,15 @@ use crate::core::graph::{
 use crate::core::processors::{
     OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
 };
-use crate::core::runtime::mesh::MeshLinkIngressTable;
 use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
-    MeshHopDroppedBagCountsByRemoteInboundLink, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
-    TheClockAnInboundLinksStampsAreTakenOn, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
     audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
     effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
 };
-use streamlib_ipc_types::{
-    MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION,
-    RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL,
-};
+use streamlib_ipc_types::{MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION};
 
 /// Open an iceoryx2 channel for a `connect()` link in the graph.
 ///
@@ -61,14 +56,13 @@ use streamlib_ipc_types::{
 /// can size them.
 #[tracing::instrument(
     name = "compiler.open_iceoryx2_service",
-    skip(graph, iceoryx2_node, mesh_link_ingress_table),
+    skip(graph, iceoryx2_node),
     fields(link_id = %link_id)
 )]
 pub fn open_iceoryx2_service(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
-    mesh_link_ingress_table: &MeshLinkIngressTable,
 ) -> Result<()> {
     let (from_port, to_port) = {
         let link =
@@ -78,28 +72,13 @@ pub fn open_iceoryx2_service(
         (link.from_port().clone(), link.to_port().clone())
     };
 
-    // A link whose source is on another runtime has no local source port to
-    // wire: its bags land on the engine-named channel that address's ingress
-    // writes, and the destination subscribes to it exactly as it would to a
-    // local port's. Everything below reads the source through `from_port`, so
-    // the two cases differ only where they have to.
-    let source_on_this_runtime = from_port.processor_id_on_this_runtime().cloned();
-    // The destination is always here: the runtime that owns an input is the one
-    // that applies the link, so a link naming another runtime's input never
-    // reaches the graph — `connect` refuses it and a link request is how one is
-    // asked for. Said by name rather than assumed, because a wiring op is where
-    // a broken invariant would otherwise surface as a channel nobody reads.
-    let Some(dest_proc_id) = to_port.processor_id_on_this_runtime().cloned() else {
-        return Err(Error::InvalidLink(format!(
-            "link '{link_id}' carries into {to_port}, which is a port on another runtime; only \
-             the runtime that owns an input wires a link into it"
-        )));
-    };
+    let source_proc_id = from_port.processor_id().clone();
+    let source_port = from_port.port_name();
+    let channel_service_name = channel_service_name(&from_port)?;
+    let dest_proc_id = to_port.processor_id().clone();
     let dest_port = to_port.port_name().to_string();
 
-    let source_link_wiring = source_on_this_runtime
-        .as_ref()
-        .and_then(|source_proc_id| out_of_process_link_wiring_of(graph, source_proc_id));
+    let source_link_wiring = out_of_process_link_wiring_of(graph, &source_proc_id);
     let dest_link_wiring = out_of_process_link_wiring_of(graph, &dest_proc_id);
     let source_is_subprocess = source_link_wiring.is_some();
     let dest_is_subprocess = dest_link_wiring.is_some();
@@ -135,8 +114,6 @@ pub fn open_iceoryx2_service(
         );
     }
 
-    let channel_service_name = channel_service_name(&from_port)?;
-
     // Every destination is notified whatever mode it runs in. One that never
     // drains its listener costs its sources a counter increment per frame:
     // iceoryx2 counts repeat notifications in shared memory and sends no
@@ -146,15 +123,13 @@ pub fn open_iceoryx2_service(
     tracing::info!(
         channel = %channel_service_name,
         notify = %notify_service_name_for_the_destination,
-        "Opening iceoryx2 channel: {} -> ({}:{}) [{}] (source_subprocess={}, dest_subprocess={}, \
-         source_on_another_runtime={})",
+        "Opening iceoryx2 channel: {} -> ({}:{}) [{}] (source_subprocess={}, dest_subprocess={})",
         from_port,
         dest_proc_id,
         dest_port,
         link_id,
         source_is_subprocess,
         dest_is_subprocess,
-        source_on_this_runtime.is_none(),
     );
 
     // A channel touching a subprocess on either end crosses a trust boundary and
@@ -187,48 +162,39 @@ pub fn open_iceoryx2_service(
     // side's startup envelope — either way wired the moment this op returns.
     let mut wire_replies_awaited_from_its_out_of_process_ends = Vec::new();
 
-    let the_clock_this_links_stamps_are_taken_on =
-        the_clock_this_links_stamps_are_taken_on(&from_port, mesh_link_ingress_table);
-
     // Source side: install the single channel publisher (first link out of this
-    // port) and append this link's destination notifier. A source on another
-    // runtime has no side to wire here — its ingress is the channel's publisher
-    // and holds every destination's notifier, and it is told which service this
-    // destination waits on once that destination is actually wired, below.
-    if let Some(source_proc_id) = source_on_this_runtime.as_ref() {
-        let source_port = from_port.port_name();
-        if let Some(source_link_wiring) = &source_link_wiring {
-            wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_source(
-                graph,
-                source_link_wiring,
-                source_proc_id,
-                &source_port,
-                &channel_service_name,
-                &notify_service_name_for_the_destination,
-                DEFAULT_EXPECTED_PAYLOAD_BYTES,
-                channel_ceiling_bytes,
-                channel_sizing,
-                max_notifiers,
-                link_id,
-            )?);
-        } else {
-            let source_processor = get_single_processor(graph, source_proc_id)?;
-            wire_rust_source(
-                graph,
-                source_proc_id,
-                &source_processor,
-                &source_port,
-                link_id,
-                &service,
-                &notify_service_for_the_destination,
-                ChannelEgressConfig {
-                    service_name: channel_service_name.clone(),
-                    trust_tier,
-                    expected_payload_bytes: DEFAULT_EXPECTED_PAYLOAD_BYTES,
-                    chunk_ceiling_bytes: channel_ceiling_bytes,
-                },
-            )?;
-        }
+    // port) and append this link's destination notifier.
+    if let Some(source_link_wiring) = &source_link_wiring {
+        wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_source(
+            graph,
+            source_link_wiring,
+            &source_proc_id,
+            source_port,
+            &channel_service_name,
+            &notify_service_name_for_the_destination,
+            DEFAULT_EXPECTED_PAYLOAD_BYTES,
+            channel_ceiling_bytes,
+            channel_sizing,
+            max_notifiers,
+            link_id,
+        )?);
+    } else {
+        let source_processor = get_single_processor(graph, &source_proc_id)?;
+        wire_rust_source(
+            graph,
+            &source_proc_id,
+            &source_processor,
+            source_port,
+            link_id,
+            &service,
+            &notify_service_for_the_destination,
+            ChannelEgressConfig {
+                service_name: channel_service_name.clone(),
+                trust_tier,
+                expected_payload_bytes: DEFAULT_EXPECTED_PAYLOAD_BYTES,
+                chunk_ceiling_bytes: channel_ceiling_bytes,
+            },
+        )?;
     }
 
     // Destination side: subscribe to the channel bound to this local input port,
@@ -240,8 +206,6 @@ pub fn open_iceoryx2_service(
             &dest_proc_id,
             &dest_port,
             &channel_service_name,
-            &inbound_link_name_of(&from_port, &channel_service_name),
-            &the_clock_this_links_stamps_are_taken_on,
             &notify_service_name_for_the_destination,
             dest_input_port_delivery,
             channel_sizing,
@@ -257,39 +221,12 @@ pub fn open_iceoryx2_service(
             &dest_processor,
             &dest_port,
             link_id,
-            &inbound_link_name_of(&from_port, &channel_service_name),
-            the_clock_this_links_stamps_are_taken_on.clone(),
+            &channel_service_name,
             dest_input_port_delivery,
             &service,
             &notify_service_for_the_destination,
             dest_audio_windowing,
         )?;
-    }
-
-    // Only now: this says the link's destination is open, and the mesh reads
-    // `wired` off it. Said before the wiring above, a destination whose wiring
-    // failed — the `?`s return before anything closes the service — would
-    // leave the ingress reporting a link that carries into nothing.
-    if source_on_this_runtime.is_none() {
-        mesh_link_ingress_table.note_how_a_links_destination_is_woken(
-            link_id,
-            notify_service_name_for_the_destination,
-            where_a_remote_links_hop_loss_is_counted(graph, &dest_proc_id, link_id),
-        );
-    }
-    // Rendered off the ingress table's own cell, so `graph` says which machine
-    // the link is carrying from now rather than which one it was carrying from
-    // when it was wired. A link from this runtime carries none: it was stamped
-    // on this machine, which the renderer answers without being told.
-    if let TheClockAnInboundLinksStampsAreTakenOn::WhicheverMachineTheMeshIsCarryingFrom(
-        machine_clock,
-    ) = the_clock_this_links_stamps_are_taken_on
-    {
-        if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
-            link.insert_component_without_rendering_it(
-                crate::core::graph::TheMachineClockALinksStampsAreTakenOnComponent(machine_clock),
-            );
-        }
     }
 
     let link = graph
@@ -343,71 +280,50 @@ pub fn open_iceoryx2_service(
 /// port — without taking that processor's lock.
 #[tracing::instrument(
     name = "compiler.close_iceoryx2_service",
-    skip(graph, mesh_link_ingress_table),
+    skip(graph),
     fields(link_id = %link_id)
 )]
-pub fn close_iceoryx2_service(
-    graph: &mut Graph,
-    link_id: &LinkUniqueId,
-    mesh_link_ingress_table: &MeshLinkIngressTable,
-) -> Result<()> {
+pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
 
-    // A link from another runtime goes here too: the table stops carrying its
-    // address once no link reads it, which undeclares this runtime's reader
-    // token and makes the source stop sending.
-    mesh_link_ingress_table.forget_a_link(link_id);
-
-    let Some((source_on_this_runtime, source_port, dest_proc_id, dest_port)) =
-        graph.traversal_mut().e(link_id).first().and_then(|link| {
-            Some((
-                link.from_port().processor_id_on_this_runtime().cloned(),
+    let Some((source_proc_id, source_port, dest_proc_id, dest_port)) =
+        graph.traversal_mut().e(link_id).first().map(|link| {
+            (
+                link.from_port().processor_id().clone(),
                 link.from_port().port_name().to_string(),
-                link.to_port().processor_id_on_this_runtime().cloned()?,
+                link.to_port().processor_id().clone(),
                 link.to_port().port_name().to_string(),
-            ))
+            )
         })
     else {
         tracing::warn!(
-            "close_iceoryx2_service: link '{}' is not in the graph, or carries into a port on \
-             another runtime this runtime never wired; nothing to reclaim",
+            "close_iceoryx2_service: link '{}' is not in the graph; nothing to reclaim",
             link_id
         );
         return Ok(());
     };
 
     // Source side: drop this link's destination notifier (and the channel
-    // publisher when this was the source port's last outbound link). A source
-    // on another runtime has none of that here — the ingress above owns it.
-    if let Some(source_proc_id) = source_on_this_runtime.as_ref() {
-        if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, source_proc_id) {
-            unwire_out_of_process_endpoint(
-                &source_link_wiring,
-                crate::core::PortDirection::Output,
-                source_proc_id,
-                &source_port,
-                link_id,
+    // publisher when this was the source port's last outbound link).
+    if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, &source_proc_id) {
+        unwire_out_of_process_endpoint(
+            &source_link_wiring,
+            crate::core::PortDirection::Output,
+            &source_proc_id,
+            &source_port,
+            link_id,
+        );
+    } else if let Some(source_processor) = processor_to_reclaim_from(graph, &source_proc_id) {
+        let source_guard = source_processor.lock();
+        if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
+            let channel_released = output_inner.remove_channel_link(&source_port, link_id.as_str());
+            tracing::debug!(
+                source = %source_proc_id,
+                port = %source_port,
+                channel_released,
+                "Reclaimed source-side egress for disconnected link"
             );
-        } else if let Some(source_processor) = processor_to_reclaim_from(graph, source_proc_id) {
-            let source_guard = source_processor.lock();
-            if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
-                let channel_released =
-                    output_inner.remove_channel_link(&source_port, link_id.as_str());
-                tracing::debug!(
-                    source = %source_proc_id,
-                    port = %source_port,
-                    channel_released,
-                    "Reclaimed source-side egress for disconnected link"
-                );
-            }
         }
-    }
-
-    // A link from another runtime counted what its hop lost on the
-    // destination's node, apart from what that destination's own ports lost.
-    // That count goes with the link, as every other per-link count does.
-    if source_on_this_runtime.is_none() {
-        forget_a_remote_links_hop_loss(graph, &dest_proc_id, link_id.as_str());
     }
 
     // Destination side: drop this link's channel subscriber (and the port
@@ -446,67 +362,22 @@ pub fn close_iceoryx2_service(
 // Internal helpers
 // ============================================================================
 
-/// The channel service name a link's bags ride on.
-///
-/// A port on this runtime publishes to `{source_processor}/{source_output_port}`
+/// The channel service name a link's bags ride on:
+/// `{source_processor}/{source_output_port}`
 /// ([`crate::iceoryx2::source_channel_name`], the single source of truth for
-/// channel identity); a port on another runtime lands on the engine-named
-/// channel its ingress writes. Either way one source, one channel, one
-/// publisher, N subscribers. A grammar-illegal port name surfaces as a named
-/// [`Error::Configuration`] here rather than an opaque iceoryx2
-/// `Invalid service name` deep in the FFI.
-fn channel_service_name(source: &OutputLinkPortRef) -> Result<String> {
-    match source {
-        OutputLinkPortRef::OnAnotherRuntime(address) => {
-            Ok(crate::iceoryx2::mesh_ingress_channel_name(&address.to_string()).into_string())
-        }
-        OutputLinkPortRef::OnThisRuntime {
-            processor_id,
-            port_name,
-        } => crate::iceoryx2::source_channel_name(processor_id.as_str(), port_name)
-            .map(|name| name.into_string())
-            .map_err(|why| {
-                Error::Configuration(format!(
-                    "cannot derive channel name for source '{processor_id}:{port_name}': {why}"
-                ))
-            }),
-    }
-}
-
-/// What a destination knows this link by.
-///
-/// A link from a port on this runtime is known by the channel it subscribed to,
-/// `{producer}/{port}`. A link from another runtime is known by that port's
-/// mesh address, so a many-track sink fed across the mesh names its tracks the
-/// same way on every run rather than by a channel name hashed out of an
-/// address. §Processor model, the link-naming read.
-fn inbound_link_name_of(source: &OutputLinkPortRef, channel_service_name: &str) -> InboundLinkName {
-    match source.mesh_port_address() {
-        Some(address) => InboundLinkName::from(address.to_string().as_str()),
-        None => InboundLinkName::from(channel_service_name),
-    }
-}
-
-/// Which machine's monotonic clock a destination reads this link's stamps as
-/// being taken on.
-///
-/// A link from a port on this runtime was stamped here. One from another
-/// runtime was stamped on whatever machine the mesh is carrying it from, which
-/// no bag has said yet: the destination is wired long before the source runtime
-/// is known, so it takes the ingress table's cell for the address and reads the
-/// answer out of it afterwards, as bags arrive and as the source comes and goes.
-fn the_clock_this_links_stamps_are_taken_on(
-    source: &OutputLinkPortRef,
-    mesh_link_ingress_table: &MeshLinkIngressTable,
-) -> TheClockAnInboundLinksStampsAreTakenOn {
-    match source.mesh_port_address() {
-        Some(address) => {
-            TheClockAnInboundLinksStampsAreTakenOn::WhicheverMachineTheMeshIsCarryingFrom(
-                mesh_link_ingress_table.machine_clock_carried_from(address),
-            )
-        }
-        None => TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
-    }
+/// channel identity). One source, one channel, one publisher, N subscribers. A
+/// grammar-illegal port name surfaces as a named [`Error::Configuration`] here
+/// rather than an opaque iceoryx2 `Invalid service name` deep in the FFI.
+pub(crate) fn channel_service_name(source: &OutputLinkPortRef) -> Result<String> {
+    let processor_id = source.processor_id();
+    let port_name = source.port_name();
+    crate::iceoryx2::source_channel_name(processor_id.as_str(), port_name)
+        .map(|name| name.into_string())
+        .map_err(|why| {
+            Error::Configuration(format!(
+                "cannot derive channel name for source '{processor_id}:{port_name}': {why}"
+            ))
+        })
 }
 
 /// Destination-keyed notify (Event) service name — `streamlib/{dest}/notify`.
@@ -521,10 +392,6 @@ fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
 
 /// Every `connect()` link carrying from `source` — the links of the one channel
 /// that source publishes to, since a channel keys on its source.
-///
-/// Walks every link rather than the source node's out-edges, because a source
-/// on another runtime has no node here to walk out of and its links must still
-/// be counted.
 fn every_link_carrying_from<'a>(
     graph: &'a Graph,
     source: &'a OutputLinkPortRef,
@@ -544,12 +411,9 @@ fn channel_destination_count(graph: &Graph, source: &OutputLinkPortRef) -> usize
 
 /// The `max_subscribers` every channel data service is created with:
 /// [`MAX_DESTINATIONS_PER_CHANNEL`] destination slots plus
-/// [`RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`] and
-/// [`RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`] — fixed, never the
-/// current fan-out, because iceoryx2 pins the count at create time and a link
-/// connected to a running source must fit a slot that already exists. The mesh
-/// egress takes its slot out of its own reservation rather than out of the
-/// destination cap, so a port at that cap still sends across the mesh.
+/// [`RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`] — fixed, never the current
+/// fan-out, because iceoryx2 pins the count at create time and a link connected
+/// to a running source must fit a slot that already exists.
 ///
 /// A source output port past the cap is refused here by name, before any
 /// service is touched.
@@ -561,9 +425,7 @@ fn channel_max_subscribers(graph: &Graph, source: &OutputLinkPortRef) -> Result<
              carries at most {MAX_DESTINATIONS_PER_CHANNEL}"
         )));
     }
-    Ok(MAX_DESTINATIONS_PER_CHANNEL
-        + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
-        + RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL)
+    Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL)
 }
 
 /// Derive the [`ChannelSizing`] for the channel keyed on `(source_proc_id,
@@ -608,9 +470,7 @@ fn channel_service_creation_depth(
         .filter(|link| link_still_counts_toward_its_ports(link))
     {
         let destination = link.to_port();
-        let Some(destination_processor_id) = destination.processor_id_on_this_runtime() else {
-            continue;
-        };
+        let destination_processor_id = destination.processor_id();
         if audio_windowing_declared_by_input_port_of(
             graph,
             destination_processor_id,
@@ -660,252 +520,41 @@ fn subscriber_ring_depth_of_input_port(
     }
 }
 
-/// The channel of an output port only the mesh reads, as its egress needs it.
-#[derive(Debug)]
-pub(crate) struct TheChannelOfAnOutputPortOnlyTheMeshReads {
-    /// The sizing the channel exists at — the only sizing a later opener of its
-    /// service may ask for, and what the egress takes its own slot with.
-    pub(crate) channel_sizing: ChannelSizing,
-    /// A helper-placed source's answer that it opened its publisher, which the
-    /// egress waits on before it says the port is being sent. `None` for a
-    /// source in this process, whose publisher is installed here and now.
-    pub(crate) the_helpers_answer_that_it_opened_its_publisher:
-        Option<Arc<OutOfProcessLinkWireReply>>,
-}
-
-impl TheChannelOfAnOutputPortOnlyTheMeshReads {
-    /// A port that is already publishing, because something local reads it too
-    /// or because the processor holds no iceoryx2 output resources to install
-    /// one into: its sizing is whatever its live channel was created at, and
-    /// nothing was asked of anyone, so there is no answer to wait for.
-    fn of_a_port_that_is_already_publishing(
-        graph: &Graph,
-        iceoryx2_node: &Iceoryx2Node,
-        source: &OutputLinkPortRef,
-    ) -> Result<Self> {
-        Ok(Self {
-            channel_sizing: resolve_channel_sizing(graph, iceoryx2_node, source)?,
-            the_helpers_answer_that_it_opened_its_publisher: None,
-        })
-    }
-}
-
-/// Open the channel of an output port nothing on this runtime reads, and
-/// install its publisher, so a port read only across the mesh publishes at all.
-///
-/// A source port's channel and its publisher are otherwise created by the first
-/// `connect` out of it: with no local link there is no channel, so the producer
-/// drops every bag as a declared port with nowhere to go. The mesh's egress is
-/// that port's first consumer, and this is the wiring it needs — the source
-/// half of [`wire_rust_source`] with no notifier, because there is no
-/// destination to wake.
-///
-/// Idempotent: a port that already has a publisher — because something local
-/// reads it too — is left exactly as it is.
-///
-/// A source whose ports live in a helper opens its own publisher, so it is
-/// asked for one instead and answers on its own time.
-///
-/// A `source` naming a port on another runtime is refused: this opens a channel
-/// this runtime hosts, and a caller that got here with one has confused the two
-/// ends of the hop.
-pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
-    graph: &mut Graph,
-    iceoryx2_node: &Iceoryx2Node,
-    source: &OutputLinkPortRef,
-) -> Result<TheChannelOfAnOutputPortOnlyTheMeshReads> {
-    let Some(source_proc_id) = source.processor_id_on_this_runtime() else {
-        return Err(Error::Configuration(format!(
-            "'{source}' names a port on another runtime, and this runtime cannot open a \
-             channel for one it does not host"
-        )));
-    };
-    let source_port = source.port_name();
-    let channel_service_name = channel_service_name(source)?;
-    if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, source_proc_id) {
-        return ask_a_helper_to_open_the_publisher_of_an_output_port_only_the_mesh_reads(
-            graph,
-            iceoryx2_node,
-            source,
-            source_proc_id,
-            &source_link_wiring,
-            &channel_service_name,
-        );
-    }
-
-    let source_processor = get_single_processor(graph, source_proc_id)?;
-    let output_writer_inner = source_processor.lock().iceoryx2_output_writer_inner();
-    let Some(output_inner) =
-        output_writer_inner.filter(|output_inner| !output_inner.has_channel_publisher(source_port))
-    else {
-        return TheChannelOfAnOutputPortOnlyTheMeshReads::of_a_port_that_is_already_publishing(
-            graph,
-            iceoryx2_node,
-            source,
-        );
-    };
-
-    let channel_sizing = the_sizing_a_channel_the_mesh_opens_first_is_created_at(graph, source)?;
-    let service = iceoryx2_node.open_or_create_service(
-        &channel_service_name,
-        channel_sizing.max_subscribers,
-        channel_sizing.channel_service_creation_depth,
-    )?;
-    let publisher = service.create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)?;
-    // Trusted: the writer is this runtime's own app-process processor, and the
-    // only reader is the engine's egress beside it.
-    let trust_tier = ChannelTrustTier::Trusted;
-    output_inner.set_channel_publisher(
-        source_port,
-        publisher,
-        ChannelEgressConfig {
-            service_name: channel_service_name,
-            trust_tier,
-            expected_payload_bytes: DEFAULT_EXPECTED_PAYLOAD_BYTES,
-            chunk_ceiling_bytes: effective_channel_chunk_ceiling_bytes(trust_tier),
-        },
-    );
-    tracing::info!(
-        source = %source_proc_id,
-        port = %source_port,
-        "Opened the channel of an output port only the mesh reads"
-    );
-    Ok(TheChannelOfAnOutputPortOnlyTheMeshReads {
-        channel_sizing,
-        the_helpers_answer_that_it_opened_its_publisher: None,
-    })
-}
-
-/// Ask a helper to open the publisher of one of its output ports that only the
-/// mesh reads, and say how that port's channel is sized.
-///
-/// A helper opens a publisher from an entry in the wiring envelope its parent
-/// sends and from nothing else, so this hands it the entry a `connect` would:
-/// with no notify service, because no destination waits on a listener, and
-/// under a hold id of the port's own, because there is no link. Its bookkeeping
-/// keys on that id alone, so the hold sits in it exactly as a link does and the
-/// port keeps its publisher while either holds it.
-///
-/// The answer is a round trip through the child, and the caller runs under the
-/// graph lock, so the cell it lands in is handed back rather than waited on.
-fn ask_a_helper_to_open_the_publisher_of_an_output_port_only_the_mesh_reads(
-    graph: &mut Graph,
-    iceoryx2_node: &Iceoryx2Node,
-    source: &OutputLinkPortRef,
-    source_proc_id: &ProcessorUniqueId,
-    source_link_wiring: &OutOfProcessLinkWiringEnvelope,
-    channel_service_name: &str,
-) -> Result<TheChannelOfAnOutputPortOnlyTheMeshReads> {
-    let source_port = source.port_name();
-    // A live channel is a helper that already publishes to it, because a
-    // helper's publisher is the only thing that ever creates this one.
-    if iceoryx2_node
-        .open_existing_channel_service(channel_service_name)?
-        .is_some()
-    {
-        return TheChannelOfAnOutputPortOnlyTheMeshReads::of_a_port_that_is_already_publishing(
-            graph,
-            iceoryx2_node,
-            source,
-        );
-    }
-
-    // Derived rather than read off the live channel: the helper creates the
-    // service from the entry below and has not answered yet, so there is
-    // nothing live to read.
-    let channel_sizing = the_sizing_a_channel_the_mesh_opens_first_is_created_at(graph, source)?;
-    let the_helpers_answer_that_it_opened_its_publisher = wire_subprocess_source(
-        graph,
-        source_link_wiring,
-        source_proc_id,
-        source_port,
-        channel_service_name,
-        // The only reader is the mesh's egress, which polls its subscriber, so
-        // there is no listener to wake and the notifier cap goes unread.
-        "",
-        DEFAULT_EXPECTED_PAYLOAD_BYTES,
-        effective_channel_chunk_ceiling_bytes(ChannelTrustTier::UntrustedSession),
-        channel_sizing,
-        MAX_INBOUND_LINKS_PER_DESTINATION,
-        &the_id_a_mesh_egress_holds_a_helper_placed_output_port_open_under(
-            source_proc_id,
-            source_port,
-        ),
-    )?;
-    tracing::info!(
-        source = %source_proc_id,
-        port = %source_port,
-        "Asked a helper to open the publisher of an output port only the mesh reads"
-    );
-    Ok(TheChannelOfAnOutputPortOnlyTheMeshReads {
-        channel_sizing,
-        the_helpers_answer_that_it_opened_its_publisher,
-    })
-}
-
-/// The sizing a port's channel is created at when the mesh's egress is its
-/// first consumer: the fixed subscriber cap, and a ring deep enough for any
-/// consumer that connects later, windowed included.
-///
-/// Deep rather than sized from the destinations present — of which there are
-/// none — because a channel keeps the depth it was created at, so the shallow
-/// ring would refuse the first windowed local `connect` that ever followed.
-fn the_sizing_a_channel_the_mesh_opens_first_is_created_at(
-    graph: &Graph,
-    source: &OutputLinkPortRef,
-) -> Result<ChannelSizing> {
-    Ok(ChannelSizing {
-        max_subscribers: channel_max_subscribers(graph, source)?,
-        channel_service_creation_depth: WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
-    })
-}
-
-/// The id a mesh egress holds a helper-placed output port's publisher open
-/// under.
-///
-/// Derived from the port rather than minted, so the same port asked for twice
-/// is one hold; prefixed so it can never read as the cuid2 a graph link's id
-/// is.
-fn the_id_a_mesh_egress_holds_a_helper_placed_output_port_open_under(
-    source_proc_id: &ProcessorUniqueId,
-    source_port: &str,
-) -> LinkUniqueId {
-    LinkUniqueId::from(format!("mesh-egress/{source_proc_id}/{source_port}"))
-}
-
 /// Resolve the address a caller names a port by — `<runtime name>/<node>/<port>`
-/// — to the source a link carries from: a port on this runtime when the address
-/// names `this_runtimes_name`, and a port on another runtime otherwise.
+/// — to the port on this runtime a link carries from.
 ///
-/// A channel's iceoryx2 data service only exists once a `connect()` has wired
-/// its source, so an address no link carries from is genuinely untappable —
-/// the caller maps `None` to [`Error::TapChannelNotFound`], as it does an
-/// address that does not parse.
-///
-/// [`Error::TapChannelNotFound`]: crate::core::error::Error::TapChannelNotFound
+/// An address naming another runtime is refused naming that runtime: a channel
+/// is tapped on the runtime that publishes it. A channel's iceoryx2 data service
+/// only exists once a `connect()` has wired its source, so an address no link
+/// carries from is genuinely untappable and answers
+/// [`Error::TapChannelNotFound`], as does an address that does not parse.
 pub(crate) fn find_the_source_a_caller_named(
     graph: &Graph,
     this_runtimes_name: &str,
     port_address: &str,
-) -> Option<OutputLinkPortRef> {
-    let address = crate::core::graph::MeshPortAddress::parse(port_address).ok()?;
-    let source = if address.names_the_runtime(this_runtimes_name) {
-        let processor_id = graph
-            .traversal()
-            .v_with_node_name(address.processor_display_name())
-            .first()?
-            .id
-            .clone();
-        OutputLinkPortRef::new(processor_id, address.port_name())
-    } else {
-        OutputLinkPortRef::on_another_runtime(address)
-    };
-    graph
+) -> Result<OutputLinkPortRef> {
+    let not_found = || Error::TapChannelNotFound(port_address.to_string());
+    let address = crate::core::graph::PortAddress::parse(port_address).map_err(|_| not_found())?;
+    if !address.names_the_runtime(this_runtimes_name) {
+        return Err(Error::InvalidPortAddress(format!(
+            "'{port_address}' names the runtime `{}`, and a tap reads a channel on this \
+             runtime, `{this_runtimes_name}`",
+            address.runtime_name()
+        )));
+    }
+    let processor_id = graph
         .traversal()
-        .e(())
-        .iter()
-        .any(|link| *link.from_port() == source)
-        .then_some(source)
+        .v_with_node_name(address.processor_display_name())
+        .first()
+        .ok_or_else(not_found)?
+        .id
+        .clone();
+    let source = OutputLinkPortRef::new(processor_id, address.port_name());
+    if every_link_carrying_from(graph, &source).next().is_some() {
+        Ok(source)
+    } else {
+        Err(not_found())
+    }
 }
 
 /// The `max_notifiers` every destination-keyed notify service is created with:
@@ -1167,7 +816,7 @@ fn wire_rust_source(
     }
 
     let notifier = notify_service.create_notifier()?;
-    output_inner.add_channel_link(source_port, link_id.as_str(), Some(notifier));
+    output_inner.add_channel_link(source_port, link_id.as_str(), notifier);
     publish_loss_counts_on_processor_node(graph, source_proc_id, &source_guard);
     Ok(())
 }
@@ -1186,8 +835,7 @@ fn wire_rust_dest(
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_port: &str,
     link_id: &LinkUniqueId,
-    inbound_link_name: &InboundLinkName,
-    stamp_clock: TheClockAnInboundLinksStampsAreTakenOn,
+    channel_service_name: &str,
     dest_input_port_delivery: DeliveryResolution,
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
@@ -1235,8 +883,7 @@ fn wire_rust_dest(
     input_inner.add_channel_subscriber(
         dest_port,
         link_id.as_str(),
-        inbound_link_name,
-        stamp_clock,
+        &InboundLinkName::from(channel_service_name),
         subscriber,
     );
     tracing::debug!(
@@ -1291,61 +938,6 @@ fn publish_loss_counts_on_processor_node(
     );
 }
 
-/// The hop-loss counts on a destination's node, with a zeroed entry minted for
-/// `link_id`, for the ingress to record into.
-///
-/// Read off the node rather than minted here: the destination's own wiring has
-/// already inserted its metrics by this point, whether it runs in the app
-/// process or in its own helper process, and the hop counts ride that one
-/// component — which is what lets a helper-placed
-/// destination's hop count reach `graph` from the app process while its ports'
-/// own counts come off its helper's board. A node carrying no metrics is a
-/// destination whose wiring did not run, which cannot happen on this path, so
-/// the ingress is handed nothing rather than the op failing a link that
-/// otherwise carries.
-///
-/// The entry is minted now rather than when the ingress first carries
-/// something, so a wired remote link that has lost nothing reads as zero
-/// instead of going missing — the rule every other per-link count keeps.
-fn where_a_remote_links_hop_loss_is_counted(
-    graph: &Graph,
-    dest_proc_id: &ProcessorUniqueId,
-    link_id: &LinkUniqueId,
-) -> Option<Arc<MeshHopDroppedBagCountsByRemoteInboundLink>> {
-    let Some(counts) = hop_loss_counts_on_the_node_of(graph, dest_proc_id) else {
-        tracing::warn!(
-            dest = %dest_proc_id,
-            "a link from another runtime reached a destination carrying no metrics, so what \
-             its hop loses will not reach `graph`"
-        );
-        return None;
-    };
-    counts.note_a_wired_link(link_id.as_str());
-    Some(counts)
-}
-
-/// Forget what a disconnected remote link's hop lost, so `graph` stops naming
-/// a link the destination no longer has.
-fn forget_a_remote_links_hop_loss(graph: &Graph, dest_proc_id: &ProcessorUniqueId, link_id: &str) {
-    if let Some(counts) = hop_loss_counts_on_the_node_of(graph, dest_proc_id) {
-        counts.forget_inbound_link(link_id);
-    }
-}
-
-/// The hop-loss counts a destination's node carries, or `None` for a node with
-/// no metrics on it yet.
-fn hop_loss_counts_on_the_node_of(
-    graph: &Graph,
-    dest_proc_id: &ProcessorUniqueId,
-) -> Option<Arc<MeshHopDroppedBagCountsByRemoteInboundLink>> {
-    graph
-        .traversal()
-        .v(dest_proc_id)
-        .first()
-        .and_then(|node| node.get::<ProcessorMetrics>())
-        .map(|metrics| Arc::clone(&metrics.mesh_hop_dropped_bag_counts_by_remote_inbound_link))
-}
-
 /// Insert `loss_counts` as `proc_id`'s node metrics, unless its first wired link
 /// already did.
 fn insert_loss_counts_on_processor_node_once(
@@ -1393,10 +985,6 @@ fn publish_device_matched_audio_window_contracts_on_destination_node(
 /// out of process, so it opens its own channel publisher + destination notifier
 /// from the envelope. One entry per link — the far side installs the single
 /// publisher once (keyed by source port) and appends a notifier per entry.
-///
-/// An empty `notify_service_name` is the wire's way of saying no listener waits
-/// on the other end — the mesh's egress, which polls — so the far side opens no
-/// notifier for this link. Every SDK reads it that way.
 ///
 /// Hands back the cell this end's answer will land in, or `None` where the
 /// entry rides the far side's startup envelope instead and its `ready`
@@ -1448,14 +1036,8 @@ fn wire_subprocess_source(
 /// of process, so it opens its own channel subscriber (bound to its local input
 /// port) from the envelope.
 ///
-/// `channel_service_name` and `inbound_link_name` ride the envelope as two
-/// separate keys because they are two different names for a link from another
-/// runtime: the channel is hashed from the port's mesh address and names
-/// nothing a reader could recognise, while the link name *is* that address.
-/// They are equal for a link whose source is on this runtime.
-///
-/// `stamp_clock` rides it as a third, spelled by
-/// [`TheClockAnInboundLinksStampsAreTakenOn::as_the_token_a_far_side_is_wired_with`].
+/// The envelope's `inbound_link_name` is the channel's own name: a helper
+/// knows each link into it by the channel that carries it.
 ///
 /// Hands back the cell this end's answer will land in, on the same terms as
 /// [`wire_subprocess_source`].
@@ -1466,8 +1048,6 @@ fn wire_subprocess_dest(
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
     channel_service_name: &str,
-    inbound_link_name: &InboundLinkName,
-    stamp_clock: &TheClockAnInboundLinksStampsAreTakenOn,
     notify_service_name: &str,
     dest_input_port_delivery: DeliveryResolution,
     channel_sizing: ChannelSizing,
@@ -1486,8 +1066,7 @@ fn wire_subprocess_dest(
         "name": dest_port,
         "link_id": link_id.to_string(),
         "channel_service_name": channel_service_name,
-        "inbound_link_name": inbound_link_name.as_str(),
-        "stamp_clock": stamp_clock.as_the_token_a_far_side_is_wired_with(),
+        "inbound_link_name": InboundLinkName::from(channel_service_name).as_str(),
         "notify_service_name": notify_service_name,
         "read_mode": dest_input_port_delivery.drain_order.as_manifest_str(),
         "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
@@ -1547,14 +1126,6 @@ fn wire_subprocess_dest(
 mod tests {
     use super::*;
 
-    /// A table for a test that wires links whose sources are all on this
-    /// runtime: the op touches it only for a link from another runtime.
-    fn a_mesh_link_ingress_table() -> Arc<MeshLinkIngressTable> {
-        MeshLinkIngressTable::of_this_runtime(
-            &Iceoryx2Node::for_this_test_process(),
-            &Arc::new(crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default()),
-        )
-    }
     use crate::core::execution::{ExecutionConfig, ProcessExecution};
     use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
@@ -1725,8 +1296,6 @@ mod tests {
             &dest_id.into(),
             "in1",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -1977,8 +1546,7 @@ mod tests {
             .unwrap();
         first_wiring.mirror_dropped_bags(7);
 
-        close_iceoryx2_service(&mut graph, &link_id, &a_mesh_link_ingress_table())
-            .expect("the disconnect succeeds");
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect succeeds");
         assert_eq!(
             rendered_metrics_in(&mut graph, &dest_id)
                 .map(|metrics| metrics["dropped_bags_by_link"].clone()),
@@ -2089,8 +1657,6 @@ mod tests {
             &helper_windowed_id.as_str().into(),
             "audio",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -2177,8 +1743,7 @@ mod tests {
 
         record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
 
-        close_iceoryx2_service(&mut graph, &link_id, &a_mesh_link_ingress_table())
-            .expect("the disconnect must succeed");
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
 
         assert_eq!(
             *source_reclaims.lock(),
@@ -2382,8 +1947,6 @@ mod tests {
             &dest_id.as_str().into(),
             "in1",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -2394,8 +1957,7 @@ mod tests {
         .expect("recording dest wiring must succeed");
         assert!(source_output.has_channel_publisher("out1"));
 
-        close_iceoryx2_service(&mut graph, &link_id, &a_mesh_link_ingress_table())
-            .expect("the disconnect must succeed");
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
 
         assert!(
             !source_output.has_channel_publisher("out1"),
@@ -2527,22 +2089,12 @@ mod tests {
 
         let from_the_engine_source =
             add_link_from_out1_to_in1(&mut graph, &engine_source_id, &dest_id);
-        open_iceoryx2_service(
-            &mut graph,
-            &from_the_engine_source,
-            &node,
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("the engine source's link wires");
+        open_iceoryx2_service(&mut graph, &from_the_engine_source, &node)
+            .expect("the engine source's link wires");
         let from_the_helper_source =
             add_link_from_out1_to_in1(&mut graph, &helper_source_id, &dest_id);
-        open_iceoryx2_service(
-            &mut graph,
-            &from_the_helper_source,
-            &node,
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("the helper source's link wires");
+        open_iceoryx2_service(&mut graph, &from_the_helper_source, &node)
+            .expect("the helper source's link wires");
 
         let helper_source_output_entry = helper_source
             .lock()
@@ -2663,8 +2215,7 @@ mod tests {
             &dest,
             "in1",
             &link_id,
-            &InboundLinkName::from("psource/out1"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
+            "psource/out1",
             DeliveryProfile::Newest.resolve(),
             &channel,
             &notify_service,
@@ -2728,8 +2279,7 @@ mod tests {
                 &dest,
                 "in1",
                 &link_id,
-                &InboundLinkName::from("psource/out1"),
-                TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
+                "psource/out1",
                 dest_delivery,
                 &channel,
                 &notify_service,
@@ -3102,13 +2652,8 @@ mod tests {
             );
         }
         let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
-        open_iceoryx2_service(
-            &mut graph,
-            &link_id,
-            &Iceoryx2Node::for_this_test_process(),
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("the helper-to-helper link wires");
+        open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+            .expect("the helper-to-helper link wires");
         let answers_owed = answers_owed.lock().clone();
         (graph, source_id, link_id, answers_owed)
     }
@@ -3164,13 +2709,7 @@ mod tests {
             ordered_consumer_input.expect("an input-only mock holds input mailboxes");
 
         let newest_link = add_link_from_out1_to_in1(&mut graph, &source_id, &newest_consumer_id);
-        open_iceoryx2_service(
-            &mut graph,
-            &newest_link,
-            &node,
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("the newest consumer wires");
+        open_iceoryx2_service(&mut graph, &newest_link, &node).expect("the newest consumer wires");
         source_output
             .write_raw(
                 "out1",
@@ -3182,13 +2721,8 @@ mod tests {
         newest_consumer_input.drain("in1");
 
         let ordered_link = add_link_from_out1_to_in1(&mut graph, &source_id, &ordered_consumer_id);
-        open_iceoryx2_service(
-            &mut graph,
-            &ordered_link,
-            &node,
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("an ordered consumer connects onto the running port");
+        open_iceoryx2_service(&mut graph, &ordered_link, &node)
+            .expect("an ordered consumer connects onto the running port");
 
         for bag in 1..=BAGS_PUBLISHED_WHILE_NEITHER_CONSUMER_READS {
             source_output
@@ -3237,13 +2771,7 @@ mod tests {
         attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &newest_consumer_id);
         let newest_link = add_link_from_out1_to_in1(&mut graph, &source_id, &newest_consumer_id);
 
-        open_iceoryx2_service(
-            &mut graph,
-            &newest_link,
-            &node,
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("the newest consumer wires");
+        open_iceoryx2_service(&mut graph, &newest_link, &node).expect("the newest consumer wires");
 
         let held_creation_depth = graph
             .traversal_mut()
@@ -3285,9 +2813,8 @@ mod tests {
             .e(link_id)
             .first()
             .expect("the link must be in the graph");
-        let rendered = crate::core::json_schema::LinkOutput::of_a_link_on_the_runtime_named(
+        let rendered = crate::core::json_schema::LinkOutput::of_a_link(
             link,
-            "a-test-runtime",
             &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         );
         (rendered.state, rendered.error_reason)
@@ -3372,8 +2899,7 @@ mod tests {
             },
         );
 
-        close_iceoryx2_service(&mut graph, &link_id, &a_mesh_link_ingress_table())
-            .expect("the disconnect must succeed");
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
 
         assert_eq!(
             link_state_in_graph(&graph, &link_id),
@@ -3396,13 +2922,8 @@ mod tests {
         attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
         let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
 
-        open_iceoryx2_service(
-            &mut graph,
-            &link_id,
-            &Iceoryx2Node::for_this_test_process(),
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("an app-process link wires");
+        open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+            .expect("an app-process link wires");
 
         assert_eq!(
             link_state_in_graph(&graph, &link_id),
@@ -3449,13 +2970,8 @@ mod tests {
         );
         let link_id = add_link_from_out1_to_in1(&mut graph, &helper_id, &helper_id);
 
-        open_iceoryx2_service(
-            &mut graph,
-            &link_id,
-            &Iceoryx2Node::for_this_test_process(),
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("a link between one helper's own ports wires");
+        open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+            .expect("a link between one helper's own ports wires");
 
         let answers_owed = answers_owed.lock().clone();
         assert_eq!(
@@ -3571,12 +3087,7 @@ mod tests {
         } = TwoHelperStubsAndAnUnwiredLinkBetweenThem::new();
 
         let wired = run_while_both_processor_locks_are_held(&source, &dest, || {
-            open_iceoryx2_service(
-                &mut graph,
-                &link_id,
-                &Iceoryx2Node::for_this_test_process(),
-                &a_mesh_link_ingress_table(),
-            )
+            open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
         })
         .expect("the op returns while both helpers still hold their processor locks");
 
@@ -3616,16 +3127,11 @@ mod tests {
             link_id,
             far_side,
         } = TwoHelperStubsAndAnUnwiredLinkBetweenThem::new();
-        open_iceoryx2_service(
-            &mut graph,
-            &link_id,
-            &Iceoryx2Node::for_this_test_process(),
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("the link wires");
+        open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+            .expect("the link wires");
 
         let closed = run_while_both_processor_locks_are_held(&source, &dest, || {
-            close_iceoryx2_service(&mut graph, &link_id, &a_mesh_link_ingress_table())
+            close_iceoryx2_service(&mut graph, &link_id)
         })
         .expect("the op returns while both helpers still hold their processor locks");
 
@@ -3650,8 +3156,7 @@ mod tests {
     fn a_disconnected_link_releases_the_services_it_held() {
         let (mut graph, source_id, link_id) = graph_with_one_wired_link_between_two_helper_stubs();
 
-        close_iceoryx2_service(&mut graph, &link_id, &a_mesh_link_ingress_table())
-            .expect("the disconnect must succeed");
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
 
         assert_eq!(
             creation_depth_a_helper_opening_out1_finds(&source_id),
@@ -3786,8 +3291,7 @@ mod tests {
             &dest,
             "audio",
             &"L-match-device".into(),
-            &InboundLinkName::from("psource/audio_out"),
-            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
+            "psource/audio_out",
             DeliveryProfile::Ordered.resolve(),
             &channel,
             &notify_service,
@@ -3876,8 +3380,6 @@ mod tests {
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -3929,8 +3431,6 @@ mod tests {
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -4163,7 +3663,6 @@ mod tests {
                 &mut graph,
                 &windowed.link_id,
                 &Iceoryx2Node::for_this_test_process(),
-                &a_mesh_link_ingress_table(),
             )
             .expect("the windowed consumer wires");
 
@@ -4213,15 +3712,9 @@ mod tests {
         let (source_id, plain_link) = add_a_source_linked_to_a_plain_consumer(&mut graph);
         let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
 
-        open_iceoryx2_service(&mut graph, &plain_link, &node, &a_mesh_link_ingress_table())
-            .expect("the plain consumer wires");
-        open_iceoryx2_service(
-            &mut graph,
-            &windowed.link_id,
-            &node,
-            &a_mesh_link_ingress_table(),
-        )
-        .expect("the windowed consumer joins the channel created for it");
+        open_iceoryx2_service(&mut graph, &plain_link, &node).expect("the plain consumer wires");
+        open_iceoryx2_service(&mut graph, &windowed.link_id, &node)
+            .expect("the windowed consumer joins the channel created for it");
 
         assert_eq!(
             creation_depth_of_the_channel_held_by(&graph, &plain_link),
@@ -4240,18 +3733,12 @@ mod tests {
         let node = Iceoryx2Node::for_this_test_process();
         let mut graph = Graph::new();
         let (source_id, plain_link) = add_a_source_linked_to_a_plain_consumer(&mut graph);
-        open_iceoryx2_service(&mut graph, &plain_link, &node, &a_mesh_link_ingress_table())
-            .expect("the plain consumer wires");
+        open_iceoryx2_service(&mut graph, &plain_link, &node).expect("the plain consumer wires");
         let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
 
-        let refusal = open_iceoryx2_service(
-            &mut graph,
-            &windowed.link_id,
-            &node,
-            &a_mesh_link_ingress_table(),
-        )
-        .expect_err("a windowed port cannot read through a ring its channel cannot hold")
-        .to_string();
+        let refusal = open_iceoryx2_service(&mut graph, &windowed.link_id, &node)
+            .expect_err("a windowed port cannot read through a ring its channel cannot hold")
+            .to_string();
 
         assert_the_refusal_names_the_port_the_link_both_depths_and_the_fix(
             &refusal,
@@ -4296,8 +3783,7 @@ mod tests {
         let node = Iceoryx2Node::for_this_test_process();
         let mut graph = Graph::new();
         let (source_id, plain_link) = add_a_source_linked_to_a_plain_consumer(&mut graph);
-        open_iceoryx2_service(&mut graph, &plain_link, &node, &a_mesh_link_ingress_table())
-            .expect("the plain consumer wires");
+        open_iceoryx2_service(&mut graph, &plain_link, &node).expect("the plain consumer wires");
         let _held_open_the_way_a_tap_holds_it = node
             .open_or_create_service(
                 &channel_service_name(&OutputLinkPortRef::new(source_id.as_str(), "out1"))
@@ -4306,18 +3792,12 @@ mod tests {
                 DeliveryProfile::ORDERED_DEPTH,
             )
             .expect("a tap joins the running channel");
-        close_iceoryx2_service(&mut graph, &plain_link, &a_mesh_link_ingress_table())
-            .expect("the plain consumer disconnects");
+        close_iceoryx2_service(&mut graph, &plain_link).expect("the plain consumer disconnects");
         let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
 
-        let refusal = open_iceoryx2_service(
-            &mut graph,
-            &windowed.link_id,
-            &node,
-            &a_mesh_link_ingress_table(),
-        )
-        .expect_err("the channel the tap holds is still 16 deep")
-        .to_string();
+        let refusal = open_iceoryx2_service(&mut graph, &windowed.link_id, &node)
+            .expect_err("the channel the tap holds is still 16 deep")
+            .to_string();
 
         assert_the_refusal_names_the_port_the_link_both_depths_and_the_fix(
             &refusal,
@@ -4437,8 +3917,6 @@ mod tests {
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
-            &InboundLinkName::from("pabc/out1"),
-            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -4482,7 +3960,7 @@ mod tests {
     /// the service. Past the cap the port is refused by name, before any
     /// service is touched.
     #[test]
-    fn channel_max_subscribers_is_the_fixed_cap_plus_its_two_reservations_and_refuses_past_it() {
+    fn channel_max_subscribers_is_the_fixed_cap_plus_the_taps_reservation_and_refuses_past_it() {
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
         let src_uid: ProcessorUniqueId = src_id.as_str().into();
@@ -4500,11 +3978,9 @@ mod tests {
         assert_eq!(
             channel_max_subscribers(&graph, &OutputLinkPortRef::new(src_uid.clone(), "out1"))
                 .expect("three destinations fit the cap"),
-            MAX_DESTINATIONS_PER_CHANNEL
-                + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
-                + RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL,
-            "the channel is sized for the cap plus the tap's slot and the mesh egress's, not \
-             for the three destinations it feeds today",
+            MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+            "the channel is sized for the cap plus the tap's slot, not for the three \
+             destinations it feeds today",
         );
 
         for _ in 3..=MAX_DESTINATIONS_PER_CHANNEL {
@@ -4554,7 +4030,7 @@ mod tests {
     /// A port on this runtime is named by `<this runtime>/<node>/<port>` and
     /// resolves to the exact source a link carries from; its iceoryx2 channel
     /// name, an address naming no node, and a port no link carries from all
-    /// resolve to `None` (the tap op maps that to `TapChannelNotFound`).
+    /// answer `TapChannelNotFound`.
     #[test]
     fn a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel() {
         let mut graph = Graph::new();
@@ -4578,12 +4054,7 @@ mod tests {
             &format!("bench-cam-a1b2/{source_node_name}/out1"),
         )
         .expect("a wired port on this runtime resolves by its address");
-        assert_eq!(
-            resolved
-                .processor_id_on_this_runtime()
-                .map(|id| id.as_str()),
-            Some(src_id.as_str())
-        );
+        assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
         assert_eq!(resolved.port_name(), "out1");
 
         let its_channel = crate::iceoryx2::source_channel_name(&src_id, "out1")
@@ -4594,36 +4065,36 @@ mod tests {
             format!("bench-cam-a1b2/{source_node_name}/out2"),
         ] {
             assert!(
-                find_the_source_a_caller_named(&graph, "bench-cam-a1b2", &unresolvable).is_none(),
+                matches!(
+                    find_the_source_a_caller_named(&graph, "bench-cam-a1b2", &unresolvable),
+                    Err(Error::TapChannelNotFound(_))
+                ),
                 "{unresolvable:?} must not resolve to any source port",
             );
         }
     }
 
-    /// A port on another runtime is named by its mesh address, not by the
-    /// channel its ingress writes — which is hashed from that address and is
-    /// nothing a caller could be expected to spell.
+    /// A tap reads a channel on this runtime, so an address naming another
+    /// runtime is refused naming that runtime rather than reported as a channel
+    /// nobody publishes.
     #[test]
-    fn a_port_on_another_runtime_is_named_by_its_address_and_not_by_its_channel() {
-        let mut graph = Graph::new();
-        let dest_id = add_mock_input_only(&mut graph);
-        let address =
-            crate::core::graph::MeshPortAddress::new("bench-cam-a1b2", "camera-source-2", "video")
-                .expect("a legal address");
-        graph
-            .traversal_mut()
-            .add_link_from_another_runtime(address.clone(), InputLinkPortRef::new(&dest_id, "in1"));
+    fn a_tap_naming_another_runtime_is_refused_naming_that_runtime() {
+        let graph = Graph::new();
 
-        let resolved =
-            find_the_source_a_caller_named(&graph, "studio-display", &address.to_string())
-                .expect("a remote link's address resolves");
-        assert_eq!(resolved.mesh_port_address(), Some(&address));
+        let refused = find_the_source_a_caller_named(
+            &graph,
+            "studio-display",
+            "bench-cam-a1b2/camera-source/video",
+        )
+        .expect_err("a channel on another runtime is nothing this runtime taps");
 
-        let its_channel = crate::iceoryx2::mesh_ingress_channel_name(&address.to_string());
         assert!(
-            find_the_source_a_caller_named(&graph, "studio-display", its_channel.as_str())
-                .is_none(),
-            "the hashed ingress channel is not what a caller names a remote port by"
+            matches!(refused, Error::InvalidPortAddress(_)),
+            "refused as an address this runtime cannot tap, got {refused:?}"
+        );
+        assert!(
+            refused.to_string().contains("`bench-cam-a1b2`"),
+            "the refusal names the runtime: {refused}"
         );
     }
 
@@ -4665,713 +4136,66 @@ mod tests {
         );
     }
 
-    mod a_link_whose_source_is_on_another_runtime {
-        use super::*;
-        use crate::core::graph::MeshPortAddress;
-        use crate::iceoryx2::{
-            ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN, THIS_MACHINE_STAMP_CLOCK_TOKEN,
-        };
+    /// One helper-placed destination's recorded input entry, wired through the
+    /// op's own subprocess branch.
+    fn one_helper_destinations_recorded_input_entry(
+        channel_service_name: &str,
+    ) -> serde_json::Value {
+        let mut graph = Graph::new();
+        let dest_id = add_mock_input_only(&mut graph);
+        let dest_instance = attach_processor_instance(
+            &mut graph,
+            &dest_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+        let link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
+        wire_subprocess_dest(
+            &mut graph,
+            &link_wiring,
+            &dest_id.as_str().into(),
+            "in1",
+            channel_service_name,
+            "pdef/notify",
+            DeliveryProfile::Newest.resolve(),
+            sizing_of_a_two_subscriber_test_channel(),
+            1,
+            &LinkUniqueId::from("L-envelope"),
+            None,
+        )
+        .expect("recording dest wiring must succeed");
 
-        /// An address of this test's own: two tests sharing one would derive
-        /// one ingress channel and meet each other's service in this process's
-        /// iceoryx2 domain.
-        fn an_address(arm: &str) -> MeshPortAddress {
-            MeshPortAddress::new(format!("bench-cam-{arm}"), "Camera Source 2", "video")
-                .expect("a legal address")
-        }
+        dest_instance
+            .lock()
+            .out_of_process_link_wiring()
+            .expect("the stub records its own wiring")
+            .as_setup_command_ports()["inputs"][0]
+            .clone()
+    }
 
-        /// A graph holding one destination and one link into it from
-        /// `an_address()`, wired through the op.
-        struct ALinkWiredFromAnotherRuntime {
-            graph: Graph,
-            dest_id: String,
-            dest_input: Option<Arc<crate::iceoryx2::InputMailboxesInner>>,
-            ingress_table: Arc<MeshLinkIngressTable>,
-            link_id: LinkUniqueId,
-        }
+    /// A helper knows a link by the channel it subscribes to.
+    #[test]
+    fn the_envelope_hands_a_helper_its_channel_as_the_name_it_knows_the_link_by() {
+        let entry = one_helper_destinations_recorded_input_entry("pcam/video");
 
-        fn wire_one(arm: &str) -> ALinkWiredFromAnotherRuntime {
-            wire_one_into(arm, WhereTheDestinationRuns::InThisProcess)
-        }
+        assert_eq!(
+            entry["channel_service_name"],
+            serde_json::json!("pcam/video")
+        );
+        assert_eq!(entry["inbound_link_name"], serde_json::json!("pcam/video"));
+    }
 
-        /// Where the destination of the wired link runs. Both wire through the
-        /// one op, which is the point: the hop count is the app process's
-        /// either way.
-        enum WhereTheDestinationRuns {
-            InThisProcess,
-            InItsOwnHelperProcess,
-        }
+    /// A native destination knows a link by the channel it subscribes to.
+    #[test]
+    fn a_native_destination_knows_each_link_by_its_channel() {
+        use crate::core::test_support::MockInputOnlyProcessor;
 
-        fn wire_one_into(
-            arm: &str,
-            where_the_destination_runs: WhereTheDestinationRuns,
-        ) -> ALinkWiredFromAnotherRuntime {
-            use crate::core::test_support::MockInputOnlyProcessor;
+        let (_source_output, dest_input) =
+            wire_one_test_link::<MockInputOnlyProcessor::Processor>("inbound-link-name", false);
 
-            let address = an_address(arm);
-            let mut graph = Graph::new();
-            let dest_id = add_mock_input_only(&mut graph);
-            let dest_input = match where_the_destination_runs {
-                WhereTheDestinationRuns::InThisProcess => {
-                    let (_, _, dest_input) = attach_mock_instance::<
-                        MockInputOnlyProcessor::Processor,
-                    >(&mut graph, &dest_id);
-                    Some(dest_input.expect("the mock destination has input mailboxes"))
-                }
-                WhereTheDestinationRuns::InItsOwnHelperProcess => {
-                    attach_processor_instance(
-                        &mut graph,
-                        &dest_id,
-                        ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
-                    );
-                    None
-                }
-            };
-            let link_id = graph
-                .traversal_mut()
-                .add_link_from_another_runtime(
-                    address.clone(),
-                    InputLinkPortRef::new(&dest_id, "in1"),
-                )
-                .first()
-                .expect("the link is kept")
-                .id
-                .clone();
-
-            // What `connect` does before the commit reaches this op: the link
-            // is the mesh's to resolve from the moment it is applied.
-            let ingress_table = a_mesh_link_ingress_table();
-            ingress_table.note_a_link_waiting_on(
-                address,
-                link_id.clone(),
-                Arc::new(Mutex::new(
-                    crate::core::graph::RemoteLinkResolution::AwaitingRemote {
-                        reason: "a test has only just applied it".to_string(),
-                    },
-                )),
-            );
-
-            open_iceoryx2_service(
-                &mut graph,
-                &link_id,
-                &Iceoryx2Node::for_this_test_process(),
-                &ingress_table,
-            )
-            .expect("a link with no local source node still wires its destination");
-
-            ALinkWiredFromAnotherRuntime {
-                graph,
-                dest_id,
-                dest_input,
-                ingress_table,
-                link_id,
-            }
-        }
-
-        /// What one wired link's destination node renders for the hop.
-        fn hop_loss_rendered_by(wired: &mut ALinkWiredFromAnotherRuntime) -> serde_json::Value {
-            rendered_metrics_in(&mut wired.graph, &wired.dest_id)
-                .expect("a wired destination renders metrics")["mesh_hop_dropped_bags_by_link"]
-                .clone()
-        }
-
-        /// A destination fed from another runtime renders what that hop lost,
-        /// under this link's id and beside what its own ports lost — zero
-        /// before anything is lost, never an absent key, so a `graph` showing
-        /// no hop loss is evidence rather than silence.
-        ///
-        /// Fail-without-fix: stop minting the entry at wiring time and a
-        /// perfectly healthy remote link renders no hop key at all, which
-        /// reads exactly like a link that cannot lose anything.
-        #[test]
-        fn a_destination_fed_from_another_runtime_renders_what_the_hop_lost_under_this_links_id() {
-            let mut wired = wire_one("hop-loss");
-
-            assert_eq!(
-                hop_loss_rendered_by(&mut wired),
-                serde_json::json!({ wired.link_id.to_string(): 0 })
-            );
-
-            // What the ingress's writing thread does when it reads a jump.
-            hop_loss_counts_on_the_node_of(&wired.graph, &wired.dest_id.as_str().into())
-                .expect("the destination's node carries hop-loss counts")
-                .counter_for_inbound_link(wired.link_id.as_str())
-                .record_dropped_bags(11);
-
-            assert_eq!(
-                hop_loss_rendered_by(&mut wired),
-                serde_json::json!({ wired.link_id.to_string(): 11 }),
-                "`graph` must read the count live off the object the ingress records into"
-            );
-        }
-
-        /// The same, into a destination running in its own helper process. The
-        /// ingress is in the app process wherever the destination runs, so the
-        /// hop count reaches `graph` with no blackboard between them — while
-        /// that destination's own dropped bags still come off its helper's.
-        ///
-        /// Fail-without-fix: hang the hop count off `ProcessorLossCounts`
-        /// instead and a helper-placed destination's hop loss would have to
-        /// cross a board its helper never writes, so it would always read zero.
-        #[test]
-        fn a_helper_placed_destination_renders_the_hop_count_the_app_process_kept_for_it() {
-            let mut wired = wire_one_into(
-                "hop-loss-helper",
-                WhereTheDestinationRuns::InItsOwnHelperProcess,
-            );
-
-            hop_loss_counts_on_the_node_of(&wired.graph, &wired.dest_id.as_str().into())
-                .expect("a helper-placed destination's node carries hop-loss counts")
-                .counter_for_inbound_link(wired.link_id.as_str())
-                .record_dropped_bags(4);
-
-            let rendered = rendered_metrics_in(&mut wired.graph, &wired.dest_id)
-                .expect("a wired destination renders metrics");
-            assert_eq!(
-                rendered["mesh_hop_dropped_bags_by_link"],
-                serde_json::json!({ wired.link_id.to_string(): 4 })
-            );
-            assert_eq!(
-                rendered["dropped_bags_by_link"],
-                serde_json::json!({ wired.link_id.to_string(): 0 }),
-                "the ports' own counts still come off the helper's board, untouched"
-            );
-        }
-
-        /// A disconnected remote link takes its hop count with it, so `graph`
-        /// stops naming a link the destination no longer has — the life every
-        /// other per-link count already has.
-        #[test]
-        fn a_disconnected_remote_link_takes_its_hop_count_with_it() {
-            let mut wired = wire_one("hop-loss-disconnect");
-            hop_loss_counts_on_the_node_of(&wired.graph, &wired.dest_id.as_str().into())
-                .expect("the destination's node carries hop-loss counts")
-                .counter_for_inbound_link(wired.link_id.as_str())
-                .record_dropped_bags(5);
-
-            close_iceoryx2_service(&mut wired.graph, &wired.link_id, &wired.ingress_table)
-                .expect("the link disconnects");
-
-            let rendered = rendered_metrics_in(&mut wired.graph, &wired.dest_id)
-                .expect("the destination still renders metrics");
-            assert_eq!(
-                rendered.get("mesh_hop_dropped_bags_by_link"),
-                None,
-                "a destination with no remote link left renders no hop key at all"
-            );
-        }
-
-        /// A link whose source is on this runtime renders no hop key: there is
-        /// no hop to lose anything on, and a zero there could not be told from
-        /// a remote link that has lost nothing.
-        #[test]
-        fn a_link_whose_source_is_on_this_runtime_renders_no_hop_key() {
-            let mut graph = Graph::new();
-            let source_id = add_mock_output_only(&mut graph);
-            let dest_id = add_mock_input_only(&mut graph);
-            attach_mock_instance::<crate::core::test_support::MockOutputOnlyProcessor::Processor>(
-                &mut graph, &source_id,
-            );
-            attach_mock_instance::<crate::core::test_support::MockInputOnlyProcessor::Processor>(
-                &mut graph, &dest_id,
-            );
-            let link_id = graph
-                .traversal_mut()
-                .add_e(
-                    OutputLinkPortRef::new(&source_id, "out1"),
-                    InputLinkPortRef::new(&dest_id, "in1"),
-                )
-                .first()
-                .expect("the link is kept")
-                .id
-                .clone();
-
-            open_iceoryx2_service(
-                &mut graph,
-                &link_id,
-                &Iceoryx2Node::for_this_test_process(),
-                &a_mesh_link_ingress_table(),
-            )
-            .expect("a link wholly on this runtime wires");
-
-            assert_eq!(
-                rendered_metrics_in(&mut graph, &dest_id)
-                    .expect("a wired destination renders metrics")
-                    .get("mesh_hop_dropped_bags_by_link"),
-                None
-            );
-        }
-
-        /// The destination subscribes to the channel the address derives — the
-        /// same derivation the ingress publishes onto, which is how the two meet
-        /// without either telling the other.
-        ///
-        /// Mental-revert: point `channel_service_name`'s remote arm at anything
-        /// else and the destination subscribes to a channel nobody writes.
-        #[test]
-        fn the_destination_subscribes_to_the_channel_the_address_derives() {
-            let wired = wire_one("subscribes");
-            let subscribed: Vec<String> = wired
-                .dest_input
-                .expect("an app-process destination has input mailboxes")
-                .inbound_link_names("in1")
-                .iter()
-                .map(|name| name.to_string())
-                .collect();
-            assert_eq!(subscribed.len(), 1, "the destination has one inbound link");
-
-            let derived =
-                crate::iceoryx2::mesh_ingress_channel_name(&an_address("subscribes").to_string());
-            let held_open = Iceoryx2Node::for_this_test_process()
-                .open_existing_channel_service(derived.as_str())
-                .expect("the channel opens");
-            assert!(
-                held_open.is_some(),
-                "wiring the link must have created {derived}, which its ingress publishes onto"
-            );
-        }
-
-        /// The destination knows the link by the port's mesh address, not by the
-        /// channel — which is hashed from that address and names nothing a reader
-        /// could recognise. §Processor model, the link-naming read.
-        ///
-        /// Mental-revert: hand `wire_rust_dest` the channel name for a remote
-        /// source and a many-track sink fed across the mesh names its tracks by a
-        /// hash.
-        #[test]
-        fn the_destination_knows_the_link_by_the_address_and_not_by_the_channel() {
-            let wired = wire_one("named");
-            let known_as = wired
-                .dest_input
-                .expect("an app-process destination has input mailboxes")
-                .inbound_link_names("in1");
-            assert_eq!(
-                known_as.first().map(|name| name.as_str()),
-                Some(an_address("named").to_string().as_str())
-            );
-            assert_ne!(
-                known_as.first().map(|name| name.as_str()),
-                Some(
-                    crate::iceoryx2::mesh_ingress_channel_name(&an_address("named").to_string())
-                        .as_str()
-                )
-            );
-        }
-
-        /// The op tells the ingress table how this link's destination is woken.
-        /// Without it the mesh never learns the destination is open, so the link
-        /// never reads `wired` and never gets its notifier.
-        ///
-        /// Mental-revert: delete the `note_how_a_links_destination_is_woken` call
-        /// and a remote link in a real runtime carries nothing, silently.
-        #[test]
-        fn the_ingress_table_learns_this_links_destination_is_open() {
-            let wired = wire_one("learns");
-            assert!(
-                wired
-                    .ingress_table
-                    .a_links_destination_is_open(&wired.link_id),
-                "the wiring op is what tells the mesh a remote link's destination is open"
-            );
-        }
-
-        /// Both arms of the link-naming read, side by side: a local source is known
-        /// by its channel and a remote one by its address.
-        #[test]
-        fn a_link_is_named_by_its_channel_at_home_and_by_its_address_across_the_mesh() {
-            assert_eq!(
-                inbound_link_name_of(&OutputLinkPortRef::new("Pcam", "video"), "pcam/video")
-                    .as_str(),
-                "pcam/video"
-            );
-            assert_eq!(
-                inbound_link_name_of(
-                    &OutputLinkPortRef::on_another_runtime(an_address("naming")),
-                    "meshlink-deadbeefdeadbeef/bags",
-                )
-                .as_str(),
-                "bench-cam-naming/camera-source-2/video"
-            );
-        }
-
-        /// One helper-placed destination's recorded input entry, wired through
-        /// the op's own subprocess branch.
-        fn one_helper_destinations_recorded_input_entry(
-            channel_service_name: &str,
-            inbound_link_name: &InboundLinkName,
-            stamp_clock: &TheClockAnInboundLinksStampsAreTakenOn,
-        ) -> serde_json::Value {
-            let mut graph = Graph::new();
-            let dest_id = add_mock_input_only(&mut graph);
-            let dest_instance = attach_processor_instance(
-                &mut graph,
-                &dest_id,
-                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
-            );
-            let link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
-                .expect("a helper stub's node carries its link wiring");
-            wire_subprocess_dest(
-                &mut graph,
-                &link_wiring,
-                &dest_id.as_str().into(),
-                "in1",
-                channel_service_name,
-                inbound_link_name,
-                stamp_clock,
-                "pdef/notify",
-                DeliveryProfile::Newest.resolve(),
-                sizing_of_a_two_subscriber_test_channel(),
-                1,
-                &LinkUniqueId::from("L-envelope"),
-                None,
-            )
-            .expect("recording dest wiring must succeed");
-
-            dest_instance
-                .lock()
-                .out_of_process_link_wiring()
-                .expect("the stub records its own wiring")
-                .as_setup_command_ports()["inputs"][0]
-                .clone()
-        }
-
-        /// The envelope hands a helper both names, and for a link from another
-        /// runtime they differ: the channel is the hash its ingress writes onto
-        /// and the link name is the port's mesh address.
-        ///
-        /// Mental-revert: drop `inbound_link_name` from the entry and a
-        /// helper-placed many-track sink fed across the mesh names its tracks
-        /// by a hash nobody can recognise.
-        #[test]
-        fn the_envelope_hands_a_helper_the_address_beside_the_channel_it_subscribes_to() {
-            let address = an_address("envelope");
-            let channel =
-                crate::iceoryx2::mesh_ingress_channel_name(&address.to_string()).into_string();
-            let source = OutputLinkPortRef::on_another_runtime(address.clone());
-
-            let entry = one_helper_destinations_recorded_input_entry(
-                &channel,
-                &inbound_link_name_of(&source, &channel),
-                &the_clock_this_links_stamps_are_taken_on(&source, &a_mesh_link_ingress_table()),
-            );
-
-            assert_eq!(
-                entry["channel_service_name"],
-                serde_json::json!(channel),
-                "the helper subscribes to the channel the ingress publishes onto"
-            );
-            assert_eq!(
-                entry["inbound_link_name"],
-                serde_json::json!(address.to_string()),
-                "and knows the link by the port's mesh address"
-            );
-            assert_ne!(
-                entry["channel_service_name"], entry["inbound_link_name"],
-                "the two names are exactly what this key exists to keep apart"
-            );
-            // Sent rather than left for the helper to infer from those two
-            // names differing. Fail-without-fix: send the local token here and
-            // a helper answers "this machine" for a link carrying from another
-            // one, which is what lets two clocks be compared.
-            assert_eq!(
-                entry["stamp_clock"],
-                serde_json::json!(ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN),
-                "only the app process holds a mesh session to name this link's machine"
-            );
-        }
-
-        /// A link whose source is on this runtime carries one name twice, which
-        /// is what makes the key safe to send for every link rather than only
-        /// for remote ones.
-        #[test]
-        fn the_envelope_hands_a_helper_one_name_twice_for_a_link_from_this_runtime() {
-            let source = OutputLinkPortRef::new("Pcam", "video");
-            let entry = one_helper_destinations_recorded_input_entry(
-                "pcam/video",
-                &inbound_link_name_of(&source, "pcam/video"),
-                &the_clock_this_links_stamps_are_taken_on(&source, &a_mesh_link_ingress_table()),
-            );
-
-            assert_eq!(
-                entry["channel_service_name"],
-                serde_json::json!("pcam/video")
-            );
-            assert_eq!(entry["inbound_link_name"], serde_json::json!("pcam/video"));
-            assert_eq!(
-                entry["stamp_clock"],
-                serde_json::json!(THIS_MACHINE_STAMP_CLOCK_TOKEN),
-                "its bags were stamped here, and the helper is told so rather than inferring it"
-            );
-        }
-
-        /// A source port nothing on this runtime reads still gets its channel
-        /// and its publisher, because the mesh's egress is its first consumer.
-        ///
-        /// What it catches, found on the rig and invisible to every other
-        /// test here: a port's channel and publisher are otherwise made by the
-        /// first `connect` out of it, and across the mesh there is no
-        /// `connect` — so the producer drops every bag as a declared port with
-        /// nowhere to go, while `graph` reports the link `wired`.
-        #[test]
-        fn a_port_only_the_mesh_reads_still_gets_its_channel_and_its_publisher() {
-            use crate::core::test_support::MockOutputOnlyProcessor;
-
-            let mut graph = Graph::new();
-            let source_id = add_mock_output_only(&mut graph);
-            let (_, source_output, _) =
-                attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
-            let source_output = source_output.expect("the mock source has an output writer");
-            let source = OutputLinkPortRef::new(&source_id, "out1");
-
-            assert!(
-                !source_output.has_channel_publisher("out1"),
-                "nothing has connected to this port, so it has no publisher yet"
-            );
-
-            open_the_channel_of_an_output_port_nothing_local_reads(
-                &mut graph,
-                &Iceoryx2Node::for_this_test_process(),
-                &source,
-            )
-            .expect("a port with no local link opens its channel for the mesh");
-
-            assert!(
-                source_output.has_channel_publisher("out1"),
-                "a port the mesh reads must be able to publish"
-            );
-
-            // Idempotent: a second egress, or a `connect` arriving afterwards,
-            // must not replace the publisher the port is already using.
-            open_the_channel_of_an_output_port_nothing_local_reads(
-                &mut graph,
-                &Iceoryx2Node::for_this_test_process(),
-                &source,
-            )
-            .expect("opening it again is a no-op");
-            assert!(source_output.has_channel_publisher("out1"));
-        }
-
-        /// A channel opened for the mesh is deep enough that a windowed local
-        /// consumer connecting afterwards is not refused.
-        ///
-        /// What it catches: sizing this channel from the destinations present
-        /// — of which there are none — pins it at the ordered depth, and a
-        /// channel keeps its creation depth for as long as anything holds it
-        /// open. The next windowed `connect` out of that port would then be
-        /// refused for a depth nothing ever asked for.
-        #[test]
-        fn a_channel_opened_for_the_mesh_still_takes_a_windowed_consumer_afterwards() {
-            use crate::core::test_support::MockOutputOnlyProcessor;
-
-            let mut graph = Graph::new();
-            let source_id = add_mock_output_only(&mut graph);
-            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
-            let source = OutputLinkPortRef::new(&source_id, "out1");
-            let iceoryx2_node = Iceoryx2Node::for_this_test_process();
-
-            open_the_channel_of_an_output_port_nothing_local_reads(
-                &mut graph,
-                &iceoryx2_node,
-                &source,
-            )
-            .expect("a port with no local link opens its channel for the mesh");
-
-            refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
-                &graph,
-                &iceoryx2_node,
-                &source,
-                &ProcessorUniqueId::from("a-windowed-consumer"),
-                "audio_from_upstream",
-                &LinkUniqueId::from("L-windowed-after-the-mesh"),
-            )
-            .expect(
-                "a windowed consumer connecting after the mesh opened the channel must not be                  refused for its depth",
-            );
-        }
-
-        /// A graph holding one output-only mock whose ports live in a helper,
-        /// with the far side that records what the parent asks of it.
-        fn a_helper_placed_output_only_source(
-            graph: &mut Graph,
-        ) -> (String, RecordingOutOfProcessFarSideLinkDelivery) {
-            let source_id = add_mock_output_only(graph);
-            let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
-            attach_processor_instance(
-                graph,
-                &source_id,
-                ProcessorInstance::new(Box::new(
-                    OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
-                        far_side.clone(),
-                        ProcessExecution::Reactive,
-                    ),
-                )),
-            );
-            (source_id, far_side)
-        }
-
-        /// A source in a helper process that nothing here reads is asked for
-        /// its publisher, over the wiring envelope a link would have used.
-        ///
-        /// What it catches (#2344): a helper opens a publisher from an envelope
-        /// entry and from nothing else, and across the mesh there is no
-        /// `connect` to make one — so the port is offered, cannot be sent, and
-        /// the reader's link waits on an egress that never starts. Every
-        /// Python-authored source is in a helper, so that was all of them.
-        #[test]
-        fn a_helper_placed_source_nothing_local_reads_is_asked_for_its_publisher() {
-            let mut graph = Graph::new();
-            let (source_id, far_side) = a_helper_placed_output_only_source(&mut graph);
-
-            let opened = open_the_channel_of_an_output_port_nothing_local_reads(
-                &mut graph,
-                &Iceoryx2Node::for_this_test_process(),
-                &OutputLinkPortRef::new(&source_id, "out1"),
-            )
-            .expect("a helper-placed source with no local link is asked for its publisher");
-
-            let handed_over = far_side.late_wired_links.lock();
-            let [(direction, entry)] = handed_over.as_slice() else {
-                panic!("exactly one entry reaches the helper; got {handed_over:?}");
-            };
-            assert_eq!(*direction, crate::core::PortDirection::Output);
-            assert_eq!(entry["name"], serde_json::json!("out1"));
-            assert_eq!(
-                entry["dest_notify_service_name"],
-                serde_json::json!(""),
-                "the mesh's egress polls its subscriber, so there is no listener to wake"
-            );
-            assert_eq!(
-                entry["link_id"],
-                serde_json::json!(format!("mesh-egress/{source_id}/out1")),
-                "the hold is the port's own, since a port read only across the mesh has no link"
-            );
-            assert!(
-                opened
-                    .the_helpers_answer_that_it_opened_its_publisher
-                    .is_some(),
-                "the answer the egress waits on is handed back, or nothing downstream can wait \
-                 for it. That it is waited on is `mesh_port_egress`'s to lock."
-            );
-        }
-
-        /// The helper is told to create the channel at exactly the sizing the
-        /// egress is then told to open it with.
-        ///
-        /// What it catches: deriving the egress's sizing from the live channel,
-        /// as the app-process path can. A helper answers on its own time, so at
-        /// this moment there is no live channel to read — the depth would fall
-        /// back to the ordered one while the helper created a windowed one, and
-        /// the egress would be refused by iceoryx2 for a depth nothing asked
-        /// for.
-        #[test]
-        fn a_helper_is_told_to_create_the_channel_at_the_sizing_the_egress_is_given() {
-            let mut graph = Graph::new();
-            let (source_id, far_side) = a_helper_placed_output_only_source(&mut graph);
-
-            let opened = open_the_channel_of_an_output_port_nothing_local_reads(
-                &mut graph,
-                &Iceoryx2Node::for_this_test_process(),
-                &OutputLinkPortRef::new(&source_id, "out1"),
-            )
-            .expect("a helper-placed source with no local link is asked for its publisher");
-
-            let handed_over = far_side.late_wired_links.lock();
-            let [(_, entry)] = handed_over.as_slice() else {
-                panic!("exactly one entry reaches the helper; got {handed_over:?}");
-            };
-            assert_eq!(
-                entry["channel_service_creation_depth"],
-                serde_json::json!(opened.channel_sizing.channel_service_creation_depth)
-            );
-            assert_eq!(
-                entry["max_subscribers"],
-                serde_json::json!(opened.channel_sizing.max_subscribers)
-            );
-            assert_eq!(
-                opened.channel_sizing.channel_service_creation_depth,
-                WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
-                "deep enough for the first windowed local `connect` that ever follows, as the \
-                 app-process path opens one"
-            );
-        }
-
-        /// A helper-placed port something local already reads is asked for
-        /// nothing: it is publishing, and the mesh takes a slot on the channel
-        /// that is already there, at the sizing that channel already has.
-        #[test]
-        fn a_helper_placed_source_something_local_reads_is_asked_for_nothing() {
-            let mut graph = Graph::new();
-            let (source_id, far_side) = a_helper_placed_output_only_source(&mut graph);
-            let iceoryx2_node = Iceoryx2Node::for_this_test_process();
-            // The helper's own publisher would have created this, from the
-            // envelope entry the local `connect` gave it.
-            let already_publishing = iceoryx2_node
-                .open_or_create_service(
-                    &crate::iceoryx2::source_channel_name(&source_id, "out1")
-                        .expect("the mock's port names a legal channel")
-                        .into_string(),
-                    4,
-                    DeliveryProfile::ORDERED_DEPTH,
-                )
-                .expect("the channel opens");
-
-            let opened = open_the_channel_of_an_output_port_nothing_local_reads(
-                &mut graph,
-                &iceoryx2_node,
-                &OutputLinkPortRef::new(&source_id, "out1"),
-            )
-            .expect("a port whose helper already publishes needs nothing asked of it");
-
-            assert!(
-                far_side.late_wired_links.lock().is_empty(),
-                "a second entry would be a second hold on a publisher that is already open"
-            );
-            assert!(
-                opened
-                    .the_helpers_answer_that_it_opened_its_publisher
-                    .is_none(),
-                "there is no answer to wait for when nothing was asked"
-            );
-            assert_eq!(
-                opened.channel_sizing.channel_service_creation_depth,
-                already_publishing.channel_service_creation_depth(),
-                "a live channel keeps the depth it was created at, and that is the only depth \
-                 the egress may open it with"
-            );
-        }
-
-        /// A source naming a port on another runtime is refused rather than
-        /// quietly succeeding: this opens a channel *this* runtime hosts.
-        #[test]
-        fn a_source_on_another_runtime_is_not_a_channel_this_runtime_can_open() {
-            let mut graph = Graph::new();
-            let refusal = open_the_channel_of_an_output_port_nothing_local_reads(
-                &mut graph,
-                &Iceoryx2Node::for_this_test_process(),
-                &OutputLinkPortRef::on_another_runtime(an_address("elsewhere")),
-            )
-            .expect_err("this runtime cannot open a channel for a port it does not host")
-            .to_string();
-
-            assert!(
-                refusal.contains("names a port on another runtime"),
-                "{refusal}"
-            );
-        }
-
-        /// Disconnecting it takes it off the ingress table, which is what stops
-        /// this runtime reading the address once no link does.
-        #[test]
-        fn disconnecting_it_takes_it_off_the_ingress_table() {
-            let mut wired = wire_one("forgets");
-            close_iceoryx2_service(&mut wired.graph, &wired.link_id, &wired.ingress_table)
-                .expect("the disconnect succeeds");
-            assert!(
-                !wired
-                    .ingress_table
-                    .a_links_destination_is_open(&wired.link_id),
-                "a disconnected link is no longer one the mesh carries"
-            );
-        }
+        assert_eq!(
+            dest_input.inbound_link_names("in1"),
+            vec![InboundLinkName::from("psource/out1")]
+        );
     }
 }

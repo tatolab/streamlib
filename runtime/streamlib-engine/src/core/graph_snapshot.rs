@@ -33,7 +33,7 @@ pub struct GraphSnapshot {
     /// Every node, each under the name links and exposures name it by.
     pub nodes: Vec<GraphSnapshotNode>,
 
-    /// Every link, each end a node's port or a port on another runtime.
+    /// Every link, each end a node's port.
     #[serde(default)]
     pub links: Vec<GraphSnapshotLink>,
 
@@ -61,10 +61,46 @@ pub struct GraphSnapshotNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GraphSnapshotLink {
     /// The output port the link carries from.
+    #[serde(deserialize_with = "a_link_end_on_the_runtime_that_loads_it")]
     pub source: LinkPortRefOutput,
 
     /// The input port the link carries into.
+    #[serde(deserialize_with = "a_link_end_on_the_runtime_that_loads_it")]
     pub target: LinkPortRefOutput,
+}
+
+/// Read one link end as `{node, port}`, refusing one that names a runtime.
+///
+/// Read as `{node, port}` with its runtime dropped, an end spelled
+/// `{runtime_name, node, port}` would load as an end on whichever node here
+/// shares the name.
+fn a_link_end_on_the_runtime_that_loads_it<'de, D>(
+    deserializer: D,
+) -> std::result::Result<LinkPortRefOutput, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct LinkEndAsWritten {
+        #[serde(default)]
+        runtime_name: Option<String>,
+        node: String,
+        port: String,
+    }
+
+    let end = LinkEndAsWritten::deserialize(deserializer)?;
+    if let Some(runtime_name) = end.runtime_name {
+        return Err(serde::de::Error::custom(format!(
+            "the link end `{}/{}` names the runtime `{runtime_name}`, and a link end on another \
+             runtime is not something a graph holds: both ends of a link are `{{node, port}}` on \
+             the runtime that loads it",
+            end.node, end.port
+        )));
+    }
+    Ok(LinkPortRefOutput {
+        node: end.node,
+        port: end.port,
+    })
 }
 
 impl GraphSnapshot {
@@ -87,9 +123,9 @@ impl GraphSnapshot {
     }
 
     /// Check the graph without loading it: every `type` registered, names
-    /// unique once cast, every link end an address the mesh carries or a port
-    /// of the right direction on a node the graph holds, and every exposure an
-    /// output port a node has, named once.
+    /// unique once cast, every link end a port of the right direction on a node
+    /// the graph holds, and every exposure an output port a node has, named
+    /// once.
     pub fn validate(&self) -> Result<()> {
         let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
@@ -119,20 +155,17 @@ impl GraphSnapshot {
                 (&link.source, PortDirection::Output),
                 (&link.target, PortDirection::Input),
             ] {
-                if end.mesh_port_address().transpose()?.is_some() {
-                    continue;
-                }
                 let Some(node) =
-                    nodes_by_cast_name.get(cast_exposed_name_to_url_safe(end.node())?.as_ref())
+                    nodes_by_cast_name.get(cast_exposed_name_to_url_safe(&end.node)?.as_ref())
                 else {
                     return Err(Error::GraphError(format!(
                         "a link names node `{}`, which the graph does not hold. The graph \
                          holds: {}",
-                        end.node(),
+                        &end.node,
                         the_names_the_graph_holds()
                     )));
                 };
-                refuse_a_port_the_node_does_not_have(end.node(), node, end.port(), direction)?;
+                refuse_a_port_the_node_does_not_have(&end.node, node, &end.port, direction)?;
             }
         }
 
@@ -239,9 +272,7 @@ mod tests {
             "links": [
                 {"id": "l1", "state": "wired", "capacity": 4,
                  "source": {"node": "camera", "port": "video"},
-                 "target": {"node": "display", "port": "video"}},
-                {"source": {"runtime_name": "rig", "node": "mic", "port": "audio"},
-                 "target": {"node": "display", "port": "audio"}}
+                 "target": {"node": "display", "port": "video"}}
             ],
             "exposed": [{"node": "camera", "port": "video"}],
             "extensions": [],
@@ -256,19 +287,10 @@ mod tests {
         assert_eq!(graph.nodes[0].config, serde_json::json!({"fps": 30}));
         assert_eq!(
             graph.links[0].source,
-            LinkPortRefOutput::OnThisRuntime {
+            LinkPortRefOutput {
                 node: "camera".into(),
                 port: "video".into()
             }
-        );
-        assert_eq!(
-            graph.links[1].source,
-            LinkPortRefOutput::OnAnotherRuntime {
-                runtime_name: "rig".into(),
-                node: "mic".into(),
-                port: "audio".into()
-            },
-            "a remote end must not be read as a local one with its runtime dropped"
         );
         assert_eq!(
             graph.exposed,
@@ -382,19 +404,34 @@ mod tests {
         assert!(refusal.contains("video"), "{refusal}");
     }
 
+    /// An end spelled `{runtime_name, node, port}` names a port on a runtime,
+    /// and a graph holds no link with an end anywhere but on the runtime that
+    /// loads it. Read as `{node, port}` with the runtime dropped, it would load
+    /// as a local end on whichever node happens to share the name.
     #[test]
-    fn a_remote_end_the_mesh_cannot_address_is_refused_before_anything_loads() {
+    fn a_link_end_naming_a_runtime_is_refused_naming_that_runtime() {
         let camera_class = a_registered_camera_class();
-        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
-            "nodes": [{"name": "back", "type": camera_class}],
-            "links": [{"source": {"runtime_name": "bench/cam", "node": "camera", "port": "video"},
-                       "target": {"node": "back", "port": "frames_in"}}]
-        }))
-        .unwrap();
+        for (source, target) in [
+            (
+                serde_json::json!({"runtime_name": "studio-cam-9f3c", "node": "front", "port": "video"}),
+                serde_json::json!({"node": "back", "port": "frames_in"}),
+            ),
+            (
+                serde_json::json!({"node": "front", "port": "video"}),
+                serde_json::json!({"runtime_name": "studio-cam-9f3c", "node": "back", "port": "frames_in"}),
+            ),
+        ] {
+            let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
+                "nodes": [{"name": "front", "type": camera_class},
+                          {"name": "back", "type": camera_class}],
+                "links": [{"source": source, "target": target}]
+            }))
+            .expect_err("a link end on another runtime is not something a graph holds")
+            .to_string();
 
-        let refusal = graph.validate().unwrap_err().to_string();
-
-        assert!(refusal.contains("runtime name"), "{refusal}");
+            assert!(refusal.contains("`studio-cam-9f3c`"), "{refusal}");
+            assert!(refusal.contains("another runtime"), "{refusal}");
+        }
     }
 
     #[test]

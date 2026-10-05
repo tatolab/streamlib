@@ -45,7 +45,6 @@ fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown
         TexturePoolDescriptor,
     };
     use crate::core::rhi::TextureFormat;
-    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
         println!("no GPU device — skipping");
@@ -79,7 +78,6 @@ fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-iosurface".to_string(),
             width,
@@ -189,7 +187,6 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
     };
     use crate::core::context::{GpuContext, GpuContextLimitedAccess, SurfaceStore};
     use crate::core::rhi::{TextureFormat, pool_slot_key_of_surface_id};
-    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
         println!("no GPU device — skipping");
@@ -223,7 +220,6 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
         let response = handle_escalate_op(
             &sandbox,
             &registry,
-            &a_mesh_link_ingress_table_carrying_nothing(),
             EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
                 request_id: "req-pooled".to_string(),
                 width,
@@ -368,12 +364,10 @@ fn next_processor_output_frame_over_the_escalate_op(
         EscalateRequest, EscalateResponse,
     };
     use crate::core::rhi::TextureFormat;
-    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
     match handle_escalate_op(
         sandbox,
         registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-pooled".to_string(),
             width: 64,
@@ -491,7 +485,6 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
     };
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use crate::core::rhi::TextureFormat;
-    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
         println!("no GPU device — skipping");
@@ -509,7 +502,6 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
     let Some(EscalateResponse::Ok(allocated)) = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-fresh-slot".to_string(),
             width: descriptor.width,
@@ -668,12 +660,10 @@ fn acquire_tensor_storage_buffer_over_the_escalate_op(
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
         EscalateRequest, EscalateResponse,
     };
-    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
     match handle_escalate_op(
         sandbox,
         registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::AcquireStorageBuffer(EscalateRequestAcquireStorageBuffer {
             request_id: "req-tensor".to_string(),
             shape: shape.to_vec(),
@@ -719,7 +709,6 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestReleaseHandle;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use crate::core::rhi::{TensorElementType, TensorStorageBufferLayout};
-    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
         println!("no GPU device — skipping");
@@ -763,7 +752,6 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
     let released = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "req-release-tensor".to_string(),
             handle_id: surface_id.clone(),
@@ -800,7 +788,6 @@ fn a_tensor_storage_buffer_crosses_on_a_byte_shaped_iosurface_and_leaves_every_t
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestReleaseHandle;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use crate::core::rhi::{TensorElementType, TensorStorageBufferLayout};
-    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
         println!("no GPU device — skipping");
@@ -857,7 +844,6 @@ fn a_tensor_storage_buffer_crosses_on_a_byte_shaped_iosurface_and_leaves_every_t
         let released = handle_escalate_op(
             &sandbox,
             &registry,
-            &a_mesh_link_ingress_table_carrying_nothing(),
             EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
                 request_id: "req-release-tensor".to_string(),
                 handle_id: surface_id.clone(),

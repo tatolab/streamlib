@@ -71,7 +71,7 @@ def two_links_into_one_port(
     for kind in ("video", "audio"):
         channel_service_name = f"{unique}/{kind}"
         destination.wire_input_link(
-            INPUT_PORT, channel_service_name, channel_service_name, "this_machine",
+            INPUT_PORT, channel_service_name, channel_service_name,
             notify_service_name,
             "read_next_in_order", 8, 8, 2, 2, f"L-{unique}-{kind}",
         )  # fmt: skip
@@ -166,22 +166,18 @@ def test_the_untimestamped_fan_in_read_is_unchanged(
 def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
     request: pytest.FixtureRequest,
 ):
-    """A link carrying from another runtime rides a channel hashed from the
-    source port's mesh address, and the address is what a read must hand back.
-
-    So the two names arrive as two separate arguments. Wired with a link name
-    that is not its channel — which is exactly the shape the engine sends for a
-    remote link — the read names the link and never the channel.
+    """The link name and the channel arrive as two separate arguments, and a
+    read hands back the link name. Wired with a link name that is not its
+    channel, the read names the link and never the channel.
     """
     unique = f"linkname{os.getpid()}_{request.node.name}"
-    channel_service_name = f"{unique}/meshlink-deadbeefdeadbeef"
+    channel_service_name = f"{unique}/channel-the-link-is-not-named-by"
     inbound_link_name = "bench-cam-a1b2/CameraSource/video"
     notify_service_name = f"{unique}_dest/notify"
 
     destination = ProcessorLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT, channel_service_name, inbound_link_name,
-        "a_machine_only_the_app_process_can_name",
         notify_service_name,
         "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip

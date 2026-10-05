@@ -5,8 +5,6 @@ use crate::core::graph::{
     Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
 };
 
-use super::super::traversal_source::link_at;
-
 impl<'a> ProcessorTraversal<'a> {
     pub fn filter(self, predicate: impl Fn(&ProcessorNode) -> bool) -> ProcessorTraversal<'a> {
         let new_ids = self
@@ -17,7 +15,6 @@ impl<'a> ProcessorTraversal<'a> {
             .collect();
         ProcessorTraversal {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids: new_ids,
         }
     }
@@ -28,14 +25,11 @@ impl<'a> LinkTraversal<'a> {
         let new_ids = self
             .ids
             .iter()
-            .filter(|at| {
-                link_at(self.graph, self.links_from_another_runtime, at).is_some_and(&predicate)
-            })
-            .cloned()
+            .filter_map(|&idx| self.graph.edge_weight(idx).map(|link| (idx, link)))
+            .filter_map(|(idx, link)| predicate(link).then_some(idx))
             .collect();
         LinkTraversal {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids: new_ids,
         }
     }
@@ -51,7 +45,6 @@ impl<'a> ProcessorTraversalMut<'a> {
             .collect();
         ProcessorTraversalMut {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids: new_ids,
         }
     }
@@ -62,14 +55,11 @@ impl<'a> LinkTraversalMut<'a> {
         let new_ids = self
             .ids
             .iter()
-            .filter(|at| {
-                link_at(self.graph, self.links_from_another_runtime, at).is_some_and(&predicate)
-            })
-            .cloned()
+            .filter_map(|&idx| self.graph.edge_weight(idx).map(|link| (idx, link)))
+            .filter_map(|(idx, link)| predicate(link).then_some(idx))
             .collect();
         LinkTraversalMut {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids: new_ids,
         }
     }

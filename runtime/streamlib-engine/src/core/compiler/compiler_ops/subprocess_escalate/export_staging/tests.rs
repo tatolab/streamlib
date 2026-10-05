@@ -22,7 +22,6 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
 };
 use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 use crate::core::rhi::PixelFormat;
-use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
 fn sandbox_or_skip(test_name: &str) -> Option<GpuContextLimitedAccess> {
     gpu_or_skip(test_name).map(GpuContextLimitedAccess::new)
@@ -65,13 +64,8 @@ fn an_unresolvable_surface_is_refused_by_name_and_never_by_a_missing_bridge() {
         let expected_request_id = request_id(&request)
             .expect("every readback op carries a correlation token")
             .to_string();
-        let response = handle_escalate_op(
-            &sandbox,
-            &registry,
-            &a_mesh_link_ingress_table_carrying_nothing(),
-            request,
-        )
-        .expect("every readback op produces a response");
+        let response = handle_escalate_op(&sandbox, &registry, request)
+            .expect("every readback op produces a response");
         match response {
             EscalateResponse::Err(err) => {
                 assert_eq!(err.request_id, expected_request_id);
@@ -120,7 +114,6 @@ fn the_seam_lands_a_frames_pixels_in_cpu_readable_memory() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-seam-read".into(),
             surface_id: surface_id.clone(),
@@ -176,7 +169,6 @@ fn the_seam_refuses_to_publish_a_staging_no_frame_was_read_into() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-seam-write".into(),
             surface_id: pool_id.to_string(),
@@ -220,7 +212,6 @@ fn the_seam_publishes_a_staged_edit_back_into_the_pooled_backing() {
     let read = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-read".into(),
             surface_id: surface_id.clone(),
@@ -246,7 +237,6 @@ fn the_seam_publishes_a_staged_edit_back_into_the_pooled_backing() {
     let published = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-publish".into(),
             surface_id: surface_id.clone(),
@@ -292,7 +282,6 @@ fn the_open_op_names_itself_and_not_its_device_export_twin() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::OpenCpuReadbackStaging(EscalateRequestOpenCpuReadbackStaging {
             request_id: "req-seam-open".into(),
             surface_id: pool_id.to_string(),
@@ -327,7 +316,6 @@ fn a_non_numeric_surface_id_is_not_a_parse_error() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
             request_id: "req-frame-id".into(),
             surface_id: "pool-slot-7#3".into(),

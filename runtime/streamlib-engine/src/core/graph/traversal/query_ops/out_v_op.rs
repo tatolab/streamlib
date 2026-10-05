@@ -4,26 +4,17 @@
 use crate::core::graph::{
     Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
 };
-use petgraph::graph::{DiGraph, NodeIndex};
-
-use super::super::traversal_source::LinkLocation;
+use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 
 /// The node each of these links carries from.
-///
-/// A link from another runtime carries from no node here, so it contributes
-/// none — which is the honest answer, not an omission.
 fn every_source_node_of(
     graph: &DiGraph<ProcessorNode, Link>,
-    links: &[LinkLocation],
+    links: &[EdgeIndex],
 ) -> Vec<NodeIndex> {
     links
         .iter()
-        .filter_map(|at| match at {
-            LinkLocation::OnAnEdgeOfTheDigraph(edge) => {
-                graph.edge_endpoints(*edge).map(|(source, _)| source)
-            }
-            LinkLocation::AmongTheLinksFromAnotherRuntime(_) => None,
-        })
+        .filter_map(|&edge| graph.edge_endpoints(edge))
+        .map(|(source, _)| source)
         .collect()
 }
 
@@ -33,7 +24,6 @@ impl<'a> LinkTraversal<'a> {
         let ids = every_source_node_of(self.graph, &self.ids);
         ProcessorTraversal {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids,
         }
     }
@@ -45,7 +35,6 @@ impl<'a> LinkTraversalMut<'a> {
         let ids = every_source_node_of(self.graph, &self.ids);
         ProcessorTraversalMut {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids,
         }
     }

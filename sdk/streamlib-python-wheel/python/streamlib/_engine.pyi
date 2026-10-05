@@ -48,8 +48,6 @@ __all__ = [
     "ProcessorOwnedWindowEvents",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
-    "RemoteProcessorInputPortReference",
-    "RemoteProcessorOutputPortReference",
     "CameraSource",
     "CapabilityExtensionHost",
     "DisplayWindow",
@@ -90,7 +88,6 @@ __all__ = [
     "processor_class_import_paths_in_this_processes_catalog",
     "register_declared_processor_class",
     "runtime_log_directory",
-    "this_machines_stamp_clock_identity",
 ]
 
 @final
@@ -563,7 +560,7 @@ class Runtime:
         costs about half a second, Zenoh's own scouting delay.
 
         The name belongs to the runtime, is stable across runs of one app, and
-        is one chunk of a port's mesh address `<runtime name>/<display
+        is one chunk of a port's address `<runtime name>/<display
         name>/<port>` — so it is non-empty, carries none of `/ * $ # ?`, and
         does not begin with `@`; spaces and unicode are fine. A name breaking
         that is refused here, naming the character.
@@ -575,8 +572,8 @@ class Runtime:
         run` and `dev` pass their `--runtime-name` through to here.
 
         A name is unique within a mesh, and never auto-suffixed: it is the
-        address other runtimes wire against, so it may not depend on start
-        order. A name another live runtime already holds is refused here,
+        first part of the address its ports are named by, so it may not depend
+        on start order. A name another live runtime already holds is refused here,
         naming that runtime's host and pid and both ways out — stop it, or start
         this one under another name. `streamlib nodes --mesh-name <mesh>` lists
         it wherever it is running: the mesh table carries every runtime on the
@@ -635,50 +632,12 @@ class Runtime:
         class's short name, cast, with the next free `-2`, `-3` … appended.
         """
 
-    def remote_processor_output(
-        self, runtime_name: str, display_name: str, port_name: str
-    ) -> RemoteProcessorOutputPortReference:
-        """Name an output port on another runtime, to pull it over the mesh.
-
-        A port on the mesh is addressed `<runtime name>/<node>/<port>` — the
-        node's name, never its id, so renaming a node re-addresses its ports.
-        The node and port names are cast as every name is; a part the mesh
-        cannot carry, or one casting to nothing, raises `ValueError` here
-        rather than at `connect`.
-
-        A `runtime_name` equal to this runtime's own is a local reference,
-        resolved by node name when the link is applied.
-        """
-
-    def remote_processor_input(
-        self, runtime_name: str, display_name: str, port_name: str
-    ) -> RemoteProcessorInputPortReference:
-        """Name an input port on another runtime, to push into it over the mesh.
-
-        Addressed the way `remote_processor_output` addresses an output, and
-        refused here the same way. A `runtime_name` equal to this runtime's own
-        is a local reference, resolved by node name when the link is applied.
-        """
-
     def connect(
         self,
-        source: ProcessorOutputPortReference | RemoteProcessorOutputPortReference,
-        destination: ProcessorInputPortReference | RemoteProcessorInputPortReference,
+        source: ProcessorOutputPortReference,
+        destination: ProcessorInputPortReference,
     ) -> None:
-        """Link one processor's output port to another's input port.
-
-        Either end may name a port on another runtime; the engine chooses the
-        transport from the link's ends and no processor can tell which. A link
-        from another runtime reads `awaiting_remote` in this runtime's `graph`
-        until that runtime is on the mesh and offers the port.
-
-        A destination on another runtime is that runtime's to apply, because
-        the runtime owning an input applies every link into it. This call asks
-        it and returns without waiting, so the link appears in *that* runtime's
-        `graph` — and until it does, the request appears in this one's under
-        `mesh.link_requests_awaiting_runtime`, with a `reason` saying whether
-        that runtime is absent, silent, or refused it by name.
-        """
+        """Link one processor's output port to another's input port on this runtime."""
 
     def load(self, graph: Mapping[str, Any], *, name: str | None = None) -> None:
         """Load a graph into this Runtime before `run()`.
@@ -844,26 +803,6 @@ class ProcessorInputPortReference:
     def __repr__(self) -> str: ...
 
 @final
-class RemoteProcessorOutputPortReference:
-    """The producing end of a link, on another runtime.
-
-    Minted by `Runtime.remote_processor_output`, which is where its address is
-    checked; there is nothing to read off it that `repr` does not show.
-    """
-
-    def __repr__(self) -> str: ...
-
-@final
-class RemoteProcessorInputPortReference:
-    """The consuming end of a link, on another runtime.
-
-    Minted by `Runtime.remote_processor_input`, which is where its address is
-    checked; there is nothing to read off it that `repr` does not show.
-    """
-
-    def __repr__(self) -> str: ...
-
-@final
 class ProcessorLinkDataAccess:
     """One processor's links. The engine binds it; app code never builds one.
 
@@ -922,7 +861,6 @@ class ProcessorLinkDataAccess:
         port_name: str,
         channel_service_name: str,
         inbound_link_name: str,
-        stamp_clock: str,
         notify_service_name: str,
         read_mode: str,
         channel_service_creation_depth: int,
@@ -937,15 +875,7 @@ class ProcessorLinkDataAccess:
         """Open this processor's subscriber for one link into `port_name`.
 
         `channel_service_name` is what this end subscribes to;
-        `inbound_link_name` is what a read hands back as the link's name. They
-        differ for a link carrying from another runtime, which rides a channel
-        hashed from the source port's mesh address, and are equal for a link
-        from this runtime.
-
-        `stamp_clock` says which machine's clock this link's stamps are taken
-        on — `"this_machine"`, or `"a_machine_only_the_app_process_can_name"`
-        for a link carrying from another runtime, whose machine this process
-        holds no mesh session to name. Any other value raises `ValueError`.
+        `inbound_link_name` is what a read hands back as the link's name.
 
         Once a loss-count board is open, `loss_count_slot` and
         `wiring_generation` name where the link's losses are mirrored, and
@@ -1078,9 +1008,7 @@ class LinkInputDataReader:
         separate producer. This is how a many-input processor tells them
         apart: the name is the source channel the link subscribed to —
         `{source processor id}/{source output port}`, the name `graph` and
-        `tap` show — or, for a link carrying from another runtime, that port's
-        mesh address `{runtime name}/{display name}/{output port}`. Either way
-        the engine knows it and a producer cannot misstate it.
+        `tap` show. The engine knows it and a producer cannot misstate it.
 
         Bags from one link arrive in that link's order. Nothing is promised
         about how two links interleave, so a reader that needs time order
@@ -1111,28 +1039,6 @@ class LinkInputDataReader:
         Readable in `setup()` — links are wired before it runs — which is how
         a sink learns how many producers it owes before the first bag
         arrives. A port nothing is connected to lists none.
-        """
-
-    def inbound_link_stamp_clock_identity(
-        self, port_name: str, inbound_link_name: str
-    ) -> str | None:
-        """Which machine's monotonic clock one link's stamps are taken on.
-
-        The machine's boot-session UUID text, or `None` — which covers a link
-        nothing has crossed yet, one whose machine names no clock of its own,
-        and a name no link on that port carries. Every stamp is a machine's
-        monotonic clock, whose epoch is
-        that machine's own boot, so two stamps taken on two machines are
-        readings of two unrelated clocks: compare one link's stamps against
-        another's only where both answer the same string, and never where
-        either answers `None`.
-
-        A link from this runtime always names this machine. A link carrying
-        from another runtime names nothing until its first bag lands, and names
-        a different machine once its peer comes back on a fresh boot. Answering
-        for one costs a round trip to the runtime, which this process holds no
-        mesh session to answer for itself — read it when a link wires or a
-        track opens, not once per bag.
         """
 
     def has_data(self, port_name: str) -> bool: ...
@@ -2421,21 +2327,6 @@ def monotonic_now_ns() -> int:
 
     `CLOCK_MONOTONIC` on Linux; `mach_absolute_time` on macOS, which is
     `time.CLOCK_UPTIME_RAW` and stops while the machine sleeps.
-    """
-
-def this_machines_stamp_clock_identity() -> str | None:
-    """Which machine's monotonic clock `monotonic_now_ns` reads.
-
-    The machine's boot-session UUID text — the same string
-    `LinkInputDataReader.inbound_link_stamp_clock_identity` answers for a link
-    *from this runtime* — or `None` where this platform names no clock of its
-    own, which is what a link carrying from that machine answers too.
-
-    This is the other half of a stamp comparison. A link's stamps may be aged
-    against a reading taken in this process exactly when the two strings match;
-    where they differ the two clocks share no epoch, and subtracting one from
-    the other is not an age. Read it once — a boot id cannot change without a
-    reboot, which ends the process.
     """
 
 def runtime_log_directory() -> Path:

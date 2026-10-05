@@ -24,7 +24,6 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
     EscalateRequest, EscalateResponse,
 };
 use crate::core::context::{GpuContext, GpuContextLimitedAccess};
-use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
 const A_WINDOW_ID_NOBODY_OWNS: &str = "processor-owned-window-never-minted";
 
@@ -181,13 +180,8 @@ fn every_present_class_op_refuses_a_window_this_processor_does_not_own() {
         let expected_request_id = request_id(&request)
             .expect("every present-class op carries a correlation token")
             .to_string();
-        let response = handle_escalate_op(
-            &sandbox,
-            &registry,
-            &a_mesh_link_ingress_table_carrying_nothing(),
-            request,
-        )
-        .expect("every present-class op produces a response");
+        let response = handle_escalate_op(&sandbox, &registry, request)
+            .expect("every present-class op produces a response");
         let message = refusal_message_of(response, &expected_request_id);
         assert!(
             message.contains(A_WINDOW_ID_NOBODY_OWNS),
@@ -337,7 +331,6 @@ fn a_window_asked_for_outside_the_setup_hook_is_refused_and_none_is_minted() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::CreateProcessorOwnedWindow(EscalateRequestCreateProcessorOwnedWindow {
             request_id: "req-create".into(),
             window_title: "a window asked for mid-pipeline".into(),

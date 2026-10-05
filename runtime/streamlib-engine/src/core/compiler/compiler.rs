@@ -271,11 +271,9 @@ impl Compiler {
                         );
 
                         tracing::info!("[CLOSE SERVICE] {}", link_id);
-                        if let Err(e) = super::compiler_ops::close_iceoryx2_service(
-                            &mut graph,
-                            link_id,
-                            runtime_ctx.mesh_link_ingress_table(),
-                        ) {
+                        if let Err(e) =
+                            super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)
+                        {
                             tracing::warn!("Failed to close service {}: {}", link_id, e);
                         }
 
@@ -410,7 +408,6 @@ impl Compiler {
                     &mut graph,
                     link_id,
                     runtime_ctx.iceoryx2_node(),
-                    runtime_ctx.mesh_link_ingress_table(),
                 )?;
 
                 PUBSUB.publish(

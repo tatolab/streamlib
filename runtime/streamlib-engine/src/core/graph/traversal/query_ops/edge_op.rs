@@ -33,53 +33,30 @@ mod private {
     }
 }
 
-use petgraph::graph::DiGraph;
+use petgraph::graph::{DiGraph, EdgeIndex};
 use petgraph::visit::EdgeRef;
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, LinkUniqueId, LinksFromAnotherRuntime, ProcessorNode,
-    TraversalSource, TraversalSourceMut,
+    Link, LinkTraversal, LinkTraversalMut, LinkUniqueId, ProcessorNode, TraversalSource,
+    TraversalSourceMut,
 };
 
-use super::super::traversal_source::LinkLocation;
-
-/// Where the link with this id lives, or nothing when the graph holds none.
-fn where_this_link_lives(
+/// The edge of the link with this id, or every edge when no id is given.
+fn every_link_edge_the_filter_selects(
     graph: &DiGraph<ProcessorNode, Link>,
-    links_from_another_runtime: &LinksFromAnotherRuntime,
-    link_id: &LinkUniqueId,
-) -> Vec<LinkLocation> {
-    if let Some(edge) = graph
-        .edge_references()
-        .find(|edge_ref| &edge_ref.weight().id == link_id)
-    {
-        return vec![LinkLocation::OnAnEdgeOfTheDigraph(edge.id())];
+    link_id_filter: Option<LinkUniqueId>,
+) -> Vec<EdgeIndex> {
+    match link_id_filter {
+        Some(link_id) => graph
+            .edge_references()
+            .find(|edge_ref| edge_ref.weight().id == link_id)
+            .map(|edge_ref| vec![edge_ref.id()])
+            .unwrap_or_default(),
+        None => graph
+            .edge_references()
+            .map(|edge_ref| edge_ref.id())
+            .collect(),
     }
-    links_from_another_runtime
-        .get(link_id)
-        .map(|link| {
-            vec![LinkLocation::AmongTheLinksFromAnotherRuntime(
-                link.id.clone(),
-            )]
-        })
-        .unwrap_or_default()
-}
-
-/// Every link in the graph — the digraph's edges first, then the links from
-/// another runtime, each group in the order it was connected.
-fn every_link(
-    graph: &DiGraph<ProcessorNode, Link>,
-    links_from_another_runtime: &LinksFromAnotherRuntime,
-) -> Vec<LinkLocation> {
-    graph
-        .edge_references()
-        .map(|edge_ref| LinkLocation::OnAnEdgeOfTheDigraph(edge_ref.id()))
-        .chain(
-            links_from_another_runtime
-                .every_link()
-                .map(|link| LinkLocation::AmongTheLinksFromAnotherRuntime(link.id.clone())),
-        )
-        .collect()
 }
 
 impl<'a> TraversalSource<'a> {
@@ -90,15 +67,9 @@ impl<'a> TraversalSource<'a> {
     /// - `&str` - edge by ID string
     /// - `LinkUniqueId` - edge by ID
     pub fn e(self, filter: impl private::IntoEdgeFilter) -> LinkTraversal<'a> {
-        let ids = match filter.into_filter() {
-            Some(link_id) => {
-                where_this_link_lives(self.graph, self.links_from_another_runtime, &link_id)
-            }
-            None => every_link(self.graph, self.links_from_another_runtime),
-        };
+        let ids = every_link_edge_the_filter_selects(self.graph, filter.into_filter());
         LinkTraversal {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids,
         }
     }
@@ -112,15 +83,9 @@ impl<'a> TraversalSourceMut<'a> {
     /// - `&str` - edge by ID string
     /// - `LinkUniqueId` - edge by ID
     pub fn e(self, filter: impl private::IntoEdgeFilter) -> LinkTraversalMut<'a> {
-        let ids = match filter.into_filter() {
-            Some(link_id) => {
-                where_this_link_lives(self.graph, self.links_from_another_runtime, &link_id)
-            }
-            None => every_link(self.graph, self.links_from_another_runtime),
-        };
+        let ids = every_link_edge_the_filter_selects(self.graph, filter.into_filter());
         LinkTraversalMut {
             graph: self.graph,
-            links_from_another_runtime: self.links_from_another_runtime,
             ids,
         }
     }

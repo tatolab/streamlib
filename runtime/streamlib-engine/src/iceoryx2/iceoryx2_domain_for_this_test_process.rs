@@ -75,6 +75,19 @@ impl Iceoryx2Node {
     }
 }
 
+/// A notifier on the notify service `notify_service_name`, for a link whose
+/// destination no test listens on.
+#[cfg(test)]
+pub(crate) fn a_notifier_nothing_listens_on(
+    notify_service_name: &str,
+) -> iceoryx2::port::notifier::Notifier<ipc::Service> {
+    Iceoryx2Node::for_this_test_process()
+        .open_or_create_notify_service(notify_service_name, 1)
+        .expect("open the notify service nothing listens on")
+        .create_notifier()
+        .expect("create a notifier on the notify service nothing listens on")
+}
+
 fn test_domain_for_process(
     runtime_directory: &Path,
     uid: u32,

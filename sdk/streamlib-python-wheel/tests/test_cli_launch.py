@@ -309,7 +309,7 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     assert entry["control_url"].startswith("http://127.0.0.1:"), (
         f"the entry must carry a reachable control URL; got {entry['control_url']}"
     )
-    # The engine replaces every character a mesh address chunk may not carry,
+    # The engine replaces every character an address chunk may not carry,
     # so a host whose own name carries one is compared against the same
     # substitution rather than against the raw `gethostname`.
     this_host = re.sub(r"[/*$#?]", "-", socket.gethostname())

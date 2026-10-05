@@ -4,7 +4,7 @@
 //! The name a runtime is addressed by on the runtime mesh.
 //!
 //! It belongs to the runtime rather than to its control plane, is stable across
-//! runs of one app, and is one chunk of a port's mesh address
+//! runs of one app, and is one chunk of a port's address
 //! `<runtime name>/<display name>/<port>`.
 
 use std::ffi::OsString;
@@ -12,9 +12,9 @@ use std::path::Path;
 
 use crate::core::app_directory::resolve_the_app_directory_this_runtime_belongs_to;
 use crate::core::error::Result;
-use crate::core::runtime::mesh_address_chunk::{
-    CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH, CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN,
-    first_reason_this_is_not_one_mesh_address_chunk, what_one_mesh_address_chunk_may_be,
+use crate::core::runtime::address_chunk::{
+    CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH, CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN,
+    first_reason_this_is_not_one_address_chunk, what_one_address_chunk_may_be,
 };
 use crate::core::runtime::stated_configuration_value::{
     refuse_a_stated_configuration_value, what_an_environment_door_says,
@@ -98,16 +98,16 @@ fn resolve_runtime_name(
     Ok(default_runtime_name())
 }
 
-/// A name somebody stated, refused unless it is one mesh address chunk.
+/// A name somebody stated, refused unless it is one address chunk.
 fn stated_runtime_name(stated: &str, where_it_came_from: &str) -> Result<RuntimeName> {
-    match first_reason_this_is_not_one_mesh_address_chunk(stated) {
+    match first_reason_this_is_not_one_address_chunk(stated) {
         None => Ok(RuntimeName(stated.to_string())),
         Some(what_is_wrong) => Err(refuse_a_stated_configuration_value(
             "a runtime name",
             stated,
             where_it_came_from,
             &what_is_wrong,
-            &what_one_mesh_address_chunk_may_be(),
+            &what_one_address_chunk_may_be(),
         )),
     }
 }
@@ -132,15 +132,15 @@ fn default_runtime_name_for(app_directory: &Path, host_name: &str) -> RuntimeNam
     )
 }
 
-/// Make a non-empty `assembled` one legal mesh address chunk by substitution
+/// Make a non-empty `assembled` one legal address chunk by substitution
 /// alone — the forbidden characters anywhere, and `@` at the front, where the
 /// grammar is the one that forbids it.
 fn replace_every_character_that_would_stop_this_being_one_chunk(assembled: &str) -> String {
     assembled
         .char_indices()
         .map(|(index, character)| {
-            let forbidden_here = CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN.contains(&character)
-                || (index == 0 && character == CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH);
+            let forbidden_here = CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN.contains(&character)
+                || (index == 0 && character == CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH);
             if forbidden_here {
                 REPLACEMENT_FOR_A_CHARACTER_A_DEFAULT_NAME_MAY_NOT_CARRY
             } else {
@@ -244,7 +244,7 @@ mod tests {
     /// Every forbidden character is refused by name, from either door.
     #[test]
     fn a_stated_name_carrying_a_forbidden_character_is_refused_naming_it() {
-        for forbidden in CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN {
+        for forbidden in CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN {
             let stated = format!("desk{forbidden}rig");
             for (configured, from_environment) in
                 [(Some(stated.as_str()), None), (None, Some(stated.as_str()))]
@@ -304,9 +304,9 @@ mod tests {
     fn a_forbidden_character_in_the_host_or_the_directory_is_replaced_rather_than_refused() {
         let name = default_runtime_name_for(Path::new("/apps/desk*lab"), "@rig?one");
         assert_eq!(
-            first_reason_this_is_not_one_mesh_address_chunk(name.as_str()),
+            first_reason_this_is_not_one_address_chunk(name.as_str()),
             None,
-            "{name} must be one legal mesh address chunk"
+            "{name} must be one legal address chunk"
         );
         assert!(name.as_str().starts_with("-rig-one-desk-lab-"), "{name}");
     }
@@ -316,9 +316,9 @@ mod tests {
     fn a_root_directory_still_yields_a_name() {
         let name = default_runtime_name_for(Path::new("/"), "rig");
         assert_eq!(
-            first_reason_this_is_not_one_mesh_address_chunk(name.as_str()),
+            first_reason_this_is_not_one_address_chunk(name.as_str()),
             None,
-            "{name} must be one legal mesh address chunk"
+            "{name} must be one legal address chunk"
         );
         assert!(
             name.as_str().starts_with(&format!(
@@ -333,9 +333,9 @@ mod tests {
     fn this_machines_host_name_yields_a_legal_default() {
         let name = default_runtime_name_for(&PathBuf::from("/apps/desk"), &this_hosts_name());
         assert_eq!(
-            first_reason_this_is_not_one_mesh_address_chunk(name.as_str()),
+            first_reason_this_is_not_one_address_chunk(name.as_str()),
             None,
-            "{name} must be one legal mesh address chunk"
+            "{name} must be one legal address chunk"
         );
     }
 }

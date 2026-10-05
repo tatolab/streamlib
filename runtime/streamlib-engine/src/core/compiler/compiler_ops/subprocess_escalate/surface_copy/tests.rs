@@ -16,7 +16,6 @@ use crate::core::rhi::{
     PixelBuffer, PixelFormat, Texture, TextureDescriptor, TextureFormat, TextureUsages,
     VulkanLayout,
 };
-use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 use crate::host_rhi::{VulkanAccess, VulkanStage};
 use crate::vulkan::rhi::ImageCopyRegion;
 
@@ -215,7 +214,6 @@ fn copy_through_the_escalate_op(
     let response = handle_escalate_op(
         &GpuContextLimitedAccess::new(gpu.clone()),
         &EscalateHandleRegistry::new(),
-        &a_mesh_link_ingress_table_carrying_nothing(),
         EscalateRequest::CopySurfaceToSurface(EscalateRequestCopySurfaceToSurface {
             request_id: "copy-1".into(),
             source_surface_id: source_surface_id.into(),

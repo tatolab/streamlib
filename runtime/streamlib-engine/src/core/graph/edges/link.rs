@@ -71,9 +71,8 @@ impl Link {
     /// generated automatically using cuid2.
     ///
     /// The endpoints arrive as references rather than as `"<node>.<port>"`
-    /// text: a mesh address carries a display name a user chose, and splitting
-    /// one back apart on `.` would tear any address whose display name or port
-    /// carries one.
+    /// text: a port name may carry a `.`, and splitting the text back apart on
+    /// `.` would tear it.
     pub fn between_with_capacity(
         source: OutputLinkPortRef,
         target: InputLinkPortRef,
@@ -133,7 +132,6 @@ impl GraphEdgeWithComponents for Link {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::graph::MeshPortAddress;
 
     /// A port name carrying a `.` survives into the link. The endpoints used to
     /// arrive as `"<node>.<port>"` text and be split back apart on the first
@@ -146,19 +144,5 @@ mod tests {
         );
         assert_eq!(link.from_port().port_name(), "video.raw");
         assert_eq!(link.to_port().port_name(), "video.in");
-    }
-
-    /// A source on another runtime reaches the link as its address, rather than
-    /// as a local reference built from whatever sat before the first `.`.
-    #[test]
-    fn a_source_on_another_runtime_reaches_the_link_as_its_address() {
-        let address = MeshPortAddress::new("bench-cam-a1b2", "Camera.Source", "video")
-            .expect("a legal address");
-        let link = Link::between(
-            OutputLinkPortRef::on_another_runtime(address.clone()),
-            InputLinkPortRef::new("Pdst", "video"),
-        );
-        assert_eq!(link.from_port().mesh_port_address(), Some(&address));
-        assert_eq!(link.from_port().processor_id_on_this_runtime(), None);
     }
 }

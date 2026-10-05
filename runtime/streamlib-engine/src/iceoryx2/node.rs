@@ -226,18 +226,12 @@ pub(crate) fn create_iceoryx2_node_in_domain(
 
 /// The sizing a channel data service is created with, and that every opener
 /// reopens it at — the parameters iceoryx2 verifies on each open.
-///
-/// Reachable rather than supported: the cross-runtime-link fixture stands a
-/// runtime's mesh half up without a `Runner`, and an egress asks for exactly
-/// the sizing the compiler created the channel with.
-#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelSizing {
-    /// The fixed destination slot count plus the two reserved slots — one for
-    /// a tap, one for the mesh's egress.
-    pub max_subscribers: usize,
+pub(crate) struct ChannelSizing {
+    /// The fixed destination slot count plus the tap's reserved slot.
+    pub(crate) max_subscribers: usize,
     /// The deepest ring any subscriber on the channel may take.
-    pub channel_service_creation_depth: usize,
+    pub(crate) channel_service_creation_depth: usize,
 }
 
 /// The publisher of a channel data service: `[u8]` frames under the
@@ -320,9 +314,7 @@ impl Iceoryx2Node {
     /// (`{source_processor}/{source_output_port}`). The service carries exactly
     /// [`MAX_PUBLISHERS_PER_CHANNEL`] (1) publisher — the source — and
     /// `max_subscribers` slots: the fixed destination cap plus the reserved tap
-    /// slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]) and
-    /// the mesh egress's
-    /// ([`crate::iceoryx2::RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
+    /// slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
     /// Every opener (the engine and every helper) must request the SAME
     /// `max_subscribers` — iceoryx2 verifies it on `open`.
     ///
@@ -670,11 +662,10 @@ impl Iceoryx2Service {
     /// slot-exhaustion case from every other transport failure.
     ///
     /// A channel data service is opened with `max_subscribers =
-    /// MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
-    /// + RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`. Destination
-    /// subscribers take their slots as links are wired, the mesh's egress takes
-    /// its own when another runtime reads the port, and the remaining reserved
-    /// slot is what a tap consumes here, with a ring `tap_ring_depth` deep.
+    /// MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`.
+    /// Destination subscribers take their slots as links are wired, and the
+    /// reserved slot is what a tap consumes here, with a ring `tap_ring_depth`
+    /// deep.
     /// iceoryx2 fixes `max_subscribers` at create time, so a tap arriving when
     /// every slot is taken trips
     /// [`iceoryx2::port::subscriber::SubscriberCreateError::ExceedsMaxSupportedSubscribers`]
@@ -1498,11 +1489,11 @@ mod tests {
             out_inner.add_channel_link(
                 "out",
                 link_id,
-                Some(notify.create_notifier().expect(
+                notify.create_notifier().expect(
                     "create_notifier must fit the notify service's max_notifiers cap — a \
                      leaked notifier from the previous connect would trip \
                      ExceedsMaxSupportedNotifiers here",
-                )),
+                ),
             );
 
             if !in_inner.has_port("in") {
@@ -1512,7 +1503,6 @@ mod tests {
                 "in",
                 link_id,
                 &InboundLinkName::from("psource/out"),
-                crate::iceoryx2::TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                 data.create_subscriber(depth).expect("dest subscriber"),
             );
             if !in_inner.has_listener() {
@@ -2029,8 +2019,8 @@ mod tests {
                 .expect("a send")
         };
 
-        // The order the fixture's peers meet it in: each source opens and
-        // publishes, and only then does the egress beside it open the channel.
+        // Each source opens and publishes, and only then does a subscriber in
+        // the first domain open the channel.
         let first_domains_publisher = open_the_channel_in(&first_root, "streamlib-test/first")
             .create_publisher(64)
             .expect("the first domain's publisher");
@@ -2038,7 +2028,7 @@ mod tests {
             .create_publisher(64)
             .expect("the second domain's publisher");
         let first_domains_subscriber =
-            open_the_channel_in(&first_root, "streamlib-test/first-egress")
+            open_the_channel_in(&first_root, "streamlib-test/first-subscriber")
                 .create_subscriber(DeliveryProfile::ORDERED_DEPTH)
                 .expect("the first domain's subscriber");
 

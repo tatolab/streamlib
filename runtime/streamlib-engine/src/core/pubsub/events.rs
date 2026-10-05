@@ -217,10 +217,6 @@ pub enum RuntimeEvent {
     // ===== Runtime Link Events =====
     // Emitted by Runtime when user connects/disconnects ports
     /// Emitted when runtime will connect two ports.
-    ///
-    /// The source rides as the reference it was named by rather than as a
-    /// processor id and a port name, because a link's source may be a port on
-    /// another runtime, which has no processor id here.
     RuntimeWillConnect {
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
@@ -678,13 +674,6 @@ mod tests {
             }),
             Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
                 from: OutputLinkPortRef::new("Pcam", "video_out"),
-                to: InputLinkPortRef::new("Pdisplay", "video_in"),
-            }),
-            Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
-                from: OutputLinkPortRef::on_another_runtime(
-                    crate::core::graph::MeshPortAddress::new("lab-two", "CameraSource", "video")
-                        .expect("a legal address"),
-                ),
                 to: InputLinkPortRef::new("Pdisplay", "video_in"),
             }),
         ];

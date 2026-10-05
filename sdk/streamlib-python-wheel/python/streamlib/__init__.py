@@ -45,12 +45,6 @@ from ._engine import ProcessorLinkDataAccess as ProcessorLinkDataAccess
 from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReference
 from ._engine import ProcessorOwnedWindow as ProcessorOwnedWindow
 from ._engine import ProcessorOwnedWindowEvents as ProcessorOwnedWindowEvents
-from ._engine import (
-    RemoteProcessorInputPortReference as RemoteProcessorInputPortReference,
-)
-from ._engine import (
-    RemoteProcessorOutputPortReference as RemoteProcessorOutputPortReference,
-)
 from ._engine import CameraSource as CameraSource
 from ._engine import DisplayWindow as DisplayWindow
 from ._engine import H264Decoder as H264Decoder
@@ -75,9 +69,6 @@ from ._engine import (
     gpu_limited_access_of_the_typed_read_in_progress as gpu_limited_access_of_the_typed_read_in_progress,
 )
 from ._engine import monotonic_now_ns as monotonic_now_ns
-from ._engine import (
-    this_machines_stamp_clock_identity as this_machines_stamp_clock_identity,
-)
 from ._processor_declaration import AudioWindowContract as AudioWindowContract
 from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
@@ -87,12 +78,6 @@ from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
 )
 from ._stream_graph_builder import NodeReference as NodeReference
-from ._stream_graph_builder import (
-    RemoteNodeInputPortReference as RemoteNodeInputPortReference,
-)
-from ._stream_graph_builder import (
-    RemoteNodeOutputPortReference as RemoteNodeOutputPortReference,
-)
 from ._stream_graph_builder import Stream as Stream
 from ._stream_graph_builder import compile_stream_to_graph as compile_stream_to_graph
 from ._stream_graph_builder import stream as stream
@@ -178,10 +163,6 @@ __all__ = [
     "ProcessorOutputTextureRing",
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
-    "RemoteNodeInputPortReference",
-    "RemoteNodeOutputPortReference",
-    "RemoteProcessorInputPortReference",
-    "RemoteProcessorOutputPortReference",
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
@@ -201,7 +182,6 @@ __all__ = [
     "output",
     "node",
     "stream",
-    "this_machines_stamp_clock_identity",
 ]
 
 

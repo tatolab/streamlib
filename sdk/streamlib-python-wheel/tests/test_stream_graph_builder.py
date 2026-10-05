@@ -28,8 +28,6 @@ from streamlib import (
     NodeInputPortReference,
     NodeOutputPortReference,
     NodeReference,
-    RemoteNodeInputPortReference,
-    RemoteNodeOutputPortReference,
     Stream,
     compile_stream_to_graph,
     input,
@@ -119,14 +117,14 @@ def every_kind_of_node(stream: Stream) -> None:
 
 @stream
 def camera_rig(stream: Stream) -> None:
-    """A marker source fanned out to two readers, fed from another runtime too."""
+    """A marker source fanned out to an inverter feeding two readers and to a second inverter."""
     source = stream.add(
         streamlib.TestPatternSource, config={"width": 1280, "height": 720}
     )
     inverter = stream.add(FrameInverter)
     first_reader = stream.add(BrightnessReader)
     backup_reader = stream.add(BrightnessReader, name="Backup Meter")
-    remote_inverter = stream.add(FrameInverter)
+    second_inverter = stream.add(FrameInverter)
     window = stream.add(streamlib.DisplayWindow, config={"title": "Rig"})
     stream.connect(source.output("video"), inverter.input("video_from_upstream"))
     stream.connect(
@@ -138,16 +136,12 @@ def camera_rig(stream: Stream) -> None:
         backup_reader.input("video_from_upstream"),
     )
     stream.connect(
-        stream.remote_output("studio", "Front Camera", "Video"),
-        remote_inverter.input("video_from_upstream"),
+        source.output("Video"),
+        second_inverter.input("video_from_upstream"),
     )
-    stream.connect(remote_inverter.output("video_to_downstream"), window.input("Video"))
-    stream.connect(
-        inverter.output("video_to_downstream"),
-        stream.remote_input("monitor-wall", "Wall Display", "Video"),
-    )
+    stream.connect(second_inverter.output("video_to_downstream"), window.input("Video"))
     stream.expose(inverter.output("video_to_downstream"))
-    stream.expose(remote_inverter.output("VIDEO_TO_DOWNSTREAM"))
+    stream.expose(second_inverter.output("VIDEO_TO_DOWNSTREAM"))
 
 
 @stream
@@ -191,10 +185,6 @@ def hand_built_references(stream: Stream) -> None:
     stream.connect(
         NodeOutputPortReference("FrameInverter", "VIDEO_TO_DOWNSTREAM"),
         NodeInputPortReference("BrightnessReader", "VIDEO_FROM_UPSTREAM"),
-    )
-    stream.connect(
-        RemoteNodeOutputPortReference("studio", "Front Camera", "Video"),
-        NodeInputPortReference("FRAMEINVERTER", "video_from_upstream"),
     )
     stream.expose(NodeOutputPortReference("FrameInverter", "Video_To_Downstream"))
 
@@ -802,7 +792,6 @@ def test_connect_refuses_an_input_as_its_source_naming_the_fix() -> None:
     message = str(refusal.value)
     assert "connect's source must name an output port" in message
     assert "`node.output(port_name)`" in message
-    assert "`stream.remote_output(runtime_name, node_name, port_name)`" in message
     assert "NodeInputPortReference" in message
 
 
@@ -819,7 +808,6 @@ def test_connect_refuses_an_output_as_its_destination_naming_the_fix() -> None:
     message = str(refusal.value)
     assert "connect's destination must name an input port" in message
     assert "`node.input(port_name)`" in message
-    assert "`stream.remote_input(runtime_name, node_name, port_name)`" in message
 
 
 def test_connect_refuses_a_node_reference_where_a_port_belongs() -> None:
@@ -857,7 +845,6 @@ def test_expose_refuses_what_is_not_a_local_output_naming_the_fix() -> None:
 
     for not_a_local_output in (
         inverter.input("video_from_upstream"),
-        builder.remote_output("studio", "camera", "video"),
         inverter,
     ):
         with pytest.raises(TypeError, match=r"`node\.output\(port_name\)`"):
@@ -914,27 +901,6 @@ def test_a_hand_built_reference_is_cast_like_a_minted_one() -> None:
     assert NodeInputPortReference("FRAMEINVERTER", "VIDEO_FROM_UPSTREAM") == (
         NodeInputPortReference("frameinverter", "video_from_upstream")
     )
-    assert RemoteNodeOutputPortReference(
-        "studio", "Front Camera", "Video"
-    ) == builder.remote_output("studio", "front-camera", "video")
-    assert RemoteNodeInputPortReference(
-        "Studio Mac", "Wall Display", "Video In"
-    ) == RemoteNodeInputPortReference("Studio Mac", "wall-display", "video-in")
-
-
-@pytest.mark.parametrize(
-    "build_the_reference",
-    [
-        lambda: RemoteNodeOutputPortReference("studio/left", "camera", "video"),
-        lambda: RemoteNodeInputPortReference("@studio", "camera", "video"),
-    ],
-    ids=["output", "input"],
-)
-def test_a_hand_built_remote_reference_refuses_a_runtime_name_the_mesh_cannot_carry(
-    build_the_reference: Any,
-) -> None:
-    with pytest.raises(ValueError, match="cannot be addressed on the mesh"):
-        build_the_reference()
 
 
 @pytest.mark.parametrize(
@@ -943,9 +909,8 @@ def test_a_hand_built_remote_reference_refuses_a_runtime_name_the_mesh_cannot_ca
         lambda: NodeReference("✨"),
         lambda: NodeOutputPortReference("frameinverter", ".."),
         lambda: NodeInputPortReference("---", "video_from_upstream"),
-        lambda: RemoteNodeInputPortReference("studio", "カメラ", "video"),
     ],
-    ids=["node", "output-port", "input-node", "remote-node"],
+    ids=["node", "output-port", "input-node"],
 )
 def test_a_hand_built_reference_casting_to_nothing_is_refused_at_construction(
     build_the_reference: Any,
@@ -971,14 +936,6 @@ def test_a_hand_built_reference_reaches_the_graph_cast() -> None:
                 "source": {"node": "frameinverter", "port": "video_to_downstream"},
                 "target": {"node": "brightnessreader", "port": "video_from_upstream"},
             },
-            {
-                "source": {
-                    "runtime_name": "studio",
-                    "node": "front-camera",
-                    "port": "video",
-                },
-                "target": {"node": "frameinverter", "port": "video_from_upstream"},
-            },
         ],
         "exposed": [{"node": "frameinverter", "port": "video_to_downstream"}],
     }
@@ -1002,66 +959,6 @@ def test_references_are_immutable_values() -> None:
     assert repr(reference) == "NodeReference(name='frameinverter')"
     with pytest.raises(AttributeError):
         reference.name = "other"  # pyright: ignore[reportAttributeAccessIssue]
-
-
-def test_a_remote_reference_casts_the_node_and_port_and_keeps_the_runtime_name() -> (
-    None
-):
-    builder = Stream("rig")
-
-    assert builder.remote_output(
-        "Studio Mac", "Front Camera", "Video"
-    ) == RemoteNodeOutputPortReference("Studio Mac", "front-camera", "video")
-    assert builder.remote_input(
-        "Studio Mac", "Wall Display", "Video In"
-    ) == RemoteNodeInputPortReference("Studio Mac", "wall-display", "video-in")
-
-
-@pytest.mark.parametrize(
-    ("runtime_name", "reason"),
-    [
-        ("", "it is empty"),
-        ("studio/left", "it contains '/'"),
-        ("studio*", "it contains '*'"),
-        ("studio$", "it contains '$'"),
-        ("studio#2", "it contains '#'"),
-        ("studio?", "it contains '?'"),
-        ("@studio", "it begins with '@'"),
-    ],
-)
-def test_a_runtime_name_the_mesh_cannot_carry_is_refused_at_the_mint(
-    runtime_name: str, reason: str
-) -> None:
-    builder = Stream("rig")
-
-    for mint in (builder.remote_output, builder.remote_input):
-        with pytest.raises(ValueError) as refusal:
-            mint(runtime_name, "camera", "video")
-
-        message = str(refusal.value)
-        assert f"the runtime name {runtime_name!r}" in message
-        assert reason in message
-        assert "`streamlib nodes`" in message
-
-
-def test_a_runtime_name_that_is_not_a_string_is_refused_naming_its_type_and_the_fix() -> (
-    None
-):
-    builder = Stream("rig")
-
-    for mint in (builder.remote_output, builder.remote_input):
-        with pytest.raises(TypeError) as refusal:
-            mint(numpy.int64(3), "camera", "video")  # pyright: ignore[reportArgumentType]
-
-        assert str(refusal.value) == (
-            "a runtime name is a str; got np.int64(3), of type `numpy.int64` — pass the "
-            "name that runtime runs under as a str; `streamlib nodes` lists them"
-        )
-
-
-def test_a_remote_node_name_casting_to_nothing_is_refused_naming_it() -> None:
-    with pytest.raises(ExposedNameCastsToNothingError, match="'カメラ'"):
-        Stream("rig").remote_output("studio", "カメラ", "video")
 
 
 def test_a_stream_compiles_to_its_graph() -> None:
@@ -1099,24 +996,12 @@ def test_a_stream_compiles_to_its_graph() -> None:
                 "target": {"node": "backup-meter", "port": "video_from_upstream"},
             },
             {
-                "source": {
-                    "runtime_name": "studio",
-                    "node": "front-camera",
-                    "port": "video",
-                },
+                "source": {"node": "testpatternsource", "port": "video"},
                 "target": {"node": "frameinverter-2", "port": "video_from_upstream"},
             },
             {
                 "source": {"node": "frameinverter-2", "port": "video_to_downstream"},
                 "target": {"node": "displaywindow", "port": "video"},
-            },
-            {
-                "source": {"node": "frameinverter", "port": "video_to_downstream"},
-                "target": {
-                    "runtime_name": "monitor-wall",
-                    "node": "wall-display",
-                    "port": "video",
-                },
             },
         ],
         "exposed": [
@@ -1398,8 +1283,6 @@ def test_the_builder_is_on_the_public_surface_and_the_cli_helper_is_not() -> Non
         "NodeInputPortReference",
         "NodeOutputPortReference",
         "NodeReference",
-        "RemoteNodeInputPortReference",
-        "RemoteNodeOutputPortReference",
         "Stream",
         "compile_stream_to_graph",
         "stream",

@@ -9,7 +9,7 @@ use streamlib::sdk::descriptors::{
     PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
 };
 use streamlib::sdk::error::Error;
-use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress, OutputLinkPortRef};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
@@ -264,48 +264,6 @@ fn a_load_refused_for_a_missing_link_port_adds_none_of_its_nodes() {
     );
 }
 
-/// An end addressed under this runtime's own name is a local reference: a
-/// target so named wires here, and one naming a node nobody holds is refused
-/// before anything is added.
-#[test]
-#[serial]
-fn an_end_naming_this_runtime_is_a_local_reference() {
-    let camera = register_test_type("SelfAddressedCamera", "frames_in", "video");
-
-    let runtime = Runner::new().unwrap();
-    let this_runtimes_name = the_graph_document_of(&runtime)["mesh"]["runtime_name"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let refusal = runtime
-        .load_graph_snapshot(&the_spec_in(serde_json::json!({
-            "nodes": [{"name": "front", "type": camera.as_str()}],
-            "links": [{"source": {"node": "front", "port": "video"},
-                       "target": {"runtime_name": this_runtimes_name, "node": "nobody", "port": "frames_in"}}]
-        })))
-        .expect_err("no node here is named `nobody`")
-        .to_string();
-    assert!(refusal.contains("nobody"), "{refusal}");
-    assert_eq!(
-        the_graph_document_of(&runtime)["nodes"],
-        serde_json::json!([])
-    );
-
-    runtime
-        .load_graph_snapshot(&the_spec_in(serde_json::json!({
-            "nodes": [{"name": "front", "type": camera.as_str()},
-                      {"name": "back", "type": camera.as_str()}],
-            "links": [{"source": {"node": "front", "port": "video"},
-                       "target": {"runtime_name": this_runtimes_name, "node": "Back", "port": "frames_in"}}]
-        })))
-        .expect("a target naming this runtime wires here");
-    assert_eq!(
-        the_graph_document_of(&runtime)["links"][0]["target"],
-        serde_json::json!({"node": "back", "port": "frames_in"})
-    );
-}
-
 #[test]
 #[serial]
 fn an_exposure_named_twice_is_refused() {
@@ -321,42 +279,6 @@ fn an_exposure_named_twice_is_refused() {
         .to_string();
 
     assert!(refusal.contains("twice"), "{refusal}");
-}
-
-/// A link from a port on another runtime renders `{runtime_name, node, port}`
-/// and loads back as that same remote end, waiting on its runtime.
-#[test]
-#[serial]
-fn a_link_from_another_runtime_loads_back_as_the_same_remote_end() {
-    let display = register_test_type("RemoteFedDisplay", "video_in", "_unused_out");
-
-    let first = Runner::new().unwrap();
-    let display_id = first
-        .add_processor(ProcessorSpec::new(display, serde_json::json!({})))
-        .unwrap();
-    first
-        .connect(
-            OutputLinkPortRef::on_another_runtime(
-                MeshPortAddress::new("bench-cam-a1b2", "Camera Source", "Video").unwrap(),
-            ),
-            InputLinkPortRef::new(&display_id, "video_in"),
-        )
-        .unwrap();
-    let rendered_first = the_graph_document_of(&first);
-    assert_eq!(
-        rendered_first["links"][0]["source"],
-        serde_json::json!({"runtime_name": "bench-cam-a1b2", "node": "camera-source", "port": "video"})
-    );
-
-    let second = Runner::new().unwrap();
-    second
-        .load_graph_snapshot(&the_spec_in(rendered_first.clone()))
-        .expect("a graph with a remote end loads");
-
-    assert_eq!(
-        the_spec_in(the_graph_document_of(&second)),
-        the_spec_in(rendered_first)
-    );
 }
 
 /// A node whose type never resolved renders under the requested import path

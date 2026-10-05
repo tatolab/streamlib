@@ -24,7 +24,6 @@ pub(super) mod handle_lifecycle;
 mod helper_log_record;
 #[cfg(any(test, target_os = "linux", target_os = "macos"))]
 mod hex_encoded_wire_bytes;
-mod inbound_link_stamp_clock_identity;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_shader_stage_source;
 mod processor_owned_window;
@@ -38,7 +37,6 @@ mod tests;
 use self::handle_lifecycle::EscalateHandleRegistry;
 use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestCloseProcessorOwnedWindow, EscalateRequestDrainProcessorOwnedWindowEvents,
-    EscalateRequestInboundLinkStampClockIdentity,
 };
 use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
@@ -46,7 +44,6 @@ use crate::core::context::GpuContextLimitedAccess;
 #[cfg(test)]
 use crate::core::error::{Error, Result};
 use crate::core::logging::push_polyglot_record;
-use crate::core::runtime::mesh::MeshLinkIngressTable;
 
 /// Wire tag marking a message as an escalate request. Bridges demux on this
 /// before falling through to lifecycle dispatch.
@@ -72,7 +69,6 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::CopySurfaceToSurface(p) => Some(&p.request_id),
         EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
-        EscalateRequest::InboundLinkStampClockIdentity(p) => Some(&p.request_id),
         EscalateRequest::OpenCpuReadbackStaging(p) => Some(&p.request_id),
         EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::RefillDeviceExportStaging(p) => Some(&p.request_id),
@@ -111,7 +107,6 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
-    mesh_link_ingress_table: &MeshLinkIngressTable,
     op: EscalateRequest,
 ) -> Option<EscalateResponse> {
     let rid = request_id(&op).map(str::to_string).unwrap_or_default();
@@ -133,18 +128,6 @@ pub(crate) fn handle_escalate_op(
         ),
         EscalateRequest::CopySurfaceToSurface(req) => Some(
             surface_copy::handle_copy_surface_to_surface(sandbox, rid, req),
-        ),
-        EscalateRequest::InboundLinkStampClockIdentity(
-            EscalateRequestInboundLinkStampClockIdentity {
-                request_id: _,
-                inbound_link_name,
-            },
-        ) => Some(
-            inbound_link_stamp_clock_identity::handle_inbound_link_stamp_clock_identity(
-                mesh_link_ingress_table,
-                rid,
-                &inbound_link_name,
-            ),
         ),
         EscalateRequest::WaitDeviceIdle(req) => {
             Some(device_idle::handle_wait_device_idle(sandbox, rid, req))
@@ -318,14 +301,13 @@ impl EscalateParseError {
 pub(crate) fn process_bridge_message(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
-    mesh_link_ingress_table: &MeshLinkIngressTable,
     value: &serde_json::Value,
 ) -> Option<serde_json::Value> {
     let parsed = try_parse_escalate_request(value)?;
     let response = match parsed {
         // Fire-and-forget ops (log) return `None` from the handler — no
         // reply is written back to the subprocess.
-        Ok(op) => handle_escalate_op(sandbox, registry, mesh_link_ingress_table, op)?,
+        Ok(op) => handle_escalate_op(sandbox, registry, op)?,
         Err(err) => err.into_response(),
     };
     Some(envelope_response(response))

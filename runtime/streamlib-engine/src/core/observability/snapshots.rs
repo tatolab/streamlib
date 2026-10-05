@@ -34,11 +34,9 @@ pub struct ProcessorSnapshot {
 pub struct LinkSnapshot {
     /// Link identifier.
     pub id: LinkUniqueId,
-    /// Source port, as the link names it — a port on this runtime, or one on
-    /// another runtime by its mesh address.
+    /// Source port.
     pub source: OutputLinkPortRef,
-    /// Target port, as the link names it — a port on this runtime, or one on
-    /// another runtime by its mesh address.
+    /// Target port.
     pub target: InputLinkPortRef,
     /// Queue capacity.
     pub capacity: usize,

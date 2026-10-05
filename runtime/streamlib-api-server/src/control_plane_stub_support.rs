@@ -96,26 +96,6 @@ macro_rules! graph_mutation_ops_are_unreachable {
         fn this_runtimes_name_on_the_mesh(&self) -> &str {
             $crate::control_plane_stub_support::STUB_RUNTIME_NAME
         }
-        fn request_link_on_remote_input_runtime(
-            &self,
-            _from: ::streamlib::sdk::graph::OutputLinkPortRef,
-            _to: ::streamlib::sdk::graph::MeshPortAddress,
-        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkRequestUniqueId> {
-            unreachable!(concat!("the control plane serves no connect ", $surface))
-        }
-        fn request_disconnect_on_remote_input_runtime(
-            &self,
-            _input_runtime_name: &str,
-            _link_id: ::streamlib::sdk::graph::LinkUniqueId,
-        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkRequestUniqueId> {
-            unreachable!(concat!("the control plane serves no disconnect ", $surface))
-        }
-        fn cancel_link_request(
-            &self,
-            _link_request_id: &::streamlib::sdk::graph::LinkRequestUniqueId,
-        ) -> ::streamlib::sdk::error::Result<()> {
-            unreachable!(concat!("the control plane serves no disconnect ", $surface))
-        }
     };
 }
 
@@ -131,15 +111,6 @@ pub(crate) enum RecordedGraphMutation {
         ::streamlib::sdk::graph::InputLinkPortRef,
     ),
     Disconnect(::streamlib::sdk::graph::LinkUniqueId),
-    /// A link whose input is on another runtime, asked for rather than applied.
-    RequestLinkOnRemoteInputRuntime(
-        ::streamlib::sdk::graph::OutputLinkPortRef,
-        ::streamlib::sdk::graph::MeshPortAddress,
-    ),
-    /// A link on another runtime, asked to go.
-    RequestDisconnectOnRemoteInputRuntime(String, ::streamlib::sdk::graph::LinkUniqueId),
-    /// A request cancelled before any runtime applied it.
-    CancelLinkRequest(::streamlib::sdk::graph::LinkRequestUniqueId),
 }
 
 /// The graph mutations a front end handed the runtime, in call order.
@@ -162,11 +133,9 @@ pub(crate) const STUB_NODE_ID_SUFFIX: &str = "-id";
 /// The id the stub answers every `connect` with.
 pub(crate) const STUB_CREATED_LINK_ID: &str = "stub-created-link";
 
-/// The id the stub answers every link request with.
-pub(crate) const STUB_MADE_LINK_REQUEST_ID: &str = "stub-made-link-request";
-
-/// The mesh name the stub runtime answers to, which is what a front end
-/// reports as the runtime a link's input is on.
+/// The name the stub runtime answers `this_runtimes_name_on_the_mesh` with,
+/// and the `mesh.runtime_name` a test arms its graph with — the first part of
+/// a tap's channel.
 pub(crate) const STUB_RUNTIME_NAME: &str = "stub-runtime";
 
 /// What a stub runtime answers an `add_node` with when the test has armed a
@@ -295,43 +264,6 @@ macro_rules! graph_mutation_ops_record_the_call {
         }
         fn this_runtimes_name_on_the_mesh(&self) -> &str {
             $crate::control_plane_stub_support::STUB_RUNTIME_NAME
-        }
-        fn request_link_on_remote_input_runtime(
-            &self,
-            from: ::streamlib::sdk::graph::OutputLinkPortRef,
-            to: ::streamlib::sdk::graph::MeshPortAddress,
-        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkRequestUniqueId> {
-            self.recorded_graph_mutations.lock().push(
-                        $crate::control_plane_stub_support::RecordedGraphMutation::
-                            RequestLinkOnRemoteInputRuntime(from, to),
-                    );
-            Ok(::streamlib::sdk::graph::LinkRequestUniqueId::from(
-                $crate::control_plane_stub_support::STUB_MADE_LINK_REQUEST_ID,
-            ))
-        }
-        fn request_disconnect_on_remote_input_runtime(
-            &self,
-            input_runtime_name: &str,
-            link_id: ::streamlib::sdk::graph::LinkUniqueId,
-        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkRequestUniqueId> {
-            self.recorded_graph_mutations.lock().push(
-                        $crate::control_plane_stub_support::RecordedGraphMutation::
-                            RequestDisconnectOnRemoteInputRuntime(input_runtime_name.to_string(), link_id),
-                    );
-            Ok(::streamlib::sdk::graph::LinkRequestUniqueId::from(
-                $crate::control_plane_stub_support::STUB_MADE_LINK_REQUEST_ID,
-            ))
-        }
-        fn cancel_link_request(
-            &self,
-            link_request_id: &::streamlib::sdk::graph::LinkRequestUniqueId,
-        ) -> ::streamlib::sdk::error::Result<()> {
-            self.recorded_graph_mutations.lock().push(
-                $crate::control_plane_stub_support::RecordedGraphMutation::CancelLinkRequest(
-                    link_request_id.clone(),
-                ),
-            );
-            Ok(())
         }
     };
 }

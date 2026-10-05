@@ -68,7 +68,8 @@ changed live.
 
 - The link request (push and third-party wiring) is retired: `request_link_on_remote_input_runtime`,
   the remote-destination spellings in Python and MCP, the link-request queryable, and `graph`'s
-  `created_by_runtime_name` and `link_requests_awaiting_runtime`. Removing them is a later change.
+  `created_by_runtime_name` and `link_requests_awaiting_runtime`. ~~Removing them is a later
+  change.~~ — Superseded 2026-10-05 by #2629, which removes them.
 
 - `expose` on the CLI, the app and the local API edits the live map. Whether those live edits
   persist across a restart is the runtime-hosting change's to settle.

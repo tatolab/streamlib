@@ -30,37 +30,13 @@ use crate::core::json_schema::LoadedCapabilityExtensionOutput;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
-use crate::core::runtime::LinkRequestsAppliedIntoThisRuntimesGraph;
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
-use crate::core::runtime::OutputPortsInThisRuntimesGraph;
 use crate::core::runtime::mesh::{
-    GpuContextTheMeshCopiesFramesWith, HostedControlPlaneEndpointRegistry, MeshLinkIngressTable,
-    ResolvedRuntimeMeshConfiguration, RuntimeMeshMembership,
-    WhatThisRuntimeOffersOnTheMeshRegistry,
+    HostedControlPlaneEndpointRegistry, ResolvedRuntimeMeshConfiguration, RuntimeMeshMembership,
 };
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
-
-/// Gives the mesh's GPU context back when `start()` leaves early.
-///
-/// The mesh reads that context on its own threads, so a `start()` that
-/// recorded one and then failed would leave the mesh holding a device
-/// belonging to a runtime that never ran — and a host that gives up on a
-/// failed `start()` never calls the `stop()` that would clear it.
-struct ForgetsTheMeshsGpuContextUnlessStartFinishes<'a> {
-    gpu_context_the_mesh_copies_frames_with: &'a GpuContextTheMeshCopiesFramesWith,
-    start_finished: bool,
-}
-
-impl Drop for ForgetsTheMeshsGpuContextUnlessStartFinishes<'_> {
-    fn drop(&mut self) {
-        if !self.start_finished {
-            self.gpu_context_the_mesh_copies_frames_with
-                .forget_the_runtimes_gpu_context();
-        }
-    }
-}
 
 /// Storage variant for tokio runtime in Runner.
 ///
@@ -161,17 +137,6 @@ pub struct Runner {
     /// Listener for graph changes that triggers compilation.
     /// Stored to keep subscription alive for runtime lifetime.
     _graph_change_listener: Arc<Mutex<dyn EventListener>>,
-    /// How the mesh reads this runtime's graph, held so it outlives the
-    /// queryable and the egresses that read it.
-    _offered_on_the_mesh: Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
-    /// Every port on another runtime this runtime links from. Handed to the
-    /// mesh, which resolves each and opens its ingress, and to every
-    /// `RuntimeContext`, through which the wiring op reaches it.
-    pub(crate) mesh_link_ingress_table: Arc<MeshLinkIngressTable>,
-    /// Where the mesh reads the GPU context it copies a frame's pixels with.
-    /// The mesh joins in `new()`, which needs no GPU; this is filled in
-    /// `start()` and cleared in `stop()`.
-    gpu_context_the_mesh_copies_frames_with: Arc<GpuContextTheMeshCopiesFramesWith>,
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     /// Created in new(); cloned into the RuntimeContext during start().
     pub(crate) iceoryx2_node: Iceoryx2Node,
@@ -274,7 +239,7 @@ impl Runner {
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
         // Beside the id, and before the runtime writes anything: a name the
-        // caller cannot use as a mesh address, or an endpoint this build cannot
+        // caller cannot use in a port address, or an endpoint this build cannot
         // open, is a wiring error, and refusing it here costs nothing that has
         // to be undone.
         let runtime_name = Arc::new(RuntimeName::from_configuration_environment_or_default(
@@ -377,35 +342,6 @@ impl Runner {
         // Subscribe to graph changes
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))?;
 
-        // The mesh joined before the graph and the iceoryx2 node existed, so
-        // this is where it learns to read them: what this runtime offers a peer
-        // that asks, and how to reach one of those ports' channels when another
-        // runtime starts reading it.
-        let offered_on_the_mesh = Arc::new(WhatThisRuntimeOffersOnTheMeshRegistry::default());
-        offered_on_the_mesh.record_how_to_read_this_runtimes_graph(
-            OutputPortsInThisRuntimesGraph::of(&compiler, &iceoryx2_node),
-        );
-        // Both halves of the mesh's frame carrying read this one cell: a
-        // surface id names a frame in this machine's pools, so a sender copies
-        // its pixels out and a receiver mints a local surface for them, and
-        // neither has a GPU context to do it with until `start()`.
-        let gpu_context_the_mesh_copies_frames_with =
-            Arc::new(GpuContextTheMeshCopiesFramesWith::default());
-        runtime_mesh.start_serving_this_runtimes_output_ports(
-            &offered_on_the_mesh,
-            &iceoryx2_node,
-            &gpu_context_the_mesh_copies_frames_with,
-        );
-
-        // The other half: every port on another runtime this one links from.
-        // `connect` notes a link here and the mesh resolves it afterwards, so
-        // nothing about a remote link waits on a network call.
-        let mesh_link_ingress_table = MeshLinkIngressTable::of_this_runtime(
-            &iceoryx2_node,
-            &gpu_context_the_mesh_copies_frames_with,
-        );
-        runtime_mesh.start_carrying_links_from_other_runtimes(&mesh_link_ingress_table);
-
         let runtime = Arc::new(Self {
             runtime_id,
             runtime_name,
@@ -416,9 +352,6 @@ impl Runner {
             runtime_context,
             status,
             _graph_change_listener: listener,
-            _offered_on_the_mesh: offered_on_the_mesh,
-            mesh_link_ingress_table,
-            gpu_context_the_mesh_copies_frames_with,
             iceoryx2_node,
             #[cfg(target_os = "linux")]
             surface_service,
@@ -437,16 +370,6 @@ impl Runner {
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
         });
-
-        // Last, because it is the one thing that needs the runtime itself: a
-        // peer's link request is applied through this runtime's own `connect`.
-        // The queryable that answers those is already declared and refuses
-        // anything arriving before now by saying the runtime is still starting.
-        runtime
-            .runtime_mesh
-            .record_how_this_runtime_applies_link_requests(
-                LinkRequestsAppliedIntoThisRuntimesGraph::of(&runtime),
-            );
 
         Ok(runtime)
     }
@@ -600,23 +523,6 @@ impl Runner {
             tracing::info!("[start] SurfaceStore initialized against runtime-internal broker");
         }
 
-        // The mesh's own half of "fully live": an egress reads a frame out
-        // through this context and an ingress mints one with it. After the
-        // SurfaceStore, because the claim an egress takes over a frame it is
-        // copying is recorded in that store's lease table.
-        self.gpu_context_the_mesh_copies_frames_with
-            .record_the_runtimes_gpu_context(&gpu);
-        // Everything below here can leave early, and a host is under no
-        // obligation to call `stop()` after a `start()` that failed. Without
-        // this, the mesh would hold the last clone of a device belonging to a
-        // runtime that never ran.
-        let mut the_mesh_keeps_this_context_only_if_start_finishes =
-            ForgetsTheMeshsGpuContextUnlessStartFinishes {
-                gpu_context_the_mesh_copies_frames_with: &self
-                    .gpu_context_the_mesh_copies_frames_with,
-                start_finished: false,
-            };
-
         // Drain pre-start hooks now — after the GpuContext is FULLY live
         // (device + SurfaceStore) but before any processor setup runs.
         // Adapter bridges and surface registrations happen here so
@@ -687,7 +593,6 @@ impl Runner {
             runtime_ops,
             self.tokio_runtime_variant.handle(),
             iceoryx2_node,
-            Arc::clone(&self.mesh_link_ingress_table),
             Arc::clone(&audio_clock),
             self.runtime_directory.clone(),
             Arc::clone(&self.hosted_control_plane),
@@ -722,7 +627,6 @@ impl Runner {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
         );
 
-        the_mesh_keeps_this_context_only_if_start_finishes.start_finished = true;
         Ok(())
     }
 
@@ -809,11 +713,6 @@ impl Runner {
             }
             self.surface_share_cross_process_timeline_pairs.clear();
         }
-
-        // Before the context is dropped, so the mesh never holds the last
-        // clone of a device this runtime has finished with.
-        self.gpu_context_the_mesh_copies_frames_with
-            .forget_the_runtimes_gpu_context();
 
         // Clear runtime context - allows fresh context on next start().
         // This enables per-session tracking (e.g., AI agents analyzing runtime state).
@@ -1325,9 +1224,8 @@ impl Runner {
     /// stream's name recorded on the graph.
     ///
     /// A node name already in the graph is refused rather than suffixed — a
-    /// loaded graph's names are already resolved. A link whose input is on
-    /// another runtime is asked of that runtime, as `connect` asks it. Every
-    /// `type` must already be registered.
+    /// loaded graph's names are already resolved. Every `type` must already be
+    /// registered.
     pub fn load_graph_snapshot(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
@@ -1343,7 +1241,7 @@ impl Runner {
                 .resolve_processor_type_if_unregistered(&node.processor_type)?;
         }
         graph.validate()?;
-        self.refuse_what_this_runtimes_graph_contradicts(graph)?;
+        self.refuse_a_node_name_this_runtimes_graph_already_holds(graph)?;
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
@@ -1362,29 +1260,10 @@ impl Runner {
         };
 
         for link in &graph.links {
-            let from = match link.source.mesh_port_address() {
-                Some(address) => OutputLinkPortRef::on_another_runtime(address?),
-                None => {
-                    OutputLinkPortRef::new(processor_id_of(link.source.node())?, link.source.port())
-                }
-            };
-            match link.target.mesh_port_address().transpose()? {
-                Some(address) if address.names_the_runtime(self.runtime_mesh.runtime_name()) => {
-                    self.connect(from, InputLinkPortRef::on_another_runtime(address))?;
-                }
-                Some(address) => {
-                    RuntimeOperations::request_link_on_remote_input_runtime(self, from, address)?;
-                }
-                None => {
-                    self.connect(
-                        from,
-                        InputLinkPortRef::new(
-                            processor_id_of(link.target.node())?,
-                            link.target.port(),
-                        ),
-                    )?;
-                }
-            }
+            self.connect(
+                OutputLinkPortRef::new(processor_id_of(&link.source.node)?, &link.source.port),
+                InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port),
+            )?;
         }
 
         let mut exposed_ports_by_processor_id: HashMap<ProcessorUniqueId, Vec<String>> =
@@ -1411,43 +1290,17 @@ impl Runner {
         Ok(())
     }
 
-    /// Refuse, before anything is added, what this runtime's own graph would
-    /// refuse partway through the load: a node name it already holds, and an
-    /// address naming this runtime whose node neither `graph` nor this
-    /// runtime's graph holds. With `validate` run first, a load refused for
-    /// either adds nothing; a link the engine refuses after that still leaves
-    /// the nodes added before it.
-    fn refuse_what_this_runtimes_graph_contradicts(
+    /// Refuse, before anything is added, a node name this runtime's own graph
+    /// already holds, which it would refuse partway through the load. With
+    /// `validate` run first, a load refused for it adds nothing; a link the
+    /// engine refuses after that still leaves the nodes added before it.
+    fn refuse_a_node_name_this_runtimes_graph_already_holds(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
     ) -> Result<()> {
-        let this_runtimes_name = self.runtime_mesh.runtime_name();
         self.compiler.scope(|live_graph, _tx| {
             for node in &graph.nodes {
                 live_graph.the_requested_node_name_unless_taken(&node.name)?;
-            }
-            for link in &graph.links {
-                for end in [&link.source, &link.target] {
-                    let Some(address) = end.mesh_port_address().transpose()? else {
-                        continue;
-                    };
-                    if !address.names_the_runtime(this_runtimes_name) {
-                        continue;
-                    }
-                    let named = address.processor_display_name();
-                    let in_the_loaded_graph = graph.nodes.iter().any(|node| {
-                        crate::core::graph::cast_exposed_name_to_url_safe(&node.name)
-                            .is_ok_and(|cast| cast == named)
-                    });
-                    if !in_the_loaded_graph
-                        && !live_graph.traversal().v_with_node_name(named).exists()
-                    {
-                        return Err(Error::ProcessorNotFound(format!(
-                            "{address} names this runtime, and neither the graph being loaded \
-                             nor this runtime holds a node named `{named}`"
-                        )));
-                    }
-                }
             }
             Ok(())
         })

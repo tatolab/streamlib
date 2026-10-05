@@ -27,18 +27,9 @@ pub fn read_this_hosts_identity() -> HostIdentity {
     )
 }
 
-/// The kernel's boot id as this machine reports it, or `None` when `/proc`
-/// does not answer.
-///
-/// Shared with the machine clock identity, which is this same boot id and
-/// nothing else: one read site and one path constant, because a second reader
-/// of one file is a second answer waiting to disagree.
-pub fn read_the_kernel_boot_id() -> Option<String> {
-    read_the_kernel_boot_id_at(Path::new(KERNEL_BOOT_ID_PATH))
-}
-
-/// The read with its path named, so the failure arm is testable without a
-/// second kernel.
+/// The kernel's boot id at `kernel_boot_id_path`, or `None` when it does not
+/// answer — the path named, so the failure arm is testable without a second
+/// kernel.
 fn read_the_kernel_boot_id_at(kernel_boot_id_path: &Path) -> Option<String> {
     let kernel_boot_id = std::fs::read_to_string(kernel_boot_id_path).ok()?;
     let kernel_boot_id = kernel_boot_id.trim().to_string();

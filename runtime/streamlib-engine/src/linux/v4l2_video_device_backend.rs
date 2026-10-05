@@ -1027,8 +1027,8 @@ fn v4l2_buffer_capture_stamp(
     timestamp_seconds: i64,
     timestamp_microseconds: i64,
 ) -> DeviceReportedCaptureStamp {
-    let timestamp_clock = buffer_flags & v4l::buffer::Flags::TIMESTAMP_MASK.bits();
-    if timestamp_clock != v4l::buffer::Flags::TIMESTAMP_MONOTONIC.bits() {
+    let timestamp_type = buffer_flags & v4l::buffer::Flags::TIMESTAMP_MASK.bits();
+    if timestamp_type != v4l::buffer::Flags::TIMESTAMP_MONOTONIC.bits() {
         return DeviceReportedCaptureStamp::OffTheMachineMonotonicClock;
     }
     DeviceReportedCaptureStamp::OnTheMachineMonotonicClock {
@@ -1056,15 +1056,15 @@ mod tests {
     }
 
     #[test]
-    fn a_buffer_whose_stamp_clock_is_unknown_or_copied_is_off_the_monotonic_clock() {
-        for timestamp_clock in [
+    fn a_buffer_whose_timestamp_type_is_unknown_or_copied_is_off_the_monotonic_clock() {
+        for timestamp_type in [
             v4l::buffer::Flags::TIMESTAMP_UNKNOWN,
             v4l::buffer::Flags::TIMESTAMP_COPY,
         ] {
             assert_eq!(
-                v4l2_buffer_capture_stamp(timestamp_clock.bits(), 541_560, 123_456),
+                v4l2_buffer_capture_stamp(timestamp_type.bits(), 541_560, 123_456),
                 DeviceReportedCaptureStamp::OffTheMachineMonotonicClock,
-                "{timestamp_clock:?}"
+                "{timestamp_type:?}"
             );
         }
     }

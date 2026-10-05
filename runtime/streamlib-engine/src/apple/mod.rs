@@ -12,7 +12,6 @@ pub mod corevideo_ffi;
 pub mod host_identity;
 pub(crate) mod imported_iosurface_storage_buffers_kept_for_recycling;
 pub mod iosurface;
-pub mod machine_clock_identity;
 pub mod media_clock;
 pub mod metal_layer_added_as_sublayer_of_window_content_view;
 pub mod vimage_ffi;

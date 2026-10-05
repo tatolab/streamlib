@@ -7,7 +7,7 @@ enforced by a Cargo feature so the split can't drift:
 |---|---|---|---|
 | **1 — Unit** | `cargo test` (default) | Pure logic, parsers, state machines, serialization round-trips, mock-backed integration. | Yes — by construction. |
 | **2 — Hardware integration** | `cargo test --features streamlib/hardware-tests,streamlib-media-builtins/hardware-tests` | Tests that construct a real `HostVulkanDevice`, allocate GPU memory, exercise the swapchain, etc. | No — must run with `--test-threads=1`. |
-| **Multi-process mesh end-to-end** | `cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes --test cross_runtime_links_two_processes --test cross_runtime_link_requests_two_processes` | Real runtimes in separate processes over Zenoh on loopback: discovery, links, link requests. | Serial within each suite. |
+| **Multi-process mesh end-to-end** | `cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes` | Real runtimes in separate processes over Zenoh on loopback: discovery. | Serial within each suite. |
 
 Tier 1 is parallel-safe by construction — no test inside the tier-1 set
 is allowed to require a GPU device or any other exclusive system
