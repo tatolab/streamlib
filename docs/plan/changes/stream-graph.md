@@ -329,7 +329,11 @@ CI stays green through the forty-fixture migration.
 - REMOVED: DEFAULT_APP_ENTRY_FILE_NAME
 - REMOVED: sdk/streamlib-python-wheel/python/streamlib/_scaffold_template/app.py
 - REMOVED: sdk/streamlib-python-wheel/python/streamlib/_scaffold_template/processors/inverting_effect.py
-- REMOVED: AddedProcessor
+- REMOVED: PythonAddedProcessor
+  The Python `AddedProcessor` class, in four spellings; the Rust `App` API's `AddedProcessor` stays.
+- REMOVED: "AddedProcessor"
+- REMOVED: class AddedProcessor
+- REMOVED: import AddedProcessor
 - REMOVED: ProcessorOutputPortReference
 - REMOVED: ProcessorInputPortReference
 - REMOVED: RemoteProcessorOutputPortReference
