@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+pub(crate) mod address_chunk;
 mod capability_extensions;
 mod end_the_process_at_once;
 mod engine_teardown_watchdog;
@@ -8,7 +9,6 @@ mod graph_change_listener;
 mod helper_process_group_registry;
 mod local_processor_type_registration;
 pub mod mesh;
-pub(crate) mod mesh_address_chunk;
 mod operations;
 mod operations_runtime;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
@@ -28,6 +28,7 @@ pub use crate::core::compiler::{
     DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,
 };
 pub use crate::core::signals::ScopedShutdownSignalOwnership;
+pub use address_chunk::what_one_address_chunk_may_be;
 pub use capability_extensions::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
 pub(crate) use end_the_process_at_once::{
     kill_every_helper_process_group_and_end_the_process_at_once, park_forever,
@@ -45,7 +46,6 @@ pub use mesh::{
     RuntimeMeshMembership, RuntimeMeshObservation, RuntimeMeshObservationRequest,
     observe_a_runtime_mesh,
 };
-pub use mesh_address_chunk::what_one_mesh_address_chunk_may_be;
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use runtime::Runner;
 pub use runtime_mesh_configuration::RuntimeMeshConfiguration;

@@ -560,7 +560,7 @@ class Runtime:
         costs about half a second, Zenoh's own scouting delay.
 
         The name belongs to the runtime, is stable across runs of one app, and
-        is one chunk of a port's mesh address `<runtime name>/<display
+        is one chunk of a port's address `<runtime name>/<display
         name>/<port>` — so it is non-empty, carries none of `/ * $ # ?`, and
         does not begin with `@`; spaces and unicode are fine. A name breaking
         that is refused here, naming the character.

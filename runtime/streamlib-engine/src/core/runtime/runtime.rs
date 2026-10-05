@@ -239,7 +239,7 @@ impl Runner {
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
         // Beside the id, and before the runtime writes anything: a name the
-        // caller cannot use as a mesh address, or an endpoint this build cannot
+        // caller cannot use in a port address, or an endpoint this build cannot
         // open, is a wiring error, and refusing it here costs nothing that has
         // to be undone.
         let runtime_name = Arc::new(RuntimeName::from_configuration_environment_or_default(

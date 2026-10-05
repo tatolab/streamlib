@@ -69,7 +69,7 @@ fn resolve_app_directory(
 ///
 /// `--dir ./app` reaches the engine exactly as typed: without this, two
 /// checkouts each launched from their own parent would hash identical bytes
-/// and take the same mesh address, while one checkout launched two ways would
+/// and take the same runtime name, while one checkout launched two ways would
 /// take two.
 fn the_one_spelling_of(chosen: PathBuf, working_directory: Option<&Path>) -> PathBuf {
     if let Ok(canonical) = chosen.canonicalize() {

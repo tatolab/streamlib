@@ -535,8 +535,7 @@ pub(crate) fn find_the_source_a_caller_named(
     port_address: &str,
 ) -> Result<OutputLinkPortRef> {
     let not_found = || Error::TapChannelNotFound(port_address.to_string());
-    let address =
-        crate::core::graph::MeshPortAddress::parse(port_address).map_err(|_| not_found())?;
+    let address = crate::core::graph::PortAddress::parse(port_address).map_err(|_| not_found())?;
     if !address.names_the_runtime(this_runtimes_name) {
         return Err(Error::InvalidPortAddress(format!(
             "'{port_address}' names the runtime `{}`, and a tap reads a channel on this \

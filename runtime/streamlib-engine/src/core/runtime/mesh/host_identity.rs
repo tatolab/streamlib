@@ -146,7 +146,7 @@ impl HostIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::runtime::mesh_address_chunk::first_reason_this_is_not_one_mesh_address_chunk;
+    use crate::core::runtime::address_chunk::first_reason_this_is_not_one_address_chunk;
 
     fn identified(kernel_boot_id: &str, pid_namespace_inode: u64) -> HostIdentity {
         HostIdentity::ThisKernelBootAndPidNamespace {
@@ -191,7 +191,7 @@ mod tests {
         ] {
             let chunk = identity.as_one_key_chunk();
             assert_eq!(
-                first_reason_this_is_not_one_mesh_address_chunk(&chunk),
+                first_reason_this_is_not_one_address_chunk(&chunk),
                 None,
                 "{chunk} must be one legal key chunk"
             );

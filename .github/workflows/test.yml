@@ -649,7 +649,7 @@ jobs:
             core::compiler::compilation_plan::tests::a_config_update_for_a_processor_this_batch_constructs_lands_on_its_node_before_it_is_built \
             core::runtime::runtime::tests::a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_graph_node \
             core::stable_short_id \
-            core::runtime::mesh_address_chunk \
+            core::runtime::address_chunk \
             core::runtime::runtime_name \
             core::app_directory \
             core::json_schema::capability_extension_and_mesh_rendering_tests::an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason \

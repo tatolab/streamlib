@@ -840,7 +840,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
     }
 
     /// The name this runtime is addressed by on the runtime mesh — what a
-    /// control plane publishes and what a mesh address begins with.
+    /// control plane publishes and what a port address begins with.
     pub fn runtime_name(&self) -> &RuntimeName {
         self.host_base().runtime_name()
     }

@@ -131,7 +131,7 @@ pub struct ProcessorNodeOutput {
     #[serde(rename = "type")]
     pub processor_type: ProcessorClassImportPath,
     /// The node's name, unique in its graph and cast to lowercase URL-safe —
-    /// what a link end, an exposure and a mesh address name it by.
+    /// what a link end, an exposure and a port address name it by.
     pub name: String,
     /// Processor configuration as JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]

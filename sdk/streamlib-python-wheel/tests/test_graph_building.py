@@ -125,7 +125,7 @@ def test_a_duplicate_requested_display_name_is_refused_by_name():
 
 
 def test_a_display_name_is_cast_rather_than_refused_for_its_spelling():
-    """The display name is the node's part of its mesh address, so it is cast
+    """The display name is the node's part of its port address, so it is cast
     to lowercase URL-safe — never refused for a character it carries."""
     runtime = streamlib.Runtime()
     try:

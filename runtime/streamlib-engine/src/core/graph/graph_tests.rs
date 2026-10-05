@@ -1308,7 +1308,7 @@ mod node_names {
 
     /// A defaulted name is the class's short name, cast, and each defaulted
     /// duplicate takes the next free `-2`, `-3` … — the one string the handle,
-    /// `graph`, the mesh address and the log prefix all show.
+    /// `graph`, the port address and the log prefix all show.
     #[test]
     fn a_defaulted_name_is_the_cast_short_name_and_a_duplicate_takes_the_next_suffix() {
         let mut graph = test_graph();
