@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The shutdown-request handshake end-to-end (#1599): a processor inside the
-//! graph asks for shutdown, and the harness that owns the run loop observes it
-//! and runs the normal teardown.
+//! The shutdown-request handshake end-to-end: a processor inside the graph
+//! asks for shutdown, and the harness that owns the run loop observes it and
+//! runs the normal teardown.
 //!
 //! What it locks, against a REAL `Runner` (not a stub):
 //! - A processor reaching `ctx.runtime().request_runtime_shutdown(..)` — the
@@ -151,7 +151,7 @@ fn a_request_issued_before_start_is_observed_by_the_run_loop() {
     let runtime = Runner::new().expect("Runner::new");
 
     runtime
-        .request_runtime_shutdown("integration test: the start-script aborted before start()")
+        .request_runtime_shutdown("integration test: the host aborted before start()")
         .expect("the host arm never fails");
 
     runtime.start().expect("runtime start");
