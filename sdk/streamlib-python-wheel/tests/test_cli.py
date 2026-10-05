@@ -174,11 +174,18 @@ def test_a_missing_explicit_entry_names_the_path_it_tried(tmp_path: Path):
 
 def test_resolution_never_walks_up_to_a_parent(tmp_path: Path):
     write_app(tmp_path, "stream.py", MINIMAL_STREAM_SOURCE)
+    write_app(tmp_path, "app.py", APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION)
     nested = tmp_path / "nested"
     nested.mkdir()
 
-    with pytest.raises(cli.AppLaunchError, match="never searches parent"):
+    with pytest.raises(
+        cli.AppLaunchError, match="never searches parent"
+    ) as resolution_failure:
         cli.resolve_app_entry_file("run", nested, None)
+
+    assert "only an `app.py`" not in str(resolution_failure.value), (
+        "a parent's `app.py` must not draw the app.py-only refusal in a nested directory"
+    )
 
 
 def test_a_directory_named_like_the_entry_is_not_an_entry(tmp_path: Path):
