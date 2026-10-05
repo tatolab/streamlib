@@ -90,7 +90,8 @@ pub trait RuntimeOperations: Send + Sync {
     /// its destination cap, but iceoryx2 counts slots rather than naming them,
     /// so an attach fails with [`Error::TapSlotOccupied`] only once every slot
     /// is held. An unwired / unknown channel fails with
-    /// [`Error::TapChannelNotFound`].
+    /// [`Error::TapChannelNotFound`], and an address naming another runtime
+    /// with [`Error::InvalidPortAddress`].
     ///
     /// There is no sync variant: a tap yields a live streaming handle, not a
     /// one-shot result, so blocking on it is never the intent. Host-side only —
@@ -100,6 +101,7 @@ pub trait RuntimeOperations: Send + Sync {
     ///
     /// [`Error::TapSlotOccupied`]: crate::core::error::Error::TapSlotOccupied
     /// [`Error::TapChannelNotFound`]: crate::core::error::Error::TapChannelNotFound
+    /// [`Error::InvalidPortAddress`]: crate::core::error::Error::InvalidPortAddress
     /// [`Error::NotSupported`]: crate::core::error::Error::NotSupported
     fn tap_async(
         &self,

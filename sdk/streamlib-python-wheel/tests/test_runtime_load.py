@@ -113,8 +113,6 @@ OWN_PROCESS_DEADLINE_SECONDS = 120.0
 
 EVERY_PROCESSOR_THE_READINESS_WAIT_LISTS_AFTER = "every processor: "
 
-RUNTIME_LOADING_A_SOURCE_AT_ITS_OWN_ADDRESS = "runtime-load-own-address"
-
 # A runtime name another live runtime on the mesh holds is refused, so the pid
 # keeps this one apart from any other run on the rig.
 SERVED_GRAPH_RUNTIME_NAME = f"runtime-load-served-graph-{os.getpid()}"
@@ -753,7 +751,7 @@ def test_load_after_shutdown_is_refused():
         shut_down_runtime.load(pattern_to_window_graph())
 
 
-# ---- links: a port no node has, and an end on another runtime ---------------
+# ---- links: a port no node has, and an end naming a runtime -----------------
 
 
 @stream
@@ -761,23 +759,6 @@ def pattern_linked_from_a_port_it_lacks_into_a_window(stream: Stream) -> None:
     pattern = stream.add(TestPatternSource)
     window = stream.add(DisplayWindow)
     stream.connect(pattern.output("no_such_port"), window.input("video"))
-
-
-@stream
-def remote_camera_into_a_local_window(stream: Stream) -> None:
-    window = stream.add(DisplayWindow)
-    stream.connect(
-        stream.remote_output("bench-cam-a1b2", "CameraSource", "video"), window.input("video")
-    )
-
-
-@stream
-def source_at_its_own_address_naming_an_absent_node_into_a_window(stream: Stream) -> None:
-    window = stream.add(DisplayWindow, name="Destination")
-    stream.connect(
-        stream.remote_output(RUNTIME_LOADING_A_SOURCE_AT_ITS_OWN_ADDRESS, "NoSuchNode", "video"),
-        window.input("video"),
-    )
 
 
 def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
@@ -789,34 +770,14 @@ def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
     assert "`no_such_port`" in str(refused.value)
 
 
-def test_a_remote_source_into_a_local_input_loads_before_run(runtime: streamlib.Runtime):
-    """The link is applied now and resolves later, so a stream naming an absent runtime loads."""
-    runtime.load(compile_stream_to_graph(remote_camera_into_a_local_window))
-
-    assert the_runtimes_graph_holds_a_processor(runtime)
-
-
-def test_a_remote_source_naming_this_runtime_and_a_node_it_lacks_is_refused_by_load():
-    """An address naming this runtime's own name is local, so it meets the local refusal."""
-    runtime = streamlib.Runtime(runtime_name=RUNTIME_LOADING_A_SOURCE_AT_ITS_OWN_ADDRESS)
-    try:
-        with pytest.raises(RuntimeError, match="`nosuchnode`"):
-            runtime.load(
-                compile_stream_to_graph(
-                    source_at_its_own_address_naming_an_absent_node_into_a_window
-                )
-            )
-    finally:
-        runtime.shutdown()
-
-
-def test_a_link_whose_target_names_another_runtime_is_refused_by_load_naming_it(
-    runtime: streamlib.Runtime,
+@pytest.mark.parametrize("end", ["source", "target"])
+def test_a_link_end_naming_a_runtime_is_refused_by_load_naming_it(
+    runtime: streamlib.Runtime, end: str
 ):
-    """A link's input is on the runtime that loads it, so a target naming another
-    runtime has nowhere to be applied."""
+    """Both ends of a link are on the runtime that loads it, so an end naming a
+    runtime is refused rather than read as a local end with its runtime dropped."""
     graph = pattern_to_window_graph()
-    graph["links"][0]["target"]["runtime_name"] = "studio-display-9f3c"
+    graph["links"][0][end]["runtime_name"] = "studio-display-9f3c"
 
     with pytest.raises(RuntimeError, match="studio-display-9f3c"):
         runtime.load(graph)

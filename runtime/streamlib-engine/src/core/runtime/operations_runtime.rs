@@ -618,8 +618,7 @@ impl RuntimeOperations for Runner {
                     graph,
                     self.this_runtimes_name_on_the_mesh(),
                     &channel,
-                )
-                .ok_or_else(|| Error::TapChannelNotFound(channel.clone()))?;
+                )?;
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
                     graph,
                     &self.iceoryx2_node,

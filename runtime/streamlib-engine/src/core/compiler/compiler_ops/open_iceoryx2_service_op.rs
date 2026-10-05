@@ -545,38 +545,46 @@ fn subscriber_ring_depth_of_input_port(
 }
 
 /// Resolve the address a caller names a port by — `<runtime name>/<node>/<port>`
-/// — to the source a link carries from: a port on this runtime when the address
-/// names `this_runtimes_name`, and a port on another runtime otherwise.
+/// — to the port on this runtime a link carries from.
 ///
-/// A channel's iceoryx2 data service only exists once a `connect()` has wired
-/// its source, so an address no link carries from is genuinely untappable —
-/// the caller maps `None` to [`Error::TapChannelNotFound`], as it does an
-/// address that does not parse.
-///
-/// [`Error::TapChannelNotFound`]: crate::core::error::Error::TapChannelNotFound
+/// An address naming another runtime is refused naming that runtime: a channel
+/// is tapped on the runtime that publishes it. A channel's iceoryx2 data service
+/// only exists once a `connect()` has wired its source, so an address no link
+/// carries from is genuinely untappable and answers
+/// [`Error::TapChannelNotFound`], as does an address that does not parse.
 pub(crate) fn find_the_source_a_caller_named(
     graph: &Graph,
     this_runtimes_name: &str,
     port_address: &str,
-) -> Option<OutputLinkPortRef> {
-    let address = crate::core::graph::MeshPortAddress::parse(port_address).ok()?;
-    let source = if address.names_the_runtime(this_runtimes_name) {
-        let processor_id = graph
-            .traversal()
-            .v_with_node_name(address.processor_display_name())
-            .first()?
-            .id
-            .clone();
-        OutputLinkPortRef::new(processor_id, address.port_name())
-    } else {
-        OutputLinkPortRef::on_another_runtime(address)
-    };
-    graph
+) -> Result<OutputLinkPortRef> {
+    let not_found = || Error::TapChannelNotFound(port_address.to_string());
+    let address =
+        crate::core::graph::MeshPortAddress::parse(port_address).map_err(|_| not_found())?;
+    if !address.names_the_runtime(this_runtimes_name) {
+        return Err(Error::InvalidPortAddress(format!(
+            "'{port_address}' names the runtime `{}`, and a tap reads a channel on this \
+             runtime, `{this_runtimes_name}`",
+            address.runtime_name()
+        )));
+    }
+    let processor_id = graph
+        .traversal()
+        .v_with_node_name(address.processor_display_name())
+        .first()
+        .ok_or_else(not_found)?
+        .id
+        .clone();
+    let source = OutputLinkPortRef::new(processor_id, address.port_name());
+    if graph
         .traversal()
         .e(())
         .iter()
         .any(|link| *link.from_port() == source)
-        .then_some(source)
+    {
+        Ok(source)
+    } else {
+        Err(not_found())
+    }
 }
 
 /// The `max_notifiers` every destination-keyed notify service is created with:
@@ -4075,7 +4083,7 @@ mod tests {
     /// A port on this runtime is named by `<this runtime>/<node>/<port>` and
     /// resolves to the exact source a link carries from; its iceoryx2 channel
     /// name, an address naming no node, and a port no link carries from all
-    /// resolve to `None` (the tap op maps that to `TapChannelNotFound`).
+    /// answer `TapChannelNotFound`.
     #[test]
     fn a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel() {
         let mut graph = Graph::new();
@@ -4115,28 +4123,37 @@ mod tests {
             format!("bench-cam-a1b2/{source_node_name}/out2"),
         ] {
             assert!(
-                find_the_source_a_caller_named(&graph, "bench-cam-a1b2", &unresolvable).is_none(),
+                matches!(
+                    find_the_source_a_caller_named(&graph, "bench-cam-a1b2", &unresolvable),
+                    Err(Error::TapChannelNotFound(_))
+                ),
                 "{unresolvable:?} must not resolve to any source port",
             );
         }
     }
 
-    /// A port on another runtime is named by its mesh address.
+    /// A tap reads a channel on this runtime, so an address naming another
+    /// runtime is refused naming that runtime rather than reported as a channel
+    /// nobody publishes.
     #[test]
-    fn a_port_on_another_runtime_is_named_by_its_address_and_not_by_its_channel() {
-        let mut graph = Graph::new();
-        let dest_id = add_mock_input_only(&mut graph);
-        let address =
-            crate::core::graph::MeshPortAddress::new("bench-cam-a1b2", "camera-source-2", "video")
-                .expect("a legal address");
-        graph
-            .traversal_mut()
-            .add_link_from_another_runtime(address.clone(), InputLinkPortRef::new(&dest_id, "in1"));
+    fn a_tap_naming_another_runtime_is_refused_naming_that_runtime() {
+        let graph = Graph::new();
 
-        let resolved =
-            find_the_source_a_caller_named(&graph, "studio-display", &address.to_string())
-                .expect("a remote link's address resolves");
-        assert_eq!(resolved.mesh_port_address(), Some(&address));
+        let refused = find_the_source_a_caller_named(
+            &graph,
+            "studio-display",
+            "bench-cam-a1b2/camera-source/video",
+        )
+        .expect_err("a channel on another runtime is nothing this runtime taps");
+
+        assert!(
+            matches!(refused, Error::InvalidPortAddress(_)),
+            "refused as an address this runtime cannot tap, got {refused:?}"
+        );
+        assert!(
+            refused.to_string().contains("`bench-cam-a1b2`"),
+            "the refusal names the runtime: {refused}"
+        );
     }
 
     /// The destination-keyed notify service is created for the fixed inbound

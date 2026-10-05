@@ -662,7 +662,7 @@ jobs:
             core::runtime::mesh \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_whose_source_is_on_another_runtime \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_envelope_hands_a_helper_its_channel_as_the_name_it_knows_the_link_by \
-            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_another_runtime_is_named_by_its_address_and_not_by_its_channel \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel \
             core::graph_snapshot \
             core::graph::graph_tests::node_names \
