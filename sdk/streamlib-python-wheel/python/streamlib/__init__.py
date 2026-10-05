@@ -46,9 +46,6 @@ from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReferenc
 from ._engine import ProcessorOwnedWindow as ProcessorOwnedWindow
 from ._engine import ProcessorOwnedWindowEvents as ProcessorOwnedWindowEvents
 from ._engine import (
-    RemoteProcessorInputPortReference as RemoteProcessorInputPortReference,
-)
-from ._engine import (
     RemoteProcessorOutputPortReference as RemoteProcessorOutputPortReference,
 )
 from ._engine import CameraSource as CameraSource
@@ -87,9 +84,6 @@ from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
 )
 from ._stream_graph_builder import NodeReference as NodeReference
-from ._stream_graph_builder import (
-    RemoteNodeInputPortReference as RemoteNodeInputPortReference,
-)
 from ._stream_graph_builder import (
     RemoteNodeOutputPortReference as RemoteNodeOutputPortReference,
 )
@@ -178,9 +172,7 @@ __all__ = [
     "ProcessorOutputTextureRing",
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
-    "RemoteNodeInputPortReference",
     "RemoteNodeOutputPortReference",
-    "RemoteProcessorInputPortReference",
     "RemoteProcessorOutputPortReference",
     "Runtime",
     "RuntimeContextFullAccess",

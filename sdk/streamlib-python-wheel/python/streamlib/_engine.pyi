@@ -48,7 +48,6 @@ __all__ = [
     "ProcessorOwnedWindowEvents",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
-    "RemoteProcessorInputPortReference",
     "RemoteProcessorOutputPortReference",
     "CameraSource",
     "CapabilityExtensionHost",
@@ -650,34 +649,17 @@ class Runtime:
         resolved by node name when the link is applied.
         """
 
-    def remote_processor_input(
-        self, runtime_name: str, display_name: str, port_name: str
-    ) -> RemoteProcessorInputPortReference:
-        """Name an input port on another runtime, to push into it over the mesh.
-
-        Addressed the way `remote_processor_output` addresses an output, and
-        refused here the same way. A `runtime_name` equal to this runtime's own
-        is a local reference, resolved by node name when the link is applied.
-        """
-
     def connect(
         self,
         source: ProcessorOutputPortReference | RemoteProcessorOutputPortReference,
-        destination: ProcessorInputPortReference | RemoteProcessorInputPortReference,
+        destination: ProcessorInputPortReference,
     ) -> None:
-        """Link one processor's output port to another's input port.
+        """Link one processor's output port to another's input port on this runtime.
 
-        Either end may name a port on another runtime; the engine chooses the
+        The source may name a port on another runtime; the engine chooses the
         transport from the link's ends and no processor can tell which. A link
         from another runtime reads `awaiting_remote` in this runtime's `graph`
         until that runtime is on the mesh and offers the port.
-
-        A destination on another runtime is that runtime's to apply, because
-        the runtime owning an input applies every link into it. This call asks
-        it and returns without waiting, so the link appears in *that* runtime's
-        `graph` — and until it does, the request appears in this one's under
-        `mesh.link_requests_awaiting_runtime`, with a `reason` saying whether
-        that runtime is absent, silent, or refused it by name.
         """
 
     def load(self, graph: Mapping[str, Any], *, name: str | None = None) -> None:
@@ -848,16 +830,6 @@ class RemoteProcessorOutputPortReference:
     """The producing end of a link, on another runtime.
 
     Minted by `Runtime.remote_processor_output`, which is where its address is
-    checked; there is nothing to read off it that `repr` does not show.
-    """
-
-    def __repr__(self) -> str: ...
-
-@final
-class RemoteProcessorInputPortReference:
-    """The consuming end of a link, on another runtime.
-
-    Minted by `Runtime.remote_processor_input`, which is where its address is
     checked; there is nothing to read off it that `repr` does not show.
     """
 

@@ -114,9 +114,6 @@ OWN_PROCESS_DEADLINE_SECONDS = 120.0
 EVERY_PROCESSOR_THE_READINESS_WAIT_LISTS_AFTER = "every processor: "
 
 RUNTIME_LOADING_A_SOURCE_AT_ITS_OWN_ADDRESS = "runtime-load-own-address"
-RUNTIME_PUSHING_INTO_ANOTHER_RUNTIME = "runtime-load-pushing"
-RUNTIME_REFUSING_A_DESTINATION_AT_ITS_OWN_ADDRESS = "runtime-load-destination-refused"
-RUNTIME_WIRING_A_DESTINATION_AT_ITS_OWN_ADDRESS = "runtime-load-destination-wired"
 
 # A runtime name another live runtime on the mesh holds is refused, so the pid
 # keeps this one apart from any other run on the rig.
@@ -783,38 +780,6 @@ def source_at_its_own_address_naming_an_absent_node_into_a_window(stream: Stream
     )
 
 
-@stream
-def local_pattern_pushed_into_a_remote_window(stream: Stream) -> None:
-    pattern = stream.add(TestPatternSource)
-    stream.connect(
-        pattern.output("video"),
-        stream.remote_input("studio-display-9f3c", "DisplayWindow", "video"),
-    )
-
-
-@stream
-def pattern_into_an_absent_node_at_its_own_address(stream: Stream) -> None:
-    pattern = stream.add(TestPatternSource, name="Source")
-    stream.connect(
-        pattern.output("video"),
-        stream.remote_input(
-            RUNTIME_REFUSING_A_DESTINATION_AT_ITS_OWN_ADDRESS, "NoSuchNode", "video"
-        ),
-    )
-
-
-@stream
-def pattern_into_a_held_window_at_its_own_address(stream: Stream) -> None:
-    pattern = stream.add(TestPatternSource, name="Source")
-    stream.add(DisplayWindow, name="Destination")
-    stream.connect(
-        pattern.output("video"),
-        stream.remote_input(
-            RUNTIME_WIRING_A_DESTINATION_AT_ITS_OWN_ADDRESS, "Destination", "video"
-        ),
-    )
-
-
 def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
     runtime: streamlib.Runtime,
 ):
@@ -845,39 +810,16 @@ def test_a_remote_source_naming_this_runtime_and_a_node_it_lacks_is_refused_by_l
         runtime.shutdown()
 
 
-def test_a_link_pushed_into_another_runtime_loads_without_waiting_on_it():
-    """The runtime owning an input applies every link into it, so this one only asks."""
-    runtime = streamlib.Runtime(runtime_name=RUNTIME_PUSHING_INTO_ANOTHER_RUNTIME)
-    try:
-        runtime.load(compile_stream_to_graph(local_pattern_pushed_into_a_remote_window))
+def test_a_link_whose_target_names_another_runtime_is_refused_by_load_naming_it(
+    runtime: streamlib.Runtime,
+):
+    """A link's input is on the runtime that loads it, so a target naming another
+    runtime has nowhere to be applied."""
+    graph = pattern_to_window_graph()
+    graph["links"][0]["target"]["runtime_name"] = "studio-display-9f3c"
 
-        assert the_runtimes_graph_holds_a_processor(runtime)
-    finally:
-        runtime.shutdown()
-
-
-def test_a_destination_naming_this_runtime_takes_the_local_path_and_its_refusals():
-    """Asking another runtime never refuses on a node name this one cannot see, so the
-    refusal is the proof the address took the local path. A refused load spends its
-    Runtime's one load, so the node the stream holds wires on a second Runtime."""
-    refusing_runtime = streamlib.Runtime(
-        runtime_name=RUNTIME_REFUSING_A_DESTINATION_AT_ITS_OWN_ADDRESS
-    )
-    try:
-        with pytest.raises(RuntimeError, match="`nosuchnode`"):
-            refusing_runtime.load(
-                compile_stream_to_graph(pattern_into_an_absent_node_at_its_own_address)
-            )
-    finally:
-        refusing_runtime.shutdown()
-
-    wiring_runtime = streamlib.Runtime(runtime_name=RUNTIME_WIRING_A_DESTINATION_AT_ITS_OWN_ADDRESS)
-    try:
-        wiring_runtime.load(compile_stream_to_graph(pattern_into_a_held_window_at_its_own_address))
-
-        assert len(processor_ids_a_never_run_runtimes_readiness_wait_lists(wiring_runtime)) == 2
-    finally:
-        wiring_runtime.shutdown()
+    with pytest.raises(RuntimeError, match="studio-display-9f3c"):
+        runtime.load(graph)
 
 
 # ---- run() after a refused load ---------------------------------------------

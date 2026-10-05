@@ -28,7 +28,6 @@ __all__ = [
     "NodeInputPortReference",
     "NodeOutputPortReference",
     "NodeReference",
-    "RemoteNodeInputPortReference",
     "RemoteNodeOutputPortReference",
     "Stream",
     "compile_stream_to_graph",
@@ -220,20 +219,6 @@ class RemoteNodeOutputPortReference:
 
 
 @dataclass(frozen=True, slots=True)
-class RemoteNodeInputPortReference:
-    """An input port of a node on another runtime, addressed over the mesh; names cast."""
-
-    runtime_name: str
-    node_name: str
-    port_name: str
-
-    def __post_init__(self) -> None:
-        _refuse_a_runtime_name_the_mesh_cannot_carry(self.runtime_name)
-        object.__setattr__(self, "node_name", _cast_name(self.node_name, "node name"))
-        object.__setattr__(self, "port_name", _cast_name(self.port_name, "port name"))
-
-
-@dataclass(frozen=True, slots=True)
 class NodeReference:
     """A node `Stream.add` recorded, under the cast name links and exposures name it by."""
 
@@ -309,7 +294,7 @@ class Stream:
     def connect(
         self,
         source: NodeOutputPortReference | RemoteNodeOutputPortReference,
-        destination: NodeInputPortReference | RemoteNodeInputPortReference,
+        destination: NodeInputPortReference,
     ) -> None:
         """Record a link from `source` to `destination`."""
         if not isinstance(
@@ -320,13 +305,10 @@ class Stream:
                 f"a node this stream added, or `stream.remote_output(runtime_name, "
                 f"node_name, port_name)` for one on another runtime. Got {source!r}."
             )
-        if not isinstance(
-            destination, (NodeInputPortReference, RemoteNodeInputPortReference)
-        ):
+        if not isinstance(destination, NodeInputPortReference):
             raise TypeError(
-                f"connect's destination must name an input port: `node.input(port_name)` "
-                f"for a node this stream added, or `stream.remote_input(runtime_name, "
-                f"node_name, port_name)` for one on another runtime. Got {destination!r}."
+                f"connect's destination must name an input port of a node this stream "
+                f"added: `node.input(port_name)`. Got {destination!r}."
             )
         self._recorded_links.append(
             {
@@ -356,12 +338,6 @@ class Stream:
     ) -> RemoteNodeOutputPortReference:
         """Name an output port on another runtime, to connect into this stream."""
         return RemoteNodeOutputPortReference(runtime_name, node_name, port_name)
-
-    def remote_input(
-        self, runtime_name: str, node_name: str, port_name: str
-    ) -> RemoteNodeInputPortReference:
-        """Name an input port on another runtime, to connect this stream into."""
-        return RemoteNodeInputPortReference(runtime_name, node_name, port_name)
 
     def _typed_name_unless_taken(self, typed_name: str) -> str:
         cast = _cast_name(typed_name, "node name")
@@ -401,12 +377,9 @@ class Stream:
         self,
         end: NodeOutputPortReference
         | NodeInputPortReference
-        | RemoteNodeOutputPortReference
-        | RemoteNodeInputPortReference,
+        | RemoteNodeOutputPortReference,
     ) -> dict[str, str]:
-        if isinstance(
-            end, (RemoteNodeOutputPortReference, RemoteNodeInputPortReference)
-        ):
+        if isinstance(end, RemoteNodeOutputPortReference):
             return {
                 "runtime_name": end.runtime_name,
                 "node": end.node_name,

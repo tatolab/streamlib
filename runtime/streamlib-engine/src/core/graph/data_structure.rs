@@ -182,13 +182,7 @@ impl Graph {
                 .edge_indices()
                 .map(|idx| &self.digraph[idx])
                 .chain(self.links_from_another_runtime.every_link())
-                .map(|link| {
-                    LinkOutput::of_a_link_on_the_runtime_named(
-                        link,
-                        &runtime_mesh.runtime_name,
-                        &node_names,
-                    )
-                })
+                .map(|link| LinkOutput::of_a_link(link, &node_names))
                 .collect(),
             exposed: self
                 .digraph

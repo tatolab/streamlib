@@ -84,17 +84,7 @@ pub fn open_iceoryx2_service(
     // local port's. Everything below reads the source through `from_port`, so
     // the two cases differ only where they have to.
     let source_on_this_runtime = from_port.processor_id_on_this_runtime().cloned();
-    // The destination is always here: the runtime that owns an input is the one
-    // that applies the link, so a link naming another runtime's input never
-    // reaches the graph — `connect` refuses it and a link request is how one is
-    // asked for. Said by name rather than assumed, because a wiring op is where
-    // a broken invariant would otherwise surface as a channel nobody reads.
-    let Some(dest_proc_id) = to_port.processor_id_on_this_runtime().cloned() else {
-        return Err(Error::InvalidLink(format!(
-            "link '{link_id}' carries into {to_port}, which is a port on another runtime; only \
-             the runtime that owns an input wires a link into it"
-        )));
-    };
+    let dest_proc_id = to_port.processor_id().clone();
     let dest_port = to_port.port_name().to_string();
 
     let source_link_wiring = source_on_this_runtime
@@ -359,18 +349,17 @@ pub fn close_iceoryx2_service(
     mesh_link_ingress_table.forget_a_link(link_id);
 
     let Some((source_on_this_runtime, source_port, dest_proc_id, dest_port)) =
-        graph.traversal_mut().e(link_id).first().and_then(|link| {
-            Some((
+        graph.traversal_mut().e(link_id).first().map(|link| {
+            (
                 link.from_port().processor_id_on_this_runtime().cloned(),
                 link.from_port().port_name().to_string(),
-                link.to_port().processor_id_on_this_runtime().cloned()?,
+                link.to_port().processor_id().clone(),
                 link.to_port().port_name().to_string(),
-            ))
+            )
         })
     else {
         tracing::warn!(
-            "close_iceoryx2_service: link '{}' is not in the graph, or carries into a port on \
-             another runtime this runtime never wired; nothing to reclaim",
+            "close_iceoryx2_service: link '{}' is not in the graph; nothing to reclaim",
             link_id
         );
         return Ok(());
@@ -608,9 +597,7 @@ fn channel_service_creation_depth(
         .filter(|link| link_still_counts_toward_its_ports(link))
     {
         let destination = link.to_port();
-        let Some(destination_processor_id) = destination.processor_id_on_this_runtime() else {
-            continue;
-        };
+        let destination_processor_id = destination.processor_id();
         if audio_windowing_declared_by_input_port_of(
             graph,
             destination_processor_id,
@@ -3285,9 +3272,8 @@ mod tests {
             .e(link_id)
             .first()
             .expect("the link must be in the graph");
-        let rendered = crate::core::json_schema::LinkOutput::of_a_link_on_the_runtime_named(
+        let rendered = crate::core::json_schema::LinkOutput::of_a_link(
             link,
-            "a-test-runtime",
             &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
         );
         (rendered.state, rendered.error_reason)

@@ -28,7 +28,6 @@ from streamlib import (
     NodeInputPortReference,
     NodeOutputPortReference,
     NodeReference,
-    RemoteNodeInputPortReference,
     RemoteNodeOutputPortReference,
     Stream,
     compile_stream_to_graph,
@@ -142,10 +141,6 @@ def camera_rig(stream: Stream) -> None:
         remote_inverter.input("video_from_upstream"),
     )
     stream.connect(remote_inverter.output("video_to_downstream"), window.input("Video"))
-    stream.connect(
-        inverter.output("video_to_downstream"),
-        stream.remote_input("monitor-wall", "Wall Display", "Video"),
-    )
     stream.expose(inverter.output("video_to_downstream"))
     stream.expose(remote_inverter.output("VIDEO_TO_DOWNSTREAM"))
 
@@ -819,7 +814,6 @@ def test_connect_refuses_an_output_as_its_destination_naming_the_fix() -> None:
     message = str(refusal.value)
     assert "connect's destination must name an input port" in message
     assert "`node.input(port_name)`" in message
-    assert "`stream.remote_input(runtime_name, node_name, port_name)`" in message
 
 
 def test_connect_refuses_a_node_reference_where_a_port_belongs() -> None:
@@ -917,18 +911,15 @@ def test_a_hand_built_reference_is_cast_like_a_minted_one() -> None:
     assert RemoteNodeOutputPortReference(
         "studio", "Front Camera", "Video"
     ) == builder.remote_output("studio", "front-camera", "video")
-    assert RemoteNodeInputPortReference(
-        "Studio Mac", "Wall Display", "Video In"
-    ) == RemoteNodeInputPortReference("Studio Mac", "wall-display", "video-in")
 
 
 @pytest.mark.parametrize(
     "build_the_reference",
     [
         lambda: RemoteNodeOutputPortReference("studio/left", "camera", "video"),
-        lambda: RemoteNodeInputPortReference("@studio", "camera", "video"),
+        lambda: RemoteNodeOutputPortReference("@studio", "camera", "video"),
     ],
-    ids=["output", "input"],
+    ids=["slash", "at-sign"],
 )
 def test_a_hand_built_remote_reference_refuses_a_runtime_name_the_mesh_cannot_carry(
     build_the_reference: Any,
@@ -943,7 +934,7 @@ def test_a_hand_built_remote_reference_refuses_a_runtime_name_the_mesh_cannot_ca
         lambda: NodeReference("✨"),
         lambda: NodeOutputPortReference("frameinverter", ".."),
         lambda: NodeInputPortReference("---", "video_from_upstream"),
-        lambda: RemoteNodeInputPortReference("studio", "カメラ", "video"),
+        lambda: RemoteNodeOutputPortReference("studio", "カメラ", "video"),
     ],
     ids=["node", "output-port", "input-node", "remote-node"],
 )
@@ -1012,9 +1003,6 @@ def test_a_remote_reference_casts_the_node_and_port_and_keeps_the_runtime_name()
     assert builder.remote_output(
         "Studio Mac", "Front Camera", "Video"
     ) == RemoteNodeOutputPortReference("Studio Mac", "front-camera", "video")
-    assert builder.remote_input(
-        "Studio Mac", "Wall Display", "Video In"
-    ) == RemoteNodeInputPortReference("Studio Mac", "wall-display", "video-in")
 
 
 @pytest.mark.parametrize(
@@ -1034,14 +1022,13 @@ def test_a_runtime_name_the_mesh_cannot_carry_is_refused_at_the_mint(
 ) -> None:
     builder = Stream("rig")
 
-    for mint in (builder.remote_output, builder.remote_input):
-        with pytest.raises(ValueError) as refusal:
-            mint(runtime_name, "camera", "video")
+    with pytest.raises(ValueError) as refusal:
+        builder.remote_output(runtime_name, "camera", "video")
 
-        message = str(refusal.value)
-        assert f"the runtime name {runtime_name!r}" in message
-        assert reason in message
-        assert "`streamlib nodes`" in message
+    message = str(refusal.value)
+    assert f"the runtime name {runtime_name!r}" in message
+    assert reason in message
+    assert "`streamlib nodes`" in message
 
 
 def test_a_runtime_name_that_is_not_a_string_is_refused_naming_its_type_and_the_fix() -> (
@@ -1049,14 +1036,13 @@ def test_a_runtime_name_that_is_not_a_string_is_refused_naming_its_type_and_the_
 ):
     builder = Stream("rig")
 
-    for mint in (builder.remote_output, builder.remote_input):
-        with pytest.raises(TypeError) as refusal:
-            mint(numpy.int64(3), "camera", "video")  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError) as refusal:
+        builder.remote_output(numpy.int64(3), "camera", "video")  # pyright: ignore[reportArgumentType]
 
-        assert str(refusal.value) == (
-            "a runtime name is a str; got np.int64(3), of type `numpy.int64` — pass the "
-            "name that runtime runs under as a str; `streamlib nodes` lists them"
-        )
+    assert str(refusal.value) == (
+        "a runtime name is a str; got np.int64(3), of type `numpy.int64` — pass the "
+        "name that runtime runs under as a str; `streamlib nodes` lists them"
+    )
 
 
 def test_a_remote_node_name_casting_to_nothing_is_refused_naming_it() -> None:
@@ -1109,14 +1095,6 @@ def test_a_stream_compiles_to_its_graph() -> None:
             {
                 "source": {"node": "frameinverter-2", "port": "video_to_downstream"},
                 "target": {"node": "displaywindow", "port": "video"},
-            },
-            {
-                "source": {"node": "frameinverter", "port": "video_to_downstream"},
-                "target": {
-                    "runtime_name": "monitor-wall",
-                    "node": "wall-display",
-                    "port": "video",
-                },
             },
         ],
         "exposed": [
@@ -1398,7 +1376,6 @@ def test_the_builder_is_on_the_public_surface_and_the_cli_helper_is_not() -> Non
         "NodeInputPortReference",
         "NodeOutputPortReference",
         "NodeReference",
-        "RemoteNodeInputPortReference",
         "RemoteNodeOutputPortReference",
         "Stream",
         "compile_stream_to_graph",

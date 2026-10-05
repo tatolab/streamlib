@@ -625,8 +625,7 @@ fn the_mesh_key_carries_exactly_what_the_plan_states() {
             "runtime_name",
             "session",
             "peers",
-            "egress_ports",
-            "link_requests_awaiting_runtime"
+            "egress_ports"
         ]
     );
     assert_eq!(mesh["mesh_name"], mesh_name);

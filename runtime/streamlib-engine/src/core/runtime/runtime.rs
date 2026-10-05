@@ -30,7 +30,6 @@ use crate::core::json_schema::LoadedCapabilityExtensionOutput;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
-use crate::core::runtime::LinkRequestsAppliedIntoThisRuntimesGraph;
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
 use crate::core::runtime::OutputPortsInThisRuntimesGraph;
 use crate::core::runtime::mesh::{
@@ -437,16 +436,6 @@ impl Runner {
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
         });
-
-        // Last, because it is the one thing that needs the runtime itself: a
-        // peer's link request is applied through this runtime's own `connect`.
-        // The queryable that answers those is already declared and refuses
-        // anything arriving before now by saying the runtime is still starting.
-        runtime
-            .runtime_mesh
-            .record_how_this_runtime_applies_link_requests(
-                LinkRequestsAppliedIntoThisRuntimesGraph::of(&runtime),
-            );
 
         Ok(runtime)
     }
@@ -1325,9 +1314,9 @@ impl Runner {
     /// stream's name recorded on the graph.
     ///
     /// A node name already in the graph is refused rather than suffixed — a
-    /// loaded graph's names are already resolved. A link whose input is on
-    /// another runtime is asked of that runtime, as `connect` asks it. Every
-    /// `type` must already be registered.
+    /// loaded graph's names are already resolved. A link whose input names
+    /// another runtime is refused by name. Every `type` must already be
+    /// registered.
     pub fn load_graph_snapshot(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
@@ -1368,23 +1357,17 @@ impl Runner {
                     OutputLinkPortRef::new(processor_id_of(link.source.node())?, link.source.port())
                 }
             };
-            match link.target.mesh_port_address().transpose()? {
-                Some(address) if address.names_the_runtime(self.runtime_mesh.runtime_name()) => {
-                    self.connect(from, InputLinkPortRef::on_another_runtime(address))?;
-                }
-                Some(address) => {
-                    RuntimeOperations::request_link_on_remote_input_runtime(self, from, address)?;
-                }
+            let to = match link.target.mesh_port_address().transpose()? {
+                Some(address) => InputLinkPortRef::new(
+                    RuntimeOperations::the_node_named(self, address.processor_display_name())?
+                        .processor_id,
+                    address.port_name(),
+                ),
                 None => {
-                    self.connect(
-                        from,
-                        InputLinkPortRef::new(
-                            processor_id_of(link.target.node())?,
-                            link.target.port(),
-                        ),
-                    )?;
+                    InputLinkPortRef::new(processor_id_of(link.target.node())?, link.target.port())
                 }
-            }
+            };
+            self.connect(from, to)?;
         }
 
         let mut exposed_ports_by_processor_id: HashMap<ProcessorUniqueId, Vec<String>> =
@@ -1427,6 +1410,15 @@ impl Runner {
                 live_graph.the_requested_node_name_unless_taken(&node.name)?;
             }
             for link in &graph.links {
+                if let Some(address) = link.target.mesh_port_address().transpose()?
+                    && !address.names_the_runtime(this_runtimes_name)
+                {
+                    return Err(Error::InvalidLink(format!(
+                        "the link into {address} names the runtime `{}`, and a link's input is \
+                         on the runtime that loads it",
+                        address.runtime_name()
+                    )));
+                }
                 for end in [&link.source, &link.target] {
                     let Some(address) = end.mesh_port_address().transpose()? else {
                         continue;

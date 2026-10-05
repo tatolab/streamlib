@@ -306,6 +306,30 @@ fn an_end_naming_this_runtime_is_a_local_reference() {
     );
 }
 
+/// A link whose input is on another runtime has nowhere to be applied, so the
+/// load is refused naming that runtime before any node is added.
+#[test]
+#[serial]
+fn a_link_whose_target_names_another_runtime_is_refused_by_name() {
+    let camera = register_test_type("OtherRuntimeTargetCamera", "frames_in", "video");
+
+    let runtime = Runner::new().unwrap();
+    let refusal = runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({
+            "nodes": [{"name": "front", "type": camera.as_str()}],
+            "links": [{"source": {"node": "front", "port": "video"},
+                       "target": {"runtime_name": "studio-display-9f3c", "node": "back", "port": "frames_in"}}]
+        })))
+        .expect_err("a link's input is on the runtime that loads it")
+        .to_string();
+
+    assert!(refusal.contains("studio-display-9f3c"), "{refusal}");
+    assert_eq!(
+        the_graph_document_of(&runtime)["nodes"],
+        serde_json::json!([])
+    );
+}
+
 #[test]
 #[serial]
 fn an_exposure_named_twice_is_refused() {

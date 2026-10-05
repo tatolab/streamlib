@@ -480,8 +480,8 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                 // it actually sends: two priorities are two QUIC streams, which
                 // would reorder one port's sequence and read downstream as
                 // gaps. `DataLow` for a port whose frames carry pixels, `Data`
-                // otherwise, so a 1080p frame never delays an audio block or a
-                // link request. Declared here rather than above the skip, so a
+                // otherwise, so a 1080p frame never delays an audio block.
+                // Declared here rather than above the skip, so a
                 // port whose frames never cross does not take the raw-frame
                 // priority for every ordinary bag it does send.
                 let publisher = match publisher.as_ref() {
@@ -559,9 +559,8 @@ fn declare_the_publisher<'a>(
     data_key: &str,
     its_first_bag_named_a_surface: bool,
 ) -> zenoh::Result<zenoh::pubsub::Publisher<'a>> {
-    // Raw frames ride below every other bag, and requests, queries and tokens
-    // ride above both, so a 1080p frame never delays a link request or an audio
-    // block.
+    // Raw frames ride below every other bag, and queries and tokens ride above
+    // both, so a 1080p frame never delays an audio block.
     let priority = if its_first_bag_named_a_surface {
         Priority::DataLow
     } else {

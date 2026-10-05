@@ -429,10 +429,8 @@ mod edge_query_ops {
         );
         assert_eq!(link.from_port().port_name(), "out1");
         assert_eq!(
-            link.to_port()
-                .processor_id_on_this_runtime()
-                .map(|id| id.as_str()),
-            Some(downstream_id.as_str())
+            link.to_port().processor_id().as_str(),
+            downstream_id.as_str()
         );
         assert_eq!(link.to_port().port_name(), "in1");
     }
@@ -543,11 +541,7 @@ mod filter_ops {
         let to_downstream1: Vec<_> = graph
             .traversal()
             .e(())
-            .filter(|link| {
-                link.to_port()
-                    .processor_id_on_this_runtime()
-                    .is_some_and(|id| id.as_str() == downstream1_id)
-            })
+            .filter(|link| link.to_port().processor_id().as_str() == downstream1_id)
             .ids();
 
         assert_eq!(to_downstream1.len(), 1);

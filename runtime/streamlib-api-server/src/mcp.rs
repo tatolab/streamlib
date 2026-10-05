@@ -51,9 +51,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::graph::{
-    InputLinkPortRef, LinkRequestUniqueId, LinkUniqueId, MeshPortAddress, OutputLinkPortRef,
-};
+use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, MeshPortAddress, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::{ExchangedPublishedSurfaceFramePngImage, RuntimeOperations};
@@ -258,7 +256,7 @@ fn initialize_result() -> Value {
             "prompts": { "listChanged": false },
         },
         "serverInfo": { "name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION },
-        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the app can import — a file beside the app, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A link whose source is a port on another runtime reads `awaiting_remote` until that runtime is on the mesh, offers the port and is sending it, with `awaiting_remote_reason` saying what it is still waiting on; unlike `error` it is not final, and the link wires itself the moment what it names turns up — except where that reason says the source's own attempt to send the port stopped and names why, which also says plainly that nothing is retrying it. Every link says which runtime asked for it in `created_by_runtime_name`, and which machine's monotonic clock its bags were stamped on in `stamp_clock_identity`: a stamp is only comparable against a stamp from a link naming the same machine, and a link from another runtime carries no `stamp_clock_identity` until its first bag lands, nor while its source runtime is away — so read it again rather than caching it. Either end of a `connect` may name a port on another runtime on the mesh, so this node can push its own output into another runtime's input, or wire two other runtimes together. A link whose input is on another runtime is that runtime's to apply, so `connect` returns a `link_request_id` rather than a `link_id`: read that runtime's own `graph` for the link, and this node's `mesh.link_requests_awaiting_runtime` while it has not answered — an entry there is `awaiting_runtime` while that runtime is absent, `unanswered` while it is not replying, or `refused` with that runtime's own words, and `disconnect` with the `link_request_id` cancels it. The resource `streamlib://node-catalog` lists every type `add_node` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
+        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the app can import — a file beside the app, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A link whose source is a port on another runtime reads `awaiting_remote` until that runtime is on the mesh, offers the port and is sending it, with `awaiting_remote_reason` saying what it is still waiting on; unlike `error` it is not final, and the link wires itself the moment what it names turns up — except where that reason says the source's own attempt to send the port stopped and names why, which also says plainly that nothing is retrying it. Every link says which machine's monotonic clock its bags were stamped on in `stamp_clock_identity`: a stamp is only comparable against a stamp from a link naming the same machine, and a link from another runtime carries no `stamp_clock_identity` until its first bag lands, nor while its source runtime is away — so read it again rather than caching it. The source of a `connect` may name a port on another runtime on the mesh; its input is always a port on this node. The resource `streamlib://node-catalog` lists every type `add_node` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
     })
 }
 
@@ -353,14 +351,13 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "connect",
-            "description": "Link an output port to an input port. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs` — with `<end>_runtime_name` beside them for a port on another runtime on the mesh, one of the runtime names `graph` lists under `mesh.peers`. A runtime name equal to this node's own names a port here. A link whose input is on this node is applied here and returns `link_id`. A link whose input is on another runtime is that runtime's to apply — this node asks it and returns `link_request_id` instead, because only the runtime owning an input wires a link into it; read that runtime's own `graph` for the link, and this node's `mesh.link_requests_awaiting_runtime` while it has not answered. Naming both ends on other runtimes wires two other runtimes together.",
+            "description": "Link an output port to an input port on this node, and answer the new link's `link_id`. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs` — with `from_runtime_name` beside the source for a port on another runtime on the mesh, one of the runtime names `graph` lists under `mesh.peers`. A runtime name equal to this node's own names a port here.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "from_runtime_name": { "type": "string", "description": "The source runtime's name on the mesh, for a port on another runtime. Omit it for a port on this node." },
                     "from_node": { "type": "string", "description": "The source node's name." },
                     "from_port": { "type": "string", "description": "The source's output port name." },
-                    "to_runtime_name": { "type": "string", "description": "The destination runtime's name on the mesh, for a port on another runtime. Omit it for a port on this node." },
                     "to_node": { "type": "string", "description": "The destination node's name." },
                     "to_port": { "type": "string", "description": "The destination's input port name." }
                 },
@@ -370,14 +367,13 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "disconnect",
-            "description": "Remove a link from a running graph by id, or cancel a link request this node has not had applied. Give `link_id` for a link on this node; give it with `input_runtime_name` for a link on another runtime, which this node asks that runtime to remove and answers with a `link_request_id`. Give `link_request_id` alone to cancel a request `graph` lists under `mesh.link_requests_awaiting_runtime`, which is never sent afterwards.",
+            "description": "Remove a link from a running graph by the id `graph` or `connect` reported.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "link_id": { "type": "string", "description": "A link id `graph` or `connect` reported." },
-                    "input_runtime_name": { "type": "string", "description": "The runtime holding that link, when it is not this one — the `input_runtime_name` that `connect` answered with, or the one on its entry under `mesh.link_requests_awaiting_runtime`. Not `created_by_runtime_name`, which names the runtime that *asked* for the link. A link another runtime holds appears in that runtime's `graph`, never this node's." },
-                    "link_request_id": { "type": "string", "description": "A link request to cancel, as `connect` returned it and `graph` lists it. Give this instead of `link_id`." }
+                    "link_id": { "type": "string", "description": "A link id `graph` or `connect` reported." }
                 },
+                "required": ["link_id"],
                 "additionalProperties": false
             },
         }),
@@ -653,10 +649,10 @@ async fn call_remove_node(runtime: &Arc<dyn RuntimeOperations>, arguments: Value
 }
 
 async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    // Unknown fields are refused rather than ignored: `to_runtime_nam` read
-    // past would leave the destination on this runtime, and this tool would
-    // wire a *local* link while the caller believed it had named another
-    // runtime's port.
+    // Unknown fields are refused rather than ignored: `from_runtime_nam` read
+    // past would leave the source on this runtime, and this tool would wire a
+    // *local* link while the caller believed it had named another runtime's
+    // port.
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct ConnectArguments {
@@ -664,8 +660,6 @@ async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) ->
         from_runtime_name: Option<String>,
         from_node: String,
         from_port: String,
-        #[serde(default)]
-        to_runtime_name: Option<String>,
         to_node: String,
         to_port: String,
     }
@@ -673,60 +667,32 @@ async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) ->
         Ok(arguments) => arguments,
         Err(e) => return tool_error(format!("connect arguments: {e}")),
     };
-    let this_runtimes_name = runtime.this_runtimes_name_on_the_mesh();
-    // A port on this runtime is addressed under this runtime's own name, which
-    // the engine resolves to the node by name — the same rule it applies to a
-    // caller that names this runtime outright.
-    let address_of = |runtime_name: Option<String>, node: String, port: String| {
-        MeshPortAddress::new(
-            runtime_name.unwrap_or_else(|| this_runtimes_name.to_string()),
-            node,
-            port,
-        )
-    };
-    let from = match address_of(
-        arguments.from_runtime_name,
+    // A source on this runtime is addressed under this runtime's own name,
+    // which the engine resolves to the node by name — the same rule it applies
+    // to a caller that names this runtime outright.
+    let from = match MeshPortAddress::new(
+        arguments
+            .from_runtime_name
+            .unwrap_or_else(|| runtime.this_runtimes_name_on_the_mesh().to_string()),
         arguments.from_node,
         arguments.from_port,
     ) {
         Ok(from) => OutputLinkPortRef::on_another_runtime(from),
         Err(refusal) => return tool_error(format!("connect arguments: {refusal}")),
     };
-    let to = match address_of(
-        arguments.to_runtime_name,
-        arguments.to_node,
-        arguments.to_port,
-    ) {
-        Ok(to) => to,
-        Err(refusal) => return tool_error(format!("connect arguments: {refusal}")),
+    let to = match runtime.the_node_named(&arguments.to_node) {
+        Ok(node) => InputLinkPortRef::new(node.processor_id, arguments.to_port),
+        Err(e) => return tool_error(format!("connect failed: {e}")),
     };
 
-    // The runtime that owns an input applies every link into it. A destination
-    // on another runtime is therefore a request this node sends, not a link it
-    // makes — and the caller is told which happened by which id comes back.
-    if to.names_the_runtime(this_runtimes_name) {
-        return match runtime
-            .connect_async(from, InputLinkPortRef::on_another_runtime(to))
-            .await
-        {
-            Ok(link_id) => {
-                let how_the_graph_reads_it = how_the_graph_reads_one_link(runtime, &link_id).await;
-                tool_ok(json!({
-                    "link_id": link_id.as_str(),
-                    "input_runtime_name": this_runtimes_name,
-                    "state": how_the_graph_reads_it.state,
-                }))
-            }
-            Err(e) => tool_error(format!("connect failed: {e}")),
-        };
-    }
-    let input_runtime_name = to.runtime_name().to_string();
-    match runtime.request_link_on_remote_input_runtime(from, to) {
-        Ok(link_request_id) => tool_ok(json!({
-            "link_request_id": link_request_id.as_str(),
-            "input_runtime_name": input_runtime_name,
-            "state": "awaiting_runtime",
-        })),
+    match runtime.connect_async(from, to).await {
+        Ok(link_id) => {
+            let how_the_graph_reads_it = how_the_graph_reads_one_link(runtime, &link_id).await;
+            tool_ok(json!({
+                "link_id": link_id.as_str(),
+                "state": how_the_graph_reads_it.state,
+            }))
+        }
         Err(e) => tool_error(format!("connect failed: {e}")),
     }
 }
@@ -777,79 +743,18 @@ async fn call_disconnect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value)
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct DisconnectArguments {
-        #[serde(default)]
-        link_id: Option<String>,
-        #[serde(default)]
-        input_runtime_name: Option<String>,
-        #[serde(default)]
-        link_request_id: Option<String>,
+        link_id: String,
     }
     let arguments: DisconnectArguments = match serde_json::from_value(arguments) {
         Ok(arguments) => arguments,
         Err(e) => return tool_error(format!("disconnect arguments: {e}")),
     };
-
-    match (arguments.link_id, arguments.link_request_id) {
-        (Some(link_id), None) => {
-            // A runtime naming itself removes its own link; the round trip
-            // would be a runtime asking itself.
-            let on_another_runtime = arguments
-                .input_runtime_name
-                .filter(|named| named != runtime.this_runtimes_name_on_the_mesh());
-            match on_another_runtime {
-                None => match runtime
-                    .disconnect_async(LinkUniqueId::from(link_id.as_str()))
-                    .await
-                {
-                    Ok(()) => tool_ok(json!({ "disconnected_link_id": link_id })),
-                    Err(e) => tool_error(format!("disconnect failed: {e}")),
-                },
-                Some(input_runtime_name) => {
-                    match runtime.request_disconnect_on_remote_input_runtime(
-                        &input_runtime_name,
-                        LinkUniqueId::from(link_id.as_str()),
-                    ) {
-                        Ok(link_request_id) => tool_ok(json!({
-                            "link_request_id": link_request_id.as_str(),
-                            "input_runtime_name": input_runtime_name,
-                            "state": "awaiting_runtime",
-                        })),
-                        Err(e) => tool_error(format!("disconnect failed: {e}")),
-                    }
-                }
-            }
-        }
-        (None, Some(link_request_id)) => {
-            // A request is this node's own to cancel, so naming a runtime
-            // beside it asks for something this tool does not do. Refused
-            // rather than read past, for the reason `deny_unknown_fields` is on
-            // the arguments above: a caller who spelled it meant it.
-            if arguments.input_runtime_name.is_some() {
-                return tool_error(
-                    "disconnect arguments: `link_request_id` cancels a request this node is \
-                     holding, which is always this node's own, so `input_runtime_name` names \
-                     nothing it could act on. Drop it, or give `link_id` with it to remove a \
-                     link another runtime holds."
-                        .to_string(),
-                );
-            }
-            match runtime.cancel_link_request(&LinkRequestUniqueId::from(link_request_id.as_str()))
-            {
-                Ok(()) => tool_ok(json!({ "cancelled_link_request_id": link_request_id })),
-                Err(e) => tool_error(format!("disconnect failed: {e}")),
-            }
-        }
-        (Some(_), Some(_)) => tool_error(
-            "disconnect arguments: `link_id` names a link to remove and `link_request_id` names \
-             a request to cancel — give one or the other, never both."
-                .to_string(),
-        ),
-        (None, None) => tool_error(
-            "disconnect arguments: nothing was named. Give `link_id` for a link `graph` lists, \
-             with `input_runtime_name` when that link is on another runtime; or \
-             `link_request_id` to cancel a request under `mesh.link_requests_awaiting_runtime`."
-                .to_string(),
-        ),
+    match runtime
+        .disconnect_async(LinkUniqueId::from(arguments.link_id.as_str()))
+        .await
+    {
+        Ok(()) => tool_ok(json!({ "disconnected_link_id": arguments.link_id })),
+        Err(e) => tool_error(format!("disconnect failed: {e}")),
     }
 }
 
@@ -1436,16 +1341,15 @@ mod tests {
         else {
             panic!("expected a connect then a disconnect, recorded {recorded:?}");
         };
-        // Both ends travel as addresses under this runtime's own name, which
-        // the engine resolves to the node by name.
+        // The source travels as an address under this runtime's own name, which
+        // the engine resolves to the node by name; the destination is the node
+        // the tool looked up by name.
         assert_eq!(
             from.mesh_port_address().map(|address| address.to_string()),
             Some(mesh_address_of_a_port_here("camera", "video"))
         );
-        assert_eq!(
-            to.mesh_port_address().map(|address| address.to_string()),
-            Some(mesh_address_of_a_port_here("fx", "video_from_upstream"))
-        );
+        assert_eq!(to.processor_id().as_str(), "fx-id");
+        assert_eq!(to.port_name(), "video_from_upstream");
         assert_eq!(link_id.as_str(), "link-9");
     }
 
@@ -1476,13 +1380,8 @@ mod tests {
             from.mesh_port_address().map(|address| address.to_string()),
             Some(mesh_address_of_a_port_here("front-camera", "video"))
         );
-        assert_eq!(
-            to.mesh_port_address().map(|address| address.to_string()),
-            Some(mesh_address_of_a_port_here(
-                "gray-fx",
-                "video_from_upstream"
-            ))
-        );
+        assert_eq!(to.processor_id().as_str(), "gray-fx-id");
+        assert_eq!(to.port_name(), "video_from_upstream");
     }
 
     /// Call `connect` with `arguments` and hand back the whole tool result.
@@ -1533,10 +1432,7 @@ mod tests {
             from.mesh_port_address().map(|address| address.to_string()),
             Some("bench-cam-a1b2/camerasource/video".to_string())
         );
-        assert_eq!(
-            to.mesh_port_address().map(|address| address.to_string()),
-            Some(mesh_address_of_a_port_here("fx", "video_from_upstream"))
-        );
+        assert_eq!(to.processor_id().as_str(), "fx-id");
     }
 
     /// Call `disconnect` with `arguments` and hand back the whole tool result.
@@ -1553,135 +1449,6 @@ mod tests {
         )
         .await
         .1
-    }
-
-    /// A destination on another runtime is that runtime's to apply, so this
-    /// node asks rather than wires and says so by answering a request id.
-    ///
-    /// Mental-revert: apply it here and the link lands in a graph whose
-    /// destination names no node, which is the edge `connect` refuses.
-    #[tokio::test]
-    async fn tools_call_connect_asks_the_runtime_that_owns_the_input_to_apply_the_link() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-
-        let body = call_the_connect_tool(
-            Arc::clone(&runtime),
-            json!({
-                "from_node": "camera",
-                "from_port": "video",
-                "to_runtime_name": "studio-display-9f3c",
-                "to_node": "window",
-                "to_port": "video",
-            }),
-        )
-        .await;
-
-        let recorded = recorded_calls.lock();
-        let [crate::control_plane_stub_support::RecordedGraphMutation::
-            RequestLinkOnRemoteInputRuntime(from, to)] = recorded.as_slice()
-        else {
-            panic!("expected one link request, recorded {recorded:?}");
-        };
-        assert_eq!(
-            from.mesh_port_address().map(|address| address.to_string()),
-            Some(mesh_address_of_a_port_here("camera", "video"))
-        );
-        assert_eq!(to.to_string(), "studio-display-9f3c/window/video");
-
-        let stated: Value =
-            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(
-            stated["link_request_id"],
-            crate::control_plane_stub_support::STUB_MADE_LINK_REQUEST_ID
-        );
-        assert!(
-            stated.get("link_id").is_none(),
-            "a link this node did not apply has no id here: {stated}"
-        );
-        assert_eq!(stated["input_runtime_name"], "studio-display-9f3c");
-        assert_eq!(stated["state"], "awaiting_runtime");
-    }
-
-    /// A destination naming this node's own runtime is an ordinary local link,
-    /// not a request this node sends to itself.
-    ///
-    /// Mental-revert: route on whether `to_runtime_name` was given rather than
-    /// on what it names, and an agent that names every end by runtime name —
-    /// the names `graph` hands it — sends this node a link request addressed
-    /// to itself.
-    #[tokio::test]
-    async fn tools_call_connect_naming_this_node_as_the_destination_wires_it_here() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-
-        let body = call_the_connect_tool(
-            Arc::clone(&runtime),
-            json!({
-                "from_node": "camera",
-                "from_port": "video",
-                "to_runtime_name": crate::control_plane_stub_support::STUB_RUNTIME_NAME,
-                "to_node": "window",
-                "to_port": "video",
-            }),
-        )
-        .await;
-
-        let recorded = recorded_calls.lock();
-        let [crate::control_plane_stub_support::RecordedGraphMutation::Connect(_, to)] =
-            recorded.as_slice()
-        else {
-            panic!("expected one local connect, recorded {recorded:?}");
-        };
-        assert_eq!(
-            to.mesh_port_address().map(|address| address.to_string()),
-            Some(mesh_address_of_a_port_here("window", "video")),
-            "the address is handed to `connect`, which resolves it by node name"
-        );
-
-        let stated: Value =
-            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(
-            stated["link_id"],
-            crate::control_plane_stub_support::STUB_CREATED_LINK_ID
-        );
-        assert!(
-            stated.get("link_request_id").is_none(),
-            "a link applied here is a link, not a request: {stated}"
-        );
-    }
-
-    /// Naming both ends remotely is a third-party wiring, and neither end
-    /// touches this node's own graph.
-    #[tokio::test]
-    async fn tools_call_connect_wires_two_other_runtimes_together() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-
-        call_the_connect_tool(
-            runtime,
-            json!({
-                "from_runtime_name": "bench-cam-a1b2",
-                "from_node": "camerasource",
-                "from_port": "video",
-                "to_runtime_name": "studio-display-9f3c",
-                "to_node": "window",
-                "to_port": "video",
-            }),
-        )
-        .await;
-
-        let recorded = recorded_calls.lock();
-        let [crate::control_plane_stub_support::RecordedGraphMutation::
-            RequestLinkOnRemoteInputRuntime(from, to)] = recorded.as_slice()
-        else {
-            panic!("expected one link request, recorded {recorded:?}");
-        };
-        assert_eq!(
-            from.mesh_port_address().map(|address| address.to_string()),
-            Some("bench-cam-a1b2/camerasource/video".to_string())
-        );
-        assert_eq!(to.to_string(), "studio-display-9f3c/window/video");
     }
 
     /// Every end needs its node and its port, and a call missing one is
@@ -1752,9 +1519,9 @@ mod tests {
 
     /// A misspelled argument is refused rather than read past.
     ///
-    /// Mental-revert: ignore unknown fields and `to_runtime_nam` leaves the
-    /// destination on this node — so a caller that meant another runtime's
-    /// port silently wires a link on this node instead.
+    /// Mental-revert: ignore unknown fields and `from_runtime_nam` leaves the
+    /// source on this node — so a caller that meant another runtime's port
+    /// silently wires a link from this node instead.
     #[tokio::test]
     async fn tools_call_connect_refuses_a_misspelled_argument_rather_than_reading_past_it() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
@@ -1763,10 +1530,10 @@ mod tests {
         let body = call_the_connect_tool(
             runtime,
             json!({
+                "from_runtime_nam": "bench-cam-a1b2",
                 "from_node": "camera",
                 "from_port": "video",
                 "to_node": "fx",
-                "to_runtime_nam": "studio-display-9f3c",
                 "to_port": "video",
             }),
         )
@@ -1774,124 +1541,47 @@ mod tests {
 
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
         assert_eq!(body["result"]["isError"], true, "{text}");
-        assert!(text.contains("to_runtime_nam"), "{text}");
+        assert!(text.contains("from_runtime_nam"), "{text}");
         assert!(recorded_calls.lock().is_empty(), "nothing was wired");
     }
 
-    /// A link on another runtime is that runtime's to remove, so this node
-    /// asks and answers a request id.
+    /// A destination is a node on this node's own graph, so one it does not
+    /// hold is refused naming it before any runtime op is reached.
     #[tokio::test]
-    async fn tools_call_disconnect_asks_the_runtime_holding_the_link_to_remove_it() {
+    async fn tools_call_connect_refuses_a_destination_node_this_node_does_not_hold() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
 
-        let body = call_the_disconnect_tool(
-            runtime,
-            json!({ "link_id": "link-9", "input_runtime_name": "studio-display-9f3c" }),
-        )
-        .await;
-
-        let recorded = recorded_calls.lock();
-        let [crate::control_plane_stub_support::RecordedGraphMutation::
-            RequestDisconnectOnRemoteInputRuntime(input_runtime_name, link_id)] =
-            recorded.as_slice()
-        else {
-            panic!("expected one disconnect request, recorded {recorded:?}");
-        };
-        assert_eq!(input_runtime_name, "studio-display-9f3c");
-        assert_eq!(link_id.as_str(), "link-9");
-
-        let stated: Value =
-            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(
-            stated["link_request_id"],
-            crate::control_plane_stub_support::STUB_MADE_LINK_REQUEST_ID
-        );
-    }
-
-    /// A runtime naming itself removes its own link rather than asking itself
-    /// over the mesh.
-    #[tokio::test]
-    async fn tools_call_disconnect_naming_this_node_removes_the_link_here() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-
-        call_the_disconnect_tool(
+        let body = call_the_connect_tool(
             runtime,
             json!({
-                "link_id": "link-9",
-                "input_runtime_name": crate::control_plane_stub_support::STUB_RUNTIME_NAME,
+                "from_node": "camera", "from_port": "video",
+                "to_node": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME,
+                "to_port": "video",
             }),
-        )
-        .await;
-
-        let recorded = recorded_calls.lock();
-        assert!(
-            matches!(
-                recorded.as_slice(),
-                [crate::control_plane_stub_support::RecordedGraphMutation::Disconnect(_)]
-            ),
-            "recorded {recorded:?}"
-        );
-    }
-
-    /// A request id cancels the request rather than removing a link.
-    #[tokio::test]
-    async fn tools_call_disconnect_cancels_a_request_no_runtime_has_applied() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-
-        let body =
-            call_the_disconnect_tool(runtime, json!({ "link_request_id": "LRabc123" })).await;
-
-        let recorded = recorded_calls.lock();
-        let [
-            crate::control_plane_stub_support::RecordedGraphMutation::CancelLinkRequest(cancelled),
-        ] = recorded.as_slice()
-        else {
-            panic!("expected one cancel, recorded {recorded:?}");
-        };
-        assert_eq!(cancelled.as_str(), "LRabc123");
-
-        let stated: Value =
-            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(stated["cancelled_link_request_id"], "LRabc123");
-    }
-
-    /// A request is this node's own to cancel, so naming a runtime beside it
-    /// is refused rather than read past.
-    ///
-    /// Mental-revert: ignore the field and
-    /// `{"link_request_id": "LR…", "input_runtime_name": "other-node"}` succeeds
-    /// while doing something other than what the caller spelled — the same
-    /// hazard `deny_unknown_fields` closes, reached through a legal field.
-    #[tokio::test]
-    async fn tools_call_disconnect_refuses_a_runtime_named_beside_a_request_to_cancel() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
-        let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
-
-        let body = call_the_disconnect_tool(
-            runtime,
-            json!({ "link_request_id": "LRabc123", "input_runtime_name": "other-node" }),
         )
         .await;
 
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
         assert_eq!(body["result"]["isError"], true, "{text}");
-        assert!(text.contains("input_runtime_name"), "{text}");
-        assert!(recorded_calls.lock().is_empty(), "nothing was cancelled");
+        assert!(text.contains("connect failed"), "{text}");
+        assert!(
+            text.contains(crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME),
+            "{text}"
+        );
+        assert!(recorded_calls.lock().is_empty(), "nothing was wired");
     }
 
-    /// Naming both a link and a request, or neither, is refused by name — the
-    /// two mean different things and the tool cannot pick.
+    /// `disconnect` takes a `link_id` and nothing else: a missing one, or any
+    /// other argument, is refused naming it before any runtime op is reached.
     #[tokio::test]
-    async fn tools_call_disconnect_refuses_naming_both_a_link_and_a_request_or_neither() {
+    async fn tools_call_disconnect_takes_a_link_id_alone() {
         for (arguments, what_the_refusal_must_name) in [
+            (json!({}), "link_id"),
             (
-                json!({ "link_id": "link-9", "link_request_id": "LRabc123" }),
-                "never both",
+                json!({ "link_id": "link-9", "runtime_name": "studio-display-9f3c" }),
+                "runtime_name",
             ),
-            (json!({}), "nothing was named"),
         ] {
             let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
             let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
@@ -1899,6 +1589,7 @@ mod tests {
 
             let text = body["result"]["content"][0]["text"].as_str().unwrap();
             assert_eq!(body["result"]["isError"], true, "{arguments} gave {text}");
+            assert!(text.contains("disconnect arguments"), "{text}");
             assert!(
                 text.contains(what_the_refusal_must_name),
                 "{arguments} must be refused naming {what_the_refusal_must_name}: {text}"
@@ -1907,11 +1598,10 @@ mod tests {
         }
     }
 
-    /// The result says which runtime applied the link and how that runtime's
-    /// own `graph` reads it, so an agent learns whether its change took
-    /// without a second call.
+    /// The result is the new link's id and how this node's own `graph` reads
+    /// it, so an agent learns whether its change took without a second call.
     #[tokio::test]
-    async fn tools_call_connect_states_the_input_runtime_and_the_links_state() {
+    async fn tools_call_connect_states_the_link_id_and_the_links_state() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         *runtime.exported_graph.lock() = json!({
             "mesh": { "runtime_name": crate::control_plane_stub_support::STUB_RUNTIME_NAME },
@@ -1940,13 +1630,11 @@ mod tests {
             stated["link_id"],
             crate::control_plane_stub_support::STUB_CREATED_LINK_ID
         );
-        assert_eq!(
-            stated["input_runtime_name"],
-            crate::control_plane_stub_support::STUB_RUNTIME_NAME,
-            "a link applied here is on this node, which names itself rather than reading its \
-             own name back out of its own graph export"
-        );
         assert_eq!(stated["state"], "awaiting_remote");
+        assert_eq!(
+            stated.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["link_id", "state"]
+        );
     }
 
     /// An address part the mesh key grammar cannot carry, or a name that
@@ -1965,8 +1653,8 @@ mod tests {
             ),
             (
                 json!({
-                    "from_node": "camerasource", "from_port": "video",
-                    "to_node": "///", "to_port": "video_from_upstream",
+                    "from_node": "///", "from_port": "video",
+                    "to_node": "fx", "to_port": "video_from_upstream",
                 }),
                 "`///`",
             ),
@@ -2869,7 +2557,6 @@ mod tests {
                 "source": { "node": "pattern", "port": "video" },
                 "target": { "node": "window", "port": "video" },
                 "state": "wired",
-                "created_by_runtime_name": "rig-desk-a1b2",
                 "stamp_clock_identity": "2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93",
                 "components": {}
             }],
@@ -2886,8 +2573,7 @@ mod tests {
                     "node": "pattern",
                     "port": "video",
                     "reader_runtime_names": ["studio-display-9f3c"]
-                }],
-                "link_requests_awaiting_runtime": []
+                }]
             }
         })
     }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::error::Result;
-use crate::core::graph::{LinkRequestUniqueId, LinkUniqueId, MeshPortAddress, ProcessorUniqueId};
+use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 use crate::core::processors::ProcessorSpec;
 use crate::core::runtime::{ExchangedPublishedSurfaceFramePngImage, TapSubscription};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
@@ -172,15 +172,8 @@ pub trait RuntimeOperations: Send + Sync {
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()>;
 
     // =========================================================================
-    // Links whose input is on another runtime
+    // Identity
     // =========================================================================
-    //
-    // The runtime that owns an input applies every link into it, so these ask
-    // rather than apply. None of them waits on the mesh or blocks: each notes
-    // the request and returns, and the mesh sends it when the runtime it names
-    // is there — which is why they have no async twin. How far a request has
-    // got is read from `graph`'s `mesh.link_requests_awaiting_runtime`, and its
-    // outcome from the link on the runtime that applied it.
 
     /// The name this runtime is addressed by on the runtime mesh.
     ///
@@ -188,30 +181,6 @@ pub trait RuntimeOperations: Send + Sync {
     /// its own returning a different type, and a caller holding a `Runner`
     /// rather than a `dyn RuntimeOperations` would silently get that one.
     fn this_runtimes_name_on_the_mesh(&self) -> &str;
-
-    /// Ask the runtime that owns `to` to carry `from` into it.
-    ///
-    /// Returns the id of the request, which `graph` renders and
-    /// [`Self::cancel_link_request`] takes. A `to` naming this runtime's own
-    /// name is refused, pointing at [`Self::connect`].
-    fn request_link_on_remote_input_runtime(
-        &self,
-        from: OutputLinkPortRef,
-        to: MeshPortAddress,
-    ) -> Result<LinkRequestUniqueId>;
-
-    /// Ask the runtime named `input_runtime_name` to remove `link_id`.
-    fn request_disconnect_on_remote_input_runtime(
-        &self,
-        input_runtime_name: &str,
-        link_id: LinkUniqueId,
-    ) -> Result<LinkRequestUniqueId>;
-
-    /// Cancel a request no runtime has applied, so it is never sent.
-    ///
-    /// Refused by name when this runtime is holding no such request — it was
-    /// applied, cancelled already, or never made here.
-    fn cancel_link_request(&self, link_request_id: &LinkRequestUniqueId) -> Result<()>;
 
     // =========================================================================
     // Lifecycle
