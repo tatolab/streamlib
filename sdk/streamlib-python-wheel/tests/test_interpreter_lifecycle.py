@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The interpreter-lifecycle contract, proven against a real `python app.py`.
+"""The interpreter-lifecycle contract, proven against a `python <script>.py` process.
 
 The arrangement under test is the wheel's: CPython starts, imports the engine,
 and drives it in-process. Every assertion here is made from outside that

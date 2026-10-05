@@ -6,8 +6,8 @@
 Three seams, none of which boots an engine. `@node` reads the config class
 off `__init__` and refuses every other signature; the deriver turns that class
 into the JSON Schema the catalog publishes; and the hosting module constructs
-the class from the mapping `rt.add` recorded, which is what a helper process
-does on the compile thread.
+the class from the config mapping `stream.add` recorded on the graph node,
+which is what a helper process does on the compile thread.
 """
 
 import dataclasses

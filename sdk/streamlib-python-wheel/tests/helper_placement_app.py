@@ -3,9 +3,10 @@
 
 """Scenarios that prove where a Python processor actually runs.
 
-Run as a real `python app.py` because the claim is about processes: only a
-parent can see that the app's interpreter never loaded a second copy of the
-processor's module, and that the pid a bag was produced in is not the app's.
+Run as its own `python <script>.py` process because the claim is about
+processes: only a parent can see that the app's interpreter never loaded a
+second copy of the processor's module, and that the pid a bag was produced in
+is not the app's.
 """
 
 import os

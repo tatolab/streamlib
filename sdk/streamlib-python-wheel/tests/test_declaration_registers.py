@@ -93,9 +93,9 @@ def test_the_catalog_names_a_class_by_its_import_path():
 def test_a_class_declared_inside_a_function_registers_nothing():
     """It has no import path to be registered under.
 
-    `rt.add` is where a class no interpreter can import is refused, with the
-    fix named — moving that refusal to decoration would refuse at import what
-    the plan refuses at add.
+    `stream.add` is where a class no interpreter can import is refused, with
+    the fix named — moving that refusal to decoration would refuse at import
+    what the plan refuses at `stream.add`.
     """
     catalog_before = set(processor_class_import_paths_in_this_processes_catalog())
 

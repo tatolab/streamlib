@@ -3,9 +3,9 @@
 
 """Scenarios that add a processor whose class no interpreter could import.
 
-Run as a real `python app.py` because `__main__` is the thing under test: under
-pytest the entry module is the test runner, so a class's `__module__` can only
-be `"__main__"` in an app actually launched as one.
+Run as its own `python <script>.py` process because `__main__` is the thing
+under test: under pytest the entry module is the test runner, so a class's
+`__module__` can only be `"__main__"` in an app actually launched as one.
 """
 
 import sys

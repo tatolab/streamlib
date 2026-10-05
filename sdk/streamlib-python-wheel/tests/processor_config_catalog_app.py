@@ -3,11 +3,11 @@
 
 """The processor catalog a running node serves, read over its own control plane.
 
-Run as a real `python app.py`: four processors are added, each hosted in its own
-helper process, and this app then reads `GET /api/registry` off itself — the
-exact payload an agent gets before deciding which keys a processor takes. A
-fifth class is imported and never added, which is what an agent discovering an
-app's effects reads.
+Run as its own `python <script>.py` process: four processors are added, each
+hosted in its own helper process, and this app then reads `GET /api/registry`
+off itself — the exact payload an agent gets before deciding which keys a
+processor takes. A fifth class is imported and never added, which is what an
+agent discovering an app's effects reads.
 """
 
 import json

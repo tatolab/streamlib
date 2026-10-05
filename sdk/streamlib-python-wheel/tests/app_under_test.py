@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Driving `python app.py` from a test, with every wait bounded.
+"""Driving a `python <script>.py` process from a test, with every wait bounded.
 
 The failures this exists to catch — a surviving process, a hang at interpreter
 finalization, a wedged GIL, a non-zero exit — are only visible to a parent, and
@@ -33,7 +33,7 @@ ENGINE_STOPPED_LOG_LINE = "[stop] Graceful shutdown complete"
 
 
 class AppUnderTest:
-    """A running `python app.py`, with its output pumped off the pipe.
+    """A running `python <script>.py` process, with its output pumped off the pipe.
 
     Every wait here is bounded. A plain `readline()` blocks indefinitely when
     the app goes quiet, which makes a deadline checked between lines useless —

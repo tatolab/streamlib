@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The app under test — a real `python app.py`, driven by
+"""The app under test — its own `python <script>.py` process, driven by
 `test_interpreter_lifecycle.py`.
 
 Each scenario prints markers the driver asserts on. Markers are flushed as they
