@@ -2805,9 +2805,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `CameraSource`, through the three touchpoints a native built-in owns and no fourth — a
   processor extension owns none of them, being an ordinary Python processor class the
   wheel never has to know about (extension-model) — : one entry in
-  `native_processor_marker_classes!` (a constructor-less `#[pyclass]` unit struct, an
-  `is()` arm resolving the type to the processor's own minted import path, a `type` class
-  attribute and the `add_class` line), a re-export with its `__all__` entry, and a stub
+  `native_processor_marker_classes!` (a constructor-less `#[pyclass]` unit struct, a `type`
+  class attribute naming the processor's own minted import path, and the `add_class`
+  line), a re-export with its `__all__` entry, and a stub
   entry gated by stubtest with no allowlist. Configured the
   one way a built-in is configured — `stream.add(H265Encoder)`,
   `stream.add(H264Encoder, config={"keyframe_interval_seconds": 2})` — and resolving on both
