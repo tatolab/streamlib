@@ -10,6 +10,11 @@ links. What it does not need is hardware: the frames come from this module's
 feeder rather than a camera, and the output lands in a queue rather than a
 window.
 
+The graph is a `Stream` built here and loaded with `Runtime.load`. The
+processor under test takes its class's default node name, and each port's
+endpoint is named for it: `test-bag-feeder-<port>` on an input,
+`test-bag-collector-<port>` on an output.
+
 The feeder and the collector are native endpoints, and that is the load-bearing
 part. A test asserts from the app process, and a queue this module could reach
 is the app's — one process away from any child that tried to read it. Native
@@ -36,8 +41,11 @@ from ._engine import (
     feed_test_harness_bag,
     open_test_harness_channel,
 )
+from ._stream_graph_builder import Stream
 
 __all__ = ["SingleProcessorTestPipeline"]
+
+SINGLE_PROCESSOR_TEST_PIPELINE_STREAM_NAME = "single-processor-test-pipeline"
 
 # Long enough that a cold engine's first frame is not mistaken for a failure,
 # short enough that a genuinely stalled pipeline fails rather than hangs.
@@ -105,34 +113,39 @@ class SingleProcessorTestPipeline:
         return self
 
     def _build_and_start(self) -> None:
-        runtime = Runtime()
-        self._runtime = runtime
-        processor_under_test = runtime.add(self._processor_class, config=self._config)
+        stream = Stream(SINGLE_PROCESSOR_TEST_PIPELINE_STREAM_NAME)
+        processor_under_test = stream.add(self._processor_class, config=self._config)
 
         for port in _declared_port_names(self._processor_class, "input"):
             channel = _claim_channel()
             self._input_channels[port] = channel
-            feeder = runtime.add(
+            feeder = stream.add(
                 TestBagFeeder,
+                name=f"test-bag-feeder-{port}",
                 config={"channel": channel},
-                display_name=f"TestBagFeeder({port})",
             )
-            runtime.connect(
+            stream.connect(
                 feeder.output("bags_to_downstream"), processor_under_test.input(port)
             )
 
         for port in _declared_port_names(self._processor_class, "output"):
             channel = _claim_channel()
             self._output_channels[port] = channel
-            collector = runtime.add(
+            collector = stream.add(
                 TestBagCollector,
+                name=f"test-bag-collector-{port}",
                 config={"channel": channel},
-                display_name=f"TestBagCollector({port})",
             )
-            runtime.connect(
+            stream.connect(
                 processor_under_test.output(port),
                 collector.input("bags_from_upstream"),
             )
+
+        runtime = Runtime()
+        self._runtime = runtime
+        # The graph is built at run time from the class under test, so there is
+        # no module-level `@stream` function for `compile_stream_to_graph` to run.
+        runtime.load(stream._compiled_graph())
 
         # `run()` blocks, and a test needs to stay in control of the main
         # thread. It is safe here because `__exit__` shuts the engine down and
