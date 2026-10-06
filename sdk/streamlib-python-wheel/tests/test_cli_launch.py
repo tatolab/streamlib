@@ -371,12 +371,14 @@ def listening_tcp_socket_inodes_in_the_network_namespace_of(pid: int) -> "set[st
     return listening_tcp_socket_inodes
 
 
-def unix_socket_inode_bound_at(pid: int, unix_socket_path: str) -> "str | None":
-    """The inode of the Unix socket bound at `unix_socket_path`, as `pid` sees it."""
-    # Columns: Num, RefCount, Protocol, Flags, Type, St, Inode, Path.
+def unix_socket_listener_inode_at(pid: int, unix_socket_path: str) -> "str | None":
+    """The inode of the Unix socket listening at `unix_socket_path`, as `pid` sees it."""
+    # Columns: Num, RefCount, Protocol, Flags, Type, St, Inode, Path. An accepted
+    # connection carries the listener's path too; only a listener has Flags
+    # 00010000 (__SO_ACCEPTCON).
     for row in Path(f"/proc/{pid}/net/unix").read_text().splitlines()[1:]:
         columns = row.split(maxsplit=7)
-        if len(columns) == 8 and columns[7] == unix_socket_path:
+        if len(columns) == 8 and columns[7] == unix_socket_path and columns[3] == "00010000":
             return columns[6]
     return None
 
@@ -405,9 +407,9 @@ def test_a_launched_node_listens_on_no_tcp_socket(
 
     node_pid = node.process.pid
     held_socket_inodes = socket_inodes_held_by(node_pid)
-    local_api_listener_inode = unix_socket_inode_bound_at(node_pid, local_api_socket_path)
+    local_api_listener_inode = unix_socket_listener_inode_at(node_pid, local_api_socket_path)
     assert local_api_listener_inode is not None, (
-        f"no Unix socket is bound at {local_api_socket_path} in /proc/{node_pid}/net/unix"
+        f"no Unix socket listens at {local_api_socket_path} in /proc/{node_pid}/net/unix"
     )
     assert local_api_listener_inode in held_socket_inodes, (
         f"the node's descriptors must include its local API listener (inode "
