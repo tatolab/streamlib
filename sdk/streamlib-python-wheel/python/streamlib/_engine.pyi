@@ -40,6 +40,9 @@ __all__ = [
     "IOSurfaceMachPortExport",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
+    "LocalApiMcpClient",
+    "LocalApiMcpRequestRefused",
+    "LocalApiMcpServerUnreachable",
     "MonotonicTimer",
     "OpaqueFdTextureExport",
     "ProcessorOwnedWindow",
@@ -2031,6 +2034,40 @@ class MonotonicTimer:
         """Release the timer's file descriptor. Idempotent."""
 
     def __enter__(self) -> MonotonicTimer: ...
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None = ...,
+        exception: BaseException | None = ...,
+        traceback: TracebackType | None = ...,
+    ) -> Literal[False]: ...
+
+class LocalApiMcpServerUnreachable(Exception):
+    """Nothing answered MCP on the local API socket."""
+
+class LocalApiMcpRequestRefused(Exception):
+    """The node answered and refused the MCP request."""
+
+@final
+class LocalApiMcpClient:
+    """An MCP client of one running node, over its local API socket.
+
+    Connecting sends `server/discover` at the latest revision; a node that
+    does not answer raises `LocalApiMcpServerUnreachable`, one that refuses
+    raises `LocalApiMcpRequestRefused`. Every call releases the GIL.
+    """
+
+    def __new__(cls, local_api_socket_path: str, timeout_seconds: float) -> LocalApiMcpClient: ...
+    def call_tool(self, tool_name: str, arguments_json: str) -> str:
+        """Call `tool_name` with a JSON object of arguments; answer its result as JSON.
+
+        A tool that ran and failed answers a result whose `isError` is true; a
+        call the node refused outright raises `LocalApiMcpRequestRefused`.
+        """
+
+    def close(self) -> None:
+        """End the client's connection. Idempotent."""
+
+    def __enter__(self) -> LocalApiMcpClient: ...
     def __exit__(
         self,
         exception_type: type[BaseException] | None = ...,

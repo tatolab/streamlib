@@ -4,10 +4,10 @@
 """A client for a running node's control plane.
 
 The MCP tool set is the control vocabulary, and this is a pure client of it:
-every verb marshals its arguments into one `tools/call` against the node's
-`POST /mcp` and prints the tool result. There is no second dispatch and no
-local runtime — the control plane exists to observe nodes that are already
-running.
+every verb is one `tools/call` through the wheel's MCP client — the official
+SDK, `rmcp`, in `_engine` — and prints the tool result. There is no second
+dispatch and no local runtime — the control plane exists to observe nodes that
+are already running.
 
 A node is found through the registry and reached through its local API
 socket, a Unix socket only its own user can open.
@@ -17,8 +17,8 @@ serves the exact frame as a binary `image/png` over REST, where the MCP tool
 serves a downscaled block sized for a model's eyes. A caller writing evidence to
 disk wants the exact bytes, so it takes the REST route.
 
-Stdlib only, deliberately: the wheel must not grow a dependency to let a user
-look at their own pipeline.
+Stdlib only on the Python side, deliberately: the wheel must not grow a
+dependency to let a user look at their own pipeline.
 """
 
 from __future__ import annotations
@@ -29,6 +29,8 @@ import json
 import socket
 import urllib.parse
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
+
+from ._engine import LocalApiMcpClient, LocalApiMcpRequestRefused, LocalApiMcpServerUnreachable
 
 if TYPE_CHECKING:
     from ._node_registry import NodeRegistryEntry
@@ -62,18 +64,14 @@ class LocalApiSocket(NamedTuple):
 class ControlPlaneError(Exception):
     """A control-plane call that failed, with a message shaped for a terminal.
 
-    `server_answered` separates "the node replied, with a status I did not want"
-    from "nothing is listening there". A liveness probe treats the first as
-    alive: any status at all proves a control plane is up.
+    `server_answered` separates "the node answered, and refused or failed the
+    call" from "nothing answered there".
     """
 
     def __init__(self, message: str, *, server_answered: bool = False) -> None:
         super().__init__(message)
         self.server_answered = server_answered
 
-
-#: The MCP endpoint's path on every control plane.
-MCP_ENDPOINT_PATH = "/mcp"
 
 
 class _ControlPlaneHttpResponse(NamedTuple):
@@ -132,49 +130,21 @@ def _request_over_the_local_api_socket(
         connection.close()
 
 
-def _post_jsonrpc(local_api_socket: LocalApiSocket, body: str, timeout_seconds: float) -> str:
-    """POST one JSON-RPC body to the local API's `/mcp` and return the response body.
-
-    Raises [`ControlPlaneError`] on a transport failure or a non-2xx status. A
-    `202` (a notification ack) yields an empty string.
-    """
-    answered = _request_over_the_local_api_socket(
-        local_api_socket,
-        method="POST",
-        path=MCP_ENDPOINT_PATH,
-        body=body.encode("utf-8"),
-        headers={"content-type": "application/json"},
-        timeout_seconds=timeout_seconds,
-    )
-    if not 200 <= answered.status < 300:
-        detail = answered.body.decode("utf-8", errors="replace").strip()
-        raise ControlPlaneError(
-            f"control plane at {local_api_socket.local_api_socket_path} answered "
-            f"{answered.status}" + (f": {detail}" if detail else ""),
-            server_answered=True,
-        )
-    return answered.body.decode("utf-8")
-
-
 def control_plane_answers(local_api_socket: LocalApiSocket) -> bool:
-    """Whether the control plane on `local_api_socket` answers its `POST /mcp` at all.
+    """Whether a control plane on `local_api_socket` answers MCP at all.
 
-    Any HTTP status counts as alive — the server is up and something answered.
-    Only a transport failure is dead. This is what a registry scan needs: "can a
-    control verb reach it", not "did this call succeed".
+    A node that answers `server/discover` is alive, and so is one that answers
+    and refuses it; only nothing answering is dead. This is what a registry
+    scan needs: "can a control verb reach it", not "did this call succeed".
     """
-    probe = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "graph", "arguments": {}},
-        }
-    )
     try:
-        _post_jsonrpc(local_api_socket, probe, REACHABILITY_PROBE_TIMEOUT_SECONDS)
-    except ControlPlaneError as failure:
-        return failure.server_answered
+        LocalApiMcpClient(
+            local_api_socket.local_api_socket_path, REACHABILITY_PROBE_TIMEOUT_SECONDS
+        ).close()
+    except LocalApiMcpRequestRefused:
+        return True
+    except LocalApiMcpServerUnreachable:
+        return False
     return True
 
 
@@ -253,64 +223,32 @@ def call_tool(
 ) -> str:
     """Drive one `tools/call` and return the tool result's text content.
 
-    Covers the four ways a call can fail — a non-2xx status and a transport
-    error (both from the POST), a top-level JSON-RPC `error` returned inside an
-    HTTP 200, and a tool-level `result.isError` — so a caller that gets a string
+    A node that cannot be reached, a call the node refused, and a tool that ran
+    and failed all raise [`ControlPlaneError`], so a caller that gets a string
     back has a real result rather than an error rendered as one.
     """
-    request_body = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        }
-    )
-    response_body = _post_jsonrpc(local_api_socket, request_body, CONTROL_VERB_TIMEOUT_SECONDS)
-
     try:
-        response = json.loads(response_body)
-    except ValueError as decode_failure:
-        raise ControlPlaneError(
-            f"control plane returned a non-JSON response: {response_body}"
-        ) from decode_failure
+        with LocalApiMcpClient(
+            local_api_socket.local_api_socket_path, CONTROL_VERB_TIMEOUT_SECONDS
+        ) as client:
+            result = json.loads(client.call_tool(tool_name, json.dumps(arguments)))
+    except LocalApiMcpServerUnreachable as unreachable:
+        raise ControlPlaneError(str(unreachable)) from unreachable
+    except LocalApiMcpRequestRefused as refusal:
+        raise ControlPlaneError(f"{tool_name} failed: {refusal}", server_answered=True) from refusal
 
-    # Every member below is checked for shape, not just presence: a server that
-    # answers 200 with a differently-shaped body would otherwise surface as an
-    # AttributeError traceback rather than as the failure it is.
-    if not isinstance(response, dict):
-        raise ControlPlaneError(
-            f"control plane returned a non-object JSON-RPC response: {response_body}"
-        )
-
-    if "error" in response:
-        error = response["error"]
-        message = (
-            error.get("message", "unknown JSON-RPC error")
-            if isinstance(error, dict)
-            else error
-        )
-        raise ControlPlaneError(f"{tool_name} failed: {message}")
-
-    result = response.get("result")
-    if not isinstance(result, dict):
-        raise ControlPlaneError(
-            f"control plane response missing a `result` object: {response_body}"
-        )
-
-    content = result.get("content")
-    first_block = content[0] if isinstance(content, list) and content else None
-    text = first_block.get("text") if isinstance(first_block, dict) else None
-
+    text = next(
+        (block["text"] for block in result["content"] if block.get("type") == "text"), None
+    )
     if result.get("isError", False):
-        raise ControlPlaneError(f"{tool_name} failed: {text or 'no detail given'}")
-    if not isinstance(text, str):
+        raise ControlPlaneError(
+            f"{tool_name} failed: {text or 'no detail given'}", server_answered=True
+        )
+    if text is None:
         # Succeeded, but carries nothing readable. Returning "" here would print
         # a blank line and exit 0, which reads as "the node has nothing" rather
-        # than "this response made no sense".
-        raise ControlPlaneError(
-            f"{tool_name} returned no text content: {response_body}"
-        )
+        # than "this result made no sense".
+        raise ControlPlaneError(f"{tool_name} returned no text content: {result}")
     return text
 
 

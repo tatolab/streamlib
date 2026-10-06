@@ -72,6 +72,10 @@ tracing = { workspace = true }
 # monotonic epoch (comparable to `time.clock_gettime_ns(time.CLOCK_MONOTONIC)`),
 # which std does not expose. Also the fd ownership the CUDA import path needs.
 libc = { workspace = true }
+# The CLI's MCP client of a running node: the official SDK over the node's
+# local API socket, driven from a runtime of its own.
+rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket"] }
+tokio = { version = "1.48.0", features = ["rt", "time"] }
 # Guards the lifecycle-scoped context leases; non-poisoning, so a panicking
 # hook cannot wedge every later lease install.
 parking_lot = "0.12"

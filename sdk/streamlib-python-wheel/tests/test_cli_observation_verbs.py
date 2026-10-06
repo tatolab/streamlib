@@ -4,8 +4,8 @@
 """The observation verbs, driven without a running node.
 
 `nodes` / `graph` / `tap` / `logs` are clients: of the on-disk node registry, of
-a node's `POST /mcp`, and of the on-disk JSONL log. Each of those is stood up
-here — a real HTTP server on a local API socket, a temp registry directory, a
+a node's MCP server, and of the on-disk JSONL log. Each of those is stood up
+here — a real MCP server on a local API socket, a temp registry directory, a
 temp log directory — so the whole surface is exercised in CI, where no GPU
 exists to boot a real node with. `test_cli_launch.py` covers the live path on
 the rig.
@@ -24,16 +24,22 @@ import json
 import os
 import shutil
 import socket
-import socketserver
 import tempfile
 import threading
 import time
 import urllib.parse
-from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable, Generator, NamedTuple, Optional, TextIO
 
 import pytest
+import uvicorn
+from mcp import types as mcp_types
+from mcp.server.lowlevel import Server
+from mcp.server.transport_security import TransportSecuritySettings
+from mcp.shared.exceptions import MCPError
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Route
 
 from streamlib import cli
 from streamlib._control_plane_client import (
@@ -75,10 +81,19 @@ PID_OUTSIDE_PID_T = 4_000_000_000
 NOTHING_LISTENS_LOCAL_API_SOCKET_PATH = "/nonexistent-streamlib-test/local-api-Rnone.sock"
 
 
-class _UnixSocketHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-    """`http.server` over a Unix socket: `HTTPServer` itself insists on a host and port."""
+class StubToolAnswer(NamedTuple):
+    """How the stub answers one `tools/call`: the tool's text, and whether the
+    tool ran and failed."""
 
-    daemon_threads = True
+    text: str
+    is_error: bool = False
+
+
+class RecordedToolCall(NamedTuple):
+    """One `tools/call` the stub received, as the node would have."""
+
+    tool_name: str
+    arguments: "dict[str, Any]"
 
 
 class StubSurfaceImageAnswer(NamedTuple):
@@ -96,84 +111,83 @@ class StubSurfaceImageAnswer(NamedTuple):
 
 
 class StubControlPlane:
-    """An HTTP server standing in for a node's control plane, on a local API socket.
+    """A node's control plane stood in by a real MCP server — the official
+    Python SDK's — on a local API socket.
 
-    Records every request body so a test can prove the verb marshalled what it
-    claimed to, and answers from a queue so tool errors and refusals are
-    reachable without a live runtime.
+    Records every tool call so a test can prove the verb sent what it claimed
+    to, and answers from a queue so tool errors and refusals are reachable
+    without a live runtime.
 
     Both front ends of the exchange live here, because the CLI drives both: the
-    `POST /mcp` the tool calls ride, and the binary `GET` the full-resolution
-    image route serves.
+    MCP tool calls, and the binary `GET` the full-resolution image route serves.
     """
 
     def __init__(
         self,
-        status: int = 200,
-        body: "Optional[str]" = None,
+        tool_answer: "Optional[StubToolAnswer]" = None,
         *,
-        queued_bodies: "Optional[list[str]]" = None,
+        queued_tool_answers: "Optional[list[StubToolAnswer]]" = None,
+        refuse_every_tool_call_with: "Optional[str]" = None,
         surface_image_answers: "Optional[dict[str, StubSurfaceImageAnswer]]" = None,
     ) -> None:
-        self.recorded_bodies: "list[str]" = []
+        self.recorded_tool_calls: "list[RecordedToolCall]" = []
         self.recorded_image_request_paths: "list[str]" = []
-        self._status = status
-        self._body = body if body is not None else _tool_result_body("{}")
-        self._queued_bodies = list(queued_bodies or [])
+        self._tool_answer = tool_answer if tool_answer is not None else StubToolAnswer("{}")
+        self._queued_tool_answers = list(queued_tool_answers or [])
+        self._refuse_every_tool_call_with = refuse_every_tool_call_with
         self._surface_image_answers = dict(surface_image_answers or {})
 
-        stub = self
+        async def on_call_tool(
+            context: Any, request: mcp_types.CallToolRequestParams
+        ) -> mcp_types.CallToolResult:
+            self.recorded_tool_calls.append(
+                RecordedToolCall(request.name, dict(request.arguments or {}))
+            )
+            if self._refuse_every_tool_call_with is not None:
+                raise MCPError(mcp_types.INVALID_PARAMS, self._refuse_every_tool_call_with)
+            # The queue drains in order and then the fixed answer answers
+            # forever, so a test names only the rounds it cares about.
+            answer = (
+                self._queued_tool_answers.pop(0) if self._queued_tool_answers else self._tool_answer
+            )
+            return mcp_types.CallToolResult(
+                content=[mcp_types.TextContent(type="text", text=answer.text)],
+                is_error=answer.is_error,
+            )
 
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name
-                length = int(self.headers.get("content-length", "0"))
-                stub.recorded_bodies.append(self.rfile.read(length).decode("utf-8"))
-                # The queue drains in order and then the fixed body answers
-                # forever, so a test names only the rounds it cares about.
-                body = (
-                    stub._queued_bodies.pop(0) if stub._queued_bodies else stub._body
+        async def surface_image_route(request: Request) -> Response:
+            raw_path = request.scope["raw_path"].decode("ascii")
+            self.recorded_image_request_paths.append(raw_path)
+            answer = self._surface_image_answers.get(
+                _surface_id_in_image_route_path(raw_path),
+                StubSurfaceImageAnswer(404, error_message="no such surface"),
+            )
+            if answer.status != 200:
+                return Response(
+                    json.dumps({"error": answer.error_message}),
+                    status_code=answer.status,
+                    media_type="application/json",
                 )
-                payload = body.encode("utf-8")
-                self.send_response(stub._status)
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
-            def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name
-                stub.recorded_image_request_paths.append(self.path)
-                answer = stub._surface_image_answers.get(
-                    _surface_id_in_image_route_path(self.path),
-                    StubSurfaceImageAnswer(404, error_message="no such surface"),
+            extent_headers = {
+                header: str(extent)
+                for header, extent in (
+                    ("x-streamlib-surface-pixel-width", answer.source_surface_pixel_width),
+                    ("x-streamlib-surface-pixel-height", answer.source_surface_pixel_height),
                 )
-                if answer.status == 200:
-                    self.send_response(200)
-                    self.send_header("content-type", "image/png")
-                    if answer.source_surface_pixel_width is not None:
-                        self.send_header(
-                            "x-streamlib-surface-pixel-width",
-                            str(answer.source_surface_pixel_width),
-                        )
-                    if answer.source_surface_pixel_height is not None:
-                        self.send_header(
-                            "x-streamlib-surface-pixel-height",
-                            str(answer.source_surface_pixel_height),
-                        )
-                    payload = answer.png_image_bytes
-                else:
-                    self.send_response(answer.status)
-                    self.send_header("content-type", "application/json")
-                    payload = json.dumps({"error": answer.error_message}).encode("utf-8")
-                self.send_header("content-length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
+                if extent is not None
+            }
+            return Response(answer.png_image_bytes, media_type="image/png", headers=extent_headers)
 
-            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
-                """Silence the default stderr access log."""
-
-            def address_string(self) -> str:
-                # A Unix-socket peer has no address tuple to render.
-                return "local-api-socket"
+        mcp_server = Server("stub-control-plane", version="0", on_call_tool=on_call_tool)
+        app = mcp_server.streamable_http_app(
+            json_response=True,
+            stateless_http=True,
+            # The socket's file mode is the gate, as on a real node.
+            transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+            custom_starlette_routes=[
+                Route("/api/surfaces/{surface_id:path}/image", surface_image_route)
+            ],
+        )
 
         # A short directory of its own: a socket path is capped near 104 bytes,
         # and a pytest tmp_path named after a long test overruns that.
@@ -182,22 +196,52 @@ class StubControlPlane:
             self._local_api_socket_directory, "local-api.sock"
         )
         self.local_api_socket = LocalApiSocket(self.local_api_socket_path)
-        self._local_api_server = _UnixSocketHTTPServer(self.local_api_socket_path, Handler)
-
-        # A short poll interval: `shutdown()` waits out one poll, and every test
-        # tears a stub down.
-        self._serving_thread = threading.Thread(
-            target=self._local_api_server.serve_forever,
-            kwargs={"poll_interval": 0.05},
-            daemon=True,
+        self._uvicorn_server = uvicorn.Server(
+            uvicorn.Config(
+                _accepting_absolute_form_request_targets(app),
+                uds=self.local_api_socket_path,
+                log_level="warning",
+                lifespan="on",
+            )
         )
+        self._serving_thread = threading.Thread(target=self._uvicorn_server.run, daemon=True)
         self._serving_thread.start()
+        deadline = time.monotonic() + STUB_CONTROL_PLANE_START_TIMEOUT_SECONDS
+        while not self._uvicorn_server.started:
+            assert time.monotonic() < deadline, "the stub control plane never started"
+            time.sleep(0.01)
 
     def close(self) -> None:
-        self._local_api_server.shutdown()
-        self._local_api_server.server_close()
+        self._uvicorn_server.should_exit = True
         self._serving_thread.join(timeout=5)
         shutil.rmtree(self._local_api_socket_directory, ignore_errors=True)
+
+
+def _accepting_absolute_form_request_targets(app: Any) -> Any:
+    """`app`, reached by an absolute-form request target as well as an
+    origin-form one.
+
+    `rmcp`'s Unix-socket client sends `POST http://localhost/mcp`, which RFC 9112
+    §3.2.2 obliges a server to accept; uvicorn hands it to the app as the path
+    unreduced, so it is reduced here to the path a node's own server routes on.
+    """
+
+    async def reduced_to_origin_form(scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and "://" in scope["path"]:
+            origin_form = urllib.parse.urlsplit(scope["path"])
+            scope = {
+                **scope,
+                "path": origin_form.path,
+                "raw_path": urllib.parse.urlsplit(scope["raw_path"].decode("ascii")).path.encode("ascii"),
+                "query_string": origin_form.query.encode("ascii"),
+            }
+        await app(scope, receive, send)
+
+    return reduced_to_origin_form
+
+
+#: Bounds the stub's start, which is a thread binding a socket.
+STUB_CONTROL_PLANE_START_TIMEOUT_SECONDS = 10.0
 
 
 def _surface_id_in_image_route_path(path: str) -> str:
@@ -208,14 +252,8 @@ def _surface_id_in_image_route_path(path: str) -> str:
     return urllib.parse.unquote(segments[2])
 
 
-def _tool_result_body(text: str, *, is_error: bool = False) -> str:
-    return json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {"content": [{"type": "text", "text": text}], "isError": is_error},
-        }
-    )
+def stub_tool_answer(text: str, *, is_error: bool = False) -> StubToolAnswer:
+    return StubToolAnswer(text, is_error=is_error)
 
 
 @pytest.fixture
@@ -236,9 +274,8 @@ def stub_control_plane():
 def targeted_stub_control_plane(stub_control_plane, monkeypatch):
     """A stub every verb in the test targets, resolved without the registry.
 
-    Resolving through the registry probes the node with a `graph` call, which
-    would answer from the stub's queue first. Resolution has tests of its own;
-    these drive what a verb does once it has its node.
+    Resolution has tests of its own; these drive what a verb does once it has
+    its node.
     """
 
     def make(**kwargs: Any) -> StubControlPlane:
@@ -369,14 +406,6 @@ def test_a_malformed_entry_does_not_hide_the_others(
     assert [node.entry.runtime_id for node in discovered] == ["Rgood"]
 
 
-def test_an_error_status_still_counts_as_reachable(stub_control_plane):
-    # Any answer proves a control plane is up. Treating a refusal as dead would
-    # prune a node that is merely failing one call.
-    server = stub_control_plane(status=503, body='{"error":"unavailable"}')
-
-    assert control_plane_answers(server.local_api_socket) is True
-
-
 def test_a_local_api_socket_that_answers_is_reachable(stub_control_plane):
     server = stub_control_plane()
 
@@ -445,64 +474,33 @@ def test_no_live_nodes_names_the_command_that_starts_one(isolated_registry):
 # ─── Driving a tool ──────────────────────────────────────────────────────────
 
 
-def test_a_tool_call_marshals_the_jsonrpc_envelope(stub_control_plane):
-    server = stub_control_plane(body=_tool_result_body('{"nodes":[]}'))
+def test_a_tool_call_carries_its_name_and_arguments_to_the_node(stub_control_plane):
+    server = stub_control_plane(tool_answer=stub_tool_answer('{"nodes":[]}'))
 
     result = call_tool(
         server.local_api_socket, "tap", {"channel": "cam/video", "count": 4}
     )
 
     assert result == '{"nodes":[]}'
-    sent = json.loads(server.recorded_bodies[0])
-    assert sent["method"] == "tools/call"
-    assert sent["params"]["name"] == "tap"
-    assert sent["params"]["arguments"] == {"channel": "cam/video", "count": 4}
+    assert server.recorded_tool_calls == [
+        RecordedToolCall("tap", {"channel": "cam/video", "count": 4})
+    ]
 
 
 def test_a_tool_level_error_is_raised_not_printed_as_a_result(stub_control_plane):
     server = stub_control_plane(
-        body=_tool_result_body("no such channel", is_error=True)
+        tool_answer=stub_tool_answer("no such channel", is_error=True)
     )
 
     with pytest.raises(ControlPlaneError, match="no such channel"):
         call_tool(server.local_api_socket, "tap", {"channel": "nope"})
 
 
-def test_a_jsonrpc_error_inside_an_http_200_is_raised(stub_control_plane):
-    server = stub_control_plane(
-        body=json.dumps(
-            {"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "nope"}}
-        )
-    )
+def test_a_call_the_node_refuses_is_raised_naming_the_refusal(stub_control_plane):
+    server = stub_control_plane(refuse_every_tool_call_with="no tool named `nope`")
 
-    with pytest.raises(ControlPlaneError, match="nope"):
-        call_tool(server.local_api_socket, "graph", {})
-
-
-def test_a_non_2xx_status_is_raised_with_its_code(stub_control_plane):
-    server = stub_control_plane(status=403, body="forbidden")
-
-    with pytest.raises(ControlPlaneError, match="403: forbidden"):
-        call_tool(server.local_api_socket, "graph", {})
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        '"a bare string"',
-        "[1, 2, 3]",
-        '{"jsonrpc":"2.0","id":1,"error":"not an object"}',
-        '{"jsonrpc":"2.0","id":1,"result":"not an object"}',
-        '{"jsonrpc":"2.0","id":1,"result":{"content":"not a list"}}',
-    ],
-)
-def test_a_misshapen_200_surfaces_as_a_control_plane_error(stub_control_plane, body):
-    # A server answering 200 with an unexpected shape must fail as itself, not
-    # as an AttributeError traceback out of the parsing path.
-    server = stub_control_plane(body=body)
-
-    with pytest.raises(ControlPlaneError):
-        call_tool(server.local_api_socket, "graph", {})
+    with pytest.raises(ControlPlaneError, match="no tool named `nope`"):
+        call_tool(server.local_api_socket, "nope", {})
 
 
 def test_an_unreachable_local_api_socket_is_named():
@@ -1517,7 +1515,7 @@ def test_a_verb_given_a_name_two_live_runtimes_hold_is_refused_naming_both(
 
 
 def test_graph_prints_the_tool_result(isolated_registry, stub_control_plane, capsys):
-    server = stub_control_plane(body=_tool_result_body('{"nodes":[]}'))
+    server = stub_control_plane(tool_answer=stub_tool_answer('{"nodes":[]}'))
     write_registry_entry(isolated_registry, "Ronly", server.local_api_socket_path)
 
     assert cli.main(["graph"]) == 0
@@ -1533,7 +1531,7 @@ def test_tap_sends_the_channel_and_count(
 
     assert cli.main(["tap", "cam/video", "--count", "3"]) == 0
 
-    arguments = json.loads(server.recorded_bodies[-1])["params"]["arguments"]
+    arguments = server.recorded_tool_calls[-1].arguments
     assert arguments == {"channel": "cam/video", "count": 3}
 
 
@@ -1546,7 +1544,7 @@ def test_tap_forwards_a_named_per_bag_cap(isolated_registry, stub_control_plane,
 
     assert cli.main(["tap", "cam/video", "--max-bag-bytes", "4096"]) == 0
 
-    arguments = json.loads(server.recorded_bodies[-1])["params"]["arguments"]
+    arguments = server.recorded_tool_calls[-1].arguments
     assert arguments == {"channel": "cam/video", "max_bag_bytes": 4096}
 
 
@@ -1560,22 +1558,21 @@ def test_tap_omits_a_per_bag_cap_nobody_named(
 
     assert cli.main(["tap", "cam/video"]) == 0
 
-    arguments = json.loads(server.recorded_bodies[-1])["params"]["arguments"]
+    arguments = server.recorded_tool_calls[-1].arguments
     assert arguments == {"channel": "cam/video"}
 
 
 def test_logs_with_a_node_reads_its_live_event_stream_through_the_local_api_socket(
     isolated_registry, stub_control_plane, capsys
 ):
-    server = stub_control_plane(body=_tool_result_body('[{"event":"started"}]'))
+    server = stub_control_plane(tool_answer=stub_tool_answer('[{"event":"started"}]'))
     write_registry_entry(
         isolated_registry, "Rlogs", server.local_api_socket_path, runtime_name="rig-logs"
     )
 
     assert cli.main(["logs", "--node", "rig-logs", "--count", "4"]) == 0
 
-    sent = json.loads(server.recorded_bodies[-1])
-    assert sent["params"] == {"name": "logs", "arguments": {"count": 4}}
+    assert server.recorded_tool_calls[-1] == RecordedToolCall("logs", {"count": 4})
     assert '[{"event":"started"}]' in capsys.readouterr().out
 
 
@@ -1592,7 +1589,7 @@ def test_a_node_target_with_on_disk_filters_is_refused(
     assert cli.main(["logs", "--node", "rig-logs", "--level", "warn"]) == 1
 
     assert "--level" in capsys.readouterr().err
-    assert server.recorded_bodies == [], "a refused flag reaches no node"
+    assert server.recorded_tool_calls == [], "a refused flag reaches no node"
 
 
 def test_list_refuses_the_flags_it_would_otherwise_ignore(isolated_registry, capsys):
@@ -1681,20 +1678,20 @@ def bag_publishing_surface_id(
     )
 
 
-def tap_result_body(
+def tap_result_tool_answer(
     channel: str,
     framed_bags: "list[bytes]",
     *,
     hex_truncated: bool = False,
     truncated_bag_indexes: "frozenset[int]" = frozenset(),
     report_byte_len: bool = True,
-) -> str:
+) -> StubToolAnswer:
     """One `tap` tool result carrying these bags, shaped as the tool shapes it.
 
     `truncated_bag_indexes` caps just those bags' previews, so a test can put an
     oversized bag where the stride will or will not reach it.
     """
-    return _tool_result_body(
+    return stub_tool_answer(
         json.dumps(
             {
                 "channel": channel,
@@ -1928,8 +1925,8 @@ def test_the_channel_form_taps_then_exchanges_each_sampled_id(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
     server = targeted_stub_control_plane(
-        queued_bodies=[
-            tap_result_body(
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
             )
@@ -1952,7 +1949,7 @@ def test_the_channel_form_taps_then_exchanges_each_sampled_id(
         == 0
     )
 
-    tap_arguments = json.loads(server.recorded_bodies[0])["params"]["arguments"]
+    tap_arguments = server.recorded_tool_calls[0].arguments
     assert tap_arguments == {"channel": "cam/frame", "count": 2}
 
     printed = capsys.readouterr()
@@ -1968,10 +1965,8 @@ def test_the_channel_form_reaches_a_registered_node_through_its_local_api_socket
     isolated_registry, stub_control_plane, tmp_path, capsys
 ):
     server = stub_control_plane(
-        queued_bodies=[
-            # The registry's liveness probe is a `graph` call, and answers first.
-            _tool_result_body("{}"),
-            tap_result_body(
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
             ),
@@ -2017,8 +2012,8 @@ def test_the_engine_is_never_asked_to_read_a_bag(
     # The composition is the client's whole job: `tap` keeps its shipped
     # contract, gaining no field argument and no decode.
     server = targeted_stub_control_plane(
-        queued_bodies=[
-            tap_result_body("cam/frame", [bag_publishing_surface_id("s#1")])
+        queued_tool_answers=[
+            tap_result_tool_answer("cam/frame", [bag_publishing_surface_id("s#1")])
         ],
         surface_image_answers={"s#1": image_answer("one")},
     )
@@ -2035,7 +2030,7 @@ def test_the_engine_is_never_asked_to_read_a_bag(
         ]
     )
 
-    tap_arguments = json.loads(server.recorded_bodies[0])["params"]["arguments"]
+    tap_arguments = server.recorded_tool_calls[0].arguments
     assert set(tap_arguments) == {"channel", "count"}
 
 
@@ -2043,8 +2038,8 @@ def test_the_field_override_reads_the_key_the_caller_named(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
     targeted_stub_control_plane(
-        queued_bodies=[
-            tap_result_body(
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id("s#9", field="rendered_surface")],
             )
@@ -2076,10 +2071,10 @@ def test_a_recycled_frame_is_retried_against_a_newer_bag_and_reported(
     # The loud half of the contract: the run recovers, and says which id it had
     # to give up on, so a sample can never quietly become a different frame.
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body("cam/frame", [bag_publishing_surface_id("stale#1")]),
-            tap_result_body("cam/frame", [bag_publishing_surface_id("fresh#2")]),
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer("cam/frame", [bag_publishing_surface_id("stale#1")]),
+            tap_result_tool_answer("cam/frame", [bag_publishing_surface_id("fresh#2")]),
         ],
         surface_image_answers={
             "stale#1": RECYCLED_FRAME_ANSWER,
@@ -2110,9 +2105,9 @@ def test_a_bag_without_the_named_field_is_counted_rather_than_fatal(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [
                     framed_bag(msgpack_named_map({"width": 640}), slice_capacity=1024),
@@ -2146,9 +2141,9 @@ def test_every_nth_bag_selects_the_stride(
 ):
     labels = ["a", "b", "c", "d", "e", "f"]
     server = targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id(f"s#{label}") for label in labels],
             )
@@ -2179,7 +2174,7 @@ def test_every_nth_bag_selects_the_stride(
         png_bytes_for("d"),
     ]
     # Enough bags to satisfy the stride were asked for, not just the frame count.
-    assert json.loads(server.recorded_bodies[0])["params"]["arguments"]["count"] == 6
+    assert server.recorded_tool_calls[0].arguments["count"] == 6
 
 
 def test_the_stride_runs_across_tap_rounds_rather_than_restarting(
@@ -2189,13 +2184,13 @@ def test_the_stride_runs_across_tap_rounds_rather_than_restarting(
     # each round — reporting a stride it did not apply. Continuing the count
     # across rounds selects `a` then `d`.
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id(f"s#{label}") for label in ("a", "b")],
             ),
-            tap_result_body(
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id(f"s#{label}") for label in ("c", "d")],
             ),
@@ -2235,9 +2230,9 @@ def test_a_short_sample_exits_nonzero(
     # A harness reading the directory must not take "fewer frames than I asked
     # for" as "this is all the channel had".
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body("cam/frame", [bag_publishing_surface_id("s#1")])
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer("cam/frame", [bag_publishing_surface_id("s#1")])
         ],
         surface_image_answers={"s#1": image_answer("one")},
     )
@@ -2267,9 +2262,9 @@ def test_a_refusal_that_cannot_be_retried_stops_the_run(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body("cam/frame", [bag_publishing_surface_id("s#1")])
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer("cam/frame", [bag_publishing_surface_id("s#1")])
         ],
         surface_image_answers={
             "s#1": StubSurfaceImageAnswer(501, error_message="no conversion arm")
@@ -2299,9 +2294,9 @@ def test_frames_that_landed_before_a_fatal_stop_are_still_printed(
     # use and a human will not find, so the stop is reported beside the frames
     # rather than instead of them.
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
             )
@@ -2345,8 +2340,8 @@ def test_a_bag_the_tap_truncated_stops_the_run_by_name(
         msgpack_named_map({"surface_id": "s#1", "filler": "x" * 200})
     )
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[tap_result_body("cam/frame", [whole_bag[:-32]])],
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[tap_result_tool_answer("cam/frame", [whole_bag[:-32]])],
     )
 
     assert (
@@ -2372,9 +2367,9 @@ def test_a_bag_past_the_taps_preview_cap_stops_the_run_and_names_the_size(
     # surface id" would blame the channel for something this client could not
     # read, and retrying it would never converge.
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame", [bag_publishing_surface_id("s#1")], hex_truncated=True
             )
         ],
@@ -2409,9 +2404,9 @@ def test_a_capped_bag_with_no_reported_size_is_still_diagnosed_as_capped(
     # one this client could not decode — blaming the channel for the tool's
     # own limit.
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id("s#1")],
                 hex_truncated=True,
@@ -2458,9 +2453,9 @@ def test_the_stride_steps_over_an_oversized_bag_rather_than_dying_on_it(
     # selected but publishes no id — without that the run finishes on bag 0 and
     # never proves where the cap check sits relative to the stride.
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [
                     framed_bag(msgpack_named_map({"width": 640}), slice_capacity=1024),
@@ -2499,9 +2494,9 @@ def test_a_bag_the_stride_skips_cannot_kill_the_run_by_being_oversized(
     # Bag 1 is past the preview cap, and `--every 2` never selects it. A run
     # that needs only bag 0 must not fail on a bag it never reads.
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
                 truncated_bag_indexes=frozenset({1}),
@@ -2536,9 +2531,9 @@ def test_an_oversized_bag_does_not_discard_the_readable_bags_beside_it(
     # Bag 0 is readable and bag 1 is not. Failing the whole tap round would
     # throw away a frame that had already been exchanged.
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
                 truncated_bag_indexes=frozenset({1}),
@@ -2573,9 +2568,9 @@ def test_a_write_that_fails_still_names_the_frames_that_landed(
     # The filesystem half of the same promise the report exists to keep: a PNG
     # on disk whose path was never printed is evidence nobody can use.
     targeted_stub_control_plane(
-        body=tap_result_body("cam/frame", []),
-        queued_bodies=[
-            tap_result_body(
+        tool_answer=tap_result_tool_answer("cam/frame", []),
+        queued_tool_answers=[
+            tap_result_tool_answer(
                 "cam/frame",
                 [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
             )

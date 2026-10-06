@@ -3,7 +3,7 @@
 
 """A scripted client follows a node's own prompt to a spliced live graph.
 
-The client is a script, not a model. What it brings is the names of the two
+The client is the official MCP Python SDK's, driven by a script, not a model. What it brings is the names of the two
 resources and the one prompt it picks from the node's listings, and the short
 class name of the effect it wants inserted. Everything else comes from the
 server: the resource URIs and the prompt's argument names from
@@ -16,15 +16,23 @@ inserted.
 Booting initializes a GPU context, so the whole module needs a device.
 """
 
+import asyncio
 import json
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
+import httpx2
 import pytest
+from mcp.client.client import Client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.exceptions import MCPError
+from mcp.types import TextContent, TextResourceContents
+from mcp_types import UNSUPPORTED_PROTOCOL_VERSION
+from mcp_types.version import LATEST_PROTOCOL_VERSION
 
-from streamlib._control_plane_client import LocalApiSocket, _post_jsonrpc
+from streamlib._control_plane_client import LocalApiSocket
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
     NODE_READY_TIMEOUT_SECONDS,
     await_sole_registry_entry,
@@ -36,7 +44,11 @@ pytestmark = pytest.mark.requires_gpu
 
 FIRST_MARKED_BAG_TIMEOUT_SECONDS = 30.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
-JSON_RPC_TIMEOUT_SECONDS = 30.0
+MCP_REQUEST_TIMEOUT_SECONDS = 30.0
+#: The MCP endpoint; it fills `Host`, and the socket path is the address.
+LOCAL_API_MCP_URL = "http://localhost/mcp"
+
+Answered = TypeVar("Answered")
 # How long a link handed to a running helper has to come back `wired`. The
 # helper answers between callbacks, so this is bounded by one frame of the
 # processor's own work, not by the wire.
@@ -153,33 +165,59 @@ def await_added_node_state(client: "ScriptedMcpClient", node_name: str, wanted: 
 
 
 class ScriptedMcpClient:
-    """Plain JSON-RPC over `POST /mcp` on the node's local API socket, and
-    nothing streamlib-specific in what it sends."""
+    """The official MCP Python SDK's client on the node's local API socket, at
+    the revision `server/discover` agrees, and nothing streamlib-specific in
+    what it sends."""
 
     def __init__(self, local_api_socket: LocalApiSocket) -> None:
         self.local_api_socket = local_api_socket
-        self.next_request_id = 0
 
-    def request(self, method: str, params: "dict[str, Any]") -> Any:
-        envelope = self.envelope(method, params)
-        assert "error" not in envelope, f"{method} was refused: {envelope['error']}"
-        return envelope["result"]
+    def answer(
+        self, operation: "Callable[[Client], Awaitable[Answered]]", *, mode: str = "auto"
+    ) -> "Answered":
+        """Run one operation on a client connected for it alone; every request
+        carries its own revision, so nothing is held between them."""
 
-    def envelope(self, method: str, params: "dict[str, Any]") -> "dict[str, Any]":
-        self.next_request_id += 1
-        body = json.dumps(
-            {"jsonrpc": "2.0", "id": self.next_request_id, "method": method, "params": params}
-        )
-        return json.loads(_post_jsonrpc(self.local_api_socket, body, JSON_RPC_TIMEOUT_SECONDS))
+        async def connected_operation() -> "Answered":
+            async with httpx2.AsyncClient(
+                transport=httpx2.AsyncHTTPTransport(uds=self.local_api_socket.local_api_socket_path),
+                timeout=MCP_REQUEST_TIMEOUT_SECONDS,
+            ) as http_client, Client(
+                streamable_http_client(LOCAL_API_MCP_URL, http_client=http_client), mode=mode
+            ) as client:
+                return await operation(client)
+
+        return asyncio.run(connected_operation())
 
     def read_json_resource(self, uri: str) -> Any:
-        contents = self.request("resources/read", {"uri": uri})["contents"]
-        return json.loads(contents[0]["text"])
+        (document,) = self.answer(lambda client: client.read_resource(uri)).contents
+        assert isinstance(document, TextResourceContents), document
+        return json.loads(document.text)
+
+    def prompt_text(self, prompt_name: str, arguments: "dict[str, str]") -> str:
+        (message,) = self.answer(lambda client: client.get_prompt(prompt_name, arguments)).messages
+        assert isinstance(message.content, TextContent), message
+        return message.content.text
 
     def call_tool(self, tool_name: str, arguments: "dict[str, Any]") -> Any:
-        result = self.request("tools/call", {"name": tool_name, "arguments": arguments})
-        assert result["isError"] is False, f"`{tool_name}` failed: {result['content']}"
-        return json.loads(result["content"][0]["text"])
+        result = self.answer(lambda client: client.call_tool(tool_name, arguments))
+        assert result.is_error is False, f"`{tool_name}` failed: {result.content}"
+        stated = result.content[0]
+        assert isinstance(stated, TextContent), result.content
+        return json.loads(stated.text)
+
+
+def the_mcp_error_in(raised: BaseException) -> MCPError:
+    """The protocol error a client raised, out of the exception group anyio
+    wraps it in."""
+    if isinstance(raised, MCPError):
+        return raised
+    for inner in getattr(raised, "exceptions", ()):
+        try:
+            return the_mcp_error_in(inner)
+        except AssertionError:
+            continue
+    raise AssertionError(f"no protocol error in {raised!r}")
 
 
 def numbered_steps(prompt_text: str) -> "list[tuple[str, str]]":
@@ -226,17 +264,24 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
     client = ScriptedMcpClient(LocalApiSocket(entry["local_api_socket_path"]))
 
-    capabilities = client.request(
-        "initialize",
-        {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "scripted", "version": "0"}},
-    )["capabilities"]
-    assert {"tools", "resources", "prompts"} <= capabilities.keys(), capabilities
-    served_tool_names = {tool["name"] for tool in client.request("tools/list", {})["tools"]}
+    negotiated_protocol_version, capabilities = client.answer(
+        lambda connected: asyncio.sleep(0, (connected.protocol_version, connected.server_capabilities))
+    )
+    assert negotiated_protocol_version == LATEST_PROTOCOL_VERSION
+    assert capabilities.tools and capabilities.resources and capabilities.prompts, capabilities
+    with pytest.raises(Exception) as raised_by_the_handshake:
+        client.answer(lambda connected: connected.list_tools(), mode="legacy")
+    handshake_refusal = the_mcp_error_in(raised_by_the_handshake.value)
+    assert handshake_refusal.code == UNSUPPORTED_PROTOCOL_VERSION, handshake_refusal
+    served_tool_names = {tool.name for tool in client.answer(lambda connected: connected.list_tools()).tools}
 
     resource_uris_by_name = {
-        resource["name"]: resource["uri"] for resource in client.request("resources/list", {})["resources"]
+        resource.name: resource.uri
+        for resource in client.answer(lambda connected: connected.list_resources()).resources
     }
-    prompts_by_name = {prompt["name"]: prompt for prompt in client.request("prompts/list", {})["prompts"]}
+    prompts_by_name = {
+        prompt.name: prompt for prompt in client.answer(lambda connected: connected.list_prompts()).prompts
+    }
     insert_prompt = prompts_by_name["insert_node_between_linked_nodes"]
 
     catalog = client.read_json_resource(resource_uris_by_name["node-catalog"])
@@ -254,15 +299,12 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
 
     # The prompt's two arguments, bound by the names the listing gave them: one
     # takes the link's id, the other a catalog import path.
-    argument_names = [argument["name"] for argument in insert_prompt["arguments"]]
+    argument_names = [argument.name for argument in insert_prompt.arguments or []]
     link_argument = next(name for name in argument_names if name.startswith("link"))
     type_argument = next(name for name in argument_names if name != link_argument)
-    insert_request = {
-        "name": insert_prompt["name"],
-        "arguments": {link_argument: replaced_link["id"], type_argument: inserted_type},
-    }
-    recipe = client.request("prompts/get", insert_request)
-    recipe_text = recipe["messages"][0]["content"]["text"]
+    recipe_text = client.prompt_text(
+        insert_prompt.name, {link_argument: replaced_link["id"], type_argument: inserted_type}
+    )
     steps = numbered_steps(recipe_text)
     assert steps, f"the recipe lists no steps:\n{recipe_text}"
     assert {tool_name for tool_name, _ in steps} <= served_tool_names, recipe_text
@@ -339,19 +381,16 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     # The virtual camera recipe names a type this node's catalog actually holds.
     source_endpoint = replaced_link["source"]
     camera_prompt = prompts_by_name["show_channel_on_virtual_camera"]
-    camera_recipe_text = client.request(
-        "prompts/get",
-        {
-            "name": camera_prompt["name"],
-            # Its required arguments name a node, then one of its output ports.
-            "arguments": dict(
-                zip(
-                    [argument["name"] for argument in camera_prompt["arguments"] if argument["required"]],
-                    [source_endpoint["node"], source_endpoint["port"]],
-                )
-            ),
-        },
-    )["messages"][0]["content"]["text"]
+    camera_recipe_text = client.prompt_text(
+        camera_prompt.name,
+        # Its required arguments name a node, then one of its output ports.
+        dict(
+            zip(
+                [argument.name for argument in camera_prompt.arguments or [] if argument.required],
+                [source_endpoint["node"], source_endpoint["port"]],
+            )
+        ),
+    )
     camera_add_step = next(
         instruction for tool_name, instruction in numbered_steps(camera_recipe_text)
         if tool_name == "add_node"
