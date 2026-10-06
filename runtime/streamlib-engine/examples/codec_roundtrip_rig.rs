@@ -1003,7 +1003,6 @@ mod linux_rig {
         // exchanging its surface ids for exact pixels.
         streamlib_api_server::control_plane_host::register_api_server_control_plane_processor_on_runtime(
             app.runner(),
-            streamlib_api_server::control_plane_host::ApiServerControlPlaneHostConfig::default(),
         )?;
 
         match &encoder {

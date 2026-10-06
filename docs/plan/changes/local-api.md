@@ -119,7 +119,7 @@ against.
   socket, chmod 0600 after bind inside the 0700 directory. A live duplicate is refused by the
   surface socket's connect probe, naming the path; a stale file is removed. The listener is the
   only one: `ApiServerConfig` loses `host`, `port` and `require_auth`;
-  `ApiServerControlPlaneHostConfig` loses `bind_host` and `bind_port`;
+  `ApiServerControlPlaneHostConfig`, which carried only `bind_host` and `bind_port`, is deleted;
   `Runtime.host_control_plane()` takes no arguments; the rigs and fixtures follow.
 - **The registry.** The entry's `control_url` becomes `local_api_socket_path`, schema 3; a
   reader refuses 2 by name (entries are per run; nothing to migrate). Liveness is the same `graph`
@@ -265,6 +265,7 @@ while the fixtures move.
 - REMOVED: Could not find available port in range
 - REMOVED: bind_host
 - REMOVED: bind_port
+- REMOVED: ApiServerControlPlaneHostConfig
 - REMOVED: control_url
 - REMOVED: requested_url
 - REMOVED: _refuse_a_non_http_url
