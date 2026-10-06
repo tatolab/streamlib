@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The data plane a Python processor reads and writes through.
+//! The data plane a Python node reads and writes through.
 //!
 //! This is where the GIL-release contract is kept for the per-bag path: the
 //! conversion between Python objects and msgpack needs the GIL and holds it;
@@ -41,9 +41,9 @@ use crate::python_processor_declaration::read_a_channel_count_or_the_source_spel
 
 /// One node's links, as seen from Python.
 ///
-/// Frozen because the engine hands the same object to the processor's own
+/// Frozen because the engine hands the same object to the node's own
 /// thread and reads it from the wiring path; the interior `OnceLock`s are
-/// written once before the processor's first callback.
+/// written once before the node's first callback.
 #[pyclass(name = "NodeLinkDataAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonProcessorLinkDataAccess {
     input_mailboxes: OnceLock<Arc<InputMailboxesInner>>,
@@ -329,7 +329,7 @@ impl PythonProcessorLinkDataAccess {
             })
     }
 
-    /// Open this processor's publisher and one destination notifier for a link
+    /// Open this node's publisher and one destination notifier for a link
     /// out of `port_name`.
     ///
     /// One call per link. The publisher is installed once — the first link out
@@ -431,7 +431,7 @@ impl PythonProcessorLinkDataAccess {
             })
     }
 
-    /// Open this processor's subscriber for a link into `port_name`, plus the
+    /// Open this node's subscriber for a link into `port_name`, plus the
     /// one listener every input shares.
     ///
     /// `channel_service_name` is what this end subscribes to and

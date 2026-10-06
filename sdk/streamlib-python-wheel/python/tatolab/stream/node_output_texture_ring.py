@@ -12,7 +12,7 @@ consumer in another process can resolve it.
 
 The engine, not this class, decides which slot is next: one a consumer still
 holds — claimed by a typed cast, or resolved — is skipped and never rewritten,
-so a downstream processor holding an earlier output keeps seeing its pixels.
+so a downstream node holding an earlier output keeps seeing its pixels.
 The pool rotates through `depth` slots while nobody holds anything, grows while
 consumers hold frames, and at its cap refuses by name: the producer drops its
 own frame, and never waits on a consumer. A frame nobody claimed stays

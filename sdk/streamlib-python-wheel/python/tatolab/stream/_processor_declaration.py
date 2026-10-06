@@ -337,7 +337,7 @@ def output(
 
 
 def node(
-    processor_class: Optional[type] = None,
+    node_class: Optional[type] = None,
     *,
     execution: Optional[str] = None,
     interval_ms: int = 0,
@@ -375,19 +375,19 @@ def node(
     `Runtime.load` does. `description` falls back to the class's docstring
     when it is not given.
     """
-    if isinstance(processor_class, type):
+    if isinstance(node_class, type):
         return _declare_processor(
-            processor_class,
+            node_class,
             execution=execution,
             interval_ms=interval_ms,
             scheduling=scheduling,
             description=description,
         )
 
-    if processor_class is not None:
+    if node_class is not None:
         raise TypeError(
             f"@node() takes no positional argument; got "
-            f"{type(processor_class).__name__}. A node is named by the import path "
+            f"{type(node_class).__name__}. A node is named by the import path "
             f"of the class it is — `my_app.filters:BlurEffect` — derived from "
             f"`__module__` and `__qualname__` and never authored. Use `@node` bare, "
             f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "

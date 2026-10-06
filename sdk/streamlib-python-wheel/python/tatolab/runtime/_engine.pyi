@@ -741,7 +741,7 @@ class NodeLinkDataAccess:
         link_id: str,
         output_port_wiring_generation: int | None = None,
     ) -> None:
-        """Open this processor's publisher and one notifier for a link out of
+        """Open this node's publisher and one notifier for a link out of
         `port_name`.
 
         Once a loss-count board is open, `output_port_wiring_generation` names
@@ -765,7 +765,7 @@ class NodeLinkDataAccess:
         loss_count_slot: int | None = None,
         wiring_generation: int | None = None,
     ) -> None:
-        """Open this processor's subscriber for one link into `port_name`.
+        """Open this node's subscriber for one link into `port_name`.
 
         `channel_service_name` is what this end subscribes to;
         `inbound_link_name` is what a read hands back as the link's name.
@@ -992,7 +992,7 @@ class GpuContextLimitedAccess:
         pool rotates through `rotation_depth` slots, grows while consumers hold
         frames, and at its cap raises naming the pool — the producer drops its
         own frame rather than wait. `NodeOutputTextureRing` is the
-        spelling a processor reaches for.
+        spelling a node reaches for.
         """
     def acquire_storage_buffer(
         self,
@@ -1110,7 +1110,7 @@ class GpuContextFullAccess:
         pool rotates through `rotation_depth` slots, grows while consumers hold
         frames, and at its cap raises naming the pool — the producer drops its
         own frame rather than wait. `NodeOutputTextureRing` is the
-        spelling a processor reaches for.
+        spelling a node reaches for.
         """
     def acquire_storage_buffer(
         self,
@@ -1147,14 +1147,14 @@ class GpuContextFullAccess:
     def create_window(
         self, title: str, width: int = 1280, height: int = 720
     ) -> NodeOwnedWindow:
-        """Request a window this processor owns, presented by the engine.
+        """Request a window this node owns, presented by the engine.
 
         `width` and `height` are the window's initial size in the desktop's
         logical pixels, so it is the same size on a 1x and a 2x display.
 
         Constructed once in `setup()`, named frames per frame in `process()`.
         The window lives in the app process on its own present loop, so it
-        keeps its frame rate whatever this processor's pace is, and naming no
+        keeps its frame rate whatever this node's pace is, and naming no
         frame leaves the last one up.
 
         Raises when the process can get no window at all — no display server,
@@ -1862,7 +1862,7 @@ class NodeOwnedWindow:
         """Close this window and release its present thread.
 
         Never an error for a window already closed, and never required: the
-        engine closes what a processor still owns at teardown.
+        engine closes what a node still owns at teardown.
         """
 
     def __repr__(self) -> str: ...

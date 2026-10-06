@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The wheel's window object: a window a Python processor owns.
+//! The wheel's window object: a window a Python node owns.
 //!
 //! Requested in `setup()` where the capability is Full, named frames from
 //! `process()`. The window itself lives in the app process, on the engine's
@@ -96,7 +96,7 @@ impl PythonProcessorOwnedWindowEvents {
 
     fn __repr__(&self) -> String {
         format!(
-            "ProcessorOwnedWindowEvents({}x{}, close_requested_by_user={}, window_is_closed={})",
+            "NodeOwnedWindowEvents({}x{}, close_requested_by_user={}, window_is_closed={})",
             self.current_width_in_physical_pixels,
             self.current_height_in_physical_pixels,
             self.close_requested_by_user,
@@ -224,7 +224,7 @@ impl PythonProcessorOwnedWindow {
     /// Close this window and release its present thread.
     ///
     /// Never an error for a window already closed, and never required: the
-    /// engine closes what a processor still owns at teardown.
+    /// engine closes what a node still owns at teardown.
     fn close(&self, python: Python<'_>) -> PyResult<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {

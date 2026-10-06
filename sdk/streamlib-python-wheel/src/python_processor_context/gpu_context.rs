@@ -530,11 +530,11 @@ impl PythonGpuContextFullAccess {
         )
     }
 
-    /// Request a window this processor owns, presented by the engine.
+    /// Request a window this node owns, presented by the engine.
     ///
     /// Constructed once in `setup()`, named frames per frame in `process()`.
     /// The window lives in the app process on its own present loop, so it
-    /// keeps its frame rate whatever this processor's pace is, and naming no
+    /// keeps its frame rate whatever this node's pace is, and naming no
     /// frame leaves the last one up.
     ///
     /// Raises when the process can get no window at all — no display server,

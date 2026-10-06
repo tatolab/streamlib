@@ -11,9 +11,11 @@ Python name `tatolab.stream` publishes says "processor".
 
 import importlib.util
 import inspect
+import pkgutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 import tatolab
 import tatolab.runtime
@@ -26,6 +28,10 @@ ENGINE_CLASS_NAMES_THE_RENAME_RETIRED = (
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
     "ProcessorLinkDataAccess",
+)
+CLASS_NAMES_THE_RENAME_RETIRED = (
+    *ENGINE_CLASS_NAMES_THE_RENAME_RETIRED,
+    "ProcessorOutputTextureRing",
 )
 ENGINE_CLASS_NAMES_IN_THEIR_PLACE = (
     "NodeOwnedWindow",
@@ -64,6 +70,23 @@ def test_no_tatolab_init_exists_in_the_source_tree_or_on_the_namespace_path():
 
 def test_no_streamlib_module_is_importable():
     assert importlib.util.find_spec("streamlib") is None
+    assert "streamlib" not in {
+        top_level_module.name for top_level_module in pkgutil.iter_modules()
+    }
+
+
+def test_the_retired_texture_ring_module_is_not_importable():
+    assert importlib.util.find_spec("tatolab.stream.processor_output_texture_ring") is None
+    assert importlib.util.find_spec("tatolab.runtime.processor_output_texture_ring") is None
+
+
+def test_no_package_nor_the_engine_holds_a_class_name_the_rename_retired():
+    for module_holding_public_names in (tatolab.stream, tatolab.runtime, engine):
+        for class_name in CLASS_NAMES_THE_RENAME_RETIRED:
+            assert not hasattr(module_holding_public_names, class_name), (
+                module_holding_public_names.__name__,
+                class_name,
+            )
 
 
 def test_importing_tatolab_runtime_alone_does_not_import_tatolab_stream():
@@ -142,6 +165,54 @@ def test_no_name_tatolab_stream_publishes_nor_any_public_member_of_one_says_proc
         )
 
     assert names_saying_processor == []
+
+
+# Public parameters that say "processor" and are not this rename's to change.
+# Each is named here so the sweep below stays exhaustive for everything else.
+PUBLIC_PARAMETERS_SAYING_PROCESSOR_OUTSIDE_THIS_RENAME: "tuple[str, ...]" = ()
+
+
+def _public_callables_tatolab_stream_publishes() -> "list[tuple[str, Callable[..., object]]]":
+    public_callables: "list[tuple[str, Callable[..., object]]]" = []
+    for exported_name in tatolab.stream.__all__:
+        exported = getattr(tatolab.stream, exported_name)
+        if inspect.isclass(exported):
+            public_callables.append((exported_name, exported))
+            for member_name in dir(exported):
+                if member_name.startswith("_"):
+                    continue
+                member = getattr(exported, member_name)
+                if callable(member) and not inspect.isclass(member):
+                    public_callables.append((f"{exported_name}.{member_name}", member))
+        elif inspect.ismodule(exported):
+            for member_name in getattr(exported, "__all__", ()):
+                member = getattr(exported, member_name)
+                if callable(member):
+                    public_callables.append((f"{exported_name}.{member_name}", member))
+        elif callable(exported):
+            public_callables.append((exported_name, exported))
+    return public_callables
+
+
+def test_the_node_decorator_names_its_class_parameter_node_class():
+    node_parameter_names = list(inspect.signature(tatolab.stream.node).parameters)
+    assert node_parameter_names[0] == "node_class"
+    assert not [name for name in node_parameter_names if "processor" in name.lower()]
+
+
+def test_no_parameter_of_a_public_callable_tatolab_stream_publishes_says_processor():
+    parameters_saying_processor = [
+        f"{qualified_name}({parameter_name})"
+        for qualified_name, public_callable in _public_callables_tatolab_stream_publishes()
+        for parameter_name in inspect.signature(public_callable).parameters
+        if "processor" in parameter_name.lower()
+    ]
+
+    assert [
+        parameter
+        for parameter in parameters_saying_processor
+        if parameter not in PUBLIC_PARAMETERS_SAYING_PROCESSOR_OUTSIDE_THIS_RENAME
+    ] == []
 
 
 def test_every_engine_class_tatolab_stream_publishes_names_tatolab_stream_as_its_module():
