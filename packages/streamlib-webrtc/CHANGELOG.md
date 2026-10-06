@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.9.0](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.8.0...streamlib-webrtc-v0.9.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** `streamlib` becomes `tatolab.stream` and `tatolab.runtime` ([#2673](https://github.com/tatolab/streamlib/issues/2673))
+
+### Features
+
+* **sdk:** `streamlib` becomes `tatolab.stream` and `tatolab.runtime` ([#2673](https://github.com/tatolab/streamlib/issues/2673)) ([d7f6807](https://github.com/tatolab/streamlib/commit/d7f680741e2f28d73c254ed80a4e09d5d705a553))
+
 ## [0.8.0](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.7.0...streamlib-webrtc-v0.8.0) (2026-10-06)
 
 

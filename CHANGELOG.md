@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.36.0](https://github.com/tatolab/streamlib/compare/v0.35.0...v0.36.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** `streamlib` becomes `tatolab.stream` and `tatolab.runtime` ([#2673](https://github.com/tatolab/streamlib/issues/2673))
+
+### Features
+
+* **sdk:** `streamlib` becomes `tatolab.stream` and `tatolab.runtime` ([#2673](https://github.com/tatolab/streamlib/issues/2673)) ([d7f6807](https://github.com/tatolab/streamlib/commit/d7f680741e2f28d73c254ed80a4e09d5d705a553))
+
 ## [0.35.0](https://github.com/tatolab/streamlib/compare/v0.34.1...v0.35.0) (2026-10-06)
 
 
