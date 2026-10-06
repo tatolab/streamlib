@@ -46,9 +46,9 @@ __all__ = [
     "LocalApiMcpToolCallFailed",
     "MonotonicTimer",
     "OpaqueFdTextureExport",
-    "ProcessorOwnedWindow",
-    "ProcessorOwnedWindowEvents",
-    "ProcessorLinkDataAccess",
+    "NodeOwnedWindow",
+    "NodeOwnedWindowEvents",
+    "NodeLinkDataAccess",
     "CameraSource",
     "CapabilityExtensionHost",
     "DisplayWindow",
@@ -101,8 +101,8 @@ class CameraSource:
     camera on macOS, ahead of external cameras and camera extensions.
     `max_width` and `max_height` (1920 and 1080 by default) cap the negotiated
     format, which is clamped to fit. Output `video` publishes an ordinary
-    `tatolab.stream.VideoFrame`. Camera→GPU transport auto-selects zero-copy (DMA-BUF on Linux, IOSurface on
-    macOS) or CPU upload. A named `device_id` that cannot be opened is refused
+    `tatolab.stream.VideoFrame`. Camera→GPU transport auto-selects zero-copy
+    (DMA-BUF on Linux, IOSurface on macOS) or CPU upload. A named `device_id` that cannot be opened is refused
     at `setup()` by name, as is every camera on a platform no capture backend
     serves. Each frame's `timestamp_ns` is the instant the device captured it,
     on the machine's monotonic clock.
@@ -696,8 +696,8 @@ class CapabilityExtensionHost:
         """
 
 @final
-class ProcessorLinkDataAccess:
-    """One processor's links. The engine binds it; app code never builds one.
+class NodeLinkDataAccess:
+    """One node's links. The engine binds it; app code never builds one.
 
     Constructing one opens a helper process's own data plane, with its own
     iceoryx2 node — only `tatolab.runtime._helper` does that. The node opens in the
@@ -705,7 +705,7 @@ class ProcessorLinkDataAccess:
     and construction raises `RuntimeError` naming that variable when it is unset.
     """
 
-    def __new__(cls) -> ProcessorLinkDataAccess: ...
+    def __new__(cls) -> NodeLinkDataAccess: ...
     def declare_ports(
         self, input_port_names: Sequence[str], output_port_names: Sequence[str]
     ) -> None:
@@ -821,15 +821,15 @@ class RuntimeContextFullAccess:
     @property
     def runtime_id(self) -> str: ...
     @property
-    def processor_id(self) -> str: ...
+    def node_id(self) -> str: ...
     def is_paused(self) -> bool: ...
     def should_process(self) -> bool: ...
     @staticmethod
     def open_for_helper_process(
         configuration: Mapping[str, Any],
-        link_data_access: ProcessorLinkDataAccess,
+        link_data_access: NodeLinkDataAccess,
         runtime_id: str,
-        processor_id: str,
+        node_id: str,
         escalate_request_to_parent: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         release_to_parent_without_waiting: Callable[[dict[str, Any]], None] | None = None,
     ) -> RuntimeContextFullAccess: ...
@@ -857,7 +857,7 @@ class RuntimeContextLimitedAccess:
     @property
     def runtime_id(self) -> str: ...
     @property
-    def processor_id(self) -> str: ...
+    def node_id(self) -> str: ...
     def is_paused(self) -> bool: ...
     def should_process(self) -> bool: ...
 
@@ -976,7 +976,7 @@ class GpuContextLimitedAccess:
         on Linux, through its own IOSurface on macOS — without the caller
         spelling a transfer usage.
         """
-    def acquire_texture_from_processor_output_pool(
+    def acquire_texture_from_node_output_pool(
         self,
         pool_key: str,
         rotation_depth: int,
@@ -985,13 +985,13 @@ class GpuContextLimitedAccess:
         format: str,
         usage: list[str],
     ) -> GpuSurfaceHandle:
-        """The texture this frame publishes into, from the processor output pool `pool_key`.
+        """The texture this frame publishes into, from the node output pool `pool_key`.
 
         Every call names a new frame, `<slot>#<generation>`, in a slot the pool
         owns; a slot any consumer still holds is skipped, never rewritten. The
         pool rotates through `rotation_depth` slots, grows while consumers hold
         frames, and at its cap raises naming the pool — the producer drops its
-        own frame rather than wait. `ProcessorOutputTextureRing` is the
+        own frame rather than wait. `NodeOutputTextureRing` is the
         spelling a processor reaches for.
         """
     def acquire_storage_buffer(
@@ -1010,18 +1010,18 @@ class GpuContextLimitedAccess:
         publish the id after it; an MLX write is ordered by the `mx.eval` it
         owes inside the block. A one-off is released at close; a tensor
         published downstream comes from
-        `acquire_storage_buffer_from_processor_output_pool`.
+        `acquire_storage_buffer_from_node_output_pool`.
         """
-    def acquire_storage_buffer_from_processor_output_pool(
+    def acquire_storage_buffer_from_node_output_pool(
         self,
         pool_key: str,
         rotation_depth: int,
         shape: Sequence[int],
         dtype: Literal["float32", "float16", "uint8", "int32"],
     ) -> GpuSurfaceHandle:
-        """The tensor this frame publishes into, from the processor output pool `pool_key`.
+        """The tensor this frame publishes into, from the node output pool `pool_key`.
 
-        The pool contract `acquire_texture_from_processor_output_pool` states:
+        The pool contract `acquire_texture_from_node_output_pool` states:
         a new `<slot>#<generation>` per call, a slot a consumer still holds is
         never rewritten, and at the cap the call raises naming the pool.
         """
@@ -1094,7 +1094,7 @@ class GpuContextFullAccess:
         on Linux, through its own IOSurface on macOS — without the caller
         spelling a transfer usage.
         """
-    def acquire_texture_from_processor_output_pool(
+    def acquire_texture_from_node_output_pool(
         self,
         pool_key: str,
         rotation_depth: int,
@@ -1103,13 +1103,13 @@ class GpuContextFullAccess:
         format: str,
         usage: list[str],
     ) -> GpuSurfaceHandle:
-        """The texture this frame publishes into, from the processor output pool `pool_key`.
+        """The texture this frame publishes into, from the node output pool `pool_key`.
 
         Every call names a new frame, `<slot>#<generation>`, in a slot the pool
         owns; a slot any consumer still holds is skipped, never rewritten. The
         pool rotates through `rotation_depth` slots, grows while consumers hold
         frames, and at its cap raises naming the pool — the producer drops its
-        own frame rather than wait. `ProcessorOutputTextureRing` is the
+        own frame rather than wait. `NodeOutputTextureRing` is the
         spelling a processor reaches for.
         """
     def acquire_storage_buffer(
@@ -1128,25 +1128,25 @@ class GpuContextFullAccess:
         publish the id after it; an MLX write is ordered by the `mx.eval` it
         owes inside the block. A one-off is released at close; a tensor
         published downstream comes from
-        `acquire_storage_buffer_from_processor_output_pool`.
+        `acquire_storage_buffer_from_node_output_pool`.
         """
-    def acquire_storage_buffer_from_processor_output_pool(
+    def acquire_storage_buffer_from_node_output_pool(
         self,
         pool_key: str,
         rotation_depth: int,
         shape: Sequence[int],
         dtype: Literal["float32", "float16", "uint8", "int32"],
     ) -> GpuSurfaceHandle:
-        """The tensor this frame publishes into, from the processor output pool `pool_key`.
+        """The tensor this frame publishes into, from the node output pool `pool_key`.
 
-        The pool contract `acquire_texture_from_processor_output_pool` states:
+        The pool contract `acquire_texture_from_node_output_pool` states:
         a new `<slot>#<generation>` per call, a slot a consumer still holds is
         never rewritten, and at the cap the call raises naming the pool.
         """
 
     def create_window(
         self, title: str, width: int = 1280, height: int = 720
-    ) -> ProcessorOwnedWindow:
+    ) -> NodeOwnedWindow:
         """Request a window this processor owns, presented by the engine.
 
         `width` and `height` are the window's initial size in the desktop's
@@ -1805,8 +1805,8 @@ class ComputeKernel:
         """
 
 @final
-class ProcessorOwnedWindow:
-    """A window this processor owns, presented by the engine at vsync.
+class NodeOwnedWindow:
+    """A window this node owns, presented by the engine at vsync.
 
     Constructed in `setup()` through `ctx.gpu_full_access.create_window(...)`;
     named frames per frame in `process()`. No window handle, swapchain or
@@ -1851,7 +1851,7 @@ class ProcessorOwnedWindow:
         shut.
         """
 
-    def drain_events(self) -> ProcessorOwnedWindowEvents:
+    def drain_events(self) -> NodeOwnedWindowEvents:
         """Take this window's coalesced state.
 
         Polling is optional — an owner that never drains still presents; it
@@ -1868,7 +1868,7 @@ class ProcessorOwnedWindow:
     def __repr__(self) -> str: ...
 
 @final
-class ProcessorOwnedWindowEvents:
+class NodeOwnedWindowEvents:
     """The coalesced state one `drain_events()` took off a window."""
 
     @property

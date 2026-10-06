@@ -30,9 +30,9 @@ from tatolab.runtime._engine import LinkOutputDataWriter as LinkOutputDataWriter
 from tatolab.runtime._engine import MicrophoneSource as MicrophoneSource
 from tatolab.runtime._engine import MonotonicTimer as MonotonicTimer
 from tatolab.runtime._engine import Mp4Sink as Mp4Sink
-from tatolab.runtime._engine import ProcessorLinkDataAccess as ProcessorLinkDataAccess
-from tatolab.runtime._engine import ProcessorOwnedWindow as ProcessorOwnedWindow
-from tatolab.runtime._engine import ProcessorOwnedWindowEvents as ProcessorOwnedWindowEvents
+from tatolab.runtime._engine import NodeLinkDataAccess as NodeLinkDataAccess
+from tatolab.runtime._engine import NodeOwnedWindow as NodeOwnedWindow
+from tatolab.runtime._engine import NodeOwnedWindowEvents as NodeOwnedWindowEvents
 from tatolab.runtime._engine import OpaqueFdTextureExport as OpaqueFdTextureExport
 from tatolab.runtime._engine import OpusDecoder as OpusDecoder
 from tatolab.runtime._engine import OpusEncoder as OpusEncoder
@@ -90,9 +90,7 @@ from .model_input_tensor_kernel import (
 )
 from .model_input_tensor_kernel import ModelInputTensorKernel as ModelInputTensorKernel
 from .model_input_tensor_kernel import ModelInputTensorLayout as ModelInputTensorLayout
-from .node_output_texture_ring import (
-    ProcessorOutputTextureRing as ProcessorOutputTextureRing,
-)
+from .node_output_texture_ring import NodeOutputTextureRing as NodeOutputTextureRing
 from .video_frame import ColorInfo as ColorInfo
 from .video_frame import ContentLight as ContentLight
 from .video_frame import MasteringDisplay as MasteringDisplay
@@ -136,11 +134,11 @@ __all__ = [
     "MonotonicTimer",
     "Mp4Sink",
     "NodeInputPortReference",
-    "ProcessorLinkDataAccess",
+    "NodeLinkDataAccess",
     "NodeOutputPortReference",
-    "ProcessorOutputTextureRing",
-    "ProcessorOwnedWindow",
-    "ProcessorOwnedWindowEvents",
+    "NodeOutputTextureRing",
+    "NodeOwnedWindow",
+    "NodeOwnedWindowEvents",
     "NodeReference",
     "OpaqueFdTextureExport",
     "OpusDecoder",

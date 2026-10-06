@@ -18,7 +18,7 @@ from tatolab.runtime._engine import (
     GpuSurfaceHandle,
 )
 
-from .node_output_texture_ring import ProcessorOutputTextureRing
+from .node_output_texture_ring import NodeOutputTextureRing
 
 GpuContextWithSurfaceCopy = Union[GpuContextLimitedAccess, GpuContextFullAccess]
 
@@ -30,7 +30,7 @@ class SampledSourceLandingTextureRing:
     """The texture each frame lands in before a kernel samples it, one pooled slot per frame."""
 
     def __init__(self) -> None:
-        self._landing_ring = ProcessorOutputTextureRing(
+        self._landing_ring = NodeOutputTextureRing(
             SAMPLED_SOURCE_TEXTURE_FORMAT, ["texture_binding"], depth=1
         )
 

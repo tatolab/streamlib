@@ -40,7 +40,7 @@ from ._capability_extensions import (
 )
 from ._engine import (
     MonotonicTimer,
-    ProcessorLinkDataAccess,
+    NodeLinkDataAccess,
     RuntimeContextFullAccess,
     capability_extension_host_for_the_helper_process,
     capture_this_helper_processes_engine_log_records,
@@ -709,7 +709,7 @@ def load_processor_class(import_path: str) -> type:
 
 
 def wire_link_data_access(
-    link_data_access: ProcessorLinkDataAccess, port_wiring: "dict[str, Any]"
+    link_data_access: NodeLinkDataAccess, port_wiring: "dict[str, Any]"
 ) -> None:
     """Open this processor's publishers and subscribers, one call per link.
 
@@ -754,7 +754,7 @@ def wire_link_data_access(
 
 
 def unwire_link_data_access(
-    link_data_access: ProcessorLinkDataAccess, command: "dict[str, Any]"
+    link_data_access: NodeLinkDataAccess, command: "dict[str, Any]"
 ) -> None:
     """Release this processor's own port for one link the engine disconnected.
 
@@ -852,7 +852,7 @@ class HostedProcessor:
 def construct_hosted_processor(
     processor_class: type,
     configuration: "Optional[dict[str, Any]]",
-    link_data_access: ProcessorLinkDataAccess,
+    link_data_access: NodeLinkDataAccess,
     runtime_id: str,
     processor_id: str,
     bridge: ParentProcessBridge,
@@ -886,7 +886,7 @@ class HelperProcessLifecycle:
         processor_class: type,
         runtime_id: str,
         processor_id: str,
-        link_data_access: ProcessorLinkDataAccess,
+        link_data_access: NodeLinkDataAccess,
     ) -> None:
         self._bridge = bridge
         self._processor_class = processor_class
@@ -1351,7 +1351,7 @@ def main() -> None:
 
     try:
         processor_class = load_processor_class(import_path)
-        link_data_access = ProcessorLinkDataAccess()
+        link_data_access = NodeLinkDataAccess()
     except Exception as startup_failure:
         engine_log_forwarder.stop_after_forwarding_what_is_left()
         log.error(

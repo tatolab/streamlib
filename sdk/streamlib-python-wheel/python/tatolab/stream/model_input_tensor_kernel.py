@@ -6,13 +6,13 @@
 The frame is stretched or letterboxed to the model's input size, or padded
 on the bottom and right at its own extent — its alpha dropped and its channels put in the
 model's order, then written as `(x * scale - mean) / std` into a tensor
-surface laid out `nchw` or `nhwc`. The tensor comes from a processor output
+surface laid out `nchw` or `nhwc`. The tensor comes from a node output
 pool, so a tensor a consumer still holds is never rewritten, and
 `torch.from_dlpack` reads it with no copy. The fit's geometry maps the model's
 boxes back to the frame's own coordinates.
 
 Wheel grammar over `create_compute_kernel`, the landing copy
-`GlslPixelEffect` shares, `acquire_storage_buffer_from_processor_output_pool`
+`GlslPixelEffect` shares, `acquire_storage_buffer_from_node_output_pool`
 and `dispatch`; the engine sees nothing but a copy, a kernel and a tensor.
 No colour conversion: a YUV frame is converted before it is published.
 """
@@ -539,7 +539,7 @@ class ModelInputTensorKernel:
         source_landing_texture = self._source_landing_ring.land_source_for_this_frame(
             gpu_limited_access, source_surface_id, source_width, source_height, refusal_subject
         )
-        tensor_surface = gpu_limited_access.acquire_storage_buffer_from_processor_output_pool(
+        tensor_surface = gpu_limited_access.acquire_storage_buffer_from_node_output_pool(
             self._tensor_output_pool_key,
             STANDARD_RING_DEPTH,
             tensor_extent.dimensions,

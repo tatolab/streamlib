@@ -210,7 +210,7 @@ impl PythonGpuContextLimitedAccess {
         )
     }
 
-    /// The texture this frame publishes into, from the processor output pool
+    /// The texture this frame publishes into, from the node output pool
     /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
     /// consumer still holds.
     ///
@@ -218,6 +218,7 @@ impl PythonGpuContextLimitedAccess {
     /// hold frames, and at its cap refuses by name — the producer drops its
     /// own frame rather than wait.
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(name = "acquire_texture_from_node_output_pool")]
     fn acquire_texture_from_processor_output_pool(
         &self,
         python: Python<'_>,
@@ -260,9 +261,10 @@ impl PythonGpuContextLimitedAccess {
         )
     }
 
-    /// The tensor this frame publishes into, from the processor output pool
+    /// The tensor this frame publishes into, from the node output pool
     /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
     /// consumer still holds; at the pool's cap, refused by name.
+    #[pyo3(name = "acquire_storage_buffer_from_node_output_pool")]
     fn acquire_storage_buffer_from_processor_output_pool(
         &self,
         python: Python<'_>,
@@ -453,7 +455,7 @@ impl PythonGpuContextFullAccess {
         )
     }
 
-    /// The texture this frame publishes into, from the processor output pool
+    /// The texture this frame publishes into, from the node output pool
     /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
     /// consumer still holds.
     ///
@@ -461,6 +463,7 @@ impl PythonGpuContextFullAccess {
     /// hold frames, and at its cap refuses by name — the producer drops its
     /// own frame rather than wait.
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(name = "acquire_texture_from_node_output_pool")]
     fn acquire_texture_from_processor_output_pool(
         &self,
         python: Python<'_>,
@@ -503,9 +506,10 @@ impl PythonGpuContextFullAccess {
         )
     }
 
-    /// The tensor this frame publishes into, from the processor output pool
+    /// The tensor this frame publishes into, from the node output pool
     /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
     /// consumer still holds; at the pool's cap, refused by name.
+    #[pyo3(name = "acquire_storage_buffer_from_node_output_pool")]
     fn acquire_storage_buffer_from_processor_output_pool(
         &self,
         python: Python<'_>,
