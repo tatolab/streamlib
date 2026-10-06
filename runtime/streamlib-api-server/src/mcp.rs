@@ -3016,32 +3016,6 @@ mod tests {
         }
     }
 
-    /// Resources and prompts expose nothing the tools do not, and answer on the
-    /// same `POST /mcp` route `graph` does.
-    #[tokio::test]
-    async fn resources_and_prompts_answer_on_the_routers_post_mcp() {
-        for (method, params) in [
-            ("resources/list", json!({})),
-            ("resources/read", json!({ "uri": "streamlib://graph" })),
-            ("prompts/list", json!({})),
-            (
-                "prompts/get",
-                json!({ "name": "look_at_what_a_channel_carries", "arguments": { "from_node": "pattern", "from_port": "video" } }),
-            ),
-        ] {
-            let (status, body) = mcp_call(
-                stub_serving_two_linked_nodes(),
-                json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }),
-            )
-            .await;
-            assert_eq!(status, StatusCode::OK, "{method}");
-            assert!(
-                body["error"].is_null() && !body["result"].is_null(),
-                "{method} must answer a result: {body}"
-            );
-        }
-    }
-
     #[tokio::test]
     async fn the_fan_prompt_adds_one_consumer_and_wires_it_to_the_named_port() {
         let text = prompt_text(

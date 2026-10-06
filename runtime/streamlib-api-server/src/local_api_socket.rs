@@ -113,8 +113,7 @@ async fn serve_local_api_until_stopped(
     }
 }
 
-/// Remove the local API's socket file once its listener has stopped. Already
-/// gone is not a failure.
+/// Remove the local API's socket file. Already gone is not a failure.
 fn remove_local_api_socket_file(local_api_socket_path: &Path) -> std::io::Result<()> {
     match std::fs::remove_file(local_api_socket_path) {
         Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => Ok(()),

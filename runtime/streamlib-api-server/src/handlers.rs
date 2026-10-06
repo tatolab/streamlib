@@ -630,20 +630,23 @@ pub(crate) mod router_surface_tests {
         control_plane_router_over(ControlPlaneRouterStubRuntime::default())
     }
 
-    async fn status_on(router: Router, request: Request<Body>) -> StatusCode {
-        router.oneshot(request).await.unwrap().status()
-    }
-
     async fn status_of(request: Request<Body>) -> StatusCode {
-        status_on(control_plane_router_over_a_stub_runtime(), request).await
+        control_plane_router_over_a_stub_runtime()
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status()
     }
 
     fn runtime_shutdown_body() -> Body {
         Body::from(serde_json::json!({ "reason": "operator asked" }).to_string())
     }
 
-    async fn json_body_on(router: Router, request: Request<Body>) -> serde_json::Value {
-        let response = router.oneshot(request).await.unwrap();
+    async fn json_body_of(request: Request<Body>) -> serde_json::Value {
+        let response = control_plane_router_over_a_stub_runtime()
+            .oneshot(request)
+            .await
+            .unwrap();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -677,7 +680,7 @@ pub(crate) mod router_surface_tests {
             .uri("/api/openapi.json")
             .body(Body::empty())
             .unwrap();
-        let spec = json_body_on(control_plane_router_over_a_stub_runtime(), request).await;
+        let spec = json_body_of(request).await;
         let paths = &spec["paths"];
 
         // Positive control. Indexing a `Value` yields `Null` for a missing key
@@ -735,7 +738,7 @@ pub(crate) mod router_surface_tests {
             .uri("/api/registry")
             .body(Body::empty())
             .unwrap();
-        let served = json_body_on(control_plane_router_over_a_stub_runtime(), request).await;
+        let served = json_body_of(request).await;
 
         let probe = served["nodes"]
             .as_array()
@@ -757,7 +760,7 @@ pub(crate) mod router_surface_tests {
             .uri("/api/openapi.json")
             .body(Body::empty())
             .unwrap();
-        let served = json_body_on(control_plane_router_over_a_stub_runtime(), request).await;
+        let served = json_body_of(request).await;
         let generated = serde_json::to_value(control_plane_openapi_spec())
             .expect("the generated spec serializes");
         assert_eq!(
