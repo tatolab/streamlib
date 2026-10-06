@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.32.0](https://github.com/tatolab/streamlib/compare/v0.31.0...v0.32.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** `Runtime.add`, `Runtime.connect`, `streamlib.AddedProcessor`, `streamlib.ProcessorOutputPortReference` and `streamlib.ProcessorInputPortReference` are gone. Build a graph in a `@stream` function with `stream.add` / `stream.connect` and load it with `Runtime().load(compile_stream_to_graph(fn))`.
+
+### Features
+
+* **sdk:** rt.add, rt.connect and the setup(rt) harness are gone ([#2655](https://github.com/tatolab/streamlib/issues/2655)) ([87cde19](https://github.com/tatolab/streamlib/commit/87cde194755f857561a07a36c91c2bf6a78c7b28))
+
 ## [0.31.0](https://github.com/tatolab/streamlib/compare/v0.30.0...v0.31.0) (2026-10-05)
 
 
