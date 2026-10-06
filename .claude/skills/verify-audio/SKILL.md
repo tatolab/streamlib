@@ -25,13 +25,12 @@ so their reports are directly comparable.
   its monitor, no StreamLib anywhere in the path. It answers "is this machine's audio sound",
   which is the question a tool living inside the runtime can never answer — it runs whether or not
   the engine compiles.
-- **`verify_audio_loopback.sh [--count N] [--port PORT] [--path P]` — through-engine.**
+- **`verify_audio_loopback.sh [--count N] [--path P]` — through-engine.**
   `SpeakerSink` plays the signal into the same null sink and `MicrophoneSource` captures it back
   off that sink's monitor, so both ends are StreamLib. It also runs the block-level channel
   contract on the microphone's own port on the way through (cadence, timestamp continuity, a frame
   the engine did not re-stamp), and fails on that before it ever measures the signal. `--count` is
-  how many bags that intermediate tap collects, not anything about the signal; `--port` moves the
-  control plane; `--path` is macOS-only (below) and exits 2 elsewhere.
+  how many bags that intermediate tap collects, not anything about the signal; `--path` is macOS-only (below) and exits 2 elsewhere.
 
 **Through-engine is the default.** It is the question a PR usually has. Run rig-only alone only
 when the engine will not build, or when you are checking the machine rather than the change.
@@ -149,51 +148,12 @@ Things only the owner can do, asked for once, before the first run that needs th
 - **For `acoustic` and rig-only:** headphones *off*, the built-in speakers as the output, a quiet
   room, and the output volume noted in the report.
 
-**The through-engine fixture hosts its control plane on port 9077, and a busy 9077 misdirects the
-run rather than failing it.** The API server walks up to ten ports looking for a free one and says
-so only at `INFO` (`Port 9077 in use, bound to 9078 instead`), while the fixture keeps asking the
-port it was given. So the node is alive and serving — somewhere else.
-
-**Budget for it: a busy port stalls the run for up to half an hour before it gives up.** The
-startup poll is 60 attempts at a call bounded by `CONTROL_VERB_TIMEOUT_SECONDS = 30.0`, so a port
-held by something that accepts and never answers burns the full 30 s per attempt.
-
-**So check the port is free before you start**, or pass `--port`. This is the one preflight that
-prevents an unearned green, and it costs nothing:
-
-```bash
-ss -ltn | grep ':9077' || echo "9077 free"                          # Linux
-lsof -nP -iTCP:9077 -sTCP:LISTEN || echo "9077 free"                # macOS, which has no ss
-```
-
-What a busy port looks like depends on what holds it, and none of these is `Connection refused`:
-
-- **A second StreamLib node that declares a `MicrophoneSource`** → **no error at all.** The tap
-  resolves against *that* node's graph, so the channel contract is measured on a different
-  process and the run can exit 0 and report `PASS`. The realistic instance is an orphaned
-  `audio_loopback_node.py` from a killed run. Its own default is 9000 — 9077 is this fixture's
-  (`verify_audio_loopback.sh`), which exports it into the node — so an orphan of a *previous run
-  of this same fixture* sits on exactly the port the next one wants, declaring exactly the
-  processor it looks for. **This is the dangerous one**: every other failure mode here announces
-  itself.
-- **A second StreamLib node without one** → the query succeeds against the wrong graph and the run
-  dies at `no node named microphonesource in the running graph`.
-- **A socket that accepts and never answers** → `no control plane reachable at
-  http://127.0.0.1:9077 (timed out)`.
-- **A foreign HTTP server** → an HTTP status rather than a refusal, e.g. `answered 404`.
-
-**Confirm the run measured its own node before believing a pass.** The tap prints the channel it
-read (`tapping <runtime_name>/microphonesource/audio for N bags`); its first chunk is the runtime
-the tap resolved against, and it must be the runtime whose `node.log` you have, or the verdict is
-about someone else's graph:
-
-```bash
-grep -F "Creating Runner named <tapped-runtime-name> " "<artifacts-dir>/node.log"
-```
-
-**`Connection refused` on 9077 means the opposite — nothing is listening there at all**, so the
-node died or never served. That is a real failure and must never be waved away as a port
-collision. `node.log` is where the run says which port it took, and whether it got that far.
+**The through-engine fixture measures the node it launched, and no other.** It resolves that
+process's `runtime_id` from the registry and passes `--node <runtime_id>` to every verb, so an
+orphaned `audio_loopback_node.py` from a killed run cannot answer in its place. A node that exits
+first fails at `the loopback node exited before serving its local API`; one that never answers
+fails at `the loopback node never answered over its local API socket`, with the tail of
+`node.log` — both are real failures.
 
 ## Reading what came back
 

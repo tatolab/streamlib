@@ -14,14 +14,12 @@ Run `inspect-live-graph` and read the top-level `runtime_name`, the source node'
 ```
 <runtime_name>/<node>/<port>   e.g.  lab-one/camera/frames
 ```
-A tap reads a channel on the runtime it targets: a channel naming another runtime is refused, naming that runtime. Point the tap at that runtime instead (`--node <its runtime name>` or its `--url`), channel unchanged.
+A tap reads a channel on the runtime it targets: a channel naming another runtime is refused, naming that runtime. Point the tap at that runtime instead (`--node <its runtime name>`), channel unchanged.
 
 ### 2. Tap a bounded sample
 The channel is a positional argument; `--count` bounds how many bags to collect before returning:
 ```bash
-streamlib tap --node <runtime_id> lab-one/camera/frames --count 10
-# or
-streamlib tap --url <control_url> lab-one/camera/frames --count 10
+streamlib tap --node <runtime name> lab-one/camera/frames --count 10
 # or, when exactly one node is live:
 streamlib tap lab-one/camera/frames --count 10
 ```
@@ -35,4 +33,4 @@ Each collected bag prints as a hex preview and a byte length. Omitting `--count`
 ## Notes
 - `tap` has NO `--output` flag. To persist the sample as evidence, redirect stdout (`streamlib tap ... > frames.json`) — see `capture-node-evidence`.
 - Read-only: a tap never mutates the graph and never disturbs the real subscribers on the channel.
-- The channel positional and `--count` can appear in either order; the node is selected by `--url` / `--node` exactly like the other verbs.
+- The channel positional and `--count` can appear in either order; the node is selected by `--node` exactly like the other verbs.
