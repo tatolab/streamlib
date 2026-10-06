@@ -37,11 +37,8 @@ pub struct ApiServerProcessor {
     /// runtime's worker threads enter it, so the HTTP server never depends
     /// on the calling lifecycle thread already being inside a tokio runtime.
     tokio_runtime: Option<tokio::runtime::Runtime>,
-    /// Signals the local API socket's server to stop serving.
-    shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
+    running_local_api_socket_server: Option<crate::local_api_socket::RunningLocalApiSocketServer>,
     runtime_id: Option<String>,
-    /// The local API socket this processor bound, removed again at stop.
-    bound_local_api_socket_path: Option<PathBuf>,
 }
 
 impl ManualProcessor for ApiServerProcessor::Processor {
@@ -99,13 +96,12 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             .as_ref()
             .expect("setup must be called before start");
 
-        let shutdown_tx = crate::local_api_socket::serve_router_on_local_api_socket(
-            crate::handlers::build_router(handles.runtime.clone()),
-            &handles.tokio_handle,
-            &handles.local_api_socket_path,
-        )?;
-        self.bound_local_api_socket_path = Some(handles.local_api_socket_path.clone());
-        self.shutdown_tx = Some(shutdown_tx);
+        self.running_local_api_socket_server =
+            Some(crate::local_api_socket::serve_router_on_local_api_socket(
+                crate::handlers::build_router(handles.runtime.clone()),
+                &handles.tokio_handle,
+                &handles.local_api_socket_path,
+            )?);
         self.runtime_id = Some(handles.runtime_id.clone());
 
         tracing::info!(
@@ -147,18 +143,8 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         {
             tracing::warn!(%error, "failed to remove node registry entry on stop");
         }
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            let _ = shutdown_tx.send(true);
-        }
-        if let Some(local_api_socket_path) = self.bound_local_api_socket_path.take()
-            && let Err(error) =
-                crate::local_api_socket::remove_local_api_socket_file(&local_api_socket_path)
-        {
-            tracing::warn!(
-                %error,
-                "failed to remove the local API socket {} on stop",
-                local_api_socket_path.display()
-            );
+        if let Some(running_local_api_socket_server) = self.running_local_api_socket_server.take() {
+            running_local_api_socket_server.stop();
         }
         Ok(())
     }
