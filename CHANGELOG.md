@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.34.0](https://github.com/tatolab/streamlib/compare/v0.33.0...v0.34.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api-server:** the runtime serves MCP through rmcp at the latest revision, and nothing earlier ([#2665](https://github.com/tatolab/streamlib/issues/2665))
+
+### Features
+
+* **api-server:** the runtime serves MCP through rmcp at the latest revision, and nothing earlier ([#2665](https://github.com/tatolab/streamlib/issues/2665)) ([fe57814](https://github.com/tatolab/streamlib/commit/fe5781451fed39c8e0de27c413be354c9a45ae4a))
+
 ## [0.33.0](https://github.com/tatolab/streamlib/compare/v0.32.2...v0.33.0) (2026-10-06)
 
 
