@@ -50,7 +50,6 @@
 #                             for an endpoint wanting RFC 9725 bearer auth;
 #                             Cloudflare Stream does not.
 #   SAMPLE_COUNT/SAMPLE_EVERY the exchange budget (defaults 6 / 2)
-#   CONTROL_PLANE_PORT        default 9422
 #   RUN_SECONDS               node budget (default 120)
 #   MEDIA_DEADLINE_SECONDS    how long to wait for the first decoded frame
 #                             after the graph is up (default 60) — an ingest
@@ -71,7 +70,6 @@ BASELINE_TSV="$ENGINE_FIXTURES/psnr_vivid_baseline.tsv"
 OUTPUT_DIR="${1:-/tmp/streamlib-webrtc-live-$(date +%s)}"
 SAMPLE_COUNT="${SAMPLE_COUNT:-6}"
 SAMPLE_EVERY="${SAMPLE_EVERY:-2}"
-CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT:-9422}"
 RUN_SECONDS="${RUN_SECONDS:-120}"
 MEDIA_DEADLINE_SECONDS="${MEDIA_DEADLINE_SECONDS:-60}"
 TOLERANCE="${TOLERANCE:-0.05}"
@@ -137,18 +135,10 @@ while read -r dev; do
 done < <(v4l2-ctl --list-devices 2>/dev/null | awk '/vivid/{getline; print $1}')
 [ -n "$VIVID_DEVICE" ] || cannot_run "no vivid capture device found"
 
-# A busy control port would misdirect this run rather than fail it: the API
-# server walks up to ten ports when the one it was given is taken, so a second
-# node already on this one would be measured instead.
-if (echo >"/dev/tcp/127.0.0.1/$CONTROL_PLANE_PORT") 2>/dev/null; then
-    fail "something is already listening on 127.0.0.1:$CONTROL_PLANE_PORT; this run would measure that node instead of its own"
-fi
-
 mkdir -p "$OUTPUT_DIR"
 EXCHANGED_DIR="$OUTPUT_DIR/exchanged"
 MEASURED_DIR="$OUTPUT_DIR/measured"
 LOG_FILE="$OUTPUT_DIR/pipeline.log"
-CONTROL_PLANE_URL="http://127.0.0.1:$CONTROL_PLANE_PORT"
 
 ORIGINAL_PATTERN="$(v4l2-ctl -d "$VIVID_DEVICE" -C test_pattern 2>/dev/null | awk '{print $2}')"
 [[ "$ORIGINAL_PATTERN" =~ ^[0-9]+$ ]] || ORIGINAL_PATTERN=0
@@ -189,7 +179,6 @@ v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$VIVID_TEST_PATTERN" 2>"$OUTPUT_DIR
 say "Output dir:        $OUTPUT_DIR"
 say "Vivid device:      $VIVID_DEVICE"
 say "Test pattern:      $VIVID_TEST_PATTERN (was $ORIGINAL_PATTERN, restored on exit)"
-say "Control plane:     $CONTROL_PLANE_URL"
 say "Endpoints:         <redacted — each URL carries the account's stream key>"
 
 # ── Build the scorer ─────────────────────────────────────────────────
@@ -248,20 +237,58 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         "$VENV_PYTHON" "$SCRIPT_DIR/whip_whep_roundtrip_node.py" \
             --camera "$VIVID_DEVICE" \
             ${AUDIO_CAPTURE_DEVICE:+--audio-capture-device "$AUDIO_CAPTURE_DEVICE"} \
-            --control-plane-port "$CONTROL_PLANE_PORT" \
         > "$LOG_FILE" 2>&1 &
 NODE_PID=$!
 
+# `$!` is `timeout`, which runs the node as its child rather than exec'ing it,
+# so the registry entry is the one whose process `timeout` is the parent of.
+# Matched by pid and never by runtime name: a second run of this fixture
+# publishes the same name, and would otherwise be measured instead.
+registry_entry_of_launched_node() {
+    "$VENV_PYTHON" -c '
+import sys
+from streamlib._node_registry import live_nodes
+
+launcher_pid = int(sys.argv[1])
+
+def parent_pid_of(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as stat_file:
+            stat_line = stat_file.read()
+    except OSError:
+        return None
+    return int(stat_line.rpartition(")")[2].split()[1])
+
+for entry in live_nodes():
+    if entry.pid == launcher_pid or parent_pid_of(entry.pid) == launcher_pid:
+        print(entry.runtime_id, entry.local_api_socket_path)
+        break
+else:
+    sys.exit(1)
+' "$NODE_PID" 2>/dev/null
+}
+
+RUNTIME_ID=""
+LOCAL_API_SOCKET=""
 for _ in $(seq 1 120); do
-    "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" >/dev/null 2>&1 && break
+    if REGISTRY_ENTRY="$(registry_entry_of_launched_node)"; then
+        read -r RUNTIME_ID LOCAL_API_SOCKET <<<"$REGISTRY_ENTRY"
+        "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1 && break
+    fi
+    kill -0 "$NODE_PID" 2>/dev/null || break
+    RUNTIME_ID=""
     sleep 0.5
 done
+[ -n "$RUNTIME_ID" ] \
+    || { tail -40 "$LOG_FILE" >&2; fail "the node never published a registry entry that answered \`streamlib graph\`"; }
+say "Runtime id:        $RUNTIME_ID"
+say "Local API socket:  $LOCAL_API_SOCKET"
 
 # A channel is the port's address, `<runtime_name>/<node>/<port>`. Derived from
 # the live graph, in a pipe: the graph renders every node's config, and this
 # graph's config holds both endpoint URLs.
 channel_of() {
-    "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
+    "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 wanted_node_name, wanted_port = sys.argv[1], sys.argv[2]
@@ -293,7 +320,7 @@ say "Waiting for the first decoded frame (deadline ${MEDIA_DEADLINE_SECONDS}s)..
 # reports a channel that has produced nothing as ready, and the run then spends
 # the exchange budget before the far side has connected.
 tapped_bag_count() {
-    "$STREAMLIB_CLI" tap "$1" --count 1 --url "$CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
+    "$STREAMLIB_CLI" tap "$1" --count 1 --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 try:
     print(json.load(sys.stdin).get("received", 0))
@@ -321,7 +348,7 @@ if ! "$STREAMLIB_CLI" exchange \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \
         --every "$SAMPLE_EVERY" \
-        --url "$CONTROL_PLANE_URL" \
+        --node "$RUNTIME_ID" \
         > "$OUTPUT_DIR/exchanged_paths.txt" 2> "$OUTPUT_DIR/exchange.log"; then
     cat "$OUTPUT_DIR/exchange.log" >&2
     tail -40 "$LOG_FILE" >&2
@@ -357,7 +384,7 @@ fi
 if [ "${PUBLISHED_AUDIO_BAGS:-0}" -eq 0 ] 2>/dev/null; then
     AUDIO_VERDICT="cannot run — this rig's capture device published no Opus packets, so nothing was sent to measure coming back"
 elif PYTHON="$VENV_PYTHON" "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
-        --url "$CONTROL_PLANE_URL" --port audio --count 8 \
+        --node "$RUNTIME_ID" --port audio --count 8 \
         > "$OUTPUT_DIR/audio_channel.json" 2> "$OUTPUT_DIR/audio_channel.log"; then
     AUDIO_VERDICT="pass"
 else
