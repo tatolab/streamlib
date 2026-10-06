@@ -106,6 +106,12 @@ jobs:
           # PEP 420: `tatolab` is a namespace package. A regular
           # `tatolab/__init__.py` would shadow every other distribution's
           # `tatolab.*` portion installed beside this wheel.
+          for regular_package in stream runtime; do
+            if [ ! -f "/tmp/unzipped-wheel/tatolab/$regular_package/__init__.py" ]; then
+              echo "::error::the wheel does not carry tatolab/$regular_package/__init__.py"
+              exit 1
+            fi
+          done
           if [ -e /tmp/unzipped-wheel/tatolab/__init__.py ]; then
             echo "::error::the wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
             exit 1

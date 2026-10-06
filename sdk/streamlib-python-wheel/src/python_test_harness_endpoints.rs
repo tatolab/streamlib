@@ -224,7 +224,7 @@ pub(crate) fn register_test_harness_processor_types() {
 
 native_processor_marker_classes! {
     added_to_the_module_by: add_test_harness_marker_classes_to_the_module,
-    python_module: "tatolab.runtime",
+    python_module: "tatolab.runtime._engine",
     markers: [
         /// `tatolab.runtime.testing`'s feeder, as the marker class `stream.add` takes.
         PythonTestBagFeederBlock as "TestBagFeeder" {
