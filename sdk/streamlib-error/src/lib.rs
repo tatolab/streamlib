@@ -96,19 +96,19 @@ pub enum Error {
     UnknownProcessorType { ident: ProcessorClassImportPath },
 
     #[error(
-        "`{processor_type}` is a built-in node this runtime does not have on {this_floor}: it \
-         runs on {floors_it_runs_on} only"
+        "`{node_type}` is a built-in node this runtime does not have on {this_floor}: it runs \
+         on {floors_it_runs_on} only"
     )]
     BuiltInNodeTypeAbsentOnThisFloor {
-        processor_type: ProcessorClassImportPath,
+        node_type: ProcessorClassImportPath,
         this_floor: String,
         floors_it_runs_on: String,
     },
 
-    #[error("node `{node_name}` (`{processor_type}`) does not take its config: {refusal}")]
+    #[error("node `{node_name}` (`{node_type}`) does not take its config: {refusal}")]
     NodeConfigRefused {
         node_name: String,
-        processor_type: ProcessorClassImportPath,
+        node_type: ProcessorClassImportPath,
         refusal: String,
     },
 
@@ -376,7 +376,7 @@ mod tests {
     /// A stream names no runtime version, so the refusal of a type this runtime
     /// lacks names the runtime's own, to compare with the stream's library.
     #[test]
-    fn unknown_processor_type_names_this_runtimes_own_version() {
+    fn an_unknown_node_type_names_this_runtimes_own_version() {
         let msg = Error::UnknownProcessorType {
             ident: ProcessorClassImportPath::new("tatolab.stream:NewThing").unwrap(),
         }

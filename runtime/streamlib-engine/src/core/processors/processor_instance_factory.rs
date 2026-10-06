@@ -194,7 +194,7 @@ pub type DynamicProcessorConstructorFn =
 
 /// Refuse a config the type's own `Config` would not take, naming the node,
 /// its type and the setting.
-type ProcessorConfigTakenCheckFn =
+type NodeConfigTakenCheckFn =
     Box<dyn Fn(&str, &ProcessorClassImportPath, &serde_json::Value) -> Result<()> + Send + Sync>;
 
 /// Per-type registration entry the factory stores.
@@ -204,8 +204,8 @@ enum RegistrationKind {
     LegacyDyn {
         constructor: DynamicProcessorConstructorFn,
         /// Present for a typed Rust registration; a Python class's config is
-        /// checked by its own config class, in its processor interpreter.
-        config_taken_check: Option<ProcessorConfigTakenCheckFn>,
+        /// checked by its own config class, where the node runs.
+        config_taken_check: Option<NodeConfigTakenCheckFn>,
     },
 }
 
@@ -275,16 +275,16 @@ impl ProcessorInstanceFactory {
         }
     }
 
-    /// Register a processor type, storing `P`'s descriptor + port info, and
+    /// Register a node type, storing `P`'s descriptor + port info, and
     /// log rather than return a registration that fails.
     pub fn register<P>(&self)
     where
         P: GeneratedProcessor + 'static,
         P::Config: Config,
     {
-        if let Err(e) = self.register_host_compiled_processor_type::<P>() {
+        if let Err(e) = self.register_host_compiled_node_type::<P>() {
             tracing::warn!(
-                "Processor registration for {} failed: {}",
+                "Node type registration for {} failed: {}",
                 std::any::type_name::<P>(),
                 e
             );
@@ -294,9 +294,7 @@ impl ProcessorInstanceFactory {
     /// Register host-compiled Rust type `P` under its descriptor's import
     /// path, returned, with a constructor and a check that refuses a config
     /// `P::Config` would not take before any node of it is added.
-    pub(crate) fn register_host_compiled_processor_type<P>(
-        &self,
-    ) -> Result<ProcessorClassImportPath>
+    pub(crate) fn register_host_compiled_node_type<P>(&self) -> Result<ProcessorClassImportPath>
     where
         P: GeneratedProcessor + 'static,
         P::Config: Config,
@@ -320,9 +318,9 @@ impl ProcessorInstanceFactory {
                 Ok(Box::new(P::from_config(config)?))
             },
         );
-        let config_taken_check: ProcessorConfigTakenCheckFn =
-            Box::new(|node_name, processor_type, config| {
-                config_the_node_type_takes::<P::Config>(node_name, processor_type, config).map(drop)
+        let config_taken_check: NodeConfigTakenCheckFn =
+            Box::new(|node_name, node_type, config| {
+                config_the_node_type_takes::<P::Config>(node_name, node_type, config).map(drop)
             });
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
         self.register_with_constructor(descriptor, constructor, Some(config_taken_check))?;
@@ -353,7 +351,7 @@ impl ProcessorInstanceFactory {
         &self,
         descriptor: ProcessorDescriptor,
         constructor: DynamicProcessorConstructorFn,
-        config_taken_check: Option<ProcessorConfigTakenCheckFn>,
+        config_taken_check: Option<NodeConfigTakenCheckFn>,
     ) -> Result<()> {
         refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
@@ -585,27 +583,27 @@ impl ProcessorInstanceFactory {
     /// refused naming the floors it runs on rather than as a type nobody has.
     pub fn register_built_in_node_type_absent_on_this_floor(
         &self,
-        processor_type: ProcessorClassImportPath,
+        node_type: ProcessorClassImportPath,
         floors_it_runs_on: impl Into<String>,
     ) {
         self.built_in_node_types_absent_on_this_floor
             .write()
-            .insert(processor_type, floors_it_runs_on.into());
+            .insert(node_type, floors_it_runs_on.into());
     }
 
     /// Refuse a built-in this floor compiles out, naming this floor and the
     /// floors it runs on.
     pub fn refuse_a_built_in_node_type_absent_on_this_floor(
         &self,
-        processor_type: &ProcessorClassImportPath,
+        node_type: &ProcessorClassImportPath,
     ) -> Result<()> {
         match self
             .built_in_node_types_absent_on_this_floor
             .read()
-            .get(processor_type)
+            .get(node_type)
         {
             Some(floors_it_runs_on) => Err(Error::BuiltInNodeTypeAbsentOnThisFloor {
-                processor_type: processor_type.clone(),
+                node_type: node_type.clone(),
                 this_floor: this_floors_name().to_string(),
                 floors_it_runs_on: floors_it_runs_on.clone(),
             }),
@@ -618,28 +616,28 @@ impl ProcessorInstanceFactory {
     pub fn refuse_a_node_this_runtime_cannot_add(
         &self,
         node_name: &str,
-        processor_type: &ProcessorClassImportPath,
+        node_type: &ProcessorClassImportPath,
         config: &serde_json::Value,
     ) -> Result<()> {
-        self.refuse_a_built_in_node_type_absent_on_this_floor(processor_type)?;
-        self.refuse_a_config_the_node_type_does_not_take(node_name, processor_type, config)
+        self.refuse_a_built_in_node_type_absent_on_this_floor(node_type)?;
+        self.refuse_a_config_the_node_type_does_not_take(node_name, node_type, config)
     }
 
     /// Refuse a config the node's type would not take — a setting it does not
     /// know, a value of the wrong kind — naming the node, its type and the
     /// setting. A type registered with no typed config (a Python class) takes
-    /// what reaches its processor interpreter, whose config class checks it.
+    /// what reaches the interpreter its node runs in, whose config class checks it.
     fn refuse_a_config_the_node_type_does_not_take(
         &self,
         node_name: &str,
-        processor_type: &ProcessorClassImportPath,
+        node_type: &ProcessorClassImportPath,
         config: &serde_json::Value,
     ) -> Result<()> {
-        match self.registrations.read().get(processor_type) {
+        match self.registrations.read().get(node_type) {
             Some(RegistrationKind::LegacyDyn {
                 config_taken_check: Some(config_taken_check),
                 ..
-            }) => config_taken_check(node_name, processor_type, config),
+            }) => config_taken_check(node_name, node_type, config),
             _ => Ok(()),
         }
     }
@@ -713,16 +711,16 @@ impl ProcessorInstanceFactory {
     }
 }
 
-/// `config` as the `C` a node of `processor_type` takes, or the refusal naming
+/// `config` as the `C` a node of `node_type` takes, or the refusal naming
 /// the node, its type and the setting serde stopped at.
 fn config_the_node_type_takes<C: serde::de::DeserializeOwned>(
     node_name: &str,
-    processor_type: &ProcessorClassImportPath,
+    node_type: &ProcessorClassImportPath,
     config: &serde_json::Value,
 ) -> Result<C> {
     serde_path_to_error::deserialize(config).map_err(|refusal| Error::NodeConfigRefused {
         node_name: node_name.to_string(),
-        processor_type: processor_type.clone(),
+        node_type: node_type.clone(),
         refusal: refusal.to_string(),
     })
 }

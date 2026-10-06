@@ -35,7 +35,7 @@ impl Runner {
             ))
         })?;
 
-        PROCESSOR_REGISTRY.register_host_compiled_processor_type::<P>()
+        PROCESSOR_REGISTRY.register_host_compiled_node_type::<P>()
     }
 }
 
@@ -89,11 +89,11 @@ mod tests {
         match refusal {
             Error::NodeConfigRefused {
                 node_name,
-                processor_type,
+                node_type,
                 refusal,
             } => {
                 assert_eq!(node_name, "front");
-                assert_eq!(processor_type, source_type);
+                assert_eq!(node_type, source_type);
                 assert!(refusal.contains("`frame_widht`"), "{refusal}");
             }
             other => panic!("expected NodeConfigRefused, got {other:?}"),

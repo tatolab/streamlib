@@ -199,7 +199,7 @@ mod tests {
     }
 
     /// A graph names a native node by its marker's `type`, so every marker the
-    /// module exports must name the path its native processor registered under:
+    /// module exports must name the type its native built-in registered under:
     /// its own class in `tatolab.stream`.
     #[test]
     fn every_exported_marker_type_names_a_registered_native_processor() {

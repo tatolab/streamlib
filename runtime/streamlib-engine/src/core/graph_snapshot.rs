@@ -643,7 +643,7 @@ mod tests {
         let refusal = graph.validate().unwrap_err();
 
         assert!(
-            matches!(&refusal, Error::BuiltInNodeTypeAbsentOnThisFloor { processor_type, .. } if *processor_type == compiled_out_here),
+            matches!(&refusal, Error::BuiltInNodeTypeAbsentOnThisFloor { node_type, .. } if *node_type == compiled_out_here),
             "{refusal:?}"
         );
         let refusal = refusal.to_string();
@@ -673,11 +673,11 @@ mod tests {
         match graph.validate() {
             Err(Error::NodeConfigRefused {
                 node_name,
-                processor_type,
+                node_type,
                 refusal,
             }) => {
                 assert_eq!(node_name, "Front");
-                assert_eq!(processor_type, source_type);
+                assert_eq!(node_type, source_type);
                 assert!(refusal.contains("`frame_widht`"), "{refusal}");
                 assert!(refusal.contains("`frame_width`"), "{refusal}");
             }
