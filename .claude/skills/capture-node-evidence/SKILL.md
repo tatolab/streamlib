@@ -34,7 +34,7 @@ Each file holds the hex-preview-plus-byte-length sample for that channel (bytes-
 ```bash
 streamlib logs --node <runtime_id> --count 200 > "$EVIDENCE_DIR/logs.txt"
 ```
-`--count` bounds the sample of the runtime event stream (all topics) within a short window. In this control-plane mode `logs` is addressed by `--url` / `--node` and bounded by `--count` — there is no positional `runtime_id` here (that form is the offline on-disk log reader, a different mode).
+`--count` bounds the sample of the runtime event stream (all topics) within a short window. In this live mode `logs` is addressed by `--node` and bounded by `--count` — there is no positional `runtime_id` here (that form is the offline on-disk log reader, a different mode).
 
 ### 5. Confirm and hand off the bundle
 ```bash
@@ -43,6 +43,6 @@ ls -l "$EVIDENCE_DIR"
 You now have `graph.json`, one `frames-<channel>.json` per tapped channel, and `logs.txt`. Attach them to the PR/issue (upload frame/graph artifacts with the `attach-artifact` skill), or diff a `-before` dir against a `-after` dir to show a change's effect.
 
 ## Notes
-- Every verb targets the node with `--url` / `--node` (or neither, when one node is live); `STREAMLIB_MCP_TOKEN` authorizes when set.
+- Every verb targets the node with `--node` (or none, when one node is live).
 - All three are read-only — capturing evidence never mutates the graph.
 - Do not invent a `--output` flag on `tap` or `graph`; redirection is the mechanism.

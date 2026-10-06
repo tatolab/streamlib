@@ -1,6 +1,6 @@
 ---
 name: teardown-running-node
-description: Stop a running StreamLib node cleanly by signaling its host process, then confirm its `runtime_id` is gone from the registry so the worktree's camera/GPU/port claim is released. Use when done driving a node — to free a `/dev/videoN` camera for another consumer, release the GPU, or clear a control port before starting a fresh run. Wraps `streamlib nodes` (to read the pid, then to confirm removal) plus an OS signal to the process — there is no `streamlib stop` verb.
+description: Stop a running StreamLib node cleanly by signaling its host process, then confirm its `runtime_id` is gone from the registry so the worktree's camera/GPU claim is released. Use when done driving a node — to free a `/dev/videoN` camera for another consumer, release the GPU, or clear the registry before starting a fresh run. Wraps `streamlib nodes` (to read the pid, then to confirm removal) plus an OS signal to the process — there is no `streamlib stop` verb.
 ---
 
 # teardown-running-node
@@ -20,13 +20,13 @@ Send `SIGTERM` (the default) so the runtime tears down gracefully and removes it
 ```bash
 kill <pid>
 ```
-If it is a node you launched in this session's foreground, `Ctrl-C` is equivalent. Escalate to `kill -9 <pid>` only if the process refuses to exit after a graceful signal — a hard kill skips clean teardown: `streamlib nodes` still prunes the stale entry on its next scan (unreachable AND pid-dead), but on Linux the node's `surface-share-<runtime_id>.sock` stays behind in the runtime directory.
+If it is a node you launched in this session's foreground, `Ctrl-C` is equivalent. Escalate to `kill -9 <pid>` only if the process refuses to exit after a graceful signal — a hard kill skips clean teardown: `streamlib nodes` still prunes the stale entry on its next scan (unreachable AND pid-dead), but the node's `local-api-<runtime_id>.sock` (and, on Linux, its `surface-share-<runtime_id>.sock`) stays behind in the runtime directory.
 
 ### 3. Confirm the node is gone
 ```bash
 streamlib nodes
 ```
-The node's row should no longer appear (or the whole table reports `No running nodes found`). Its camera / GPU / control-port claim is now released for the next run or another worktree.
+The node's row should no longer appear (or the whole table reports `No running nodes found`). Its camera / GPU claim is now released for the next run or another worktree. A clean shutdown also removed its local API socket; after a hard kill the stale socket file stays until a later bind at that path clears it.
 
 ## Notes
 - Get the pid from `streamlib nodes` — it is the authoritative source; do not guess.

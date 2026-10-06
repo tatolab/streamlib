@@ -12,9 +12,7 @@ The read-only ground-truth verb. Everything else keys off names that only the li
 ### 1. Export the live graph
 Target the node with the same flag you pinned in `drive-running-node`:
 ```bash
-streamlib graph --node <runtime_id>
-# or
-streamlib graph --url <control_url>
+streamlib graph --node <runtime name>
 # or, when exactly one node is live:
 streamlib graph
 ```
