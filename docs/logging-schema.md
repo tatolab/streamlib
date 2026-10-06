@@ -4,7 +4,7 @@ This is the **durable interface contract** for logs emitted by the
 StreamLib runtime. Every line of every segment under
 `<STREAMLIB_HOME>/.streamlib/logs/` (see [Files and rotation](#files-and-rotation))
 is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — the wheel's
-`streamlib logs` (`sdk/streamlib-python-wheel/python/streamlib/_runtime_log_reader.py`)
+`streamlib logs` (`sdk/streamlib-python-wheel/python/tatolab/runtime/_runtime_log_reader.py`)
 and any tool that reads a runtime's segments — depend on this shape.
 
 > ~~polyglot SDKs, the future orchestrator~~ — Superseded 2026-09-14: the Python
@@ -74,7 +74,7 @@ it, and reopens the active name. `streamlib logs --follow` does this.
 | `schema_version` | integer | no | Bumped on breaking schema changes. |
 | `host_ts` | integer | no | Host wall-clock timestamp (nanoseconds since UNIX epoch). Stamped on the emitting thread for a Rust or app-process Python record, and at receipt for a record a helper process sends. Not monotonic — see [Ordering](#ordering). |
 | `runtime_id` | string | no | The owning runtime's id ([`RuntimeUniqueId`][rs_id]). |
-| `source` | enum | no | `"rust"` \| `"python"`. Rust events come from the `tracing` pipeline — the app process's own, or a helper process's, captured there and relayed over the `{op:"log"}` escalate IPC; python events come from `streamlib.log.*` in the app's interpreter, from a helper process via that same IPC, or from a helper process's captured stdout / stderr. |
+| `source` | enum | no | `"rust"` \| `"python"`. Rust events come from the `tracing` pipeline — the app process's own, or a helper process's, captured there and relayed over the `{op:"log"}` escalate IPC; python events come from `tatolab.stream.log.*` in the app's interpreter, from a helper process via that same IPC, or from a helper process's captured stdout / stderr. |
 | `level` | enum | no | `"trace"` \| `"debug"` \| `"info"` \| `"warn"` \| `"error"`. |
 | `message` | string | no | Primary human-readable message. May be empty for events that carry only structured fields. |
 | `target` | string | no | Tracing target (module path, typically) for Rust, a record relayed from a helper process included — a call site keeps its own target wherever it ran; subprocess-declared target for polyglot. |
@@ -83,9 +83,9 @@ it, and reopens the active name. `streamlib logs --follow` does this.
 | `rhi_op` | string | yes | RHI operation name (`"acquire_texture"`, `"acquire_pixel_buffer"`, `"queue_submit"`, …). Set only inside RHI call sites. |
 | `source_ts` | string | yes | Helper-process wall-clock timestamp (ISO8601). Advisory only — never used for ordering. Set only on records a helper process sends via the `{op:"log"}` escalate IPC, whichever source they carry; on a captured engine record it is when the engine made the record, not when the helper got round to sending it. `null` otherwise. |
 | `source_seq` | integer | yes | Helper-process sequence number: starts at `1` and increments per record the helper sends via the `{op:"log"}` escalate IPC, its captured engine records included — one sequence per helper, not one per source. One helper hosts one processor, so the sequence is per `(runtime_id, processor_id)`, and a new helper process for that processor starts again at `1`. `null` on every other record. |
-| `intercepted` | bool | no (default `false`) | `true` when the record came from fd-level capture of stdout / stderr (a raw fd write, a Python `print()`, a third-party library's output) rather than a direct `tracing` / `streamlib.log.*` call. |
+| `intercepted` | bool | no (default `false`) | `true` when the record came from fd-level capture of stdout / stderr (a raw fd write, a Python `print()`, a third-party library's output) rather than a direct `tracing` / `tatolab.stream.log.*` call. |
 | `channel` | string | yes | `"fd1"` (stdout) or `"fd2"` (stderr) when `intercepted: true`. `null` otherwise. |
-| `attrs` | object<string, any> | yes (default `{}`) | User-supplied structured fields captured from the emitting call site. For Rust, anything passed to `tracing::info!(foo = 123, bar = "abc", "msg")` other than the well-known fields above; for polyglot, the `**attrs` / `attrs` object passed to `streamlib.log.*`. |
+| `attrs` | object<string, any> | yes (default `{}`) | User-supplied structured fields captured from the emitting call site. For Rust, anything passed to `tracing::info!(foo = 123, bar = "abc", "msg")` other than the well-known fields above; for polyglot, the `**attrs` / `attrs` object passed to `tatolab.stream.log.*`. |
 
 > ~~`"deno"` as a `source` value, `host_ts` as a host monotonic timestamp and the
 > authoritative sort key across the merged stream, `console.log` / `"logging"` /
@@ -125,7 +125,7 @@ it, and reopens the active name. `streamlib logs --follow` does this.
 ## Interceptors
 
 Records tagged `intercepted: true` come from a capture layer rather than
-a direct `tracing` / `streamlib.log.*` call. The three enforcement
+a direct `tracing` / `tatolab.stream.log.*` call. The three enforcement
 layers are:
 
 1. **Compile-time (Rust)**: clippy `disallowed-macros` rejects

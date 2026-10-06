@@ -86,7 +86,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   any other reason is a parity bug, never a skip.
   [macos-capability-parity — SHIPPED #2400, #2403, #2405]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_platform_markers.py -->
-  <!-- verify: grep -n "mypy.stubtest streamlib._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
+  <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_an_fd_shaped_raw_handle_refuses_by_name_off_linux -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
@@ -97,7 +97,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the effect's output that reads the frame through `frame.cpu()` and logs its mean once a
   second, paced on `ctx.time` — with dependencies `streamlib` and `numpy>=2.1`, nothing
   more, the same on both floors. The files render from template files the wheel ships
-  (`streamlib/_scaffold_template/`), each placeholder its template's own default value so
+  (`tatolab/runtime/_scaffold_template/`), each placeholder its template's own default value so
   the templates stay importable and checkable; ruff runs over every render, pyright over
   the template tree, and the cross-floor check gates the output.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438; amended by stream-graph: the entry file and the nodes' directory re-spelled]
@@ -525,7 +525,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   never blocks a start, gates in CI the wheel's own Python and the scaffold's output, and
   runs over `examples/` when a change ships; it is no CLI verb of its own. It reads
   source, not behaviour: a dynamic import or a dependency's own device choice is left to
-  the same Python suite running on both floors. As built, `streamlib._cross_floor_check`
+  the same Python suite running on both floors. As built, `tatolab.stream._cross_floor_check`
   (stdlib `ast` and `tomllib`) reads every `.py` under the app anchor — skipping
   dot-directories, `.venv`/`venv` and any directory holding a `pyvenv.cfg` — and the
   anchor's `pyproject.toml`, and flags: an import of `cupy`, `pycuda`, `numba.cuda`,
@@ -3567,12 +3567,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and nothing else is linked. On Linux, system libraries (Vulkan loader, window system,
   libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape.
   On macOS a stock machine has no Vulkan driver, so the wheel carries one in
-  `streamlib/_vulkan_driver/`: the Vulkan loader (built from source at the wheel's
+  `tatolab/runtime/_vulkan_driver/`: the Vulkan loader (built from source at the wheel's
   deployment target), MoltenVK and its unedited ICD manifest, and still links only
   `/usr/lib/` and `/System/`. Engine and helper alike dlopen that loader by absolute path,
   found beside the `_engine` image through `dladdr`, after the bare names and `VULKAN_SDK`
   and before the Homebrew prefixes, which are developer-machine fallbacks.
-  `streamlib/__init__.py` names the bundled manifest to the loader additively — through
+  `tatolab/runtime/__init__.py` names the bundled manifest to the loader additively — through
   `VK_ADD_DRIVER_FILES`, before `_engine` loads, idempotently for a re-importing helper, and
   not at all when `VK_DRIVER_FILES` or `VK_ICD_FILENAMES` says the user chose their drivers —
   so a user's own driver stays discoverable. The MoltenVK carried is 1.4.1 or later: camera

@@ -28,7 +28,7 @@ pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString>
 /// Where the macOS wheel stages the loader, MoltenVK and its ICD manifest,
 /// relative to the directory of the image this crate is linked into — the
 /// wheel's `_engine` extension. `scripts/stage_macos_bundled_vulkan_driver.sh`
-/// writes it and `streamlib/__init__.py` points the loader at the manifest.
+/// writes it and `tatolab/runtime/__init__.py` points the loader at the manifest.
 #[cfg(target_os = "macos")]
 const BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME: &str = "_vulkan_driver";
 
