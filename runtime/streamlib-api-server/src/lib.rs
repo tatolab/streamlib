@@ -10,6 +10,7 @@ mod local_api_socket;
 mod mcp;
 mod mcp_prompts;
 mod mcp_resources;
+mod mcp_stdio_upgrade;
 pub mod node_registry;
 mod state;
 

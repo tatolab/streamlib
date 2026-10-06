@@ -126,7 +126,8 @@ mod tests {
     use super::*;
     use crate::control_plane_stub_support::{
         LocalApiServedOnAFreshSocket, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-        STUB_EXCHANGED_IMAGE_BYTES, serve_the_control_plane_router_at,
+        STUB_EXCHANGED_IMAGE_BYTES, response_head_over_the_socket,
+        serve_the_control_plane_router_at,
     };
     use crate::handlers::router_surface_tests::a_control_plane_router_stub_runtime;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -248,22 +249,13 @@ mod tests {
         let mut stream = tokio::net::UnixStream::connect(&served.local_api_socket_path)
             .await
             .unwrap();
-        stream
-            .write_all(
-                b"GET /ws/events HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n\
-                  Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
-                  Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
-            )
-            .await
-            .unwrap();
-
-        let mut head = Vec::new();
-        let mut byte = [0u8; 1];
-        while !head.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).await.unwrap();
-            head.push(byte[0]);
-        }
-        let head = String::from_utf8(head).unwrap();
+        let head = response_head_over_the_socket(
+            &mut stream,
+            "GET /ws/events HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n\
+             Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+        )
+        .await;
 
         assert!(head.starts_with("HTTP/1.1 101 "), "{head}");
     }

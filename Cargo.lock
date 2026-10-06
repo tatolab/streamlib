@@ -4516,6 +4516,8 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "futures-util",
+ "hyper",
+ "hyper-util",
  "parking_lot",
  "percent-encoding",
  "rmcp",

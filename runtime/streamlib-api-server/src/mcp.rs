@@ -155,10 +155,8 @@ impl LocalApiMcpServerHandler {
 /// [`LocalApiMcpServerHandler`], stateless, serving only
 /// [`SERVED_MCP_PROTOCOL_VERSIONS`].
 pub(crate) fn local_api_mcp_streamable_http_service(
-    runtime: Arc<dyn RuntimeOperations>,
-    local_api_stopping_token: CancellationToken,
+    handler: LocalApiMcpServerHandler,
 ) -> StreamableHttpService<LocalApiMcpServerHandler, NeverSessionManager> {
-    let handler = LocalApiMcpServerHandler::new(runtime, local_api_stopping_token);
     StreamableHttpService::new(
         move || Ok(handler.clone()),
         Arc::new(NeverSessionManager::default()),
@@ -750,7 +748,7 @@ impl EventListener for McpEventForwarder {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! MCP wire tests: an `rmcp` client drives the real `/mcp` endpoint that
     //! [`crate::handlers::build_router`] wires in, served on a real local API
     //! socket, through discovery, the tool catalog, and each tool through to
@@ -802,7 +800,7 @@ mod tests {
     /// Every graph-mutating op records what it was handed and answers a fixed
     /// id, so a mutation tool's test asserts the op it reached and the
     /// arguments it carried.
-    struct ControlPlaneMcpDispatchStubRuntime {
+    pub(crate) struct ControlPlaneMcpDispatchStubRuntime {
         exported_graph: Arc<Mutex<Value>>,
         tap_plan: Option<StubTapPlan>,
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
@@ -812,7 +810,7 @@ mod tests {
     }
 
     impl ControlPlaneMcpDispatchStubRuntime {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 exported_graph: Arc::new(Mutex::new(json!({ "nodes": [], "links": [] }))),
                 tap_plan: None,
@@ -850,7 +848,7 @@ mod tests {
         /// A stub whose `tap_async` yields a subscription over `bags` but keeps
         /// the forward sender alive, so `recv()` pends after the bags drain — a
         /// quiet channel whose collection ends on the monotonic sample window.
-        fn with_quiet_tap(bags: Vec<Vec<u8>>) -> Self {
+        pub(crate) fn with_quiet_tap(bags: Vec<Vec<u8>>) -> Self {
             Self {
                 tap_plan: Some(StubTapPlan {
                     bags,
@@ -918,6 +916,21 @@ mod tests {
         "connect",
         "disconnect",
     ];
+
+    /// Exact, not a superset: the catalog IS the control vocabulary, so a
+    /// tool appearing that is not in this list is a surface the plan does not
+    /// grant.
+    pub(crate) fn assert_names_exactly_the_control_vocabulary(
+        mut advertised_tool_names: Vec<&str>,
+    ) {
+        advertised_tool_names.sort_unstable();
+        let mut control_tool_names = CONTROL_TOOL_NAMES.to_vec();
+        control_tool_names.sort_unstable();
+        assert_eq!(
+            advertised_tool_names, control_tool_names,
+            "tools/list must advertise exactly the control vocabulary"
+        );
+    }
 
     /// The authority the MCP client names in `Host`; the socket path is the
     /// address.
@@ -1163,10 +1176,10 @@ mod tests {
     /// allowlist on a socket no browser can dial.
     #[test]
     fn the_endpoint_is_stateless_demands_per_request_metadata_and_admits_any_host() {
-        let service = local_api_mcp_streamable_http_service(
+        let service = local_api_mcp_streamable_http_service(LocalApiMcpServerHandler::new(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             CancellationToken::new(),
-        );
+        ));
         assert!(!service.config.legacy_session_mode);
         assert!(service.config.stateless_protocol_metadata_required);
         assert!(
@@ -1245,20 +1258,11 @@ mod tests {
     #[tokio::test]
     async fn tools_list_advertises_exactly_the_control_vocabulary() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
-        let mut names: Vec<&str> = tools
-            .iter()
-            .filter_map(|tool| tool["name"].as_str())
-            .collect();
-        names.sort_unstable();
-        let mut control_tool_names = CONTROL_TOOL_NAMES.to_vec();
-        control_tool_names.sort_unstable();
-
-        // Exact, not a superset: the catalog IS the control vocabulary, so a
-        // tool appearing here that is not in this list is a surface the plan
-        // does not grant.
-        assert_eq!(
-            names, control_tool_names,
-            "tools/list must advertise exactly the control vocabulary"
+        assert_names_exactly_the_control_vocabulary(
+            tools
+                .iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .collect(),
         );
         for tool in tools {
             assert_eq!(

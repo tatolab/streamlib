@@ -1307,20 +1307,10 @@ def test_this_wheel_is_the_only_streamlib_cli():
         "tap",
         "logs",
         "exchange",
+        "mcp",
         # The one machine-setup verb: touches no node, speaks no control plane.
         "enable-virtual-camera",
     }
-
-
-def test_the_wheel_serves_no_mcp_verb(tmp_path: Path):
-    """MCP is served by a node's own control plane at `POST /mcp`, on the node's
-    lifecycle — there is no CLI verb to start one or attach to one."""
-    finished = run_cli("mcp")
-
-    assert finished.returncode != 0
-    assert "invalid choice" in finished.stderr, (
-        f"`streamlib mcp` must not be a subcommand; stderr was:\n{finished.stderr}"
-    )
 
 
 # ---------------------------------------------------------------------------
