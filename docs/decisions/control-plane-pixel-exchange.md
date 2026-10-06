@@ -103,12 +103,11 @@ matters most where the id *is* per-frame.
   sample-as-you-go loop. Sharing it means one draw at a time per attachment format, which
   a control-plane read can afford and a window — which owns its own compositor because a
   swapchain can flip the attachment format under it — does not have to.
-- The verb joins the bearer-gated set beside the tap WebSocket. That is mechanism
+- ~~The verb joins the bearer-gated set beside the tap WebSocket. That is mechanism
   parity, not a trust boundary the exchange imposes: whatever the open auth and
-  remote-access question decides later, it decides for this verb the same as the rest.
-
-  > Amended 2026-10-01 by `local-api.md`: control carries no token, so the bearer gate
-  > retired with the network listener (#2575).
+  remote-access question decides later, it decides for this verb the same as the rest.~~
+  — Superseded 2026-10-01 by `local-api.md`: control carries no token; file permission on
+  the local API socket is the whole gate, for this verb the same as the rest.
 - Latency is a client-shape question, not an operation cost. A warm client holding one
   connection round-trips on localhost in low single-digit milliseconds, inside the
   publish-to-claim window a 60 fps source with pool depth 4 allows. A cold process spawn
