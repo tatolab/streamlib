@@ -7,7 +7,7 @@ Reads and discards: what is under test is what the source published, which the
 tap reads independently of anything downstream doing with it.
 """
 
-from streamlib import RuntimeContextLimitedAccess, input, node
+from tatolab.stream import RuntimeContextLimitedAccess, input, node
 
 
 @node

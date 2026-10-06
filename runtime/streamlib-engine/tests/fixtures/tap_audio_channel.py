@@ -11,9 +11,9 @@ processor, with no second device in the path.
 
 Unlike the loopback fixture beside it, this needs the wheel installed: the tap's
 payloads are transport-framed and the engine ships the decoder for them, and
-`streamlib.AudioBlock` is the cast that says what a well-formed block is. That
-is the right trade — what is under test is a running engine, so an engine that
-will not build has already answered the question.
+`tatolab.stream.AudioBlock` is the cast that says what a well-formed block is.
+That is the right trade — what is under test is a running engine, so an engine
+that will not build has already answered the question.
 
 Two things come back. What can be checked with no signal at all: block cadence,
 timestamp continuity, rate, channels, dtype — over the real IPC path rather
@@ -77,13 +77,13 @@ def audio_blocks_from_tapped_bags(tapped_bags, preview_bound_bytes=None):
     Ordering comes from the blocks' own timestamps rather than arrival, so the
     waveform is what the device produced and a gap stays a gap.
 
-    What a well-formed block is comes from `streamlib.AudioBlock` rather than
+    What a well-formed block is comes from `tatolab.stream.AudioBlock` rather than
     being restated here: it already refuses a payload whose length disagrees
     with its declared shape, and already reads an absent dtype as `f32` the way
     the wire contract says to.
     """
-    from streamlib import AudioBlock
-    from streamlib._engine import decode_tapped_channel_bag_frame_to_python_object
+    from tatolab.runtime._engine import decode_tapped_channel_bag_frame_to_python_object
+    from tatolab.stream import AudioBlock
 
     tapped = []
     for index, bag in enumerate(tapped_bags):

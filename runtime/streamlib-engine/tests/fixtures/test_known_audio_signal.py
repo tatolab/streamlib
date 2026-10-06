@@ -255,7 +255,8 @@ class KnownAudioSignalAnalysis(unittest.TestCase):
                 sys.executable,
                 "-c",
                 "import sys, known_audio_signal;"
-                " sys.exit(1 if 'streamlib' in sys.modules else 0)",
+                " sys.exit(1 if {'tatolab.stream', 'tatolab.runtime'}"
+                " & sys.modules.keys() else 0)",
             ],
             cwd=str(Path(__file__).parent),
             capture_output=True,

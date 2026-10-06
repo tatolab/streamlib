@@ -549,7 +549,7 @@ mod python_subprocess {
     // thread frames onto stdout.
     const HELPER_PREAMBLE: &str = r#"
 import sys
-from streamlib import log
+from tatolab.stream import log
 from streamlib.escalate import EscalateChannel
 channel = EscalateChannel(sys.stdout.buffer)
 log.set_processor_id("pr-test")

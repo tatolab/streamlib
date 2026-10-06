@@ -5,8 +5,8 @@
 
 Synthesised tap payloads throughout, so this needs no running node and no
 device. It does need the wheel, unlike the loopback fixture beside it: the tap's
-payloads are transport-framed and `streamlib.AudioBlock` is what says whether a
-decoded block is well formed.
+payloads are transport-framed and `tatolab.stream.AudioBlock` is what says
+whether a decoded block is well formed.
 """
 
 import contextlib

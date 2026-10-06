@@ -13,7 +13,7 @@ until the node has registered and its local API socket answers.
 import subprocess
 import sys
 
-from streamlib._node_registry import live_nodes
+from tatolab.runtime._node_registry import live_nodes
 
 
 def parent_pid_of(pid: int) -> int:

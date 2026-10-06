@@ -20,7 +20,7 @@ import os
 import numpy
 
 import known_audio_signal
-from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, log, node
+from tatolab.stream import AudioBlock, RuntimeContextLimitedAccess, input, log, node
 
 RESULT_MARKER = "MARKER:WAVEFORM_WRITTEN "
 

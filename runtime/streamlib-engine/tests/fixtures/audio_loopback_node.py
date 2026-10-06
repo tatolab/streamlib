@@ -30,10 +30,11 @@ contract on it.
 import contextlib
 import os
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from captured_audio_waveform_recorder import CapturedAudioWaveformRecorder
 from known_audio_signal_source import KnownAudioSignalSource
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 
 def _this_nodes_output_as_a_capture_device_when_asked(capture_device_id, sink):
@@ -75,12 +76,12 @@ def known_signal_played_and_captured_back(stream: Stream) -> None:
 
     signal = stream.add(KnownAudioSignalSource)
     speaker = stream.add(
-        streamlib.SpeakerSink, config={"device_id": sink} if sink else {}
+        tatolab.stream.SpeakerSink, config={"device_id": sink} if sink else {}
     )
     stream.connect(signal.output("audio"), speaker.input("audio"))
 
     microphone = stream.add(
-        streamlib.MicrophoneSource, config={"device_id": capture_device_id}
+        tatolab.stream.MicrophoneSource, config={"device_id": capture_device_id}
     )
     recorder = stream.add(CapturedAudioWaveformRecorder)
     stream.connect(microphone.output("audio"), recorder.input("audio_from_upstream"))
@@ -96,7 +97,7 @@ def main() -> None:
             print(f"MARKER:COREAUDIO_PROCESS_TAP {process_tap.evidence()}", flush=True)
 
         graph = compile_stream_to_graph(known_signal_played_and_captured_back)
-        runtime = streamlib.Runtime()
+        runtime = tatolab.runtime.Runtime()
         runtime.load(graph)
 
         runtime.host_control_plane()
