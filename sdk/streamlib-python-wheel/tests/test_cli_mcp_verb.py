@@ -70,7 +70,7 @@ class ScriptedLocalApiSocket:
         try:
             connection, _ = self._listener.accept()
         except OSError:
-            # Closed with nothing connected: a test that never opened the stream.
+            # Shut down with nothing connected: a test that never opened the stream.
             return
         connection.settimeout(SCRIPT_TIMEOUT_SECONDS)
         try:
@@ -87,6 +87,11 @@ class ScriptedLocalApiSocket:
             raise self.script_failure
 
     def close(self) -> None:
+        # Close alone does not wake an `accept` already blocked on Linux.
+        try:
+            self._listener.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self._listener.close()
         self._socket_directory.cleanup()
 
