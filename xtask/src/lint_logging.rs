@@ -3,7 +3,7 @@
 
 //! Lints ad-hoc logging patterns in the Rust workspace and in the Python /
 //! Python polyglot SDKs. The only sanctioned pathway is `tracing::*` /
-//! `streamlib.log.*` — see `docs/logging.md`.
+//! `tatolab.stream.log.*` — see `docs/logging.md`.
 //!
 //! Python uses a ripgrep-style substring scan. Rust uses a `syn`
 //! AST walk so that `#[cfg(test)]`, `#[allow(clippy::disallowed_macros)]`, and
@@ -47,7 +47,7 @@ const fn python_logging_lint_target(name: &'static str, root_relative: &'static 
         exclude_file_suffixes: &["_test.py"],
         comment_prefix: "#",
         banned_substrings: &["print(", "sys.stdout", "sys.stderr", "logging.basicConfig"],
-        allow_substring: "streamlib.log.",
+        allow_substring: "tatolab.stream.log.",
     }
 }
 
@@ -95,7 +95,7 @@ pub fn run(project_root: &Path) -> Result<()> {
     let report = scan_all(project_root)?;
     for v in &report.violations {
         eprintln!(
-            "{}:{}: [{}] banned `{}` — use tracing::* / streamlib.log.* / see docs/logging.md\n    {}",
+            "{}:{}: [{}] banned `{}` — use tracing::* / tatolab.stream.log.* / see docs/logging.md\n    {}",
             v.path.display(),
             v.line_no,
             v.target,
@@ -1105,20 +1105,49 @@ mod tests {
     }
 
     #[test]
-    fn accepts_streamlib_log_python() {
+    fn accepts_tatolab_stream_log_python() {
         let v = scan_fixture_tree(
             lint_target_named("python"),
-            "import streamlib\nstreamlib.log.info(\"hi\")\n",
+            "import tatolab.stream\ntatolab.stream.log.info(\"hi\")\n",
             "src/app.py",
         );
-        assert!(v.is_empty(), "streamlib.log.* should pass: {:?}", v);
+        assert!(v.is_empty(), "tatolab.stream.log.* should pass: {:?}", v);
+    }
+
+    #[test]
+    fn a_tatolab_stream_log_line_naming_a_banned_pattern_passes() {
+        let v = scan_fixture_tree(
+            lint_target_named("python"),
+            "tatolab.stream.log.info(\"never call print( here\")\n",
+            "src/app.py",
+        );
+        assert!(
+            v.is_empty(),
+            "tatolab.stream.log.* line should pass: {:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn a_streamlib_log_line_naming_a_banned_pattern_is_flagged() {
+        let v = scan_fixture_tree(
+            lint_target_named("python"),
+            "streamlib.log.info(\"never call print( here\")\n",
+            "src/app.py",
+        );
+        assert_eq!(
+            v.len(),
+            1,
+            "the retired streamlib.log spelling must not exempt a line"
+        );
+        assert_eq!(v[0].matched_pattern, "print(");
     }
 
     #[test]
     fn skips_comment_lines_python() {
         let v = scan_fixture_tree(
             lint_target_named("python"),
-            "# don't use print(\"x\") here\nstreamlib.log.info(\"ok\")\n",
+            "# don't use print(\"x\") here\ntatolab.stream.log.info(\"ok\")\n",
             "src/app.py",
         );
         assert!(v.is_empty(), "commented-out print should not flag: {:?}", v);
@@ -1129,7 +1158,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
         write_fixture(&root, "tests/test_app.py", "print(\"hi\")\n");
-        write_fixture(&root, "src/app.py", "streamlib.log.info(\"ok\")\n");
+        write_fixture(&root, "src/app.py", "tatolab.stream.log.info(\"ok\")\n");
         let mut violations = Vec::new();
         let mut files_scanned = 0usize;
         scan_target(
@@ -1587,8 +1616,8 @@ mod tests {
         let root = tmp.path();
         write_fixture(
             &root.join(lint_target_named("python").root_relative),
-            "streamlib/app.py",
-            "streamlib.log.info(\"ok\")\n",
+            "tatolab/stream/app.py",
+            "tatolab.stream.log.info(\"ok\")\n",
         );
 
         let report = scan_all(root).unwrap();
