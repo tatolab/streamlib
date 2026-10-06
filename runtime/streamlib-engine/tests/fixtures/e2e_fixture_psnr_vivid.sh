@@ -314,25 +314,7 @@ RIG_PID=$!
 # either arm, so the runtime is the launched pid's child rather than the pid
 # itself.
 runtime_id_of_the_node_launched_as() {
-    "$STREAMLIB_CLI_PYTHON" -c '
-import subprocess, sys
-from streamlib._node_registry import live_nodes
-
-launched_pid = int(sys.argv[1])
-
-def parent_pid(pid):
-    ps = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
-    return int(ps.stdout.strip() or 0)
-
-matching = [
-    node.runtime_id
-    for node in live_nodes()
-    if launched_pid in (node.pid, parent_pid(node.pid))
-]
-if len(matching) != 1:
-    sys.exit(1)
-print(matching[0])
-' "$1"
+    "$STREAMLIB_CLI_PYTHON" "$SCRIPT_DIR/runtime_id_of_launched_node.py" "$1"
 }
 
 RUNTIME_ID=""

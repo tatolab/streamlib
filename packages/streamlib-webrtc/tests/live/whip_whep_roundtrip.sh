@@ -240,49 +240,25 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         > "$LOG_FILE" 2>&1 &
 NODE_PID=$!
 
-# `$!` is `timeout`, which runs the node as its child rather than exec'ing it,
-# so the registry entry is the one whose process `timeout` is the parent of.
-# Matched by pid and never by runtime name: a second run of this fixture
-# publishes the same name, and would otherwise be measured instead.
-registry_entry_of_launched_node() {
-    "$VENV_PYTHON" -c '
-import sys
-from streamlib._node_registry import live_nodes
-
-launcher_pid = int(sys.argv[1])
-
-def parent_pid_of(pid):
-    try:
-        with open(f"/proc/{pid}/stat") as stat_file:
-            stat_line = stat_file.read()
-    except OSError:
-        return None
-    return int(stat_line.rpartition(")")[2].split()[1])
-
-for entry in live_nodes():
-    if entry.pid == launcher_pid or parent_pid_of(entry.pid) == launcher_pid:
-        print(entry.runtime_id, entry.local_api_socket_path)
-        break
-else:
-    sys.exit(1)
-' "$NODE_PID" 2>/dev/null
-}
-
+# Matched by the launched pid and never by runtime name: a second run of this
+# fixture publishes the same name, and would otherwise be measured instead.
 RUNTIME_ID=""
-LOCAL_API_SOCKET=""
+NODE_ANSWERED=0
 for _ in $(seq 1 120); do
-    if REGISTRY_ENTRY="$(registry_entry_of_launched_node)"; then
-        read -r RUNTIME_ID LOCAL_API_SOCKET <<<"$REGISTRY_ENTRY"
-        "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1 && break
-    fi
     kill -0 "$NODE_PID" 2>/dev/null || break
-    RUNTIME_ID=""
+    if [ -z "$RUNTIME_ID" ]; then
+        RUNTIME_ID="$("$VENV_PYTHON" "$ENGINE_FIXTURES/runtime_id_of_launched_node.py" "$NODE_PID" 2>/dev/null)" \
+            || RUNTIME_ID=""
+    fi
+    if [ -n "$RUNTIME_ID" ] && "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        NODE_ANSWERED=1
+        break
+    fi
     sleep 0.5
 done
-[ -n "$RUNTIME_ID" ] \
+[ "$NODE_ANSWERED" = 1 ] \
     || { tail -40 "$LOG_FILE" >&2; fail "the node never published a registry entry that answered \`streamlib graph\`"; }
 say "Runtime id:        $RUNTIME_ID"
-say "Local API socket:  $LOCAL_API_SOCKET"
 
 # A channel is the port's address, `<runtime_name>/<node>/<port>`. Derived from
 # the live graph, in a pipe: the graph renders every node's config, and this

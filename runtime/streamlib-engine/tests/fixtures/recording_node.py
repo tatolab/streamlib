@@ -103,7 +103,7 @@ def camera_and_known_signal_recorded_into_one_file(stream: Stream) -> None:
 
 
 def main() -> None:
-    arguments = _parse_fixture_arguments()
+    _parse_fixture_arguments()
     graph = compile_stream_to_graph(camera_and_known_signal_recorded_into_one_file)
     runtime = streamlib.Runtime(runtime_name="recording-node")
     runtime.load(graph)

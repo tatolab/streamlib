@@ -84,7 +84,7 @@ def camera_through_the_codec_into_a_window(stream: Stream) -> None:
 
 
 def main() -> None:
-    arguments = _parse_fixture_arguments()
+    _parse_fixture_arguments()
     graph = compile_stream_to_graph(camera_through_the_codec_into_a_window)
     runtime = streamlib.Runtime(runtime_name="codec-roundtrip-node")
     runtime.load(graph)
