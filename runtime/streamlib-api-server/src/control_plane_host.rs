@@ -9,11 +9,19 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
+/// How a host binary stands up the control plane it hosts. It carries no
+/// setting: the local API socket's path follows from the runtime.
+#[derive(Debug, Clone, Default)]
+pub struct ApiServerControlPlaneHostConfig {}
+
 /// Register the `ApiServer` processor type in-process and add one instance to
 /// `runtime`, so that starting the runtime binds its local API socket and
 /// publishes the node-registry entry `streamlib nodes` discovers, under the
 /// runtime's own name.
-pub fn register_api_server_control_plane_processor_on_runtime(runtime: &Runner) -> Result<()> {
+pub fn register_api_server_control_plane_processor_on_runtime(
+    runtime: &Runner,
+    ApiServerControlPlaneHostConfig {}: ApiServerControlPlaneHostConfig,
+) -> Result<()> {
     // A host, not a loadable plugin: the type is statically linked into the
     // caller and registered on the shared registry rather than dlopen'd.
     PROCESSOR_REGISTRY.register::<crate::api_server::ApiServerProcessor::Processor>();

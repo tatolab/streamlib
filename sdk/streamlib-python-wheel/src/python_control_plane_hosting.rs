@@ -10,7 +10,9 @@
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use streamlib::sdk::runtime::Runner;
-use streamlib_api_server::control_plane_host::register_api_server_control_plane_processor_on_runtime;
+use streamlib_api_server::control_plane_host::{
+    ApiServerControlPlaneHostConfig, register_api_server_control_plane_processor_on_runtime,
+};
 
 /// Add the control-plane processor to `engine`, with the GIL released.
 ///
@@ -18,6 +20,11 @@ use streamlib_api_server::control_plane_host::register_api_server_control_plane_
 /// graph, neither of which needs the interpreter.
 pub(crate) fn host_control_plane_on_engine(python: Python<'_>, engine: &Runner) -> PyResult<()> {
     python
-        .detach(|| register_api_server_control_plane_processor_on_runtime(engine))
+        .detach(|| {
+            register_api_server_control_plane_processor_on_runtime(
+                engine,
+                ApiServerControlPlaneHostConfig::default(),
+            )
+        })
         .map_err(|hosting_failure| PyRuntimeError::new_err(hosting_failure.to_string()))
 }
