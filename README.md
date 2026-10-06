@@ -106,7 +106,7 @@ No camera on this machine? `streamlib new my-rig --test-pattern` uses the built-
 working directory, compiles its one `@stream` function to the stream's graph, and loads that graph:
 
 ```python
-from streamlib import CameraSource, DisplayWindow, Stream, stream
+from tatolab.stream import CameraSource, DisplayWindow, Stream, stream
 
 from nodes.brightness_meter import BrightnessMeter
 from nodes.inverting_effect import InvertingEffect
@@ -133,7 +133,7 @@ a file, `streamlib dev stream.py:<function>` picks one.
 Pixels stay on the GPU. `nodes/inverting_effect.py` is one shader function:
 
 ```python
-from streamlib import (
+from tatolab.stream import (
     GlslPixelEffect,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
