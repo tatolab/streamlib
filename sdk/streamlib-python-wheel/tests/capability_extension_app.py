@@ -128,7 +128,7 @@ def scenario_a_helper_runs_the_hook_before_the_processor() -> None:
     runtime.load(graph)
 
     def stop_once_the_helper_has_reported() -> None:
-        runtime.wait_until_every_processor_is_running(timeout=60.0)
+        runtime.wait_until_every_node_is_running(timeout=60.0)
         time.sleep(SECONDS_OF_RUNNING_BEFORE_SHUTDOWN)
         runtime.shutdown()
 
@@ -159,7 +159,7 @@ def scenario_a_raising_hook_refuses_the_processor() -> None:
 
     def report_whether_the_processor_ever_started() -> None:
         try:
-            runtime.wait_until_every_processor_is_running(timeout=30.0)
+            runtime.wait_until_every_node_is_running(timeout=30.0)
         except RuntimeError as never_started:
             marker(f"PROCESSOR_REFUSED={never_started}")
         else:
@@ -194,7 +194,7 @@ def scenario_graph_renders_the_registered_capability() -> None:
     runtime.host_control_plane()
 
     def report_the_extensions_the_graph_carries() -> None:
-        runtime.wait_until_every_processor_is_running(timeout=60.0)
+        runtime.wait_until_every_node_is_running(timeout=60.0)
         graph = json.loads(call_tool(this_processes_local_api_socket(), "graph", {}))
         marker(f"GRAPH_EXTENSIONS={json.dumps(graph['extensions'])}")
         runtime.shutdown()

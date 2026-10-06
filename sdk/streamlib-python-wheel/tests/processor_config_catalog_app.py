@@ -44,7 +44,7 @@ def main() -> None:
 
     def read_the_catalog_this_node_serves() -> None:
         try:
-            runtime.wait_until_every_processor_is_running(
+            runtime.wait_until_every_node_is_running(
                 timeout=GRAPH_READY_TIMEOUT_SECONDS
             )
             answered = _request_over_the_local_api_socket(

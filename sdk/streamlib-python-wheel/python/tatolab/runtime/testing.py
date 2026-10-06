@@ -1,17 +1,17 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Drive one processor from a test: feed its inputs, assert on its outputs.
+"""Drive one node from a test: feed its inputs, assert on its outputs.
 
-The processor under test runs in a real graph on a real engine — in its own
-helper process, like every Python processor — so what a test exercises is what
+The node under test runs in a real graph on a real engine — in its own
+helper process, like every Python node — so what a test exercises is what
 production runs: the same construction, the same lifecycle hooks, the same
 links. What it does not need is hardware: the frames come from this module's
 feeder rather than a camera, and the output lands in a queue rather than a
 window.
 
 The graph is a `Stream` built here and loaded with `Runtime.load`. The
-processor under test takes its class's default node name, and each port's
+node under test takes its class's default node name, and each port's
 endpoint is named for it: `test-bag-feeder-<port>` on an input,
 `test-bag-collector-<port>` on an output.
 
@@ -44,9 +44,9 @@ from ._engine import (
     open_test_harness_channel,
 )
 
-__all__ = ["SingleProcessorTestPipeline"]
+__all__ = ["SingleNodeTestPipeline"]
 
-SINGLE_PROCESSOR_TEST_PIPELINE_STREAM_NAME = "single-processor-test-pipeline"
+SINGLE_NODE_TEST_PIPELINE_STREAM_NAME = "single-node-test-pipeline"
 
 # Long enough that a cold engine's first frame is not mistaken for a failure,
 # short enough that a genuinely stalled pipeline fails rather than hangs.
@@ -57,7 +57,7 @@ DEFAULT_BAG_TIMEOUT_SECONDS = 30.0
 # diagnostic rather than a wedged test run.
 ENGINE_TEARDOWN_TIMEOUT_SECONDS = 60.0
 
-# How long `__enter__` waits for every processor's helper process to attach.
+# How long `__enter__` waits for every node's helper process to attach.
 # Generous because a cold first spawn pays for a child interpreter's startup and
 # imports; a graph that has not come up by now is broken, not slow.
 GRAPH_READY_TIMEOUT_SECONDS = 60.0
@@ -73,22 +73,22 @@ _channel_lock = threading.Lock()
 _running_pipeline_lock = threading.Lock()
 
 
-class SingleProcessorTestPipeline:
-    """One processor, with a feeder on every input and a collector on every output.
+class SingleNodeTestPipeline:
+    """One node, with a feeder on every input and a collector on every output.
 
-    `__enter__` returns only once every processor is running — which for the
-    processor under test means its helper process has registered and wired its
+    `__enter__` returns only once every node is running — which for the
+    node under test means its helper process has registered and wired its
     ports — so the first `feed` on the next line cannot be dropped by a link
     whose consumer has not attached.
     """
 
     def __init__(
         self,
-        processor_class: type,
+        node_class: type,
         *,
         config: "Optional[Dict[str, Any]]" = None,
     ) -> None:
-        self._processor_class = processor_class
+        self._node_class = node_class
         self._config = config
         self._input_channels: "Dict[str, str]" = {}
         self._output_channels: "Dict[str, str]" = {}
@@ -96,10 +96,10 @@ class SingleProcessorTestPipeline:
         self._run_loop: Optional[threading.Thread] = None
         self._run_failure: "queue.Queue[BaseException]" = queue.Queue()
 
-    def __enter__(self) -> "SingleProcessorTestPipeline":
+    def __enter__(self) -> "SingleNodeTestPipeline":
         if not _running_pipeline_lock.acquire(blocking=False):
             raise RuntimeError(
-                "another SingleProcessorTestPipeline is still running in this process: "
+                "another SingleNodeTestPipeline is still running in this process: "
                 "one engine owns the process's shutdown signals, so pipelines run one at "
                 "a time. Close the first `with` block before opening the second."
             )
@@ -114,10 +114,10 @@ class SingleProcessorTestPipeline:
         return self
 
     def _build_and_start(self) -> None:
-        stream = Stream(SINGLE_PROCESSOR_TEST_PIPELINE_STREAM_NAME)
-        processor_under_test = stream.add(self._processor_class, config=self._config)
+        stream = Stream(SINGLE_NODE_TEST_PIPELINE_STREAM_NAME)
+        node_under_test = stream.add(self._node_class, config=self._config)
 
-        for port in _declared_port_names(self._processor_class, "input"):
+        for port in _declared_port_names(self._node_class, "input"):
             channel = _claim_channel()
             self._input_channels[port] = channel
             feeder = stream.add(
@@ -126,10 +126,10 @@ class SingleProcessorTestPipeline:
                 config={"channel": channel},
             )
             stream.connect(
-                feeder.output("bags_to_downstream"), processor_under_test.input(port)
+                feeder.output("bags_to_downstream"), node_under_test.input(port)
             )
 
-        for port in _declared_port_names(self._processor_class, "output"):
+        for port in _declared_port_names(self._node_class, "output"):
             channel = _claim_channel()
             self._output_channels[port] = channel
             collector = stream.add(
@@ -138,7 +138,7 @@ class SingleProcessorTestPipeline:
                 config={"channel": channel},
             )
             stream.connect(
-                processor_under_test.output(port),
+                node_under_test.output(port),
                 collector.input("bags_from_upstream"),
             )
 
@@ -156,16 +156,16 @@ class SingleProcessorTestPipeline:
             target=self._run_until_shut_down, name="streamlib-test-pipeline", daemon=True
         )
         self._run_loop.start()
-        self._await_every_processor_running(runtime)
+        self._await_every_node_running(runtime)
 
-    def _await_every_processor_running(self, runtime: Runtime) -> None:
+    def _await_every_node_running(self, runtime: Runtime) -> None:
         try:
-            runtime.wait_until_every_processor_is_running(
+            runtime.wait_until_every_node_is_running(
                 timeout=GRAPH_READY_TIMEOUT_SECONDS
             )
         except BaseException:
             # A graph that never came up usually never started: the run loop
-            # raised on another thread and left every processor where it was.
+            # raised on another thread and left every node where it was.
             # That failure is the cause; this one is the symptom.
             try:
                 run_failure = self._run_failure.get_nowait()
@@ -191,7 +191,7 @@ class SingleProcessorTestPipeline:
                 if self._run_loop.is_alive():
                     raise AssertionError(
                         f"the engine did not tear down within "
-                        f"{ENGINE_TEARDOWN_TIMEOUT_SECONDS}s — a processor thread is still "
+                        f"{ENGINE_TEARDOWN_TIMEOUT_SECONDS}s — a node thread is still "
                         f"running, or teardown is blocked on one"
                     )
             for channel in self._input_channels.values():
@@ -208,12 +208,12 @@ class SingleProcessorTestPipeline:
         return False
 
     def feed(self, port_name: str, bag: "Mapping[str, Any]") -> None:
-        """Queue one bag for delivery to the processor's `port_name` input.
+        """Queue one bag for delivery to the node's `port_name` input.
 
-        A bag is a named map, same as anything a processor writes.
+        A bag is a named map, same as anything a node writes.
 
         Safe from the first line of the `with` block: `__enter__` already
-        waited for the processor's helper to attach.
+        waited for the node's helper to attach.
         """
         feed_test_harness_bag(
             self._channel_for(self._input_channels, port_name, "input"), bag
@@ -222,16 +222,16 @@ class SingleProcessorTestPipeline:
     def await_bag(
         self, port_name: str, *, timeout: float = DEFAULT_BAG_TIMEOUT_SECONDS
     ) -> Any:
-        """The next bag the processor produced on `port_name`.
+        """The next bag the node produced on `port_name`.
 
-        Raises rather than blocking forever: a processor that never produces is
+        Raises rather than blocking forever: a node that never produces is
         the failure a test is looking for.
         """
         channel = self._channel_for(self._output_channels, port_name, "output")
         bag = await_test_harness_bag(channel, timeout)
         if bag is None:
             raise AssertionError(
-                f"{self._processor_class.__name__} produced nothing on {port_name!r} "
+                f"{self._node_class.__name__} produced nothing on {port_name!r} "
                 f"within {timeout}s"
             )
         return bag
@@ -249,18 +249,18 @@ class SingleProcessorTestPipeline:
             return channels[cast_exposed_name_to_url_safe(port_name)]
         except (KeyError, ExposedNameCastsToNothingError):
             raise KeyError(
-                f"{self._processor_class.__name__} declares no {direction} port "
+                f"{self._node_class.__name__} declares no {direction} port "
                 f"{port_name!r}; it declares {sorted(channels) or 'none'}"
             ) from None
 
 
-def _declared_port_names(processor_class: type, direction: str) -> "list[str]":
+def _declared_port_names(node_class: type, direction: str) -> "list[str]":
     declared = getattr(
-        processor_class, f"__streamlib_processor_{direction}_ports__", None
+        node_class, f"__streamlib_processor_{direction}_ports__", None
     )
     if declared is None:
         raise TypeError(
-            f"{processor_class.__name__} is not a processor: decorate it with "
+            f"{node_class.__name__} is not a node: decorate it with "
             f"@tatolab.stream.node"
         )
     return [port["name"] for port in declared]

@@ -73,7 +73,7 @@ def two_feeders_into_one_port(stream: Stream) -> None:
 class TwoFeedersIntoOnePort:
     """Two `TestBagFeeder`s on one input port, and a collector on the output.
 
-    `SingleProcessorTestPipeline` gives every input port exactly one feeder,
+    `SingleNodeTestPipeline` gives every input port exactly one feeder,
     which is the one arrangement that cannot exercise fan-in — so this loads
     its own graph. Everything else is the harness's own shape: native
     endpoints in the app process, the processor under test in its own child.
@@ -111,7 +111,7 @@ class TwoFeedersIntoOnePort:
             target=self._run_until_shut_down, name="inbound-link-naming", daemon=True
         )
         self._run_loop.start()
-        runtime.wait_until_every_processor_is_running(
+        runtime.wait_until_every_node_is_running(
             timeout=GRAPH_READY_TIMEOUT_SECONDS
         )
 

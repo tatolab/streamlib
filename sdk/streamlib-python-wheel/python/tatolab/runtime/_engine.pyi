@@ -166,8 +166,8 @@ class H264Decoder:
 
     The decode session is minted at `setup()`. On a device with no hardware
     decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox
-    hardware decoder — setup refuses by name: the processor never reaches
-    Running, and `Runtime.wait_until_every_processor_is_running` raises
+    hardware decoder — setup refuses by name: the node never reaches
+    Running, and `Runtime.wait_until_every_node_is_running` raises
     rather than the graph running with an empty channel.
     """
 
@@ -239,8 +239,8 @@ class H265Decoder:
 
     The decode session is minted at `setup()`. On a device with no hardware
     decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox
-    hardware decoder — setup refuses by name: the processor never reaches
-    Running, and `Runtime.wait_until_every_processor_is_running` raises
+    hardware decoder — setup refuses by name: the node never reaches
+    Running, and `Runtime.wait_until_every_node_is_running` raises
     rather than the graph running with an empty channel.
     """
 
@@ -636,15 +636,15 @@ class Runtime:
         SIGTERM are never handed back to Python, and SIGHUP is not owned.
         """
 
-    def wait_until_every_processor_is_running(self, *, timeout: float = 30.0) -> None:
-        """Block until every processor in the graph is running.
+    def wait_until_every_node_is_running(self, *, timeout: float = 30.0) -> None:
+        """Block until every node in the graph is running.
 
         Call it before `run()` or from another thread while `run()` blocks — a
         graph that has not started yet is waited through, not refused. A Python
-        processor is running once its helper process has registered and wired
+        node is running once its helper process has registered and wired
         its ports; anything published into the graph before that is dropped by
-        the link. Raises `RuntimeError` if a processor failed instead of
-        starting — carrying that processor's own refusal text, so a built-in
+        the link. Raises `RuntimeError` if a node failed instead of
+        starting — carrying that node's own refusal text, so a built-in
         that refused at setup is read by name — if `timeout` elapses, or if
         this runtime has already been shut down; and `ValueError` for a
         `timeout` that is negative, NaN, or too large to be a duration.

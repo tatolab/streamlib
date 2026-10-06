@@ -232,7 +232,7 @@ def scenario_readiness_wait_across_teardown() -> None:
         # The same stdin handshake the cross-thread shutdown scenario uses:
         # until the driver closes it, `run()` may not yet hold the engine.
         sys.stdin.read()
-        runtime.wait_until_every_processor_is_running(timeout=30.0)
+        runtime.wait_until_every_node_is_running(timeout=30.0)
         marker("GRAPH_READY")
         runtime.shutdown()
 

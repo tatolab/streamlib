@@ -84,7 +84,7 @@ def main() -> None:
 
     def watch_readiness() -> None:
         try:
-            runtime.wait_until_every_processor_is_running(
+            runtime.wait_until_every_node_is_running(
                 timeout=READINESS_TIMEOUT_SECONDS
             )
         except RuntimeError as refusal:

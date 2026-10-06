@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The graph endpoints `SingleProcessorTestPipeline` feeds and collects
+//! The graph endpoints `SingleNodeTestPipeline` feeds and collects
 //! through.
 //!
 //! A test hands bags to a processor and asserts on what comes back, so the

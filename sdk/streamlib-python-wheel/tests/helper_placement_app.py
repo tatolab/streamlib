@@ -272,7 +272,7 @@ def scenario_a_helper_that_imported_another_engine_build_is_refused() -> None:
 
     def report_whether_the_processor_ever_started() -> None:
         try:
-            runtime.wait_until_every_processor_is_running(timeout=30.0)
+            runtime.wait_until_every_node_is_running(timeout=30.0)
         except RuntimeError as never_started:
             marker(f"PROCESSOR_REFUSED={never_started}")
         else:

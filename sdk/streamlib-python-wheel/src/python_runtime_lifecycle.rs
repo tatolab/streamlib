@@ -769,22 +769,22 @@ impl PythonRuntimeHandle {
         }
     }
 
-    /// Block until every processor in the graph is running, then return.
+    /// Block until every node in the graph is running, then return.
     ///
     /// Call it around `run()` — before it, or from another thread while it
     /// blocks; a graph that has not started yet is waited through rather than
-    /// refused. A processor runs once its `setup` has returned, and for a
-    /// Python processor `setup` is what waits for its helper process to
+    /// refused. A node runs once its `setup` has returned, and for a
+    /// Python node `setup` is what waits for its helper process to
     /// register and wire its ports. Publishing into the graph before that
     /// point loses bags: a link drops what it carries while its consumer is
     /// not yet attached.
     ///
-    /// Raises if a processor failed instead of starting, or if `timeout`
-    /// elapses first; the message names the processor and the state it was
-    /// left in, so forgetting `run()` altogether reads as every processor
+    /// Raises if a node failed instead of starting, or if `timeout`
+    /// elapses first; the message names the node and the state it was
+    /// left in, so forgetting `run()` altogether reads as every node
     /// still `Pending`.
     #[pyo3(signature = (*, timeout = 30.0))]
-    fn wait_until_every_processor_is_running(
+    fn wait_until_every_node_is_running(
         &self,
         python: Python<'_>,
         timeout: f64,

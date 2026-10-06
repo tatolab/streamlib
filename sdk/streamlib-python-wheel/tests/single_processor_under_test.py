@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Processors driven through `SingleProcessorTestPipeline`.
+"""Processors driven through `SingleNodeTestPipeline`.
 
 In their own module because that is what the harness is for: a user's processor
 lives in an importable module, and its helper process imports exactly that. A

@@ -205,7 +205,7 @@ def processor_ids_a_never_run_runtimes_readiness_wait_lists(
 ) -> list[str]:
     """Every processor id a never-run runtime's readiness wait lists, sorted; none if it returns."""
     try:
-        runtime.wait_until_every_processor_is_running(timeout=0.0)
+        runtime.wait_until_every_node_is_running(timeout=0.0)
     except RuntimeError as readiness_refusal:
         _, every_processor_listed, listing = str(readiness_refusal).partition(
             EVERY_PROCESSOR_THE_READINESS_WAIT_LISTS_AFTER
@@ -952,7 +952,7 @@ def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_control_pla
         runtime.load(compile_stream_to_graph(named_pattern_into_a_named_collector))
         runtime.host_control_plane()
         run_loop.start()
-        runtime.wait_until_every_processor_is_running(timeout=SERVED_GRAPH_READY_TIMEOUT_SECONDS)
+        runtime.wait_until_every_node_is_running(timeout=SERVED_GRAPH_READY_TIMEOUT_SECONDS)
         served_graph = json.loads(
             call_tool(
                 local_api_socket_once_the_registry_lists(SERVED_GRAPH_RUNTIME_NAME), "graph", {}

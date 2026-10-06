@@ -6,7 +6,7 @@
 `tatolab` is PEP 420: no distribution ships `tatolab/__init__.py`, so a second
 distribution's `tatolab.<name>` lands beside these two rather than shadowing
 them. `tatolab.stream` and `tatolab.runtime` are regular packages. No public
-Python name `tatolab.stream` publishes says "processor".
+Python name either publishes, nor any public module beneath them, says "processor".
 """
 
 import importlib.util
@@ -15,11 +15,13 @@ import pkgutil
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Callable
 
 import tatolab
 import tatolab.runtime
 import tatolab.runtime._engine as engine
+import tatolab.runtime.testing
 import tatolab.stream
 
 WHEEL_PYTHON_SOURCE_DIRECTORY = Path(__file__).resolve().parents[1] / "python"
@@ -146,12 +148,43 @@ def test_the_engine_publishes_the_node_names_in_their_place():
     )
 
 
-def test_no_name_tatolab_stream_publishes_nor_any_public_member_of_one_says_processor():
+def _public_tatolab_modules() -> "list[ModuleType]":
+    public_modules: "list[ModuleType]" = []
+    for package in (tatolab.stream, tatolab.runtime):
+        public_modules.append(package)
+        for submodule in pkgutil.iter_modules(package.__path__, f"{package.__name__}."):
+            if not submodule.name.rsplit(".", 1)[1].startswith("_"):
+                public_modules.append(importlib.import_module(submodule.name))
+    return public_modules
+
+
+def _public_names_tatolab_publishes() -> "list[tuple[str, object]]":
+    public_names: "list[tuple[str, object]]" = []
+    for public_module in _public_tatolab_modules():
+        assert hasattr(public_module, "__all__"), public_module.__name__
+        for exported_name in public_module.__all__:
+            public_names.append(
+                (f"{public_module.__name__}.{exported_name}", getattr(public_module, exported_name))
+            )
+    return public_names
+
+
+def test_every_public_tatolab_module_is_swept_for_processor():
+    swept_module_names = {public_module.__name__ for public_module in _public_tatolab_modules()}
+    assert {
+        "tatolab.stream",
+        "tatolab.runtime",
+        "tatolab.runtime.testing",
+        "tatolab.runtime.cli",
+        "tatolab.stream.node_output_texture_ring",
+    } <= swept_module_names
+
+
+def test_no_name_tatolab_publishes_nor_any_public_member_of_one_says_processor():
     names_saying_processor: "list[str]" = []
-    for exported_name in tatolab.stream.__all__:
-        if "processor" in exported_name.lower():
-            names_saying_processor.append(exported_name)
-        exported = getattr(tatolab.stream, exported_name)
+    for qualified_name, exported in _public_names_tatolab_publishes():
+        if "processor" in qualified_name.rsplit(".", 1)[1].lower():
+            names_saying_processor.append(qualified_name)
         if inspect.isclass(exported):
             member_names = [name for name in dir(exported) if not name.startswith("_")]
         elif inspect.ismodule(exported):
@@ -159,7 +192,7 @@ def test_no_name_tatolab_stream_publishes_nor_any_public_member_of_one_says_proc
         else:
             continue
         names_saying_processor.extend(
-            f"{exported_name}.{member_name}"
+            f"{qualified_name}.{member_name}"
             for member_name in member_names
             if "processor" in member_name.lower()
         )
@@ -172,25 +205,24 @@ def test_no_name_tatolab_stream_publishes_nor_any_public_member_of_one_says_proc
 PUBLIC_PARAMETERS_SAYING_PROCESSOR_OUTSIDE_THIS_RENAME: "tuple[str, ...]" = ()
 
 
-def _public_callables_tatolab_stream_publishes() -> "list[tuple[str, Callable[..., object]]]":
+def _public_callables_tatolab_publishes() -> "list[tuple[str, Callable[..., object]]]":
     public_callables: "list[tuple[str, Callable[..., object]]]" = []
-    for exported_name in tatolab.stream.__all__:
-        exported = getattr(tatolab.stream, exported_name)
+    for qualified_name, exported in _public_names_tatolab_publishes():
         if inspect.isclass(exported):
-            public_callables.append((exported_name, exported))
+            public_callables.append((qualified_name, exported))
             for member_name in dir(exported):
                 if member_name.startswith("_"):
                     continue
                 member = getattr(exported, member_name)
                 if callable(member) and not inspect.isclass(member):
-                    public_callables.append((f"{exported_name}.{member_name}", member))
+                    public_callables.append((f"{qualified_name}.{member_name}", member))
         elif inspect.ismodule(exported):
             for member_name in getattr(exported, "__all__", ()):
                 member = getattr(exported, member_name)
                 if callable(member):
-                    public_callables.append((f"{exported_name}.{member_name}", member))
+                    public_callables.append((f"{qualified_name}.{member_name}", member))
         elif callable(exported):
-            public_callables.append((exported_name, exported))
+            public_callables.append((qualified_name, exported))
     return public_callables
 
 
@@ -200,10 +232,17 @@ def test_the_node_decorator_names_its_class_parameter_node_class():
     assert not [name for name in node_parameter_names if "processor" in name.lower()]
 
 
-def test_no_parameter_of_a_public_callable_tatolab_stream_publishes_says_processor():
+def test_the_single_node_test_pipeline_names_its_class_parameter_node_class():
+    pipeline_parameter_names = list(
+        inspect.signature(tatolab.runtime.testing.SingleNodeTestPipeline).parameters
+    )
+    assert pipeline_parameter_names[0] == "node_class"
+
+
+def test_no_parameter_of_a_public_callable_tatolab_publishes_says_processor():
     parameters_saying_processor = [
         f"{qualified_name}({parameter_name})"
-        for qualified_name, public_callable in _public_callables_tatolab_stream_publishes()
+        for qualified_name, public_callable in _public_callables_tatolab_publishes()
         for parameter_name in inspect.signature(public_callable).parameters
         if "processor" in parameter_name.lower()
     ]
