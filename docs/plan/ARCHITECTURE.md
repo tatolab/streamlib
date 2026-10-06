@@ -3147,7 +3147,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   prompt's exact wording under `SMAppService` is an acceptance check of the installer change.
   Owner, 2026-10-01, on #2560's research. [runtime-hosting; one-runtime-per-machine]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ stream-graph, local-api, runtime-hosting)
+## Networking — transport, moq, webrtc — IN-FLIGHT (→ stream-graph, runtime-hosting)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -3669,7 +3669,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   portion of a PEP 420 namespace beside a pure one, in wheels and editable installs alike, so no
   custom module system is needed. [one-runtime-per-machine; package-split-and-lend]
 
-## Control plane & observability — IN-FLIGHT (→ local-api, stream-graph, runtime-hosting)
+## Control plane & observability — IN-FLIGHT (→ stream-graph, runtime-hosting)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
@@ -3702,24 +3702,26 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   a link wired onto a running processor reaches it, and every channel is sized for a
   destination that connects later. `exchange` stays an observation verb because a read
   that costs the node a bounded copy is still a read. MCP is
-  served by the node's control plane at `POST /mcp`, mounted with the node and sharing
-  its lifecycle. Beside its tools the node serves two resources, each rendered at
-  the moment it is read: `streamlib://processor-catalog`, every processor type it can
-  add with its description, derived config schema and ports — `/api/registry`'s
-  document — and `streamlib://graph`, the `graph` tool's. It also serves four prompts,
-  recipes rendered against the live graph and the catalog —
-  `insert_processor_between_linked_processors`, `fan_output_to_another_consumer`,
+  served by the node's local API, mounted with the node and sharing its lifecycle, through
+  `rmcp`, the official Rust MCP SDK — no MCP protocol logic is hand-written, in the runtime
+  or the CLI's client, which is `rmcp`'s client — in two framings over one handler:
+  `POST /mcp`, `rmcp`'s Streamable HTTP service with its header checks and statuses, for
+  the CLI's one-shot calls; and `/mcp/stdio`, an HTTP/1.1 `Upgrade: mcp-stdio` after which
+  the connection carries MCP's stdio framing both ways, for the `mcp` verb. Beside its
+  tools the node serves two resources, each rendered at the moment it is read:
+  `streamlib://node-catalog`, every node type it can add with its description, derived
+  config schema and ports — `/api/registry`'s document — and `streamlib://graph`, the
+  `graph` tool's. It also serves four prompts, recipes rendered against the live graph and
+  the catalog — `insert_node_between_linked_nodes`, `fan_output_to_another_consumer`,
   `show_channel_on_virtual_camera` and `look_at_what_a_channel_carries` — whose every
   step is a call to a served tool: a prompt is text, never a mutation path, so the tool
   set stays the whole of the control vocabulary.
   [importable-python-library; mcp-served-with-the-node — SHIPPED #1712;
   agent-readable-processor-catalog — SHIPPED #2232;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; local-transport-hardening —
-  SHIPPED #2263, #2265; reopened by one-runtime-per-machine: the local API; amended by
-  local-api: the tools, resources and prompts speak the graph's words, and an MCP host
-  launches the CLI's `mcp` verb (the entries below); amended by moq-on-the-tailnet: `tap` and
-  `exchange` leave the tool set at the sharing step]
-  <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
+  SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; amended by
+  moq-on-the-tailnet: `tap` and `exchange` leave the tool set at the sharing step]
+  <!-- verify: cargo test -p streamlib-api-server the_upgraded_stream_serves_the_same_tools_and_resources_as_post_mcp -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
   <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_node_catalog_and_the_live_graph -->
@@ -3764,7 +3766,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   prerequisite of the rip-out. [control-plane-one-surface]
 - **DECIDED** — The CLI ships inside the wheel and slims to `new` / `dev` / `run` (a
   thin runner over the same engine the wheel exposes) plus the observation verbs
-  (`nodes` / `graph` / `tap` / `logs` / `exchange`) and one machine-setup verb,
+  (`nodes` / `graph` / `tap` / `logs` / `exchange`), the `mcp` verb, and one machine-setup verb,
   `enable-virtual-camera`, which installs the loopback permission the virtual camera's
   loopback door needs behind the desktop's password prompt and touches no node.
   `exchange` takes a surface id, or a
@@ -3778,18 +3780,19 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975;
-  virtual-camera-sink — SHIPPED #2196; amended by one-runtime-per-machine: an
-  installer-registered per-user service starts the runtime, which never detaches itself;
-  amended by local-api: the `mcp` verb joins; amended by tatolab-names and
+  virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667; amended by
+  one-runtime-per-machine: an installer-registered per-user service starts the runtime,
+  which never detaches itself; amended by tatolab-names and
   package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the
   installer and never in a pip wheel; amended by moq-on-the-tailnet: `tap` and `exchange` leave
   the CLI at the sharing step]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_mcp_verb.py -->
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the node registry, the
-  surface-sharing socket and the iceoryx2 domain. On Linux it is
+  surface-sharing socket, the local API socket and the iceoryx2 domain. On Linux it is
   `$XDG_RUNTIME_DIR/streamlib/` when that variable is set and non-empty, and otherwise —
   empty or unset, and on macOS always — `/tmp/streamlib-<uid>/`, created owner-only and
   checked as a real directory this uid owns with no group or other bits. The check runs once
@@ -3798,14 +3801,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   overrides it — a container or CI job sets `XDG_RUNTIME_DIR` — so a runtime starts anywhere
   with nothing set, and the wheel's Python registry reader resolves identically. What a runtime *keeps* — logs, caches — stays under the project's
   `.streamlib/`. Node discovery is the per-user on-disk registry inside that directory: one
-  JSON file per live node, written only by control-plane-hosting runtimes, pruned only when
-  both liveness signals (control round-trip, process check) fail. The entry carries the
-  runtime's own `runtime_name` beside its `runtime_id`, taken from the runtime rather than
-  from the control plane it hosts; the control plane carries no name of its own. Owner,
-  2026-09-14. [control-plane-one-surface; local-transport-hardening — SHIPPED #2261;
-  runtime-mesh — SHIPPED #2282]
+  JSON file per live node, written only by runtimes hosting their local API, pruned only
+  when both liveness signals (a `graph` round trip over the socket, process check) fail.
+  The entry carries the runtime's own `runtime_name` beside its `runtime_id`, taken from
+  the runtime rather than from the local API it hosts, which carries no name of its own,
+  and the `local_api_socket_path` a client dials; a reader refuses an entry of an earlier
+  schema by name. Owner, 2026-09-14. [control-plane-one-surface; local-transport-hardening
+  — SHIPPED #2261; runtime-mesh — SHIPPED #2282; local-api — SHIPPED #2660, #2663]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::streamlib_runtime_directory -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_directory.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_schema_two_entry_is_refused_by_its_version_and_never_pruned -->
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
   bags verbatim, trading completeness for guaranteed non-interference; graph and health
   inspection ride the same control plane. [control-plane-one-surface; amended by moq-on-the-tailnet: `tap` is deleted at the sharing step; logs, `graph` and health stand]
@@ -3875,19 +3880,17 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — Two spellings of one operation: MCP tool and REST route serve the same
   `exchange` with the same arguments, differing only in result shape. REST serves the
   exact frame as a binary `image/png` body — lossless, full resolution, no base64
-  inflation, remote-capable: the evidence and PSNR path, and what the CLI writes into a
+  inflation: the evidence and PSNR path, and what the CLI writes into a
   caller-named directory. The MCP tool returns an image content block, downscaled by
   default to a declared long-edge cap (~1568 px, the resolution ceiling vision models
   actually use), with the result stating the true extent and the exact-bytes route — the
   agent's in-session view, always under the per-image payload ceiling. The downscale
   rides the RHI's existing blit path, never a second scaler, and raw unconverted planes
-  stay deferred until something needs them. The REST spelling joins the bearer-gated set
-  beside the tap WebSocket and MCP inherits the gate the whole dispatch already has:
-  whatever the auth entry below decides later, it decides for this verb the same as the
-  rest. [control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; amended by local-api:
-  the auth entry decided that control carries no token, so the bearer gate retires with the
-  network listener; amended by moq-on-the-tailnet: `exchange` is deleted at the sharing step, the repo's
-  verification reading a private port's snapshot instead]
+  stay deferred until something needs them. Both spellings are gated as the rest of the
+  local API is, by the auth entry below. [control-plane-surface-pixel-exchange — SHIPPED
+  #1972, #1974; local-api — SHIPPED #2663; amended by moq-on-the-tailnet: `exchange` is
+  deleted at the sharing step, the repo's verification reading a private port's snapshot
+  instead]
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route -->
 - **DECIDED** — There is no observer effect: reading a channel does not require terminating
@@ -3899,29 +3902,41 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   call it — the owning user, by file permission — and nothing off the machine can call it at
   all, so control carries no token and no account. What a runtime offers other machines is
   exposure, decided in §Networking. Owner, 2026-10-01.
-  [control-plane-bind-posture; local-api]
+  [control-plane-bind-posture; local-api — SHIPPED #2663]
+  <!-- verify: cargo test -p streamlib-api-server the_socket_is_only_its_owners_to_open -->
 - **DECIDED** — The local API is reachable only on its own machine. Each machine's runtime
   serves one local API on a socket in its runtime directory that only the owning user can
-  open, carrying today's router and control vocabulary unchanged; no network address serves
-  control. The URL forms are a separate listener that changes nothing — private and public
+  open — `local-api-<runtime_id>.sock`, chmod 0600 inside the 0700 directory, a live
+  duplicate refused by a connect probe naming the path and a stale file replaced — carrying
+  the router and control vocabulary unchanged; no network address serves control. A client
+  picks a runtime by `--node <runtime name or id>`, or takes the sole live one. The URL forms are a separate listener that changes nothing — private and public
   ports on loopback — because browsers and ffmpeg cannot dial a socket. A runtime is never
   driven from another machine
   through its local API: changing a stream on another machine means running the CLI or an
   agent on that machine, over ssh for example, and a fleet-wide path is the external control
-  client's. Owner, 2026-10-01. [local-api; one-runtime-per-machine; amended by
-  moq-on-the-tailnet: the URL listener's tailnet half, through `tailscale serve`]
+  client's. Owner, 2026-10-01. [one-runtime-per-machine; local-api — SHIPPED
+  #2660, #2662, #2663; amended by moq-on-the-tailnet: the URL listener's tailnet half,
+  through `tailscale serve`]
+  <!-- verify: cargo test -p streamlib-api-server serving_the_router_on_the_local_api_socket_opens_no_tcp_listener -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_launched_node_listens_on_no_tcp_socket -->
 - **DECIDED** — An MCP host reaches the local API by launching the CLI's `mcp` verb as a
-  stdio server — `claude mcp add streamlib -- <cli> mcp`. The verb forwards each message
-  from its stdin to the runtime's MCP endpoint over the socket, unchanged, and writes the
-  runtime's messages to its stdout; it interprets nothing, so the tools, resources, prompts
-  and protocol revision stay the runtime's alone, and it exits when the host closes it. Run
-  over ssh — `ssh <machine> <cli> mcp` — it is how an agent changes a stream on another
-  machine. No network listener serves MCP. The runtime serves only the current MCP revision,
-  2026-07-28 (stateless: no `initialize` handshake and no session); a host that speaks only an
-  earlier revision is refused with the protocol's own unsupported-version error naming
-  2026-07-28. Agents
-  hosted in a cloud, which can neither launch a command nor reach a machine's loopback, are
-  not served by the local API. Owner, 2026-10-01. [local-api]
+  stdio server — `claude mcp add streamlib -- <cli> mcp`. The verb resolves the runtime,
+  opens its socket, sends the one `/mcp/stdio` upgrade request, and then copies bytes,
+  stdin → socket and socket → stdout; it parses no message, so the tools, resources, prompts
+  and protocol revision stay the runtime's alone. Stdin closing half-closes the socket and
+  the verb exits when the runtime closes its side; the runtime going away exits it non-zero
+  with one stderr line naming the runtime; no live runtime at launch is a one-line refusal
+  naming `streamlib nodes`. Run over ssh — `ssh <machine> <cli> mcp` — it is how an agent
+  changes a stream on another machine. No network listener serves MCP. The runtime serves
+  only the latest MCP revision `rmcp` speaks, 2026-07-28 (stateless: no `initialize`
+  handshake and no session); a host that speaks only an earlier revision is refused with the
+  protocol's own unsupported-version error naming the served revision.
+  `subscriptions/listen` is acknowledged with an empty set — `listChanged` stays `false` —
+  and held until cancelled or the local API stops. Agents hosted in a cloud, which can
+  neither launch a command nor reach a machine's loopback, are not served by the local API.
+  Owner, 2026-10-01; `rmcp`, owner, 2026-10-06. [local-api — SHIPPED #2665, #2667]
+  <!-- verify: cargo test -p streamlib-api-server an_initialize_handshake_is_refused_with_the_unsupported_version_error_naming_the_latest -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_mcp_verb.py::test_the_verb_opens_the_stream_with_one_upgrade_and_copies_both_ways_untouched -->
 - **DECIDED** — `graph` returns every stream the runtime holds, and every stream action the CLI
   has — `run` attached, `run -d`, `stop`, `start`, `rm`, `streams`, `expose` — is also a tool,
   beside the graph-mutation tools, which stay, so an agent can do whatever the CLI can; the
