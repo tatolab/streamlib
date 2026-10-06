@@ -1338,6 +1338,73 @@ pub(crate) mod tests {
         );
     }
 
+    /// The one setting [`AddNodeTestSourceTakingOneSetting`] takes.
+    #[derive(
+        Debug,
+        Clone,
+        Default,
+        PartialEq,
+        serde::Serialize,
+        serde::Deserialize,
+        streamlib::sdk::schemars::JsonSchema,
+    )]
+    #[schemars(crate = "streamlib::sdk::schemars")]
+    #[serde(deny_unknown_fields)]
+    pub struct AddNodeTestSourceTakingOneSettingConfig {
+        #[serde(default)]
+        pub frame_width: Option<u32>,
+    }
+
+    /// A native source whose config refuses every key but `frame_width`.
+    #[streamlib::sdk::processor(
+        execution = manual,
+        config = crate::mcp::tests::AddNodeTestSourceTakingOneSettingConfig,
+        output("video"),
+    )]
+    pub struct AddNodeTestSourceTakingOneSetting;
+
+    impl streamlib::sdk::processors::ManualProcessor for AddNodeTestSourceTakingOneSetting::Processor {
+        fn start(
+            &mut self,
+            _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Against a real engine: a live add meets the refusal a load does, naming
+    /// the node, its type and the setting, and adds nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tools_call_add_node_refuses_a_setting_the_nodes_type_does_not_take_naming_it() {
+        streamlib::sdk::processors::PROCESSOR_REGISTRY
+            .register::<AddNodeTestSourceTakingOneSetting::Processor>();
+        let source_type = AddNodeTestSourceTakingOneSetting::processor_class_import_path();
+        let runtime = streamlib::sdk::runtime::Runner::new().unwrap();
+
+        let body = tool_call_result(
+            Arc::clone(&runtime) as Arc<dyn RuntimeOperations>,
+            "add_node",
+            json!({
+                "type": source_type.as_str(),
+                "name": "front",
+                "config": {"frame_widht": 640}
+            }),
+        )
+        .await;
+
+        assert_eq!(body["isError"], true, "body={body}");
+        let text = body["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("node `front`"), "{text}");
+        assert!(text.contains(source_type.as_str()), "{text}");
+        assert!(text.contains("`frame_widht`"), "{text}");
+        let graph = runtime.to_json().unwrap();
+        assert_eq!(
+            graph["nodes"],
+            json!([]),
+            "a refused add adds nothing: {graph}"
+        );
+    }
+
     #[tokio::test]
     async fn tools_call_add_node_without_config_or_name_sends_an_empty_object_and_answers_the_engines_name()
      {

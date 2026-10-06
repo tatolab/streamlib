@@ -13,7 +13,6 @@ from __future__ import annotations
 import copy
 import inspect
 import math
-import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import FunctionType
@@ -254,7 +253,6 @@ class Stream:
         """Record a node of `node_class` under `name` (cast) or its class's short name, cast."""
         if not isinstance(node_class, type):
             raise TypeError(_not_a_node_refusal(node_class))
-        _refuse_a_node_this_platform_cannot_run(node_class)
         node_type = _node_type_of(node_class)
         node_name = (
             self._name_a_defaulted_node_takes(node_class)
@@ -400,18 +398,6 @@ def _not_a_node_refusal(node_class: object) -> str:
         f"{node_class!r} is not a node: decorate the class with @streamlib.node, and "
         f"pass the class itself rather than an instance of it"
     )
-
-
-def _refuse_a_node_this_platform_cannot_run(node_class: type) -> None:
-    if (
-        not sys.platform.startswith("linux")
-        and node_class.__module__ == "streamlib"
-        and node_class.__qualname__ == "VirtualCameraSink"
-    ):
-        raise RuntimeError(
-            "VirtualCameraSink is Linux-only today; this platform is not supported by "
-            "the streamlib wheel yet"
-        )
 
 
 def _node_type_of(node_class: type) -> str:

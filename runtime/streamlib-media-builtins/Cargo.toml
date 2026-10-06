@@ -47,6 +47,8 @@ audible-hardware-tests = ["hardware-tests", "streamlib/audible-hardware-tests"]
 # shipped. This one enforces the spec's mandatory boxes.
 mp4 = "0.14"
 serde_json = { workspace = true }
+# Pins each golden graph's bytes, so a golden is added beside the others and never edited.
+sha2 = { workspace = true }
 rmp-serde = { workspace = true }
 rmpv = { workspace = true }
 

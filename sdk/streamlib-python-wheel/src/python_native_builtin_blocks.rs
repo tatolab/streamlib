@@ -64,16 +64,6 @@ macro_rules! native_processor_marker_classes {
 }
 pub(crate) use native_processor_marker_classes;
 
-/// The import path `DisplayWindow` registers under where it is compiled in,
-/// for a floor where it is not; held equal to the built-in's own derived path
-/// by a test on Linux.
-#[cfg(any(
-    all(test, target_os = "linux"),
-    not(any(target_os = "linux", target_os = "macos"))
-))]
-const DISPLAY_WINDOW_PROCESSOR_CLASS_IMPORT_PATH: &str =
-    "streamlib_media_builtins::display_window::DisplayWindow";
-
 native_processor_marker_classes! {
     added_to_the_module_by: add_native_builtin_marker_classes_to_the_module,
     markers: [
@@ -99,10 +89,9 @@ native_processor_marker_classes! {
                 }
                 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                 {
-                    streamlib::sdk::descriptors::ProcessorClassImportPath::new(
-                        DISPLAY_WINDOW_PROCESSOR_CLASS_IMPORT_PATH,
+                    streamlib::sdk::descriptors::ProcessorClassImportPath::of_built_in_node(
+                        "DisplayWindow",
                     )
-                    .expect("a non-blank literal is a valid import path")
                 }
             },
         }
@@ -173,10 +162,9 @@ native_processor_marker_classes! {
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    streamlib::sdk::descriptors::ProcessorClassImportPath::new(
-                        streamlib_api_server::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
+                    streamlib::sdk::descriptors::ProcessorClassImportPath::of_built_in_node(
+                        "VirtualCameraSink",
                     )
-                    .expect("a non-blank literal is a valid import path")
                 }
             },
         }
@@ -210,17 +198,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_display_window_path_for_a_floor_without_it_is_the_one_it_registers_under() {
-        assert_eq!(
-            DISPLAY_WINDOW_PROCESSOR_CLASS_IMPORT_PATH,
-            streamlib_media_builtins::DisplayWindow::Processor::processor_class_import_path()
-                .as_str()
-        );
-    }
-
     /// A graph names a native node by its marker's `type`, so every marker the
-    /// module exports must name the path its native processor registered under.
+    /// module exports must name the type its native built-in registered under:
+    /// its own class in `tatolab.stream`.
     #[test]
     fn every_exported_marker_type_names_a_registered_native_processor() {
         Python::initialize();
@@ -238,9 +218,12 @@ mod tests {
             for marker_class in marker_classes {
                 let type_attribute: String =
                     marker_class.getattr("type").unwrap().extract().unwrap();
-                assert!(
-                    type_attribute.starts_with("streamlib_media_builtins::"),
-                    "{marker_class}: {type_attribute}"
+                let python_class_name: String =
+                    marker_class.getattr("__name__").unwrap().extract().unwrap();
+                assert_eq!(
+                    type_attribute,
+                    format!("tatolab.stream:{python_class_name}"),
+                    "{marker_class}"
                 );
                 assert!(
                     PROCESSOR_REGISTRY.is_registered(

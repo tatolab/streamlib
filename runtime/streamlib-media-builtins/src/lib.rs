@@ -82,11 +82,20 @@ pub use video_frame::VideoFrame;
 #[cfg(target_os = "linux")]
 pub use virtual_camera_sink::{VirtualCameraDoor, VirtualCameraSink, VirtualCameraSinkConfig};
 
+use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 
-/// Register every media built-in on the process-wide registry. In-process
-/// static registration (the api-server precedent) — no dlopen, and idempotent,
-/// so hosts may call it more than once.
+/// Each built-in compiled in on some floors only, by its public class name,
+/// with the floors it runs on.
+const BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY: &[(&str, &str)] = &[
+    ("DisplayWindow", "Linux and macOS"),
+    ("VirtualCameraSink", "Linux"),
+];
+
+/// Register every media built-in on the process-wide registry, and record each
+/// one this floor compiles out so a graph naming it is refused naming the
+/// floors it runs on. In-process static registration (the api-server
+/// precedent) — no dlopen, and idempotent, so hosts may call it more than once.
 pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<test_pattern_source::TestPatternSource::Processor>();
     PROCESSOR_REGISTRY.register::<microphone_source::MicrophoneSource::Processor>();
@@ -103,4 +112,121 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<h264_decoder::H264Decoder::Processor>();
     PROCESSOR_REGISTRY.register::<h265_encoder::H265Encoder::Processor>();
     PROCESSOR_REGISTRY.register::<h265_decoder::H265Decoder::Processor>();
+
+    for (class_name, floors_it_runs_on) in BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY {
+        let built_in_node_type = ProcessorClassImportPath::of_built_in_node(class_name);
+        if !PROCESSOR_REGISTRY.is_registered(&built_in_node_type) {
+            PROCESSOR_REGISTRY.register_built_in_node_type_absent_on_this_floor(
+                built_in_node_type,
+                *floors_it_runs_on,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod built_in_node_type_tests {
+    use streamlib::sdk::error::Error;
+
+    use super::*;
+
+    /// Every built-in this floor registers, each held to its class in
+    /// `tatolab.stream` — its authored name, which the descriptor carries.
+    fn every_built_in_registered_on_this_floor() -> Vec<ProcessorClassImportPath> {
+        register_media_builtin_processor_types();
+        let built_ins: Vec<ProcessorClassImportPath> = PROCESSOR_REGISTRY
+            .list_registered()
+            .into_iter()
+            .filter(|descriptor| {
+                descriptor
+                    .processor_class_import_path
+                    .names_a_built_in_node()
+            })
+            .map(|descriptor| {
+                assert_eq!(
+                    descriptor.processor_class_import_path,
+                    ProcessorClassImportPath::of_built_in_node(
+                        descriptor.processor_class_short_name.as_str()
+                    ),
+                    "a built-in's type is its authored name in `tatolab.stream`"
+                );
+                descriptor.processor_class_import_path
+            })
+            .collect();
+        assert!(!built_ins.is_empty());
+        built_ins
+    }
+
+    #[test]
+    fn every_built_in_is_registered_as_its_authored_name_in_the_stream_package() {
+        let built_ins = every_built_in_registered_on_this_floor();
+
+        assert!(built_ins.contains(&camera_source::CameraSource::processor_class_import_path()));
+        let rust_module_paths: Vec<ProcessorClassImportPath> = PROCESSOR_REGISTRY
+            .registered_processor_class_import_paths()
+            .into_iter()
+            .filter(|path| path.as_str().starts_with("streamlib_media_builtins::"))
+            .collect();
+        assert!(
+            rust_module_paths.is_empty(),
+            "a built-in's Rust module path reached the registry: {rust_module_paths:?}"
+        );
+    }
+
+    /// Each built-in's config derives `deny_unknown_fields` by hand, so this is
+    /// what fails when one does not — a fourteenth built-in included.
+    #[test]
+    fn every_built_in_refuses_a_setting_it_does_not_take_naming_it() {
+        for built_in_node_type in every_built_in_registered_on_this_floor() {
+            let refusal = PROCESSOR_REGISTRY.refuse_a_node_this_runtime_cannot_add(
+                "probe",
+                &built_in_node_type,
+                &serde_json::json!({"a_setting_no_built_in_takes": 1}),
+            );
+
+            match refusal {
+                Err(Error::NodeConfigRefused { refusal, .. }) => assert!(
+                    refusal.contains("`a_setting_no_built_in_takes`"),
+                    "{built_in_node_type}: {refusal}"
+                ),
+                other => panic!("{built_in_node_type} took a setting it does not know: {other:?}"),
+            }
+        }
+    }
+
+    /// The table names classes by hand, for floors where they are not compiled
+    /// in; each must still be the class a floor that compiles it registers.
+    #[test]
+    fn every_built_in_on_some_floors_only_is_registered_here_or_refused_naming_where_it_runs() {
+        register_media_builtin_processor_types();
+
+        for (class_name, floors_it_runs_on) in BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY {
+            let built_in_node_type = ProcessorClassImportPath::of_built_in_node(class_name);
+            let refusal = PROCESSOR_REGISTRY
+                .refuse_a_built_in_node_type_absent_on_this_floor(&built_in_node_type);
+            if PROCESSOR_REGISTRY.is_registered(&built_in_node_type) {
+                assert!(refusal.is_ok(), "{refusal:?}");
+            } else {
+                match refusal {
+                    Err(Error::BuiltInNodeTypeAbsentOnThisFloor {
+                        floors_it_runs_on: refused_naming,
+                        ..
+                    }) => assert_eq!(refused_naming, *floors_it_runs_on),
+                    other => {
+                        panic!("{built_in_node_type}: expected the floor refusal, got {other:?}")
+                    }
+                }
+            }
+        }
+        #[cfg(target_os = "linux")]
+        assert!(
+            BUILT_INS_COMPILED_IN_ON_SOME_FLOORS_ONLY
+                .iter()
+                .all(|(class_name, _)| {
+                    PROCESSOR_REGISTRY
+                        .is_registered(&ProcessorClassImportPath::of_built_in_node(class_name))
+                }),
+            "Linux compiles in every built-in, so every name the table holds is one it registers"
+        );
+    }
 }

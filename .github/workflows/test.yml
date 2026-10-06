@@ -129,10 +129,11 @@ jobs:
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # A `graph` document loads back as the same graph, and a node's name
           # is cast, suffixed when defaulted and refused when typed twice. A
-          # Rust processor's port is cast as `@node` casts a Python one.
+          # Rust node's port is cast as `@node` casts a Python one. An add
+          # naming a type nobody registered refuses with its own typed error.
           cargo test --locked -p streamlib-engine \
             --test graph_snapshot_round_trip_test --test node_name_test \
-            --test rust_port_name_cast_test
+            --test rust_port_name_cast_test --test unknown_processor_type_test
           # The compile-fail half of the same locks. The descriptor carries the
           # config type's schema, so the derive is a requirement, and the note
           # naming the fix is the only thing standing between an author and a
@@ -147,6 +148,10 @@ jobs:
           # the display's fold onto the engine's present machinery — the rest of
           # that coverage is rig-gated and never runs in CI at all.
           cargo test --locked -p streamlib-media-builtins --lib
+          # The compatibility record: every golden graph loads, and the goldens
+          # together name every built-in this floor registers. GPU-free — a load
+          # adds nodes and links and starts nothing.
+          cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
           # Compiled but not run. `speaker_sink_matches_its_device` is the only
           # thing that drives the two `match_device` production call sites —
           # `SpeakerSink::setup()` settling its port, and the spawn seam refusing
@@ -317,6 +322,10 @@ jobs:
           # A port named in any spelling that casts to it, on the read and the
           # write side, and registration refusing a descriptor whose ports are
           # not cast or not distinct.
+          # What a runtime refuses by name before a frame flows: a built-in this
+          # floor compiles out, a config its type does not take — whichever way
+          # a Rust type was registered — and a built-in's type, which is never
+          # handed to the Python resolver.
           cargo test --locked -p streamlib-engine --lib -- \
             vulkan::rhi::vulkan_video_session::tests \
             vulkan::rhi::vulkan_present_target::tests::acquire_barrier_source_stage_chains_off_the_image_available_wait \
@@ -661,6 +670,12 @@ jobs:
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel \
             core::graph_snapshot \
+            core::graph::traversal::mutation_ops::add_v_op::tests::a_built_in_this_floor_compiles_out_is_refused_and_nothing_is_added \
+            core::graph::traversal::mutation_ops::add_v_op::tests::a_config_the_type_does_not_take_is_refused_naming_the_node_and_nothing_is_added \
+            core::processors::processor_instance_factory::tests::a_built_in_type_is_never_handed_to_the_unregistered_type_resolver \
+            core::processors::processor_instance_factory::tests::a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any \
+            core::processors::processor_instance_factory::tests::only_a_type_recorded_absent_on_this_floor_is_refused_as_absent \
+            core::runtime::local_processor_type_registration::tests::a_type_added_locally_refuses_a_setting_its_config_does_not_take_at_add \
             core::graph::graph_tests::node_names \
             core::json_schema::capability_extension_and_runtime_name_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
             core::graph::edges \
@@ -777,6 +792,9 @@ jobs:
             -p streamlib-processor-schema -p streamlib-ipc-types --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           cargo test --locked -p streamlib-media-builtins --lib
+          # Where a golden names a built-in macOS compiles out, the load is
+          # refused naming the floor and the rest of it loads.
+          cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
           cargo test --locked -p streamlib-consumer-rhi --lib
           cargo test --locked -p streamlib-api-server --lib
           # `--test-threads=1` because two of these open iceoryx2 nodes in child

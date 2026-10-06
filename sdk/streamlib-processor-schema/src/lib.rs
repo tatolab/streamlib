@@ -33,7 +33,7 @@ pub use exposed_name_cast::{
     EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe,
     is_in_exposed_name_cast_form,
 };
-pub use processor_class_import_path::ProcessorClassImportPath;
+pub use processor_class_import_path::{BUILT_IN_NODE_CLASS_MODULE, ProcessorClassImportPath};
 pub use processor_class_short_name::ProcessorClassShortName;
 pub use processor_schema::{
     DELIVERY_PROFILE_DECLARATION_VALUES, ProcessorConfigSchema, ProcessorLanguage,

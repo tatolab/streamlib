@@ -18,6 +18,7 @@ use crate::video_frame::{ColorInfo, Primaries, Range, Transfer, VideoFrame};
 /// rate, and pixel format are fixed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct TestPatternSourceConfig {
     /// Frame width in pixels.
     #[serde(default = "default_width")]
@@ -90,6 +91,7 @@ enum TestPatternSurfaceState {
 }
 
 #[streamlib::sdk::processor(
+    built_in_node,
     description = "Synthetic SMPTE-style color-bar source — demos a pipeline with no camera attached",
     execution = continuous(interval_ms = 33),
     config = crate::test_pattern_source::TestPatternSourceConfig,

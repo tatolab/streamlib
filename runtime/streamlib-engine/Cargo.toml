@@ -104,6 +104,7 @@ dotenvy = "0.15"  # Load .env files for development environment
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+serde_path_to_error.workspace = true  # names the setting a node's config is refused at
 serde_yaml.workspace = true
 toml.workspace = true
 schemars = "0.8"  # JSON Schema generation from Rust types

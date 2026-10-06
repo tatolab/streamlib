@@ -47,6 +47,7 @@ const ENCODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
 /// exactly these, because the seam takes exactly these.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct HardwareVideoEncoderConfig {
     /// Expected frame width — a guardrail, not a resize: a mismatching
     /// frame wins with a warning.

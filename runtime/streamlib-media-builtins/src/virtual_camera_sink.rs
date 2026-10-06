@@ -125,6 +125,7 @@ pub enum VirtualCameraDoor {
 /// Configuration for [`VirtualCameraSink`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct VirtualCameraSinkConfig {
     /// The camera's name in every picker. Absent: `StreamLib Camera` plus a
     /// short id that is unique per instance and app and stable across runs.
@@ -675,6 +676,7 @@ impl std::fmt::Display for LatchedRefusal {
 }
 
 #[streamlib::sdk::processor(
+    built_in_node,
     description = "Presents video frames as a virtual camera any Linux application can select",
     execution = reactive,
     scheduling = high,

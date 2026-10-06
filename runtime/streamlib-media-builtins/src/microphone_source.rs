@@ -67,6 +67,7 @@ const PUBLISH_THREAD_EXIT_GRACE: Duration = Duration::from_secs(2);
 /// Configuration for [`MicrophoneSource`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct MicrophoneSourceConfig {
     /// Backend-named capture device. Absent: the backend's default device.
     /// A name the backend cannot open raises rather than landing on a
@@ -80,6 +81,7 @@ pub struct MicrophoneSourceConfig {
 }
 
 #[streamlib::sdk::processor(
+    built_in_node,
     description = "Captures audio from the machine's audio backend as timestamped sample blocks (silence where no backend exists)",
     execution = manual,
     scheduling = realtime,

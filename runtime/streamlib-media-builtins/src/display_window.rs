@@ -69,6 +69,7 @@ impl DisplayScaling {
 /// Configuration for [`DisplayWindow`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct DisplayWindowConfig {
     /// Window title.
     #[serde(default = "default_title")]
@@ -108,6 +109,7 @@ impl Default for DisplayWindowConfig {
 }
 
 #[streamlib::sdk::processor(
+    built_in_node,
     description = "Shows video frames in a window with vsync",
     execution = manual,
     scheduling = high,

@@ -23,6 +23,7 @@ use crate::audio_window_to_encoded_packet_encoder::{
 };
 
 #[streamlib::sdk::processor(
+    built_in_node,
     description = "Encodes 20 ms windows of audio to Opus encoded-audio-packet bags via libopus",
     execution = reactive,
     scheduling = high,
