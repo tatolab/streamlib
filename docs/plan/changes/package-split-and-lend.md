@@ -121,7 +121,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   `compile_stream_to_graph`), `_processor_config_schema`, the data types (`AudioBlock`,
   `EncodedAudioPacket`, `VideoFrame` and its colour types, `EncodedVideoFrame`), the composable
   pieces (`ClaimedSurfacePixelAccess`, `PixelAccessToOneClaimedSurface`, `GlslPixelEffect`, the
-  `ModelInputTensor` family, `ProcessorOutputTextureRing`), `clock`, `log`, and
+  `ModelInputTensor` family, `NodeOutputTextureRing`), `clock`, `log`, and
   `_cross_floor_check`, which the compile entry runs.
 - **Built-ins are generated pure classes.** `cargo xtask generate-built-in-node-classes` writes
   `_built_in_nodes.py` from each built-in's descriptor and `Config` `JsonSchema` — its `type`
@@ -136,8 +136,8 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   stream.add(CameraSource, config={"device_id": "/dev/video2"})  # pyright checks the keys
   ```
 - **Runtime-backed names are declared once, here**: the contexts, `LinkInputDataReader`,
-  `LinkOutputDataWriter`, `ProcessorLinkDataAccess`, `GpuContext*`, `GpuSurfaceHandle`, the
-  kernels, `MonotonicTimer`, the texture exports, `ProcessorOwnedWindow*`, the bag codec pair, `monotonic_now_ns`,
+  `LinkOutputDataWriter`, `NodeLinkDataAccess`, `GpuContext*`, `GpuSurfaceHandle`, the
+  kernels, `MonotonicTimer`, the texture exports, `NodeOwnedWindow*`, the bag codec pair, `monotonic_now_ns`,
   `this_machines_stamp_clock_identity`. A class is a `typing.Protocol` carrying today's stub
   signatures; a function resolves the runtime's on first call and, with nothing lent, raises
   `RuntimeError` naming itself and saying it runs in a processor interpreter. `_engine.pyi`
