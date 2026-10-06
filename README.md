@@ -185,12 +185,13 @@ Edit a stage, re-run `dev`. Each stage runs `reactive` (the default once it has 
 ## Inspect a device that's already running
 
 Add `--url http://<host>:9000` to any of these and you're debugging the rig instead of your desk;
-`--node <runtime name>` picks a node by the `RUNTIME_NAME` column `streamlib nodes` prints.
+`--node <runtime name>` picks a node by the `RUNTIME_NAME` column `streamlib nodes` prints, and
+reaches it through its local API socket — a Unix socket only your user can open.
 
 ```console
 $ streamlib nodes
-RUNTIME_NAME      RUNTIME_ID                 CONTROL_URL            PID  ALIVE?  HINT
-desk-my-rig-8kq3  Rq1w8xk3m2v0pz7ny4tbd6hsf  http://127.0.0.1:9000  48212  yes     streamlib (/home/you/my-rig)
+RUNTIME_NAME      RUNTIME_ID                 LOCAL_API_SOCKET                                                       PID  ALIVE?  HINT
+desk-my-rig-8kq3  Rq1w8xk3m2v0pz7ny4tbd6hsf  /run/user/1000/streamlib/local-api-Rq1w8xk3m2v0pz7ny4tbd6hsf.sock    48212  yes     streamlib (/home/you/my-rig)
 
 $ streamlib tap desk-my-rig-8kq3/camerasource/video --count 3
 {"channel": "desk-my-rig-8kq3/camerasource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
@@ -213,7 +214,7 @@ $ claude mcp add --transport http streamlib http://127.0.0.1:9000/mcp
 ```
 
 Served at `POST /mcp`, mounted with the node and sharing its lifecycle — there is no bridge
-process to run; `streamlib nodes` prints the URL a running node actually bound. The tools are
+process to run; the node's log names the port it actually bound. The tools are
 `graph`, `tap`, `logs`, `exchange` and `shutdown` to observe, and `add_node`, `connect`,
 `disconnect` and `remove_node` to change the running graph: an agent writes a processor
 class into a module beside `stream.py` — or `pip install`s one — names it to the node by its

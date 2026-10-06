@@ -5,9 +5,10 @@
 
 `nodes` / `graph` / `tap` / `logs` are clients: of the on-disk node registry, of
 a node's `POST /mcp`, and of the on-disk JSONL log. Each of those is stood up
-here — a real HTTP server on a loopback port, a temp registry directory, a temp
-log directory — so the whole surface is exercised in CI, where no GPU exists to
-boot a real node with. `test_cli_launch.py` covers the live path on the rig.
+here — a real HTTP server on a local API socket and a loopback port, a temp
+registry directory, a temp log directory — so the whole surface is exercised in
+CI, where no GPU exists to boot a real node with. `test_cli_launch.py` covers
+the live path on the rig.
 
 The rendering assertions are the load-bearing ones: the JSONL schema and its
 pretty form are durable contracts, and a record read by this CLI must come out
@@ -21,6 +22,10 @@ import io
 import itertools
 import json
 import os
+import shutil
+import socket
+import socketserver
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -33,11 +38,12 @@ import pytest
 from streamlib import cli
 from streamlib._control_plane_client import (
     ControlPlaneError,
+    LocalApiSocket,
     SurfaceImageExchangeRefusal,
     call_tool,
     control_plane_answers,
     fetch_surface_image_png_bytes,
-    resolve_control_url,
+    resolve_control_plane_endpoint,
 )
 from streamlib import _node_registry
 from streamlib._node_registry import registry_directory, scan_check_and_prune
@@ -64,6 +70,16 @@ UNUSED_PID = 4_000_000
 #: Outside `pid_t`, which only a corrupt registry entry could carry.
 PID_OUTSIDE_PID_T = 4_000_000_000
 
+#: A local API socket path nothing listens on: its directory does not exist, so
+#: a connect fails at once rather than waiting on a slow answer.
+NOTHING_LISTENS_LOCAL_API_SOCKET_PATH = "/nonexistent-streamlib-test/local-api-Rnone.sock"
+
+
+class _UnixSocketHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """`http.server` over a Unix socket: `HTTPServer` itself insists on a host and port."""
+
+    daemon_threads = True
+
 
 class StubSurfaceImageAnswer(NamedTuple):
     """How the stub answers one `GET /api/surfaces/{id}/image`.
@@ -80,7 +96,10 @@ class StubSurfaceImageAnswer(NamedTuple):
 
 
 class StubControlPlane:
-    """A loopback HTTP server standing in for a node's control plane.
+    """An HTTP server standing in for a node's control plane, on both front doors.
+
+    The same handler answers on a local API socket — what a registry entry
+    names — and on a loopback port, what `--url` still reaches.
 
     Records every request body so a test can prove the verb marshalled what it
     claimed to, and answers from a queue so tool errors and auth rejections are
@@ -161,15 +180,40 @@ class StubControlPlane:
             def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
                 """Silence the default stderr access log."""
 
+            def address_string(self) -> str:
+                # A Unix-socket peer has no address tuple to render.
+                return "local-api-socket"
+
         self._server = HTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self._server.server_port}"
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-        self._thread.start()
+
+        # A short directory of its own: a socket path is capped near 104 bytes,
+        # and a pytest tmp_path named after a long test overruns that.
+        self._local_api_socket_directory = tempfile.mkdtemp(prefix="sl-stub-")
+        self.local_api_socket_path = os.path.join(
+            self._local_api_socket_directory, "local-api.sock"
+        )
+        self.local_api_socket = LocalApiSocket(self.local_api_socket_path)
+        self._local_api_server = _UnixSocketHTTPServer(self.local_api_socket_path, Handler)
+
+        # A short poll interval: `shutdown()` waits out one poll per server, and
+        # every test tears a stub down.
+        self._threads = [
+            threading.Thread(
+                target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+            )
+            for server in (self._server, self._local_api_server)
+        ]
+        for thread in self._threads:
+            thread.start()
 
     def close(self) -> None:
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join(timeout=5)
+        for server in (self._server, self._local_api_server):
+            server.shutdown()
+            server.server_close()
+        for thread in self._threads:
+            thread.join(timeout=5)
+        shutil.rmtree(self._local_api_socket_directory, ignore_errors=True)
 
 
 def _surface_id_in_image_route_path(path: str) -> str:
@@ -221,7 +265,7 @@ def isolated_registry(tmp_path, monkeypatch):
 def write_registry_entry(
     registry: Path,
     runtime_id: str,
-    control_url: str,
+    local_api_socket_path: str,
     *,
     pid: "Optional[int]" = None,
     runtime_name: "Optional[str]" = None,
@@ -234,7 +278,8 @@ def write_registry_entry(
                 "schema_version": _node_registry.NODE_REGISTRY_SCHEMA_VERSION,
                 "runtime_id": runtime_id,
                 "runtime_name": runtime_name or f"rig-app-{runtime_id}",
-                "control_url": control_url,
+                "control_url": "http://127.0.0.1:1",
+                "local_api_socket_path": local_api_socket_path,
                 "pid": os.getpid() if pid is None else pid,
                 "hint": "python (/tmp/app)",
             }
@@ -255,7 +300,7 @@ def test_registry_directory_follows_xdg_runtime_dir(tmp_path, monkeypatch):
 
 def test_a_reachable_entry_is_listed_as_alive(isolated_registry, stub_control_plane):
     server = stub_control_plane()
-    write_registry_entry(isolated_registry, "Ralive", server.url)
+    write_registry_entry(isolated_registry, "Ralive", server.local_api_socket_path)
 
     discovered = scan_check_and_prune()
 
@@ -268,7 +313,7 @@ def test_an_entry_that_is_unreachable_and_dead_is_pruned(isolated_registry):
     # Port 1 is never bound by a normal user process, so the probe gets a
     # transport error rather than a slow answer.
     entry_path = write_registry_entry(
-        isolated_registry, "Rdead", "http://127.0.0.1:1", pid=UNUSED_PID
+        isolated_registry, "Rdead", NOTHING_LISTENS_LOCAL_API_SOCKET_PATH, pid=UNUSED_PID
     )
 
     assert scan_check_and_prune() == []
@@ -282,7 +327,7 @@ def test_an_unreachable_entry_with_a_live_process_is_kept_but_not_alive(
     # control plane answers nothing. Pruning here would delete a live node's
     # entry because it was briefly slow.
     entry_path = write_registry_entry(
-        isolated_registry, "Rbusy", "http://127.0.0.1:1"
+        isolated_registry, "Rbusy", NOTHING_LISTENS_LOCAL_API_SOCKET_PATH
     )
 
     discovered = scan_check_and_prune()
@@ -301,9 +346,9 @@ def test_a_pid_outside_pid_t_does_not_crash_the_scan(
     # healthy node undiscoverable alongside the corrupt entry.
     server = stub_control_plane()
     write_registry_entry(
-        isolated_registry, "Rcorrupt", "http://127.0.0.1:1", pid=PID_OUTSIDE_PID_T
+        isolated_registry, "Rcorrupt", NOTHING_LISTENS_LOCAL_API_SOCKET_PATH, pid=PID_OUTSIDE_PID_T
     )
-    write_registry_entry(isolated_registry, "Rgood", server.url)
+    write_registry_entry(isolated_registry, "Rgood", server.local_api_socket_path)
 
     discovered = scan_check_and_prune()
 
@@ -316,7 +361,7 @@ def test_a_malformed_entry_does_not_hide_the_others(
     server = stub_control_plane()
     isolated_registry.mkdir(parents=True, exist_ok=True)
     (isolated_registry / "Rgarbage.json").write_text("{ not json", encoding="utf-8")
-    write_registry_entry(isolated_registry, "Rgood", server.url)
+    write_registry_entry(isolated_registry, "Rgood", server.local_api_socket_path)
 
     discovered = scan_check_and_prune()
 
@@ -331,31 +376,57 @@ def test_an_auth_rejection_still_counts_as_reachable(stub_control_plane):
     assert control_plane_answers(server.url) is True
 
 
+def test_a_local_api_socket_that_answers_is_reachable(stub_control_plane):
+    server = stub_control_plane()
+
+    assert control_plane_answers(server.local_api_socket) is True
+
+
 def test_nothing_listening_is_not_reachable():
     assert control_plane_answers("http://127.0.0.1:1") is False
+
+
+def test_a_local_api_socket_nothing_listens_on_is_not_reachable():
+    stale_socket_directory = tempfile.mkdtemp(prefix="sl-stale-")
+    stale_socket_path = os.path.join(stale_socket_directory, "local-api.sock")
+    stale_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale_listener.bind(stale_socket_path)
+    stale_listener.close()
+    try:
+        assert os.path.exists(stale_socket_path), "a closed listener leaves its file"
+        assert control_plane_answers(LocalApiSocket(stale_socket_path)) is False
+        assert (
+            control_plane_answers(LocalApiSocket(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH))
+            is False
+        )
+    finally:
+        shutil.rmtree(stale_socket_directory, ignore_errors=True)
 
 
 # ─── Resolving which node a verb drives ──────────────────────────────────────
 
 
 def test_an_explicit_url_wins_without_consulting_the_registry(isolated_registry):
-    assert resolve_control_url("http://127.0.0.1:9999", None) == "http://127.0.0.1:9999"
+    assert (
+        resolve_control_plane_endpoint("http://127.0.0.1:9999", None)
+        == "http://127.0.0.1:9999"
+    )
 
 
 def test_the_sole_live_node_is_the_default_target(isolated_registry, stub_control_plane):
     server = stub_control_plane()
-    write_registry_entry(isolated_registry, "Ronly", server.url)
+    write_registry_entry(isolated_registry, "Ronly", server.local_api_socket_path)
 
-    assert resolve_control_url(None, None) == server.url
+    assert resolve_control_plane_endpoint(None, None) == server.local_api_socket
 
 
-def test_a_named_node_resolves_to_its_url(isolated_registry, stub_control_plane):
+def test_a_named_node_resolves_to_its_local_api_socket(isolated_registry, stub_control_plane):
     first = stub_control_plane()
     second = stub_control_plane()
-    write_registry_entry(isolated_registry, "Rfirst", first.url)
-    write_registry_entry(isolated_registry, "Rsecond", second.url)
+    write_registry_entry(isolated_registry, "Rfirst", first.local_api_socket_path)
+    write_registry_entry(isolated_registry, "Rsecond", second.local_api_socket_path)
 
-    assert resolve_control_url(None, "Rsecond") == second.url
+    assert resolve_control_plane_endpoint(None, "Rsecond") == second.local_api_socket
 
 
 def test_two_live_nodes_and_no_flag_is_an_error_that_lists_them(
@@ -363,11 +434,11 @@ def test_two_live_nodes_and_no_flag_is_an_error_that_lists_them(
 ):
     first = stub_control_plane()
     second = stub_control_plane()
-    write_registry_entry(isolated_registry, "Rfirst", first.url)
-    write_registry_entry(isolated_registry, "Rsecond", second.url)
+    write_registry_entry(isolated_registry, "Rfirst", first.local_api_socket_path)
+    write_registry_entry(isolated_registry, "Rsecond", second.local_api_socket_path)
 
     with pytest.raises(ControlPlaneError) as failure:
-        resolve_control_url(None, None)
+        resolve_control_plane_endpoint(None, None)
 
     message = str(failure.value)
     assert "Rfirst" in message and "Rsecond" in message
@@ -376,7 +447,7 @@ def test_two_live_nodes_and_no_flag_is_an_error_that_lists_them(
 
 def test_no_live_nodes_names_the_command_that_starts_one(isolated_registry):
     with pytest.raises(ControlPlaneError) as failure:
-        resolve_control_url(None, None)
+        resolve_control_plane_endpoint(None, None)
 
     assert "streamlib dev" in str(failure.value)
 
@@ -384,10 +455,20 @@ def test_no_live_nodes_names_the_command_that_starts_one(isolated_registry):
 # ─── Driving a tool ──────────────────────────────────────────────────────────
 
 
-def test_a_tool_call_marshals_the_jsonrpc_envelope(stub_control_plane):
+@pytest.fixture(params=["local_api_socket", "control_plane_url"])
+def stub_endpoint_of(request) -> "Callable[[StubControlPlane], Any]":
+    """Each client test runs through both front doors the stub serves."""
+    if request.param == "local_api_socket":
+        return lambda server: server.local_api_socket
+    return lambda server: server.url
+
+
+def test_a_tool_call_marshals_the_jsonrpc_envelope(stub_control_plane, stub_endpoint_of):
     server = stub_control_plane(body=_tool_result_body('{"nodes":[]}'))
 
-    result = call_tool(server.url, "tap", {"channel": "cam/video", "count": 4})
+    result = call_tool(
+        stub_endpoint_of(server), "tap", {"channel": "cam/video", "count": 4}
+    )
 
     assert result == '{"nodes":[]}'
     sent = json.loads(server.recorded_bodies[0])
@@ -405,6 +486,17 @@ def test_a_bearer_token_rides_as_an_authorization_header(stub_control_plane, mon
     assert server.recorded_authorizations[0] == "Bearer secret-token"
 
 
+def test_the_local_api_socket_carries_no_bearer_token(stub_control_plane, monkeypatch):
+    # The socket's file mode is the whole gate, so a token configured for a
+    # TCP port never rides it.
+    server = stub_control_plane()
+    monkeypatch.setenv("STREAMLIB_MCP_TOKEN", "secret-token")
+
+    call_tool(server.local_api_socket, "graph", {})
+
+    assert server.recorded_authorizations[0] is None
+
+
 def test_no_token_sends_no_authorization_header(stub_control_plane, monkeypatch):
     server = stub_control_plane()
     monkeypatch.delenv("STREAMLIB_MCP_TOKEN", raising=False)
@@ -414,16 +506,18 @@ def test_no_token_sends_no_authorization_header(stub_control_plane, monkeypatch)
     assert server.recorded_authorizations[0] is None
 
 
-def test_a_tool_level_error_is_raised_not_printed_as_a_result(stub_control_plane):
+def test_a_tool_level_error_is_raised_not_printed_as_a_result(
+    stub_control_plane, stub_endpoint_of
+):
     server = stub_control_plane(
         body=_tool_result_body("no such channel", is_error=True)
     )
 
     with pytest.raises(ControlPlaneError, match="no such channel"):
-        call_tool(server.url, "tap", {"channel": "nope"})
+        call_tool(stub_endpoint_of(server), "tap", {"channel": "nope"})
 
 
-def test_a_jsonrpc_error_inside_an_http_200_is_raised(stub_control_plane):
+def test_a_jsonrpc_error_inside_an_http_200_is_raised(stub_control_plane, stub_endpoint_of):
     server = stub_control_plane(
         body=json.dumps(
             {"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "nope"}}
@@ -431,14 +525,14 @@ def test_a_jsonrpc_error_inside_an_http_200_is_raised(stub_control_plane):
     )
 
     with pytest.raises(ControlPlaneError, match="nope"):
-        call_tool(server.url, "graph", {})
+        call_tool(stub_endpoint_of(server), "graph", {})
 
 
-def test_a_non_2xx_status_is_raised_with_its_code(stub_control_plane):
+def test_a_non_2xx_status_is_raised_with_its_code(stub_control_plane, stub_endpoint_of):
     server = stub_control_plane(status=403, body="forbidden")
 
-    with pytest.raises(ControlPlaneError, match="403"):
-        call_tool(server.url, "graph", {})
+    with pytest.raises(ControlPlaneError, match="403: forbidden"):
+        call_tool(stub_endpoint_of(server), "graph", {})
 
 
 @pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.invalid/x"])
@@ -466,12 +560,19 @@ def test_a_misshapen_200_surfaces_as_a_control_plane_error(stub_control_plane, b
     server = stub_control_plane(body=body)
 
     with pytest.raises(ControlPlaneError):
-        call_tool(server.url, "graph", {})
+        call_tool(server.local_api_socket, "graph", {})
 
 
 def test_an_unreachable_node_names_the_url():
     with pytest.raises(ControlPlaneError, match="127.0.0.1:1"):
         call_tool("http://127.0.0.1:1", "graph", {})
+
+
+def test_an_unreachable_local_api_socket_is_named():
+    with pytest.raises(ControlPlaneError) as failure:
+        call_tool(LocalApiSocket(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH), "graph", {})
+
+    assert NOTHING_LISTENS_LOCAL_API_SOCKET_PATH in str(failure.value)
 
 
 # ─── Reading the on-disk log ─────────────────────────────────────────────────
@@ -1148,8 +1249,16 @@ def test_a_record_caught_half_written_is_held_until_its_newline_lands(
         {"runtime_id": {"nested": "object"}},
         {"schema_version": 2.9},
         {"pid": True},
+        {"local_api_socket_path": None},
     ],
-    ids=["null-name", "array-name", "object-id", "fractional-version", "boolean-pid"],
+    ids=[
+        "null-name",
+        "array-name",
+        "object-id",
+        "fractional-version",
+        "boolean-pid",
+        "null-socket-path",
+    ],
 )
 def test_an_entry_whose_fields_are_the_wrong_shape_is_neither_listed_nor_deleted(
     isolated_registry, malformed
@@ -1164,6 +1273,7 @@ def test_an_entry_whose_fields_are_the_wrong_shape_is_neither_listed_nor_deleted
         "runtime_id": "Rmalformed",
         "runtime_name": "rig-app-a1b2",
         "control_url": "http://127.0.0.1:1",
+        "local_api_socket_path": NOTHING_LISTENS_LOCAL_API_SOCKET_PATH,
         "pid": UNUSED_PID,
         "hint": "hand-edited",
     }
@@ -1188,8 +1298,35 @@ def test_an_entry_whose_schema_version_is_unknown_is_neither_listed_nor_deleted(
                 "runtime_id": "Rfuture",
                 "runtime_name": "rig-app-future",
                 "control_url": "http://127.0.0.1:1",
+                "local_api_socket_path": NOTHING_LISTENS_LOCAL_API_SOCKET_PATH,
                 "pid": UNUSED_PID,
                 "hint": "written by a newer engine",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert scan_check_and_prune() == []
+    assert entry_path.exists(), "a reader must not delete a record it cannot parse"
+
+
+def test_a_schema_two_entry_is_refused_by_its_version_and_never_pruned(
+    isolated_registry,
+):
+    # Entries are per run, so a schema-2 entry — a TCP URL and no socket — has
+    # nothing to migrate. It is skipped, and a dead pid does not get it pruned.
+    assert _node_registry.NODE_REGISTRY_SCHEMA_VERSION == 3
+    isolated_registry.mkdir(parents=True, exist_ok=True)
+    entry_path = isolated_registry / "Rschema-two.json"
+    entry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "runtime_id": "Rschema-two",
+                "runtime_name": "rig-app-schema-two",
+                "control_url": "http://127.0.0.1:1",
+                "pid": UNUSED_PID,
+                "hint": "written by an engine before the local API socket",
             }
         ),
         encoding="utf-8",
@@ -1241,7 +1378,7 @@ def test_nodes_renders_a_live_node_as_a_table(
 ):
     server = stub_control_plane()
     write_registry_entry(
-        isolated_registry, "Rlisted", server.url, runtime_name="rig-desk-a1b2"
+        isolated_registry, "Rlisted", server.local_api_socket_path, runtime_name="rig-desk-a1b2"
     )
 
     assert cli.main(["nodes"]) == 0
@@ -1253,7 +1390,8 @@ def test_nodes_renders_a_live_node_as_a_table(
     )
     assert "RUNTIME_ID" in printed
     assert "rig-desk-a1b2" in printed
-    assert "Rlisted" in printed and server.url in printed
+    assert "LOCAL_API_SOCKET" in header and "CONTROL_URL" not in header, header
+    assert "Rlisted" in printed and server.local_api_socket_path in printed
     assert "yes" in printed
 
 
@@ -1261,9 +1399,9 @@ def test_nodes_prints_the_registry_table_alone(
     isolated_registry, stub_control_plane, capsys
 ):
     first = stub_control_plane()
-    write_registry_entry(isolated_registry, "Rfirst", first.url, runtime_name="rig-desk-a1b2")
+    write_registry_entry(isolated_registry, "Rfirst", first.local_api_socket_path, runtime_name="rig-desk-a1b2")
     second = stub_control_plane()
-    write_registry_entry(isolated_registry, "Rsecond", second.url, runtime_name="rig-lab-c3d4")
+    write_registry_entry(isolated_registry, "Rsecond", second.local_api_socket_path, runtime_name="rig-lab-c3d4")
 
     assert cli.main(["nodes"]) == 0
 
@@ -1313,15 +1451,15 @@ def test_a_verb_targets_a_node_by_its_runtime_name(
 ):
     server = stub_control_plane()
     write_registry_entry(
-        isolated_registry, "Rnamed", server.url, runtime_name="rig-desk-a1b2"
+        isolated_registry, "Rnamed", server.local_api_socket_path, runtime_name="rig-desk-a1b2"
     )
     other = stub_control_plane()
     write_registry_entry(
-        isolated_registry, "Rother", other.url, runtime_name="rig-lab-c3d4"
+        isolated_registry, "Rother", other.local_api_socket_path, runtime_name="rig-lab-c3d4"
     )
 
-    assert resolve_control_url(None, "rig-desk-a1b2") == server.url
-    assert resolve_control_url(None, "Rnamed") == server.url, (
+    assert resolve_control_plane_endpoint(None, "rig-desk-a1b2") == server.local_api_socket
+    assert resolve_control_plane_endpoint(None, "Rnamed") == server.local_api_socket, (
         "the runtime_id keeps resolving beside the name"
     )
 
@@ -1331,11 +1469,11 @@ def test_a_node_flag_naming_nothing_says_so_and_lists_what_is_live(
 ):
     server = stub_control_plane()
     write_registry_entry(
-        isolated_registry, "Rnamed", server.url, runtime_name="rig-desk-a1b2"
+        isolated_registry, "Rnamed", server.local_api_socket_path, runtime_name="rig-desk-a1b2"
     )
 
     with pytest.raises(ControlPlaneError) as refusal:
-        resolve_control_url(None, "rig-nowhere-0000")
+        resolve_control_plane_endpoint(None, "rig-nowhere-0000")
 
     assert "rig-nowhere-0000" in str(refusal.value)
     assert "rig-desk-a1b2" in str(refusal.value), (
@@ -1348,19 +1486,24 @@ def test_two_nodes_answering_to_one_name_are_named_rather_than_picked_between(
 ):
     first = stub_control_plane()
     write_registry_entry(
-        isolated_registry, "Rfirst", first.url, runtime_name="rig-desk-a1b2"
+        isolated_registry, "Rfirst", first.local_api_socket_path, runtime_name="rig-desk-a1b2"
     )
     second = stub_control_plane()
     write_registry_entry(
-        isolated_registry, "Rsecond", second.url, runtime_name="rig-desk-a1b2"
+        isolated_registry, "Rsecond", second.local_api_socket_path, runtime_name="rig-desk-a1b2"
     )
 
     with pytest.raises(ControlPlaneError) as refusal:
-        resolve_control_url(None, "rig-desk-a1b2")
+        resolve_control_plane_endpoint(None, "rig-desk-a1b2")
 
-    for named_row in ("Rfirst", first.url, "Rsecond", second.url):
+    for named_row in (
+        "Rfirst",
+        first.local_api_socket_path,
+        "Rsecond",
+        second.local_api_socket_path,
+    ):
         assert named_row in str(refusal.value), (
-            f"the refusal names each matching row's runtime_id and URL: {refusal.value}"
+            f"the refusal names each matching row's runtime_id and socket: {refusal.value}"
         )
 
 
@@ -1368,21 +1511,26 @@ def test_a_verb_given_a_name_two_live_runtimes_hold_is_refused_naming_both(
     isolated_registry, stub_control_plane, capsys
 ):
     first = stub_control_plane()
-    write_registry_entry(isolated_registry, "Rfirst", first.url, runtime_name="rig-desk-a1b2")
+    write_registry_entry(isolated_registry, "Rfirst", first.local_api_socket_path, runtime_name="rig-desk-a1b2")
     second = stub_control_plane()
-    write_registry_entry(isolated_registry, "Rsecond", second.url, runtime_name="rig-desk-a1b2")
+    write_registry_entry(isolated_registry, "Rsecond", second.local_api_socket_path, runtime_name="rig-desk-a1b2")
 
     assert cli.main(["graph", "--node", "rig-desk-a1b2"]) == 1
 
     printed = capsys.readouterr()
-    for named_row in ("Rfirst", first.url, "Rsecond", second.url):
+    for named_row in (
+        "Rfirst",
+        first.local_api_socket_path,
+        "Rsecond",
+        second.local_api_socket_path,
+    ):
         assert named_row in printed.err, printed.err
     assert printed.out == "", f"a refused name prints neither runtime's graph: {printed.out!r}"
 
 
 def test_graph_prints_the_tool_result(isolated_registry, stub_control_plane, capsys):
     server = stub_control_plane(body=_tool_result_body('{"nodes":[]}'))
-    write_registry_entry(isolated_registry, "Ronly", server.url)
+    write_registry_entry(isolated_registry, "Ronly", server.local_api_socket_path)
 
     assert cli.main(["graph"]) == 0
 
@@ -1393,7 +1541,7 @@ def test_tap_sends_the_channel_and_count(
     isolated_registry, stub_control_plane, capsys
 ):
     server = stub_control_plane()
-    write_registry_entry(isolated_registry, "Ronly", server.url)
+    write_registry_entry(isolated_registry, "Ronly", server.local_api_socket_path)
 
     assert cli.main(["tap", "cam/video", "--count", "3"]) == 0
 
@@ -1406,7 +1554,7 @@ def test_tap_forwards_a_named_per_bag_cap(isolated_registry, stub_control_plane,
     that raised the cap and had the flag silently dropped would get exactly the
     failure it was trying to avoid."""
     server = stub_control_plane()
-    write_registry_entry(isolated_registry, "Ronly", server.url)
+    write_registry_entry(isolated_registry, "Ronly", server.local_api_socket_path)
 
     assert cli.main(["tap", "cam/video", "--max-bag-bytes", "4096"]) == 0
 
@@ -1420,12 +1568,27 @@ def test_tap_omits_a_per_bag_cap_nobody_named(
     """Absent means absent: the tool's own default is what applies, and the CLI
     does not invent one of its own."""
     server = stub_control_plane()
-    write_registry_entry(isolated_registry, "Ronly", server.url)
+    write_registry_entry(isolated_registry, "Ronly", server.local_api_socket_path)
 
     assert cli.main(["tap", "cam/video"]) == 0
 
     arguments = json.loads(server.recorded_bodies[-1])["params"]["arguments"]
     assert arguments == {"channel": "cam/video"}
+
+
+def test_logs_with_a_node_reads_its_live_event_stream_through_the_local_api_socket(
+    isolated_registry, stub_control_plane, capsys
+):
+    server = stub_control_plane(body=_tool_result_body('[{"event":"started"}]'))
+    write_registry_entry(
+        isolated_registry, "Rlogs", server.local_api_socket_path, runtime_name="rig-logs"
+    )
+
+    assert cli.main(["logs", "--node", "rig-logs", "--count", "4"]) == 0
+
+    sent = json.loads(server.recorded_bodies[-1])
+    assert sent["params"] == {"name": "logs", "arguments": {"count": 4}}
+    assert '[{"event":"started"}]' in capsys.readouterr().out
 
 
 def test_a_control_target_with_on_disk_filters_is_refused(
@@ -1599,14 +1762,16 @@ RECYCLED_FRAME_ANSWER = StubSurfaceImageAnswer(
 # ─── The REST spelling of the exchange ───────────────────────────────────────
 
 
-def test_a_pooled_frame_id_is_percent_encoded_into_the_route(stub_control_plane):
+def test_a_pooled_frame_id_is_percent_encoded_into_the_route(
+    stub_control_plane, stub_endpoint_of
+):
     # A bare `#` would make the generation a URL fragment the node never sees,
     # so the exchange would resolve the wrong frame — or none.
     server = stub_control_plane(
         surface_image_answers={"cam/frame#7": image_answer("seven")}
     )
 
-    exchanged = fetch_surface_image_png_bytes(server.url, "cam/frame#7")
+    exchanged = fetch_surface_image_png_bytes(stub_endpoint_of(server), "cam/frame#7")
 
     assert exchanged.png_image_bytes == png_bytes_for("seven")
     assert server.recorded_image_request_paths == [
@@ -1614,10 +1779,10 @@ def test_a_pooled_frame_id_is_percent_encoded_into_the_route(stub_control_plane)
     ]
 
 
-def test_the_exchange_states_the_surface_s_own_extent(stub_control_plane):
+def test_the_exchange_states_the_surface_s_own_extent(stub_control_plane, stub_endpoint_of):
     server = stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
 
-    exchanged = fetch_surface_image_png_bytes(server.url, "s#1")
+    exchanged = fetch_surface_image_png_bytes(stub_endpoint_of(server), "s#1")
 
     assert exchanged.source_surface_pixel_width == 1920
     assert exchanged.source_surface_pixel_height == 1080
@@ -1634,11 +1799,13 @@ def test_the_exchange_carries_the_bearer_token(stub_control_plane, monkeypatch):
     assert server.recorded_image_authorizations == ["Bearer s3cret"]
 
 
-def test_a_recycled_frame_is_a_refusal_that_composes_as_a_retry(stub_control_plane):
+def test_a_recycled_frame_is_a_refusal_that_composes_as_a_retry(
+    stub_control_plane, stub_endpoint_of
+):
     server = stub_control_plane(surface_image_answers={"s#1": RECYCLED_FRAME_ANSWER})
 
     with pytest.raises(SurfaceImageExchangeRefusal) as refused:
-        fetch_surface_image_png_bytes(server.url, "s#1")
+        fetch_surface_image_png_bytes(stub_endpoint_of(server), "s#1")
 
     assert refused.value.names_a_recycled_frame
     assert "recycled" in str(refused.value)
@@ -1646,7 +1813,7 @@ def test_a_recycled_frame_is_a_refusal_that_composes_as_a_retry(stub_control_pla
 
 @pytest.mark.parametrize("status", [404, 501])
 def test_a_refusal_that_is_not_a_recycled_frame_does_not_compose(
-    stub_control_plane, status
+    stub_control_plane, stub_endpoint_of, status
 ):
     # A surface that never existed, or a format with no conversion arm, will
     # refuse identically forever — retrying it would spin rather than recover.
@@ -1655,7 +1822,7 @@ def test_a_refusal_that_is_not_a_recycled_frame_does_not_compose(
     )
 
     with pytest.raises(SurfaceImageExchangeRefusal) as refused:
-        fetch_surface_image_png_bytes(server.url, "s#1")
+        fetch_surface_image_png_bytes(stub_endpoint_of(server), "s#1")
 
     assert not refused.value.names_a_recycled_frame
     assert refused.value.http_status == status
@@ -1687,6 +1854,29 @@ def test_the_id_form_writes_the_exact_bytes_and_prints_the_path(
     written = capsys.readouterr().out.strip()
     assert Path(written).read_bytes() == png_bytes_for("seven")
     assert Path(written).parent == output_directory
+
+
+def test_the_id_form_reaches_a_registered_node_through_its_local_api_socket(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    server = stub_control_plane(
+        surface_image_answers={"cam/frame#7": image_answer("seven")}
+    )
+    write_registry_entry(
+        isolated_registry, "Rcam", server.local_api_socket_path, runtime_name="rig-cam"
+    )
+    output_directory = tmp_path / "frames"
+
+    assert (
+        cli.main(
+            ["exchange", "cam/frame#7", "--out", str(output_directory), "--node", "rig-cam"]
+        )
+        == 0
+    )
+
+    written = capsys.readouterr().out.strip()
+    assert Path(written).read_bytes() == png_bytes_for("seven")
+    assert server.recorded_image_request_paths == ["/api/surfaces/cam%2Fframe%237/image"]
 
 
 def test_the_id_form_creates_the_output_directory(
@@ -1804,6 +1994,53 @@ def test_the_channel_form_taps_then_exchanges_each_sampled_id(
         png_bytes_for("two"),
     ]
     assert "exchanged 2 of 2" in printed.err
+
+
+def test_the_channel_form_reaches_a_registered_node_through_its_local_api_socket(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    server = stub_control_plane(
+        queued_bodies=[
+            # The registry's liveness probe is a `graph` call, and answers first.
+            _tool_result_body("{}"),
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+            ),
+        ],
+        surface_image_answers={"s#1": image_answer("one"), "s#2": image_answer("two")},
+    )
+    write_registry_entry(
+        isolated_registry, "Rcam", server.local_api_socket_path, runtime_name="rig-cam"
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--node",
+                "rig-cam",
+            ]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr()
+    written = [Path(line) for line in printed.out.splitlines()]
+    assert [path.read_bytes() for path in written] == [
+        png_bytes_for("one"),
+        png_bytes_for("two"),
+    ]
+    assert server.recorded_image_request_paths == [
+        "/api/surfaces/s%231/image",
+        "/api/surfaces/s%232/image",
+    ]
 
 
 def test_the_engine_is_never_asked_to_read_a_bag(

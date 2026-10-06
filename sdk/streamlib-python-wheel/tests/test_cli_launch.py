@@ -20,6 +20,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -31,7 +32,12 @@ import pytest
 from app_under_test import ENGINE_READY_LOG_LINE
 
 from streamlib import cli
-from streamlib._control_plane_client import call_tool
+from streamlib._control_plane_client import LocalApiSocket, call_tool
+from streamlib._surface_image_exchange import (
+    DEFAULT_SURFACE_ID_BAG_FIELD_NAME,
+    _surface_id_in_bag,
+    _tapped_bag_frames,
+)
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -108,6 +114,14 @@ DISPLAY_WINDOW_FRAME_COUNT = re.compile(r"DisplayWindow: stopped \((\d+) frames\
 
 # Enough tail to carry a traceback and the lines around it.
 RECENT_OUTPUT_CHARACTERS = 4000
+
+# A `tap` collects its sample server-side, so a verb can legitimately take a moment.
+CLI_VERB_TIMEOUT_SECONDS = 60.0
+# The id form races the pool: a frame tapped at 30fps can be recycled before
+# its exchange lands, which is a `410` the caller answers by tapping again.
+SURFACE_ID_EXCHANGE_ATTEMPTS = 10
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+LOCAL_API_SOCKET_FILE_MODE = 0o600
 
 
 def free_port() -> int:
@@ -248,6 +262,7 @@ def launch_node(isolated_runtime_directory: Path):
         port: int,
         capture_output: bool = False,
         extra_arguments: "tuple[str, ...]" = (),
+        extra_environment: "dict[str, str] | None" = None,
     ) -> LaunchedNode:
         # A file rather than a pipe: nothing here reads the child while it runs,
         # and a full pipe buffer would wedge a node the test is still polling.
@@ -270,7 +285,11 @@ def launch_node(isolated_runtime_directory: Path):
                 ),
                 text=True,
                 start_new_session=True,
-                env={**os.environ, "XDG_RUNTIME_DIR": str(isolated_runtime_directory)},
+                env={
+                    **os.environ,
+                    "XDG_RUNTIME_DIR": str(isolated_runtime_directory),
+                    **(extra_environment or {}),
+                },
             )
         finally:
             if output_sink is not None:
@@ -306,9 +325,12 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     entry = await_sole_registry_entry(runtime_directory, NODE_READY_TIMEOUT_SECONDS)
 
     assert entry["pid"] == node.process.pid, "the entry must name the hosting process"
-    assert entry["control_url"].startswith("http://127.0.0.1:"), (
-        f"the entry must carry a reachable control URL; got {entry['control_url']}"
-    )
+    assert entry["schema_version"] == 3
+    local_api_socket_path = Path(entry["local_api_socket_path"])
+    assert local_api_socket_path == (
+        runtime_directory / "streamlib" / f"local-api-{entry['runtime_id']}.sock"
+    ), f"the local API socket sits in the runtime directory; got {local_api_socket_path}"
+    assert_only_its_owner_can_open(local_api_socket_path)
     # The engine replaces every character an address chunk may not carry,
     # so a host whose own name carries one is compared against the same
     # substitution rather than against the raw `gethostname`.
@@ -325,6 +347,197 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     assert registry_entry_paths(runtime_directory) == [], (
         "clean teardown must remove the node-registry entry"
     )
+    assert not local_api_socket_path.exists(), "clean teardown must remove the local API socket"
+
+
+def assert_only_its_owner_can_open(local_api_socket_path: Path) -> None:
+    status = os.stat(local_api_socket_path)
+    assert stat.S_ISSOCK(status.st_mode), f"{local_api_socket_path} is not a socket"
+    assert stat.S_IMODE(status.st_mode) == LOCAL_API_SOCKET_FILE_MODE, (
+        f"the local API socket must be {LOCAL_API_SOCKET_FILE_MODE:o}; "
+        f"got {stat.S_IMODE(status.st_mode):o}"
+    )
+    assert status.st_uid == os.getuid()
+
+
+def run_cli_verb(
+    isolated_runtime_directory: Path, *arguments: str
+) -> "subprocess.CompletedProcess[str]":
+    """One `streamlib` verb in its own process, seeing the launched node's runtime directory."""
+    return subprocess.run(
+        [sys.executable, "-m", "streamlib.cli", *arguments],
+        capture_output=True,
+        text=True,
+        timeout=CLI_VERB_TIMEOUT_SECONDS,
+        env={**os.environ, "XDG_RUNTIME_DIR": str(isolated_runtime_directory)},
+    )
+
+
+def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:
+    """The verb's stdout, once it exited 0 — or a failure carrying what it said."""
+    assert completed.returncode == 0, (
+        f"`streamlib {' '.join(completed.args[3:])}` exited {completed.returncode}:\n"
+        f"stdout: {completed.stdout}\nstderr: {completed.stderr}"
+    )
+    return completed.stdout
+
+
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
+def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_socket(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    """`nodes`, `graph`, `tap`, `logs` and both forms of `exchange`, driven the
+    way a user drives them: a separate process, with only the registry to find
+    the node by. The source is wired to a reader, since a channel is tappable
+    only once a connect has wired its output."""
+    app_directory = tmp_path / "app"
+    write_app_with_helper_placed_processors(app_directory, 1)
+    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
+    node.await_captured_output_containing(ENGINE_READY_LOG_LINE, NODE_READY_TIMEOUT_SECONDS)
+    runtime_name = entry["runtime_name"]
+    local_api_socket_path = entry["local_api_socket_path"]
+
+    listed = succeeded(run_cli_verb(isolated_runtime_directory, "nodes"))
+    assert listed.splitlines()[0].split()[2] == "LOCAL_API_SOCKET", listed
+    assert local_api_socket_path in listed
+
+    graph = json.loads(
+        succeeded(run_cli_verb(isolated_runtime_directory, "graph", "--node", runtime_name))
+    )
+    assert graph["runtime_name"] == runtime_name
+    source_name = next(
+        graph_node["name"]
+        for graph_node in graph["nodes"]
+        if graph_node["name"].startswith("testpatternsource")
+    )
+    channel = f"{runtime_name}/{source_name}/video"
+
+    tapped = json.loads(
+        succeeded(
+            run_cli_verb(
+                isolated_runtime_directory, "tap", channel, "--count", "2", "--node", runtime_name
+            )
+        )
+    )
+    assert tapped["received"] > 0, f"no bags reached the tap over the socket: {tapped}"
+
+    succeeded(run_cli_verb(isolated_runtime_directory, "logs", "--node", runtime_name, "--count", "1"))
+
+    channel_form_directory = tmp_path / "channel-form"
+    channel_form_written = succeeded(
+        run_cli_verb(
+            isolated_runtime_directory,
+            "exchange", "--channel", channel, "--count", "1",
+            "--out", str(channel_form_directory), "--node", runtime_name,
+        )
+    ).split()
+    assert len(channel_form_written) == 1, channel_form_written
+    assert Path(channel_form_written[0]).read_bytes().startswith(PNG_SIGNATURE)
+
+    id_form_directory = tmp_path / "id-form"
+    id_form_attempts: "list[str]" = []
+    for _ in range(SURFACE_ID_EXCHANGE_ATTEMPTS):
+        frames = _tapped_bag_frames(LocalApiSocket(local_api_socket_path), channel, 1)
+        published_surface_id = _surface_id_in_bag(
+            frames[0].framed_bytes, channel, DEFAULT_SURFACE_ID_BAG_FIELD_NAME
+        )
+        assert published_surface_id is not None, f"{channel} published no surface id"
+        exchanged = run_cli_verb(
+            isolated_runtime_directory,
+            "exchange", published_surface_id,
+            "--out", str(id_form_directory), "--node", runtime_name,
+        )
+        if exchanged.returncode == 0:
+            assert Path(exchanged.stdout.strip()).read_bytes().startswith(PNG_SIGNATURE)
+            break
+        id_form_attempts.append(exchanged.stderr.strip())
+    else:
+        raise AssertionError(
+            f"the id form never exchanged a frame in {SURFACE_ID_EXCHANGE_ATTEMPTS} "
+            f"attempts: {id_form_attempts}"
+        )
+
+    node.interrupt()
+    assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+    assert not Path(local_api_socket_path).exists()
+
+
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
+def test_a_second_runtime_with_a_live_runtimes_id_is_refused_naming_its_local_api_socket(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    """The surface socket refuses a pinned duplicate before the local API is
+    reached, so the local API's own refusal is driven with the surface socket
+    out of the way: a live listener at the pinned id's local API path stands in
+    for a second runtime. The refusal fails the api-server's start, which the
+    engine logs; the node publishes no registry entry."""
+    app_directory = tmp_path / "app"
+    app_directory.mkdir()
+    (app_directory / "stream.py").write_text(STREAM_WITH_ONE_NATIVE_SOURCE)
+    pinned_runtime_id = f"Rpinned{os.getpid()}"
+    local_api_socket_path = (
+        isolated_runtime_directory / "streamlib" / f"local-api-{pinned_runtime_id}.sock"
+    )
+    local_api_socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    squatting_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    squatting_listener.bind(str(local_api_socket_path))
+    squatting_listener.listen(1)
+    try:
+        node = launch_node(
+            "run",
+            app_directory,
+            free_port(),
+            capture_output=True,
+            extra_environment={"STREAMLIB_RUNTIME_ID": pinned_runtime_id},
+        )
+        node.await_captured_output_satisfying(
+            lambda captured: str(local_api_socket_path) in captured
+            and "already bound by a live process" in captured,
+            "the local API's refusal naming its socket",
+            NODE_READY_TIMEOUT_SECONDS,
+        )
+        assert registry_entry_paths(isolated_runtime_directory) == []
+        node.interrupt()
+        node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS)
+        assert local_api_socket_path.exists(), "a refused bind must leave the live socket alone"
+    finally:
+        squatting_listener.close()
+
+
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
+def test_a_stale_local_api_socket_file_is_replaced(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    app_directory = tmp_path / "app"
+    app_directory.mkdir()
+    (app_directory / "stream.py").write_text(STREAM_WITH_ONE_NATIVE_SOURCE)
+    pinned_runtime_id = f"Rstale{os.getpid()}"
+    local_api_socket_path = (
+        isolated_runtime_directory / "streamlib" / f"local-api-{pinned_runtime_id}.sock"
+    )
+    local_api_socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    crashed_runs_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    crashed_runs_listener.bind(str(local_api_socket_path))
+    crashed_runs_listener.close()
+    assert local_api_socket_path.exists(), "a closed listener leaves its file, as a crash does"
+
+    node = launch_node(
+        "run",
+        app_directory,
+        free_port(),
+        extra_environment={"STREAMLIB_RUNTIME_ID": pinned_runtime_id},
+    )
+    entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
+
+    assert entry["local_api_socket_path"] == str(local_api_socket_path)
+    assert_only_its_owner_can_open(local_api_socket_path)
+    graph = json.loads(call_tool(LocalApiSocket(str(local_api_socket_path)), "graph", {}))
+    assert graph["runtime_name"] == entry["runtime_name"]
+
+    node.interrupt()
+    assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0
+    assert not local_api_socket_path.exists()
 
 
 @pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
@@ -490,7 +703,9 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     )
     assert entry["pid"] == node.process.pid
     node.await_captured_output_containing(ENGINE_READY_LOG_LINE, NODE_READY_TIMEOUT_SECONDS)
-    live_graph = json.loads(call_tool(entry["control_url"], "graph", {}))
+    live_graph = json.loads(
+        call_tool(LocalApiSocket(entry["local_api_socket_path"]), "graph", {})
+    )
     assert live_graph["stream"] == "main", (
         f"the node must render the stream it was loaded as; graph was {live_graph}"
     )

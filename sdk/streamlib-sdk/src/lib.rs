@@ -95,6 +95,7 @@ pub mod sdk {
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
+    pub use streamlib_engine::core::unix_socket_path_cleared_for_bind;
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub use streamlib_engine::core::processor_owned_window;

@@ -1880,7 +1880,7 @@ def test_the_nodes_help_names_every_column_it_prints(capsys):
         cli.main(["nodes", "--help"])
 
     printed = capsys.readouterr().out
-    for column in ("runtime_name", "runtime_id", "control_url", "pid", "alive?", "hint"):
+    for column in ("runtime_name", "runtime_id", "local_api_socket", "pid", "alive?", "hint"):
         assert column in printed, f"`nodes --help` must document {column}"
 
 

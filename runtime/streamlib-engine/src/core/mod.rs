@@ -46,6 +46,7 @@ pub mod rhi;
 pub mod runtime;
 pub mod stable_short_id;
 pub mod texture;
+pub mod unix_socket_path_cleared_for_bind;
 pub mod utils;
 // Wherever winit and the Vulkan present target compile.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
