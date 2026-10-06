@@ -40,7 +40,7 @@ use syn::{Ident, LitInt, LitStr, Path, Token, parenthesized};
 /// setting only valid on an `input(...)`; the grammar rejects it on an
 /// `output(...)`.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PortDirection {
+pub(crate) enum PortDirection {
     Input,
     Output,
 }
@@ -53,22 +53,31 @@ impl PortDirection {
         }
     }
 
-    fn port_marker_module_name(self) -> &'static str {
-        match self {
+    /// The module the generated port markers for this direction live in.
+    pub(crate) fn port_marker_module_ident(self) -> Ident {
+        let name = match self {
             PortDirection::Input => "InputLink",
             PortDirection::Output => "OutputLink",
-        }
+        };
+        Ident::new(name, proc_macro2::Span::call_site())
+    }
+
+    /// The trait the generated port markers for this direction implement.
+    pub(crate) fn port_marker_trait_ident(self) -> Ident {
+        let name = match self {
+            PortDirection::Input => "InputPortMarker",
+            PortDirection::Output => "OutputPortMarker",
+        };
+        Ident::new(name, proc_macro2::Span::call_site())
     }
 }
 
 /// A parsed input/output port declaration.
 pub struct ParsedPort {
-    /// The name as the author wrote it — the marker type's identifier
-    /// (`OutputLink::videoOut`).
-    pub declared_spelling: String,
-    /// Where the declared spelling sits, for a refusal naming it.
-    pub declared_spelling_span: proc_macro2::Span,
-    /// The declared spelling as every exposed name is cast — what the
+    /// The name as the author wrote it, spanned at the declaration — the
+    /// marker type's identifier (`OutputLink::videoOut`).
+    pub declared_marker_ident: Ident,
+    /// The declared name as every exposed name is cast — what the
     /// descriptor and the marker's `PORT_NAME` carry.
     pub cast_name: String,
     pub description: Option<String>,
@@ -263,28 +272,28 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
 fn refuse_ports_that_cast_alike<'port>(
     ports: impl IntoIterator<Item = &'port ParsedPort>,
 ) -> syn::Result<()> {
-    let mut declared_spelling_by_cast_name = std::collections::HashMap::new();
+    let mut declared_marker_ident_by_cast_name = std::collections::HashMap::new();
     for port in ports {
-        let Some(first_spelling) =
-            declared_spelling_by_cast_name.insert(port.cast_name.as_str(), &port.declared_spelling)
+        let Some(first_spelling) = declared_marker_ident_by_cast_name
+            .insert(port.cast_name.as_str(), &port.declared_marker_ident)
         else {
             continue;
         };
-        let refusal = if *first_spelling == port.declared_spelling {
+        let refusal = if *first_spelling == port.declared_marker_ident {
             format!(
                 "the port name `{}` is declared more than once — every port, input or output, \
                  needs its own name",
-                port.declared_spelling
+                port.declared_marker_ident
             )
         } else {
             format!(
                 "the ports `{first_spelling}` and `{}` both cast to `{}` — a port name is \
                  lowercased with its accents dropped and anything outside a-z 0-9 - . _ ~ \
                  turned into '-', so two ports need names that stay apart once cast",
-                port.declared_spelling, port.cast_name
+                port.declared_marker_ident, port.cast_name
             )
         };
-        return Err(syn::Error::new(port.declared_spelling_span, refusal));
+        return Err(syn::Error::new(port.declared_marker_ident.span(), refusal));
     }
     Ok(())
 }
@@ -342,16 +351,24 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
 
     let name_lit: LitStr = content.parse()?;
     let name = name_lit.value();
-    if syn::parse_str::<Ident>(&name).is_err() {
-        return Err(syn::Error::new(
-            name_lit.span(),
-            format!(
-                "port `{name}` is not a Rust identifier — the declared name is the port \
-                 marker's type (`{}::{name}`), so it must be one, and not a keyword",
-                direction.port_marker_module_name()
-            ),
-        ));
-    }
+    // `parse_str` skips whitespace and comments and lexes `r#`, none of which
+    // the marker's `Ident` can carry, so only a spelling that parses back to
+    // itself is one.
+    let mut declared_marker_ident = match syn::parse_str::<Ident>(&name) {
+        Ok(ident) if ident == name && !name.starts_with("r#") => ident,
+        _ => {
+            return Err(syn::Error::new(
+                name_lit.span(),
+                format!(
+                    "port `{name}` is not a plain Rust identifier — the declared name is the \
+                     port marker's type (`{}::{name}`), so it can carry no space, punctuation, \
+                     keyword or `r#` prefix",
+                    direction.port_marker_module_ident()
+                ),
+            ));
+        }
+    };
+    declared_marker_ident.set_span(name_lit.span());
     let cast_name = cast_exposed_name_to_url_safe(&name)
         .map_err(|casts_to_nothing| syn::Error::new(name_lit.span(), casts_to_nothing))?
         .into_owned();
@@ -433,8 +450,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     }
 
     Ok(ParsedPort {
-        declared_spelling: name,
-        declared_spelling_span: name_lit.span(),
+        declared_marker_ident,
         cast_name,
         description,
         delivery_profile,
@@ -926,9 +942,9 @@ mod tests {
             input("VidéoIn", delivery_profile = "newest"),
             output("videoOut"),
         });
-        assert_eq!(parsed.inputs[0].declared_spelling, "VidéoIn");
+        assert_eq!(parsed.inputs[0].declared_marker_ident, "VidéoIn");
         assert_eq!(parsed.inputs[0].cast_name, "videoin");
-        assert_eq!(parsed.outputs[0].declared_spelling, "videoOut");
+        assert_eq!(parsed.outputs[0].declared_marker_ident, "videoOut");
         assert_eq!(parsed.outputs[0].cast_name, "videoout");
 
         let schema = parsed.to_processor_schema();
@@ -938,14 +954,23 @@ mod tests {
 
     #[test]
     fn a_port_name_that_is_not_an_identifier_is_an_error() {
-        for not_an_identifier in ["", "..", "video in", "video-out", "type"] {
+        for not_an_identifier in [
+            "",
+            "..",
+            "video in",
+            "video-out",
+            "type",
+            "r#type",
+            " videoOut ",
+            "videoOut /* c */",
+        ] {
             let msg = parse_err(quote! {
                 execution = manual,
                 output(#not_an_identifier),
             });
             assert!(
                 msg.contains(&format!(
-                    "port `{not_an_identifier}` is not a Rust identifier"
+                    "port `{not_an_identifier}` is not a plain Rust identifier"
                 )),
                 "{not_an_identifier:?} got: {msg}"
             );

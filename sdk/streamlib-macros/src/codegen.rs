@@ -13,7 +13,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
 use streamlib_processor_schema::ProcessorSchema;
 
-use crate::grammar::{ParsedPort, ParsedProcessorAttr};
+use crate::grammar::{ParsedPort, ParsedProcessorAttr, PortDirection};
 use syn::ItemStruct;
 use syn::spanned::Spanned;
 
@@ -50,16 +50,8 @@ pub fn generate_from_parsed_processor_attr(
 
     let processor_struct =
         generate_processor_struct_from_schema(schema, &config_field_name, &custom_fields);
-    let input_link_module = generate_port_marker_module(
-        quote! { InputLink },
-        quote! { InputPortMarker },
-        &parsed.inputs,
-    );
-    let output_link_module = generate_port_marker_module(
-        quote! { OutputLink },
-        quote! { OutputPortMarker },
-        &parsed.outputs,
-    );
+    let input_link_module = generate_port_marker_module(PortDirection::Input, &parsed.inputs);
+    let output_link_module = generate_port_marker_module(PortDirection::Output, &parsed.outputs);
     let processor_impl = generate_processor_impl_from_schema(
         schema,
         &config_type,
@@ -274,14 +266,15 @@ fn generate_processor_struct_from_schema(
 /// Generate a port-marker module (`InputLink` / `OutputLink`): one marker per
 /// declared port, named by its declared spelling and carrying its cast name.
 fn generate_port_marker_module(
-    module_name: TokenStream,
-    port_marker_trait: TokenStream,
+    direction: PortDirection,
     declared_ports: &[ParsedPort],
 ) -> TokenStream {
+    let module_name = direction.port_marker_module_ident();
+    let port_marker_trait = direction.port_marker_trait_ident();
     let port_markers: Vec<TokenStream> = declared_ports
         .iter()
         .map(|port| {
-            let marker_name = Ident::new(&port.declared_spelling, port.declared_spelling_span);
+            let marker_name = &port.declared_marker_ident;
             let cast_name = &port.cast_name;
             quote! {
                 pub struct #marker_name;
@@ -1525,20 +1518,20 @@ mod processor_struct_emit_tests {
     #[test]
     fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
         let declared_output_port = ParsedPort {
-            declared_spelling: "videoOut".to_string(),
-            declared_spelling_span: Span::call_site(),
+            declared_marker_ident: Ident::new("videoOut", Span::call_site()),
             cast_name: "videoout".to_string(),
             description: None,
             delivery_profile: None,
             audio_window: None,
         };
-        let rendered = generate_port_marker_module(
-            quote! { OutputLink },
-            quote! { OutputPortMarker },
-            &[declared_output_port],
-        )
-        .to_string();
+        let rendered =
+            generate_port_marker_module(PortDirection::Output, &[declared_output_port]).to_string();
+        assert!(rendered.contains("pub mod OutputLink"), "got: {rendered}");
         assert!(rendered.contains("pub struct videoOut"), "got: {rendered}");
+        assert!(
+            rendered.contains("OutputPortMarker for videoOut"),
+            "got: {rendered}"
+        );
         assert!(
             rendered.contains(r#"const PORT_NAME : & 'static str = "videoout""#),
             "got: {rendered}"
