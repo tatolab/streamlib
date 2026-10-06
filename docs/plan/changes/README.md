@@ -37,8 +37,10 @@ place it reads as pending work forever, and `/ship-change` has nothing to fold.
 - **`mvp-app-experience.md`** — superseded 2026-08-02 by `importable-python-library`,
   retired 2026-08-24 (owner). Its package-source, discovery-scan, string-id and
   subprocess-execution sections died with the SDK-shape pivot. The clauses that survived
-  it — the `app.py`/`setup(rt)` convention, `streamlib new`, class-form `rt.add` — are
-  §Product plan text, SHIPPED #1683, #1684, #1711.
+  it — the `app.py`/`setup(rt)` convention, `streamlib new`, class-form `rt.add` — shipped
+  as §Product plan text (#1683, #1684, #1711); stream-graph replaced the convention and
+  `rt.add` with `stream.py`'s `@stream` and `stream.add` (#2569), and `streamlib new`
+  remains.
 - **`pypi-packaging.md`** — superseded 2026-08-02 by `importable-python-library`,
   retired 2026-08-24 (owner). It packaged a standalone binary; the shipped artifact is
   the PyO3 wheel served from a repo-hosted PEP 503 simple index, which is §Distribution

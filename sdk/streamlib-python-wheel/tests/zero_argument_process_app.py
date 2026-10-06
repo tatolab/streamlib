@@ -3,10 +3,10 @@
 
 """An app whose only processor defines `process` without the ctx parameter.
 
-Run as a real `python app.py` because the failure under test is a log line:
-the engine's tracing writer binds this process's stdout at first boot, so only
-a parent reading the pipe observes it reliably — capfd inside the test process
-sees nothing once another test booted an engine first.
+Run as its own `python <script>.py` process because the failure under test is
+a log line: the engine's tracing writer binds this process's stdout at first
+boot, so only a parent reading the pipe observes it reliably — capfd inside the
+test process sees nothing once another test booted an engine first.
 """
 
 import streamlib

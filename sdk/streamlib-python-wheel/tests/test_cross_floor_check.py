@@ -354,12 +354,12 @@ def test_on_a_python_without_tomllib_the_dependency_rule_is_skipped_by_name(
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "demo"\ndependencies = ["cupy-cuda13x"]\n'
     )
-    (tmp_path / "app.py").write_text("import cupy\n")
+    (tmp_path / "effect.py").write_text("import cupy\n")
 
     report = check_app_directory_for_floor_bindings(tmp_path)
     block = render_cross_floor_warning_block(report, tmp_path)
 
-    assert [finding.file.name for finding in report.findings] == ["app.py"]
+    assert [finding.file.name for finding in report.findings] == ["effect.py"]
     assert report.skipped_rule_reason is not None
     assert "dependency rule was skipped" in block
     assert "tomllib" in block

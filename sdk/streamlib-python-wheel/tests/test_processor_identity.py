@@ -139,7 +139,7 @@ def test_a_class_run_as_a_script_identifies_by_its_module(start_app_under_test):
 
 
 def test_the_launch_arrangement_never_changes_the_identity(start_app_under_test):
-    """`python app.py`, `python -m app`, and `streamlib dev` — one name.
+    """`python <script>.py`, `python -m <script>`, and `streamlib dev` — one name.
 
     Three arrangements that put a different thing on `sys.path` and give the
     entry file a different provenance. What must not move is the *processor's*

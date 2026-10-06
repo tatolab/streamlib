@@ -3,9 +3,10 @@
 
 """One processor-owned-window probe against a real source, in its real placement.
 
-Run as a real `python app.py`: the probe owns its window from its own helper
-process while the engine presents it here, and its observation reaches this app
-— and the test driving it — over the child→parent log forwarding.
+Run as its own `python <script>.py` process: the probe owns its window from its
+own helper process while the engine presents it here, and its observation
+reaches this app — and the test driving it — over the child→parent log
+forwarding.
 
 A `DisplayWindow` rides alongside every probe that gets a window at all. Two
 windows on the app process's one event pump is the arrangement that pump exists

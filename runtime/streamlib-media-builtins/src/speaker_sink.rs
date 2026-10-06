@@ -754,9 +754,9 @@ mod tests {
         );
     }
 
-    /// `rt.add(SpeakerSink)` sends `{}` to the engine, and every field of a
-    /// built-in's config has to deserialize from it — the spelling the plan
-    /// blesses for a block that needs no configuration.
+    /// `stream.add(SpeakerSink)` records `{}` as the node's config, and every
+    /// field of a built-in's config has to deserialize from it — the spelling
+    /// the plan blesses for a block that needs no configuration.
     #[test]
     fn a_config_given_no_fields_at_all_takes_the_backends_default_device() {
         let config: SpeakerSinkConfig =

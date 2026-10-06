@@ -48,11 +48,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   Python version, ordinary PyPI dependencies, nothing dynamically downloaded;
   `dev`/`run` load the sole `@stream` in `stream.py` by convention — `run <file>.py:<fn>`
   or `run <module>:<fn>` loads one, `-f <file>` overrides the file, `--name` the stream's
-  name — falling back to an `app.py`'s `setup(rt)` until #2569 deletes it; nodes are
+  name — and a directory holding an `app.py` but no `stream.py` is refused naming
+  `stream.py` and `-f`; nodes are
   Python classes written in the project or imported from pip-installed packages, and
   `stream.add` takes the class; the builder's API is `add`/`connect`/`expose`.
-  [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node` — stream-graph builds the authoring clauses]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
+  [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567, #2569; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node` — stream-graph builds the authoring clauses]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_stream_graph_builder.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
@@ -67,10 +69,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   source-compiled. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — The two floors are one product surface. A Python processor written
   against the wheel's public surface runs on both; where it cannot is a short closed
-  list that refuses by name before a frame flows — at `stream.add()` or `rt.add()`, or in `setup()`,
+  list that refuses by name before a frame flows — at `stream.add()`, or in `setup()`,
   naming the platform — never mid-frame: ray-tracing kernels (MoltenVK has no
   `VK_KHR_ray_tracing_pipeline`; each constructor refuses at `setup()` naming the absent
-  tier), `VirtualCameraSink` (refused at `stream.add()` and `rt.add()`), the CUDA Array Interface, and the
+  tier), `VirtualCameraSink` (refused at `stream.add()`), the CUDA Array Interface, and the
   fd-shaped raw handles (`export_dma_buf`, `export_opaque_fd`, `import_dma_buf` exist on
   macOS and refuse pointing at `export_iosurface`). The scaffold and the examples use
   only the portable surface. The guarantee is mechanical, never prose: one
@@ -222,7 +224,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — Two extension mechanisms, recorded as the current best understanding of
   the shape and expected to flex during the align and implementation. A *processor
   extension* is a Python processor class in a pip-installed package whose per-frame work
-  runs in native code the same wheel carries: `rt.add(TheClass)` is its registration, as
+  runs in native code the same wheel carries: `stream.add(TheClass)` adds it, as
   for any Python processor; it runs in its own helper process under the one placement
   rule; and it calls its own package's Rust directly — the engine does not call extension
   code on the data path, and there is no processor-to-engine-to-wheel round trip. A
@@ -1006,7 +1008,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   configuration and refuses a non-empty one by name; reconfiguration calls
   `configure(config_class(**configuration))`. Construction is the only check — the wheel
   carries no validator, and how strict it is stays the author's choice of config class.
-  On the wire, `rt.add(cls, config={…})` carries a dict, the graph node stores its JSON, and
+  On the wire, `stream.add(cls, config={…})` carries a dict, the graph node stores its JSON, and
   `ctx.config` is that mapping. [agent-readable-processor-catalog — SHIPPED #2226]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_class.py::test_a_keyword_parameter_is_refused_with_the_fix_named -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_class.py::test_the_helper_constructs_the_processor_by_the_config_keyword -->
@@ -1282,7 +1284,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   derived mechanically, never authored, and the same string in the registry, in the
   control plane's type field, and for spawning the processor's helper process — which
   is how every Python processor runs. A processor defined in the entry file run as
-  `python app.py` identifies as `__main__:<Type>` and is a wiring error at `rt.add` and `stream.add`,
+  `python <script>.py` identifies as `__main__:<Type>` and is a wiring error at `stream.add`,
   with an error naming the fix (move the class to an importable module and import it
   from the entry file — one import line). The entry file itself may still run as
   `__main__`; only processor classes may not live there.
@@ -1317,11 +1319,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   Decoration inside a helper process registers nothing, because a helper hosts no
   graph. A class decorated twice under one import path meets the existing
   duplicate-path refusal. As built: after stamping, the decorator calls the
-  wheel-internal `register_declared_processor_class`, which reads the class as `rt.add`
-  does and registers the descriptor alone through `register_descriptor_only`. It passes
-  over two classes — one decorated where `STREAMLIB_ENTRYPOINT` is in the environment,
-  which is how a helper knows itself, and one with no import path (declared inside a
-  function, or in the entry file), whose refusal stays at `rt.add` and `stream.add` with the fix named.
+  wheel-internal `register_declared_processor_class`, which reads the class as the
+  unregistered-type resolver does and registers the descriptor alone through
+  `register_descriptor_only`. It passes over two classes — one decorated where
+  `STREAMLIB_ENTRYPOINT` is in the environment, which is how a helper knows itself, and
+  one with no import path (declared inside a function, or in the entry file), whose
+  refusal stays at `stream.add` with the fix named.
   At first add `ProcessorInstanceFactory::install_constructor_for_registered_descriptor`
   gives the registered descriptor its constructor, refusing a path that already has one
   with the two-classes-one-path text and a path nobody registered by name; the
@@ -1339,7 +1342,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   (§Networking), so renaming a processor re-addresses its ports. Being part of that address
   is what bounds it: `add`
   refuses a requested display name that is empty, contains `/`, `*`, `$`, `#` or `?`, or
-  begins with `@`, naming the character and the fix, in Rust, in `rt.add` and in MCP
+  begins with `@`, naming the character and the fix, in Rust and in MCP
   `add_processor` alike. Spaces and unicode stay legal, and a class's short name and the
   engine's ` 2` suffix always pass, so no default display name is ever refused.
   Identity is never derived from it — and neither is the default: a descriptor carries
@@ -1354,7 +1357,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   refusals]
   <!-- verify: cargo test -p streamlib-engine --test node_name_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_refused_by_name -->
+  <!-- verify: cargo test -p streamlib-engine --test graph_snapshot_round_trip_test a_loaded_name_already_in_the_graph_is_refused_rather_than_suffixed -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_stream_graph_builder.py::test_a_typed_duplicate_is_refused_at_the_add_that_typed_it_naming_both -->
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
@@ -1879,7 +1883,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   stated rather than deferred: a macOS virtual camera is a CoreMediaIO Camera Extension
   inside a bundled, entitled, notarised app, which the floor rules out under any
   justification, and the DAL plug-in stopped loading in macOS 14.1; on macOS the marker
-  refuses by name at `stream.add()` and `rt.add()`, and `streamlib enable-virtual-camera` refuses by name. As
+  refuses by name at `stream.add()`, and `streamlib enable-virtual-camera` refuses by name. As
   many instances as the graph adds — the display's rule. Each instance is one camera that exists only
   while its processor runs: created at `setup()`, removed at `teardown()`, a camera plugged
   in and pulled out from every other application's point of view, whose frames are
@@ -2801,12 +2805,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `CameraSource`, through the three touchpoints a native built-in owns and no fourth — a
   processor extension owns none of them, being an ordinary Python processor class the
   wheel never has to know about (extension-model) — : one entry in
-  `native_processor_marker_classes!` (a constructor-less `#[pyclass]` unit struct, an
-  `is()` arm resolving the type to the processor's own minted import path, a `type` class
-  attribute and the `add_class` line), a re-export with its `__all__` entry, and a stub
+  `native_processor_marker_classes!` (a constructor-less `#[pyclass]` unit struct, a `type`
+  class attribute naming the processor's own minted import path, and the `add_class`
+  line), a re-export with its `__all__` entry, and a stub
   entry gated by stubtest with no allowlist. Configured the
-  one way a built-in is configured — `rt.add(H265Encoder)`,
-  `rt.add(H264Encoder, config={"keyframe_interval_seconds": 2})` — and resolving on both
+  one way a built-in is configured — `stream.add(H265Encoder)`,
+  `stream.add(H264Encoder, config={"keyframe_interval_seconds": 2})` — and resolving on both
   floors, since the codec seam made the blocks platform-free and they register
   everywhere. The wheel links all four and registers them at import, so the blocks need no
   engine registration. The stub docstring is where a
@@ -2956,7 +2960,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   name. At `setup()` the sink enumerates its inbound links, refusing by name when there
   are none; it opens `path` (required, created or truncated) and refuses by name a path it
   cannot open, the named-device shape. Truncating is the call: an app is re-run from the
-  same `app.py`, wall-clock file naming would be a fourth surface the clock entry bans, and
+  same `stream.py`, wall-clock file naming would be a fourth surface the clock entry bans, and
   refusing an existing file fails every second run.
   [opus-mp4-recording-rung — SHIPPED #2127]
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_sink::tests::the_only_port_is_one_ordered_input_and_there_is_no_output -->
@@ -3248,7 +3252,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `<hostname>-<app directory name>-<id>`: every forbidden character replaced by `-`, the id four
   base-36 characters of an FNV-1a hash over the app directory's full path — the virtual camera's
   own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else the wheel's captured entry directory
-  for a hand-run `python app.py`, else the working directory. A host that reports no name takes a
+  for a hand-run `python <script>.py`, else the working directory. A host that reports no name takes a
   stand-in, said once. Each part of an address is one address chunk — non-empty, no `/`, `*`,
   `$`, `#` or `?`, not beginning with `@`, spaces and unicode legal — checked against the rule's
   own table, and an explicit runtime name that breaks it is refused at construction naming the
@@ -3282,7 +3286,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [zenoh-and-moq-wheel-removal — SHIPPED #2643]
   <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_link_end_naming_a_runtime_is_refused_naming_that_runtime -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_load.py::test_a_link_end_naming_a_runtime_is_refused_by_load_naming_it -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_source_that_is_not_an_output_reference_names_the_spelling_that_would_work -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_stream_graph_builder.py::test_connect_refuses_an_input_as_its_source_naming_the_fix -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
 - **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
   creates it, reading a port the source stream has exposed — private on the machine, public off
@@ -3500,7 +3504,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   engine teardown strictly precedes interpreter finalization — all engine threads
   joined, or abandoned and named, and every anchored thread state released before
   `rt.run()` returns, with an `atexit`/context-manager guarantee on the exception path.
-  Proven against a real `python app.py` harness.
+  Proven against a hand-run `python <script>.py` harness.
   [importable-python-library — SHIPPED #1707]
 - **DECIDED** — `rt.run()` owns SIGINT, SIGTERM and SIGHUP through the whole teardown,
   engine drop included, and escalates on repeat: the first interrupt stops the graph
@@ -3692,7 +3696,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   worth having (owner, 2026-09-06). A mutation compiles inside the call, so the caller learns whether
   its change took rather than reading a `Running` node with nothing flowing. A Python
   class is named by its import path — its descriptor registered when its decorator ran,
-  its constructor at this first add exactly as `rt.add` supplies it; the app process
+  its constructor at this first add exactly as a load supplies it; the app process
   imports the class, the processor runs in its own helper process — and a native
   built-in by the path `graph` reports for one;
   a link wired onto a running processor reaches it, and every channel is sized for a

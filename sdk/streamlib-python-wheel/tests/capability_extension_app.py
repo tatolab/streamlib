@@ -3,10 +3,11 @@
 
 """Scenarios that construct a `Runtime()` with test extensions installed.
 
-Driven as a real `python app.py` because the loop runs once per process: a
-second `Runtime()` re-runs nothing, so one process can prove one outcome. The
-extensions are put on `sys.path` here rather than installed into the venv — the
-raising variant would otherwise fail every other test's `Runtime()`.
+Driven as its own `python <script>.py` process because the loop runs once per
+process: a second `Runtime()` re-runs nothing, so one process can prove one
+outcome. The extensions are put on `sys.path` here rather than installed into
+the venv — the raising variant would otherwise fail every other test's
+`Runtime()`.
 
 `sys.path.append`, never `insert`: the helper spawn host reads `sys.path[0]` to
 tell a child where the app's own modules live, and PYTHONPATH carries the

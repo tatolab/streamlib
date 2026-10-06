@@ -3,9 +3,9 @@
 
 """Scenarios that run a Python frame producer in its real placement.
 
-Run as a real `python app.py`: the producer executes in a helper process, and
-what it observed reaches this app — and the test driving it — over the same log
-forwarding every child's records ride.
+Run as its own `python <script>.py` process: the producer executes in a helper
+process, and what it observed reaches this app — and the test driving it — over
+the same log forwarding every child's records ride.
 """
 
 import sys

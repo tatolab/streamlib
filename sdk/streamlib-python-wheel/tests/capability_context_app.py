@@ -3,9 +3,9 @@
 
 """Scenarios that run one capability-context probe in its real placement.
 
-Run as a real `python app.py`: the probe's hooks execute in a helper process,
-and the observation reaches this app — and the test driving it — over the same
-log forwarding every child's records ride.
+Run as its own `python <script>.py` process: the probe's hooks execute in a
+helper process, and the observation reaches this app — and the test driving it
+— over the same log forwarding every child's records ride.
 """
 
 import sys

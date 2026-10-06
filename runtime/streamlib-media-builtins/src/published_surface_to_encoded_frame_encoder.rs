@@ -501,7 +501,7 @@ mod tests {
         assert_eq!((width, height), (3840, 2160));
     }
 
-    /// The config map is open and fully optional — `rt.add(H265Encoder)`
+    /// The config map is open and fully optional — `stream.add(H265Encoder)`
     /// with no config at all must deserialize.
     #[test]
     fn an_all_absent_config_deserializes_to_defaults() {

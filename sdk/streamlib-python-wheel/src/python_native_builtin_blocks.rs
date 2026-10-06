@@ -4,71 +4,24 @@
 //! The wheel-exported names for the native media built-ins.
 //!
 //! `streamlib.TestPatternSource` is a marker class: never instantiated, never
-//! subclassed, carrying no Python behavior. `Runtime.add` recognizes the type
-//! object itself and resolves it to the statically-linked native processor —
-//! per-frame paths never enter the interpreter.
+//! subclassed, carrying no Python behavior. Its `type` class attribute is the
+//! import path a graph names the statically-linked native processor by, which
+//! `stream.add` records on the node — per-frame paths never enter the
+//! interpreter.
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::type_object::PyTypeInfo;
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
-
-/// A wheel-exported marker class standing for one native processor.
-pub(crate) trait NativeProcessorMarkerClass: PyTypeInfo {
-    /// The import path this marker's native processor registers under — on
-    /// every floor, including one where that processor is not compiled in.
-    fn native_processor_class_import_path() -> ProcessorClassImportPath;
-
-    /// Why `Runtime.add` refuses this marker on this floor, which does not
-    /// compile its native processor in.
-    fn refusal_on_this_floor() -> Option<&'static str> {
-        None
-    }
-
-    /// This marker's import path, or its refusal on this floor, when
-    /// `candidate_class` is this marker's type object itself.
-    fn native_processor_class_import_path_if_it_is(
-        python: Python<'_>,
-        candidate_class: &Bound<'_, PyAny>,
-    ) -> Option<PyResult<ProcessorClassImportPath>> {
-        if !candidate_class.is(python.get_type::<Self>()) {
-            return None;
-        }
-        Some(match Self::refusal_on_this_floor() {
-            Some(refusal_on_this_floor) => Err(PyRuntimeError::new_err(refusal_on_this_floor)),
-            None => Ok(Self::native_processor_class_import_path()),
-        })
-    }
-}
-
-/// How one marker answers whether a class is it, and with which import path.
-pub(crate) type NativeProcessorClassImportPathIfItIs =
-    fn(Python<'_>, &Bound<'_, PyAny>) -> Option<PyResult<ProcessorClassImportPath>>;
-
-/// The value of a marker's `type` class attribute: the import path a graph
-/// names the marker's native processor by.
-pub(crate) fn marker_type_class_attribute<Marker: NativeProcessorMarkerClass>() -> String {
-    Marker::native_processor_class_import_path()
-        .as_str()
-        .to_owned()
-}
-
-/// Declare marker classes, each standing for one native processor, with the
-/// resolver list `Runtime.add` searches and the function adding them to the
-/// module.
+/// Declare marker classes, each standing for one native processor, and the
+/// function adding them to the module.
 ///
 /// No marker has a `#[new]`: instantiating one is always a mistake, and PyO3's
 /// "no constructor defined" error says so.
 macro_rules! native_processor_marker_classes {
     (
-        resolvers: $marker_import_path_resolvers:ident,
         added_to_the_module_by: $add_marker_classes_to_the_module:ident,
         markers: [$(
             $(#[$marker_attribute:meta])*
             $marker:ident as $python_class_name:literal {
                 $(dunder_test: $dunder_test:literal,)?
                 import_path: $import_path:expr,
-                $(#[$floor_refusing_the_marker:meta] refused_on_this_floor: $refusal_on_this_floor:literal,)?
             }
         )+]
     ) => {
@@ -88,35 +41,17 @@ macro_rules! native_processor_marker_classes {
                     }
                 )?
 
+                /// The import path a graph names this marker's native processor by — on
+                /// every floor, including one where that processor is not compiled in.
                 #[classattr]
                 #[pyo3(name = "type")]
-                fn native_processor_type() -> String {
-                    $crate::python_native_builtin_blocks::marker_type_class_attribute::<Self>()
+                fn native_processor_class_import_path() -> String {
+                    let native_processor_class_import_path:
+                        ::streamlib::sdk::descriptors::ProcessorClassImportPath = $import_path;
+                    native_processor_class_import_path.as_str().to_owned()
                 }
-            }
-
-            impl $crate::python_native_builtin_blocks::NativeProcessorMarkerClass for $marker {
-                fn native_processor_class_import_path(
-                ) -> ::streamlib::sdk::descriptors::ProcessorClassImportPath {
-                    $import_path
-                }
-
-                $(
-                    #[$floor_refusing_the_marker]
-                    fn refusal_on_this_floor() -> Option<&'static str> {
-                        Some($refusal_on_this_floor)
-                    }
-                )?
             }
         )+
-
-        /// Every marker this list declares, by its import-path resolver.
-        const $marker_import_path_resolvers: &[
-            $crate::python_native_builtin_blocks::NativeProcessorClassImportPathIfItIs
-        ] = &[$(
-            <$marker as $crate::python_native_builtin_blocks::NativeProcessorMarkerClass>
-                ::native_processor_class_import_path_if_it_is,
-        )+];
 
         /// Add every marker class this list declares to the module.
         pub(crate) fn $add_marker_classes_to_the_module(
@@ -140,7 +75,6 @@ const DISPLAY_WINDOW_PROCESSOR_CLASS_IMPORT_PATH: &str =
     "streamlib_media_builtins::display_window::DisplayWindow";
 
 native_processor_marker_classes! {
-    resolvers: NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS,
     added_to_the_module_by: add_native_builtin_marker_classes_to_the_module,
     markers: [
         /// `streamlib.TestPatternSource` — SMPTE-style color bars, no hardware.
@@ -165,13 +99,12 @@ native_processor_marker_classes! {
                 }
                 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                 {
-                    ProcessorClassImportPath::new(DISPLAY_WINDOW_PROCESSOR_CLASS_IMPORT_PATH)
-                        .expect("a non-blank literal is a valid import path")
+                    streamlib::sdk::descriptors::ProcessorClassImportPath::new(
+                        DISPLAY_WINDOW_PROCESSOR_CLASS_IMPORT_PATH,
+                    )
+                    .expect("a non-blank literal is a valid import path")
                 }
             },
-            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-            refused_on_this_floor: "DisplayWindow runs on Linux and macOS; this platform is not \
-                                    supported by the streamlib wheel yet",
         }
         /// `streamlib.MicrophoneSource` — audio capture on whichever backend the
         /// chain probed, silence where none exists.
@@ -240,32 +173,14 @@ native_processor_marker_classes! {
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    ProcessorClassImportPath::new(
+                    streamlib::sdk::descriptors::ProcessorClassImportPath::new(
                         streamlib_api_server::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
                     )
                     .expect("a non-blank literal is a valid import path")
                 }
             },
-            #[cfg(not(target_os = "linux"))]
-            refused_on_this_floor: "VirtualCameraSink is Linux-only today; this platform is not \
-                                    supported by the streamlib wheel yet",
         }
     ]
-}
-
-/// Resolve a Python object to a native built-in's class import path, if it is
-/// one of the wheel-exported marker type objects. On a platform where a
-/// marker's native processor is not compiled in, the answer is an explicit
-/// unsupported-platform error rather than the generic "not a processor"
-/// rejection.
-pub(crate) fn native_builtin_class_import_path(
-    python: Python<'_>,
-    processor_class: &Bound<'_, PyAny>,
-) -> PyResult<Option<ProcessorClassImportPath>> {
-    NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS
-        .iter()
-        .find_map(|import_path_if_it_is| import_path_if_it_is(python, processor_class))
-        .transpose()
 }
 
 /// Register the native built-in processor types on the process-wide registry.
@@ -276,6 +191,11 @@ pub(crate) fn register_native_builtin_processor_types() {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
+    use pyo3::prelude::*;
+    use pyo3::types::{PyModule, PyType};
+    use streamlib::sdk::descriptors::ProcessorClassImportPath;
+    use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+
     use super::*;
 
     /// The control plane's virtual-camera prompt names the built-in by a path
@@ -299,38 +219,33 @@ mod tests {
         );
     }
 
+    /// A graph names a native node by its marker's `type`, so every marker the
+    /// module exports must name the path its native processor registered under.
     #[test]
-    fn every_marker_type_attribute_is_the_path_add_resolves_the_marker_to() {
+    fn every_exported_marker_type_names_a_registered_native_processor() {
         Python::initialize();
+        register_native_builtin_processor_types();
         Python::attach(|python| {
-            let marker_classes = [
-                python.get_type::<PythonTestPatternSourceBlock>(),
-                python.get_type::<PythonCameraSourceBlock>(),
-                python.get_type::<PythonDisplayWindowBlock>(),
-                python.get_type::<PythonMicrophoneSourceBlock>(),
-                python.get_type::<PythonSpeakerSinkBlock>(),
-                python.get_type::<PythonH264EncoderBlock>(),
-                python.get_type::<PythonH264DecoderBlock>(),
-                python.get_type::<PythonH265EncoderBlock>(),
-                python.get_type::<PythonH265DecoderBlock>(),
-                python.get_type::<PythonOpusEncoderBlock>(),
-                python.get_type::<PythonOpusDecoderBlock>(),
-                python.get_type::<PythonMp4SinkBlock>(),
-                python.get_type::<PythonVirtualCameraSinkBlock>(),
-            ];
-            assert_eq!(
-                marker_classes.len(),
-                NATIVE_BUILTIN_MARKER_IMPORT_PATH_RESOLVERS.len()
-            );
+            let module = PyModule::new(python, "native_builtin_markers_under_test").unwrap();
+            add_native_builtin_marker_classes_to_the_module(&module).unwrap();
+            let marker_classes: Vec<_> = module
+                .dict()
+                .values()
+                .into_iter()
+                .filter(|exported| exported.is_instance_of::<PyType>())
+                .collect();
+            assert!(!marker_classes.is_empty());
             for marker_class in marker_classes {
                 let type_attribute: String =
                     marker_class.getattr("type").unwrap().extract().unwrap();
-                let resolved = native_builtin_class_import_path(python, marker_class.as_any())
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(type_attribute, resolved.as_str(), "{marker_class}");
                 assert!(
                     type_attribute.starts_with("streamlib_media_builtins::"),
+                    "{marker_class}: {type_attribute}"
+                );
+                assert!(
+                    PROCESSOR_REGISTRY.is_registered(
+                        &ProcessorClassImportPath::new(type_attribute.as_str()).unwrap()
+                    ),
                     "{marker_class}: {type_attribute}"
                 );
             }

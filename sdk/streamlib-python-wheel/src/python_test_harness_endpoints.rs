@@ -24,7 +24,6 @@ use parking_lot::{Condvar, Mutex};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ContinuousProcessor, ReactiveProcessor};
 use streamlib::sdk::schemars::JsonSchema;
@@ -216,38 +215,27 @@ impl ReactiveProcessor for TestBagCollector::Processor {
     }
 }
 
-/// Register the harness endpoints so `rt.add` can resolve them.
+/// Register the harness endpoints, so a graph naming one by its marker's `type`
+/// resolves to it.
 pub(crate) fn register_test_harness_processor_types() {
     streamlib::sdk::processors::PROCESSOR_REGISTRY.register::<TestBagFeeder::Processor>();
     streamlib::sdk::processors::PROCESSOR_REGISTRY.register::<TestBagCollector::Processor>();
 }
 
 native_processor_marker_classes! {
-    resolvers: TEST_HARNESS_MARKER_IMPORT_PATH_RESOLVERS,
     added_to_the_module_by: add_test_harness_marker_classes_to_the_module,
     markers: [
-        /// `streamlib.testing`'s feeder, as the marker type `Runtime.add` resolves.
+        /// `streamlib.testing`'s feeder, as the marker class `stream.add` takes.
         PythonTestBagFeederBlock as "TestBagFeeder" {
             dunder_test: false,
             import_path: TestBagFeeder::Processor::processor_class_import_path(),
         }
-        /// `streamlib.testing`'s collector, as the marker type `Runtime.add` resolves.
+        /// `streamlib.testing`'s collector, as the marker class `stream.add` takes.
         PythonTestBagCollectorBlock as "TestBagCollector" {
             dunder_test: false,
             import_path: TestBagCollector::Processor::processor_class_import_path(),
         }
     ]
-}
-
-/// The harness marker classes, resolved the same way the media built-ins are.
-pub(crate) fn test_harness_class_import_path(
-    python: Python<'_>,
-    processor_class: &Bound<'_, PyAny>,
-) -> PyResult<Option<ProcessorClassImportPath>> {
-    TEST_HARNESS_MARKER_IMPORT_PATH_RESOLVERS
-        .iter()
-        .find_map(|import_path_if_it_is| import_path_if_it_is(python, processor_class))
-        .transpose()
 }
 
 /// Open a harness channel under `channel`.
@@ -334,20 +322,35 @@ mod tests {
         wire_bytes
     }
 
+    /// A graph names a harness endpoint by its marker's `type`, so each must
+    /// name the path its native processor registered under.
     #[test]
-    fn each_harness_marker_type_attribute_is_the_path_add_resolves_it_to() {
+    fn each_harness_marker_type_names_a_registered_native_processor() {
         Python::initialize();
+        register_test_harness_processor_types();
         Python::attach(|python| {
-            for marker_class in [
-                python.get_type::<PythonTestBagFeederBlock>(),
-                python.get_type::<PythonTestBagCollectorBlock>(),
+            for (marker_class, registered_import_path) in [
+                (
+                    python.get_type::<PythonTestBagFeederBlock>(),
+                    TestBagFeeder::Processor::processor_class_import_path(),
+                ),
+                (
+                    python.get_type::<PythonTestBagCollectorBlock>(),
+                    TestBagCollector::Processor::processor_class_import_path(),
+                ),
             ] {
                 let type_attribute: String =
                     marker_class.getattr("type").unwrap().extract().unwrap();
-                let resolved = test_harness_class_import_path(python, marker_class.as_any())
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(type_attribute, resolved.as_str(), "{marker_class}");
+                assert_eq!(
+                    type_attribute,
+                    registered_import_path.as_str(),
+                    "{marker_class}"
+                );
+                assert!(
+                    streamlib::sdk::processors::PROCESSOR_REGISTRY
+                        .is_registered(&registered_import_path),
+                    "{marker_class}: {type_attribute}"
+                );
             }
         });
     }

@@ -44,8 +44,9 @@ runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e
 
 The script:
 1. Loads vivid and finds its capture node
-2. Boots `examples/camera-display` with `streamlib run` — the app is Python, so
-   there is no build step between an edit and the run
+2. Boots `camera_display_stream.py`, the fixture stream beside the script, with
+   `streamlib run` — the stream is Python, so there is no build step between an
+   edit and the run
 3. Waits for the node to register, then asserts against `streamlib graph`:
    both native built-ins present, linked camera → window
 4. Captures the window to PNG, then stops the node with SIGTERM and requires a
@@ -74,7 +75,7 @@ including the swapchain present — a dump of the source HOST_VISIBLE pixel buff
 taken before rendering, would not.
 
 The fixture selects the camera through `STREAMLIB_CAMERA_DEVICE`, which
-`examples/camera-display/app.py` reads — the engine does not.
+`camera_display_stream.py` reads — the engine does not.
 
 ## Troubleshooting
 
@@ -102,4 +103,4 @@ finalization.
 
 ## Reference
 - Fixture scripts: `runtime/streamlib-engine/tests/fixtures/`
-- The app under test: `examples/camera-display/app.py`
+- The stream under test: `runtime/streamlib-engine/tests/fixtures/camera_display_stream.py`

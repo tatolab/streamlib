@@ -198,7 +198,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
 - Every built-in `Config` takes `#[serde(deny_unknown_fields)]`; the factory's error names the
   node, its `type` and the setting. A `type` the runtime lacks is refused at load naming it; a
   built-in absent on this floor is refused there naming the floor (`VirtualCameraSink` moves from
-  `rt.add()` to load). A graph key the loader neither reads as spec nor knows as one of `graph`'s
+  `stream.add()` to load). A graph key the loader neither reads as spec nor knows as one of `graph`'s
   live keys is refused by name. A golden graph checked in here, holding every key and built-in
   `type`, loads on every later build; a shape change adds a golden beside it, never edits one.
 
@@ -249,8 +249,8 @@ its PR. Paths under `sdk/streamlib-python-wheel/` unless rooted. One file per ro
 
 | Old shape | Ends | Slice |
 |---|---|---|
-| `src/python_runtime_lifecycle.rs` (715 lines, the `Runtime` pyclass: capture, resolver, `add`, `connect`, control-plane hosting, `run`'s GIL detach and signal hand-back, shutdown, `__enter__`, atexit), `src/python_control_plane_hosting.rs`, `src/python_added_processor.rs`, `src/python_test_harness_endpoints.rs`, `python/streamlib/testing.py`, the `Runtime` subclass and `_live_runtimes` (`__init__.py:184-229`) | deleted | S4 |
-| `src/python_native_builtin_blocks.rs`, `src/python_processor_registration.rs`, `src/python_processor_import_path.rs` (identity checked at `add`) | deleted; identity is checked by the builder and by describe | S2, S3 |
+| `src/python_runtime_lifecycle.rs` (715 lines, the `Runtime` pyclass: capture, resolver, `load`, control-plane hosting, `run`'s GIL detach and signal hand-back, shutdown, `__enter__`, atexit), `src/python_control_plane_hosting.rs`, `src/python_test_harness_endpoints.rs`, `python/streamlib/testing.py`, the `Runtime` subclass and `_live_runtimes` (`__init__.py:184-229`) | deleted | S4 |
+| `src/python_native_builtin_blocks.rs`, `src/python_processor_registration.rs`, `src/python_processor_import_path.rs` (identity checked at decoration and registration) | deleted; identity is checked by the builder and by describe | S2, S3 |
 | `src/python_helper_process_spawn_host.rs` (2074 lines), `src/helper_process_shutdown_ladder.rs` (798) | moved into the engine, Python-free | S3 |
 | `src/python_logging.rs:162-186` and `core/logging/mod.rs:31` (app-process Python log records) | deleted; the helper drain stays | S4 |
 | The hook: `src/python_capability_extension_host.rs`, `python/streamlib/_capability_extensions.py`, its two call sites (`Runtime.__init__`, `_helper.py`), `graph`'s `extensions` key in `GraphResponse`, OpenAPI and MCP, `generate_third_party_notices.rs:1277-1312`'s entry-point discovery, `test_capability_extensions`, `extension_fixtures/` | deleted; the notices find `packages/*` by path | S7 |

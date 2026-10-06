@@ -5,10 +5,11 @@
 //!
 //! Registration arrives in two halves. `@node` registers the descriptor
 //! when it runs, so the class is in the catalog an agent reads before anything
-//! adds it; the first add installs the constructor onto that descriptor.
-//! Registration is per process and idempotent per identity: `rt.add(Blur)`
-//! called twice installs `Blur`'s constructor once and adds two processors to
-//! the graph, each with its own configuration and its own instance of the class.
+//! adds it; the first graph node naming the class installs the constructor onto
+//! that descriptor. Registration is per process and idempotent per identity: a
+//! stream that adds `Blur` twice installs `Blur`'s constructor once and runs two
+//! processors, each with its own configuration and its own instance of the
+//! class.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -39,16 +40,16 @@ fn registered_processor_classes() -> &'static Mutex<HashMap<ProcessorClassImport
 /// Give the descriptor `processor_class` registered at decoration the
 /// constructor that spawns its helper process, unless it already has one.
 ///
-/// Returns the class import path `Runtime.add` names the processor by.
-pub(crate) fn register_processor_class(
+/// Returns the class import path a graph names the processor by.
+fn register_processor_class(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
 ) -> PyResult<ProcessorClassImportPath> {
     let declaration = PythonProcessorDeclaration::read_from_class(processor_class)?;
     let identity = declaration.descriptor.processor_class_import_path.clone();
 
-    // Held across the check and the registration, so two threads adding the
-    // same class cannot both get past the engine registry's non-atomic
+    // Held across the check and the registration, so two threads registering
+    // the same class cannot both get past the engine registry's non-atomic
     // read-then-write.
     let mut registered = registered_processor_classes()
         .lock()
@@ -64,15 +65,15 @@ pub(crate) fn register_processor_class(
             // An import path is `__module__` + `__qualname__`, so two classes
             // reach the same one only by being the same declaration executed
             // twice — the module was loaded again and rebuilt its classes. Two
-            // *differently named* classes can no longer collide at all, so
-            // there is nothing to declare that would tell these apart; the fix
-            // is upstream, at the reload.
+            // differently named classes never collide, so there is nothing to
+            // declare that would tell these apart; the fix is upstream, at the
+            // reload.
             Err(PyValueError::new_err(format!(
                 "two different class objects both identify as `{identity}`: {} and {}. One \
                  import path names one class, so these are the same declaration loaded twice \
-                 — `importlib.reload` is the usual cause, and the class object you are adding \
-                 is not the one already registered. Add the class from the module the \
-                 interpreter currently holds, or restart the app.",
+                 — `importlib.reload` is the usual cause, and the class the module holds now \
+                 is not the one this process registered. Restart the app rather than \
+                 reloading a processor module.",
                 class_qualified_name(already_registered.bind(python)),
                 class_qualified_name(processor_class),
             )))
@@ -84,7 +85,7 @@ pub(crate) fn register_processor_class(
     // The closure captures the class's import path, never the class object:
     // the object lives in this interpreter, and the processor does not. Every
     // instance the engine constructs is a child that imports the class for
-    // itself, which is the same string `rt.add` already refused an
+    // itself, which is the same string `stream.add` already refused an
     // unimportable class by.
     let processor_class_import_path = declaration
         .descriptor
@@ -120,13 +121,13 @@ pub(crate) fn register_processor_class(
 /// `processor_class`, so the class is in the catalog before anything adds it.
 ///
 /// The decorator's one call into the native half. Registers the descriptor
-/// alone: the constructor is the first add's to supply, through
-/// [`register_processor_class`].
+/// alone: the constructor arrives through [`register_processor_class`] when a
+/// graph node first names the class.
 ///
 /// Two classes are passed over rather than registered. One decorated inside a
 /// helper process registers nothing, because a helper hosts no graph. One no
 /// interpreter could import — declared in the entry file or inside a function
-/// — has no identity to be registered under, and `rt.add` is where that is
+/// — has no identity to be registered under, and `stream.add` is where that is
 /// said, with the fix named.
 #[pyfunction]
 pub(crate) fn register_declared_processor_class(
@@ -173,9 +174,9 @@ pub(crate) fn processor_class_import_paths_in_this_processes_catalog() -> Vec<St
 }
 
 /// Register the class `processor_class_import_path` names by importing it into
-/// this interpreter — the registration import `rt.add` performs, done for a
-/// caller that holds only the path, such as an `add_processor` over the control
-/// plane. The processor itself still runs in its own helper process.
+/// this interpreter, for a caller that holds only the path — a `Runtime.load`
+/// graph node, or an `add_processor` over the control plane. The processor
+/// itself runs in its own helper process.
 ///
 /// A path in another grammar — a Rust `crate::module::Type`, or one with no
 /// module at all — names nothing this interpreter could import, so it is left

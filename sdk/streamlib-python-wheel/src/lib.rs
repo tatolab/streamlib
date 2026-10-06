@@ -9,7 +9,6 @@ use pyo3::prelude::*;
 #[cfg(target_os = "macos")]
 mod darwin_close_on_exec_kqueue;
 mod helper_process_shutdown_ladder;
-mod python_added_processor;
 mod python_bag_conversion;
 mod python_capability_extension_host;
 #[cfg(test)]
@@ -48,9 +47,6 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_capability_extension_host::PythonCapabilityExtensionHost>()?;
     python_native_builtin_blocks::add_native_builtin_marker_classes_to_the_module(module)?;
     python_test_harness_endpoints::add_test_harness_marker_classes_to_the_module(module)?;
-    module.add_class::<python_added_processor::PythonAddedProcessor>()?;
-    module.add_class::<python_added_processor::PythonProcessorOutputPortReference>()?;
-    module.add_class::<python_added_processor::PythonProcessorInputPortReference>()?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
     module.add_class::<python_processor_context::PythonRuntimeContextFullAccess>()?;
     module.add_class::<python_processor_context::PythonRuntimeContextLimitedAccess>()?;

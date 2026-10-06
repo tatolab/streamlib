@@ -22,9 +22,9 @@ static APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST: OnceLock<PathBuf> = On
 ///
 /// The wheel calls this from `Runtime()`'s constructor with the directory it
 /// captured off `sys.path[0]`, which is the only thing that tells a hand-run
-/// `python app.py` apart from a `streamlib run`. The first call wins and there
-/// is no way back — the entry file does not move while the process lives, which
-/// is also why no test records one: doing so would rename every runtime
+/// `python <script>.py` apart from a `streamlib run`. The first call wins and
+/// there is no way back — the entry file does not move while the process lives,
+/// which is also why no test records one: doing so would rename every runtime
 /// constructed later in the same binary.
 pub fn record_the_app_entry_directory_the_language_host_captured(entry_directory: PathBuf) {
     let _ = APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST.set(entry_directory);
@@ -46,9 +46,9 @@ pub fn resolve_the_app_directory_this_runtime_belongs_to() -> PathBuf {
 ///
 /// [`APP_DIRECTORY_ENVIRONMENT_VARIABLE`] first, so a CLI-launched app is
 /// anchored where the launcher anchored it; then the entry directory a language
-/// host recorded, which is what a hand-run `python app.py` has; then the working
-/// directory, which is what a Rust app gets. An empty environment value reads as
-/// unset, the way an empty `XDG_RUNTIME_DIR` does.
+/// host recorded, which is what a hand-run `python <script>.py` has; then the
+/// working directory, which is what a Rust app gets. An empty environment value
+/// reads as unset, the way an empty `XDG_RUNTIME_DIR` does.
 fn resolve_app_directory(
     app_directory_from_the_environment: Option<OsString>,
     entry_directory_the_language_host_captured: Option<&Path>,
@@ -108,7 +108,7 @@ mod tests {
         );
     }
 
-    /// A hand-run `python app.py` is anchored at the entry directory its
+    /// A hand-run `python <script>.py` is anchored at the entry directory its
     /// interpreter reported, not at the shell it was launched from.
     #[test]
     fn the_captured_entry_directory_outranks_the_working_directory() {

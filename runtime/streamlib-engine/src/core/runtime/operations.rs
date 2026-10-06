@@ -200,8 +200,8 @@ pub trait RuntimeOperations: Send + Sync {
     /// `topics::RUNTIME_GLOBAL`): the receiver is not a scoping parameter, and
     /// the escalation it raises is cleared only by the run loop that observed it,
     /// once that run has ended. A request issued while no run loop is running
-    /// is observed by the next one to start, so a start-script that aborts from
-    /// `setup(rt)` still stops the run.
+    /// is observed by the next one to start, so a host that decides to abort
+    /// before it calls `start()` still stops the run.
     ///
     /// Fire-and-forget with no completion payload, so unlike every other sync
     /// method on this trait it never `block_on`s and therefore cannot deadlock

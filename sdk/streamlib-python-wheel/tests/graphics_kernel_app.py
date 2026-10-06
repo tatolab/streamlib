@@ -3,9 +3,9 @@
 
 """Scenarios that run one graphics-kernel probe in its real placement.
 
-Run as a real `python app.py`: the probe builds and draws its kernel from a
-helper process, and its observation reaches this app — and the test driving it —
-over the child→parent log forwarding.
+Run as its own `python <script>.py` process: the probe builds and draws its
+kernel from a helper process, and its observation reaches this app — and the
+test driving it — over the child→parent log forwarding.
 """
 
 import sys

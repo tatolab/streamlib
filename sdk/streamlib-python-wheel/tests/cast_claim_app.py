@@ -3,8 +3,9 @@
 
 """One cast-claim probe against a real source, in its real placement.
 
-Run as a real `python app.py`: the probe executes in its own helper process and
-reports what it saw over the child→parent log forwarding.
+Run as its own `python <script>.py` process: the probe executes in a helper
+process of its own and reports what it saw over the child→parent log
+forwarding.
 
 The source is the second argument. The camera is what the lifetime probes need
 — only a real capture pool recycles a slot underneath a held frame. The native

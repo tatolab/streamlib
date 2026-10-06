@@ -4,12 +4,12 @@
 """StreamLib — a realtime streaming engine with Python authoring.
 
 The engine runs in this interpreter's process: `Runtime()` boots it,
-`rt.load(graph)` puts a stream's graph in it — or `rt.add` / `rt.connect` build
-one in place — and `rt.run()` blocks until Ctrl-C with the GIL released. A
-stream is a `@stream` function that adds, links and exposes nodes on a
-`Stream`; `compile_stream_to_graph` returns the graph it builds. Processors
-declare identity and ports with `@node` / `@input` / `@output` and receive a
-capability-typed context in every lifecycle hook.
+`rt.load(graph)` puts a stream's graph in it, and `rt.run()` blocks until
+Ctrl-C with the GIL released. A stream is a `@stream` function that adds,
+links and exposes nodes on a `Stream`; `compile_stream_to_graph` returns the
+graph it builds. Processors declare identity and ports with `@node` /
+`@input` / `@output` and receive a capability-typed context in every
+lifecycle hook.
 """
 
 import atexit
@@ -27,7 +27,6 @@ from . import log as log
 from ._capability_extensions import (
     load_installed_capability_extensions_once_per_process,
 )
-from ._engine import AddedProcessor as AddedProcessor
 from ._engine import CapabilityExtensionHost as CapabilityExtensionHost
 from ._engine import capability_extension_host_for_the_app_process
 from ._engine import GpuContextFullAccess as GpuContextFullAccess
@@ -40,9 +39,7 @@ from ._engine import LinkInputDataReader as LinkInputDataReader
 from ._engine import LinkOutputDataWriter as LinkOutputDataWriter
 from ._engine import MonotonicTimer as MonotonicTimer
 from ._engine import OpaqueFdTextureExport as OpaqueFdTextureExport
-from ._engine import ProcessorInputPortReference as ProcessorInputPortReference
 from ._engine import ProcessorLinkDataAccess as ProcessorLinkDataAccess
-from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReference
 from ._engine import ProcessorOwnedWindow as ProcessorOwnedWindow
 from ._engine import ProcessorOwnedWindowEvents as ProcessorOwnedWindowEvents
 from ._engine import CameraSource as CameraSource
@@ -112,9 +109,8 @@ from .video_frame import MasteringDisplay as MasteringDisplay
 from .video_frame import VideoFrame as VideoFrame
 
 # `input` and `output` shadow the builtins at module scope on purpose — the
-# authoring grammar reads `@input(...)` / `@output(...)`, matching the old SDK.
+# authoring grammar reads `@input(...)` / `@output(...)`.
 __all__ = [
-    "AddedProcessor",
     "AudioBlock",
     "AudioWindowContract",
     "CameraSource",
@@ -157,9 +153,7 @@ __all__ = [
     "OpusDecoder",
     "OpusEncoder",
     "PixelAccessToOneClaimedSurface",
-    "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",
-    "ProcessorOutputPortReference",
     "ProcessorOutputTextureRing",
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
