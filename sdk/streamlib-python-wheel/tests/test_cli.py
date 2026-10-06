@@ -27,10 +27,10 @@ from typing import Any
 import pytest
 from app_under_test import ENGINE_STARTING_LOG_LINE
 
-from streamlib import _node_registry, cli
+from tatolab.runtime import _node_registry, cli
 
 MINIMAL_STREAM_SOURCE = (
-    "from streamlib import Stream, TestPatternSource, stream\n"
+    "from tatolab.stream import Stream, TestPatternSource, stream\n"
     "\n"
     "\n"
     "@stream\n"
@@ -76,12 +76,12 @@ def run_cli(
 ) -> "subprocess.CompletedProcess[str]":
     """Drive the console script's module entry in a child interpreter.
 
-    `-m streamlib.cli` rather than the installed `streamlib` binary so the test
+    `-m tatolab.runtime.cli` rather than the installed `streamlib` binary so the test
     is about the code, not about whether this environment's `bin/` is on PATH —
     the shipped entry point is checked separately.
     """
     return subprocess.run(
-        [sys.executable, "-m", "streamlib.cli", *arguments],
+        [sys.executable, "-m", "tatolab.runtime.cli", *arguments],
         capture_output=True,
         text=True,
         timeout=RESOLUTION_FAILURE_TIMEOUT_SECONDS,
@@ -312,7 +312,7 @@ def test_the_entry_runs_as_main_with_its_own_directory_importable(tmp_path: Path
 ENGINE_CONSTRUCTED_LOG_LINE = "Creating Runner named"
 
 FRONT_STREAM_SOURCE = (
-    "from streamlib import DisplayWindow, Stream, TestPatternSource, stream\n"
+    "from tatolab.stream import DisplayWindow, Stream, TestPatternSource, stream\n"
     "\n"
     "\n"
     "@stream\n"
@@ -598,7 +598,7 @@ def test_a_module_target_naming_a_module_with_no_import_spec_is_refused_naming_t
         [
             sys.executable,
             "-c",
-            "import sys\nfrom streamlib import cli\nsys.exit(cli.main(sys.argv[1:]))",
+            "import sys\nfrom tatolab.runtime import cli\nsys.exit(cli.main(sys.argv[1:]))",
             "run",
             "--dir",
             str(tmp_path),
@@ -1008,7 +1008,7 @@ def test_a_stream_that_adds_nothing_is_refused_at_load_and_publishes_no_node(
     write_app(
         tmp_path,
         "stream.py",
-        "from streamlib import Stream, stream\n"
+        "from tatolab.stream import Stream, stream\n"
         "\n"
         "\n"
         "@stream\n"
@@ -1045,7 +1045,7 @@ def test_a_raising_stream_function_prints_its_traceback_and_builds_no_engine(
     write_app(
         tmp_path,
         "stream.py",
-        "from streamlib import Stream, stream\n"
+        "from tatolab.stream import Stream, stream\n"
         "\n"
         "\n"
         "@stream\n"
@@ -1071,7 +1071,7 @@ def test_a_typed_duplicate_is_refused_on_the_authors_own_line(tmp_path: Path):
     write_app(
         tmp_path,
         "stream.py",
-        "from streamlib import Stream, TestPatternSource, stream\n"
+        "from tatolab.stream import Stream, TestPatternSource, stream\n"
         "\n"
         "\n"
         "@stream\n"
@@ -1105,7 +1105,7 @@ def test_a_syntax_error_prints_the_apps_traceback_and_builds_no_engine(tmp_path:
     write_app(
         tmp_path,
         "stream.py",
-        "from streamlib import Stream, stream\n"
+        "from tatolab.stream import Stream, stream\n"
         "\n"
         "\n"
         "@stream\n"
@@ -1239,7 +1239,7 @@ def test_a_stream_function_that_exits_on_purpose_keeps_its_own_exit_code(
         "stream.py",
         "import sys\n"
         "\n"
-        "from streamlib import Stream, stream\n"
+        "from tatolab.stream import Stream, stream\n"
         "\n"
         "\n"
         "@stream\n"
@@ -1373,7 +1373,7 @@ def test_new_writes_exactly_the_rendered_templates(
 
 # The source tree's copy, so ruff resolves the wheel's `[tool.ruff]` config.
 SCAFFOLD_TEMPLATE_SOURCE_DIRECTORY = (
-    Path(__file__).resolve().parents[1] / "python" / "streamlib" / "_scaffold_template"
+    Path(__file__).resolve().parents[1] / "python" / "tatolab" / "runtime" / "_scaffold_template"
 )
 
 
@@ -1540,7 +1540,8 @@ SCAFFOLDED_STREAM_COMPILE_AND_LOAD_SCRIPT = """
 import json
 from pathlib import Path
 
-from streamlib import Runtime, cli, compile_stream_to_graph
+from tatolab.runtime import Runtime, cli
+from tatolab.stream import compile_stream_to_graph
 
 entry_namespace = cli.execute_app_entry_file(Path("stream.py").resolve())
 compiled_graph = compile_stream_to_graph(entry_namespace["main"])
@@ -1904,7 +1905,7 @@ def test_enable_virtual_camera_makes_the_control_node_writable():
     """The rig check: the verb, run for real, leaves the control node openable
     read-write by this user in this same session — no re-login."""
     finished = subprocess.run(
-        [sys.executable, "-m", "streamlib.cli", "enable-virtual-camera"],
+        [sys.executable, "-m", "tatolab.runtime.cli", "enable-virtual-camera"],
         text=True,
         timeout=180,
     )

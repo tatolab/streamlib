@@ -11,14 +11,14 @@ import dataclasses
 
 import pytest
 
-import streamlib
-from streamlib import AudioWindowContract, input, node, output
+import tatolab.stream
+from tatolab.stream import AudioWindowContract, input, node, output
 
-# Not `from streamlib import ...`: the sentinel is on no public surface, so
+# Not `from tatolab.stream import ...`: the sentinel is on no public surface, so
 # reaching the private module for it is what an author would have to do to
 # reach the refusal below at all.
-from streamlib import _processor_declaration
-from streamlib._processor_declaration import AUDIO_WINDOW_MATCH_DEVICE
+from tatolab.stream import _processor_declaration
+from tatolab.stream._processor_declaration import AUDIO_WINDOW_MATCH_DEVICE
 
 
 def test_a_bare_decorator_needs_no_arguments_at_all():
@@ -212,9 +212,9 @@ def test_a_port_name_casting_to_nothing_is_refused_naming_the_class():
 
 
 def test_the_package_exports_node_and_no_processor_alias():
-    assert not hasattr(streamlib, "processor")
-    assert "processor" not in streamlib.__all__
-    assert "node" in streamlib.__all__
+    assert not hasattr(tatolab.stream, "processor")
+    assert "processor" not in tatolab.stream.__all__
+    assert "node" in tatolab.stream.__all__
 
 
 def test_a_source_must_declare_its_execution_mode():
@@ -427,8 +427,8 @@ def test_the_device_matching_sentinel_is_on_no_public_surface():
     re-exports.
     """
     for name in ("AUDIO_WINDOW_MATCH_DEVICE", "AudioWindowMatchDeviceSentinel"):
-        assert name not in streamlib.__all__, name
-        assert not hasattr(streamlib, name), name
+        assert name not in tatolab.stream.__all__, name
+        assert not hasattr(tatolab.stream, name), name
         assert name not in _processor_declaration.__all__, name
 
 

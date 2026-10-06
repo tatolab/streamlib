@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from streamlib._bundled_vulkan_driver import (
+from tatolab.runtime._bundled_vulkan_driver import (
     BUNDLED_ICD_MANIFEST_FILE_NAME,
     point_the_vulkan_loader_at_the_bundled_driver,
 )

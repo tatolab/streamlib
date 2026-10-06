@@ -12,7 +12,7 @@ suite inside the child.
 import time
 from typing import TypedDict
 
-from streamlib import input, node, output
+from tatolab.stream import input, node, output
 
 
 class PassThroughProbeConfig(TypedDict, total=False):
