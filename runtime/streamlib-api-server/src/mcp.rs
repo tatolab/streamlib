@@ -7,9 +7,8 @@
 //! JSON-RPC 2.0 message against an `Arc<dyn RuntimeOperations>` and knows
 //! nothing about how the bytes arrived. It has exactly one transport: the
 //! Streamable-HTTP endpoint (`POST /mcp`, [`mcp_endpoint`]) on the existing axum
-//! stack, with its [`crate::auth`] bearer middleware. That endpoint is mounted
-//! with the node and shares its lifecycle, so an MCP host reaches StreamLib by
-//! pointing at a running node's URL — there is nothing to start and nothing to
+//! stack, served on the node's local API socket. That endpoint is mounted with
+//! the node and shares its lifecycle — there is nothing to start and nothing to
 //! attach. It exposes the runtime as MCP *tools* so an LLM agent observes the
 //! live graph the same way the REST client does, and beside them serves the
 //! node catalog and the live graph as *resources*
@@ -1044,7 +1043,7 @@ mod tests {
     ];
 
     fn mcp_router(runtime: Arc<dyn RuntimeOperations>) -> Router {
-        crate::handlers::build_router(runtime, None)
+        crate::handlers::build_router(runtime)
     }
 
     /// POST one JSON-RPC message to `/mcp` and return the parsed JSON body (or
@@ -1690,47 +1689,6 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(body["error"].is_null());
         assert_eq!(body["result"]["isError"], true);
-    }
-
-    #[tokio::test]
-    async fn mcp_endpoint_is_gated_by_bearer_auth_when_enabled() {
-        use axum::http::header::AUTHORIZATION;
-        const TOKEN: &str = "mcp-test-secret";
-
-        let auth_router = || {
-            crate::handlers::build_router(
-                Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-                Some(crate::auth::ApiServerBearerToken::from_secret(TOKEN)),
-            )
-        };
-        let message = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
-
-        // No bearer token → the gate rejects with 401 before the JSON-RPC
-        // handler runs. Deleting the mcp_router `.route_layer(...)`
-        // flips this to 200, going red here.
-        let unauthenticated = Request::builder()
-            .method("POST")
-            .uri("/mcp")
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(message.clone()))
-            .unwrap();
-        let status = auth_router()
-            .oneshot(unauthenticated)
-            .await
-            .unwrap()
-            .status();
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-
-        // A valid token clears the gate and reaches the handler.
-        let authenticated = Request::builder()
-            .method("POST")
-            .uri("/mcp")
-            .header(CONTENT_TYPE, "application/json")
-            .header(AUTHORIZATION, format!("Bearer {TOKEN}"))
-            .body(Body::from(message))
-            .unwrap();
-        let status = auth_router().oneshot(authenticated).await.unwrap().status();
-        assert_eq!(status, StatusCode::OK);
     }
 
     #[tokio::test]
@@ -3058,17 +3016,10 @@ mod tests {
         }
     }
 
-    /// Resources and prompts expose nothing the tools do not, and are gated
-    /// exactly as `graph` is: by the one bearer gate in front of `POST /mcp`.
-    ///
-    /// Paired, because the gate sits on the route: an unauthorised call is
-    /// refused whether or not the method exists, so only the authorised half
-    /// proves each method is served behind it.
+    /// Resources and prompts expose nothing the tools do not, and answer on the
+    /// same `POST /mcp` route `graph` does.
     #[tokio::test]
-    async fn resources_and_prompts_answer_behind_the_bearer_gate_and_nowhere_else() {
-        use axum::http::header::AUTHORIZATION;
-        const TOKEN: &str = "mcp-resources-secret";
-
+    async fn resources_and_prompts_answer_on_the_routers_post_mcp() {
         for (method, params) in [
             ("resources/list", json!({})),
             ("resources/read", json!({ "uri": "streamlib://graph" })),
@@ -3078,40 +3029,15 @@ mod tests {
                 json!({ "name": "look_at_what_a_channel_carries", "arguments": { "from_node": "pattern", "from_port": "video" } }),
             ),
         ] {
-            let message = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
-                .to_string();
-            let request_with = |authorization: Option<String>| {
-                let mut request = Request::builder()
-                    .method("POST")
-                    .uri("/mcp")
-                    .header(CONTENT_TYPE, "application/json");
-                if let Some(authorization) = authorization {
-                    request = request.header(AUTHORIZATION, authorization);
-                }
-                request.body(Body::from(message.clone())).unwrap()
-            };
-            let router = || {
-                crate::handlers::build_router(
-                    stub_serving_two_linked_nodes(),
-                    Some(crate::auth::ApiServerBearerToken::from_secret(TOKEN)),
-                )
-            };
-
-            let refused = router().oneshot(request_with(None)).await.unwrap();
-            assert_eq!(refused.status(), StatusCode::UNAUTHORIZED, "{method}");
-
-            let answered = router()
-                .oneshot(request_with(Some(format!("Bearer {TOKEN}"))))
-                .await
-                .unwrap();
-            assert_eq!(answered.status(), StatusCode::OK, "{method}");
-            let bytes = axum::body::to_bytes(answered.into_body(), usize::MAX)
-                .await
-                .unwrap();
-            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            let (status, body) = mcp_call(
+                stub_serving_two_linked_nodes(),
+                json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{method}");
             assert!(
                 body["error"].is_null() && !body["result"].is_null(),
-                "{method} must answer a result behind the gate: {body}"
+                "{method} must answer a result: {body}"
             );
         }
     }

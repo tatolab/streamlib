@@ -617,17 +617,9 @@ impl PythonRuntimeHandle {
     /// Opt-in: a runtime that never calls this runs headless and publishes no
     /// node-registry entry. Called before `run()`, like every other
     /// graph-building call — the control plane is a processor in the graph.
-    #[pyo3(signature = (*, bind_host = "0.0.0.0".to_string(), bind_port = 9000))]
-    fn host_control_plane(
-        &self,
-        python: Python<'_>,
-        bind_host: String,
-        bind_port: u16,
-    ) -> PyResult<()> {
+    fn host_control_plane(&self, python: Python<'_>) -> PyResult<()> {
         let engine = self.engine_being_built("host the control plane")?;
-        crate::python_control_plane_hosting::host_control_plane_on_engine(
-            python, &engine, bind_host, bind_port,
-        )
+        crate::python_control_plane_hosting::host_control_plane_on_engine(python, &engine)
     }
 
     /// Run the pipeline until Ctrl-C, SIGTERM, SIGHUP or [`shutdown`], then tear

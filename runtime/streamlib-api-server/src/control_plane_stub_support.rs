@@ -380,11 +380,9 @@ macro_rules! surface_exchange_op_answers_the_stub {
 pub(crate) use surface_exchange_op_answers_the_stub;
 
 /// One tracing span or event raised while [`CapturedTracingRecords`] was
-/// installed. A span carries its name as the message; it has no other.
+/// installed, named by its target.
 pub(crate) struct CapturedTracingRecord {
-    pub(crate) level: ::tracing::Level,
     pub(crate) target: String,
-    pub(crate) message: String,
 }
 
 /// Every tracing span and event raised on the calling thread while this is its
@@ -443,13 +441,10 @@ impl<S: ::tracing::Subscriber> ::tracing_subscriber::layer::Layer<S> for Capture
         _id: &::tracing::span::Id,
         _context: ::tracing_subscriber::layer::Context<'_, S>,
     ) {
-        let metadata = span.metadata();
         self.0
             .lock()
             .push(::std::sync::Arc::new(CapturedTracingRecord {
-                level: *metadata.level(),
-                target: metadata.target().to_string(),
-                message: metadata.name().to_string(),
+                target: span.metadata().target().to_string(),
             }));
     }
 
@@ -458,27 +453,10 @@ impl<S: ::tracing::Subscriber> ::tracing_subscriber::layer::Layer<S> for Capture
         event: &::tracing::Event<'_>,
         _context: ::tracing_subscriber::layer::Context<'_, S>,
     ) {
-        let mut message = String::new();
-        event.record(&mut OneCapturedRecordMessage(&mut message));
-        let metadata = event.metadata();
         self.0
             .lock()
             .push(::std::sync::Arc::new(CapturedTracingRecord {
-                level: *metadata.level(),
-                target: metadata.target().to_string(),
-                message,
+                target: event.metadata().target().to_string(),
             }));
-    }
-}
-
-/// Renders an event's `message` field, the one field a log assertion reads.
-struct OneCapturedRecordMessage<'a>(&'a mut String);
-
-impl ::tracing::field::Visit for OneCapturedRecordMessage<'_> {
-    fn record_debug(&mut self, field: &::tracing::field::Field, value: &dyn ::std::fmt::Debug) {
-        use ::std::fmt::Write;
-        if field.name() == "message" {
-            let _ = write!(self.0, "{value:?}");
-        }
     }
 }

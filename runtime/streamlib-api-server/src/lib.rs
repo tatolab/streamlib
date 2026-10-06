@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod api_server_config;
-mod auth;
 pub mod control_plane_host;
 #[cfg(test)]
 mod control_plane_stub_support;

@@ -9,39 +9,24 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
-/// How a host binary stands up the control plane it hosts.
-pub struct ApiServerControlPlaneHostConfig {
-    /// Address the HTTP listener binds.
-    pub bind_host: String,
-    /// Requested port; the api-server increments on collision.
-    pub bind_port: u16,
-}
-
-impl Default for ApiServerControlPlaneHostConfig {
-    /// Loopback only, port 9000.
-    fn default() -> Self {
-        Self {
-            bind_host: "127.0.0.1".to_string(),
-            bind_port: 9000,
-        }
-    }
-}
+/// How a host binary stands up the control plane it hosts. It carries no
+/// setting: the local API socket's path follows from the runtime.
+#[derive(Debug, Clone, Default)]
+pub struct ApiServerControlPlaneHostConfig {}
 
 /// Register the `ApiServer` processor type in-process and add one instance to
-/// `runtime`, so that starting the runtime binds a control endpoint and
+/// `runtime`, so that starting the runtime binds its local API socket and
 /// publishes the node-registry entry `streamlib nodes` discovers, under the
 /// runtime's own name.
 pub fn register_api_server_control_plane_processor_on_runtime(
     runtime: &Runner,
-    config: ApiServerControlPlaneHostConfig,
+    ApiServerControlPlaneHostConfig {}: ApiServerControlPlaneHostConfig,
 ) -> Result<()> {
     // A host, not a loadable plugin: the type is statically linked into the
     // caller and registered on the shared registry rather than dlopen'd.
     PROCESSOR_REGISTRY.register::<crate::api_server::ApiServerProcessor::Processor>();
 
     let mut api_server_config = serde_json::Map::new();
-    api_server_config.insert("host".into(), serde_json::Value::from(config.bind_host));
-    api_server_config.insert("port".into(), serde_json::Value::from(config.bind_port));
     if let Some(jsonl_log_path) = runtime.jsonl_log_path() {
         api_server_config.insert(
             "log_path".into(),
