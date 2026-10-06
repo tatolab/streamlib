@@ -61,13 +61,14 @@ pub fn clear_unix_socket_path_for_bind(
                 path: path.to_path_buf(),
             });
         }
-        // Refused: a socket file with no listener, or a file that is not a
-        // socket. Not found: a dangling symlink.
+        // Refused: a socket file with no listener, or on Linux a file that is
+        // not a socket. Not a socket: what macOS answers for that file. Not
+        // found: a dangling symlink.
         Err(failure)
             if matches!(
                 failure.kind(),
                 io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
-            ) => {}
+            ) || failure.raw_os_error() == Some(libc::ENOTSOCK) => {}
         Err(source) => {
             return Err(UnixSocketPathRefusedForBind::NotShownStale {
                 path: path.to_path_buf(),
