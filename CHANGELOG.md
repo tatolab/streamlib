@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.35.0](https://github.com/tatolab/streamlib/compare/v0.34.1...v0.35.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** the runtime refuses, by name, anything in a graph it does not understand ([#2671](https://github.com/tatolab/streamlib/issues/2671))
+
+### Features
+
+* **engine:** the runtime refuses, by name, anything in a graph it does not understand ([#2671](https://github.com/tatolab/streamlib/issues/2671)) ([b50ce90](https://github.com/tatolab/streamlib/commit/b50ce9092e564eae2a26ead64d360a1234dc5d23))
+
 ## [0.34.1](https://github.com/tatolab/streamlib/compare/v0.34.0...v0.34.1) (2026-10-06)
 
 
