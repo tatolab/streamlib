@@ -71,8 +71,8 @@ from streamlib._control_plane_client import (
 
 runtime_name_or_id, wanted, requested_port = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
-    endpoint = resolve_control_plane_endpoint(None, runtime_name_or_id or None)
-    graph = json.loads(call_tool(endpoint, "graph", {}))
+    local_api_socket = resolve_control_plane_endpoint(runtime_name_or_id or None)
+    graph = json.loads(call_tool(local_api_socket, "graph", {}))
 except ControlPlaneError as control_plane_error:
     sys.exit(str(control_plane_error))
 for node in graph["nodes"]:
