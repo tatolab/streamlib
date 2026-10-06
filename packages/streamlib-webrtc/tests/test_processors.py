@@ -14,20 +14,7 @@ from typing import Any
 
 import pytest
 
-import streamlib
-from streamlib import (
-    H264Decoder,
-    H264Encoder,
-    OpusDecoder,
-    OpusEncoder,
-    RuntimeContextFullAccess,
-    Stream,
-    compile_stream_to_graph,
-    log,
-    stream,
-)
-from streamlib._engine import ProcessorLinkDataAccess
-from streamlib._processor_hosting import construct_processor_instance
+import tatolab.runtime
 from streamlib_webrtc import WhepPlayer, WhepPlayerConfig, WhipPublisher
 from streamlib_webrtc.processors import (
     FIRST_RECONNECT_DELAY_SECONDS,
@@ -38,6 +25,19 @@ from streamlib_webrtc.processors import (
     _native,
     refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
+)
+from tatolab.runtime._engine import NodeLinkDataAccess
+from tatolab.runtime._processor_hosting import construct_processor_instance
+from tatolab.stream import (
+    H264Decoder,
+    H264Encoder,
+    OpusDecoder,
+    OpusEncoder,
+    RuntimeContextFullAccess,
+    Stream,
+    compile_stream_to_graph,
+    log,
+    stream,
 )
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
@@ -93,7 +93,7 @@ def a_publish_and_play_round_trip(stream: Stream) -> None:
 
 
 def node_names_loaded_into(
-    runtime: streamlib.Runtime, stream_function: "Callable[[Stream], None]"
+    runtime: tatolab.runtime.Runtime, stream_function: "Callable[[Stream], None]"
 ) -> "list[str]":
     """Load `stream_function`'s graph into `runtime`, and name the nodes it holds.
 
@@ -107,7 +107,7 @@ def node_names_loaded_into(
 
 @pytest.fixture
 def runtime():
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         yield runtime
     finally:
@@ -238,7 +238,7 @@ class _PublisherUnderTest:
         config: "dict[str, Any]",
     ) -> None:
         unique = f"whipsetup{os.getpid()}_{request.node.name}"
-        link_data_access = ProcessorLinkDataAccess()
+        link_data_access = NodeLinkDataAccess()
         for index in range(inbound_links):
             link_data_access.wire_input_link(
                 "tracks", f"{unique}/encoder{index}", f"{unique}/encoder{index}",
@@ -342,12 +342,12 @@ def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
     channel = f"{unique}/encoder"
     notify = f"{unique}_dest/notify"
 
-    destination = ProcessorLinkDataAccess()
+    destination = NodeLinkDataAccess()
     destination.wire_input_link(
         "tracks", channel, channel, notify,
         "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
-    source = ProcessorLinkDataAccess()
+    source = NodeLinkDataAccess()
     source.wire_output_link(
         "encoded_audio", channel, notify, 1024, 1 << 20, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
