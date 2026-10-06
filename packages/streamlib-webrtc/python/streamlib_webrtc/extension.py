@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import importlib.metadata
 
-from streamlib import CapabilityExtensionHost
+from tatolab.runtime import CapabilityExtensionHost
 
 from . import _native
 

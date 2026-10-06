@@ -428,7 +428,7 @@ impl PlayedOpusPacket {
 }
 
 /// Nanoseconds on the clock this wheel stamps bags with, which is the
-/// engine's — so a reading compares with `streamlib.monotonic_now_ns()`.
+/// engine's — so a reading compares with `tatolab.stream.monotonic_now_ns()`.
 #[pyfunction(name = "monotonic_now_ns")]
 fn this_wheels_monotonic_now_ns() -> i64 {
     monotonic_clock::monotonic_now_ns()

@@ -17,7 +17,7 @@ import threading
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal, Protocol
 
-from streamlib import (
+from tatolab.stream import (
     EncodedAudioPacket,
     EncodedVideoFrame,
     LinkOutputDataWriter,

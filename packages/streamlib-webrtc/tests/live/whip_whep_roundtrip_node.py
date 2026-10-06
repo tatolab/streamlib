@@ -27,9 +27,10 @@ import argparse
 import functools
 import os
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
 from streamlib_webrtc import WhepPlayer, WhipPublisher
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 #: Stated rather than left to the encoder's default, because the baseline this
 #: run locks against was captured with it stated: one baseline scores two paths
@@ -106,17 +107,17 @@ def whip_whep_roundtrip(stream: Stream) -> None:
     )
 
     camera = stream.add(
-        streamlib.CameraSource,
+        tatolab.stream.CameraSource,
         config={"device_id": arguments.camera} if arguments.camera else {},
         name="camera",
     )
     video_encoder = stream.add(
-        streamlib.H264Encoder,
+        tatolab.stream.H264Encoder,
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
         name="video_encoder",
     )
     microphone = stream.add(
-        streamlib.MicrophoneSource,
+        tatolab.stream.MicrophoneSource,
         config=(
             {"device_id": arguments.audio_capture_device}
             if arguments.audio_capture_device
@@ -124,18 +125,18 @@ def whip_whep_roundtrip(stream: Stream) -> None:
         ),
         name="microphone",
     )
-    audio_encoder = stream.add(streamlib.OpusEncoder, name="audio_encoder")
+    audio_encoder = stream.add(tatolab.stream.OpusEncoder, name="audio_encoder")
 
-    video_decoder = stream.add(streamlib.H264Decoder, name="video_decoder")
-    audio_decoder = stream.add(streamlib.OpusDecoder, name="audio_decoder")
+    video_decoder = stream.add(tatolab.stream.H264Decoder, name="video_decoder")
+    audio_decoder = stream.add(tatolab.stream.OpusDecoder, name="audio_decoder")
     # Both sinks are here so each decoder has a subscriber for the whole run,
     # which is the shape the showcase ships and the shape the codec rig scored.
     window = stream.add(
-        streamlib.DisplayWindow,
+        tatolab.stream.DisplayWindow,
         config={"title": "streamlib whip/whep round-trip"},
         name="window",
     )
-    speaker = stream.add(streamlib.SpeakerSink, name="speaker")
+    speaker = stream.add(tatolab.stream.SpeakerSink, name="speaker")
 
     stream.connect(camera.output("video"), video_encoder.input("video"))
     stream.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
@@ -156,7 +157,7 @@ def main() -> None:
     _parse_fixture_arguments()
     graph = compile_stream_to_graph(whip_whep_roundtrip)
 
-    runtime = streamlib.Runtime(runtime_name="whip-whep-roundtrip-node")
+    runtime = tatolab.runtime.Runtime(runtime_name="whip-whep-roundtrip-node")
     runtime.load(graph)
 
     runtime.host_control_plane()

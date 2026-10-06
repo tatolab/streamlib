@@ -21,12 +21,13 @@ graph by node name, and it derives it the same way for both arms.
 import argparse
 import functools
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
-    "h264": (streamlib.H264Encoder, streamlib.H264Decoder),
-    "h265": (streamlib.H265Encoder, streamlib.H265Decoder),
+    "h264": (tatolab.stream.H264Encoder, tatolab.stream.H264Decoder),
+    "h265": (tatolab.stream.H265Encoder, tatolab.stream.H265Decoder),
 }
 
 # Stated rather than left to the encoder's own default, because the Rust arm
@@ -62,7 +63,7 @@ def camera_through_the_codec_into_a_window(stream: Stream) -> None:
     ]
 
     camera = stream.add(
-        streamlib.CameraSource,
+        tatolab.stream.CameraSource,
         name="camera",
         config={"device_id": arguments.camera} if arguments.camera else {},
     )
@@ -73,7 +74,7 @@ def camera_through_the_codec_into_a_window(stream: Stream) -> None:
     )
     decoder = stream.add(decoder_marker, name="decoder")
     display = stream.add(
-        streamlib.DisplayWindow,
+        tatolab.stream.DisplayWindow,
         name="display",
         config={"title": "streamlib codec round-trip node"},
     )
@@ -86,7 +87,7 @@ def camera_through_the_codec_into_a_window(stream: Stream) -> None:
 def main() -> None:
     _parse_fixture_arguments()
     graph = compile_stream_to_graph(camera_through_the_codec_into_a_window)
-    runtime = streamlib.Runtime(runtime_name="codec-roundtrip-node")
+    runtime = tatolab.runtime.Runtime(runtime_name="codec-roundtrip-node")
     runtime.load(graph)
 
     runtime.host_control_plane()

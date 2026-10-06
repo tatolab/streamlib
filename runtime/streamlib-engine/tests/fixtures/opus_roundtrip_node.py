@@ -27,8 +27,9 @@ import os
 
 import known_audio_signal
 import known_audio_signal_source
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 # What the source will ever publish, derived rather than named so it cannot
 # drift when the signal changes.
@@ -55,8 +56,8 @@ def known_signal_through_opus_and_back(stream: Stream) -> None:
     from known_audio_signal_source import KnownAudioSignalSource
 
     signal = stream.add(KnownAudioSignalSource)
-    encoder = stream.add(streamlib.OpusEncoder)
-    decoder = stream.add(streamlib.OpusDecoder)
+    encoder = stream.add(tatolab.stream.OpusEncoder)
+    decoder = stream.add(tatolab.stream.OpusDecoder)
     recorder = stream.add(CapturedAudioWaveformRecorder)
 
     stream.connect(signal.output("audio"), encoder.input("audio"))
@@ -99,7 +100,7 @@ def main() -> None:
     os.environ["STREAMLIB_CAPTURED_WAVEFORM_SECONDS"] = str(arguments.record_seconds)
 
     graph = compile_stream_to_graph(known_signal_through_opus_and_back)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
 
     runtime.host_control_plane()

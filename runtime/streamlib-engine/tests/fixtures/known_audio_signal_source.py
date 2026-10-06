@@ -34,7 +34,7 @@ import os
 import numpy
 
 import known_audio_signal
-from streamlib import RuntimeContextLimitedAccess, monotonic_now_ns, node, output
+from tatolab.stream import RuntimeContextLimitedAccess, monotonic_now_ns, node, output
 
 # PipeWire's fixture sink is created with `audio.position=[FL FR]` and its arm
 # asks for `F32_LE`; a Mac's built-in speakers are two channels, and the

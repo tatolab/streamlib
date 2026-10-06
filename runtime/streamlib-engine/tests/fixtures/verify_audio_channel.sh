@@ -63,7 +63,7 @@ import json, sys
 
 # The engine's own resolver and client, so this cannot drift from the node and
 # socket `streamlib graph --node` actually drives.
-from streamlib._control_plane_client import (
+from tatolab.runtime._control_plane_client import (
     ControlPlaneError,
     call_tool,
     resolve_local_api_socket_of_requested_node,
@@ -111,7 +111,7 @@ if [ -n "$RUNTIME_NAME_OR_ID" ]; then
 fi
 
 echo "tapping $CHANNEL for $BAG_COUNT bags" >&2
-if ! "$PYTHON" -m streamlib.cli tap "$CHANNEL" --count "$BAG_COUNT" \
+if ! "$PYTHON" -m tatolab.runtime.cli tap "$CHANNEL" --count "$BAG_COUNT" \
     ${RUNTIME_SELECTION[@]+"${RUNTIME_SELECTION[@]}"} \
     > "$OUTPUT_DIR/tapped.json" 2>"$OUTPUT_DIR/tap.err"; then
     cat "$OUTPUT_DIR/tap.err" >&2

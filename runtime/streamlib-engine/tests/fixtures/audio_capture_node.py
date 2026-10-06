@@ -13,16 +13,17 @@ pointed at a virtual device.
 
 import os
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from audio_channel_drain import AudioChannelDrain
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 
 @stream
 def microphone_into_an_audio_channel_drain(stream: Stream) -> None:
     device_id = os.environ.get("STREAMLIB_AUDIO_DEVICE_ID")
     microphone = stream.add(
-        streamlib.MicrophoneSource,
+        tatolab.stream.MicrophoneSource,
         config={"device_id": device_id} if device_id else {},
     )
     drain = stream.add(AudioChannelDrain)
@@ -31,7 +32,7 @@ def microphone_into_an_audio_channel_drain(stream: Stream) -> None:
 
 def main() -> None:
     graph = compile_stream_to_graph(microphone_into_an_audio_channel_drain)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.host_control_plane()
     runtime.run()

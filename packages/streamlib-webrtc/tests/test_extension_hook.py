@@ -21,10 +21,10 @@ from typing import cast
 
 import pytest
 
-import streamlib
-from streamlib import CapabilityExtensionHost
-from streamlib._engine import capability_extension_host_for_the_app_process
+import tatolab.runtime
 from streamlib_webrtc import _native, extension
+from tatolab.runtime import CapabilityExtensionHost
+from tatolab.runtime._engine import capability_extension_host_for_the_app_process
 
 THIS_WHEEL = "streamlib-webrtc"
 
@@ -78,7 +78,7 @@ def test_constructing_a_runtime_is_what_runs_this_wheels_hook():
     """The registration lands because the engine ran the hook, not because
     anything here called it — which is the whole of the mechanism's promise to
     an installed wheel."""
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         # A second distribution claiming the name is refused, naming both. That
         # refusal is only reachable if the first registration happened.

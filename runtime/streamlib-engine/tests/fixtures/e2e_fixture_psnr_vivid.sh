@@ -171,13 +171,13 @@ if [ "$PIPELINE" = "python" ]; then
     if ! MARKER_IMPORT_FAILURE="$("$FIXTURE_NODE_PYTHON" -c '
 import sys
 
-import streamlib
+import tatolab.stream
 
 codec = sys.argv[1].upper()
 for role in ("Encoder", "Decoder"):
-    getattr(streamlib, codec + role)
+    getattr(tatolab.stream, codec + role)
 ' "$CODEC" 2>&1)"; then
-        echo "[vivid-color] SKIP: $FIXTURE_NODE_PYTHON cannot import streamlib's" >&2
+        echo "[vivid-color] SKIP: $FIXTURE_NODE_PYTHON cannot import tatolab.stream's" >&2
         echo "[vivid-color] $CODEC blocks. Rebuild the wheel with \`maturin develop\` before" >&2
         echo "[vivid-color] running the python arm — it measures the extension, not the tree." >&2
         echo "$MARKER_IMPORT_FAILURE" >&2
