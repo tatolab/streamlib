@@ -1270,6 +1270,28 @@ def test_a_schema_two_entry_is_refused_by_its_version_and_never_pruned(
     assert entry_path.exists(), "a reader must not delete a record it cannot parse"
 
 
+def test_a_schema_three_entry_still_carrying_the_retired_url_key_is_listed(
+    isolated_registry, stub_control_plane
+):
+    # A released engine from before the TCP listener went writes schema 3 with
+    # the URL key beside the socket path; an app venv pinned to it still runs.
+    # Joined at run time so the retired key's own text does not survive here,
+    # where a source-walking gate would still find it.
+    server = stub_control_plane()
+    entry_path = write_registry_entry(
+        isolated_registry, "Rcarries-url", server.local_api_socket_path
+    )
+    record = json.loads(entry_path.read_text(encoding="utf-8"))
+    record["_".join(("control", "url"))] = "http://127.0.0.1:9000"
+    entry_path.write_text(json.dumps(record), encoding="utf-8")
+
+    discovered = scan_check_and_prune()
+
+    assert [(node.entry.runtime_id, node.reachable) for node in discovered] == [
+        ("Rcarries-url", True)
+    ]
+
+
 # ─── The CLI surface ─────────────────────────────────────────────────────────
 
 
@@ -1787,7 +1809,7 @@ def test_a_refusal_that_is_not_a_recycled_frame_does_not_compose(stub_control_pl
 def test_the_id_form_writes_the_exact_bytes_and_prints_the_path(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         surface_image_answers={"cam/frame#7": image_answer("seven")}
     )
     output_directory = tmp_path / "frames"
@@ -1830,7 +1852,7 @@ def test_the_id_form_reaches_a_registered_node_through_its_local_api_socket(
 def test_the_id_form_creates_the_output_directory(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
-    server = targeted_stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
+    targeted_stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
     output_directory = tmp_path / "nested" / "frames"
 
     assert (
@@ -1845,7 +1867,7 @@ def test_the_id_form_creates_the_output_directory(
 def test_a_surface_id_that_does_not_resolve_fails_the_verb(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
-    server = targeted_stub_control_plane(surface_image_answers={})
+    targeted_stub_control_plane(surface_image_answers={})
 
     assert (
         cli.main(["exchange", "gone#1", "--out", str(tmp_path)]) == 1
@@ -2020,7 +2042,7 @@ def test_the_engine_is_never_asked_to_read_a_bag(
 def test_the_field_override_reads_the_key_the_caller_named(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         queued_bodies=[
             tap_result_body(
                 "cam/frame",
@@ -2053,7 +2075,7 @@ def test_a_recycled_frame_is_retried_against_a_newer_bag_and_reported(
 ):
     # The loud half of the contract: the run recovers, and says which id it had
     # to give up on, so a sample can never quietly become a different frame.
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body("cam/frame", [bag_publishing_surface_id("stale#1")]),
@@ -2087,7 +2109,7 @@ def test_a_recycled_frame_is_retried_against_a_newer_bag_and_reported(
 def test_a_bag_without_the_named_field_is_counted_rather_than_fatal(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body(
@@ -2166,7 +2188,7 @@ def test_the_stride_runs_across_tap_rounds_rather_than_restarting(
     # A stride reset per round would exchange `a` then `c` — the first bag of
     # each round — reporting a stride it did not apply. Continuing the count
     # across rounds selects `a` then `d`.
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body(
@@ -2212,7 +2234,7 @@ def test_a_short_sample_exits_nonzero(
 ):
     # A harness reading the directory must not take "fewer frames than I asked
     # for" as "this is all the channel had".
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body("cam/frame", [bag_publishing_surface_id("s#1")])
@@ -2244,7 +2266,7 @@ def test_a_short_sample_exits_nonzero(
 def test_a_refusal_that_cannot_be_retried_stops_the_run(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body("cam/frame", [bag_publishing_surface_id("s#1")])
@@ -2276,7 +2298,7 @@ def test_frames_that_landed_before_a_fatal_stop_are_still_printed(
     # A PNG on disk whose path was never printed is evidence a harness cannot
     # use and a human will not find, so the stop is reported beside the frames
     # rather than instead of them.
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body(
@@ -2322,7 +2344,7 @@ def test_a_bag_the_tap_truncated_stops_the_run_by_name(
     whole_bag = framed_bag(
         msgpack_named_map({"surface_id": "s#1", "filler": "x" * 200})
     )
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[tap_result_body("cam/frame", [whole_bag[:-32]])],
     )
@@ -2349,7 +2371,7 @@ def test_a_bag_past_the_taps_preview_cap_stops_the_run_and_names_the_size(
     # The tap tool says when it capped a bag. Counting one as "published no
     # surface id" would blame the channel for something this client could not
     # read, and retrying it would never converge.
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body(
@@ -2383,9 +2405,10 @@ def test_a_capped_bag_with_no_reported_size_is_still_diagnosed_as_capped(
     isolated_registry, targeted_stub_control_plane, tmp_path, capsys
 ):
     # A verb drives whichever node it resolves, so the size is the tool's to
-    # report and may be missing. Losing the cap would misdiagnose the bag as one this client
-    # could not decode — blaming the channel for the tool's own limit.
-    server = targeted_stub_control_plane(
+    # report and may be missing. Losing the cap would misdiagnose the bag as
+    # one this client could not decode — blaming the channel for the tool's
+    # own limit.
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body(
@@ -2434,7 +2457,7 @@ def test_the_stride_steps_over_an_oversized_bag_rather_than_dying_on_it(
     # The loop must actually reach the capped bag and pass it by, so bag 0 is
     # selected but publishes no id — without that the run finishes on bag 0 and
     # never proves where the cap check sits relative to the stride.
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body(
@@ -2475,7 +2498,7 @@ def test_a_bag_the_stride_skips_cannot_kill_the_run_by_being_oversized(
 ):
     # Bag 1 is past the preview cap, and `--every 2` never selects it. A run
     # that needs only bag 0 must not fail on a bag it never reads.
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body(
@@ -2512,7 +2535,7 @@ def test_an_oversized_bag_does_not_discard_the_readable_bags_beside_it(
 ):
     # Bag 0 is readable and bag 1 is not. Failing the whole tap round would
     # throw away a frame that had already been exchanged.
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body(
@@ -2549,7 +2572,7 @@ def test_a_write_that_fails_still_names_the_frames_that_landed(
 ):
     # The filesystem half of the same promise the report exists to keep: a PNG
     # on disk whose path was never printed is evidence nobody can use.
-    server = targeted_stub_control_plane(
+    targeted_stub_control_plane(
         body=tap_result_body("cam/frame", []),
         queued_bodies=[
             tap_result_body(
@@ -2596,7 +2619,7 @@ def test_an_output_directory_that_cannot_be_written_is_reported_not_raised(
 ):
     # `--out` naming an existing regular file is a typo, and typos get a
     # message rather than a Python traceback.
-    server = targeted_stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
+    targeted_stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
     already_a_file = tmp_path / "already-a-file"
     already_a_file.write_text("not a directory")
 
