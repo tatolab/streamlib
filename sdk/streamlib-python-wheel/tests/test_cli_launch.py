@@ -371,6 +371,31 @@ def listening_tcp_socket_inodes_in_the_network_namespace_of(pid: int) -> "set[st
     return listening_tcp_socket_inodes
 
 
+def assert_the_tcp_listener_scan_sees_the_listeners_this_process_holds() -> None:
+    """Bind loopback TCP listeners here and require the scan to find each one."""
+    tcp_listeners = [socket.create_server(("127.0.0.1", 0))]
+    try:
+        tcp_listeners.append(socket.create_server(("::1", 0), family=socket.AF_INET6))
+    except OSError:
+        # A host without IPv6 loopback has no `tcp6` row to check the scan against.
+        pass
+    try:
+        this_pid = os.getpid()
+        listening_tcp_socket_inodes_this_process_holds = socket_inodes_held_by(
+            this_pid
+        ) & listening_tcp_socket_inodes_in_the_network_namespace_of(this_pid)
+        for tcp_listener in tcp_listeners:
+            tcp_listener_inode = str(os.fstat(tcp_listener.fileno()).st_ino)
+            assert tcp_listener_inode in listening_tcp_socket_inodes_this_process_holds, (
+                f"the TCP scan must see the listener this test holds at "
+                f"{tcp_listener.getsockname()} (inode {tcp_listener_inode}); it saw "
+                f"{sorted(listening_tcp_socket_inodes_this_process_holds)}"
+            )
+    finally:
+        for tcp_listener in tcp_listeners:
+            tcp_listener.close()
+
+
 def unix_socket_listener_inode_at(pid: int, unix_socket_path: str) -> "str | None":
     """The inode of the Unix socket listening at `unix_socket_path`, as `pid` sees it."""
     # Columns: Num, RefCount, Protocol, Flags, Type, St, Inode, Path. An accepted
@@ -390,9 +415,10 @@ def test_a_launched_node_listens_on_no_tcp_socket(
     """Nothing on the network can reach a node's control API: the node holds no
     TCP socket in LISTEN, on any address, loopback included.
 
-    The same descriptor scan, read off Linux's `/proc`, has to find the local
-    API socket's listener, and the node has to answer over it, so an empty TCP
-    answer is the node's own and not a scan that saw nothing.
+    The same scan, read off Linux's `/proc`, has to find the TCP listeners the
+    test itself holds and the local API socket's listener, and the node has to
+    answer over it, so an empty TCP answer is the node's own and not a scan
+    that saw nothing.
     """
     app_directory = tmp_path / "app"
     app_directory.mkdir()
@@ -405,6 +431,7 @@ def test_a_launched_node_listens_on_no_tcp_socket(
     graph = json.loads(call_tool(LocalApiSocket(local_api_socket_path), "graph", {}))
     assert graph["runtime_name"] == entry["runtime_name"]
 
+    assert_the_tcp_listener_scan_sees_the_listeners_this_process_holds()
     node_pid = node.process.pid
     held_socket_inodes = socket_inodes_held_by(node_pid)
     local_api_listener_inode = unix_socket_listener_inode_at(node_pid, local_api_socket_path)
