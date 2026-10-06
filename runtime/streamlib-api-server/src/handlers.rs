@@ -1030,7 +1030,7 @@ mod control_plane_request_trace_level_tests {
 
     use super::router_surface_tests::control_plane_router_over_a_stub_runtime;
     use super::*;
-    use crate::control_plane_stub_support::CapturedTracingRecords;
+    use crate::control_plane_stub_support::CapturedTracingTargets;
     use axum::body::Body;
     use axum::http::Request;
     use serial_test::serial;
@@ -1055,14 +1055,13 @@ mod control_plane_request_trace_level_tests {
         });
     }
 
-    fn tower_http_trace_targets_under(env_filter_directives: &str) -> Vec<String> {
-        CapturedTracingRecords::captured_from_the_second_of_two_runs(
+    fn tower_http_trace_targets_under(env_filter_directives: &str) -> Vec<&'static str> {
+        CapturedTracingTargets::captured_from_the_second_of_two_runs(
             env_filter_directives,
             serve_one_graph_request,
         )
-        .iter()
-        .filter(|record| record.target.starts_with("tower_http"))
-        .map(|record| record.target.clone())
+        .into_iter()
+        .filter(|target| target.starts_with("tower_http"))
         .collect()
     }
 
@@ -1086,7 +1085,7 @@ mod control_plane_request_trace_level_tests {
             "tower_http::trace::on_response",
         ] {
             assert!(
-                targets.iter().any(|target| target == hook),
+                targets.contains(&hook),
                 "asking for the request trace must yield {hook}, got: {targets:?}"
             );
         }
