@@ -543,7 +543,11 @@ impl PythonRayTracingKernel {
 /// Defined on every platform so the stub's surface is honest everywhere; off
 /// Linux it is unconstructible, because both builders refuse before reaching
 /// it.
-#[pyclass(name = "AccelerationStructureHandle", module = "tatolab.stream", frozen)]
+#[pyclass(
+    name = "AccelerationStructureHandle",
+    module = "tatolab.stream",
+    frozen
+)]
 pub(crate) struct PythonAccelerationStructureHandle {
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) acceleration_structure_id: String,

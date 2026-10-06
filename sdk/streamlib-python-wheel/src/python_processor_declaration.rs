@@ -541,8 +541,14 @@ class BlurProcessor:
         // is a copy of.
         for (package_name, package_directory) in [
             ("tatolab", WHEEL_PYTHON_TATOLAB_NAMESPACE_DIRECTORY),
-            ("tatolab.stream", WHEEL_PYTHON_TATOLAB_STREAM_PACKAGE_DIRECTORY),
-            ("tatolab.runtime", WHEEL_PYTHON_TATOLAB_RUNTIME_PACKAGE_DIRECTORY),
+            (
+                "tatolab.stream",
+                WHEEL_PYTHON_TATOLAB_STREAM_PACKAGE_DIRECTORY,
+            ),
+            (
+                "tatolab.runtime",
+                WHEEL_PYTHON_TATOLAB_RUNTIME_PACKAGE_DIRECTORY,
+            ),
         ] {
             if sys_modules.contains(package_name).unwrap() {
                 continue;
@@ -553,7 +559,10 @@ class BlurProcessor:
                 .call_method1("ModuleType", (package_name,))
                 .unwrap();
             package
-                .setattr("__path__", PyList::new(python, [package_directory]).unwrap())
+                .setattr(
+                    "__path__",
+                    PyList::new(python, [package_directory]).unwrap(),
+                )
                 .unwrap();
             sys_modules.set_item(package_name, package).unwrap();
         }

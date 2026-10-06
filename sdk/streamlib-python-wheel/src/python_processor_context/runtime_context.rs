@@ -195,7 +195,11 @@ impl PythonRuntimeContextFullAccess {
 ///
 /// `gpu_full_access` is deliberately absent — reaching for it raises
 /// `AttributeError`, mirroring the Rust capability split.
-#[pyclass(name = "RuntimeContextLimitedAccess", module = "tatolab.stream", frozen)]
+#[pyclass(
+    name = "RuntimeContextLimitedAccess",
+    module = "tatolab.stream",
+    frozen
+)]
 pub(crate) struct PythonRuntimeContextLimitedAccess {
     runtime_id: String,
     processor_id: String,
