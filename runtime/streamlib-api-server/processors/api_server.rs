@@ -204,8 +204,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         );
 
         // The socket is served with no bearer gate: its file mode is the whole gate.
-        let local_api_app =
-            crate::handlers::build_router(handles.runtime.clone(), None);
+        let local_api_app = crate::handlers::build_router(handles.runtime.clone(), None);
         tokio_handle.spawn(serve_until_shutdown(
             listener,
             app,
@@ -237,16 +236,15 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         if let Some(shutdown_tx) = self.shutdown_tx.take() {
             let _ = shutdown_tx.send(true);
         }
-        if let Some(local_api_socket_path) = self.bound_local_api_socket_path.take() {
-            if let Err(error) =
+        if let Some(local_api_socket_path) = self.bound_local_api_socket_path.take()
+            && let Err(error) =
                 crate::local_api_socket::remove_local_api_socket_file(&local_api_socket_path)
-            {
-                tracing::warn!(
-                    %error,
-                    "failed to remove the local API socket {} on stop",
-                    local_api_socket_path.display()
-                );
-            }
+        {
+            tracing::warn!(
+                %error,
+                "failed to remove the local API socket {} on stop",
+                local_api_socket_path.display()
+            );
         }
         Ok(())
     }

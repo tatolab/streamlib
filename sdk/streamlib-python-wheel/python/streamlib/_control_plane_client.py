@@ -53,7 +53,8 @@ __all__ = [
 #: a node runs locally with full permission unless its config opted in.
 BEARER_TOKEN_ENVIRONMENT_VARIABLE = "STREAMLIB_MCP_TOKEN"
 
-#: Bounds a liveness probe so a hung reused port cannot stall a registry scan.
+#: Bounds a liveness probe so a socket that accepts but never answers cannot
+#: stall a registry scan.
 REACHABILITY_PROBE_TIMEOUT_SECONDS = 1.5
 
 #: Bounds a real verb. Generous: `tap` and `logs` collect a bounded sample
@@ -189,7 +190,7 @@ def _request_over_a_control_plane_url(
         ) from transport_failure
 
 
-def _request(
+def _request_to_control_plane_endpoint(
     endpoint: ControlPlaneEndpoint,
     *,
     method: str,
@@ -224,7 +225,7 @@ def _post_jsonrpc(endpoint: ControlPlaneEndpoint, body: str, timeout_seconds: fl
     Raises [`ControlPlaneError`] on a transport failure or a non-2xx status. A
     `202` (a notification ack) yields an empty string.
     """
-    answered = _request(
+    answered = _request_to_control_plane_endpoint(
         endpoint,
         method="POST",
         path=MCP_ENDPOINT_PATH,
@@ -296,8 +297,8 @@ def resolve_control_plane_endpoint(
         )
 
     raise ControlPlaneError(
-        f"{len(nodes)} live nodes — pick one with `--node <runtime name or id>` or "
-        f"`--url <url>`." + _live_node_hint(nodes)
+        f"{len(nodes)} live nodes — pick one with `--node <runtime name or id>`."
+        + _live_node_hint(nodes)
     )
 
 
@@ -319,7 +320,7 @@ def _sole_node_matching(
         if matching:
             raise ControlPlaneError(
                 f"{len(matching)} live nodes answer to `{requested_node}` — pick one by "
-                f"runtime_id with `--node <runtime_id>` or by URL with `--url <url>`."
+                f"runtime_id with `--node <runtime_id>`."
                 + _live_node_hint(matching)
             )
     raise ControlPlaneError(
@@ -500,7 +501,7 @@ def fetch_surface_image_png_bytes(
     The full-resolution REST spelling, not the MCP tool's downscaled block: this
     is what gets written to disk as evidence.
     """
-    answered = _request(
+    answered = _request_to_control_plane_endpoint(
         endpoint,
         method="GET",
         path=_surface_image_exchange_route_path(published_surface_id),

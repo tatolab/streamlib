@@ -24,7 +24,11 @@ pub enum UnixSocketPathClearedForBind {
 #[derive(Debug, thiserror::Error)]
 pub enum UnixSocketPathRefusedForBind {
     /// A live process answers a connect on the path.
-    #[error("{} is already bound by a live process", path.display())]
+    #[error(
+        "{} is already bound by a live process; each runtime needs a unique runtime_id, so check \
+         for a duplicate STREAMLIB_RUNTIME_ID or another runtime in the same session",
+        path.display()
+    )]
     HeldByALiveProcess { path: PathBuf },
     /// No process answers on the path, and the file could not be removed.
     #[error("found a stale socket {} that no process answers on, but failed to remove it: {source}", path.display())]

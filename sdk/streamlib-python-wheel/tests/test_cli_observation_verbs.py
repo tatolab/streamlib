@@ -25,7 +25,6 @@ import os
 import shutil
 import socket
 import socketserver
-import stat
 import tempfile
 import threading
 import time
@@ -197,8 +196,12 @@ class StubControlPlane:
         self.local_api_socket = LocalApiSocket(self.local_api_socket_path)
         self._local_api_server = _UnixSocketHTTPServer(self.local_api_socket_path, Handler)
 
+        # A short poll interval: `shutdown()` waits out one poll per server, and
+        # every test tears a stub down.
         self._threads = [
-            threading.Thread(target=server.serve_forever, daemon=True)
+            threading.Thread(
+                target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+            )
             for server in (self._server, self._local_api_server)
         ]
         for thread in self._threads:

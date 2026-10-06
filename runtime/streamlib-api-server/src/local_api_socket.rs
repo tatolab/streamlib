@@ -24,11 +24,8 @@ pub const LOCAL_API_SOCKET_FILE_MODE: u32 = 0o600;
 pub fn bind_local_api_unix_listener(
     local_api_socket_path: &Path,
 ) -> Result<tokio::net::UnixListener> {
-    let cleared = clear_unix_socket_path_for_bind(local_api_socket_path).map_err(|refusal| {
-        Error::Runtime(format!(
-            "Local API socket {refusal}; is another runtime running with the same runtime_id?"
-        ))
-    })?;
+    let cleared = clear_unix_socket_path_for_bind(local_api_socket_path)
+        .map_err(|refusal| Error::Runtime(format!("Local API socket: {refusal}")))?;
     if cleared == UnixSocketPathClearedForBind::StaleSocketFileRemoved {
         tracing::warn!(
             "Removed a stale local API socket left by a prior runtime: {}",
@@ -36,12 +33,13 @@ pub fn bind_local_api_unix_listener(
         );
     }
 
-    let listener = tokio::net::UnixListener::bind(local_api_socket_path).map_err(|bind_failure| {
-        Error::Runtime(format!(
-            "Failed to bind the local API socket {}: {bind_failure}",
-            local_api_socket_path.display()
-        ))
-    })?;
+    let listener =
+        tokio::net::UnixListener::bind(local_api_socket_path).map_err(|bind_failure| {
+            Error::Runtime(format!(
+                "Failed to bind the local API socket {}: {bind_failure}",
+                local_api_socket_path.display()
+            ))
+        })?;
     std::fs::set_permissions(
         local_api_socket_path,
         std::fs::Permissions::from_mode(LOCAL_API_SOCKET_FILE_MODE),
@@ -137,7 +135,12 @@ mod tests {
             .permissions()
             .mode();
 
-        assert_eq!(mode & 0o777, LOCAL_API_SOCKET_FILE_MODE, "mode {:o}", mode & 0o777);
+        assert_eq!(
+            mode & 0o777,
+            LOCAL_API_SOCKET_FILE_MODE,
+            "mode {:o}",
+            mode & 0o777
+        );
     }
 
     #[tokio::test]
@@ -147,7 +150,11 @@ mod tests {
         let health =
             http_exchange_over_unix_socket(&local_api_socket_path, "GET /health HTTP/1.1", b"")
                 .await;
-        assert!(health.status_line.contains(" 200 "), "{}", health.status_line);
+        assert!(
+            health.status_line.contains(" 200 "),
+            "{}",
+            health.status_line
+        );
         assert_eq!(health.body, b"ok");
 
         let exchanged_image = http_exchange_over_unix_socket(
@@ -184,7 +191,11 @@ mod tests {
         )
         .await;
 
-        assert!(answered.status_line.contains(" 200 "), "{}", answered.status_line);
+        assert!(
+            answered.status_line.contains(" 200 "),
+            "{}",
+            answered.status_line
+        );
         let response: serde_json::Value = serde_json::from_slice(&answered.body).unwrap();
         assert_eq!(response["id"], 1, "{response}");
         assert!(response.get("error").is_none(), "{response}");
@@ -229,11 +240,18 @@ mod tests {
             refusal.contains(&local_api_socket_path.display().to_string()),
             "{refusal}"
         );
-        assert!(refusal.contains("already bound by a live process"), "{refusal}");
+        assert!(
+            refusal.contains("already bound by a live process"),
+            "{refusal}"
+        );
         let still_served =
             http_exchange_over_unix_socket(&local_api_socket_path, "GET /health HTTP/1.1", b"")
                 .await;
-        assert!(still_served.status_line.contains(" 200 "), "{}", still_served.status_line);
+        assert!(
+            still_served.status_line.contains(" 200 "),
+            "{}",
+            still_served.status_line
+        );
     }
 
     #[tokio::test]
@@ -251,8 +269,17 @@ mod tests {
         let health =
             http_exchange_over_unix_socket(&local_api_socket_path, "GET /health HTTP/1.1", b"")
                 .await;
-        assert!(health.status_line.contains(" 200 "), "{}", health.status_line);
-        assert!(health.head.to_ascii_lowercase().contains("content-type: text/plain"));
+        assert!(
+            health.status_line.contains(" 200 "),
+            "{}",
+            health.status_line
+        );
+        assert!(
+            health
+                .head
+                .to_ascii_lowercase()
+                .contains("content-type: text/plain")
+        );
     }
 
     #[test]

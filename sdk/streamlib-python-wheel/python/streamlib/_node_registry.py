@@ -86,7 +86,7 @@ def _resolve_runtime_directory(
 
     The fallback sits in a directory every user can write, so an existing one is
     trusted only as a real directory this uid owns with no group or other bits —
-    an entry planted there could point a control verb at anyone's port. A
+    an entry planted there could point a control verb at anyone's socket. A
     fallback that does not exist yet is returned unchecked: a reader never
     creates it, and there is nothing in it to trust.
     """
