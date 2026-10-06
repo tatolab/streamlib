@@ -120,7 +120,9 @@ first edits each file once, in place.
 | `def input(` / `def output(`, their re-exports and `noqa: A004`, every `@input(` / `@output(` in the wheel, tests, fixtures, webrtc and docs | renamed `input_port` / `output_port` | A |
 | The Rust grammar's `"input"` / `"output"` keys and every in-tree `#[processor]` port declaration | renamed `input_port` / `output_port` | B |
 
-## Slices
+## Slices, as ticketed
+
+Derived 2026-10-06, milestone "Native runtime, engine-free stream venvs": A is #2679 (blocks #2588), B is #2680.
 
 - **A — the Python surface.** `StreamBuilder` / `stream_builder` and `@input_port` /
   `@output_port` across the wheel, its tests, the engine fixtures, `streamlib-webrtc`, README and
