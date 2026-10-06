@@ -365,6 +365,10 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "node_name_test",
                 "--test",
                 "rust_port_name_cast_test",
+                "--test",
+                "unknown_processor_type_test",
+                "--test",
+                "connect_typed_errors_test",
             ],
         ),
         (

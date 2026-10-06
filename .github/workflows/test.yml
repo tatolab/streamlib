@@ -129,10 +129,13 @@ jobs:
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # A `graph` document loads back as the same graph, and a node's name
           # is cast, suffixed when defaulted and refused when typed twice. A
-          # Rust processor's port is cast as `@node` casts a Python one.
+          # Rust processor's port is cast as `@node` casts a Python one. An add
+          # naming a type nobody registered, and a connect naming a node or a
+          # port the graph lacks, each refuse with their own typed error.
           cargo test --locked -p streamlib-engine \
             --test graph_snapshot_round_trip_test --test node_name_test \
-            --test rust_port_name_cast_test
+            --test rust_port_name_cast_test --test unknown_processor_type_test \
+            --test connect_typed_errors_test
           # The compile-fail half of the same locks. The descriptor carries the
           # config type's schema, so the derive is a requirement, and the note
           # naming the fix is the only thing standing between an author and a

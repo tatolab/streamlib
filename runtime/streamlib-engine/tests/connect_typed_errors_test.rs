@@ -192,10 +192,7 @@ fn connect_default_id_processors_with_valid_ports_returns_ok() {
 fn connect_valid_processors_nonexistent_port_returns_port_not_found_not_invalid_link() {
     // A connect to a port that does not exist on a real (default-id) processor
     // surfaces as the typed `ProcessorPortNotFound`, never a masking
-    // `InvalidLink`. The port name here is also grammar-illegal (`/` is the
-    // chunk separator), and a real port is always grammar-legal, so the
-    // port-existence error is the actionable one: if `connect_impl` derived the
-    // channel name before validating the port, this would read as InvalidLink.
+    // `InvalidLink`, naming the port as its reference casts it.
     let cam = register_test_type("CameraSource", "_unused_in", "video");
     let sink = register_test_type("DisplaySink", "video_in", "_unused_out");
 
@@ -217,7 +214,7 @@ fn connect_valid_processors_nonexistent_port_returns_port_not_found_not_invalid_
             direction,
         }) => {
             assert_eq!(processor_id, sink_id.to_string());
-            assert_eq!(port_name, "no/such/input");
+            assert_eq!(port_name, "no-such-input");
             assert_eq!(direction, PortDirection::Input);
         }
         other => panic!("expected ProcessorPortNotFound, got {:?}", other),

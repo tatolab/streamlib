@@ -1,0 +1,12 @@
+# Every text file checks out with LF on every platform, Windows included: shell
+# scripts run under bash, and fixtures and gates compare bytes.
+* text=auto eol=lf
+
+# Licence texts reproduced byte for byte from the projects they come from,
+# line endings included.
+THIRD-PARTY-NOTICES.md -text
+packages/streamlib-webrtc/THIRD-PARTY-NOTICES.md -text
+
+# A golden graph's bytes are pinned by SHA-256 (every_golden_graph_loads.rs), so
+# no checkout may rewrite them.
+runtime/streamlib-media-builtins/tests/golden_graphs/*.json -text
