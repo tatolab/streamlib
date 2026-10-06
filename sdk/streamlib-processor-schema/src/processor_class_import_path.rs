@@ -56,9 +56,10 @@ impl ProcessorClassImportPath {
         Ok(Self(import_path))
     }
 
-    /// The type of the built-in node whose public class is `class_name`.
-    pub fn of_built_in_node(class_name: &str) -> SchemaResult<Self> {
-        Self::new(format!("{BUILT_IN_NODE_CLASS_MODULE}:{class_name}"))
+    /// The type of the built-in node whose public class is `class_name` —
+    /// never blank, the module standing before it.
+    pub fn of_built_in_node(class_name: &str) -> Self {
+        Self(format!("{BUILT_IN_NODE_CLASS_MODULE}:{class_name}"))
     }
 
     /// Whether this path names a class in [`BUILT_IN_NODE_CLASS_MODULE`].
@@ -112,7 +113,7 @@ mod tests {
 
     #[test]
     fn a_built_in_nodes_type_is_its_class_in_the_stream_package() {
-        let camera = ProcessorClassImportPath::of_built_in_node("CameraSource").unwrap();
+        let camera = ProcessorClassImportPath::of_built_in_node("CameraSource");
 
         assert_eq!(camera.as_str(), "tatolab.stream:CameraSource");
         assert!(camera.names_a_built_in_node());

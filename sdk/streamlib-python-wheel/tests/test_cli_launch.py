@@ -1073,9 +1073,8 @@ def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
 def test_a_bad_config_is_reported_without_a_launcher_traceback(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
-    """`load` takes a config whose fields it does not check, and the engine builds
-    each node's config as it compiles the graph at `run()` — so a bad config
-    surfaces from `run()`. It is still the app's problem, not a launcher crash."""
+    """`load` refuses a config its built-in does not take, naming the node and the
+    setting, before `run()`. It is still the app's problem, not a launcher crash."""
     app_directory = tmp_path / "app"
     app_directory.mkdir()
     (app_directory / "stream.py").write_text(
@@ -1095,6 +1094,8 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
         f"an engine-side failure must not arrive as a launcher traceback; output was:\n{output}"
     )
     assert "error:" in output
+    assert "`tatolab.stream:TestPatternSource`" in output, output
+    assert "width: invalid type" in output, output
 
 
 def test_a_stream_function_that_raises_publishes_no_node(

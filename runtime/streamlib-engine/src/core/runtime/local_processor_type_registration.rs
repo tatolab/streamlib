@@ -28,13 +28,6 @@ impl Runner {
         P: GeneratedProcessor + 'static,
         P::Config: Config,
     {
-        let descriptor = <P as GeneratedProcessor>::descriptor().ok_or_else(|| {
-            Error::Configuration(format!(
-                "{} exposes no descriptor — it is not a #[processor] type",
-                std::any::type_name::<P>()
-            ))
-        })?;
-
         serde_json::from_value::<P::Config>(config).map_err(|config_mismatch| {
             Error::Configuration(format!(
                 "config does not match {}'s Config type: {config_mismatch}",
@@ -42,27 +35,68 @@ impl Runner {
             ))
         })?;
 
-        let processor_class_import_path = descriptor.processor_class_import_path.clone();
-        // Host-compiled Rust types register through the same
-        // trait-object path as subprocess hosts.
-        let constructor: crate::core::processors::DynamicProcessorConstructorFn = Box::new(
-            |node: &crate::core::graph::ProcessorNode| -> Result<
-                Box<dyn crate::core::processors::DynGeneratedProcessor + Send>,
-            > {
-                let config: P::Config = match &node.config {
-                    Some(json) => serde_json::from_value(json.clone()).map_err(|e| {
-                        Error::Configuration(format!(
-                            "config does not match {}'s Config type: {e}",
-                            std::any::type_name::<P>()
-                        ))
-                    })?,
-                    None => P::Config::default(),
-                };
-                Ok(Box::new(P::from_config(config)?))
-            },
-        );
-        PROCESSOR_REGISTRY.register_dynamic(descriptor, constructor)?;
+        PROCESSOR_REGISTRY.register_host_compiled_processor_type::<P>()
+    }
+}
 
-        Ok(processor_class_import_path)
+#[cfg(test)]
+mod tests {
+    use crate::core::error::Error;
+    use crate::core::processors::ProcessorSpec;
+    use crate::core::runtime::Runner;
+
+    /// The one setting [`AddLocalSourceTakingOneSetting`] takes.
+    #[derive(
+        Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+    )]
+    #[serde(deny_unknown_fields)]
+    pub struct AddLocalSourceTakingOneSettingConfig {
+        #[serde(default)]
+        pub frame_width: Option<u32>,
+    }
+
+    /// A host type registered by [`Runner::add_local`] alone.
+    #[crate::processor(
+        execution = manual,
+        config = crate::core::runtime::local_processor_type_registration::tests::AddLocalSourceTakingOneSettingConfig,
+        output("video"),
+    )]
+    pub struct AddLocalSourceTakingOneSetting;
+
+    impl crate::core::ManualProcessor for AddLocalSourceTakingOneSetting::Processor {
+        fn start(
+            &mut self,
+            _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+        ) -> crate::core::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_type_added_locally_refuses_a_setting_its_config_does_not_take_at_add() {
+        let runtime = Runner::new().unwrap();
+        let source_type = runtime
+            .add_local::<AddLocalSourceTakingOneSetting::Processor>(serde_json::json!({}))
+            .unwrap();
+
+        let refusal = runtime
+            .add_processor(
+                ProcessorSpec::new(source_type.clone(), serde_json::json!({"frame_widht": 640}))
+                    .with_display_name("front"),
+            )
+            .unwrap_err();
+
+        match refusal {
+            Error::NodeConfigRefused {
+                node_name,
+                processor_type,
+                refusal,
+            } => {
+                assert_eq!(node_name, "front");
+                assert_eq!(processor_type, source_type);
+                assert!(refusal.contains("`frame_widht`"), "{refusal}");
+            }
+            other => panic!("expected NodeConfigRefused, got {other:?}"),
+        }
     }
 }

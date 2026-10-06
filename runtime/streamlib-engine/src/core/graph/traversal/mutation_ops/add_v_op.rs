@@ -27,8 +27,6 @@ impl<'a> TraversalSourceMut<'a> {
     /// why — runtime-dynamic systems prefer "load-and-mark-failed" over
     /// "silently-skip" so observability survives the misconfiguration.
     pub fn add_v(self, spec: ProcessorSpec) -> Result<ProcessorTraversalMut<'a>> {
-        PROCESSOR_REGISTRY.refuse_a_built_in_node_type_absent_on_this_floor(&spec.name)?;
-
         // Gated on `port_info` presence — every registered processor has an
         // entry (subprocess-only descriptors register empty port lists), so
         // this resolves any registered type and misses only a
@@ -38,7 +36,7 @@ impl<'a> TraversalSourceMut<'a> {
         let registry_miss = resolved_ports.is_none();
 
         let name = the_name_a_new_node_takes(self.graph, spec.display_name.as_deref(), &spec.name)?;
-        PROCESSOR_REGISTRY.refuse_a_config_the_node_type_does_not_take(
+        PROCESSOR_REGISTRY.refuse_a_node_this_runtime_cannot_add(
             &name,
             &spec.name,
             &spec.config,
@@ -159,7 +157,7 @@ mod tests {
     #[test]
     fn a_built_in_this_floor_compiles_out_is_refused_and_nothing_is_added() {
         let compiled_out_here =
-            ProcessorClassImportPath::of_built_in_node("AddVTestCompiledOutHere").unwrap();
+            ProcessorClassImportPath::of_built_in_node("AddVTestCompiledOutHere");
         PROCESSOR_REGISTRY
             .register_built_in_node_type_absent_on_this_floor(compiled_out_here.clone(), "Plan 9");
         let mut graph = Graph::new();

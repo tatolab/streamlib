@@ -96,11 +96,11 @@ pub enum Error {
     UnknownProcessorType { ident: ProcessorClassImportPath },
 
     #[error(
-        "`{ident}` is a built-in node this runtime does not have on {this_floor}: it runs on \
-         {floors_it_runs_on} only"
+        "`{processor_type}` is a built-in node this runtime does not have on {this_floor}: it \
+         runs on {floors_it_runs_on} only"
     )]
     BuiltInNodeTypeAbsentOnThisFloor {
-        ident: ProcessorClassImportPath,
+        processor_type: ProcessorClassImportPath,
         this_floor: String,
         floors_it_runs_on: String,
     },

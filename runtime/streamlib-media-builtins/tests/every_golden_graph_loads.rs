@@ -9,12 +9,20 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::runtime::Runner;
 use streamlib_media_builtins::register_media_builtin_processor_types;
+
+/// Each golden graph's SHA-256, pinned as it was added: a golden is never
+/// edited, so a change to what a graph holds adds a golden and a line here.
+const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[(
+    "0001-every-key-and-every-built-in.json",
+    "b799e9e2ab499bfd5eb1a44691692c1567c80597c27737d89d5751bb4f7031b0",
+)];
 
 fn golden_graph_paths() -> Vec<PathBuf> {
     let golden_graphs_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden_graphs");
@@ -150,4 +158,41 @@ fn the_golden_graphs_name_every_built_in_this_floor_registers() {
         named_by_no_golden.is_empty(),
         "no golden graph names {named_by_no_golden:?} — add a golden beside the others that does"
     );
+}
+
+/// Making a red golden test green by editing the golden is the failure the
+/// record exists to prevent, so an edit is red here whatever else passes.
+#[test]
+fn no_golden_graph_has_changed_or_gone_since_it_was_pinned() {
+    let mut file_names_checked_in = BTreeSet::new();
+    for path in golden_graph_paths() {
+        let file_name = path
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .expect("a golden graph's file name is UTF-8")
+            .to_string();
+        let Some((_, pinned_sha256)) = GOLDEN_GRAPH_SHA256_BY_FILE_NAME
+            .iter()
+            .find(|(pinned_file_name, _)| *pinned_file_name == file_name)
+        else {
+            panic!("{file_name} is pinned by no line of GOLDEN_GRAPH_SHA256_BY_FILE_NAME — pin it");
+        };
+        let sha256: String = Sha256::digest(std::fs::read(&path).expect("a golden graph reads"))
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+
+        assert_eq!(
+            sha256, *pinned_sha256,
+            "{file_name} has changed since it was pinned. A golden is never edited: restore it \
+             and add the new graph as a golden beside it"
+        );
+        file_names_checked_in.insert(file_name);
+    }
+    for (pinned_file_name, _) in GOLDEN_GRAPH_SHA256_BY_FILE_NAME {
+        assert!(
+            file_names_checked_in.contains(*pinned_file_name),
+            "{pinned_file_name} is pinned and no longer checked in — a golden is never deleted"
+        );
+    }
 }

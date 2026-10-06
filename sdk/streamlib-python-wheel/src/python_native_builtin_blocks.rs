@@ -92,7 +92,6 @@ native_processor_marker_classes! {
                     streamlib::sdk::descriptors::ProcessorClassImportPath::of_built_in_node(
                         "DisplayWindow",
                     )
-                    .expect("a class name is never blank")
                 }
             },
         }
@@ -166,7 +165,6 @@ native_processor_marker_classes! {
                     streamlib::sdk::descriptors::ProcessorClassImportPath::of_built_in_node(
                         "VirtualCameraSink",
                     )
-                    .expect("a class name is never blank")
                 }
             },
         }

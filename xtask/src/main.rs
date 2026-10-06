@@ -797,6 +797,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::processors::processor_instance_factory::tests::a_built_in_type_is_never_handed_to_the_unregistered_type_resolver",
                 "core::processors::processor_instance_factory::tests::a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any",
                 "core::processors::processor_instance_factory::tests::only_a_type_recorded_absent_on_this_floor_is_refused_as_absent",
+                "core::runtime::local_processor_type_registration::tests::a_type_added_locally_refuses_a_setting_its_config_does_not_take_at_add",
                 "core::graph::graph_tests::node_names",
                 "core::json_schema::capability_extension_and_runtime_name_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list",
                 "core::graph::edges",

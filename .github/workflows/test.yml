@@ -322,8 +322,9 @@ jobs:
           # write side, and registration refusing a descriptor whose ports are
           # not cast or not distinct.
           # What a runtime refuses by name before a frame flows: a built-in this
-          # floor compiles out, a config its type does not take, and a
-          # built-in's type, which is never handed to the Python resolver.
+          # floor compiles out, a config its type does not take — whichever way
+          # a Rust type was registered — and a built-in's type, which is never
+          # handed to the Python resolver.
           cargo test --locked -p streamlib-engine --lib -- \
             vulkan::rhi::vulkan_video_session::tests \
             vulkan::rhi::vulkan_present_target::tests::acquire_barrier_source_stage_chains_off_the_image_available_wait \
@@ -673,6 +674,7 @@ jobs:
             core::processors::processor_instance_factory::tests::a_built_in_type_is_never_handed_to_the_unregistered_type_resolver \
             core::processors::processor_instance_factory::tests::a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any \
             core::processors::processor_instance_factory::tests::only_a_type_recorded_absent_on_this_floor_is_refused_as_absent \
+            core::runtime::local_processor_type_registration::tests::a_type_added_locally_refuses_a_setting_its_config_does_not_take_at_add \
             core::graph::graph_tests::node_names \
             core::json_schema::capability_extension_and_runtime_name_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
             core::graph::edges \

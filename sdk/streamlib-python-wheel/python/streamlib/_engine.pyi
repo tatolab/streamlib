@@ -480,7 +480,8 @@ class VirtualCameraSink:
 
     A marker type — pass the class itself to `stream.add`
     (`stream.add(VirtualCameraSink, config={"name": "Desk cam"})`); it is never
-    instantiated and its per-frame path never enters the interpreter.
+    instantiated and its per-frame path never enters the interpreter. Off
+    Linux the runtime refuses a graph naming it at load, naming the platform.
 
     One input, `video` (`newest`), and no output. Add as many instances as the
     graph needs; each is its own camera.
@@ -583,9 +584,12 @@ class Runtime:
         `RuntimeError` naming the stream already loaded, the earlier refusal,
         or the load still underway on another thread. An empty graph raises
         `RuntimeError`, naming the stream when it has one; one that does not
-        parse, and one the engine refuses — an unknown `type`, a taken node
-        name, a link to a port no node has — raise `RuntimeError` with the
-        engine's own text. A refused load can leave part of its graph behind,
+        parse, and one the engine refuses — a key it does not read, an unknown
+        `type` (named beside the runtime's own version), a built-in this
+        platform does not have (naming the platform), a setting a built-in
+        does not take or a value of the wrong kind for one (naming the node and
+        the setting), a taken node name, a link to a port no node has — raise
+        `RuntimeError` with the engine's own text. A refused load can leave part of its graph behind,
         so every refused call is recorded — save one refused because this
         Runtime is already running or shut down, which `run()` refuses anyway
         — and so is a panic inside the load; `run()` then raises naming the

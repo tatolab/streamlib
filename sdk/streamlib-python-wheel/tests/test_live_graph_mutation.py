@@ -129,8 +129,7 @@ class LiveAddedEffect:
 '''
 
 # The display window is a native built-in; over the control plane it is named
-# by the class import path `graph` reports for one, which for a Rust built-in
-# is its declaration's module path.
+# by the type `graph` reports for one, its class in `tatolab.stream`.
 DISPLAY_WINDOW_TYPE = "tatolab.stream:DisplayWindow"
 
 
