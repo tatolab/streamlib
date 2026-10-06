@@ -30,7 +30,12 @@ import socket
 import urllib.parse
 from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
-from ._engine import LocalApiMcpClient, LocalApiMcpRequestRefused, LocalApiMcpServerUnreachable
+from ._engine import (
+    LocalApiMcpClient,
+    LocalApiMcpRequestRefused,
+    LocalApiMcpServerUnreachable,
+    LocalApiMcpToolCallFailed,
+)
 
 if TYPE_CHECKING:
     from ._node_registry import NodeRegistryEntry
@@ -71,7 +76,6 @@ class ControlPlaneError(Exception):
     def __init__(self, message: str, *, server_answered: bool = False) -> None:
         super().__init__(message)
         self.server_answered = server_answered
-
 
 
 class _ControlPlaneHttpResponse(NamedTuple):
@@ -133,9 +137,10 @@ def _request_over_the_local_api_socket(
 def control_plane_answers(local_api_socket: LocalApiSocket) -> bool:
     """Whether a control plane on `local_api_socket` answers MCP at all.
 
-    A node that answers `server/discover` is alive, and so is one that answers
-    and refuses it; only nothing answering is dead. This is what a registry
-    scan needs: "can a control verb reach it", not "did this call succeed".
+    A node that answers `server/discover`, or refuses it in the protocol's own
+    words, is alive; a socket nothing listens on, or one that answers outside
+    MCP, is not. This is what a registry scan needs: "can a control verb reach
+    it", not "did this call succeed".
     """
     try:
         LocalApiMcpClient(
@@ -221,7 +226,7 @@ def _live_node_hint(nodes: "list[NodeRegistryEntry]") -> str:
 def call_tool(
     local_api_socket: LocalApiSocket, tool_name: str, arguments: "dict[str, Any]"
 ) -> str:
-    """Drive one `tools/call` and return the tool result's text content.
+    """Drive one `tools/call` and return the text its result carries.
 
     A node that cannot be reached, a call the node refused, and a tool that ran
     and failed all raise [`ControlPlaneError`], so a caller that gets a string
@@ -231,25 +236,13 @@ def call_tool(
         with LocalApiMcpClient(
             local_api_socket.local_api_socket_path, CONTROL_VERB_TIMEOUT_SECONDS
         ) as client:
-            result = json.loads(client.call_tool(tool_name, json.dumps(arguments)))
+            return client.call_tool(tool_name, json.dumps(arguments))
     except LocalApiMcpServerUnreachable as unreachable:
         raise ControlPlaneError(str(unreachable)) from unreachable
     except LocalApiMcpRequestRefused as refusal:
         raise ControlPlaneError(f"{tool_name} failed: {refusal}", server_answered=True) from refusal
-
-    text = next(
-        (block["text"] for block in result["content"] if block.get("type") == "text"), None
-    )
-    if result.get("isError", False):
-        raise ControlPlaneError(
-            f"{tool_name} failed: {text or 'no detail given'}", server_answered=True
-        )
-    if text is None:
-        # Succeeded, but carries nothing readable. Returning "" here would print
-        # a blank line and exit 0, which reads as "the node has nothing" rather
-        # than "this result made no sense".
-        raise ControlPlaneError(f"{tool_name} returned no text content: {result}")
-    return text
+    except LocalApiMcpToolCallFailed as tool_failure:
+        raise ControlPlaneError(str(tool_failure), server_answered=True) from tool_failure
 
 
 #: The REST spelling of the exchange, as the api-server serves it. Kept as the

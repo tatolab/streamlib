@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyValueError};
+use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rmcp::RoleClient;
-use rmcp::model::{CallToolRequestParams, JsonObject, ProtocolVersion};
+use rmcp::model::{CallToolRequestParams, CallToolResult, JsonObject, ProtocolVersion};
 use rmcp::service::{
     ClientInitializeError, ClientLifecycleMode, ClientServiceExt, RunningService, ServiceError,
 };
@@ -34,12 +34,20 @@ create_exception!(
     PyException,
     "The node answered and refused the MCP request."
 );
+create_exception!(
+    _engine,
+    LocalApiMcpToolCallFailed,
+    PyException,
+    "The tool ran and reported a failure, or answered with no text."
+);
 
 /// A connected MCP client of one node's local API.
 #[pyclass(name = "LocalApiMcpClient", module = "streamlib._engine", frozen)]
 pub(crate) struct PythonLocalApiMcpClient {
-    tokio_runtime: tokio::runtime::Runtime,
+    // Declared before the runtime so it is dropped while the runtime that
+    // drives it still exists.
     connected_mcp_client: Mutex<Option<RunningService<RoleClient, ()>>>,
+    tokio_runtime: tokio::runtime::Runtime,
     local_api_socket_path: String,
     request_timeout: Duration,
 }
@@ -52,18 +60,19 @@ impl PythonLocalApiMcpClient {
         local_api_socket_path: String,
         timeout_seconds: f64,
     ) -> PyResult<Self> {
-        let request_timeout = Duration::try_from_secs_f64(timeout_seconds).map_err(|_| {
-            PyValueError::new_err(format!(
-                "timeout_seconds must be a positive number of seconds, got {timeout_seconds}"
-            ))
-        })?;
+        let request_timeout = Duration::try_from_secs_f64(timeout_seconds)
+            .ok()
+            .filter(|timeout| !timeout.is_zero())
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "timeout_seconds must be a positive number of seconds, got {timeout_seconds}"
+                ))
+            })?;
         let tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(|e| {
-                LocalApiMcpServerUnreachable::new_err(format!(
-                    "could not start the MCP client's runtime: {e}"
-                ))
+                PyRuntimeError::new_err(format!("could not start the MCP client's runtime: {e}"))
             })?;
         let connected = python.detach(|| {
             tokio_runtime.block_on(async {
@@ -93,6 +102,15 @@ impl PythonLocalApiMcpClient {
                     refusal.message, refusal.code.0
                 )));
             }
+            Ok(Err(ClientInitializeError::NoCompatibleProtocolVersion {
+                server_supported,
+                ..
+            })) => {
+                return Err(LocalApiMcpRequestRefused::new_err(format!(
+                    "the node at {local_api_socket_path} serves {server_supported:?}, not {}",
+                    ProtocolVersion::LATEST
+                )));
+            }
             Ok(Err(connect_failure)) => {
                 return Err(LocalApiMcpServerUnreachable::new_err(format!(
                     "no node answers MCP at {local_api_socket_path} ({connect_failure})"
@@ -105,15 +123,15 @@ impl PythonLocalApiMcpClient {
             }
         };
         Ok(Self {
-            tokio_runtime,
             connected_mcp_client: Mutex::new(Some(connected_mcp_client)),
+            tokio_runtime,
             local_api_socket_path,
             request_timeout,
         })
     }
 
     /// Call `tool_name` with the JSON object `arguments_json`, answering the
-    /// tool's result as JSON.
+    /// text the tool's result carries.
     fn call_tool(
         &self,
         python: Python<'_>,
@@ -125,34 +143,27 @@ impl PythonLocalApiMcpClient {
                 "`{tool_name}` arguments are not a JSON object: {e}"
             ))
         })?;
-        let connected_mcp_client = self.connected_mcp_client.lock();
-        let Some(connected_mcp_client) = connected_mcp_client.as_ref() else {
-            return Err(LocalApiMcpServerUnreachable::new_err(
-                "this MCP client is closed",
-            ));
-        };
         let request = CallToolRequestParams::new(tool_name.clone()).with_arguments(arguments);
+        // The lock is taken with the GIL released, so a second thread calling
+        // in waits on the lock without holding the GIL this call needs back.
         let answered = python.detach(|| {
-            self.tokio_runtime.block_on(async {
+            let connected_mcp_client = self.connected_mcp_client.lock();
+            let connected_mcp_client = connected_mcp_client.as_ref()?;
+            Some(self.tokio_runtime.block_on(async {
                 tokio::time::timeout(
                     self.request_timeout,
                     connected_mcp_client.call_tool(request),
                 )
                 .await
-            })
+            }))
         });
         match answered {
-            Ok(Ok(result)) => serde_json::to_string(&result).map_err(|e| {
-                LocalApiMcpRequestRefused::new_err(format!("`{tool_name}` result: {e}"))
-            }),
-            Ok(Err(ServiceError::McpError(refusal))) => Err(LocalApiMcpRequestRefused::new_err(
-                format!("{} ({})", refusal.message, refusal.code.0),
+            None => Err(LocalApiMcpServerUnreachable::new_err(
+                "this MCP client is closed",
             )),
-            Ok(Err(failure)) => Err(LocalApiMcpServerUnreachable::new_err(format!(
-                "`{tool_name}` to the node at {} failed: {failure}",
-                self.local_api_socket_path
-            ))),
-            Err(_elapsed) => Err(LocalApiMcpServerUnreachable::new_err(format!(
+            Some(Ok(Ok(result))) => tool_result_text(&tool_name, &result),
+            Some(Ok(Err(failure))) => Err(self.python_error_for_service_error(&tool_name, failure)),
+            Some(Err(_elapsed)) => Err(LocalApiMcpServerUnreachable::new_err(format!(
                 "`{tool_name}` to the node at {} did not answer within {:?}",
                 self.local_api_socket_path, self.request_timeout
             ))),
@@ -161,13 +172,21 @@ impl PythonLocalApiMcpClient {
 
     /// End the client's connection. Idempotent.
     fn close(&self, python: Python<'_>) {
-        let Some(connected_mcp_client) = self.connected_mcp_client.lock().take() else {
-            return;
-        };
         python.detach(|| {
+            let Some(connected_mcp_client) = self.connected_mcp_client.lock().take() else {
+                return;
+            };
             self.tokio_runtime.block_on(async {
-                if let Err(failure) = connected_mcp_client.cancel().await {
-                    tracing::debug!(%failure, "closing an MCP client of the local API");
+                match tokio::time::timeout(self.request_timeout, connected_mcp_client.cancel())
+                    .await
+                {
+                    Ok(Ok(_quit_reason)) => {}
+                    Ok(Err(failure)) => {
+                        tracing::debug!(%failure, "closing an MCP client of the local API");
+                    }
+                    Err(_elapsed) => {
+                        tracing::debug!("closing an MCP client of the local API timed out");
+                    }
                 }
             })
         });
@@ -184,7 +203,47 @@ impl PythonLocalApiMcpClient {
     }
 }
 
-/// Add the client class and its two exceptions to `_engine`.
+impl PythonLocalApiMcpClient {
+    /// The Python exception for a `tools/call` that did not come back as a
+    /// result: a refusal when the node answered, unreachable when nothing did.
+    fn python_error_for_service_error(&self, tool_name: &str, failure: ServiceError) -> PyErr {
+        match failure {
+            ServiceError::McpError(refusal) => LocalApiMcpRequestRefused::new_err(format!(
+                "{} ({})",
+                refusal.message, refusal.code.0
+            )),
+            ServiceError::UnexpectedResponse => LocalApiMcpRequestRefused::new_err(format!(
+                "the node at {} answered `{tool_name}` with something other than its result",
+                self.local_api_socket_path
+            )),
+            other => LocalApiMcpServerUnreachable::new_err(format!(
+                "`{tool_name}` to the node at {} failed: {other}",
+                self.local_api_socket_path
+            )),
+        }
+    }
+}
+
+/// The first text block of a tool's result, or the failure it reported.
+fn tool_result_text(tool_name: &str, result: &CallToolResult) -> PyResult<String> {
+    let text = result
+        .content
+        .iter()
+        .find_map(|block| block.as_text())
+        .map(|text_block| text_block.text.clone());
+    match (result.is_error.unwrap_or(false), text) {
+        (false, Some(text)) => Ok(text),
+        (true, text) => Err(LocalApiMcpToolCallFailed::new_err(format!(
+            "{tool_name} failed: {}",
+            text.as_deref().unwrap_or("no detail given")
+        ))),
+        (false, None) => Err(LocalApiMcpToolCallFailed::new_err(format!(
+            "{tool_name} returned no text content"
+        ))),
+    }
+}
+
+/// Add the client class and its exceptions to `_engine`.
 pub(crate) fn register_local_api_mcp_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let python = module.py();
     module.add_class::<PythonLocalApiMcpClient>()?;
@@ -195,6 +254,10 @@ pub(crate) fn register_local_api_mcp_client(module: &Bound<'_, PyModule>) -> PyR
     module.add(
         "LocalApiMcpRequestRefused",
         python.get_type::<LocalApiMcpRequestRefused>(),
+    )?;
+    module.add(
+        "LocalApiMcpToolCallFailed",
+        python.get_type::<LocalApiMcpToolCallFailed>(),
     )?;
     Ok(())
 }

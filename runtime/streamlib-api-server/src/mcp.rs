@@ -41,12 +41,12 @@ use rmcp::model::{
     ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities,
     ServerConfig, SubscriptionFilter,
 };
+use rmcp::schemars::JsonSchema;
 use rmcp::service::{RequestContext, SubscriptionContext};
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use rmcp::{prompt_handler, tool, tool_handler, tool_router};
-use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
@@ -60,7 +60,7 @@ use tokio_util::sync::CancellationToken;
 const SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
 
 /// Server identity carried in every result's `serverInfo`.
-const MCP_SERVER_NAME: &str = "streamlib-api-server";
+const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 
 /// Server version carried in `serverInfo` — the api-server crate version.
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -129,43 +129,46 @@ const TAP_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 #[derive(Clone)]
 pub(crate) struct LocalApiMcpServerHandler {
     pub(crate) runtime: Arc<dyn RuntimeOperations>,
-    local_api_stopping: CancellationToken,
-    tool_router: ToolRouter<Self>,
-    prompt_router: PromptRouter<Self>,
+    local_api_stopping_token: CancellationToken,
+    tool_router: Arc<ToolRouter<Self>>,
+    prompt_router: Arc<PromptRouter<Self>>,
 }
 
 impl LocalApiMcpServerHandler {
-    /// `local_api_stopping` ends every held `subscriptions/listen` with its
+    /// `local_api_stopping_token` ends every held `subscriptions/listen` with its
     /// final result, so the server's graceful shutdown never waits on a host
     /// that holds one open.
     pub(crate) fn new(
         runtime: Arc<dyn RuntimeOperations>,
-        local_api_stopping: CancellationToken,
+        local_api_stopping_token: CancellationToken,
     ) -> Self {
         Self {
             runtime,
-            local_api_stopping,
-            tool_router: Self::tool_router(),
-            prompt_router: Self::prompt_router(),
+            local_api_stopping_token,
+            tool_router: Arc::new(Self::tool_router()),
+            prompt_router: Arc::new(Self::prompt_router()),
         }
     }
 }
 
-/// `POST /mcp`'s service: `rmcp`'s Streamable HTTP transport over one
+/// `/mcp`'s service: `rmcp`'s Streamable HTTP transport over one
 /// [`LocalApiMcpServerHandler`], stateless, serving only
 /// [`SERVED_MCP_PROTOCOL_VERSIONS`].
 pub(crate) fn local_api_mcp_streamable_http_service(
     runtime: Arc<dyn RuntimeOperations>,
-    local_api_stopping: CancellationToken,
+    local_api_stopping_token: CancellationToken,
 ) -> StreamableHttpService<LocalApiMcpServerHandler, NeverSessionManager> {
-    let handler = LocalApiMcpServerHandler::new(runtime, local_api_stopping);
+    let handler = LocalApiMcpServerHandler::new(runtime, local_api_stopping_token);
     StreamableHttpService::new(
         move || Ok(handler.clone()),
         Arc::new(NeverSessionManager::default()),
         StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
             .with_stateless_protocol_metadata_required(true)
-            .with_json_response(true),
+            .with_json_response(true)
+            // The socket's file mode is the gate; DNS rebinding needs a TCP
+            // port a browser can reach, and the local API has none.
+            .disable_allowed_hosts(),
     )
 }
 
@@ -174,6 +177,7 @@ pub(crate) fn local_api_mcp_streamable_http_service(
 // ============================================================================
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct TapToolArguments {
     #[schemars(
@@ -193,6 +197,7 @@ struct TapToolArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct LogsToolArguments {
     #[schemars(
@@ -203,6 +208,7 @@ struct LogsToolArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct ExchangeToolArguments {
     #[schemars(
@@ -217,6 +223,7 @@ struct ExchangeToolArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct ShutdownToolArguments {
     #[schemars(
@@ -226,6 +233,7 @@ struct ShutdownToolArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct AddNodeToolArguments {
     #[serde(rename = "type")]
@@ -244,6 +252,7 @@ struct AddNodeToolArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct RemoveNodeToolArguments {
     #[schemars(description = "A node's name, as `graph` or `add_node` reported it.")]
@@ -251,6 +260,7 @@ struct RemoveNodeToolArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct ConnectToolArguments {
     #[schemars(description = "The source node's name.")]
@@ -264,6 +274,7 @@ struct ConnectToolArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct DisconnectToolArguments {
     #[schemars(description = "A link id `graph` or `connect` reported.")]
@@ -558,7 +569,7 @@ impl ServerHandler for LocalApiMcpServerHandler {
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
         tokio::select! {
             () = context.cancelled() => {}
-            () = self.local_api_stopping.cancelled() => {}
+            () = self.local_api_stopping_token.cancelled() => {}
         }
         Ok(())
     }
@@ -750,8 +761,9 @@ mod tests {
     //! and what must never be again.
 
     use crate::control_plane_stub_support::{
-        STUB_EXCHANGED_FRAME_SURFACE_ID, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-        STUB_EXCHANGED_IMAGE_BYTES, STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
+        LocalApiServedOnAFreshSocket, STUB_EXCHANGED_FRAME_SURFACE_ID,
+        STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED, STUB_EXCHANGED_IMAGE_BYTES,
+        STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
     };
     use base64::Engine as _;
     use rmcp::RoleClient;
@@ -911,47 +923,22 @@ mod tests {
     /// address.
     const LOCAL_API_MCP_URI: &str = "http://localhost/mcp";
 
-    /// The real router over a runtime, served on a local API socket in a fresh
-    /// temp directory for as long as this lives.
-    struct LocalApiServedForMcpTests {
-        _socket_directory: tempfile::TempDir,
-        running_server: Option<crate::local_api_socket::RunningLocalApiSocketServer>,
-        local_api_socket_path: std::path::PathBuf,
-    }
-
-    impl LocalApiServedForMcpTests {
-        fn stop_serving(&mut self) {
-            drop(self.running_server.take());
-        }
-    }
-
-    fn serve_the_local_api_over(runtime: Arc<dyn RuntimeOperations>) -> LocalApiServedForMcpTests {
-        let socket_directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = socket_directory.path().join("local-api.sock");
-        let local_api_stopping = CancellationToken::new();
-        let running_server = crate::local_api_socket::serve_router_on_local_api_socket(
-            crate::handlers::build_router(runtime, local_api_stopping.clone()),
-            local_api_stopping,
-            &tokio::runtime::Handle::current(),
-            &local_api_socket_path,
-        )
-        .unwrap();
-        LocalApiServedForMcpTests {
-            _socket_directory: socket_directory,
-            running_server: Some(running_server),
-            local_api_socket_path,
-        }
-    }
-
     fn mcp_transport_to(
-        served: &LocalApiServedForMcpTests,
+        served: &LocalApiServedOnAFreshSocket,
+    ) -> StreamableHttpClientTransport<UnixSocketHttpClient> {
+        mcp_transport_naming(served, LOCAL_API_MCP_URI)
+    }
+
+    fn mcp_transport_naming(
+        served: &LocalApiServedOnAFreshSocket,
+        local_api_mcp_uri: &str,
     ) -> StreamableHttpClientTransport<UnixSocketHttpClient> {
         StreamableHttpClientTransport::with_client(
             UnixSocketHttpClient::new(
                 served.local_api_socket_path.to_str().unwrap(),
-                LOCAL_API_MCP_URI,
+                local_api_mcp_uri,
             ),
-            StreamableHttpClientTransportConfig::with_uri(LOCAL_API_MCP_URI),
+            StreamableHttpClientTransportConfig::with_uri(local_api_mcp_uri.to_string()),
         )
     }
 
@@ -959,8 +946,8 @@ mod tests {
     /// over `runtime`.
     async fn connected_mcp_client(
         runtime: Arc<dyn RuntimeOperations>,
-    ) -> (LocalApiServedForMcpTests, RunningService<RoleClient, ()>) {
-        let served = serve_the_local_api_over(runtime);
+    ) -> (LocalApiServedOnAFreshSocket, RunningService<RoleClient, ()>) {
+        let served = LocalApiServedOnAFreshSocket::over(runtime);
         let client = ()
             .serve_with_lifecycle(
                 mcp_transport_to(&served),
@@ -983,11 +970,29 @@ mod tests {
         let (_served, client) = connected_mcp_client(runtime).await;
         let request = CallToolRequestParams::new(tool_name.to_string())
             .with_arguments(arguments.as_object().cloned().unwrap_or_default());
-        match client.call_tool(request).await {
+        wire_outcome(client.call_tool(request).await)
+    }
+
+    /// A result or refusal as it crossed the wire.
+    fn wire_outcome<T: serde::Serialize>(
+        outcome: std::result::Result<T, ServiceError>,
+    ) -> std::result::Result<Value, McpError> {
+        match outcome {
             Ok(result) => Ok(serde_json::to_value(result).unwrap()),
             Err(ServiceError::McpError(refusal)) => Err(refusal),
-            Err(other) => panic!("`{tool_name}` failed below the protocol: {other}"),
+            Err(other) => panic!("the request failed below the protocol: {other}"),
         }
+    }
+
+    /// The JSON a successful tool result states in its first text block.
+    fn first_text_block_json(tool_result: &Value) -> Value {
+        assert_eq!(tool_result["isError"], false, "{tool_result}");
+        serde_json::from_str(
+            tool_result["content"][0]["text"]
+                .as_str()
+                .expect("a text block"),
+        )
+        .expect("the text block is JSON")
     }
 
     async fn tool_call_result(
@@ -1076,8 +1081,9 @@ mod tests {
             ProtocolVersion::V_2025_06_18,
             ProtocolVersion::LATEST_WITH_INITIALIZE,
         ] {
-            let served =
-                serve_the_local_api_over(Arc::new(ControlPlaneMcpDispatchStubRuntime::new()));
+            let served = LocalApiServedOnAFreshSocket::over(Arc::new(
+                ControlPlaneMcpDispatchStubRuntime::new(),
+            ));
             let refusal = HandshakeRevisionMcpClient {
                 handshake_protocol_version: handshake_protocol_version.clone(),
             }
@@ -1150,6 +1156,62 @@ mod tests {
             targets.is_empty(),
             "an MCP request must be silent at the engine's default filter, got: {targets:?}"
         );
+    }
+
+    /// The settings that make the endpoint the latest revision's alone: no
+    /// session, every request carrying its own revision, and no `Host`
+    /// allowlist on a socket no browser can dial.
+    #[test]
+    fn the_endpoint_is_stateless_demands_per_request_metadata_and_admits_any_host() {
+        let service = local_api_mcp_streamable_http_service(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            CancellationToken::new(),
+        );
+        assert!(!service.config.legacy_session_mode);
+        assert!(service.config.stateless_protocol_metadata_required);
+        assert!(
+            service.config.allowed_hosts.is_empty(),
+            "{:?}",
+            service.config.allowed_hosts
+        );
+    }
+
+    #[tokio::test]
+    async fn a_client_naming_any_host_over_the_socket_is_answered() {
+        let served =
+            LocalApiServedOnAFreshSocket::over(Arc::new(ControlPlaneMcpDispatchStubRuntime::new()));
+        let client = ()
+            .serve_with_lifecycle(
+                mcp_transport_naming(&served, "http://streamlib-node/mcp"),
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::LATEST],
+                },
+            )
+            .await
+            .expect("the socket's file mode is the gate, not the Host header");
+        assert!(client.list_all_tools().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_request_at_a_handshake_revision_is_refused_with_the_unsupported_version_error() {
+        let served =
+            LocalApiServedOnAFreshSocket::over(Arc::new(ControlPlaneMcpDispatchStubRuntime::new()));
+        let refusal = ()
+            .serve_with_lifecycle(
+                mcp_transport_to(&served),
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::V_2025_06_18],
+                },
+            )
+            .await
+            .expect_err("a handshake revision must not be served");
+        let ClientInitializeError::NoCompatibleProtocolVersion {
+            server_supported, ..
+        } = refusal
+        else {
+            panic!("expected the unsupported-version refusal, got {refusal}");
+        };
+        assert_eq!(server_supported, [ProtocolVersion::LATEST]);
     }
 
     /// A host that holds `subscriptions/listen` open must not hold the node's
@@ -1286,8 +1348,7 @@ mod tests {
         .await;
 
         assert_eq!(body["isError"], false, "body={body}");
-        let stated: Value =
-            serde_json::from_str(body["content"][0]["text"].as_str().unwrap()).unwrap();
+        let stated: Value = first_text_block_json(&body);
         assert_eq!(
             stated["name"],
             crate::control_plane_stub_support::STUB_ADDED_NODE_NAME,
@@ -1343,8 +1404,7 @@ mod tests {
         )
         .await;
         assert_eq!(connect_body["isError"], false, "body={connect_body}");
-        let stated: Value =
-            serde_json::from_str(connect_body["content"][0]["text"].as_str().unwrap()).unwrap();
+        let stated: Value = first_text_block_json(&connect_body);
         assert_eq!(
             stated["link_id"],
             crate::control_plane_stub_support::STUB_CREATED_LINK_ID
@@ -1586,8 +1646,7 @@ mod tests {
         )
         .await;
 
-        let stated: Value =
-            serde_json::from_str(body["content"][0]["text"].as_str().unwrap()).unwrap();
+        let stated: Value = first_text_block_json(&body);
         assert_eq!(
             stated["link_id"],
             crate::control_plane_stub_support::STUB_CREATED_LINK_ID
@@ -1606,8 +1665,7 @@ mod tests {
 
         let body = tool_call_result(runtime, "remove_node", json!({ "name": "FX" })).await;
         assert_eq!(body["isError"], false, "body={body}");
-        let stated: Value =
-            serde_json::from_str(body["content"][0]["text"].as_str().unwrap()).unwrap();
+        let stated: Value = first_text_block_json(&body);
         assert_eq!(
             stated,
             json!({ "removed_name": "fx" }),
@@ -1699,10 +1757,7 @@ mod tests {
         runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
         arguments: Value,
     ) -> Value {
-        let body = tool_call_result(runtime, "tap", arguments).await;
-        assert_eq!(body["isError"], false, "body={body}");
-        serde_json::from_str(body["content"][0]["text"].as_str().unwrap())
-            .expect("tap result text is JSON")
+        first_text_block_json(&tool_call_result(runtime, "tap", arguments).await)
     }
 
     /// A bag is a msgpack map, so a decoder needs all of it or none — which
@@ -2004,7 +2059,6 @@ mod tests {
         let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
 
         let body = tool_call_result(runtime, "shutdown", json!({ "reason": 42 })).await;
-        assert!(body.get("error").is_none(), "not a JSON-RPC error: {body}");
         assert_eq!(body["isError"], true, "body={body}");
         assert!(
             body["content"][0]["text"]
@@ -2034,14 +2088,11 @@ mod tests {
     /// `result` object and the `(surface id, cap)` pairs the tool handed the
     /// operation.
     async fn call_exchange_tool(arguments: Value) -> (Value, Vec<(String, Option<u32>)>) {
-        let (body, calls) =
-            call_exchange_tool_on(exchange_stub(StubSurfaceExchange::default()), arguments).await;
-        (body.clone(), calls)
+        call_exchange_tool_on(exchange_stub(StubSurfaceExchange::default()), arguments).await
     }
 
-    /// The same call against a stub the test chose, returning the whole
-    /// JSON-RPC body — so a refusal test can assert it is an in-band tool
-    /// error and not a JSON-RPC one.
+    /// The same call against a stub the test chose, returning the tool result
+    /// and the exchange calls the stub recorded.
     async fn call_exchange_tool_on(
         runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
         arguments: Value,
@@ -2209,8 +2260,6 @@ mod tests {
             json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID }),
         )
         .await;
-
-        assert!(body.get("error").is_none(), "not a JSON-RPC error: {body}");
         let result = &body;
         assert_eq!(result["isError"], true, "body={body}");
         let reported = result["content"][0]["text"].as_str().unwrap();
@@ -2255,11 +2304,6 @@ mod tests {
             let (body, calls) =
                 call_exchange_tool_on(exchange_stub(StubSurfaceExchange::default()), arguments)
                     .await;
-
-            assert!(
-                body.get("error").is_none(),
-                "{case} must not be a JSON-RPC error: {body}"
-            );
             assert_eq!(body["isError"], true, "{case}: {body}");
             assert!(
                 body["content"][0]["text"]
@@ -2457,17 +2501,6 @@ mod tests {
                 )
                 .expect("the virtual camera path is registered by this helper alone");
         });
-    }
-
-    /// A result or refusal as it crossed the wire.
-    fn wire_outcome<T: serde::Serialize>(
-        outcome: std::result::Result<T, ServiceError>,
-    ) -> std::result::Result<Value, McpError> {
-        match outcome {
-            Ok(result) => Ok(serde_json::to_value(result).unwrap()),
-            Err(ServiceError::McpError(refusal)) => Err(refusal),
-            Err(other) => panic!("the request failed below the protocol: {other}"),
-        }
     }
 
     async fn listed_resources_result(runtime: Arc<dyn RuntimeOperations>) -> Value {
@@ -2928,6 +2961,12 @@ mod tests {
                 "look_at_what_a_channel_carries",
                 json!({ "from_node": 7, "from_port": "video" }),
                 "7",
+            ),
+            (
+                "a misspelled argument",
+                "show_channel_on_virtual_camera",
+                json!({ "from_node": "pattern", "from_port": "video", "camera_nme": "desk" }),
+                "camera_nme",
             ),
         ] {
             let refusal = prompt_outcome(stub_serving_two_linked_nodes(), prompt_name, arguments)

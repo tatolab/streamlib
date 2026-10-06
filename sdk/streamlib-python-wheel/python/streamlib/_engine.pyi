@@ -43,6 +43,7 @@ __all__ = [
     "LocalApiMcpClient",
     "LocalApiMcpRequestRefused",
     "LocalApiMcpServerUnreachable",
+    "LocalApiMcpToolCallFailed",
     "MonotonicTimer",
     "OpaqueFdTextureExport",
     "ProcessorOwnedWindow",
@@ -2047,6 +2048,9 @@ class LocalApiMcpServerUnreachable(Exception):
 class LocalApiMcpRequestRefused(Exception):
     """The node answered and refused the MCP request."""
 
+class LocalApiMcpToolCallFailed(Exception):
+    """The tool ran and reported a failure, or answered with no text."""
+
 @final
 class LocalApiMcpClient:
     """An MCP client of one running node, over its local API socket.
@@ -2058,10 +2062,11 @@ class LocalApiMcpClient:
 
     def __new__(cls, local_api_socket_path: str, timeout_seconds: float) -> LocalApiMcpClient: ...
     def call_tool(self, tool_name: str, arguments_json: str) -> str:
-        """Call `tool_name` with a JSON object of arguments; answer its result as JSON.
+        """Call `tool_name` with a JSON object of arguments; answer the text its result carries.
 
-        A tool that ran and failed answers a result whose `isError` is true; a
-        call the node refused outright raises `LocalApiMcpRequestRefused`.
+        A tool that ran and failed, or answered no text, raises
+        `LocalApiMcpToolCallFailed`; a call the node refused outright raises
+        `LocalApiMcpRequestRefused`.
         """
 
     def close(self) -> None:

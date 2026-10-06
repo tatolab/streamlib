@@ -96,11 +96,12 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             .as_ref()
             .expect("setup must be called before start");
 
-        let local_api_stopping = tokio_util::sync::CancellationToken::new();
+        let runtime = handles.runtime.clone();
         self.running_local_api_socket_server =
             Some(crate::local_api_socket::serve_router_on_local_api_socket(
-                crate::handlers::build_router(handles.runtime.clone(), local_api_stopping.clone()),
-                local_api_stopping,
+                |local_api_stopping_token| {
+                    crate::handlers::build_router(runtime, local_api_stopping_token)
+                },
                 &handles.tokio_handle,
                 &handles.local_api_socket_path,
             )?);

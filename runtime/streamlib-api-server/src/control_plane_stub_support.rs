@@ -444,3 +444,47 @@ impl<S: ::tracing::Subscriber> ::tracing_subscriber::layer::Layer<S> for Capture
         self.0.lock().push(event.metadata().target());
     }
 }
+
+/// The real router over `runtime`, served on a local API socket at
+/// `local_api_socket_path` until the returned server is dropped.
+pub(crate) fn serve_the_control_plane_router_at(
+    runtime: ::std::sync::Arc<dyn ::streamlib::sdk::runtime::RuntimeOperations>,
+    local_api_socket_path: &::std::path::Path,
+) -> crate::local_api_socket::RunningLocalApiSocketServer {
+    crate::local_api_socket::serve_router_on_local_api_socket(
+        |local_api_stopping_token| crate::handlers::build_router(runtime, local_api_stopping_token),
+        &::tokio::runtime::Handle::current(),
+        local_api_socket_path,
+    )
+    .expect("the local API socket binds in a fresh directory")
+}
+
+/// The real router over a runtime, served on a local API socket in a fresh
+/// temp directory for as long as this lives.
+pub(crate) struct LocalApiServedOnAFreshSocket {
+    pub(crate) local_api_socket_path: ::std::path::PathBuf,
+    running_server: Option<crate::local_api_socket::RunningLocalApiSocketServer>,
+    _socket_directory: ::tempfile::TempDir,
+}
+
+impl LocalApiServedOnAFreshSocket {
+    pub(crate) fn over(
+        runtime: ::std::sync::Arc<dyn ::streamlib::sdk::runtime::RuntimeOperations>,
+    ) -> Self {
+        let socket_directory = ::tempfile::tempdir().expect("a temp directory");
+        let local_api_socket_path = socket_directory.path().join("local-api-Rtest.sock");
+        Self {
+            running_server: Some(serve_the_control_plane_router_at(
+                runtime,
+                &local_api_socket_path,
+            )),
+            local_api_socket_path,
+            _socket_directory: socket_directory,
+        }
+    }
+
+    /// Stop serving, as the node does when it stops.
+    pub(crate) fn stop_serving(&mut self) {
+        drop(self.running_server.take());
+    }
+}

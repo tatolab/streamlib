@@ -47,8 +47,6 @@ tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 # The official MCP SDK: the protocol, its Streamable HTTP transport, and the
 # tool / prompt routers the node's control vocabulary is declared through.
 rmcp = { version = "3.5.1", features = ["server", "macros", "transport-streamable-http-server"] }
-# rmcp's tool and prompt parameter schemas derive through the schemars it uses.
-schemars = "1.0"
 tokio-util = "0.7"
 
 # The MCP `exchange` tool's image content block: base64 for the inline PNG,

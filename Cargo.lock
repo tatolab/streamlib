@@ -4519,7 +4519,6 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "rmcp",
- "schemars 1.2.2",
  "serde",
  "serde_json",
  "serial_test",

@@ -66,18 +66,21 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
 /// code, so nothing here creates, replaces, connects, or removes a processor.
 /// `POST /api/runtime/shutdown` is the one route that acts on the node rather
 /// than reporting on it. No route asks for a credential: whoever can open the
-/// local API socket may call every one. `local_api_stopping` is cancelled when
-/// the local API stops serving, ending every response stream `/mcp` holds open.
+/// local API socket may call every one. `local_api_stopping_token` is
+/// cancelled when the local API stops serving, ending every
+/// `subscriptions/listen` `/mcp` holds open.
 pub(crate) fn build_router(
     runtime: Arc<dyn RuntimeOperations>,
-    local_api_stopping: CancellationToken,
+    local_api_stopping_token: CancellationToken,
 ) -> Router {
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(control_plane_rest_routes())
         .split_for_parts();
 
-    let local_api_mcp_service =
-        crate::mcp::local_api_mcp_streamable_http_service(runtime.clone(), local_api_stopping);
+    let local_api_mcp_service = crate::mcp::local_api_mcp_streamable_http_service(
+        runtime.clone(),
+        local_api_stopping_token,
+    );
     let state = AppState { runtime, openapi };
 
     // Method, path, status and latency for every request, at DEBUG so a client
@@ -93,7 +96,7 @@ pub(crate) fn build_router(
         .route("/ws/events", get(websocket_handler))
         .route("/api/openapi.json", get(get_openapi_spec))
         .route("/ws/tap/{channel}", get(tap_websocket_handler))
-        .nest_service("/mcp", local_api_mcp_service);
+        .route_service("/mcp", local_api_mcp_service);
 
     router.layer(trace_layer).with_state(state)
 }
@@ -630,6 +633,11 @@ pub(crate) mod router_surface_tests {
 
     fn control_plane_router_over(runtime: ControlPlaneRouterStubRuntime) -> Router {
         build_router(Arc::new(runtime), CancellationToken::new())
+    }
+
+    /// A default stub runtime, for tests that build the router themselves.
+    pub(crate) fn a_control_plane_router_stub_runtime() -> Arc<dyn RuntimeOperations> {
+        Arc::new(ControlPlaneRouterStubRuntime::default())
     }
 
     /// The real router over a default stub runtime.

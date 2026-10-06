@@ -55,13 +55,13 @@ fn bind_local_api_unix_listener(local_api_socket_path: &Path) -> Result<tokio::n
 #[must_use = "dropping this stops the local API server"]
 #[derive(Debug)]
 pub struct RunningLocalApiSocketServer {
-    local_api_stopping: CancellationToken,
+    local_api_stopping_token: CancellationToken,
     local_api_socket_path: PathBuf,
 }
 
 impl Drop for RunningLocalApiSocketServer {
     fn drop(&mut self) {
-        self.local_api_stopping.cancel();
+        self.local_api_stopping_token.cancel();
         // Logged, not raised: the next bind at the path clears a stale file anyway.
         if let Err(error) = remove_local_api_socket_file(&self.local_api_socket_path) {
             tracing::warn!(
@@ -73,12 +73,14 @@ impl Drop for RunningLocalApiSocketServer {
     }
 }
 
-/// Bind the local API socket at `local_api_socket_path` and serve
-/// `control_plane_router` on it from `tokio_handle` until the returned server
-/// is dropped, which cancels `local_api_stopping`.
+/// Bind the local API socket at `local_api_socket_path` and serve the router
+/// `build_control_plane_router` builds on it from `tokio_handle`, until the
+/// returned server is dropped.
+///
+/// The builder is handed the token the server cancels as it stops, so whatever
+/// the router holds open can end before the graceful shutdown waits on it.
 pub fn serve_router_on_local_api_socket(
-    control_plane_router: axum::Router,
-    local_api_stopping: CancellationToken,
+    build_control_plane_router: impl FnOnce(CancellationToken) -> axum::Router,
     tokio_handle: &tokio::runtime::Handle,
     local_api_socket_path: &Path,
 ) -> Result<RunningLocalApiSocketServer> {
@@ -86,13 +88,14 @@ pub fn serve_router_on_local_api_socket(
         let _entered_tokio_runtime = tokio_handle.enter();
         bind_local_api_unix_listener(local_api_socket_path)?
     };
+    let local_api_stopping_token = CancellationToken::new();
     tokio_handle.spawn(serve_local_api_until_stopped(
         local_api_listener,
-        control_plane_router,
-        local_api_stopping.clone(),
+        build_control_plane_router(local_api_stopping_token.clone()),
+        local_api_stopping_token.clone(),
     ));
     Ok(RunningLocalApiSocketServer {
-        local_api_stopping,
+        local_api_stopping_token,
         local_api_socket_path: local_api_socket_path.to_path_buf(),
     })
 }
@@ -100,10 +103,10 @@ pub fn serve_router_on_local_api_socket(
 async fn serve_local_api_until_stopped(
     local_api_listener: tokio::net::UnixListener,
     control_plane_router: axum::Router,
-    local_api_stopping: CancellationToken,
+    local_api_stopping_token: CancellationToken,
 ) {
     let served = axum::serve(local_api_listener, control_plane_router)
-        .with_graceful_shutdown(local_api_stopping.cancelled_owned())
+        .with_graceful_shutdown(local_api_stopping_token.cancelled_owned())
         .await;
     if let Err(error) = served {
         tracing::error!(%error, "the local API socket stopped serving");
@@ -122,9 +125,10 @@ fn remove_local_api_socket_file(local_api_socket_path: &Path) -> std::io::Result
 mod tests {
     use super::*;
     use crate::control_plane_stub_support::{
-        STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED, STUB_EXCHANGED_IMAGE_BYTES,
+        LocalApiServedOnAFreshSocket, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
+        STUB_EXCHANGED_IMAGE_BYTES, serve_the_control_plane_router_at,
     };
-    use crate::handlers::router_surface_tests::control_plane_router_over_a_stub_runtime;
+    use crate::handlers::router_surface_tests::a_control_plane_router_stub_runtime;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// One HTTP/1.1 exchange's status line, headers and body, as raw as the
@@ -170,34 +174,15 @@ mod tests {
         }
     }
 
-    /// Serve the real router, stub runtime behind it, on a socket bound at
-    /// `local_api_socket_path`.
     fn serve_the_stub_router_at(local_api_socket_path: &Path) -> RunningLocalApiSocketServer {
-        serve_router_on_local_api_socket(
-            control_plane_router_over_a_stub_runtime(),
-            CancellationToken::new(),
-            &tokio::runtime::Handle::current(),
+        serve_the_control_plane_router_at(
+            a_control_plane_router_stub_runtime(),
             local_api_socket_path,
         )
-        .unwrap()
     }
 
-    /// The stub router served on a socket in a fresh temp directory, for as
-    /// long as this lives.
-    struct StubRouterServedOnAFreshSocket {
-        local_api_socket_path: PathBuf,
-        _running_server: RunningLocalApiSocketServer,
-        _directory: tempfile::TempDir,
-    }
-
-    fn serve_the_stub_router_on_a_fresh_socket() -> StubRouterServedOnAFreshSocket {
-        let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rtest.sock");
-        StubRouterServedOnAFreshSocket {
-            _running_server: serve_the_stub_router_at(&local_api_socket_path),
-            local_api_socket_path,
-            _directory: directory,
-        }
+    fn serve_the_stub_router_on_a_fresh_socket() -> LocalApiServedOnAFreshSocket {
+        LocalApiServedOnAFreshSocket::over(a_control_plane_router_stub_runtime())
     }
 
     /// Probe `GET /health` over the socket, assert it answered 200, and hand

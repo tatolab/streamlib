@@ -13,8 +13,8 @@ use std::fmt::Write as _;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{GetPromptResult, PromptMessage, Role};
+use rmcp::schemars::JsonSchema;
 use rmcp::{prompt, prompt_router};
-use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
@@ -48,7 +48,15 @@ const FROM_PORT_ARGUMENT_DESCRIPTION: &str =
 const CAMERA_NAME_ARGUMENT_DESCRIPTION: &str =
     "The camera's name in every picker. Omit for the default name.";
 
+const INSERT_NODE_BETWEEN_LINKED_NODES_PROMPT_DESCRIPTION: &str =
+    "Splice a new node into an existing link, so what the link carried passes through it.";
+const FAN_OUTPUT_TO_ANOTHER_CONSUMER_PROMPT_DESCRIPTION: &str = "Add a node as one more consumer of an output port, leaving the consumers it already feeds as they are.";
+const SHOW_CHANNEL_ON_VIRTUAL_CAMERA_PROMPT_DESCRIPTION: &str = "Present an output's video frames as a camera every other application on the machine can select.";
+const LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION: &str = "Sample one bag an output port publishes, decode it, and see the frame it names when it names one.";
+
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 struct InsertNodeBetweenLinkedNodesPromptArguments {
     #[schemars(description = LINK_ID_ARGUMENT_DESCRIPTION)]
     link_id: String,
@@ -58,6 +66,8 @@ struct InsertNodeBetweenLinkedNodesPromptArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 struct FanOutputToAnotherConsumerPromptArguments {
     #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
     from_node: String,
@@ -69,6 +79,8 @@ struct FanOutputToAnotherConsumerPromptArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 struct ShowChannelOnVirtualCameraPromptArguments {
     #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
     from_node: String,
@@ -79,6 +91,8 @@ struct ShowChannelOnVirtualCameraPromptArguments {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 struct LookAtWhatAChannelCarriesPromptArguments {
     #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
     from_node: String,
@@ -89,9 +103,8 @@ struct LookAtWhatAChannelCarriesPromptArguments {
 #[prompt_router(vis = "pub(crate)")]
 impl LocalApiMcpServerHandler {
     #[prompt(
-        name = "insert_node_between_linked_nodes",
         title = "Insert a node into a link",
-        description = "Splice a new node into an existing link, so what the link carried passes through it."
+        description = INSERT_NODE_BETWEEN_LINKED_NODES_PROMPT_DESCRIPTION
     )]
     async fn insert_node_between_linked_nodes(
         &self,
@@ -99,15 +112,12 @@ impl LocalApiMcpServerHandler {
     ) -> Result<GetPromptResult, McpError> {
         let live_graph = self.live_graph().await?;
         let recipe = insert_node_between_linked_nodes_recipe(&live_graph, &arguments)?;
-        Ok(recipe.prompt_result(
-            "Splice a new node into an existing link, so what the link carried passes through it.",
-        ))
+        Ok(recipe.prompt_result(INSERT_NODE_BETWEEN_LINKED_NODES_PROMPT_DESCRIPTION))
     }
 
     #[prompt(
-        name = "fan_output_to_another_consumer",
         title = "Fan an output to another consumer",
-        description = "Add a node as one more consumer of an output port, leaving the consumers it already feeds as they are."
+        description = FAN_OUTPUT_TO_ANOTHER_CONSUMER_PROMPT_DESCRIPTION
     )]
     async fn fan_output_to_another_consumer(
         &self,
@@ -115,15 +125,12 @@ impl LocalApiMcpServerHandler {
     ) -> Result<GetPromptResult, McpError> {
         let live_graph = self.live_graph().await?;
         let recipe = fan_output_to_another_consumer_recipe(&live_graph, &arguments)?;
-        Ok(recipe.prompt_result(
-            "Add a node as one more consumer of an output port, leaving the consumers it already feeds as they are.",
-        ))
+        Ok(recipe.prompt_result(FAN_OUTPUT_TO_ANOTHER_CONSUMER_PROMPT_DESCRIPTION))
     }
 
     #[prompt(
-        name = "show_channel_on_virtual_camera",
         title = "Show a channel on a virtual camera",
-        description = "Present an output's video frames as a camera every other application on the machine can select."
+        description = SHOW_CHANNEL_ON_VIRTUAL_CAMERA_PROMPT_DESCRIPTION
     )]
     async fn show_channel_on_virtual_camera(
         &self,
@@ -131,15 +138,12 @@ impl LocalApiMcpServerHandler {
     ) -> Result<GetPromptResult, McpError> {
         let live_graph = self.live_graph().await?;
         let recipe = show_channel_on_virtual_camera_recipe(&live_graph, &arguments)?;
-        Ok(recipe.prompt_result(
-            "Present an output's video frames as a camera every other application on the machine can select.",
-        ))
+        Ok(recipe.prompt_result(SHOW_CHANNEL_ON_VIRTUAL_CAMERA_PROMPT_DESCRIPTION))
     }
 
     #[prompt(
-        name = "look_at_what_a_channel_carries",
         title = "Look at what a channel carries",
-        description = "Sample one bag an output port publishes, decode it, and see the frame it names when it names one."
+        description = LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION
     )]
     async fn look_at_what_a_channel_carries(
         &self,
@@ -147,9 +151,7 @@ impl LocalApiMcpServerHandler {
     ) -> Result<GetPromptResult, McpError> {
         let live_graph = self.live_graph().await?;
         let recipe = look_at_what_a_channel_carries_recipe(&live_graph, &arguments)?;
-        Ok(recipe.prompt_result(
-            "Sample one bag an output port publishes, decode it, and see the frame it names when it names one.",
-        ))
+        Ok(recipe.prompt_result(LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION))
     }
 }
 
@@ -244,13 +246,13 @@ fn input_port_of<'graph>(
     node.ports.inputs.iter().find(|port| port.name == port_name)
 }
 
-/// The node `from_node` names and the `from_port` the arguments name, having
-/// checked that port is one of its outputs.
-fn output_port_named_by_arguments<'graph, 'arguments>(
+/// The node `from_node` names, having checked `from_port` is one of its
+/// outputs.
+fn node_with_output_port_named<'graph>(
     graph: &'graph GraphResponse,
     from_node: &str,
-    from_port: &'arguments str,
-) -> Result<(&'graph ProcessorNodeOutput, &'arguments str), McpError> {
+    from_port: &str,
+) -> Result<&'graph ProcessorNodeOutput, McpError> {
     let node = node_named(graph, from_node)?;
     if !node.ports.outputs.iter().any(|port| port.name == from_port) {
         let output_port_names: Vec<&str> = node
@@ -267,7 +269,7 @@ fn output_port_named_by_arguments<'graph, 'arguments>(
             None,
         ));
     }
-    Ok((node, from_port))
+    Ok(node)
 }
 
 /// A registered type's input, when it has exactly one for a recipe to wire.
@@ -430,8 +432,8 @@ fn fan_output_to_another_consumer_recipe(
     graph: &GraphResponse,
     arguments: &FanOutputToAnotherConsumerPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
-    let (source, from_port) =
-        output_port_named_by_arguments(graph, &arguments.from_node, &arguments.from_port)?;
+    let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
+    let from_port = arguments.from_port.as_str();
     let node_type = arguments.node_type.as_str();
     let source_name = source.name.as_str();
     let consumer_type_entry = catalog_entry_for(node_type);
@@ -472,8 +474,8 @@ fn show_channel_on_virtual_camera_recipe(
     graph: &GraphResponse,
     arguments: &ShowChannelOnVirtualCameraPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
-    let (source, from_port) =
-        output_port_named_by_arguments(graph, &arguments.from_node, &arguments.from_port)?;
+    let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
+    let from_port = arguments.from_port.as_str();
     let camera_name = arguments.camera_name.as_deref();
     let virtual_camera_sink = catalog_entry_for(VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH)
         .ok_or_else(|| {
@@ -540,8 +542,8 @@ fn look_at_what_a_channel_carries_recipe(
     graph: &GraphResponse,
     arguments: &LookAtWhatAChannelCarriesPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
-    let (source, from_port) =
-        output_port_named_by_arguments(graph, &arguments.from_node, &arguments.from_port)?;
+    let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
+    let from_port = arguments.from_port.as_str();
     let channel = format!("{}/{}/{from_port}", graph.runtime_name, source.name);
 
     Ok(GraphRecipe {
