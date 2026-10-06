@@ -136,6 +136,12 @@ against.
 
 ## ADDED: §Control plane & observability — MCP 2026-07-28, and the `mcp` verb
 
+> **Built on the official SDK (owner, 2026-10-06, #2572).** The revision below is served by
+> `rmcp`, the official Rust MCP SDK, at its latest revision alone — no MCP protocol logic is
+> hand-written, in the runtime or the wheel's client. `rmcp` owns the protocol behaviour this
+> section lists; the node's tools, resources and prompts are its handler. The cache hints are
+> `rmcp`'s defaults rather than the one-hour assumption below.
+
 - **The revision.** `mcp.rs` serves 2026-07-28 only: `initialize` and `ping` leave the dispatch;
   `server/discover` joins, answering `supportedVersions: ["2026-07-28"]`, today's capabilities and
   instructions, `serverInfo` in `_meta`; every request's `_meta` is checked — a missing version or
@@ -215,7 +221,7 @@ ship gate runs, since the gate searches `.claude/`.
   the local API stays one socket; the verb is a byte pipe because the plan's "interprets
   nothing" rules out a forwarder that derives HTTP headers from each message and maps cancels.
 - `POST /mcp` stays beside `/mcp/stdio` because the CLI's one-shot calls are simplest as HTTP and
-  "today's router unchanged" is decided; both framings call one `dispatch_jsonrpc`.
+  "today's router unchanged" is decided; both framings serve one `rmcp` handler.
 - `ttlMs` is 0 for `resources/read` of the live graph and one hour for the static lists.
 - Registry v3 ships with no migration; `nodes` lists the local registry alone, the mesh being
   gone (#2643, #2645).
