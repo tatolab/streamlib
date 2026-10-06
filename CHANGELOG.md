@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.33.0](https://github.com/tatolab/streamlib/compare/v0.32.2...v0.33.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** the control plane's TCP port, --host/--port/--url and the bearer gate are gone ([#2663](https://github.com/tatolab/streamlib/issues/2663))
+
+### Features
+
+* **sdk:** the control plane's TCP port, --host/--port/--url and the bearer gate are gone ([#2663](https://github.com/tatolab/streamlib/issues/2663)) ([ca3dfeb](https://github.com/tatolab/streamlib/commit/ca3dfeba03f158593cba0607c9dee5cafd1bcbdb))
+
 ## [0.32.2](https://github.com/tatolab/streamlib/compare/v0.32.1...v0.32.2) (2026-10-06)
 
 
