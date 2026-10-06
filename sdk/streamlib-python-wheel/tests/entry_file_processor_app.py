@@ -10,8 +10,8 @@ under test: under pytest the entry module is the test runner, so a class's
 
 import sys
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, node, stream
+import tatolab.runtime
+from tatolab.stream import Stream, compile_stream_to_graph, node, stream
 
 MARKER_PREFIX = "MARKER:"
 
@@ -72,7 +72,7 @@ def scenario_function_local_class_is_refused() -> None:
 
 def scenario_importable_class_is_accepted() -> None:
     graph = compile_stream_to_graph(an_importable_processor)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     marker("ACCEPTED")
     runtime.shutdown()

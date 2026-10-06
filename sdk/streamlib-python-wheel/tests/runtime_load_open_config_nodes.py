@@ -10,7 +10,7 @@ as null — names this node instead.
 
 from typing import Any
 
-from streamlib import RuntimeContextLimitedAccess, input, node
+from tatolab.stream import RuntimeContextLimitedAccess, input, node
 
 
 class OpenConfig(dict[str, Any]):

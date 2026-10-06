@@ -10,7 +10,8 @@ which only a real child can show.
 
 import sys
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from audio_window_probes import (
     DeclaredMonoWindowProbe,
     ExactWindowProbe,
@@ -18,11 +19,11 @@ from audio_window_probes import (
     SourceFollowingWindowProbe,
     StereoToneSource,
 )
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 
 def _microphone_into(stream: Stream, probe_class: type) -> None:
-    microphone = stream.add(streamlib.MicrophoneSource)
+    microphone = stream.add(tatolab.stream.MicrophoneSource)
     probe = stream.add(probe_class)
     stream.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 
@@ -63,7 +64,7 @@ STREAM_BY_SCENARIO = {
 def main() -> None:
     scenario = sys.argv[1] if len(sys.argv) > 1 else "contiguous_windows"
     graph = compile_stream_to_graph(STREAM_BY_SCENARIO[scenario])
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

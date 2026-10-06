@@ -20,7 +20,7 @@ from typing import Iterator
 
 import pytest
 
-from streamlib._node_registry import (
+from tatolab.runtime._node_registry import (
     UntrustedRuntimeDirectoryError,
     _resolve_runtime_directory,
     registry_directory,
@@ -140,8 +140,8 @@ RUNTIME_THAT_REPORTS_WHERE_IT_OPENED = """
 import json, os, sys
 from pathlib import Path
 
-import streamlib
-from streamlib._node_registry import runtime_directory
+import tatolab.runtime
+from tatolab.runtime._node_registry import runtime_directory
 
 resolved = runtime_directory()
 def node_details():
@@ -149,7 +149,7 @@ def node_details():
 def sockets():
     return {str(path) for path in resolved.glob("surface-share-*.sock")}
 node_details_before, sockets_before = node_details(), sockets()
-runtime = streamlib.Runtime()
+runtime = tatolab.runtime.Runtime()
 try:
     print(json.dumps({
         "resolved_by_the_reader": str(resolved),

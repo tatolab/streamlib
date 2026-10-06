@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 from graphics_kernel_probes import SOURCE_BINDING
-from streamlib._engine import GpuContextFullAccess, GraphicsKernel
+from tatolab.runtime._engine import GpuContextFullAccess, GraphicsKernel
 
 APP = Path(__file__).parent / "graphics_kernel_app.py"
 

@@ -10,8 +10,8 @@ test driving it — over the child→parent log forwarding.
 
 import sys
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 import graphics_kernel_probes
 
@@ -29,7 +29,7 @@ def one_standalone_graphics_kernel_probe(stream: Stream) -> None:
 
 if __name__ == "__main__":
     graph = compile_stream_to_graph(one_standalone_graphics_kernel_probe)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

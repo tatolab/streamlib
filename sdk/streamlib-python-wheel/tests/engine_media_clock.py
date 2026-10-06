@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The engine's media clock, read through the `time` module rather than streamlib.
+"""The engine's media clock, read through the `time` module rather than `tatolab.stream`.
 
 A bracket built on this cannot pass by agreeing with the clock it checks.
 """

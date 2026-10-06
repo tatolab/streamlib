@@ -17,8 +17,8 @@ import json
 import os
 import traceback
 
-from streamlib import (
-    ProcessorOutputTextureRing,
+from tatolab.stream import (
+    NodeOutputTextureRing,
     VideoFrame,
     clock,
     input,
@@ -79,7 +79,7 @@ class TextureRingPublishingVideoSource:
     def frames_to_downstream(self) -> None: ...
 
     def __init__(self, config: TextureRingPublishingVideoSourceConfig) -> None:
-        self._output_texture_ring = ProcessorOutputTextureRing(
+        self._output_texture_ring = NodeOutputTextureRing(
             RING_TEXTURE_FORMAT, RING_TEXTURE_USAGE, depth=RING_DEPTH
         )
         self._frames_to_publish = config.frames_to_publish

@@ -23,8 +23,8 @@ from typing import Any
 
 import pytest
 
-from streamlib import _capability_extensions
-from streamlib._capability_extensions import (
+from tatolab.runtime import _capability_extensions
+from tatolab.runtime._capability_extensions import (
     CapabilityExtensionLoadError,
     load_installed_capability_extensions_once_per_process,
     run_every_installed_capability_extension_hook,

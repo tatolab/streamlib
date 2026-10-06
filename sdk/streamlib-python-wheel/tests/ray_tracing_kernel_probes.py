@@ -25,7 +25,7 @@ import os
 import traceback
 from collections.abc import Sequence
 
-from streamlib import (
+from tatolab.stream import (
     GpuContextFullAccess,
     GpuSurfaceHandle,
     RuntimeContextFullAccess,
@@ -33,7 +33,7 @@ from streamlib import (
     log,
     node,
 )
-from streamlib._engine import AccelerationStructureHandle, RayTracingKernel
+from tatolab.runtime._engine import AccelerationStructureHandle, RayTracingKernel
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 64

@@ -25,7 +25,7 @@ import traceback
 
 import numpy
 
-from streamlib import (
+from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,

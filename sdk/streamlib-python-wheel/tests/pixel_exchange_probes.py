@@ -17,7 +17,7 @@ from typing import TypedDict
 
 import numpy
 
-from streamlib import VideoFrame, input, log, node, output
+from tatolab.stream import VideoFrame, input, log, node, output
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 32

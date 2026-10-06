@@ -22,8 +22,8 @@ that uses it (`test_single_processor_pipeline.py`).
 
 import pytest
 
-import streamlib
-from streamlib import (
+import tatolab.runtime
+from tatolab.stream import (
     RuntimeContextLimitedAccess,
     Stream,
     compile_stream_to_graph,
@@ -49,7 +49,7 @@ def one_never_started_source(stream: Stream) -> None:
 def test_waiting_on_a_graph_that_was_never_run_times_out_naming_the_state():
     """Not an error, a wait — and when nothing ever starts it, the timeout says
     every processor is still `Pending` rather than blaming the caller."""
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(compile_stream_to_graph(one_never_started_source))
         with pytest.raises(RuntimeError, match="Pending"):
@@ -61,7 +61,7 @@ def test_waiting_on_a_graph_that_was_never_run_times_out_naming_the_state():
 def test_waiting_on_an_empty_graph_that_was_never_run_returns():
     """No processors, nothing to wait for — the same answer before `run()` as
     after it."""
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.wait_until_every_processor_is_running(timeout=5.0)
     finally:
@@ -69,7 +69,7 @@ def test_waiting_on_an_empty_graph_that_was_never_run_returns():
 
 
 def test_waiting_after_shutdown_says_the_runtime_is_gone():
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.shutdown()
 
     with pytest.raises(RuntimeError, match="has been shut down"):
@@ -80,7 +80,7 @@ def test_waiting_after_shutdown_says_the_runtime_is_gone():
 def test_a_timeout_python_can_express_but_a_duration_cannot_is_refused(rejected_timeout):
     """`Duration::from_secs_f64` panics on all of these, and a panic crossing
     the binding aborts the interpreter rather than failing the call."""
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         with pytest.raises(ValueError, match="finite, non-negative"):
             runtime.wait_until_every_processor_is_running(timeout=rejected_timeout)

@@ -25,14 +25,15 @@ import json
 import sys
 import threading
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from video_codec_blocks_probes import (
     DecodedVideoFrameProbe,
     EncodedFrameProbe,
     EncodedFrameTimestampProbe,
 )
-from streamlib import Stream, compile_stream_to_graph, stream
-from streamlib._control_plane_client import call_tool
+from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.runtime._control_plane_client import call_tool
 from this_processes_node_registry_entry import this_processes_local_api_socket
 
 READINESS_TIMEOUT_SECONDS = 20.0
@@ -43,8 +44,8 @@ KEYFRAME_INTERVAL_SECONDS = 1
 
 
 CODEC_BLOCKS = {
-    "h264": (streamlib.H264Encoder, streamlib.H264Decoder),
-    "h265": (streamlib.H265Encoder, streamlib.H265Decoder),
+    "h264": (tatolab.stream.H264Encoder, tatolab.stream.H264Decoder),
+    "h265": (tatolab.stream.H265Encoder, tatolab.stream.H265Decoder),
 }
 
 
@@ -53,7 +54,7 @@ def a_codec_round_trip_with_probes(stream: Stream) -> None:
     """The encoder and decoder pair `argv[1]` names, with the three probes."""
     encoder_class, decoder_class = CODEC_BLOCKS[sys.argv[1]]
     pattern = stream.add(
-        streamlib.TestPatternSource, config={"width": 320, "height": 180}
+        tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
     )
     encoder = stream.add(
         encoder_class,
@@ -96,7 +97,7 @@ def main() -> None:
     encoder_class, decoder_class = CODEC_BLOCKS[sys.argv[1]]
 
     graph = compile_stream_to_graph(a_codec_round_trip_with_probes)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.host_control_plane()
     marker_class_name_by_node_name = {

@@ -9,7 +9,7 @@ one module differ only in `__qualname__`, and a graph mixing modules is what a
 real app looks like.
 """
 
-from streamlib import node
+from tatolab.stream import node
 
 
 @node(execution="continuous", interval_ms=1)

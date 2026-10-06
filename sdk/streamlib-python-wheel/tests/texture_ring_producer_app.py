@@ -10,8 +10,8 @@ the same log forwarding every child's records ride.
 
 import sys
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 from texture_ring_producer_probes import (
     FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD,
     MINIMUM_INTERVAL_BETWEEN_HELD_FRAME_PUBLISHES_NS,
@@ -104,7 +104,7 @@ STREAM_BY_SCENARIO = {
 
 if __name__ == "__main__":
     graph = compile_stream_to_graph(STREAM_BY_SCENARIO[sys.argv[1]])
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

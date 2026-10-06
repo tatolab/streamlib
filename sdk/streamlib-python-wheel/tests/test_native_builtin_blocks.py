@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-import streamlib
-from streamlib import (
+import tatolab.runtime
+from tatolab.stream import (
     Stream,
     TestPatternSource,
     VideoFrame,
@@ -174,7 +174,7 @@ def a_test_pattern_source_alone(stream: Stream) -> None:
 def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(a_test_pattern_source_alone)
     assert [node["name"] for node in graph["nodes"]] == ["testpatternsource"]
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(graph)
     finally:

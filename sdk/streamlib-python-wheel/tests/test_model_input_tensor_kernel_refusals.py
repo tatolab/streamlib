@@ -18,7 +18,7 @@ from typing import Any, cast
 import numpy
 import pytest
 
-from streamlib import (
+from tatolab.stream import (
     GpuContextFullAccess,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,
@@ -72,7 +72,7 @@ class GpuLimitedAccessStandIn:
         self.calls: "list[str]" = []
         self.tensor_requests: "list[tuple[int, list[int], str]]" = []
 
-    def acquire_texture_from_processor_output_pool(
+    def acquire_texture_from_node_output_pool(
         self, pool_key: str, rotation_depth: int, width: int, height: int,
         texture_format: str, usage: "list[str]",
     ) -> SurfaceHandleStandIn:
@@ -84,7 +84,7 @@ class GpuLimitedAccessStandIn:
     ) -> None:
         self.calls.append(f"copy {source_surface_id} -> {destination_surface.surface_id}")
 
-    def acquire_storage_buffer_from_processor_output_pool(
+    def acquire_storage_buffer_from_node_output_pool(
         self, pool_key: str, rotation_depth: int, shape: "list[int]", dtype: str
     ) -> SurfaceHandleStandIn:
         self.calls.append(f"acquire tensor {shape} {dtype}")

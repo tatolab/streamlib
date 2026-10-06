@@ -8,7 +8,7 @@ by its import path, and a class in the entry file identifies as `__main__:â€¦` â
 a name the child interpreter that hosts it cannot import.
 """
 
-from streamlib import node
+from tatolab.stream import node
 
 
 @node(execution="continuous", interval_ms=1)

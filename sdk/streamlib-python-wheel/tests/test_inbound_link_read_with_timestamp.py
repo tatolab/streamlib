@@ -20,8 +20,8 @@ from typing import Any
 
 import pytest
 
-from streamlib import RuntimeContextFullAccess
-from streamlib._engine import ProcessorLinkDataAccess
+from tatolab.stream import RuntimeContextFullAccess
+from tatolab.runtime._engine import NodeLinkDataAccess
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
@@ -43,7 +43,7 @@ class TwoLinksIntoOnePort:
     def __init__(
         self,
         context: RuntimeContextFullAccess,
-        sources: "dict[str, ProcessorLinkDataAccess]",
+        sources: "dict[str, NodeLinkDataAccess]",
         channel_named: "dict[str, str]",
     ) -> None:
         self.context = context
@@ -65,8 +65,8 @@ def two_links_into_one_port(
 
     # The destination subscribes first: iceoryx2 drops a send with no
     # subscriber attached.
-    destination = ProcessorLinkDataAccess()
-    sources: "dict[str, ProcessorLinkDataAccess]" = {}
+    destination = NodeLinkDataAccess()
+    sources: "dict[str, NodeLinkDataAccess]" = {}
     channel_named: "dict[str, str]" = {}
     for kind in ("video", "audio"):
         channel_service_name = f"{unique}/{kind}"
@@ -75,7 +75,7 @@ def two_links_into_one_port(
             notify_service_name,
             "read_next_in_order", 8, 8, 2, 2, f"L-{unique}-{kind}",
         )  # fmt: skip
-        source = ProcessorLinkDataAccess()
+        source = NodeLinkDataAccess()
         source.wire_output_link(
             OUTPUT_PORT, channel_service_name, notify_service_name,
             1024, 1 << 20, 8, 2, 2, f"L-{unique}-{kind}",
@@ -175,13 +175,13 @@ def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
     inbound_link_name = "bench-cam-a1b2/CameraSource/video"
     notify_service_name = f"{unique}_dest/notify"
 
-    destination = ProcessorLinkDataAccess()
+    destination = NodeLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT, channel_service_name, inbound_link_name,
         notify_service_name,
         "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
-    source = ProcessorLinkDataAccess()
+    source = NodeLinkDataAccess()
     source.wire_output_link(
         OUTPUT_PORT, channel_service_name, notify_service_name,
         1024, 1 << 20, 8, 2, 1, f"L-{unique}",

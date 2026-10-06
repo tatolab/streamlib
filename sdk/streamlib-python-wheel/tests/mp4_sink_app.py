@@ -26,10 +26,11 @@ import argparse
 import json
 import threading
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from opus_blocks_probes import StereoToneSource
-from streamlib import Stream, compile_stream_to_graph, stream
-from streamlib._control_plane_client import call_tool
+from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.runtime._control_plane_client import call_tool
 from this_processes_node_registry_entry import this_processes_local_api_socket
 
 READINESS_TIMEOUT_SECONDS = 20.0
@@ -50,13 +51,13 @@ def _parse_mp4_sink_arguments() -> argparse.Namespace:
 @stream
 def two_tone_pairs_recorded_into_one_mp4(stream: Stream) -> None:
     sink = stream.add(
-        streamlib.Mp4Sink,
+        tatolab.stream.Mp4Sink,
         name="recorder",
         config={"path": _parse_mp4_sink_arguments().path},
     )
     for pair_name in RECORDED_PAIR_NAMES:
         source = stream.add(StereoToneSource, name=f"{pair_name}_tone")
-        encoder = stream.add(streamlib.OpusEncoder, name=f"{pair_name}_encoder")
+        encoder = stream.add(tatolab.stream.OpusEncoder, name=f"{pair_name}_encoder")
         stream.connect(source.output("audio"), encoder.input("audio"))
         stream.connect(encoder.output("encoded_audio"), sink.input("tracks"))
 
@@ -77,7 +78,7 @@ def _recorded_track_names() -> "list[str]":
 
 def main() -> None:
     graph = compile_stream_to_graph(two_tone_pairs_recorded_into_one_mp4)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.host_control_plane()
 

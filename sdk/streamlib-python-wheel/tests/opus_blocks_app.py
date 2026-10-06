@@ -21,13 +21,14 @@ there is no rechunker between them and no configuration that could add one.
 
 import threading
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from opus_blocks_probes import (
     DecodedAudioBlockProbe,
     EncodedAudioPacketProbe,
     StereoToneSource,
 )
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
@@ -35,8 +36,8 @@ READINESS_TIMEOUT_SECONDS = 20.0
 @stream
 def stereo_tone_through_the_opus_pair_probed_on_both_links(stream: Stream) -> None:
     source = stream.add(StereoToneSource)
-    encoder = stream.add(streamlib.OpusEncoder)
-    decoder = stream.add(streamlib.OpusDecoder)
+    encoder = stream.add(tatolab.stream.OpusEncoder)
+    decoder = stream.add(tatolab.stream.OpusDecoder)
     encoded_probe = stream.add(EncodedAudioPacketProbe)
     decoded_probe = stream.add(DecodedAudioBlockProbe)
 
@@ -55,7 +56,7 @@ def main() -> None:
     graph = compile_stream_to_graph(
         stereo_tone_through_the_opus_pair_probed_on_both_links
     )
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
 
     def watch_readiness() -> None:

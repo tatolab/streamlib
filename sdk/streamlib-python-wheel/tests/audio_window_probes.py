@@ -19,7 +19,7 @@ import math
 import struct
 from typing import Optional
 
-from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
     AudioBlock,
     AudioWindowContract,
     RuntimeContextLimitedAccess,

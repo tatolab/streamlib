@@ -28,8 +28,9 @@ from pathlib import Path
 
 import pytest
 
-import streamlib
-from streamlib import Mp4Sink, Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Mp4Sink, Stream, compile_stream_to_graph, stream
 
 MP4_SINK_APP = Path(__file__).parent / "mp4_sink_app.py"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -131,7 +132,7 @@ def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(one_mp4_sink_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == ["mp4sink"]
 
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(graph)
     finally:
@@ -142,8 +143,8 @@ def test_node_name_defaults_to_the_type_name():
 def two_microphone_encoder_pairs_into_one_mp4_sink(stream: Stream) -> None:
     sink = stream.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
     for _ in range(2):
-        microphone = stream.add(streamlib.MicrophoneSource)
-        encoder = stream.add(streamlib.OpusEncoder)
+        microphone = stream.add(tatolab.stream.MicrophoneSource)
+        encoder = stream.add(tatolab.stream.OpusEncoder)
         stream.connect(microphone.output("audio"), encoder.input("audio"))
         stream.connect(encoder.output("encoded_audio"), sink.input("tracks"))
 
@@ -157,7 +158,7 @@ def test_two_encoders_wire_into_the_one_input_without_an_adapter():
     The builder checks no port names, so the engine accepting the load is the
     proof.
     """
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(
             compile_stream_to_graph(two_microphone_encoder_pairs_into_one_mp4_sink)

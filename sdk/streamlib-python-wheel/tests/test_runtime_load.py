@@ -32,8 +32,8 @@ from typing import Any
 
 import pytest
 
-import streamlib
-from streamlib import (
+import tatolab.runtime
+from tatolab.stream import (
     CameraSource,
     DisplayWindow,
     H264Decoder,
@@ -51,14 +51,14 @@ from streamlib import (
     compile_stream_to_graph,
     stream,
 )
-from streamlib._control_plane_client import (
+from tatolab.runtime._control_plane_client import (
     ControlPlaneError,
     LocalApiSocket,
     call_tool,
     resolve_local_api_socket_of_requested_node,
 )
 from runtime_load_open_config_nodes import OpenConfigSink
-from streamlib._engine import (
+from tatolab.runtime._engine import (
     TestBagCollector,
     TestBagFeeder,
     close_test_harness_channel,
@@ -137,9 +137,9 @@ SERVED_GRAPH_ENGINE_TEARDOWN_TIMEOUT_SECONDS = 30.0
 
 
 @pytest.fixture
-def runtime() -> Iterator[streamlib.Runtime]:
+def runtime() -> Iterator[tatolab.runtime.Runtime]:
     """A Runtime built but never run, shut down whatever the test did."""
-    built_runtime = streamlib.Runtime()
+    built_runtime = tatolab.runtime.Runtime()
     try:
         yield built_runtime
     finally:
@@ -201,7 +201,7 @@ def empty_graph() -> dict[str, Any]:
 
 
 def processor_ids_a_never_run_runtimes_readiness_wait_lists(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ) -> list[str]:
     """Every processor id a never-run runtime's readiness wait lists, sorted; none if it returns."""
     try:
@@ -219,7 +219,7 @@ def processor_ids_a_never_run_runtimes_readiness_wait_lists(
     return []
 
 
-def the_runtimes_graph_holds_a_processor(runtime: streamlib.Runtime) -> bool:
+def the_runtimes_graph_holds_a_processor(runtime: tatolab.runtime.Runtime) -> bool:
     """Whether a never-run runtime's readiness wait lists a processor rather than returning."""
     return bool(processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime))
 
@@ -294,7 +294,7 @@ def graph_relaying_through(relay_type: str, *, stream_name: str) -> dict[str, An
 
 
 def load_on_another_thread_holding_at_the_import(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
     graph: dict[str, Any],
     held_node_module: NodeModuleWhoseImportHoldsTheLoad,
     while_the_load_is_held: Callable[[], None],
@@ -336,7 +336,7 @@ def run_in_its_own_process(script: str) -> None:
     )
 
 
-def run_expecting_a_refusal(runtime: streamlib.Runtime) -> RuntimeError:
+def run_expecting_a_refusal(runtime: tatolab.runtime.Runtime) -> RuntimeError:
     """`run()`'s refusal, bounded so a run that starts instead fails rather than hangs."""
     shutdown_if_run_started = threading.Timer(RUN_REFUSAL_DEADLINE_SECONDS, runtime.shutdown)
     shutdown_if_run_started.start()
@@ -364,7 +364,7 @@ def test_every_compiled_marker_type_is_in_this_processes_catalog(marker: type):
     assert getattr(marker, "type") in processor_class_import_paths_in_this_processes_catalog()
 
 
-def test_a_graph_naming_every_compiled_marker_by_its_type_loads(runtime: streamlib.Runtime):
+def test_a_graph_naming_every_compiled_marker_by_its_type_loads(runtime: tatolab.runtime.Runtime):
     runtime.load(
         {
             "nodes": [
@@ -385,19 +385,19 @@ def test_a_graph_naming_every_compiled_marker_by_its_type_loads(runtime: streaml
 # ---- loading ----------------------------------------------------------------
 
 
-def test_a_loaded_graphs_nodes_are_in_the_runtimes_graph(runtime: streamlib.Runtime):
+def test_a_loaded_graphs_nodes_are_in_the_runtimes_graph(runtime: tatolab.runtime.Runtime):
     runtime.load(pattern_to_window_graph(stream_name="pattern-to-window"))
 
     assert len(processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime)) == 2
 
 
-def test_a_mapping_that_is_not_a_dict_loads(runtime: streamlib.Runtime):
+def test_a_mapping_that_is_not_a_dict_loads(runtime: tatolab.runtime.Runtime):
     runtime.load(types.MappingProxyType(pattern_to_window_graph()))
 
     assert the_runtimes_graph_holds_a_processor(runtime)
 
 
-def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: streamlib.Runtime):
+def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: tatolab.runtime.Runtime):
     graph = pattern_to_window_graph()
     graph["nodes"] = tuple(graph["nodes"])
 
@@ -406,7 +406,7 @@ def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: streamlib.Runtime)
     assert the_runtimes_graph_holds_a_processor(runtime)
 
 
-def test_the_deepest_config_the_builder_compiles_loads(runtime: streamlib.Runtime):
+def test_the_deepest_config_the_builder_compiles_loads(runtime: tatolab.runtime.Runtime):
     runtime.load(
         compile_stream_to_graph(open_config_sink_with_the_deepest_config_the_builder_compiles)
     )
@@ -415,7 +415,7 @@ def test_the_deepest_config_the_builder_compiles_loads(runtime: streamlib.Runtim
 
 
 def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_load(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ):
     """The builder's bound is `load`'s: one container past it, written by hand, is refused."""
     with pytest.raises(ValueError) as refused:
@@ -440,7 +440,7 @@ def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_l
 
 @pytest.mark.parametrize("not_a_number", [float("nan"), float("inf")], ids=["nan", "infinity"])
 def test_nan_and_infinity_in_a_graphs_config_load(
-    runtime: streamlib.Runtime, not_a_number: float
+    runtime: tatolab.runtime.Runtime, not_a_number: float
 ):
     runtime.load(open_config_sink_graph_whose_config_holds(not_a_number))
 
@@ -448,7 +448,7 @@ def test_nan_and_infinity_in_a_graphs_config_load(
 
 
 def test_a_python_node_type_the_process_never_imported_loads_through_the_resolver(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ):
     assert RESOLVER_IMPORTED_NODE_MODULE not in sys.modules, "only the resolver may import it"
     assert RESOLVER_IMPORTED_NODE_TYPE not in processor_class_import_paths_in_this_processes_catalog()
@@ -480,14 +480,14 @@ def test_a_python_node_type_the_process_never_imported_loads_through_the_resolve
     assert the_runtimes_graph_holds_a_processor(runtime)
 
 
-def test_the_name_given_to_load_replaces_the_graphs_and_is_cast(runtime: streamlib.Runtime):
+def test_the_name_given_to_load_replaces_the_graphs_and_is_cast(runtime: tatolab.runtime.Runtime):
     runtime.load(pattern_to_window_graph(stream_name="graph-own-name"), name="Camera Rig")
 
     with pytest.raises(RuntimeError, match="already loaded the stream `camera-rig`"):
         runtime.load(pattern_to_window_graph())
 
 
-def test_the_stream_name_a_graph_carries_is_cast(runtime: streamlib.Runtime):
+def test_the_stream_name_a_graph_carries_is_cast(runtime: tatolab.runtime.Runtime):
     runtime.load(pattern_to_window_graph(stream_name="Front Camera"))
 
     with pytest.raises(RuntimeError, match="already loaded the stream `front-camera`"):
@@ -497,7 +497,7 @@ def test_the_stream_name_a_graph_carries_is_cast(runtime: streamlib.Runtime):
 # ---- refusals ---------------------------------------------------------------
 
 
-def test_an_empty_graph_is_refused_by_name(runtime: streamlib.Runtime):
+def test_an_empty_graph_is_refused_by_name(runtime: tatolab.runtime.Runtime):
     with pytest.raises(RuntimeError) as refused:
         runtime.load(empty_graph())
 
@@ -515,7 +515,7 @@ def test_an_empty_graph_is_refused_by_name(runtime: streamlib.Runtime):
     ids=["list", "json-text", "function"],
 )
 def test_a_value_that_is_not_a_mapping_is_refused_naming_it_and_the_fix(
-    runtime: streamlib.Runtime, not_a_graph: object, type_name: str
+    runtime: tatolab.runtime.Runtime, not_a_graph: object, type_name: str
 ):
     with pytest.raises(TypeError) as refused:
         runtime.load(not_a_graph)  # type: ignore[arg-type]
@@ -524,7 +524,7 @@ def test_a_value_that_is_not_a_mapping_is_refused_naming_it_and_the_fix(
     assert "compile_stream_to_graph" in str(refused.value)
 
 
-def test_a_stream_name_that_is_not_a_str_is_refused_naming_the_fix(runtime: streamlib.Runtime):
+def test_a_stream_name_that_is_not_a_str_is_refused_naming_the_fix(runtime: tatolab.runtime.Runtime):
     with pytest.raises(TypeError) as refused:
         runtime.load(pattern_to_window_graph(), name=7)  # type: ignore[arg-type]
 
@@ -533,7 +533,7 @@ def test_a_stream_name_that_is_not_a_str_is_refused_naming_the_fix(runtime: stre
 
 
 def test_a_stream_name_that_cannot_be_encoded_is_refused_naming_it_and_the_fix(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ):
     with pytest.raises(ValueError) as refused:
         runtime.load(pattern_to_window_graph(), name="\udc80")
@@ -545,7 +545,7 @@ def test_a_stream_name_that_cannot_be_encoded_is_refused_naming_it_and_the_fix(
     assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
-def test_a_stream_name_casting_to_nothing_is_refused_naming_it(runtime: streamlib.Runtime):
+def test_a_stream_name_casting_to_nothing_is_refused_naming_it(runtime: tatolab.runtime.Runtime):
     with pytest.raises(ValueError) as refused:
         runtime.load(pattern_to_window_graph(), name="..")
 
@@ -576,7 +576,7 @@ def test_a_stream_name_casting_to_nothing_is_refused_naming_it(runtime: streamli
     ],
 )
 def test_a_graph_holding_what_json_cannot_carry_is_refused_with_the_converters_text_and_the_fix(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
     scaling: object,
     refusal_type: type[Exception],
     cause_type: type[Exception],
@@ -594,7 +594,7 @@ def test_a_graph_holding_what_json_cannot_carry_is_refused_with_the_converters_t
     assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
-def test_bytes_in_a_graph_are_refused_naming_how_to_carry_bytes(runtime: streamlib.Runtime):
+def test_bytes_in_a_graph_are_refused_naming_how_to_carry_bytes(runtime: tatolab.runtime.Runtime):
     with pytest.raises(TypeError) as refused_by_load:
         runtime.load(pattern_to_window_graph_with_window_scaling(b"fit"))
 
@@ -606,12 +606,12 @@ def test_bytes_in_a_graph_are_refused_naming_how_to_carry_bytes(runtime: streaml
 
 
 GRAPH_HOLDING_ITSELF_REFUSED_IN_ITS_OWN_PROCESS = f"""
-    import streamlib
-    from streamlib import DisplayWindow
+    import tatolab.runtime
+    from tatolab.stream import DisplayWindow
 
     config_holding_itself = {{"title": "load"}}
     config_holding_itself["itself"] = config_holding_itself
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(
             {{
@@ -635,13 +635,13 @@ GRAPH_HOLDING_ITSELF_REFUSED_IN_ITS_OWN_PROCESS = f"""
 """
 
 GRAPH_NESTED_FAR_PAST_THE_MAXIMUM_REFUSED_IN_ITS_OWN_PROCESS = f"""
-    import streamlib
-    from streamlib import DisplayWindow
+    import tatolab.runtime
+    from tatolab.stream import DisplayWindow
 
     nested_far_past_the_maximum = []
     for _ in range(100_000):
         nested_far_past_the_maximum = [nested_far_past_the_maximum]
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(
             {{
@@ -676,7 +676,7 @@ def test_a_container_holding_itself_or_nested_past_the_maximum_is_refused_rather
 
 
 def test_a_virtual_camera_sink_loads_on_linux_and_is_refused_at_load_naming_the_platform_elsewhere(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ):
     graph = {"nodes": [{"name": "camera", "type": VirtualCameraSink.type, "config": {}}]}
     if sys.platform.startswith("linux"):
@@ -692,7 +692,7 @@ def test_a_virtual_camera_sink_loads_on_linux_and_is_refused_at_load_naming_the_
 
 
 def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_and_the_setting(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ):
     with pytest.raises(RuntimeError) as refused:
         runtime.load(
@@ -713,7 +713,7 @@ def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_a
 
 
 def test_a_graph_that_does_not_parse_is_refused_with_the_engines_text(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ):
     with pytest.raises(RuntimeError, match="the graph does not parse"):
         runtime.load({"nodes": [{"name": "nameless-type"}]})
@@ -728,7 +728,7 @@ def test_a_graph_that_does_not_parse_is_refused_with_the_engines_text(
     ids=["native-path", "python-path"],
 )
 def test_a_graph_naming_an_unknown_type_is_refused(
-    runtime: streamlib.Runtime, unknown_type: str, engine_refusal: str
+    runtime: tatolab.runtime.Runtime, unknown_type: str, engine_refusal: str
 ):
     with pytest.raises(RuntimeError) as refused:
         runtime.load({"nodes": [{"name": "unknown", "type": unknown_type, "config": {}}]})
@@ -738,7 +738,7 @@ def test_a_graph_naming_an_unknown_type_is_refused(
 
 
 def test_a_second_load_after_a_success_is_refused_naming_the_stream_and_the_fix(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ):
     runtime.load(pattern_to_window_graph(stream_name="pattern-to-window"))
     processor_ids_the_first_load_added = processor_ids_a_never_run_runtimes_readiness_wait_lists(
@@ -758,7 +758,7 @@ def test_a_second_load_after_a_success_is_refused_naming_the_stream_and_the_fix(
 
 
 def test_a_second_load_after_a_refusal_is_refused_naming_that_refusal(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ):
     with pytest.raises(RuntimeError):
         runtime.load(empty_graph())
@@ -772,7 +772,7 @@ def test_a_second_load_after_a_refusal_is_refused_naming_that_refusal(
 
 
 def test_load_after_shutdown_is_refused():
-    shut_down_runtime = streamlib.Runtime()
+    shut_down_runtime = tatolab.runtime.Runtime()
     shut_down_runtime.shutdown()
 
     with pytest.raises(RuntimeError, match="has been shut down"):
@@ -790,7 +790,7 @@ def pattern_linked_from_a_port_it_lacks_into_a_window(stream: Stream) -> None:
 
 
 def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
-    runtime: streamlib.Runtime,
+    runtime: tatolab.runtime.Runtime,
 ):
     with pytest.raises(RuntimeError) as refused:
         runtime.load(compile_stream_to_graph(pattern_linked_from_a_port_it_lacks_into_a_window))
@@ -800,7 +800,7 @@ def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
 
 @pytest.mark.parametrize("end", ["source", "target"])
 def test_a_link_end_naming_a_runtime_is_refused_by_load_naming_it(
-    runtime: streamlib.Runtime, end: str
+    runtime: tatolab.runtime.Runtime, end: str
 ):
     """Both ends of a link are on the runtime that loads it, so an end naming a
     runtime is refused rather than read as a local end with its runtime dropped."""
@@ -836,7 +836,7 @@ def test_a_link_end_naming_a_runtime_is_refused_by_load_naming_it(
     ],
 )
 def test_run_after_a_refused_load_refuses_naming_it_and_never_starts(
-    runtime: streamlib.Runtime, refused_load
+    runtime: tatolab.runtime.Runtime, refused_load
 ):
     with pytest.raises((RuntimeError, TypeError, ValueError)) as load_refused:
         refused_load(runtime)
@@ -848,7 +848,7 @@ def test_run_after_a_refused_load_refuses_naming_it_and_never_starts(
     assert processor_ids_a_never_run_runtimes_readiness_wait_lists(runtime) == []
 
 
-def test_run_after_a_refused_second_load_refuses_too(runtime: streamlib.Runtime):
+def test_run_after_a_refused_second_load_refuses_too(runtime: tatolab.runtime.Runtime):
     runtime.load(pattern_to_window_graph(stream_name="pattern-to-window"))
     with pytest.raises(RuntimeError) as second_load_refused:
         runtime.load(pattern_to_window_graph())
@@ -859,7 +859,7 @@ def test_run_after_a_refused_second_load_refuses_too(runtime: streamlib.Runtime)
 
 
 def test_a_load_refused_while_another_is_underway_stands_over_its_success_and_run_names_it(
-    runtime: streamlib.Runtime, held_node_module: NodeModuleWhoseImportHoldsTheLoad
+    runtime: tatolab.runtime.Runtime, held_node_module: NodeModuleWhoseImportHoldsTheLoad
 ):
     refused_while_underway: list[RuntimeError] = []
     run_refused_while_underway: list[RuntimeError] = []
@@ -885,7 +885,7 @@ def test_a_load_refused_while_another_is_underway_stands_over_its_success_and_ru
 
 
 def test_a_held_loads_own_refusal_stands_over_a_load_refused_while_it_was_underway(
-    runtime: streamlib.Runtime, held_node_module: NodeModuleWhoseImportHoldsTheLoad
+    runtime: tatolab.runtime.Runtime, held_node_module: NodeModuleWhoseImportHoldsTheLoad
 ):
     def refuse_a_load() -> None:
         with pytest.raises(RuntimeError, match="still underway"):
@@ -936,7 +936,7 @@ def local_api_socket_once_the_registry_lists(runtime_name: str) -> LocalApiSocke
 @pytest.mark.requires_gpu
 def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_control_plane():
     open_test_harness_channel(SERVED_GRAPH_COLLECTOR_CHANNEL)
-    runtime = streamlib.Runtime(runtime_name=SERVED_GRAPH_RUNTIME_NAME)
+    runtime = tatolab.runtime.Runtime(runtime_name=SERVED_GRAPH_RUNTIME_NAME)
     run_failures: list[BaseException] = []
 
     def run_until_shut_down() -> None:

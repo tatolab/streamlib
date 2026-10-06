@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`streamlib.testing.SingleProcessorTestPipeline`, driving a real processor.
+"""`tatolab.runtime.testing.SingleProcessorTestPipeline`, driving a real processor.
 
 The harness is public API a user writes their own tests against, so what is
 worth breaking a build over is that it works end to end: a bag fed from the
@@ -20,7 +20,7 @@ from single_processor_under_test import (
     DoublingFilter,
     MixedCasePortDoubler,
 )
-from streamlib.testing import SingleProcessorTestPipeline
+from tatolab.runtime.testing import SingleProcessorTestPipeline
 
 pytestmark = [pytest.mark.requires_gpu]
 

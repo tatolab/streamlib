@@ -45,7 +45,7 @@ from dataclasses import dataclass
 
 import numpy
 
-from streamlib import (
+from tatolab.stream import (
     ClaimedSurfacePixelAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,

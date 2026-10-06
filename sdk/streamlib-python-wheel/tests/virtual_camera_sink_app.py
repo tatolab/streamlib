@@ -18,8 +18,9 @@ the test as `MARKER:NOT_EVERY_PROCESSOR_RUNNING` with the sink's own text.
 import argparse
 import threading
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
@@ -43,7 +44,7 @@ def _parse_virtual_camera_arguments() -> argparse.Namespace:
 def a_test_pattern_into_virtual_cameras(stream: Stream) -> None:
     arguments = _parse_virtual_camera_arguments()
     pattern = stream.add(
-        streamlib.TestPatternSource,
+        tatolab.stream.TestPatternSource,
         config={"width": arguments.width, "height": arguments.height},
     )
     camera_names = [arguments.name]
@@ -51,7 +52,7 @@ def a_test_pattern_into_virtual_cameras(stream: Stream) -> None:
         camera_names.append(arguments.second_name)
     for camera_name in camera_names:
         sink = stream.add(
-            streamlib.VirtualCameraSink,
+            tatolab.stream.VirtualCameraSink,
             config={"name": camera_name, "door": arguments.door},
         )
         stream.connect(pattern.output("video"), sink.input("video"))
@@ -59,7 +60,7 @@ def a_test_pattern_into_virtual_cameras(stream: Stream) -> None:
 
 def main() -> None:
     graph = compile_stream_to_graph(a_test_pattern_into_virtual_cameras)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
 
     def watch_readiness() -> None:

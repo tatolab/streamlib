@@ -20,7 +20,7 @@ import os
 import traceback
 from collections.abc import Sequence
 
-from streamlib import (
+from tatolab.stream import (
     GpuContextFullAccess,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,

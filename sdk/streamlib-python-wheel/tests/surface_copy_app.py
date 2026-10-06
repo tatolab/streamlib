@@ -7,8 +7,9 @@ real placement, a helper process."""
 import sys
 from typing import Any
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 import surface_copy_probes
 
@@ -17,7 +18,7 @@ def _wire_a_test_pattern_into_probe(
     stream: Stream, probe_class: type, probe_config: dict[str, Any]
 ) -> None:
     pattern = stream.add(
-        streamlib.TestPatternSource,
+        tatolab.stream.TestPatternSource,
         config={
             "width": surface_copy_probes.FRAME_WIDTH,
             "height": surface_copy_probes.FRAME_HEIGHT,
@@ -56,7 +57,7 @@ STREAM_BY_SCENARIO = {
 
 if __name__ == "__main__":
     graph = compile_stream_to_graph(STREAM_BY_SCENARIO[sys.argv[1]])
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

@@ -13,8 +13,8 @@ import dataclasses
 import os
 import time
 
-from streamlib import input, log, node, output
-from streamlib._engine import (
+from tatolab.stream import input, log, node, output
+from tatolab.runtime._engine import (
     processor_class_import_paths_in_this_processes_catalog,
 )
 

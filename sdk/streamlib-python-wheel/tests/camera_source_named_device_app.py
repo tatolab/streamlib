@@ -10,8 +10,9 @@ readiness wait is for — `run()` owns the calling thread until teardown.
 
 import threading
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 UNOPENABLE_DEVICE_ID = "/dev/video-not-a-real-camera"
 READINESS_TIMEOUT_SECONDS = 10.0
@@ -19,12 +20,12 @@ READINESS_TIMEOUT_SECONDS = 10.0
 
 @stream
 def a_camera_naming_a_device_no_backend_can_open(stream: Stream) -> None:
-    stream.add(streamlib.CameraSource, config={"device_id": UNOPENABLE_DEVICE_ID})
+    stream.add(tatolab.stream.CameraSource, config={"device_id": UNOPENABLE_DEVICE_ID})
 
 
 def main() -> None:
     graph = compile_stream_to_graph(a_camera_naming_a_device_no_backend_can_open)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
 
     def watch_readiness() -> None:

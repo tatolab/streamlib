@@ -13,7 +13,7 @@ import dataclasses
 
 import numpy
 
-from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, node, output
+from tatolab.stream import AudioBlock, RuntimeContextLimitedAccess, input, node, output
 
 
 @node

@@ -15,8 +15,9 @@ real producer, so they run on any GPU rather than only on a rig with a camera.
 
 import sys
 
-import streamlib
-from streamlib import NodeReference, Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import NodeReference, Stream, compile_stream_to_graph, stream
 
 import cast_claim_probes
 from camera_under_test import camera_source_config
@@ -24,10 +25,10 @@ from camera_under_test import camera_source_config
 
 def _add_source(stream: Stream, source_name: str) -> NodeReference:
     if source_name == "camera":
-        return stream.add(streamlib.CameraSource, config=camera_source_config())
+        return stream.add(tatolab.stream.CameraSource, config=camera_source_config())
     if source_name == "test_pattern":
         return stream.add(
-            streamlib.TestPatternSource, config={"width": 640, "height": 480}
+            tatolab.stream.TestPatternSource, config={"width": 640, "height": 480}
         )
     raise SystemExit(f"unknown source {source_name!r}: use 'camera' or 'test_pattern'")
 
@@ -50,7 +51,7 @@ def one_cast_claim_probe_off_a_real_source(stream: Stream) -> None:
 
 if __name__ == "__main__":
     graph = compile_stream_to_graph(one_cast_claim_probe_off_a_real_source)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

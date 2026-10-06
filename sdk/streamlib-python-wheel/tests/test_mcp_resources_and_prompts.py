@@ -32,7 +32,7 @@ from mcp.types import TextContent, TextResourceContents
 from mcp_types import UNSUPPORTED_PROTOCOL_VERSION
 from mcp_types.version import LATEST_PROTOCOL_VERSION
 
-from streamlib._control_plane_client import LocalApiSocket
+from tatolab.runtime._control_plane_client import LocalApiSocket
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
     NODE_READY_TIMEOUT_SECONDS,
     await_sole_registry_entry,
@@ -59,7 +59,7 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 
 STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
-from streamlib import Stream, TestPatternSource, stream
+from tatolab.stream import Stream, TestPatternSource, stream
 
 # Imported and never added: its decorator is what puts it in the catalog.
 from processors.bag_marking_effect import BagMarkingEffect  # noqa: F401
@@ -77,7 +77,7 @@ def main(stream: Stream) -> None:
 # input can relate to the sink's — the same profile, a shallower one, a deeper
 # one — meets a live node.
 BAG_MARKING_EFFECT_SOURCE_TEMPLATE = '''\
-from streamlib import RuntimeContextLimitedAccess, input, node, output
+from tatolab.stream import RuntimeContextLimitedAccess, input, node, output
 
 
 @node
@@ -97,7 +97,7 @@ class BagMarkingEffect:
 '''
 
 MARKED_BAG_SINK_SOURCE_TEMPLATE = '''\
-from streamlib import RuntimeContextLimitedAccess, input, log, node
+from tatolab.stream import RuntimeContextLimitedAccess, input, log, node
 
 
 @node

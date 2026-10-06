@@ -8,7 +8,7 @@ Nothing imports this module but the engine's type resolver, during
 the resolver imports and registers a node type the process never imported.
 """
 
-from streamlib import RuntimeContextLimitedAccess, input, node, output
+from tatolab.stream import RuntimeContextLimitedAccess, input, node, output
 
 
 @node

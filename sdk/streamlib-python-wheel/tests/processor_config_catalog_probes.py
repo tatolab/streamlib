@@ -17,7 +17,7 @@ from typing import Annotated, Optional, TypedDict
 
 import pydantic
 
-from streamlib import RuntimeContextFullAccess, log, node
+from tatolab.stream import RuntimeContextFullAccess, log, node
 
 
 def _report(processor_name: str, config: object) -> None:

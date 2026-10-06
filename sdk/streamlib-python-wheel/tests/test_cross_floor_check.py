@@ -16,19 +16,24 @@ from pathlib import Path
 
 import pytest
 
-from streamlib import _cross_floor_check, cli
-from streamlib._cross_floor_check import (
+from tatolab.runtime import cli
+from tatolab.stream import _cross_floor_check
+from tatolab.stream._cross_floor_check import (
     check_app_directory_for_floor_bindings,
     find_floor_bindings_in_project_manifest,
     find_floor_bindings_in_python_source,
     render_cross_floor_warning_block,
 )
 
-WHEEL_PYTHON_PACKAGE_DIRECTORY = Path(__file__).resolve().parents[1] / "python" / "streamlib"
+WHEEL_PYTHON_SOURCE_DIRECTORY = Path(__file__).resolve().parents[1] / "python"
+WHEEL_PYTHON_PACKAGE_DIRECTORIES = (
+    WHEEL_PYTHON_SOURCE_DIRECTORY / "tatolab" / "stream",
+    WHEEL_PYTHON_SOURCE_DIRECTORY / "tatolab" / "runtime",
+)
 FIXTURE_FILE = Path("processors/effect.py")
 FIXTURE_MANIFEST = Path("pyproject.toml")
 FLOOR_CLEAN_STREAM_SOURCE = (
-    "from streamlib import Stream, TestPatternSource, stream\n"
+    "from tatolab.stream import Stream, TestPatternSource, stream\n"
     "\n"
     "\n"
     "@stream\n"
@@ -229,7 +234,7 @@ def test_a_cuda_method_call_is_named():
     "use, name, peer",
     [
         ("stream.add(VirtualCameraSink)", "VirtualCameraSink", None),
-        ("stream.add(streamlib.VirtualCameraSink)", "VirtualCameraSink", None),
+        ("stream.add(tatolab.stream.VirtualCameraSink)", "VirtualCameraSink", None),
         ("ctx.gpu_full_access.create_ray_tracing_kernel(stages, groups)", "create_ray_tracing_kernel", None),
         ("ctx.gpu_full_access.build_triangles_blas(vertices, indices)", "build_triangles_blas", None),
         ("ctx.gpu_full_access.build_tlas(instances)", "build_tlas", None),
@@ -269,7 +274,7 @@ def test_defining_the_cuda_array_interface_is_named():
 def test_importing_a_single_floor_name_is_not_a_use_of_it():
     assert findings_in(
         """\
-        from streamlib import VirtualCameraSink
+        from tatolab.stream import VirtualCameraSink
         __all__ = ["VirtualCameraSink"]
         """
     ) == []
@@ -457,14 +462,19 @@ def test_a_clean_app_renders_nothing(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_the_wheels_own_python_binds_to_no_floor():
-    assert (WHEEL_PYTHON_PACKAGE_DIRECTORY / "__init__.py").is_file(), (
-        f"the gate must read the wheel's own Python, not {WHEEL_PYTHON_PACKAGE_DIRECTORY}"
+@pytest.mark.parametrize(
+    "wheel_python_package_directory",
+    WHEEL_PYTHON_PACKAGE_DIRECTORIES,
+    ids=lambda package_directory: package_directory.name,
+)
+def test_the_wheels_own_python_binds_to_no_floor(wheel_python_package_directory: Path):
+    assert (wheel_python_package_directory / "__init__.py").is_file(), (
+        f"the gate must read the wheel's own Python, not {wheel_python_package_directory}"
     )
-    report = check_app_directory_for_floor_bindings(WHEEL_PYTHON_PACKAGE_DIRECTORY)
+    report = check_app_directory_for_floor_bindings(wheel_python_package_directory)
 
     assert report.findings == [], render_cross_floor_warning_block(
-        report, WHEEL_PYTHON_PACKAGE_DIRECTORY
+        report, wheel_python_package_directory
     )
 
 

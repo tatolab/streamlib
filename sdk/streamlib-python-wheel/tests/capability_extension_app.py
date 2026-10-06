@@ -48,9 +48,9 @@ def install_fixture_distributions(*variants: str) -> None:
 
 def scenario_a_hook_runs_and_registers() -> None:
     install_fixture_distributions("registering")
-    import streamlib
+    import tatolab.runtime
 
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     host = sys.modules["streamlib_test_extension"].hosts_the_hook_was_handed[-1]
     marker(f"HOST_ROLE={host.role}")
     runtime.shutdown()
@@ -59,11 +59,11 @@ def scenario_a_hook_runs_and_registers() -> None:
 
 def scenario_the_hook_runs_once_however_many_runtimes() -> None:
     install_fixture_distributions("registering")
-    import streamlib
+    import tatolab.runtime
 
-    first = streamlib.Runtime()
+    first = tatolab.runtime.Runtime()
     first.shutdown()
-    second = streamlib.Runtime()
+    second = tatolab.runtime.Runtime()
     second.shutdown()
 
     hooks = sys.modules["streamlib_test_extension"].hosts_the_hook_was_handed
@@ -73,10 +73,10 @@ def scenario_the_hook_runs_once_however_many_runtimes() -> None:
 
 def scenario_a_raising_hook_fails_the_runtime() -> None:
     install_fixture_distributions("raising")
-    import streamlib
+    import tatolab.runtime
 
     try:
-        streamlib.Runtime()
+        tatolab.runtime.Runtime()
     except Exception as construction_failure:
         marker(f"RUNTIME_REFUSED={construction_failure}")
     else:
@@ -86,12 +86,12 @@ def scenario_a_raising_hook_fails_the_runtime() -> None:
 
 def scenario_a_raising_hook_keeps_failing_every_later_runtime() -> None:
     install_fixture_distributions("raising")
-    import streamlib
+    import tatolab.runtime
 
     refusals = 0
     for _ in range(2):
         try:
-            streamlib.Runtime()
+            tatolab.runtime.Runtime()
         except Exception:
             refusals += 1
     marker(f"REFUSAL_COUNT={refusals}")
@@ -101,10 +101,10 @@ def scenario_a_raising_hook_keeps_failing_every_later_runtime() -> None:
 
 def scenario_two_distributions_on_one_capability_name() -> None:
     install_fixture_distributions("registering", "duplicate")
-    import streamlib
+    import tatolab.runtime
 
     try:
-        streamlib.Runtime()
+        tatolab.runtime.Runtime()
     except Exception as construction_failure:
         marker(f"RUNTIME_REFUSED={construction_failure}")
     else:
@@ -115,15 +115,16 @@ def scenario_two_distributions_on_one_capability_name() -> None:
 def scenario_a_helper_runs_the_hook_before_the_processor() -> None:
     """A real helper spawn: the hook runs in the child, before its import."""
     install_fixture_distributions("registering")
-    import streamlib
+    import tatolab.runtime
+    import tatolab.stream
     from capability_extension_reporting_stream import (
         one_processor_that_reports_its_helpers_extensions,
     )
 
-    graph = streamlib.compile_stream_to_graph(
+    graph = tatolab.stream.compile_stream_to_graph(
         one_processor_that_reports_its_helpers_extensions
     )
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
 
     def stop_once_the_helper_has_reported() -> None:
@@ -144,15 +145,16 @@ def scenario_a_raising_hook_refuses_the_processor() -> None:
     reach a helper at all.
     """
     install_fixture_distributions("helper_raising")
-    import streamlib
+    import tatolab.runtime
+    import tatolab.stream
     from capability_extension_reporting_stream import (
         one_processor_that_reports_its_helpers_extensions,
     )
 
-    graph = streamlib.compile_stream_to_graph(
+    graph = tatolab.stream.compile_stream_to_graph(
         one_processor_that_reports_its_helpers_extensions
     )
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
 
     def report_whether_the_processor_ever_started() -> None:
@@ -176,17 +178,18 @@ def scenario_graph_renders_the_registered_capability() -> None:
     `GET /api/graph` and the MCP `graph` tool serve.
     """
     install_fixture_distributions("registering")
-    import streamlib
+    import tatolab.runtime
+    import tatolab.stream
     from capability_extension_reporting_stream import (
         one_processor_that_reports_its_helpers_extensions,
     )
-    from streamlib._control_plane_client import call_tool
+    from tatolab.runtime._control_plane_client import call_tool
     from this_processes_node_registry_entry import this_processes_local_api_socket
 
-    graph = streamlib.compile_stream_to_graph(
+    graph = tatolab.stream.compile_stream_to_graph(
         one_processor_that_reports_its_helpers_extensions
     )
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.host_control_plane()
 

@@ -9,7 +9,7 @@ importing this name, and a class in the entry file identifies as `__main__`,
 which names the child's own entry file instead.
 """
 
-from streamlib import node
+from tatolab.stream import node
 
 
 @node(execution="continuous", interval_ms=1)

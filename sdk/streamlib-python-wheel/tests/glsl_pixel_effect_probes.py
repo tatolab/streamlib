@@ -14,7 +14,7 @@ from typing import Any, Callable, TypedDict
 
 import numpy
 
-from streamlib import (
+from tatolab.stream import (
     GlslPixelEffect,
     GlslPixelEffectDialType,
     GpuContextLimitedAccess,

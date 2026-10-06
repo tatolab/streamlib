@@ -36,8 +36,9 @@ from pathlib import Path
 
 import pytest
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 VIRTUAL_CAMERA_SINK_APP = Path(__file__).parent / "virtual_camera_sink_app.py"
 CONTROL_NODE = Path("/dev/v4l2loopback")
@@ -341,19 +342,19 @@ def read_yuyv_frames(video_node: Path, count: int):
 
 def test_the_marker_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        streamlib.VirtualCameraSink()
+        tatolab.stream.VirtualCameraSink()
 
 
 @stream
 def a_virtual_camera_sink_alone(stream: Stream) -> None:
-    stream.add(streamlib.VirtualCameraSink)
+    stream.add(tatolab.stream.VirtualCameraSink)
 
 
 @pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(a_virtual_camera_sink_alone)
     assert [node["name"] for node in graph["nodes"]] == ["virtualcamerasink"]
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(graph)
     finally:

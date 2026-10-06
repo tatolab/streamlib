@@ -24,8 +24,9 @@ from pathlib import Path
 
 import pytest
 
-import streamlib
-from streamlib import (
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import (
     OpusDecoder,
     OpusEncoder,
     Stream,
@@ -99,7 +100,7 @@ def test_node_name_defaults_to_the_type_name(marker_class):
     ]
     assert marker_node["name"] == marker_class.__name__.lower()
 
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(graph)
     finally:
@@ -108,10 +109,10 @@ def test_node_name_defaults_to_the_type_name(marker_class):
 
 @stream
 def microphone_through_the_opus_round_trip_into_a_speaker(stream: Stream) -> None:
-    microphone = stream.add(streamlib.MicrophoneSource)
+    microphone = stream.add(tatolab.stream.MicrophoneSource)
     encoder = stream.add(OpusEncoder)
     decoder = stream.add(OpusDecoder)
-    speaker = stream.add(streamlib.SpeakerSink)
+    speaker = stream.add(tatolab.stream.SpeakerSink)
     stream.connect(microphone.output("audio"), encoder.input("audio"))
     stream.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
     stream.connect(decoder.output("audio"), speaker.input("audio"))
@@ -124,7 +125,7 @@ def test_the_round_trip_wires_without_an_adapter():
     between the source and the encoder: the encoder's own window contract
     frames. The builder checks no port names, so the engine accepting the load
     is the proof."""
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(
             compile_stream_to_graph(

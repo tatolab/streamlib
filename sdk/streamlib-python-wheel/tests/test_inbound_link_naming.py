@@ -23,10 +23,10 @@ from typing import Any, Literal, Optional
 
 import pytest
 
-import streamlib
+import tatolab.runtime
 from inbound_link_naming_processors import ReportsWhichLinkEachBagCameFrom
-from streamlib import Stream, compile_stream_to_graph, stream
-from streamlib._engine import (
+from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.runtime._engine import (
     TestBagCollector,
     TestBagFeeder,
     await_test_harness_bag,
@@ -82,7 +82,7 @@ class TwoFeedersIntoOnePort:
     def __init__(self) -> None:
         self._feed_channels: "dict[str, str]" = {}
         self._collect_channel = ""
-        self._runtime: "Optional[streamlib.Runtime]" = None
+        self._runtime: "Optional[tatolab.runtime.Runtime]" = None
         self._run_loop: "Optional[threading.Thread]" = None
         self._run_failure: "queue.Queue[BaseException]" = queue.Queue()
 
@@ -103,7 +103,7 @@ class TwoFeedersIntoOnePort:
         self._collect_channel = INBOUND_LINK_NAMING_ATTRIBUTIONS_CHANNEL
 
         graph = compile_stream_to_graph(two_feeders_into_one_port)
-        runtime = streamlib.Runtime()
+        runtime = tatolab.runtime.Runtime()
         self._runtime = runtime
         runtime.load(graph)
 

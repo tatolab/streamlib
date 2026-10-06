@@ -3,15 +3,16 @@
 
 """One native built-in feeding one Python processor in its real placement."""
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from native_builtin_probes import VideoFrameProbe
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 
 @stream
 def a_test_pattern_into_a_video_frame_probe(stream: Stream) -> None:
     pattern = stream.add(
-        streamlib.TestPatternSource, config={"width": 320, "height": 180}
+        tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
     )
     probe = stream.add(VideoFrameProbe)
     stream.connect(pattern.output("video"), probe.input("video_from_upstream"))
@@ -19,7 +20,7 @@ def a_test_pattern_into_a_video_frame_probe(stream: Stream) -> None:
 
 def main() -> None:
     graph = compile_stream_to_graph(a_test_pattern_into_a_video_frame_probe)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

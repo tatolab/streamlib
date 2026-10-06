@@ -11,7 +11,7 @@ import os
 import signal
 import time
 
-from streamlib import log, node, output
+from tatolab.stream import log, node, output
 
 # How long a probe's teardown takes when it is meant to be slow but still inside
 # the ladder's five-second teardown budget.

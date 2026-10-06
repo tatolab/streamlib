@@ -22,8 +22,9 @@ never asked for a window.
 import os
 import sys
 
-import streamlib
-from streamlib import NodeReference, Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import NodeReference, Stream, compile_stream_to_graph, stream
 
 import processor_owned_window_probes
 
@@ -31,14 +32,14 @@ import processor_owned_window_probes
 def _add_source(stream: Stream, source_name: str) -> NodeReference:
     if source_name == "camera":
         return stream.add(
-            streamlib.CameraSource,
+            tatolab.stream.CameraSource,
             config={
                 "device_id": os.environ.get("STREAMLIB_CAMERA_DEVICE", "/dev/video0")
             },
         )
     if source_name == "test_pattern":
         return stream.add(
-            streamlib.TestPatternSource, config={"width": 640, "height": 480}
+            tatolab.stream.TestPatternSource, config={"width": 640, "height": 480}
         )
     raise SystemExit(f"unknown source {source_name!r}: use 'camera' or 'test_pattern'")
 
@@ -49,7 +50,7 @@ def a_probe_window_beside_a_display_window(stream: Stream) -> None:
     probe_class_name, source_name = sys.argv[2], sys.argv[3]
     source = _add_source(stream, source_name)
     probe = stream.add(getattr(processor_owned_window_probes, probe_class_name))
-    display = stream.add(streamlib.DisplayWindow, config={"title": DISPLAY_TITLE})
+    display = stream.add(tatolab.stream.DisplayWindow, config={"title": DISPLAY_TITLE})
     stream.connect(source.output("video"), probe.input("video_from_upstream"))
     stream.connect(source.output("video"), display.input("video"))
 
@@ -67,7 +68,7 @@ def scenario_beside_a_display_window() -> None:
     """The arrangement a debug window is really used in: the pipeline's own
     display up, and a processor's window beside it."""
     graph = compile_stream_to_graph(a_probe_window_beside_a_display_window)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
@@ -85,7 +86,7 @@ def scenario_with_no_display_server() -> None:
     os.environ.pop("DISPLAY", None)
     os.environ.pop("WAYLAND_DISPLAY", None)
     graph = compile_stream_to_graph(a_probe_window_with_no_display_server)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
