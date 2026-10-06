@@ -36,7 +36,7 @@ use crate::mcp_resources::exported_live_graph_json;
 /// camera recipe looks up in the catalog. This crate does not link the media
 /// built-ins, so the wheel pins it against the built-in's own derived path.
 pub const VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH: &str =
-    "streamlib_media_builtins::virtual_camera_sink::VirtualCameraSink";
+    "tatolab.stream:VirtualCameraSink";
 
 const LINK_ID_ARGUMENT_DESCRIPTION: &str =
     "The id of the link to splice into, as `graph` lists it under `links`.";

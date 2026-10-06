@@ -32,6 +32,7 @@ const SILENT_LINK_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 /// Where the recording is written.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct Mp4SinkConfig {
     /// The file to write, created or truncated at `setup()`.
     ///
@@ -41,6 +42,7 @@ pub struct Mp4SinkConfig {
 }
 
 #[streamlib::sdk::processor(
+    built_in_node,
     description = "Records encoded video and audio bags to one fragmented MP4 file, one track per inbound link",
     execution = reactive,
     scheduling = high,

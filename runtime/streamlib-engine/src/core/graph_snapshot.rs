@@ -6,8 +6,8 @@
 //!
 //! A [`GraphSnapshot`] is the spec keys of a `graph` document — `stream`,
 //! `nodes[].name` / `type` / `config`, `links[].source` / `target` and
-//! `exposed` — and nothing else, so `graph`'s own output deserializes into one
-//! with its live keys ignored. Loading one is
+//! `exposed` — and nothing else, so `graph`'s own output reads into one with
+//! its live keys skipped, and any other key is refused by name. Loading one is
 //! [`Runner::load_graph_snapshot`](crate::core::runtime::Runner::load_graph_snapshot);
 //! there is no saver, because the render is the export.
 
@@ -24,7 +24,10 @@ use crate::core::{Error, PortDirection, Result};
 
 /// A graph a runtime runs: its nodes by class import path, config and name,
 /// the links between their ports, and the output ports the stream exposes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+///
+/// Read only through [`Self::from_json_str`] and [`Self::from_graph_document`],
+/// which refuse a key the runtime does not read.
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct GraphSnapshot {
     /// The stream this graph is. Absent on a graph no stream was loaded as.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,6 +45,59 @@ pub struct GraphSnapshot {
     pub exposed: Vec<ExposedOutputPortOutput>,
 }
 
+/// The spec keys a graph document is read through, before its keys are checked.
+#[derive(Deserialize)]
+struct GraphSnapshotAsWritten {
+    #[serde(default)]
+    stream: Option<String>,
+    nodes: Vec<GraphSnapshotNode>,
+    #[serde(default)]
+    links: Vec<GraphSnapshotLink>,
+    #[serde(default)]
+    exposed: Vec<ExposedOutputPortOutput>,
+}
+
+/// The keys one kind of object in a graph document is written with: the spec
+/// a load reads, and the live keys `graph` renders beside it, which a load
+/// skips. A live key `graph` stops rendering stays listed, so a graph recorded
+/// while it rendered still loads.
+struct GraphDocumentObjectKeys {
+    /// The kind of object, as a refusal names it.
+    object_kind: &'static str,
+    spec_keys: &'static [&'static str],
+    live_keys: &'static [&'static str],
+}
+
+const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
+    object_kind: "a graph",
+    spec_keys: &["stream", "nodes", "links", "exposed"],
+    live_keys: &["extensions", "runtime_name"],
+};
+
+const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
+    object_kind: "a node",
+    spec_keys: &["name", "type", "config"],
+    live_keys: &["id", "config_checksum", "ports", "components"],
+};
+
+const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
+    object_kind: "a link",
+    spec_keys: &["source", "target"],
+    live_keys: &["id", "capacity", "state", "error_reason", "components"],
+};
+
+const GRAPH_LINK_END_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
+    object_kind: "a link end",
+    spec_keys: &["node", "port"],
+    live_keys: &[],
+};
+
+const GRAPH_EXPOSURE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
+    object_kind: "an exposure",
+    spec_keys: &["node", "port"],
+    live_keys: &[],
+};
+
 /// One node of a [`GraphSnapshot`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GraphSnapshotNode {
@@ -52,9 +108,14 @@ pub struct GraphSnapshotNode {
     #[serde(rename = "type")]
     pub processor_type: ProcessorClassImportPath,
 
-    /// The node's config.
-    #[serde(default)]
+    /// The node's config. Absent reads as `{}`, the config `add_node` takes
+    /// when it is given none.
+    #[serde(default = "a_config_naming_no_setting")]
     pub config: serde_json::Value,
+}
+
+fn a_config_naming_no_setting() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
 }
 
 /// One link of a [`GraphSnapshot`], from an output port to an input port.
@@ -106,14 +167,29 @@ where
 impl GraphSnapshot {
     /// Read a graph from JSON — a `graph` document or the spec keys alone.
     pub fn from_json_str(json: &str) -> Result<Self> {
-        serde_json::from_str(json)
-            .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))
+        Self::from_graph_document(
+            serde_json::from_str(json)
+                .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?,
+        )
     }
 
-    /// Read a graph from a parsed `graph` document, its live keys ignored.
+    /// Read a graph from a parsed `graph` document, its live keys skipped and
+    /// any other key refused by name.
     pub fn from_graph_document(graph_document: serde_json::Value) -> Result<Self> {
-        serde_json::from_value(graph_document)
-            .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))
+        let GraphSnapshotAsWritten {
+            stream,
+            nodes,
+            links,
+            exposed,
+        } = GraphSnapshotAsWritten::deserialize(&graph_document)
+            .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?;
+        refuse_a_key_this_runtime_does_not_read(&graph_document)?;
+        Ok(Self {
+            stream,
+            nodes,
+            links,
+            exposed,
+        })
     }
 
     /// Serialize the graph as pretty-printed JSON.
@@ -122,18 +198,25 @@ impl GraphSnapshot {
             .map_err(|e| Error::GraphError(format!("the graph does not serialize: {e}")))
     }
 
-    /// Check the graph without loading it: every `type` registered, names
-    /// unique once cast, every link end a port of the right direction on a node
-    /// the graph holds, and every exposure an output port a node has, named
-    /// once.
+    /// Check the graph without loading it: every `type` one this runtime has
+    /// on this floor, every config one its type takes, names unique once cast,
+    /// every link end a port of the right direction on a node the graph holds,
+    /// and every exposure an output port a node has, named once.
     pub fn validate(&self) -> Result<()> {
         let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
+            PROCESSOR_REGISTRY
+                .refuse_a_built_in_node_type_absent_on_this_floor(&node.processor_type)?;
             if PROCESSOR_REGISTRY.port_info(&node.processor_type).is_none() {
                 return Err(Error::UnknownProcessorType {
                     ident: node.processor_type.clone(),
                 });
             }
+            PROCESSOR_REGISTRY.refuse_a_config_the_node_type_does_not_take(
+                &node.name,
+                &node.processor_type,
+                &node.config,
+            )?;
             match nodes_by_cast_name.entry(cast_exposed_name_to_url_safe(&node.name)?.into_owned())
             {
                 Entry::Occupied(taken) => {
@@ -197,6 +280,116 @@ impl GraphSnapshot {
         }
 
         Ok(())
+    }
+}
+
+/// Refuse the first key of `graph_document` the runtime does not read — at the
+/// top, on a node, a link, a link end or an exposure — naming it and where it
+/// sits. Run over a document [`GraphSnapshotAsWritten`] has already read, so
+/// every object the walk expects is there.
+fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -> Result<()> {
+    let objects_of = |key: &str| {
+        graph_document
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_object)
+    };
+    let text_at = |object: &serde_json::Map<String, serde_json::Value>, key: &str| {
+        object
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?")
+            .to_string()
+    };
+    let port_address_of = |link_end: Option<&serde_json::Value>| {
+        link_end
+            .and_then(serde_json::Value::as_object)
+            .map(|link_end| {
+                format!(
+                    "{}/{}",
+                    text_at(link_end, "node"),
+                    text_at(link_end, "port")
+                )
+            })
+            .unwrap_or_else(|| "?".to_string())
+    };
+
+    if let Some(graph_object) = graph_document.as_object() {
+        refuse_a_key_no_such_object_holds(graph_object, &GRAPH_DOCUMENT_KEYS, "the graph")?;
+    }
+    for node in objects_of("nodes") {
+        refuse_a_key_no_such_object_holds(
+            node,
+            &GRAPH_NODE_KEYS,
+            &format!("node `{}`", text_at(node, "name")),
+        )?;
+    }
+    for link in objects_of("links") {
+        let link_named = format!(
+            "the link `{}` → `{}`",
+            port_address_of(link.get("source")),
+            port_address_of(link.get("target"))
+        );
+        refuse_a_key_no_such_object_holds(link, &GRAPH_LINK_KEYS, &link_named)?;
+        for end_key in ["source", "target"] {
+            if let Some(link_end) = link.get(end_key).and_then(serde_json::Value::as_object) {
+                refuse_a_key_no_such_object_holds(
+                    link_end,
+                    &GRAPH_LINK_END_KEYS,
+                    &format!("the {end_key} end of {link_named}"),
+                )?;
+            }
+        }
+    }
+    for exposure in objects_of("exposed") {
+        refuse_a_key_no_such_object_holds(
+            exposure,
+            &GRAPH_EXPOSURE_KEYS,
+            &format!(
+                "the exposure `{}/{}`",
+                text_at(exposure, "node"),
+                text_at(exposure, "port")
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+fn refuse_a_key_no_such_object_holds(
+    object: &serde_json::Map<String, serde_json::Value>,
+    keys: &GraphDocumentObjectKeys,
+    object_named: &str,
+) -> Result<()> {
+    let Some(unread_key) = object.keys().find(|key| {
+        !keys.spec_keys.contains(&key.as_str()) && !keys.live_keys.contains(&key.as_str())
+    }) else {
+        return Ok(());
+    };
+    let live_keys_clause = if keys.live_keys.is_empty() {
+        String::new()
+    } else {
+        format!(
+            ", beside the live keys `graph` renders on it, which a load skips: {}",
+            keys_listed_for_a_refusal(keys.live_keys)
+        )
+    };
+    Err(Error::GraphError(format!(
+        "{object_named} carries the key `{unread_key}`, which this runtime does not read. The \
+         keys of {} are {}{live_keys_clause}",
+        keys.object_kind,
+        keys_listed_for_a_refusal(keys.spec_keys)
+    )))
+}
+
+/// `keys` as "`a`, `b` and `c`".
+fn keys_listed_for_a_refusal(keys: &[&str]) -> String {
+    let quoted: Vec<String> = keys.iter().map(|key| format!("`{key}`")).collect();
+    match quoted.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, before)) => format!("{} and {last}", before.join(", ")),
+        None => String::new(),
     }
 }
 
@@ -446,6 +639,228 @@ mod tests {
                 assert_eq!(ident.as_str(), "my_app.nodes:NotARegisteredNode");
             }
             other => panic!("expected UnknownProcessorType, got {other:?}"),
+        }
+    }
+
+    /// A stream names no runtime version, so the refusal names this runtime's
+    /// own beside the type it lacks.
+    #[test]
+    fn a_built_in_type_this_runtime_lacks_is_refused_naming_it_and_this_runtimes_version() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "newthing", "type": "tatolab.stream:NewThing"}]
+        }))
+        .unwrap();
+
+        let refusal = graph.validate().unwrap_err().to_string();
+
+        assert_eq!(
+            refusal,
+            format!(
+                "this runtime ({}) has no node type `tatolab.stream:NewThing`",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+    }
+
+    #[test]
+    fn a_built_in_this_floor_compiles_out_is_refused_naming_this_floor_and_where_it_runs() {
+        let compiled_out_here =
+            ProcessorClassImportPath::of_built_in_node("GraphSnapshotTestCompiledOutHere").unwrap();
+        PROCESSOR_REGISTRY
+            .register_built_in_node_type_absent_on_this_floor(compiled_out_here.clone(), "Plan 9");
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "elsewhere", "type": compiled_out_here.as_str()}]
+        }))
+        .unwrap();
+
+        let refusal = graph.validate().unwrap_err();
+
+        assert!(
+            matches!(&refusal, Error::BuiltInNodeTypeAbsentOnThisFloor { ident, .. } if *ident == compiled_out_here),
+            "{refusal:?}"
+        );
+        let refusal = refusal.to_string();
+        assert!(
+            refusal.contains("`tatolab.stream:GraphSnapshotTestCompiledOutHere`"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("runs on Plan 9 only"), "{refusal}");
+        #[cfg(target_os = "macos")]
+        assert!(refusal.contains("on macOS"), "{refusal}");
+        #[cfg(target_os = "linux")]
+        assert!(refusal.contains("on Linux"), "{refusal}");
+    }
+
+    #[test]
+    fn a_setting_the_nodes_type_does_not_take_is_refused_naming_the_node_its_type_and_the_setting()
+    {
+        crate::core::test_support::ensure_test_mocks_registered();
+        let source_type =
+            crate::core::test_support::MockSourceTakingOneSetting::processor_class_import_path();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "Front", "type": source_type.as_str(),
+                       "config": {"frame_widht": 640}}]
+        }))
+        .unwrap();
+
+        match graph.validate() {
+            Err(Error::NodeConfigRefused {
+                node_name,
+                processor_type,
+                refusal,
+            }) => {
+                assert_eq!(node_name, "Front");
+                assert_eq!(processor_type, source_type);
+                assert!(refusal.contains("`frame_widht`"), "{refusal}");
+                assert!(refusal.contains("`frame_width`"), "{refusal}");
+            }
+            other => panic!("expected NodeConfigRefused, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_setting_the_nodes_type_takes_passes() {
+        crate::core::test_support::ensure_test_mocks_registered();
+        let source_type =
+            crate::core::test_support::MockSourceTakingOneSetting::processor_class_import_path();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "Front", "type": source_type.as_str(),
+                       "config": {"frame_width": 640}},
+                      {"name": "Back", "type": source_type.as_str()}]
+        }))
+        .unwrap();
+
+        graph.validate().unwrap();
+    }
+
+    #[test]
+    fn a_node_written_without_a_config_takes_the_config_naming_no_setting() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}]
+        }))
+        .unwrap();
+
+        assert_eq!(graph.nodes[0].config, serde_json::json!({}));
+    }
+
+    /// A misspelled key is read past by serde and the graph loads as something
+    /// its author did not write, so every key that is neither read nor one of
+    /// `graph`'s live keys is refused, at every level, naming where it sits.
+    #[test]
+    fn a_key_this_runtime_does_not_read_is_refused_naming_it_and_where_it_sits() {
+        let a_node = serde_json::json!({"name": "camera", "type": A_CAMERA_CLASS});
+        let a_link = serde_json::json!({"source": {"node": "camera", "port": "video"},
+                                        "target": {"node": "display", "port": "video"}});
+        let with = |mut object: serde_json::Value, key: &str| {
+            object[key] = serde_json::json!(1);
+            object
+        };
+        for (graph_document, refusal_names) in [
+            (
+                serde_json::json!({"nodes": [], "linkz": []}),
+                [
+                    "the graph carries the key `linkz`",
+                    "`stream`, `nodes`, `links` and `exposed`",
+                ],
+            ),
+            (
+                serde_json::json!({"nodes": [with(a_node.clone(), "confg")]}),
+                [
+                    "node `camera` carries the key `confg`",
+                    "`name`, `type` and `config`",
+                ],
+            ),
+            (
+                serde_json::json!({"nodes": [a_node.clone()], "links": [with(a_link.clone(), "sourec")]}),
+                [
+                    "the link `camera/video` → `display/video` carries the key `sourec`",
+                    "`source` and `target`",
+                ],
+            ),
+            (
+                serde_json::json!({"nodes": [a_node.clone()], "links": [{
+                    "source": {"node": "camera", "port": "video", "prot": "x"},
+                    "target": {"node": "display", "port": "video"}}]}),
+                [
+                    "the source end of the link `camera/video` → `display/video` carries the key `prot`",
+                    "`node` and `port`",
+                ],
+            ),
+            (
+                serde_json::json!({"nodes": [a_node.clone()],
+                                   "exposed": [{"node": "camera", "port": "video", "level": "public"}]}),
+                [
+                    "the exposure `camera/video` carries the key `level`",
+                    "`node` and `port`",
+                ],
+            ),
+        ] {
+            let refusal = GraphSnapshot::from_graph_document(graph_document)
+                .expect_err("a key the runtime does not read is refused")
+                .to_string();
+            for named in refusal_names {
+                assert!(refusal.contains(named), "{named:?} not in: {refusal}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_this_runtime_does_not_read_is_refused_from_a_json_string_too() {
+        let refusal = GraphSnapshot::from_json_str(r#"{"nodes": [], "nodez": []}"#)
+            .unwrap_err()
+            .to_string();
+
+        assert!(refusal.contains("`nodez`"), "{refusal}");
+    }
+
+    /// `graph` renders spec and live keys together and a load reads it back, so
+    /// every key the render can carry has to be one a load reads or skips, and
+    /// every spec key one the render carries.
+    #[test]
+    fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
+        let render_schema = serde_json::to_value(schemars::schema_for!(
+            crate::core::json_schema::GraphResponse
+        ))
+        .unwrap();
+        let definitions = render_schema
+            .get("definitions")
+            .or_else(|| render_schema.get("$defs"))
+            .expect("the render's schema defines its nested objects");
+        let keys_rendered_on = |object_schema: &serde_json::Value| -> HashSet<String> {
+            object_schema["properties"]
+                .as_object()
+                .expect("an object schema lists its properties")
+                .keys()
+                .cloned()
+                .collect()
+        };
+
+        for (object_schema, keys) in [
+            (&render_schema, &GRAPH_DOCUMENT_KEYS),
+            (&definitions["ProcessorNodeOutput"], &GRAPH_NODE_KEYS),
+            (&definitions["LinkOutput"], &GRAPH_LINK_KEYS),
+            (&definitions["LinkPortRefOutput"], &GRAPH_LINK_END_KEYS),
+            (
+                &definitions["ExposedOutputPortOutput"],
+                &GRAPH_EXPOSURE_KEYS,
+            ),
+        ] {
+            let rendered = keys_rendered_on(object_schema);
+            for key in &rendered {
+                assert!(
+                    keys.spec_keys.contains(&key.as_str())
+                        || keys.live_keys.contains(&key.as_str()),
+                    "`graph` renders `{key}` on {}, which a load neither reads nor skips",
+                    keys.object_kind
+                );
+            }
+            for spec_key in keys.spec_keys {
+                assert!(
+                    rendered.contains(*spec_key),
+                    "a load reads `{spec_key}` on {}, which `graph` does not render",
+                    keys.object_kind
+                );
+            }
         }
     }
 

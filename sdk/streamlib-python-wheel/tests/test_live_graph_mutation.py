@@ -131,7 +131,7 @@ class LiveAddedEffect:
 # The display window is a native built-in; over the control plane it is named
 # by the class import path `graph` reports for one, which for a Rust built-in
 # is its declaration's module path.
-DISPLAY_WINDOW_TYPE = "streamlib_media_builtins::display_window::DisplayWindow"
+DISPLAY_WINDOW_TYPE = "tatolab.stream:DisplayWindow"
 
 
 def mcp_json(local_api_socket: LocalApiSocket, tool_name: str, arguments: dict) -> dict:

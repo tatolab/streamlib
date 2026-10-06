@@ -23,10 +23,17 @@ use crate::error::{SchemaError, SchemaResult};
 /// Every inhabitant is valid: the inner string is private, [`Self::new`] is the
 /// only constructor, there is no `Default`, and [`Deserialize`] validates
 /// rather than inheriting `String`'s.
+///
+/// One module is read: a path in [`BUILT_IN_NODE_CLASS_MODULE`] names one of
+/// the runtime's built-ins, resolved from its own registry and never imported.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct ProcessorClassImportPath(String);
+
+/// The module a stream imports every built-in node's class from, so a
+/// built-in's type is `tatolab.stream:<Class>`.
+pub const BUILT_IN_NODE_CLASS_MODULE: &str = "tatolab.stream";
 
 impl ProcessorClassImportPath {
     /// Build a path, refusing one that names no class.
@@ -47,6 +54,18 @@ impl ProcessorClassImportPath {
             });
         }
         Ok(Self(import_path))
+    }
+
+    /// The type of the built-in node whose public class is `class_name`.
+    pub fn of_built_in_node(class_name: &str) -> SchemaResult<Self> {
+        Self::new(format!("{BUILT_IN_NODE_CLASS_MODULE}:{class_name}"))
+    }
+
+    /// Whether this path names a class in [`BUILT_IN_NODE_CLASS_MODULE`].
+    pub fn names_a_built_in_node(&self) -> bool {
+        self.0
+            .strip_prefix(BUILT_IN_NODE_CLASS_MODULE)
+            .is_some_and(|after_the_module| after_the_module.starts_with(':'))
     }
 
     /// The path as written by the authoring surface.
@@ -87,6 +106,32 @@ mod tests {
                 ProcessorClassImportPath::new(path).unwrap().as_str(),
                 path,
                 "the path must survive construction byte for byte"
+            );
+        }
+    }
+
+    #[test]
+    fn a_built_in_nodes_type_is_its_class_in_the_stream_package() {
+        let camera = ProcessorClassImportPath::of_built_in_node("CameraSource").unwrap();
+
+        assert_eq!(camera.as_str(), "tatolab.stream:CameraSource");
+        assert!(camera.names_a_built_in_node());
+    }
+
+    #[test]
+    fn only_a_class_in_the_stream_package_itself_names_a_built_in_node() {
+        for not_a_built_in in [
+            PYTHON_PATH,
+            RUST_PATH,
+            "tatolab.streaming:CameraSource",
+            "tatolab.stream.nodes:CameraSource",
+            "streamlib_media_builtins::camera_source::CameraSource",
+        ] {
+            assert!(
+                !ProcessorClassImportPath::new(not_a_built_in)
+                    .unwrap()
+                    .names_a_built_in_node(),
+                "{not_a_built_in}"
             );
         }
     }

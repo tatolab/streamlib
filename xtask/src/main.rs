@@ -390,6 +390,18 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "--lib",
             ],
         ),
+        (
+            "every golden graph loads",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-media-builtins",
+                "--test",
+                "every_golden_graph_loads",
+            ],
+        ),
         // The wheel's own Rust tests. CI runs these in `python-wheel.yml`
         // rather than `test.yml`, so this mirror had no entry for them and a
         // break in the helper's data plane reached a PR green locally.
@@ -780,6 +792,11 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel",
                 "core::graph_snapshot",
+                "core::graph::traversal::mutation_ops::add_v_op::tests::a_built_in_this_floor_compiles_out_is_refused_and_nothing_is_added",
+                "core::graph::traversal::mutation_ops::add_v_op::tests::a_config_the_type_does_not_take_is_refused_naming_the_node_and_nothing_is_added",
+                "core::processors::processor_instance_factory::tests::a_built_in_type_is_never_handed_to_the_unregistered_type_resolver",
+                "core::processors::processor_instance_factory::tests::a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any",
+                "core::processors::processor_instance_factory::tests::only_a_type_recorded_absent_on_this_floor_is_refused_as_absent",
                 "core::graph::graph_tests::node_names",
                 "core::json_schema::capability_extension_and_runtime_name_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list",
                 "core::graph::edges",

@@ -89,8 +89,28 @@ pub enum Error {
     #[error("Processor not found: {0}")]
     ProcessorNotFound(String),
 
-    #[error("Unknown processor type: {ident} (not registered)")]
+    #[error(
+        "this runtime ({runtime_version}) has no node type `{ident}`",
+        runtime_version = env!("CARGO_PKG_VERSION")
+    )]
     UnknownProcessorType { ident: ProcessorClassImportPath },
+
+    #[error(
+        "`{ident}` is a built-in node this runtime does not have on {this_floor}: it runs on \
+         {floors_it_runs_on} only"
+    )]
+    BuiltInNodeTypeAbsentOnThisFloor {
+        ident: ProcessorClassImportPath,
+        this_floor: String,
+        floors_it_runs_on: String,
+    },
+
+    #[error("node `{node_name}` (`{processor_type}`) does not take its config: {refusal}")]
+    NodeConfigRefused {
+        node_name: String,
+        processor_type: ProcessorClassImportPath,
+        refusal: String,
+    },
 
     #[error(
         "processor `{processor_class_import_path}` declares the port `{port_name}`, which is \
@@ -343,7 +363,6 @@ mod tests {
             ident: ProcessorClassImportPath::new("my_app.filters:BlurProcessor").unwrap(),
         }
         .to_string();
-        assert!(msg.contains("not registered"), "message: {msg}");
         assert!(
             msg.contains("my_app.filters:BlurProcessor"),
             "the requested path must reach the user unaltered: {msg}"
@@ -351,6 +370,23 @@ mod tests {
         assert!(
             !msg.contains("streamlib add"),
             "no install fix-it survives the module-system removal: {msg}"
+        );
+    }
+
+    /// A stream names no runtime version, so the refusal of a type this runtime
+    /// lacks names the runtime's own, to compare with the stream's library.
+    #[test]
+    fn unknown_processor_type_names_this_runtimes_own_version() {
+        let msg = Error::UnknownProcessorType {
+            ident: ProcessorClassImportPath::new("tatolab.stream:NewThing").unwrap(),
+        }
+        .to_string();
+        assert_eq!(
+            msg,
+            format!(
+                "this runtime ({}) has no node type `tatolab.stream:NewThing`",
+                env!("CARGO_PKG_VERSION")
+            )
         );
     }
 

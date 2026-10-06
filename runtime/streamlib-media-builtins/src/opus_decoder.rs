@@ -21,6 +21,7 @@ use crate::encoded_packet_to_audio_block_decoder::{
 };
 
 #[streamlib::sdk::processor(
+    built_in_node,
     description = "Decodes Opus encoded-audio-packet bags to audio blocks via libopus",
     execution = reactive,
     scheduling = high,

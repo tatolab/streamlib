@@ -192,12 +192,20 @@ impl ProcessorInstance {
 pub type DynamicProcessorConstructorFn =
     Box<dyn Fn(&ProcessorNode) -> Result<Box<dyn DynGeneratedProcessor + Send>> + Send + Sync>;
 
+/// Whether a config is one the type's own `Config` takes, answering serde's
+/// refusal — which names the setting — when it is not.
+type ProcessorConfigTakenCheckFn =
+    Box<dyn Fn(&serde_json::Value) -> std::result::Result<(), String> + Send + Sync>;
+
 /// Per-type registration entry the factory stores.
 enum RegistrationKind {
     /// `Box<dyn Fn>` closure constructor — the one dispatch shape, used by
     /// host-compiled Rust types and helper-process host wrappers alike.
     LegacyDyn {
         constructor: DynamicProcessorConstructorFn,
+        /// Present for a typed Rust registration; a Python class's config is
+        /// checked by its own config class, in its processor interpreter.
+        config_taken_check: Option<ProcessorConfigTakenCheckFn>,
     },
 }
 
@@ -235,6 +243,8 @@ pub struct ProcessorInstanceFactory {
     registrations: RwLock<HashMap<ProcessorClassImportPath, RegistrationKind>>,
     port_info: RwLock<HashMap<ProcessorClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
     descriptors: RwLock<HashMap<ProcessorClassImportPath, ProcessorDescriptor>>,
+    /// Each built-in compiled out on this floor, with the floors it runs on.
+    built_in_node_types_absent_on_this_floor: RwLock<HashMap<ProcessorClassImportPath, String>>,
 }
 
 /// Global processor registry for runtime lookups.
@@ -261,6 +271,7 @@ impl ProcessorInstanceFactory {
             registrations: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
             descriptors: RwLock::new(HashMap::new()),
+            built_in_node_types_absent_on_this_floor: RwLock::new(HashMap::new()),
         }
     }
 
@@ -288,18 +299,27 @@ impl ProcessorInstanceFactory {
         let constructor: DynamicProcessorConstructorFn = Box::new(
             |node: &ProcessorNode| -> Result<Box<dyn DynGeneratedProcessor + Send>> {
                 let config: P::Config = match &node.config {
-                    Some(json) => serde_json::from_value(json.clone()).map_err(|e| {
-                        Error::Configuration(format!(
-                            "config does not match {}'s Config type: {e}",
-                            std::any::type_name::<P>()
-                        ))
+                    Some(json) => serde_json::from_value(json.clone()).map_err(|refusal| {
+                        Error::NodeConfigRefused {
+                            node_name: node.display_name.clone(),
+                            processor_type: node.processor_type.clone(),
+                            refusal: refusal.to_string(),
+                        }
                     })?,
                     None => P::Config::default(),
                 };
                 Ok(Box::new(P::from_config(config)?))
             },
         );
-        if let Err(e) = self.register_dynamic(descriptor, constructor) {
+        let config_taken_check: ProcessorConfigTakenCheckFn =
+            Box::new(|config: &serde_json::Value| {
+                serde_json::from_value::<P::Config>(config.clone())
+                    .map(drop)
+                    .map_err(|refusal| refusal.to_string())
+            });
+        if let Err(e) =
+            self.register_with_constructor(descriptor, constructor, Some(config_taken_check))
+        {
             tracing::warn!(
                 "Processor registration for {} failed: {}",
                 std::any::type_name::<P>(),
@@ -325,6 +345,15 @@ impl ProcessorInstanceFactory {
         descriptor: ProcessorDescriptor,
         constructor: DynamicProcessorConstructorFn,
     ) -> Result<()> {
+        self.register_with_constructor(descriptor, constructor, None)
+    }
+
+    fn register_with_constructor(
+        &self,
+        descriptor: ProcessorDescriptor,
+        constructor: DynamicProcessorConstructorFn,
+        config_taken_check: Option<ProcessorConfigTakenCheckFn>,
+    ) -> Result<()> {
         refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
@@ -347,7 +376,10 @@ impl ProcessorInstanceFactory {
 
         self.registrations.write().insert(
             processor_class_import_path.clone(),
-            RegistrationKind::LegacyDyn { constructor },
+            RegistrationKind::LegacyDyn {
+                constructor,
+                config_taken_check,
+            },
         );
 
         descriptors.insert(processor_class_import_path.clone(), descriptor);
@@ -447,7 +479,10 @@ impl ProcessorInstanceFactory {
         }
         registrations.insert(
             processor_class_import_path.clone(),
-            RegistrationKind::LegacyDyn { constructor },
+            RegistrationKind::LegacyDyn {
+                constructor,
+                config_taken_check: None,
+            },
         );
         drop(registrations);
         drop(descriptors);
@@ -470,12 +505,15 @@ impl ProcessorInstanceFactory {
 
     /// Register `processor_class_import_path` through the installed resolver when
     /// it is unknown. With no resolver an unknown type stays unknown, so the add
-    /// fails exactly as it did before a resolver existed.
+    /// fails exactly as it did before a resolver existed. A built-in's type is
+    /// never handed to the resolver: the runtime has it or it does not.
     pub fn resolve_processor_type_if_unregistered(
         &self,
         processor_class_import_path: &ProcessorClassImportPath,
     ) -> Result<()> {
-        if self.is_registered(processor_class_import_path) {
+        if self.is_registered(processor_class_import_path)
+            || processor_class_import_path.names_a_built_in_node()
+        {
             return Ok(());
         }
         let resolver = self.unregistered_type_resolver.read().clone();
@@ -542,6 +580,63 @@ impl ProcessorInstanceFactory {
         }
     }
 
+    /// Record a built-in this floor compiles out, so a graph naming it is
+    /// refused naming the floors it runs on rather than as a type nobody has.
+    pub fn register_built_in_node_type_absent_on_this_floor(
+        &self,
+        processor_type: ProcessorClassImportPath,
+        floors_it_runs_on: impl Into<String>,
+    ) {
+        self.built_in_node_types_absent_on_this_floor
+            .write()
+            .insert(processor_type, floors_it_runs_on.into());
+    }
+
+    /// Refuse a built-in this floor compiles out, naming this floor and the
+    /// floors it runs on.
+    pub fn refuse_a_built_in_node_type_absent_on_this_floor(
+        &self,
+        processor_type: &ProcessorClassImportPath,
+    ) -> Result<()> {
+        match self
+            .built_in_node_types_absent_on_this_floor
+            .read()
+            .get(processor_type)
+        {
+            Some(floors_it_runs_on) => Err(Error::BuiltInNodeTypeAbsentOnThisFloor {
+                ident: processor_type.clone(),
+                this_floor: this_floors_name().to_string(),
+                floors_it_runs_on: floors_it_runs_on.clone(),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// Refuse a config the node's type would not take — a setting it does not
+    /// know, a value of the wrong kind — naming the node, its type and the
+    /// setting. A type registered with no typed config (a Python class) takes
+    /// what reaches its processor interpreter, whose config class checks it.
+    pub fn refuse_a_config_the_node_type_does_not_take(
+        &self,
+        node_name: &str,
+        processor_type: &ProcessorClassImportPath,
+        config: &serde_json::Value,
+    ) -> Result<()> {
+        let registrations = self.registrations.read();
+        let Some(RegistrationKind::LegacyDyn {
+            config_taken_check: Some(config_taken_check),
+            ..
+        }) = registrations.get(processor_type)
+        else {
+            return Ok(());
+        };
+        config_taken_check(config).map_err(|refusal| Error::NodeConfigRefused {
+            node_name: node_name.to_string(),
+            processor_type: processor_type.clone(),
+            refusal,
+        })
+    }
+
     pub fn can_create(&self, processor_type: &ProcessorClassImportPath) -> bool {
         self.registrations.read().contains_key(processor_type)
     }
@@ -555,7 +650,7 @@ impl ProcessorInstanceFactory {
             ))
         })?;
 
-        let RegistrationKind::LegacyDyn { constructor } = registration;
+        let RegistrationKind::LegacyDyn { constructor, .. } = registration;
         let mut instance = ProcessorInstance::new(constructor(node)?);
         instance.install_iceoryx2_resources()?;
         Ok(instance)
@@ -608,6 +703,16 @@ impl ProcessorInstanceFactory {
     /// List all registered processor types with their full descriptors.
     pub fn list_registered(&self) -> Vec<ProcessorDescriptor> {
         self.descriptors.read().values().cloned().collect()
+    }
+}
+
+/// This floor as a person names it.
+fn this_floors_name() -> &'static str {
+    match std::env::consts::OS {
+        "linux" => "Linux",
+        "macos" => "macOS",
+        "windows" => "Windows",
+        other => other,
     }
 }
 
@@ -1096,5 +1201,82 @@ mod tests {
             <MockProcessorWithACamelCaseOutputPort::OutputLink::outOne as OutputPortMarker>::PORT_NAME,
             "outone"
         );
+    }
+
+    /// A built-in's type names one of the runtime's own nodes, so it is never
+    /// imported: a resolver handed one would import `tatolab.stream` in the
+    /// runtime process and refuse with an import error instead of naming it.
+    #[test]
+    fn a_built_in_type_is_never_handed_to_the_unregistered_type_resolver() {
+        let factory = ProcessorInstanceFactory::new();
+        let paths_handed_to_the_resolver = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&paths_handed_to_the_resolver);
+        factory.set_unregistered_processor_type_resolver(Arc::new(move |path| {
+            recorded.lock().push(path.as_str().to_string());
+            Ok(())
+        }));
+
+        factory
+            .resolve_processor_type_if_unregistered(&class_import_path("tatolab.stream:NewThing"))
+            .unwrap();
+        factory
+            .resolve_processor_type_if_unregistered(&class_import_path("my_app.nodes:Blur"))
+            .unwrap();
+
+        assert_eq!(*paths_handed_to_the_resolver.lock(), ["my_app.nodes:Blur"]);
+    }
+
+    #[test]
+    fn a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any() {
+        use crate::core::test_support::MockSourceTakingOneSetting;
+        let factory = ProcessorInstanceFactory::new();
+        factory.register::<MockSourceTakingOneSetting::Processor>();
+        let python_class = class_import_path("my_app.nodes:Blur");
+        factory
+            .register_descriptor_only(descriptor_for(python_class.as_str()))
+            .unwrap();
+        let typed = MockSourceTakingOneSetting::processor_class_import_path();
+        let a_misspelled_setting = serde_json::json!({"frame_widht": 640});
+
+        let refusal = factory
+            .refuse_a_config_the_node_type_does_not_take("front", &typed, &a_misspelled_setting)
+            .unwrap_err()
+            .to_string();
+
+        assert!(refusal.contains("node `front`"), "{refusal}");
+        assert!(refusal.contains(typed.as_str()), "{refusal}");
+        assert!(refusal.contains("`frame_widht`"), "{refusal}");
+        factory
+            .refuse_a_config_the_node_type_does_not_take(
+                "front",
+                &typed,
+                &serde_json::json!({"frame_width": 640}),
+            )
+            .unwrap();
+        factory
+            .refuse_a_config_the_node_type_does_not_take(
+                "blur",
+                &python_class,
+                &a_misspelled_setting,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn only_a_type_recorded_absent_on_this_floor_is_refused_as_absent() {
+        let factory = ProcessorInstanceFactory::new();
+        let compiled_out_here = class_import_path("tatolab.stream:CompiledOutHere");
+        factory
+            .register_built_in_node_type_absent_on_this_floor(compiled_out_here.clone(), "Plan 9");
+
+        assert!(matches!(
+            factory.refuse_a_built_in_node_type_absent_on_this_floor(&compiled_out_here),
+            Err(Error::BuiltInNodeTypeAbsentOnThisFloor { .. })
+        ));
+        factory
+            .refuse_a_built_in_node_type_absent_on_this_floor(&class_import_path(
+                "tatolab.stream:CameraSource",
+            ))
+            .unwrap();
     }
 }

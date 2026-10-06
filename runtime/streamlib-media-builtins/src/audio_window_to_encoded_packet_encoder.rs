@@ -90,6 +90,7 @@ impl OpusEncoderApplication {
 /// rather than be invented back by a decoder.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct OpusEncoderConfig {
     /// Target bitrate in bits per second. Absent, libopus picks its own from
     /// the sample rate and channel count.

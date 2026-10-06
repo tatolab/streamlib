@@ -34,6 +34,7 @@ const VIDEO_OUTPUT_PORT: &str = "video";
 /// Configuration for [`CameraSource`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct CameraSourceConfig {
     /// The capture backend's name for the device — a V4L2 device path
     /// (`/dev/video0`) on Linux, an AVFoundation camera's unique ID on macOS.
@@ -49,6 +50,7 @@ pub struct CameraSourceConfig {
 }
 
 #[streamlib::sdk::processor(
+    built_in_node,
     description = "Captures live video from the platform's camera — V4L2 on Linux (zero-copy DMA-BUF when the device exports it, CPU upload otherwise), AVFoundation on macOS (zero-copy IOSurface import, CPU upload otherwise)",
     execution = manual,
     scheduling = high,

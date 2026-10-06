@@ -60,6 +60,7 @@ const STREAM_RE_ENTRY_REPORT_INTERVAL: u64 = 20;
 /// the codec seam's own and is not configurable here.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[serde(deny_unknown_fields)]
 pub struct HardwareVideoDecoderConfig {
     /// Upper bound on the coded width the DPB is allocated for. Absent:
     /// auto-detected from the first SPS.

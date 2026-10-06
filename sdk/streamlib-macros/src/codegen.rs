@@ -54,6 +54,7 @@ pub fn generate_from_parsed_processor_attr(
     let output_link_module = generate_port_marker_module(PortDirection::Output, &parsed.outputs);
     let processor_impl = generate_processor_impl_from_schema(
         schema,
+        parsed.built_in_node,
         &config_type,
         &config_field_name,
         &custom_fields,
@@ -299,6 +300,7 @@ fn generate_port_marker_module(
 /// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
+    built_in_node: bool,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
@@ -307,6 +309,15 @@ fn generate_processor_impl_from_schema(
 
     let processor_class_short_name = &schema.name;
     let description = schema.description.as_deref().unwrap_or("Processor");
+    let processor_class_import_path_capture = if built_in_node {
+        let built_in_node_type = format!(
+            "{}:{processor_class_short_name}",
+            streamlib_processor_schema::BUILT_IN_NODE_CLASS_MODULE
+        );
+        quote! { #built_in_node_type }
+    } else {
+        quote! { ::core::module_path!() }
+    };
 
     // Derive execution mode from schema
     let (
@@ -402,9 +413,9 @@ fn generate_processor_impl_from_schema(
                 -> __streamlib_sdk::descriptors::ProcessorClassImportPath
             {
                 __streamlib_sdk::descriptors::ProcessorClassImportPath::new(
-                    ::core::module_path!(),
+                    #processor_class_import_path_capture,
                 )
-                .expect("module_path! always names the enclosing module")
+                .expect("the captured path always names a class")
             }
 
             /// Create a [`ProcessorSpec`](__streamlib_sdk::processors::ProcessorSpec)
@@ -1438,8 +1449,13 @@ mod processor_struct_emit_tests {
     /// The whole `impl Processor` block, which is where the identity accessor
     /// the descriptor delegates to is emitted.
     fn rendered_processor_impl() -> String {
+        rendered_processor_impl_declared_as(false)
+    }
+
+    fn rendered_processor_impl_declared_as(built_in_node: bool) -> String {
         render_token_stream_without_whitespace(generate_processor_impl_from_schema(
             &minimal_schema(),
+            built_in_node,
             &quote! { __streamlib_sdk::processors::EmptyConfig },
             &None,
             &[],
@@ -1466,6 +1482,21 @@ mod processor_struct_emit_tests {
         assert!(
             rendered_descriptor().contains("Processor::processor_class_import_path()"),
             "the descriptor must take its identity from that one capture"
+        );
+    }
+
+    /// A built-in's type is its class in `tatolab.stream`, written whole at
+    /// expansion, so moving its Rust module never changes it.
+    #[test]
+    fn a_built_in_nodes_identity_is_its_class_in_the_stream_package() {
+        let rendered = rendered_processor_impl_declared_as(true);
+        assert!(
+            rendered.contains("\"tatolab.stream:MinimalProbe\""),
+            "a built-in's type is `tatolab.stream:<struct name>` — got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("module_path!()"),
+            "a built-in's type never reads its module path — got: {rendered}"
         );
     }
 

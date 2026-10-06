@@ -218,6 +218,33 @@ impl crate::core::ManualProcessor for MockProcessorWithACamelCaseOutputPort::Pro
     }
 }
 
+/// The one setting [`MockSourceTakingOneSetting`] takes.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct MockSourceTakingOneSettingConfig {
+    #[serde(default)]
+    pub frame_width: Option<u32>,
+}
+
+/// Mock source whose config takes `frame_width` and refuses every other key.
+#[crate::processor(
+    execution = manual,
+    config = crate::core::test_support::MockSourceTakingOneSettingConfig,
+    output("video"),
+)]
+pub(crate) struct MockSourceTakingOneSetting;
+
+impl crate::core::ManualProcessor for MockSourceTakingOneSetting::Processor {
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Register all engine-internal test mock processors with the global
 /// `PROCESSOR_REGISTRY`. Idempotent — safe to call from every test
 /// fixture that builds a graph against `lookup_registered_ident` or
@@ -233,6 +260,7 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockOrderedInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockProcessorWithACamelCaseOutputPort::Processor>();
+        PROCESSOR_REGISTRY.register::<MockSourceTakingOneSetting::Processor>();
     });
 }
 

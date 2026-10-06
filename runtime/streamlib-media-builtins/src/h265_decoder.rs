@@ -31,6 +31,7 @@ impl HardwareVideoCodecProcessorIdentity for H265DecoderCodecIdentity {
 }
 
 #[streamlib::sdk::processor(
+    built_in_node,
     description = "Decodes H.265 Annex-B encoded-frame bags to published video surfaces via hardware decode",
     execution = reactive,
     scheduling = high,

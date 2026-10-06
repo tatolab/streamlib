@@ -125,15 +125,15 @@ CODEC_ROUND_TRIPS = {
     "h264": {
         "stream": h264_round_trip_into_a_window,
         "rendered_types": {
-            "H264Encoder": "streamlib_media_builtins::h264_encoder::H264Encoder",
-            "H264Decoder": "streamlib_media_builtins::h264_decoder::H264Decoder",
+            "H264Encoder": "tatolab.stream:H264Encoder",
+            "H264Decoder": "tatolab.stream:H264Decoder",
         },
     },
     "h265": {
         "stream": h265_round_trip_into_a_window,
         "rendered_types": {
-            "H265Encoder": "streamlib_media_builtins::h265_encoder::H265Encoder",
-            "H265Decoder": "streamlib_media_builtins::h265_decoder::H265Decoder",
+            "H265Encoder": "tatolab.stream:H265Encoder",
+            "H265Decoder": "tatolab.stream:H265Decoder",
         },
     },
 }

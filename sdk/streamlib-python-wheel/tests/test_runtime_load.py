@@ -57,6 +57,7 @@ from streamlib._control_plane_client import (
     call_tool,
     resolve_local_api_socket_of_requested_node,
 )
+from runtime_load_open_config_nodes import OpenConfigSink
 from streamlib._engine import (
     TestBagCollector,
     TestBagFeeder,
@@ -66,19 +67,19 @@ from streamlib._engine import (
 )
 
 MEDIA_BUILTIN_MARKER_TYPES: dict[type, str] = {
-    TestPatternSource: "streamlib_media_builtins::test_pattern_source::TestPatternSource",
-    CameraSource: "streamlib_media_builtins::camera_source::CameraSource",
-    DisplayWindow: "streamlib_media_builtins::display_window::DisplayWindow",
-    MicrophoneSource: "streamlib_media_builtins::microphone_source::MicrophoneSource",
-    SpeakerSink: "streamlib_media_builtins::speaker_sink::SpeakerSink",
-    H264Encoder: "streamlib_media_builtins::h264_encoder::H264Encoder",
-    H264Decoder: "streamlib_media_builtins::h264_decoder::H264Decoder",
-    H265Encoder: "streamlib_media_builtins::h265_encoder::H265Encoder",
-    H265Decoder: "streamlib_media_builtins::h265_decoder::H265Decoder",
-    OpusEncoder: "streamlib_media_builtins::opus_encoder::OpusEncoder",
-    OpusDecoder: "streamlib_media_builtins::opus_decoder::OpusDecoder",
-    Mp4Sink: "streamlib_media_builtins::mp4_sink::Mp4Sink",
-    VirtualCameraSink: "streamlib_media_builtins::virtual_camera_sink::VirtualCameraSink",
+    TestPatternSource: "tatolab.stream:TestPatternSource",
+    CameraSource: "tatolab.stream:CameraSource",
+    DisplayWindow: "tatolab.stream:DisplayWindow",
+    MicrophoneSource: "tatolab.stream:MicrophoneSource",
+    SpeakerSink: "tatolab.stream:SpeakerSink",
+    H264Encoder: "tatolab.stream:H264Encoder",
+    H264Decoder: "tatolab.stream:H264Decoder",
+    H265Encoder: "tatolab.stream:H265Encoder",
+    H265Decoder: "tatolab.stream:H265Decoder",
+    OpusEncoder: "tatolab.stream:OpusEncoder",
+    OpusDecoder: "tatolab.stream:OpusDecoder",
+    Mp4Sink: "tatolab.stream:Mp4Sink",
+    VirtualCameraSink: "tatolab.stream:VirtualCameraSink",
 }
 
 TEST_HARNESS_MARKER_TYPES: dict[type, str] = {
@@ -96,7 +97,14 @@ MARKERS_THIS_PLATFORM_COMPILES = [
     if marker is not VirtualCameraSink or sys.platform.startswith("linux")
 ]
 
+# A setting a built-in's config requires; every other marker loads with `{}`.
+THE_CONFIG_A_MARKER_CANNOT_LOAD_WITHOUT: dict[type, dict[str, object]] = {
+    Mp4Sink: {"path": "recording.mp4"},
+}
+
 RUN_REFUSAL_DEADLINE_SECONDS = 20.0
+
+OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"
 
 # Imported by nothing but the engine's type resolver, during `load`.
 RESOLVER_IMPORTED_NODE_MODULE = "runtime_load_nodes"
@@ -171,11 +179,20 @@ def config_nesting_containers_deep(containers_counting_the_config: int) -> dict[
 
 
 @stream
-def window_with_the_deepest_config_the_builder_compiles(stream: Stream) -> None:
+def open_config_sink_with_the_deepest_config_the_builder_compiles(stream: Stream) -> None:
     stream.add(
-        DisplayWindow,
+        OpenConfigSink,
         config=config_nesting_containers_deep(CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF),
     )
+
+
+def open_config_sink_graph_whose_config_holds(value: object) -> dict[str, Any]:
+    """One node taking any config, its config holding `value`."""
+    return {
+        "nodes": [
+            {"name": "openconfigsink", "type": OPEN_CONFIG_SINK_TYPE, "config": {"value": value}}
+        ]
+    }
 
 
 def empty_graph() -> dict[str, Any]:
@@ -351,7 +368,11 @@ def test_a_graph_naming_every_compiled_marker_by_its_type_loads(runtime: streaml
     runtime.load(
         {
             "nodes": [
-                {"name": marker.__name__, "type": getattr(marker, "type"), "config": {}}
+                {
+                    "name": marker.__name__,
+                    "type": getattr(marker, "type"),
+                    "config": THE_CONFIG_A_MARKER_CANNOT_LOAD_WITHOUT.get(marker, {}),
+                }
                 for marker in MARKERS_THIS_PLATFORM_COMPILES
             ]
         }
@@ -386,7 +407,9 @@ def test_a_tuple_nested_in_the_graph_loads_as_a_list(runtime: streamlib.Runtime)
 
 
 def test_the_deepest_config_the_builder_compiles_loads(runtime: streamlib.Runtime):
-    runtime.load(compile_stream_to_graph(window_with_the_deepest_config_the_builder_compiles))
+    runtime.load(
+        compile_stream_to_graph(open_config_sink_with_the_deepest_config_the_builder_compiles)
+    )
 
     assert the_runtimes_graph_holds_a_processor(runtime)
 
@@ -419,7 +442,7 @@ def test_a_config_one_container_deeper_than_the_builder_compiles_is_refused_by_l
 def test_nan_and_infinity_in_a_graphs_config_load(
     runtime: streamlib.Runtime, not_a_number: float
 ):
-    runtime.load(pattern_to_window_graph_with_window_scaling(not_a_number))
+    runtime.load(open_config_sink_graph_whose_config_holds(not_a_number))
 
     assert the_runtimes_graph_holds_a_processor(runtime)
 
@@ -652,6 +675,43 @@ def test_a_container_holding_itself_or_nested_past_the_maximum_is_refused_rather
     run_in_its_own_process(script)
 
 
+def test_a_virtual_camera_sink_loads_on_linux_and_is_refused_at_load_naming_the_platform_elsewhere(
+    runtime: streamlib.Runtime,
+):
+    graph = {"nodes": [{"name": "camera", "type": VirtualCameraSink.type, "config": {}}]}
+    if sys.platform.startswith("linux"):
+        runtime.load(graph)
+        return
+
+    with pytest.raises(RuntimeError) as refused:
+        runtime.load(graph)
+
+    assert "`tatolab.stream:VirtualCameraSink`" in str(refused.value)
+    assert "macOS" in str(refused.value)
+    assert "runs on Linux only" in str(refused.value)
+
+
+def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_and_the_setting(
+    runtime: streamlib.Runtime,
+):
+    with pytest.raises(RuntimeError) as refused:
+        runtime.load(
+            {
+                "nodes": [
+                    {
+                        "name": "pattern",
+                        "type": TestPatternSource.type,
+                        "config": {"widht": 640},
+                    }
+                ]
+            }
+        )
+
+    assert "node `pattern`" in str(refused.value)
+    assert "`tatolab.stream:TestPatternSource`" in str(refused.value)
+    assert "`widht`" in str(refused.value)
+
+
 def test_a_graph_that_does_not_parse_is_refused_with_the_engines_text(
     runtime: streamlib.Runtime,
 ):
@@ -662,7 +722,7 @@ def test_a_graph_that_does_not_parse_is_refused_with_the_engines_text(
 @pytest.mark.parametrize(
     ("unknown_type", "engine_refusal"),
     [
-        ("streamlib_media_builtins::no_such_node::NoSuchNode", "Unknown processor type"),
+        ("tatolab.stream:NoSuchNode", "has no node type"),
         ("no_such_module_for_runtime_load:NoSuchNode", "could not register"),
     ],
     ids=["native-path", "python-path"],

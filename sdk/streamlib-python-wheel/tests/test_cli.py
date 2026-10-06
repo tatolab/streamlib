@@ -337,12 +337,12 @@ FRONT_STREAM_GRAPH = {
     "nodes": [
         {
             "name": "testpatternsource",
-            "type": "streamlib_media_builtins::test_pattern_source::TestPatternSource",
+            "type": "tatolab.stream:TestPatternSource",
             "config": {},
         },
         {
             "name": "displaywindow",
-            "type": "streamlib_media_builtins::display_window::DisplayWindow",
+            "type": "tatolab.stream:DisplayWindow",
             "config": {},
         },
     ],
@@ -458,7 +458,7 @@ def test_a_file_target_with_a_function_loads_that_stream(
         "nodes": [
             {
                 "name": "back-pattern",
-                "type": "streamlib_media_builtins::test_pattern_source::TestPatternSource",
+                "type": "tatolab.stream:TestPatternSource",
                 "config": {},
             }
         ],
@@ -1559,12 +1559,12 @@ print("COMPILED_GRAPH=" + json.dumps(compiled_graph))
         (
             False,
             "camerasource",
-            "streamlib_media_builtins::camera_source::CameraSource",
+            "tatolab.stream:CameraSource",
         ),
         (
             True,
             "testpatternsource",
-            "streamlib_media_builtins::test_pattern_source::TestPatternSource",
+            "tatolab.stream:TestPatternSource",
         ),
     ],
 )
@@ -1613,7 +1613,7 @@ def test_the_scaffolded_stream_compiles_to_its_graph_and_loads_without_a_device(
             },
             {
                 "name": "displaywindow",
-                "type": "streamlib_media_builtins::display_window::DisplayWindow",
+                "type": "tatolab.stream:DisplayWindow",
                 "config": {"title": "StreamLib", "scaling": "fit"},
             },
         ],

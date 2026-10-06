@@ -45,13 +45,9 @@ STREAM_GRAPH_BUILDER_SOURCE = (
     Path(streamlib.__file__).resolve().parent / "_stream_graph_builder.py"
 )
 
-TEST_PATTERN_SOURCE_TYPE = (
-    "streamlib_media_builtins::test_pattern_source::TestPatternSource"
-)
-DISPLAY_WINDOW_TYPE = "streamlib_media_builtins::display_window::DisplayWindow"
-VIRTUAL_CAMERA_SINK_TYPE = (
-    "streamlib_media_builtins::virtual_camera_sink::VirtualCameraSink"
-)
+TEST_PATTERN_SOURCE_TYPE = "tatolab.stream:TestPatternSource"
+DISPLAY_WINDOW_TYPE = "tatolab.stream:DisplayWindow"
+VIRTUAL_CAMERA_SINK_TYPE = "tatolab.stream:VirtualCameraSink"
 FRAME_INVERTER_TYPE = "stream_graph_builder_nodes:FrameInverter"
 BRIGHTNESS_READER_TYPE = "stream_graph_builder_nodes:BrightnessReader"
 FRAME_DARKENER_TYPE = "stream_graph_builder_nodes:FrameFilters.FrameDarkener"
@@ -471,57 +467,15 @@ def test_an_instance_is_refused_naming_the_class_itself() -> None:
         Stream("rig").add(FrameInverter())  # pyright: ignore[reportArgumentType]
 
 
-def test_virtual_camera_sink_is_refused_off_linux(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_a_virtual_camera_sink_is_recorded_whatever_floor_the_stream_compiles_on(
+    monkeypatch: pytest.MonkeyPatch, platform: str
 ) -> None:
-    monkeypatch.setattr(sys, "platform", "darwin")
-
-    with pytest.raises(RuntimeError) as refusal:
-        Stream("rig").add(streamlib.VirtualCameraSink)
-
-    assert str(refusal.value) == (
-        "VirtualCameraSink is Linux-only today; this platform is not supported by the "
-        "streamlib wheel yet"
-    )
-
-
-def test_virtual_camera_sink_is_accepted_on_linux(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "platform", platform)
 
     assert compile_stream_to_graph(a_virtual_camera)["nodes"] == [
         {"name": "virtualcamerasink", "type": VIRTUAL_CAMERA_SINK_TYPE, "config": {}}
     ]
-
-
-def test_a_class_named_like_the_virtual_camera_sink_elsewhere_is_not_refused(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(sys, "platform", "darwin")
-    look_alike = type(
-        "VirtualCameraSink", (), {"type": "stand_in_builtins::look_alike::Sink"}
-    )
-
-    assert Stream("rig").add(look_alike).name == "virtualcamerasink"
-
-
-def test_an_add_refused_for_its_platform_records_nothing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(sys, "platform", "darwin")
-    builder = Stream("rig")
-    look_alike = type(
-        "VirtualCameraSink", (), {"type": "stand_in_builtins::look_alike::Sink"}
-    )
-
-    with pytest.raises(RuntimeError, match="VirtualCameraSink is Linux-only"):
-        builder.add(streamlib.VirtualCameraSink)
-    with pytest.raises(RuntimeError, match="VirtualCameraSink is Linux-only"):
-        builder.add(streamlib.VirtualCameraSink, name="Loopback Camera")
-
-    assert builder.add(look_alike).name == "virtualcamerasink"
-    assert builder.add(FrameInverter, name="Loopback Camera").name == "loopback-camera"
 
 
 @pytest.mark.parametrize(

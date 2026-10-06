@@ -12,6 +12,7 @@
 //!     execution = manual,               // reactive | manual | continuous | continuous(interval_ms = 10)
 //!     scheduling = high,                // realtime | high | normal (default: normal)
 //!     unsafe_send,                      // flag — emit `unsafe impl Send`
+//!     built_in_node,                    // flag — type is `tatolab.stream:<struct name>`
 //!     config = crate::CameraConfig,     // typed Config alias; must derive `JsonSchema`
 //!     input("video_in", delivery_profile = "newest"),
 //!     output("video"),
@@ -24,7 +25,8 @@
 //! never reaches the engine.
 //!
 //! The attribute declares no identity. A processor is named by the import path
-//! of its type, captured by the macro at the expansion site.
+//! of its type, captured by the macro at the expansion site — or, for a
+//! declaration flagged `built_in_node`, by its class in `tatolab.stream`.
 
 use streamlib_processor_schema::{
     AudioWindowContract, AudioWindowContractDeclaredValues, DELIVERY_PROFILE_DECLARATION_VALUES,
@@ -99,6 +101,9 @@ pub struct ParsedProcessorAttr {
     pub execution: ProcessorSchemaExecution,
     pub scheduling: Option<ThreadPriority>,
     pub unsafe_send: bool,
+    /// Whether this is one of the runtime's built-in nodes, typed
+    /// `tatolab.stream:<struct name>` rather than by its module path.
+    pub built_in_node: bool,
     pub config_type: Option<Path>,
     pub config_field_name: String,
     pub inputs: Vec<ParsedPort>,
@@ -174,6 +179,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
     let mut execution: Option<ProcessorSchemaExecution> = None;
     let mut scheduling: Option<ThreadPriority> = None;
     let mut unsafe_send = false;
+    let mut built_in_node = false;
     let mut config_type: Option<Path> = None;
     let mut config_field_name: Option<String> = None;
     let mut inputs: Vec<ParsedPort> = Vec::new();
@@ -186,6 +192,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
         let key = Ident::parse_any(input)?;
         match key.to_string().as_str() {
             "unsafe_send" => unsafe_send = true,
+            "built_in_node" => built_in_node = true,
             "description" => {
                 input.parse::<Token![=]>()?;
                 let lit: LitStr = input.parse()?;
@@ -261,6 +268,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
         execution,
         scheduling,
         unsafe_send,
+        built_in_node,
         config_type,
         config_field_name,
         inputs,
@@ -680,6 +688,7 @@ const PROCESSOR_ATTRIBUTE_KEYS: &[&str] = &[
     "execution",
     "scheduling",
     "unsafe_send",
+    "built_in_node",
     "config",
     "config_field",
     "description",
@@ -888,6 +897,18 @@ mod tests {
             unsafe_send,
         });
         assert!(parsed.unsafe_send);
+    }
+
+    #[test]
+    fn built_in_node_flag() {
+        assert!(
+            parse_ok(quote! {
+                execution = manual,
+                built_in_node,
+            })
+            .built_in_node
+        );
+        assert!(!parse_ok(quote! { execution = manual }).built_in_node);
     }
 
     // ---- error cases ----
