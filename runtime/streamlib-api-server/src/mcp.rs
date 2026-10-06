@@ -1109,6 +1109,49 @@ mod tests {
         }
     }
 
+    fn serve_one_mcp_tool_call() {
+        let request_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime builds");
+        request_runtime.block_on(async {
+            tool_call_result(
+                Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+                "graph",
+                json!({}),
+            )
+            .await;
+        });
+    }
+
+    fn rmcp_trace_targets_under(env_filter_directives: &str) -> Vec<&'static str> {
+        crate::control_plane_stub_support::CapturedTracingTargets::captured_from_the_second_of_two_runs(
+            env_filter_directives,
+            serve_one_mcp_tool_call,
+        )
+        .into_iter()
+        .filter(|target| target.starts_with("rmcp"))
+        .collect()
+    }
+
+    /// At the engine's default filter a node's control plane adds nothing to
+    /// the app's own log, MCP included.
+    #[test]
+    #[serial_test::serial]
+    fn a_routine_mcp_request_says_nothing_at_the_engines_default_filter() {
+        assert!(
+            !rmcp_trace_targets_under("info").is_empty(),
+            "the SDK speaks at info, so the default has to hold it"
+        );
+        let targets = rmcp_trace_targets_under(
+            streamlib::sdk::logging::ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES,
+        );
+        assert!(
+            targets.is_empty(),
+            "an MCP request must be silent at the engine's default filter, got: {targets:?}"
+        );
+    }
+
     /// A host that holds `subscriptions/listen` open must not hold the node's
     /// shutdown: stopping the local API ends the stream with its final result.
     #[tokio::test]
