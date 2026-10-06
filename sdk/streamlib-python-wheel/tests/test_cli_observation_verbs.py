@@ -1313,12 +1313,6 @@ def test_the_not_yet_in_the_wheel_stopgap_is_gone():
     assert not hasattr(cli, "OBSERVATION_VERBS_NOT_YET_IN_THE_WHEEL")
 
 
-def test_the_wheel_serves_no_mcp_verb():
-    # MCP is served by the node's own control plane at POST /mcp, on the node's
-    # lifecycle — there is no CLI verb to start or attach one.
-    assert "mcp" not in served_verbs()
-
-
 def test_nodes_reports_an_empty_registry_without_failing(isolated_registry, capsys):
     assert cli.main(["nodes"]) == 0
 

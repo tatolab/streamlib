@@ -42,11 +42,13 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ControlPlaneError",
+    "NoLiveNodeError",
     "SurfaceImageExchangeRefusal",
     "ExchangedSurfaceImage",
     "LocalApiSocket",
     "control_plane_answers",
     "resolve_local_api_socket_of_requested_node",
+    "resolve_requested_live_node",
     "call_tool",
     "fetch_surface_image_png_bytes",
 ]
@@ -76,6 +78,10 @@ class ControlPlaneError(Exception):
     def __init__(self, message: str, *, server_answered: bool = False) -> None:
         super().__init__(message)
         self.server_answered = server_answered
+
+
+class NoLiveNodeError(ControlPlaneError):
+    """No node on this machine is live, so a verb has nothing to target."""
 
 
 class _ControlPlaneHttpResponse(NamedTuple):
@@ -154,14 +160,19 @@ def control_plane_answers(local_api_socket: LocalApiSocket) -> bool:
 
 
 def resolve_local_api_socket_of_requested_node(requested_node: "Optional[str]") -> LocalApiSocket:
-    """The local API socket a verb targets.
+    """The local API socket of the node `resolve_requested_live_node` picks."""
+    return LocalApiSocket(resolve_requested_live_node(requested_node).local_api_socket_path)
 
-    `--node` resolves that node's socket from the registry, matching a runtime
-    name first and a runtime_id second — the name is the one an app chooses and
+
+def resolve_requested_live_node(requested_node: "Optional[str]") -> "NodeRegistryEntry":
+    """The live node a verb targets.
+
+    `--node` resolves that node from the registry, matching a runtime name
+    first and a runtime_id second — the name is the one an app chooses and
     keeps across runs. Without it, the sole live node, which is the
-    zero-ceremony case. Zero live nodes, more than one matching `--node`, or more
-    than one live node with no `--node` given, is an error that lists what it
-    found.
+    zero-ceremony case. Zero live nodes raises `NoLiveNodeError`; more than one
+    matching `--node`, or more than one live node with no `--node` given, is an
+    error that lists what it found.
     """
     from ._node_registry import live_nodes
 
@@ -171,10 +182,10 @@ def resolve_local_api_socket_of_requested_node(requested_node: "Optional[str]") 
         return _sole_node_matching(nodes, requested_node)
 
     if len(nodes) == 1:
-        return LocalApiSocket(nodes[0].local_api_socket_path)
+        return nodes[0]
 
     if not nodes:
-        raise ControlPlaneError(
+        raise NoLiveNodeError(
             "no running StreamLib nodes found.\n"
             "Start one with `streamlib dev`."
         )
@@ -187,8 +198,8 @@ def resolve_local_api_socket_of_requested_node(requested_node: "Optional[str]") 
 
 def _sole_node_matching(
     nodes: "list[NodeRegistryEntry]", requested_node: str
-) -> LocalApiSocket:
-    """The local API socket of the one live node `--node` names, or an error.
+) -> "NodeRegistryEntry":
+    """The one live node `--node` names, or an error.
 
     Names are matched before ids because a name is what an app chose. Nothing
     makes a name unique, so a tie names every match and refuses rather than
@@ -199,7 +210,7 @@ def _sole_node_matching(
         [node for node in nodes if node.runtime_id == requested_node],
     ):
         if len(matching) == 1:
-            return LocalApiSocket(matching[0].local_api_socket_path)
+            return matching[0]
         if matching:
             raise ControlPlaneError(
                 f"{len(matching)} live nodes answer to `{requested_node}` — pick one by "

@@ -66,6 +66,7 @@ from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
+from ._local_api_mcp_stdio_pipe import pipe_stdio_to_the_runtimes_mcp_server
 from ._node_registry import UntrustedRuntimeDirectoryError
 from ._stream_graph_builder import compile_stream_to_graph, is_stream_function
 from ._surface_image_exchange import (
@@ -1397,6 +1398,18 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     add_control_target_flag(exchange_command)
 
+    mcp_command = subcommands.add_parser(
+        "mcp",
+        help="Connect an MCP host to a running node over this command's stdin and stdout.",
+        description=(
+            "For an MCP host to launch: `claude mcp add streamlib -- streamlib mcp`, or "
+            "`ssh <machine> streamlib mcp` for a node on another machine. Copies bytes "
+            "between stdio and the node's MCP server, through its local API socket, "
+            "without reading them."
+        ),
+    )
+    add_control_target_flag(mcp_command)
+
     logs_command = subcommands.add_parser(
         "logs",
         help="Read a runtime's JSONL log file, or a running node's event stream.",
@@ -1659,6 +1672,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return _run_exchange_verb(arguments)
         if arguments.verb == "logs":
             return _run_logs_verb(arguments)
+        if arguments.verb == "mcp":
+            return pipe_stdio_to_the_runtimes_mcp_server(arguments.requested_node)
         return launch_app_node(
             arguments.verb,
             requested_anchor_directory=arguments.anchor_directory,

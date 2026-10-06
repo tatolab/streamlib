@@ -209,11 +209,14 @@ rather than off an offline pipeline that has already drifted from it.
 <br>
 
 ```console
-$ claude mcp add --transport http streamlib http://127.0.0.1:9000/mcp
+$ claude mcp add streamlib -- streamlib mcp
 ```
 
-Served at `POST /mcp` on the node's local API socket, mounted with the node and sharing its
-lifecycle — there is no bridge process to run. The tools are
+The host launches `streamlib mcp`, which carries its stdin and stdout to the running node's MCP
+server over the node's local API socket and reads none of it. To reach a node on another machine,
+launch it over ssh instead: `claude mcp add streamlib -- ssh <machine> streamlib mcp`. `--node`
+picks one when a machine runs more than one. The server is mounted with the node and shares its
+lifecycle. The tools are
 `graph`, `tap`, `logs`, `exchange` and `shutdown` to observe, and `add_node`, `connect`,
 `disconnect` and `remove_node` to change the running graph: an agent writes a processor
 class into a module beside `stream.py` — or `pip install`s one — names it to the node by its
