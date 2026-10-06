@@ -26,11 +26,11 @@ from streamlib_webrtc.processors import (
     refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
 )
-from tatolab.runtime._engine import NodeLinkDataAccess
 from tatolab.runtime._processor_hosting import construct_processor_instance
 from tatolab.stream import (
     H264Decoder,
     H264Encoder,
+    NodeLinkDataAccess,
     OpusDecoder,
     OpusEncoder,
     RuntimeContextFullAccess,

@@ -22,8 +22,7 @@ from streamlib_webrtc.processors import (
     encoded_audio_packet_bag,
     encoded_video_frame_bag,
 )
-from tatolab.runtime._engine import NodeLinkDataAccess
-from tatolab.stream import EncodedAudioPacket, EncodedVideoFrame
+from tatolab.stream import EncodedAudioPacket, EncodedVideoFrame, NodeLinkDataAccess
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
