@@ -52,8 +52,8 @@ from streamlib import (
     stream,
 )
 from streamlib._control_plane_client import (
-    ControlPlaneEndpoint,
     ControlPlaneError,
+    LocalApiSocket,
     call_tool,
     resolve_control_plane_endpoint,
 )
@@ -861,12 +861,12 @@ def named_pattern_into_a_named_collector(stream: Stream) -> None:
     stream.connect(pattern.output("video"), collector.input("bags_from_upstream"))
 
 
-def local_api_socket_once_the_registry_lists(runtime_name: str) -> ControlPlaneEndpoint:
+def local_api_socket_once_the_registry_lists(runtime_name: str) -> LocalApiSocket:
     """The local API socket the node registry lists for `runtime_name`, polled until it lists one."""
     deadline = time.monotonic() + SERVED_GRAPH_CONTROL_PLANE_REGISTRATION_DEADLINE_SECONDS
     while True:
         try:
-            return resolve_control_plane_endpoint(None, runtime_name)
+            return resolve_control_plane_endpoint(runtime_name)
         except ControlPlaneError:
             if time.monotonic() >= deadline:
                 raise

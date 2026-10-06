@@ -19,16 +19,15 @@ Booting initializes a GPU context, so the whole module needs a device.
 import json
 import re
 import time
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from streamlib._control_plane_client import LocalApiSocket, _post_jsonrpc
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
     NODE_READY_TIMEOUT_SECONDS,
     await_sole_registry_entry,
-    free_port,
     isolated_runtime_directory,
     launch_node,
 )
@@ -154,10 +153,11 @@ def await_added_node_state(client: "ScriptedMcpClient", node_name: str, wanted: 
 
 
 class ScriptedMcpClient:
-    """Plain JSON-RPC over `POST /mcp`, and nothing streamlib-specific."""
+    """Plain JSON-RPC over `POST /mcp` on the node's local API socket, and
+    nothing streamlib-specific in what it sends."""
 
-    def __init__(self, control_url: str) -> None:
-        self.endpoint = f"{control_url.rstrip('/')}/mcp"
+    def __init__(self, local_api_socket: LocalApiSocket) -> None:
+        self.local_api_socket = local_api_socket
         self.next_request_id = 0
 
     def request(self, method: str, params: "dict[str, Any]") -> Any:
@@ -169,12 +169,8 @@ class ScriptedMcpClient:
         self.next_request_id += 1
         body = json.dumps(
             {"jsonrpc": "2.0", "id": self.next_request_id, "method": method, "params": params}
-        ).encode("utf-8")
-        request = urllib.request.Request(
-            self.endpoint, data=body, method="POST", headers={"content-type": "application/json"}
         )
-        with urllib.request.urlopen(request, timeout=JSON_RPC_TIMEOUT_SECONDS) as response:
-            return json.loads(response.read())
+        return json.loads(_post_jsonrpc(self.local_api_socket, body, JSON_RPC_TIMEOUT_SECONDS))
 
     def read_json_resource(self, uri: str) -> Any:
         contents = self.request("resources/read", {"uri": uri})["contents"]
@@ -225,10 +221,10 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     )
     (app_directory / "stream.py").write_text(STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK)
 
-    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    node = launch_node("run", app_directory, capture_output=True)
     entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
     node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
-    client = ScriptedMcpClient(entry["control_url"])
+    client = ScriptedMcpClient(LocalApiSocket(entry["local_api_socket_path"]))
 
     capabilities = client.request(
         "initialize",

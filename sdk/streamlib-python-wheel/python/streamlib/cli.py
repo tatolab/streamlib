@@ -86,9 +86,6 @@ APP_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_APP_DIRECTORY"
 STREAM_TARGET_FILE_SUFFIX = ".py"
 STREAM_TARGET_FUNCTION_SEPARATOR = ":"
 
-DEFAULT_CONTROL_PLANE_BIND_HOST = "0.0.0.0"
-DEFAULT_CONTROL_PLANE_BIND_PORT = 9000
-
 
 class ObservationVerbUsageError(Exception):
     """An observation verb invoked with flags that contradict each other.
@@ -342,7 +339,7 @@ def execute_app_entry_file(entry_file: Path) -> "dict[str, Any]":
     `nodes/` package resolves it here exactly as it does there. `sys.argv`
     is narrowed to the entry file for the same reason: the launcher's own flags
     are not the app's, and an app that parses `sys.argv` would otherwise see
-    `run --dir … --port …`.
+    `run --dir … --runtime-name …`.
     """
     entry_directory = str(entry_file.parent)
     if sys.path[:1] != [entry_directory]:
@@ -655,8 +652,6 @@ def launch_app_node(
     requested_entry_file: Optional[Path],
     requested_stream_target: Optional[str],
     requested_stream_name: Optional[str],
-    bind_host: str,
-    bind_port: int,
     runtime_name: Optional[str],
 ) -> int:
     """Boot the entry's node and own its run loop until the user interrupts it."""
@@ -740,7 +735,7 @@ def launch_app_node(
     try:
         # Only once the graph is loaded, so a stream that failed to load
         # publishes no node entry for `streamlib nodes` to find.
-        runtime.host_control_plane(bind_host=bind_host, bind_port=bind_port)
+        runtime.host_control_plane()
         runtime.run()
     except RuntimeError as engine_failure:
         # The engine compiles the graph at `run()`, so the failures a user
@@ -908,13 +903,12 @@ def print_the_node_registry_table() -> int:
 def call_observation_tool(
     tool_name: str,
     *,
-    requested_url: "Optional[str]",
     requested_node: "Optional[str]",
     arguments: "Optional[dict[str, Any]]" = None,
 ) -> int:
     """Resolve the target node, drive one tool, print its result."""
-    endpoint = resolve_control_plane_endpoint(requested_url, requested_node)
-    print(call_tool(endpoint, tool_name, arguments or {}))
+    local_api_socket = resolve_control_plane_endpoint(requested_node)
+    print(call_tool(local_api_socket, tool_name, arguments or {}))
     return 0
 
 
@@ -979,7 +973,7 @@ def render_runtime_logs(
         raise ObservationVerbUsageError(
             "missing RUNTIME_ID.\n"
             "`streamlib logs --list` enumerates the runtimes that have log files, "
-            "and `--url` / `--node` reads a running node's live event stream instead."
+            "and `--node` reads a running node's live event stream instead."
         )
 
     log_file = newest_log_file_for_runtime(log_directory, runtime_id)
@@ -1264,22 +1258,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
             ),
         )
         launch_command.add_argument(
-            "--host",
-            dest="bind_host",
-            default=DEFAULT_CONTROL_PLANE_BIND_HOST,
-            metavar="HOST",
-            help="Host address to bind the control plane to (default: all interfaces).",
-        )
-        launch_command.add_argument(
-            "-p",
-            "--port",
-            dest="bind_port",
-            type=int,
-            default=DEFAULT_CONTROL_PLANE_BIND_PORT,
-            metavar="PORT",
-            help="Port for the control plane; increments on collision.",
-        )
-        launch_command.add_argument(
             "--runtime-name",
             dest="runtime_name",
             metavar="NAME",
@@ -1291,21 +1269,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
             ),
         )
 
-    def add_control_target_flags(command: argparse.ArgumentParser) -> None:
-        """`--url` / `--node`: the two ways to pin which node a verb drives.
+    def add_control_target_flag(command: argparse.ArgumentParser) -> None:
+        """`--node`, which pins the node a verb drives.
 
-        Mutually exclusive by construction. With neither, the verb resolves the
-        sole live node, which is the whole ceremony for the common case of one
-        node on the machine.
+        Without it, the verb resolves the sole live node, which is the whole
+        ceremony for the common case of one node on the machine.
         """
-        target = command.add_mutually_exclusive_group()
-        target.add_argument(
-            "--url",
-            dest="requested_url",
-            metavar="URL",
-            help="Control-plane base URL of the target node.",
-        )
-        target.add_argument(
+        command.add_argument(
             "--node",
             dest="requested_node",
             metavar="RUNTIME_NAME_OR_ID",
@@ -1335,7 +1305,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "reports them right now."
         ),
     )
-    add_control_target_flags(graph_command)
+    add_control_target_flag(graph_command)
 
     tap_command = subcommands.add_parser(
         "tap",
@@ -1369,7 +1339,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "accept one (default: high enough to carry any audio block whole)."
         ),
     )
-    add_control_target_flags(tap_command)
+    add_control_target_flag(tap_command)
 
     exchange_command = subcommands.add_parser(
         "exchange",
@@ -1425,14 +1395,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
             f"(default: {DEFAULT_SURFACE_ID_BAG_FIELD_NAME})."
         ),
     )
-    add_control_target_flags(exchange_command)
+    add_control_target_flag(exchange_command)
 
     logs_command = subcommands.add_parser(
         "logs",
         help="Read a runtime's JSONL log file, or a running node's event stream.",
         description=(
             "With RUNTIME_ID, renders that runtime's on-disk JSONL log exactly as "
-            "the runtime mirrored it. With --url / --node, collects a bounded "
+            "the runtime mirrored it. With --node, collects a bounded "
             "sample of a running node's live event stream instead."
         ),
     )
@@ -1440,7 +1410,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "runtime_id",
         nargs="?",
         metavar="RUNTIME_ID",
-        help="Runtime to read logs for. Omit with --list, --url or --node.",
+        help="Runtime to read logs for. Omit with --list or --node.",
     )
     logs_command.add_argument(
         "--list",
@@ -1483,9 +1453,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--count",
         type=int,
         metavar="N",
-        help="(--url / --node only) Max events to collect before returning.",
+        help="(--node only) Max events to collect before returning.",
     )
-    add_control_target_flags(logs_command)
+    add_control_target_flag(logs_command)
 
     return parser
 
@@ -1555,12 +1525,10 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
                 f"{', '.join(channel_form_flags)} sample a channel, and a surface id "
                 f"names one frame already. Use `--channel` instead of SURFACE_ID."
             )
-        endpoint = resolve_control_plane_endpoint(
-            arguments.requested_url, arguments.requested_node
-        )
+        local_api_socket = resolve_control_plane_endpoint(arguments.requested_node)
         try:
             written_image_path = exchange_one_published_surface_id_into_directory(
-                endpoint, arguments.surface_id, arguments.output_directory
+                local_api_socket, arguments.surface_id, arguments.output_directory
             )
         except OSError as write_failure:
             # A `--out` that names an existing file, or a directory this user
@@ -1578,9 +1546,9 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
     if every_nth_bag < 1:
         raise ObservationVerbUsageError("`--every` must be at least 1.")
 
-    endpoint = resolve_control_plane_endpoint(arguments.requested_url, arguments.requested_node)
+    local_api_socket = resolve_control_plane_endpoint(arguments.requested_node)
     report = sample_channel_into_exchanged_surface_images(
-        endpoint,
+        local_api_socket,
         arguments.channel,
         arguments.output_directory,
         wanted_image_count=wanted_image_count,
@@ -1601,7 +1569,7 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
 
 
 def _run_logs_verb(arguments: argparse.Namespace) -> int:
-    """`logs` has two modes; a control target picks the live one.
+    """`logs` has two modes; `--node` picks the live one.
 
     The on-disk filters have no meaning against a live event stream (the tool
     takes a count and nothing else), so asking for both is a wiring error rather
@@ -1609,7 +1577,7 @@ def _run_logs_verb(arguments: argparse.Namespace) -> int:
     """
     from ._runtime_log_reader import LogRecordFilters
 
-    targets_a_running_node = bool(arguments.requested_url or arguments.requested_node)
+    targets_a_running_node = bool(arguments.requested_node)
     if targets_a_running_node:
         conflicting = [
             name
@@ -1628,13 +1596,12 @@ def _run_logs_verb(arguments: argparse.Namespace) -> int:
         ]
         if conflicting:
             raise ObservationVerbUsageError(
-                f"`--url` / `--node` reads a running node's live event stream, which "
-                f"takes no {', '.join(conflicting)}. Drop the control target to read "
+                f"`--node` reads a running node's live event stream, which "
+                f"takes no {', '.join(conflicting)}. Drop `--node` to read "
                 f"an on-disk log file instead."
             )
         return call_observation_tool(
             "logs",
-            requested_url=arguments.requested_url,
             requested_node=arguments.requested_node,
             arguments={"count": arguments.count} if arguments.count else {},
         )
@@ -1642,7 +1609,7 @@ def _run_logs_verb(arguments: argparse.Namespace) -> int:
     if arguments.count is not None:
         raise ObservationVerbUsageError(
             "`--count` bounds a live event-stream sample; it has no meaning for an "
-            "on-disk log file. Use `--url` / `--node`, or drop `--count`."
+            "on-disk log file. Use `--node`, or drop `--count`."
         )
     return render_runtime_logs(
         runtime_id=arguments.runtime_id,
@@ -1675,7 +1642,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if arguments.verb == "graph":
             return call_observation_tool(
                 "graph",
-                requested_url=arguments.requested_url,
                 requested_node=arguments.requested_node,
             )
         if arguments.verb == "tap":
@@ -1686,7 +1652,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 tap_arguments["max_bag_bytes"] = arguments.max_bag_bytes
             return call_observation_tool(
                 "tap",
-                requested_url=arguments.requested_url,
                 requested_node=arguments.requested_node,
                 arguments=tap_arguments,
             )
@@ -1700,8 +1665,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             requested_entry_file=arguments.entry_file,
             requested_stream_target=arguments.requested_stream_target,
             requested_stream_name=arguments.requested_stream_name,
-            bind_host=arguments.bind_host,
-            bind_port=arguments.bind_port,
             runtime_name=arguments.runtime_name,
         )
     except (

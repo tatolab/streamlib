@@ -23,12 +23,11 @@ from typing import Callable
 
 import pytest
 
-from streamlib._control_plane_client import call_tool
+from streamlib._control_plane_client import LocalApiSocket, call_tool
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
     NODE_READY_TIMEOUT_SECONDS,
     LaunchedNode,
     await_sole_registry_entry,
-    free_port,
     isolated_runtime_directory,
     launch_node,
 )
@@ -140,9 +139,9 @@ APP_PROCESS_METRICS_KEYS = {
 }
 
 
-def mcp_json(control_url: str, tool_name: str, arguments: dict) -> dict:
+def mcp_json(local_api_socket: LocalApiSocket, tool_name: str, arguments: dict) -> dict:
     """One tool call, its text result decoded."""
-    return json.loads(call_tool(control_url, tool_name, arguments))
+    return json.loads(call_tool(local_api_socket, tool_name, arguments))
 
 
 def node_named(graph: dict, name: str) -> dict:
@@ -155,14 +154,14 @@ def node_named(graph: dict, name: str) -> dict:
     return matches[0]
 
 
-def metrics_of(control_url: str, name: str) -> dict:
+def metrics_of(local_api_socket: LocalApiSocket, name: str) -> dict:
     """What `graph` renders under `name`'s `metrics`, or `{}` for no key."""
-    node = node_named(mcp_json(control_url, "graph", {}), name)
+    node = node_named(mcp_json(local_api_socket, "graph", {}), name)
     return node["components"].get("metrics", {})
 
 
 def await_metrics_satisfying(
-    control_url: str,
+    local_api_socket: LocalApiSocket,
     name: str,
     satisfied: "Callable[[dict], bool]",
     awaited: str,
@@ -172,7 +171,7 @@ def await_metrics_satisfying(
     deadline = time.monotonic() + COUNT_TIMEOUT_SECONDS
     metrics: dict = {}
     while time.monotonic() < deadline:
-        metrics = metrics_of(control_url, name)
+        metrics = metrics_of(local_api_socket, name)
         if satisfied(metrics):
             return metrics
         time.sleep(0.2)
@@ -187,9 +186,9 @@ def launch_the_loss_counting_node(
     isolated_runtime_directory: Path,
     launch_node,
     monkeypatch: pytest.MonkeyPatch,
-) -> "tuple[LaunchedNode, str]":
+) -> "tuple[LaunchedNode, LocalApiSocket]":
     """Write `stream.py` beside its processors, launch it, and hand back the node
-    and its control URL once it runs."""
+    and its local API socket once it runs."""
     app_directory = tmp_path / "app"
     (app_directory / "processors").mkdir(parents=True)
     (app_directory / "processors" / "__init__.py").write_text("")
@@ -202,10 +201,10 @@ def launch_the_loss_counting_node(
         str(HELPER_LINK_CEILING_BYTES),
     )
 
-    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    node = launch_node("run", app_directory, capture_output=True)
     entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
     node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
-    return node, entry["control_url"]
+    return node, LocalApiSocket(entry["local_api_socket_path"])
 
 
 def the_link_into(graph: dict, name: str) -> str:
@@ -231,13 +230,13 @@ def test_an_overrun_helper_placed_ordered_destination_renders_its_dropped_bags_p
     Fail-without-fix: attach no metrics for a helper-placed destination and the
     node renders no `metrics` key however many bags its helper lost.
     """
-    node, control_url = launch_the_loss_counting_node(
+    node, local_api_socket = launch_the_loss_counting_node(
         tmp_path, isolated_runtime_directory, launch_node, monkeypatch
     )
-    link_id = the_link_into(mcp_json(control_url, "graph", {}), "slow-sink")
+    link_id = the_link_into(mcp_json(local_api_socket, "graph", {}), "slow-sink")
 
     metrics = await_metrics_satisfying(
-        control_url,
+        local_api_socket,
         "slow-sink",
         any_dropped_bags_on(link_id),
         f"dropped bags on {link_id}",
@@ -261,12 +260,12 @@ def test_a_helper_placed_producers_write_refused_at_the_ceiling_renders_on_its_o
     Fail-without-fix: count the refusal in the helper and mirror nothing, and
     the producer's `refused_bags_by_output_port` stays at zero.
     """
-    node, control_url = launch_the_loss_counting_node(
+    node, local_api_socket = launch_the_loss_counting_node(
         tmp_path, isolated_runtime_directory, launch_node, monkeypatch
     )
 
     metrics = await_metrics_satisfying(
-        control_url,
+        local_api_socket,
         "source",
         lambda metrics: metrics.get("refused_bags_by_output_port", {}).get("oversized_bags", 0)
         > 0,
@@ -277,8 +276,8 @@ def test_a_helper_placed_producers_write_refused_at_the_ceiling_renders_on_its_o
     assert set(metrics) == APP_PROCESS_METRICS_KEYS, metrics
     assert metrics["refused_bags_by_output_port"]["bags"] == 0
     assert metrics["dropped_bags_by_link"] == {}, "the source has no inbound link"
-    graph = mcp_json(control_url, "graph", {})
-    assert metrics_of(control_url, "oversized-sink")["dropped_bags_by_link"] == {
+    graph = mcp_json(local_api_socket, "graph", {})
+    assert metrics_of(local_api_socket, "oversized-sink")["dropped_bags_by_link"] == {
         the_link_into(graph, "oversized-sink"): 0
     }, "a bag refused before it reached any link is no loss on the destination's link"
     node.await_captured_output_containing(
@@ -298,13 +297,13 @@ def test_a_killed_helpers_last_counts_render_until_its_processor_is_removed(
     channel to the child, and the killed sink's node renders nothing — or
     zeros — for losses that happened.
     """
-    node, control_url = launch_the_loss_counting_node(
+    node, local_api_socket = launch_the_loss_counting_node(
         tmp_path, isolated_runtime_directory, launch_node, monkeypatch
     )
-    graph = mcp_json(control_url, "graph", {})
+    graph = mcp_json(local_api_socket, "graph", {})
     link_id = the_link_into(graph, "slow-sink")
     await_metrics_satisfying(
-        control_url,
+        local_api_socket,
         "slow-sink",
         any_dropped_bags_on(link_id),
         f"dropped bags on {link_id}",
@@ -312,14 +311,14 @@ def test_a_killed_helpers_last_counts_render_until_its_processor_is_removed(
     )
     pid_marker = SLOW_SINK_PID.search(node.captured_output())
     assert pid_marker is not None, node.recent_output()
-    counted_before_the_kill = metrics_of(control_url, "slow-sink")["dropped_bags_by_link"][link_id]
+    counted_before_the_kill = metrics_of(local_api_socket, "slow-sink")["dropped_bags_by_link"][link_id]
 
     os.kill(int(pid_marker.group(1)), signal.SIGKILL)
     node.await_captured_output_containing("its helper process (pid=", COUNT_TIMEOUT_SECONDS)
 
-    after_the_kill = metrics_of(control_url, "slow-sink")
+    after_the_kill = metrics_of(local_api_socket, "slow-sink")
     time.sleep(1.0)
-    a_second_later = metrics_of(control_url, "slow-sink")
+    a_second_later = metrics_of(local_api_socket, "slow-sink")
     assert after_the_kill == a_second_later, "a dead helper's counts no longer move"
     assert set(after_the_kill) == APP_PROCESS_METRICS_KEYS, after_the_kill
     assert after_the_kill["dropped_bags_by_link"][link_id] >= counted_before_the_kill > 0, (
@@ -327,8 +326,8 @@ def test_a_killed_helpers_last_counts_render_until_its_processor_is_removed(
         f"{counted_before_the_kill}, after {after_the_kill}"
     )
 
-    mcp_json(control_url, "remove_node", {"name": "slow-sink"})
+    mcp_json(local_api_socket, "remove_node", {"name": "slow-sink"})
     assert all(
         rendered["name"] != "slow-sink"
-        for rendered in mcp_json(control_url, "graph", {})["nodes"]
+        for rendered in mcp_json(local_api_socket, "graph", {})["nodes"]
     ), "a removed node, and the counts on it, go with it"

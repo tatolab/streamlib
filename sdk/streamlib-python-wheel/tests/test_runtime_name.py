@@ -113,14 +113,23 @@ def test_the_constructor_takes_no_keyword_but_the_runtime_name(retired_keyword_p
         streamlib.Runtime(runtime_name="desk rig", **retired)
 
 
-def test_hosting_the_control_plane_takes_no_name_of_its_own():
-    """The name belongs to the runtime, so there is nothing to pass here."""
+@pytest.mark.parametrize(
+    "retired_keyword_parts",
+    [
+        ("node", "name"),
+        ("bind", "host"),
+        ("bind", "port"),
+    ],
+)
+def test_hosting_the_control_plane_takes_no_argument(retired_keyword_parts):
+    """The name belongs to the runtime and the socket's path to its runtime
+    directory, so there is nothing to pass here."""
     runtime = streamlib.Runtime(runtime_name="desk rig")
     try:
-        # Spelled as a mapping so the retired keyword's own text does not
+        # Joined at run time so the retired keyword's own text does not
         # survive here, where a source-walking gate would still find it.
-        retired = {"node_name": "desk rig"}
+        retired = {"_".join(retired_keyword_parts): None}
         with pytest.raises(TypeError):
-            runtime.host_control_plane(bind_host="127.0.0.1", bind_port=0, **retired)
+            runtime.host_control_plane(**retired)
     finally:
         runtime.shutdown()

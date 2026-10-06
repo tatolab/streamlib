@@ -184,9 +184,9 @@ Edit a stage, re-run `dev`. Each stage runs `reactive` (the default once it has 
 
 ## Inspect a device that's already running
 
-Add `--url http://<host>:9000` to any of these and you're debugging the rig instead of your desk;
-`--node <runtime name>` picks a node by the `RUNTIME_NAME` column `streamlib nodes` prints, and
-reaches it through its local API socket — a Unix socket only your user can open.
+Run these on the machine the node runs on. `--node <runtime name>` picks a node by the
+`RUNTIME_NAME` column `streamlib nodes` prints, and reaches it through its local API socket — a
+Unix socket only your user can open, so control is reachable only on the node's own machine.
 
 ```console
 $ streamlib nodes
@@ -221,9 +221,9 @@ class into a module beside `stream.py` — or `pip install`s one — names it to
 `module:ClassName` path, and splices it into the live pipeline. The class runs in its own
 helper process like every other. The CLI is a pure client of exactly this surface.
 
-**It costs you** an unauthenticated port that can now rewire the graph. A node binds all
-interfaces and does not authenticate callers — narrow it with `--host` on any network you
-don't control.
+**Control is reachable only on its machine.** A node opens no network port for it. The graph can
+be rewired by whoever can open the node's local API socket, which is only processes running as
+your user.
 
 </details>
 

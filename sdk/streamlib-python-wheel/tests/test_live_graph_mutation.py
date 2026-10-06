@@ -22,12 +22,11 @@ from typing import Callable, TypeVar
 
 import pytest
 
-from streamlib._control_plane_client import ControlPlaneError, call_tool
+from streamlib._control_plane_client import ControlPlaneError, LocalApiSocket, call_tool
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
     NODE_READY_TIMEOUT_SECONDS,
     LaunchedNode,
     await_sole_registry_entry,
-    free_port,
     isolated_runtime_directory,
     launch_node,
 )
@@ -135,9 +134,9 @@ class LiveAddedEffect:
 DISPLAY_WINDOW_TYPE = "streamlib_media_builtins::display_window::DisplayWindow"
 
 
-def mcp_json(control_url: str, tool_name: str, arguments: dict) -> dict:
+def mcp_json(local_api_socket: LocalApiSocket, tool_name: str, arguments: dict) -> dict:
     """One tool call, its text result decoded."""
-    return json.loads(call_tool(control_url, tool_name, arguments))
+    return json.loads(call_tool(local_api_socket, tool_name, arguments))
 
 
 def node_named(graph: dict, name: str) -> dict:
@@ -154,7 +153,7 @@ def link_with_id(graph: dict, link_id: str) -> "dict | None":
     return next((link for link in graph["links"] if link["id"] == link_id), None)
 
 
-def await_link_state(control_url: str, link_id: str, wanted: str) -> str:
+def await_link_state(local_api_socket: LocalApiSocket, link_id: str, wanted: str) -> str:
     """Poll `graph` until one link reaches `wanted`, and report what it reached.
 
     A `connect` onto a helper-placed processor returns with the link `pending`:
@@ -167,7 +166,7 @@ def await_link_state(control_url: str, link_id: str, wanted: str) -> str:
     deadline = time.monotonic() + LINK_ANSWER_TIMEOUT_SECONDS
     link = None
     while time.monotonic() < deadline:
-        link = link_with_id(mcp_json(control_url, "graph", {}), link_id)
+        link = link_with_id(mcp_json(local_api_socket, "graph", {}), link_id)
         if link is not None and link["state"] in (wanted, "error"):
             return link["state"] + (
                 f" ({link['error_reason']})" if link.get("error_reason") else ""
@@ -176,7 +175,7 @@ def await_link_state(control_url: str, link_id: str, wanted: str) -> str:
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
-def await_node_state(control_url: str, name: str, wanted: str) -> str:
+def await_node_state(local_api_socket: LocalApiSocket, name: str, wanted: str) -> str:
     """Poll `graph` until one node reaches `wanted`, and report what it reached.
 
     A helper-placed node reads `Running` only once its helper has finished
@@ -187,7 +186,7 @@ def await_node_state(control_url: str, name: str, wanted: str) -> str:
     deadline = time.monotonic() + FIRST_FRAME_TIMEOUT_SECONDS
     state = "absent"
     while time.monotonic() < deadline:
-        state = node_named(mcp_json(control_url, "graph", {}), name)["components"][
+        state = node_named(mcp_json(local_api_socket, "graph", {}), name)["components"][
             "state"
         ]
         if state == wanted:
@@ -224,12 +223,12 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     (app_directory / "stream.py").write_text(STREAM_WITH_ONE_PATTERN_SOURCE)
     (app_directory / "processors" / "__init__.py").write_text("")
 
-    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    node = launch_node("run", app_directory, capture_output=True)
     entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
-    control_url = entry["control_url"]
+    local_api_socket = LocalApiSocket(entry["local_api_socket_path"])
     node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
 
-    graph_before = mcp_json(control_url, "graph", {})
+    graph_before = mcp_json(local_api_socket, "graph", {})
     pattern = node_named(graph_before, "pattern")
     assert pattern["components"]["state"] == "Running"
     assert graph_before["links"] == []
@@ -241,7 +240,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     )
 
     added = mcp_json(
-        control_url,
+        local_api_socket,
         "add_node",
         {
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
@@ -251,7 +250,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     )
     assert added == {"name": "effect"}
 
-    graph_after_add = mcp_json(control_url, "graph", {})
+    graph_after_add = mcp_json(local_api_socket, "graph", {})
     effect = node_named(graph_after_add, "effect")
     assert effect["type"] == f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}"
     assert effect["config"] == {"marker": "FIRST_EFFECT_SAW_A_FRAME"}
@@ -259,7 +258,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     assert [port["name"] for port in effect["ports"]["outputs"]] == ["video_to_downstream"]
 
     connected = mcp_json(
-        control_url,
+        local_api_socket,
         "connect",
         {
             "from_node": "pattern",
@@ -270,15 +269,15 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     )
     upstream_link_id = connected["link_id"]
 
-    graph_after_connect = mcp_json(control_url, "graph", {})
+    graph_after_connect = mcp_json(local_api_socket, "graph", {})
     upstream_link = link_with_id(graph_after_connect, upstream_link_id)
     assert upstream_link is not None, f"the link is missing from {graph_after_connect['links']}"
     assert upstream_link["state"] in ("pending", "wired"), (
         "`connect` onto a helper returns before that helper has opened its "
         f"port, so the link reads pending or wired and nothing else: {upstream_link}"
     )
-    assert await_node_state(control_url, "effect", "Running") == "Running"
-    assert await_link_state(control_url, upstream_link_id, "wired") == "wired", (
+    assert await_node_state(local_api_socket, "effect", "Running") == "Running"
+    assert await_link_state(local_api_socket, upstream_link_id, "wired") == "wired", (
         "the helper's own answer is what makes the link wired; a link stuck "
         "pending is a helper that never opened its port, and one in error "
         "carries the helper's reason"
@@ -292,7 +291,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     # created for the first link, and iceoryx2 pins its subscriber count then,
     # so this is the late subscriber the fixed sizing exists for.
     second = mcp_json(
-        control_url,
+        local_api_socket,
         "add_node",
         {
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
@@ -301,7 +300,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         },
     )
     mcp_json(
-        control_url,
+        local_api_socket,
         "connect",
         {
             "from_node": "pattern",
@@ -316,7 +315,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     # side of a helper that already ran its setup, and a destination whose
     # notify service is created after the source was already publishing.
     window = mcp_json(
-        control_url,
+        local_api_socket,
         "add_node",
         {
             "type": DISPLAY_WINDOW_TYPE,
@@ -325,7 +324,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         },
     )
     mcp_json(
-        control_url,
+        local_api_socket,
         "connect",
         {
             "from_node": "effect",
@@ -335,21 +334,21 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         },
     )
     effect_output_channel = tap_channel_of(graph_after_add, "effect", "video_to_downstream")
-    flowing = mcp_json(control_url, "tap", {"channel": effect_output_channel, "count": 3})
+    flowing = mcp_json(local_api_socket, "tap", {"channel": effect_output_channel, "count": 3})
     assert flowing["received"] > 0, f"no bags left the live-added effect: {flowing}"
 
-    mcp_json(control_url, "disconnect", {"link_id": upstream_link_id})
-    graph_after_disconnect = mcp_json(control_url, "graph", {})
+    mcp_json(local_api_socket, "disconnect", {"link_id": upstream_link_id})
+    graph_after_disconnect = mcp_json(local_api_socket, "graph", {})
     assert link_with_id(graph_after_disconnect, upstream_link_id) is None
     # Nothing feeds the effect any more, so nothing leaves it — once the frame
     # it already held when the link went has gone out. A tap that then waits
     # out its window and comes back empty is the disconnect taking.
     time.sleep(SECONDS_FOR_A_HELD_FRAME_TO_LEAVE)
-    starved = mcp_json(control_url, "tap", {"channel": effect_output_channel, "count": 3})
+    starved = mcp_json(local_api_socket, "tap", {"channel": effect_output_channel, "count": 3})
     assert starved["received"] == 0, f"bags still leave a disconnected effect: {starved}"
 
-    assert mcp_json(control_url, "remove_node", {"name": "effect"}) == {"removed_name": "effect"}
-    graph_after_remove = mcp_json(control_url, "graph", {})
+    assert mcp_json(local_api_socket, "remove_node", {"name": "effect"}) == {"removed_name": "effect"}
+    graph_after_remove = mcp_json(local_api_socket, "graph", {})
     assert all(node["name"] != "effect" for node in graph_after_remove["nodes"])
     assert all(
         "effect" not in (link["source"]["node"], link["target"]["node"])
@@ -430,14 +429,14 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
         SLOWLY_IMPORTING_SINK_SOURCE
     )
 
-    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    node = launch_node("run", app_directory, capture_output=True)
     entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
-    control_url = entry["control_url"]
+    local_api_socket = LocalApiSocket(entry["local_api_socket_path"])
     node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
-    pattern = node_named(mcp_json(control_url, "graph", {}), "pattern")
+    pattern = node_named(mcp_json(local_api_socket, "graph", {}), "pattern")
 
     sink = mcp_json(
-        control_url,
+        local_api_socket,
         "add_node",
         {
             "type": f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}",
@@ -447,7 +446,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
 
     connect_seconds, connected = seconds_taken_by(
         lambda: mcp_json(
-            control_url,
+            local_api_socket,
             "connect",
             {
                 "from_node": pattern["name"],
@@ -462,7 +461,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     )
 
     graph_seconds, graph_while_importing = seconds_taken_by(
-        lambda: mcp_json(control_url, "graph", {})
+        lambda: mcp_json(local_api_socket, "graph", {})
     )
     assert graph_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
         f"graph took {graph_seconds:.1f}s, waiting on a helper still importing"
@@ -473,7 +472,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
 
     add_seconds, _ = seconds_taken_by(
         lambda: mcp_json(
-            control_url,
+            local_api_socket,
             "add_node",
             {"type": pattern["type"], "name": "second-pattern"},
         )
@@ -482,8 +481,8 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
         f"add_node took {add_seconds:.1f}s, waiting on a helper still importing"
     )
 
-    assert await_node_state(control_url, "sink", "Running") == "Running"
-    assert await_link_state(control_url, connected["link_id"], "wired") == "wired", (
+    assert await_node_state(local_api_socket, "sink", "Running") == "Running"
+    assert await_link_state(local_api_socket, connected["link_id"], "wired") == "wired", (
         "the link connected during the import is wired once the helper is up"
     )
 
@@ -506,23 +505,23 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     app_directory.mkdir()
     (app_directory / "stream.py").write_text(STREAM_WITH_ONE_PATTERN_SOURCE)
 
-    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    node = launch_node("run", app_directory, capture_output=True)
     entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
-    control_url = entry["control_url"]
+    local_api_socket = LocalApiSocket(entry["local_api_socket_path"])
     node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
 
     with pytest.raises(ControlPlaneError) as refusal:
-        call_tool(control_url, "add_node", {"type": "processors.no_such_module:Missing"})
+        call_tool(local_api_socket, "add_node", {"type": "processors.no_such_module:Missing"})
     assert re.search(r"no_such_module|No module named", str(refusal.value)), str(refusal.value)
 
-    graph = mcp_json(control_url, "graph", {})
+    graph = mcp_json(local_api_socket, "graph", {})
     assert [n["name"] for n in graph["nodes"] if n["name"] == "pattern"], (
         "a refused add must leave the running graph as it was"
     )
 
     with pytest.raises(ControlPlaneError) as port_refusal:
         call_tool(
-            control_url,
+            local_api_socket,
             "connect",
             {
                 "from_node": "pattern",

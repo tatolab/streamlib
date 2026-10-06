@@ -181,7 +181,7 @@ def scenario_graph_renders_the_registered_capability() -> None:
         one_processor_that_reports_its_helpers_extensions,
     )
     from streamlib._control_plane_client import call_tool
-    from this_processes_node_registry_entry import this_processes_control_url
+    from this_processes_node_registry_entry import this_processes_local_api_socket
 
     graph = streamlib.compile_stream_to_graph(
         one_processor_that_reports_its_helpers_extensions
@@ -192,7 +192,7 @@ def scenario_graph_renders_the_registered_capability() -> None:
 
     def report_the_extensions_the_graph_carries() -> None:
         runtime.wait_until_every_processor_is_running(timeout=60.0)
-        graph = json.loads(call_tool(this_processes_control_url(), "graph", {}))
+        graph = json.loads(call_tool(this_processes_local_api_socket(), "graph", {}))
         marker(f"GRAPH_EXTENSIONS={json.dumps(graph['extensions'])}")
         runtime.shutdown()
 
