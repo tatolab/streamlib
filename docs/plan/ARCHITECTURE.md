@@ -69,10 +69,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   source-compiled. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — The two floors are one product surface. A Python processor written
   against the wheel's public surface runs on both; where it cannot is a short closed
-  list that refuses by name before a frame flows — at `stream.add()`, or in `setup()`,
+  list that refuses by name before a frame flows — at load, or in `setup()`,
   naming the platform — never mid-frame: ray-tracing kernels (MoltenVK has no
   `VK_KHR_ray_tracing_pipeline`; each constructor refuses at `setup()` naming the absent
-  tier), `VirtualCameraSink` (refused at `stream.add()`), the CUDA Array Interface, and the
+  tier), `VirtualCameraSink` (refused at load), the CUDA Array Interface, and the
   fd-shaped raw handles (`export_dma_buf`, `export_opaque_fd`, `import_dma_buf` exist on
   macOS and refuse pointing at `export_iosurface`). The scaffold and the examples use
   only the portable surface. The guarantee is mechanical, never prose: one
@@ -1882,8 +1882,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   (c): `VirtualCameraSink`, in the media built-ins crate, Linux only — with no Apple port,
   stated rather than deferred: a macOS virtual camera is a CoreMediaIO Camera Extension
   inside a bundled, entitled, notarised app, which the floor rules out under any
-  justification, and the DAL plug-in stopped loading in macOS 14.1; on macOS the marker
-  refuses by name at `stream.add()`, and `streamlib enable-virtual-camera` refuses by name. As
+  justification, and the DAL plug-in stopped loading in macOS 14.1; on macOS the runtime
+  refuses a graph naming it at load, naming the platform, and `streamlib enable-virtual-camera`
+  refuses by name. As
   many instances as the graph adds — the display's rule. Each instance is one camera that exists only
   while its processor runs: created at `setup()`, removed at `teardown()`, a camera plugged
   in and pulled out from every other application's point of view, whose frames are
