@@ -7,6 +7,7 @@ pub mod control_plane_host;
 #[cfg(test)]
 mod control_plane_stub_support;
 mod handlers;
+mod local_api_socket;
 mod mcp;
 mod mcp_prompts;
 mod mcp_resources;

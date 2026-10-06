@@ -600,7 +600,7 @@ fn truncate_on_char_boundary(mut text: String, max_bytes: usize) -> String {
 }
 
 #[cfg(test)]
-mod router_surface_and_auth_gate_tests {
+pub(crate) mod router_surface_and_auth_gate_tests {
     //! What [`build_router`] exposes, and how the bearer gate binds to it.
     //!
     //! Two things are under test. First, the route *surface*: the control plane
@@ -690,7 +690,7 @@ mod router_surface_and_auth_gate_tests {
     }
 
     /// Router in the default (auth-off) mode — every route is open with no token.
-    pub(super) fn auth_disabled_router() -> Router {
+    pub(crate) fn auth_disabled_router() -> Router {
         build_router(Arc::new(ControlPlaneRouterStubRuntime::default()), None)
     }
 

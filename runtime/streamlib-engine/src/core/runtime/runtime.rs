@@ -1293,34 +1293,27 @@ fn bring_up_surface_service(
 )> {
     use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
+    use crate::core::unix_socket_path_cleared_for_bind::{
+        UnixSocketPathClearedForBind, UnixSocketPathRefusedForBind, clear_unix_socket_path_for_bind,
+    };
+
     let socket_path = runtime_directory.surface_share_socket_path(runtime_id);
 
-    if socket_path.exists() {
-        match std::os::unix::net::UnixStream::connect(&socket_path) {
-            Ok(_) => {
-                return Err(Error::Runtime(format!(
-                    "Surface-sharing socket {} is already bound by a live process. \
-                     Each Runner requires a unique runtime_id; check for a \
-                     duplicate STREAMLIB_RUNTIME_ID env var or another runtime in \
-                     the same session.",
-                    socket_path.display()
-                )));
-            }
-            Err(_) => {
-                std::fs::remove_file(&socket_path).map_err(|e| {
-                    Error::Runtime(format!(
-                        "Found stale surface-sharing socket {} from a prior crashed \
-                         runtime but failed to remove it: {}",
-                        socket_path.display(),
-                        e
-                    ))
-                })?;
-                tracing::warn!(
-                    "[new] Removed stale surface-sharing socket left by prior runtime: {}",
-                    socket_path.display()
-                );
-            }
+    let cleared = clear_unix_socket_path_for_bind(&socket_path).map_err(|refusal| match refusal {
+        UnixSocketPathRefusedForBind::HeldByALiveProcess { .. } => Error::Runtime(format!(
+            "Surface-sharing socket {refusal}. Each Runner requires a unique runtime_id; \
+             check for a duplicate STREAMLIB_RUNTIME_ID env var or another runtime in the \
+             same session."
+        )),
+        UnixSocketPathRefusedForBind::StaleSocketFileNotRemoved { .. } => {
+            Error::Runtime(format!("Surface-sharing socket: {refusal}"))
         }
+    })?;
+    if cleared == UnixSocketPathClearedForBind::StaleSocketFileRemoved {
+        tracing::warn!(
+            "[new] Removed stale surface-sharing socket left by prior runtime: {}",
+            socket_path.display()
+        );
     }
 
     let state = SurfaceShareState::new();

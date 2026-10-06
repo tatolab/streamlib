@@ -4,8 +4,8 @@
 //! On-disk discovery registry for ApiServer-hosting runtimes.
 //!
 //! A runtime that hosts an [`crate::ApiServerProcessor`] writes one JSON entry
-//! per runtime into `<runtime directory>/nodes/<runtime_id>.json` when its
-//! control port binds, and removes it on clean teardown. The runtime directory
+//! per runtime into `<runtime directory>/nodes/<runtime_id>.json` once its
+//! listeners bind, and removes it on clean teardown. The runtime directory
 //! is the one the engine resolved and checked as the runtime started. A CLI discovers
 //! live control planes by scanning that directory. Entry existence is tied to
 //! the control endpoint existing: a runtime without an ApiServer never appears.
@@ -25,7 +25,7 @@ use streamlib::sdk::runtime::RuntimeName;
 
 /// Schema version stamped into every [`NodeRegistryEntry`]. A reader skips an
 /// entry whose `schema_version` it does not recognize.
-pub const NODE_REGISTRY_SCHEMA_VERSION: u32 = 2;
+pub const NODE_REGISTRY_SCHEMA_VERSION: u32 = 3;
 
 /// One discovery entry: a running ApiServer-hosting runtime's control endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +39,8 @@ pub struct NodeRegistryEntry {
     pub runtime_name: String,
     /// The control plane's reachable base URL (`http://127.0.0.1:<bound_port>`).
     pub control_url: String,
+    /// The Unix socket the runtime's local API is served on, openable only by its user.
+    pub local_api_socket_path: PathBuf,
     /// OS process id hosting the control plane.
     pub pid: u32,
     /// Human hint for disambiguating nodes in a listing (process arg0 + cwd).
@@ -47,18 +49,20 @@ pub struct NodeRegistryEntry {
 
 impl NodeRegistryEntry {
     /// Build an entry for the runtime named `runtime_name` reachable at
-    /// `control_url`, stamping the current process id and a hint derived from
-    /// this process's arg0 and cwd.
+    /// `control_url` and `local_api_socket_path`, stamping the current process
+    /// id and a hint derived from this process's arg0 and cwd.
     pub fn for_current_process(
         runtime_id: String,
         runtime_name: &RuntimeName,
         control_url: String,
+        local_api_socket_path: PathBuf,
     ) -> Self {
         Self {
             schema_version: NODE_REGISTRY_SCHEMA_VERSION,
             runtime_id,
             runtime_name: runtime_name.as_str().to_string(),
             control_url,
+            local_api_socket_path,
             pid: std::process::id(),
             hint: current_process_hint(),
         }
@@ -121,7 +125,7 @@ pub enum NodeRegistryError {
 
 /// Write (create or replace) the discovery entry for `entry.runtime_id` into
 /// `registry_directory`, creating it if needed. Returns the entry's path.
-#[tracing::instrument(skip(entry), fields(runtime_id = %entry.runtime_id, control_url = %entry.control_url))]
+#[tracing::instrument(skip(entry), fields(runtime_id = %entry.runtime_id, local_api_socket_path = %entry.local_api_socket_path.display()))]
 pub fn write_entry(
     registry_directory: &Path,
     entry: &NodeRegistryEntry,
@@ -170,19 +174,36 @@ pub fn read_entry(
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(source) => return Err(NodeRegistryError::EntryRead { path, source }),
     };
-    let entry: NodeRegistryEntry =
-        serde_json::from_slice(&bytes).map_err(|source| NodeRegistryError::EntryDecode {
-            path: path.clone(),
-            source,
-        })?;
-    if entry.schema_version != NODE_REGISTRY_SCHEMA_VERSION {
+    decode_entry_at_this_schema_version(&path, &bytes).map(Some)
+}
+
+/// Decode an entry file's bytes, checking `schema_version` before the rest so an
+/// entry of another version is refused by its version rather than by whichever
+/// field it lacks.
+fn decode_entry_at_this_schema_version(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<NodeRegistryEntry, NodeRegistryError> {
+    #[derive(Deserialize)]
+    struct EntrySchemaVersionOnly {
+        schema_version: u32,
+    }
+
+    let decode_failure = |source| NodeRegistryError::EntryDecode {
+        path: path.to_path_buf(),
+        source,
+    };
+    let found = serde_json::from_slice::<EntrySchemaVersionOnly>(bytes)
+        .map_err(decode_failure)?
+        .schema_version;
+    if found != NODE_REGISTRY_SCHEMA_VERSION {
         return Err(NodeRegistryError::EntrySchemaVersionMismatch {
-            path,
-            found: entry.schema_version,
+            path: path.to_path_buf(),
+            found,
             expected: NODE_REGISTRY_SCHEMA_VERSION,
         });
     }
-    Ok(Some(entry))
+    serde_json::from_slice(bytes).map_err(decode_failure)
 }
 
 /// Scan every discovery entry, skipping (with a warning) any unreadable,
@@ -221,22 +242,19 @@ pub fn scan_entries(
                 continue;
             }
         };
-        let entry: NodeRegistryEntry = match serde_json::from_slice(&bytes) {
-            Ok(entry) => entry,
+        match decode_entry_at_this_schema_version(&path, &bytes) {
+            Ok(entry) => entries.push(entry),
+            Err(NodeRegistryError::EntrySchemaVersionMismatch { found, .. }) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    schema_version = found,
+                    "skipping node registry entry with unrecognized schema_version"
+                );
+            }
             Err(error) => {
                 tracing::warn!(path = %path.display(), %error, "skipping undecodable node registry entry");
-                continue;
             }
-        };
-        if entry.schema_version != NODE_REGISTRY_SCHEMA_VERSION {
-            tracing::warn!(
-                path = %path.display(),
-                schema_version = entry.schema_version,
-                "skipping node registry entry with unrecognized schema_version"
-            );
-            continue;
         }
-        entries.push(entry);
     }
     Ok(entries)
 }
@@ -304,6 +322,9 @@ mod tests {
             runtime_id: runtime_id.to_string(),
             runtime_name: format!("rig-example-{port}"),
             control_url: format!("http://127.0.0.1:{port}"),
+            local_api_socket_path: PathBuf::from(format!(
+                "/tmp/streamlib-1000/local-api-{runtime_id}.sock"
+            )),
             pid: 4242,
             hint: "streamlib (/tmp/example)".to_string(),
         }
@@ -414,6 +435,54 @@ mod tests {
                 "expected a schema-version-mismatch error; got: {error}"
             );
         });
+    }
+
+    /// Entries are per run, so a schema-2 entry — a `control_url` and no socket —
+    /// has nothing to migrate: it is refused by its version, not by the field it lacks.
+    #[test]
+    fn a_schema_two_entry_is_refused_by_its_version() {
+        with_isolated_registry_directory(|registry_directory| {
+            std::fs::create_dir_all(registry_directory).unwrap();
+            let schema_two_entry = serde_json::json!({
+                "schema_version": 2,
+                "runtime_id": "Rschema-two",
+                "runtime_name": "rig-schema-two",
+                "control_url": "http://127.0.0.1:9000",
+                "pid": 4242,
+                "hint": "streamlib (/tmp/example)",
+            });
+            std::fs::write(
+                registry_directory.join("Rschema-two.json"),
+                serde_json::to_vec(&schema_two_entry).unwrap(),
+            )
+            .unwrap();
+
+            let error = read_entry(registry_directory, "Rschema-two")
+                .expect_err("a schema-2 entry must be refused");
+            assert!(
+                matches!(
+                    error,
+                    NodeRegistryError::EntrySchemaVersionMismatch {
+                        found: 2,
+                        expected: 3,
+                        ..
+                    }
+                ),
+                "expected a refusal naming schema 2; got: {error}"
+            );
+            assert!(scan_entries(registry_directory).expect("scan").is_empty());
+        });
+    }
+
+    #[test]
+    fn the_wire_form_carries_the_local_api_socket_path() {
+        let entry = sample_entry("Rnode-socket", 9100);
+        let wire: serde_json::Value = serde_json::to_value(&entry).unwrap();
+        assert_eq!(
+            wire["local_api_socket_path"],
+            "/tmp/streamlib-1000/local-api-Rnode-socket.sock"
+        );
+        assert_eq!(wire["schema_version"], 3);
     }
 
     #[test]

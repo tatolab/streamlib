@@ -4,12 +4,13 @@
 //! The `ApiServer` processor — owns the HTTP listener lifecycle and binds the
 //! shared [`crate::state::AppState`] to per-request handlers.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::runtime::RuntimeOperations;
+use streamlib::sdk::runtime::{RuntimeOperations, RuntimeUniqueId};
 
 /// Handles cloned from the setup-time context for use in start().
 /// The `tokio_handle` points at this processor's own tokio runtime
@@ -23,6 +24,7 @@ struct StashedHandles {
     /// `Some` only when the config opted into bearer auth; `None` leaves the
     /// shutdown route and the tap WebSocket open (the zero-ceremony default).
     auth_token: Option<crate::auth::ApiServerBearerToken>,
+    local_api_socket_path: PathBuf,
 }
 
 #[streamlib::sdk::processor(
@@ -38,9 +40,12 @@ pub struct ApiServerProcessor {
     /// runtime's worker threads enter it, so the HTTP server never depends
     /// on the calling lifecycle thread already being inside a tokio runtime.
     tokio_runtime: Option<tokio::runtime::Runtime>,
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// Signals both listeners — the TCP port and the local API socket — to stop serving.
+    shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
     runtime_id: Option<String>,
     actual_port: Option<u16>,
+    /// The local API socket this processor bound, removed again at stop.
+    bound_local_api_socket_path: Option<PathBuf>,
 }
 
 impl ManualProcessor for ApiServerProcessor::Processor {
@@ -78,11 +83,16 @@ impl ManualProcessor for ApiServerProcessor::Processor {
 
         // Capture just the narrow handles the HTTP server task needs;
         // the long-lived task never holds a `RuntimeContext`.
+        let runtime_id = ctx.runtime_id();
+        let local_api_socket_path = ctx
+            .runtime_directory()
+            .local_api_socket_path(&RuntimeUniqueId::from(runtime_id.as_str()));
         self.handles = Some(StashedHandles {
             runtime: ctx.runtime(),
             tokio_handle,
-            runtime_id: ctx.runtime_id().to_string(),
+            runtime_id,
             auth_token,
+            local_api_socket_path,
         });
         Ok(())
     }
@@ -109,10 +119,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             .handles
             .as_ref()
             .expect("setup must be called before start");
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-        self.shutdown_tx = Some(shutdown_tx);
-
-        self.runtime_id = Some(handles.runtime_id.clone());
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         let config = self.config.clone();
         let host = config.host.clone();
@@ -153,10 +160,22 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             )))
         })?;
 
+        let local_api_listener = {
+            let _entered_tokio_runtime = tokio_handle.enter();
+            crate::local_api_socket::bind_local_api_unix_listener(&handles.local_api_socket_path)?
+        };
+        self.bound_local_api_socket_path = Some(handles.local_api_socket_path.clone());
+        self.shutdown_tx = Some(shutdown_tx);
+        self.runtime_id = Some(handles.runtime_id.clone());
+
         self.actual_port = Some(actual_port);
         let api_endpoint = format!("{}:{}", host, actual_port);
 
         tracing::info!("Api server listening on {}", api_endpoint);
+        tracing::info!(
+            "Local API listening on {}",
+            handles.local_api_socket_path.display()
+        );
 
         // Publish a discovery entry so a CLI can find this live control plane.
         // The endpoint exists now (the port is bound), so the entry's existence
@@ -167,6 +186,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             handles.runtime_id.clone(),
             ctx.runtime_name(),
             control_url,
+            handles.local_api_socket_path.clone(),
         );
         match crate::node_registry::write_entry(
             &ctx.runtime_directory().node_registry_directory(),
@@ -183,15 +203,21 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             api_endpoint
         );
 
-        // Spawn the HTTP server
-        tokio_handle.spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-                .unwrap();
-        });
+        // The socket is served with no bearer gate: its file mode is the whole gate.
+        let local_api_app =
+            crate::handlers::build_router(handles.runtime.clone(), None);
+        tokio_handle.spawn(serve_until_shutdown(
+            listener,
+            app,
+            shutdown_rx.clone(),
+            "control-plane TCP port",
+        ));
+        tokio_handle.spawn(serve_until_shutdown(
+            local_api_listener,
+            local_api_app,
+            shutdown_rx,
+            "local API socket",
+        ));
 
         Ok(())
     }
@@ -208,9 +234,40 @@ impl ManualProcessor for ApiServerProcessor::Processor {
                 tracing::warn!(%error, "failed to remove node registry entry on stop");
             }
         }
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(true);
+        }
+        if let Some(local_api_socket_path) = self.bound_local_api_socket_path.take() {
+            if let Err(error) =
+                crate::local_api_socket::remove_local_api_socket_file(&local_api_socket_path)
+            {
+                tracing::warn!(
+                    %error,
+                    "failed to remove the local API socket {} on stop",
+                    local_api_socket_path.display()
+                );
+            }
         }
         Ok(())
+    }
+}
+
+/// Serve `app` on `listener` until `shutdown_rx` sees the stop signal or its sender drops.
+async fn serve_until_shutdown<L>(
+    listener: L,
+    app: axum::Router,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    listener_description: &'static str,
+) where
+    L: axum::serve::Listener,
+    L::Addr: std::fmt::Debug,
+{
+    let served = axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = shutdown_rx.wait_for(|stop_requested| *stop_requested).await;
+        })
+        .await;
+    if let Err(error) = served {
+        tracing::error!(%error, "the {listener_description} stopped serving");
     }
 }

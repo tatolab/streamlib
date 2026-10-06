@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The one directory a runtime keeps what means nothing once its processes are
-//! gone: the iceoryx2 domain, the surface-sharing socket and the node registry.
+//! gone: the iceoryx2 domain, the surface-sharing socket, the local API socket and the node
+//! registry.
 
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
@@ -62,6 +63,11 @@ impl StreamlibRuntimeDirectory {
     /// The Unix socket a runtime's surface-sharing service listens on.
     pub fn surface_share_socket_path(&self, runtime_id: &RuntimeUniqueId) -> PathBuf {
         self.path.join(format!("surface-share-{runtime_id}.sock"))
+    }
+
+    /// The Unix socket a runtime hosting its local API serves it on.
+    pub fn local_api_socket_path(&self, runtime_id: &RuntimeUniqueId) -> PathBuf {
+        self.path.join(format!("local-api-{runtime_id}.sock"))
     }
 }
 
@@ -329,6 +335,10 @@ mod tests {
         assert_eq!(
             directory.surface_share_socket_path(&RuntimeUniqueId::from("Rabc")),
             PathBuf::from("/tmp/streamlib-1000/surface-share-Rabc.sock")
+        );
+        assert_eq!(
+            directory.local_api_socket_path(&RuntimeUniqueId::from("Rabc")),
+            PathBuf::from("/tmp/streamlib-1000/local-api-Rabc.sock")
         );
     }
 }
