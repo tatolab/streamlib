@@ -187,13 +187,21 @@ pub fn init_for_tests(config: StreamlibLoggingConfig) -> Result<StreamlibLogging
     Ok(guard)
 }
 
+/// The filter every engine process runs at when `RUST_LOG` says nothing.
+///
+/// `rmcp` records each MCP request's service start and finish at `info`; held
+/// to `warn` here, a host polling a node's control plane stays out of the app's
+/// own log. `RUST_LOG=info,rmcp=info` brings them back.
+pub const ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES: &str = "info,rmcp=warn";
+
 /// The level and target filtering every engine process runs at: `RUST_LOG`,
-/// or `info` where it says nothing.
+/// or [`ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES`] where it says nothing.
 ///
 /// One spelling for the app process and for a helper, so a record captured in
 /// a child is the record the same call site would make in the parent.
 pub(crate) fn the_engines_configured_tracing_filter() -> EnvFilter {
-    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+    EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES))
 }
 
 fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, StreamlibLoggingGuard)> {

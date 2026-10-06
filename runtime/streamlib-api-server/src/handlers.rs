@@ -12,7 +12,7 @@ use axum::{
     http::StatusCode,
     http::header::CONTENT_TYPE,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
 };
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
@@ -23,6 +23,7 @@ use streamlib::sdk::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::RuntimeOperations;
+use tokio_util::sync::CancellationToken;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use utoipa::OpenApi;
@@ -65,12 +66,21 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
 /// code, so nothing here creates, replaces, connects, or removes a processor.
 /// `POST /api/runtime/shutdown` is the one route that acts on the node rather
 /// than reporting on it. No route asks for a credential: whoever can open the
-/// local API socket may call every one.
-pub(crate) fn build_router(runtime: Arc<dyn RuntimeOperations>) -> Router {
+/// local API socket may call every one. `local_api_stopping_token` is
+/// cancelled when the local API stops serving, ending every
+/// `subscriptions/listen` `/mcp` holds open.
+pub(crate) fn build_router(
+    runtime: Arc<dyn RuntimeOperations>,
+    local_api_stopping_token: CancellationToken,
+) -> Router {
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(control_plane_rest_routes())
         .split_for_parts();
 
+    let local_api_mcp_service = crate::mcp::local_api_mcp_streamable_http_service(
+        runtime.clone(),
+        local_api_stopping_token,
+    );
     let state = AppState { runtime, openapi };
 
     // Method, path, status and latency for every request, at DEBUG so a client
@@ -86,7 +96,7 @@ pub(crate) fn build_router(runtime: Arc<dyn RuntimeOperations>) -> Router {
         .route("/ws/events", get(websocket_handler))
         .route("/api/openapi.json", get(get_openapi_spec))
         .route("/ws/tap/{channel}", get(tap_websocket_handler))
-        .route("/mcp", post(crate::mcp::mcp_endpoint));
+        .route_service("/mcp", local_api_mcp_service);
 
     router.layer(trace_layer).with_state(state)
 }
@@ -622,7 +632,12 @@ pub(crate) mod router_surface_tests {
     ];
 
     fn control_plane_router_over(runtime: ControlPlaneRouterStubRuntime) -> Router {
-        build_router(Arc::new(runtime))
+        build_router(Arc::new(runtime), CancellationToken::new())
+    }
+
+    /// A default stub runtime, for tests that build the router themselves.
+    pub(crate) fn a_control_plane_router_stub_runtime() -> Arc<dyn RuntimeOperations> {
+        Arc::new(ControlPlaneRouterStubRuntime::default())
     }
 
     /// The real router over a default stub runtime.
@@ -792,7 +807,8 @@ pub(crate) mod router_surface_tests {
 
     /// File permission on the local API socket is the whole gate, so a request
     /// carrying no credential reaches every route — the one that acts on the
-    /// node included — rather than a 401 or 403.
+    /// node included — rather than a 401 or 403. `/mcp` is reached the same
+    /// way by every MCP wire test's client.
     #[tokio::test]
     async fn no_route_asks_for_a_credential() {
         let requests_carrying_no_credential = [
@@ -803,11 +819,6 @@ pub(crate) mod router_surface_tests {
                 "",
             ),
             ("GET", "/ws/tap/some-channel".to_string(), ""),
-            (
-                "POST",
-                "/mcp".to_string(),
-                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
-            ),
         ];
         for (method, uri, body) in requests_carrying_no_credential {
             let request = Request::builder()
@@ -837,7 +848,7 @@ pub(crate) mod router_surface_tests {
     async fn runtime_shutdown_is_202_and_reaches_the_runtime() {
         let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(runtime);
+        let router = build_router(runtime, CancellationToken::new());
         let request = Request::builder()
             .method("POST")
             .uri("/api/runtime/shutdown")
@@ -866,7 +877,7 @@ pub(crate) mod router_surface_tests {
     async fn runtime_shutdown_without_a_reason_is_accepted_as_unspecified() {
         let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(runtime);
+        let router = build_router(runtime, CancellationToken::new());
         let request = Request::builder()
             .method("POST")
             .uri("/api/runtime/shutdown")

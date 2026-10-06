@@ -12,6 +12,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::unix_socket_path_cleared_for_bind::{
     UnixSocketPathClearedForBind, clear_unix_socket_path_for_bind,
 };
+use tokio_util::sync::CancellationToken;
 
 /// Owner read-write only: the socket's file mode is what keeps every other user out.
 pub const LOCAL_API_SOCKET_FILE_MODE: u32 = 0o600;
@@ -54,15 +55,13 @@ fn bind_local_api_unix_listener(local_api_socket_path: &Path) -> Result<tokio::n
 #[must_use = "dropping this stops the local API server"]
 #[derive(Debug)]
 pub struct RunningLocalApiSocketServer {
-    stop_serving_sender: Option<tokio::sync::oneshot::Sender<()>>,
+    local_api_stopping_token: CancellationToken,
     local_api_socket_path: PathBuf,
 }
 
 impl Drop for RunningLocalApiSocketServer {
     fn drop(&mut self) {
-        if let Some(stop_serving_sender) = self.stop_serving_sender.take() {
-            let _ = stop_serving_sender.send(());
-        }
+        self.local_api_stopping_token.cancel();
         // Logged, not raised: the next bind at the path clears a stale file anyway.
         if let Err(error) = remove_local_api_socket_file(&self.local_api_socket_path) {
             tracing::warn!(
@@ -74,11 +73,14 @@ impl Drop for RunningLocalApiSocketServer {
     }
 }
 
-/// Bind the local API socket at `local_api_socket_path` and serve
-/// `control_plane_router` on it from `tokio_handle` until the returned server
-/// is dropped.
+/// Bind the local API socket at `local_api_socket_path` and serve the router
+/// `build_control_plane_router` builds on it from `tokio_handle`, until the
+/// returned server is dropped.
+///
+/// The builder is handed the token the server cancels as it stops, so whatever
+/// the router holds open can end before the graceful shutdown waits on it.
 pub fn serve_router_on_local_api_socket(
-    control_plane_router: axum::Router,
+    build_control_plane_router: impl FnOnce(CancellationToken) -> axum::Router,
     tokio_handle: &tokio::runtime::Handle,
     local_api_socket_path: &Path,
 ) -> Result<RunningLocalApiSocketServer> {
@@ -86,14 +88,14 @@ pub fn serve_router_on_local_api_socket(
         let _entered_tokio_runtime = tokio_handle.enter();
         bind_local_api_unix_listener(local_api_socket_path)?
     };
-    let (stop_serving_sender, stop_serving_receiver) = tokio::sync::oneshot::channel();
+    let local_api_stopping_token = CancellationToken::new();
     tokio_handle.spawn(serve_local_api_until_stopped(
         local_api_listener,
-        control_plane_router,
-        stop_serving_receiver,
+        build_control_plane_router(local_api_stopping_token.clone()),
+        local_api_stopping_token.clone(),
     ));
     Ok(RunningLocalApiSocketServer {
-        stop_serving_sender: Some(stop_serving_sender),
+        local_api_stopping_token,
         local_api_socket_path: local_api_socket_path.to_path_buf(),
     })
 }
@@ -101,12 +103,10 @@ pub fn serve_router_on_local_api_socket(
 async fn serve_local_api_until_stopped(
     local_api_listener: tokio::net::UnixListener,
     control_plane_router: axum::Router,
-    stop_serving_receiver: tokio::sync::oneshot::Receiver<()>,
+    local_api_stopping_token: CancellationToken,
 ) {
     let served = axum::serve(local_api_listener, control_plane_router)
-        .with_graceful_shutdown(async move {
-            let _ = stop_serving_receiver.await;
-        })
+        .with_graceful_shutdown(local_api_stopping_token.cancelled_owned())
         .await;
     if let Err(error) = served {
         tracing::error!(%error, "the local API socket stopped serving");
@@ -125,9 +125,10 @@ fn remove_local_api_socket_file(local_api_socket_path: &Path) -> std::io::Result
 mod tests {
     use super::*;
     use crate::control_plane_stub_support::{
-        STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED, STUB_EXCHANGED_IMAGE_BYTES,
+        LocalApiServedOnAFreshSocket, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
+        STUB_EXCHANGED_IMAGE_BYTES, serve_the_control_plane_router_at,
     };
-    use crate::handlers::router_surface_tests::control_plane_router_over_a_stub_runtime;
+    use crate::handlers::router_surface_tests::a_control_plane_router_stub_runtime;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// One HTTP/1.1 exchange's status line, headers and body, as raw as the
@@ -173,33 +174,15 @@ mod tests {
         }
     }
 
-    /// Serve the real router, stub runtime behind it, on a socket bound at
-    /// `local_api_socket_path`.
     fn serve_the_stub_router_at(local_api_socket_path: &Path) -> RunningLocalApiSocketServer {
-        serve_router_on_local_api_socket(
-            control_plane_router_over_a_stub_runtime(),
-            &tokio::runtime::Handle::current(),
+        serve_the_control_plane_router_at(
+            a_control_plane_router_stub_runtime(),
             local_api_socket_path,
         )
-        .unwrap()
     }
 
-    /// The stub router served on a socket in a fresh temp directory, for as
-    /// long as this lives.
-    struct StubRouterServedOnAFreshSocket {
-        local_api_socket_path: PathBuf,
-        _running_server: RunningLocalApiSocketServer,
-        _directory: tempfile::TempDir,
-    }
-
-    fn serve_the_stub_router_on_a_fresh_socket() -> StubRouterServedOnAFreshSocket {
-        let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rtest.sock");
-        StubRouterServedOnAFreshSocket {
-            _running_server: serve_the_stub_router_at(&local_api_socket_path),
-            local_api_socket_path,
-            _directory: directory,
-        }
+    fn serve_the_stub_router_on_a_fresh_socket() -> LocalApiServedOnAFreshSocket {
+        LocalApiServedOnAFreshSocket::over(a_control_plane_router_stub_runtime())
     }
 
     /// Probe `GET /health` over the socket, assert it answered 200, and hand
@@ -257,35 +240,6 @@ mod tests {
             exchanged_image.status_line
         );
         assert_eq!(exchanged_image.body, STUB_EXCHANGED_IMAGE_BYTES);
-    }
-
-    #[tokio::test]
-    async fn the_router_answers_an_mcp_tool_call_over_the_socket() {
-        let served = serve_the_stub_router_on_a_fresh_socket();
-        let tool_call = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {"name": "graph", "arguments": {}},
-        })
-        .to_string();
-
-        let answered = http_exchange_over_unix_socket(
-            &served.local_api_socket_path,
-            "POST /mcp HTTP/1.1\r\nContent-Type: application/json",
-            tool_call.as_bytes(),
-        )
-        .await;
-
-        assert!(
-            answered.status_line.contains(" 200 "),
-            "{}",
-            answered.status_line
-        );
-        let response: serde_json::Value = serde_json::from_slice(&answered.body).unwrap();
-        assert_eq!(response["id"], 1, "{response}");
-        assert!(response.get("error").is_none(), "{response}");
-        assert_eq!(response["result"]["isError"], false, "{response}");
     }
 
     #[tokio::test]

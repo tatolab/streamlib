@@ -136,22 +136,20 @@ against.
 
 ## ADDED: §Control plane & observability — MCP 2026-07-28, and the `mcp` verb
 
-- **The revision.** `mcp.rs` serves 2026-07-28 only: `initialize` and `ping` leave the dispatch;
-  `server/discover` joins, answering `supportedVersions: ["2026-07-28"]`, today's capabilities and
-  instructions, `serverInfo` in `_meta`; every request's `_meta` is checked — a missing version or
-  capabilities is `-32602`, any other version `-32022` with `data {supported, requested}` (so a
-  legacy `initialize` is refused naming 2026-07-28); every result carries `resultType:
-  "complete"`; the list and read results carry `ttlMs` and `cacheScope: "public"`; a missing
-  resource is `-32602`. `subscriptions/listen` answers its acknowledgement with an empty set — no
-  list ever changes under a host, since `listChanged` stays `false` — and holds until cancelled.
-  `RpcError` gains `data`.
-- **Two framings, one dispatch.** `POST /mcp` stays Streamable HTTP for the CLI and tests, now
-  with the header checks (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name` against the body,
-  `-32020`) and the spec's statuses (400, 404 for an unknown method, 405 for GET). Beside it the
-  router serves `/mcp/stdio`: an HTTP/1.1 `Upgrade: mcp-stdio` after which the connection carries
-  MCP's stdio framing both ways — the spec's framing for a byte-stream socket. Requests on it run
-  concurrently; responses are written as they complete; `notifications/cancelled` drops the
-  request's answer; the stream closing ends every request it carried.
+- **The revision.** The node's MCP server is `rmcp`, the official Rust MCP SDK, serving its latest
+  revision alone (2026-07-28 today) — owner, 2026-10-06, #2572: no MCP protocol logic is
+  hand-written, in the runtime or the wheel's client, which is `rmcp`'s client. `rmcp` owns the
+  protocol: `server/discover`, the per-request `_meta` checks (a missing version or capabilities
+  is `-32602`, any other version `-32022` with `data {supported, requested}`, so a legacy
+  `initialize` is refused naming the served revision), `resultType`, the cache hints, a missing
+  resource as `-32602`. The node's tools, resources and prompts are its handler.
+  `subscriptions/listen` is acknowledged with an empty set — no list ever changes under a host,
+  since `listChanged` stays `false` — and held until cancelled or the local API stops.
+- **Two framings, one handler.** `POST /mcp` is `rmcp`'s Streamable HTTP service for the CLI and
+  tests, with its header checks (`MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`) and statuses.
+  Beside it the router serves `/mcp/stdio`: an HTTP/1.1 `Upgrade: mcp-stdio` after which the
+  connection carries MCP's stdio framing both ways — the spec's framing for a byte-stream socket —
+  served by `rmcp` over the upgraded stream with the same handler.
 - **The verb.** `streamlib mcp [--node …]` resolves the runtime, opens the socket, sends the one
   upgrade request, and then copies bytes: stdin → socket, socket → stdout. It parses no message.
   Stdin closing half-closes the socket and the verb exits when the runtime closes its side; the
@@ -215,8 +213,7 @@ ship gate runs, since the gate searches `.claude/`.
   the local API stays one socket; the verb is a byte pipe because the plan's "interprets
   nothing" rules out a forwarder that derives HTTP headers from each message and maps cancels.
 - `POST /mcp` stays beside `/mcp/stdio` because the CLI's one-shot calls are simplest as HTTP and
-  "today's router unchanged" is decided; both framings call one `dispatch_jsonrpc`.
-- `ttlMs` is 0 for `resources/read` of the live graph and one hour for the static lists.
+  "today's router unchanged" is decided; both framings serve one `rmcp` handler.
 - Registry v3 ships with no migration; `nodes` lists the local registry alone, the mesh being
   gone (#2643, #2645).
 

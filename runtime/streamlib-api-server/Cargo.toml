@@ -44,6 +44,11 @@ serde_json = {version = "1.0", features = ["preserve_order"]}
 thiserror = {workspace = true}
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
+# The official MCP SDK: the protocol, its Streamable HTTP transport, and the
+# tool / prompt routers the node's control vocabulary is declared through.
+rmcp = { version = "3.5.1", features = ["server", "macros", "transport-streamable-http-server"] }
+tokio-util = "0.7"
+
 # The MCP `exchange` tool's image content block: base64 for the inline PNG,
 # percent-encoding for the surface id in the REST route the result names.
 base64 = "0.22"
@@ -54,6 +59,8 @@ percent-encoding = "2.3"
 # for the MCP/REST tap-tool tests. A dev-dep feature: active for tests, absent
 # from the production `cargo build` dependency graph.
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.33.0", features = ["test-support"] }
+# The MCP wire tests drive the real router over its socket with rmcp's own client.
+rmcp = { version = "3.5.1", features = ["client", "transport-streamable-http-client-unix-socket"] }
 tempfile = "3"
 tower = {version = "0.5", features = ["util"]}
 serial_test = "3.2"

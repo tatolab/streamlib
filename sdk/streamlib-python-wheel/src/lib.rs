@@ -21,6 +21,7 @@ mod python_gpu_surface_pixel_exchange;
 mod python_helper_process_parent_death_watch;
 mod python_helper_process_pixel_exchange;
 mod python_helper_process_spawn_host;
+mod python_local_api_mcp_client;
 mod python_logging;
 #[cfg(target_os = "macos")]
 mod python_metal_framework_queue_synchronization;
@@ -67,6 +68,7 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
+    python_local_api_mcp_client::register_local_api_mcp_client(module)?;
     module.add_function(wrap_pyfunction!(
         python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
         module

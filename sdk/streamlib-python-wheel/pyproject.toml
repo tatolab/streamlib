@@ -61,6 +61,10 @@ dev = [
     "typing_extensions>=4.6",
     # Lints and format-checks each render of the `streamlib new` templates.
     "ruff==0.16.9",
+    # The official MCP Python SDK: the observation-verb tests stand a node's
+    # control plane in with its server, and the live MCP test drives a real
+    # node with its client. Tests only; the wheel's own client is rmcp.
+    "mcp==2.3.0",
 ]
 
 [tool.pytest.ini_options]

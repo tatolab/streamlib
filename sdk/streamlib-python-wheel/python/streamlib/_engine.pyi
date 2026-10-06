@@ -40,6 +40,10 @@ __all__ = [
     "IOSurfaceMachPortExport",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
+    "LocalApiMcpClient",
+    "LocalApiMcpRequestRefused",
+    "LocalApiMcpServerUnreachable",
+    "LocalApiMcpToolCallFailed",
     "MonotonicTimer",
     "OpaqueFdTextureExport",
     "ProcessorOwnedWindow",
@@ -2031,6 +2035,44 @@ class MonotonicTimer:
         """Release the timer's file descriptor. Idempotent."""
 
     def __enter__(self) -> MonotonicTimer: ...
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None = ...,
+        exception: BaseException | None = ...,
+        traceback: TracebackType | None = ...,
+    ) -> Literal[False]: ...
+
+class LocalApiMcpServerUnreachable(Exception):
+    """Nothing answered MCP on the local API socket."""
+
+class LocalApiMcpRequestRefused(Exception):
+    """The node answered and refused the MCP request."""
+
+class LocalApiMcpToolCallFailed(Exception):
+    """The tool ran and reported a failure, or answered with no text."""
+
+@final
+class LocalApiMcpClient:
+    """An MCP client of one running node, over its local API socket.
+
+    Connecting sends `server/discover` at the latest revision; a node that
+    does not answer raises `LocalApiMcpServerUnreachable`, one that refuses
+    raises `LocalApiMcpRequestRefused`. Every call releases the GIL.
+    """
+
+    def __new__(cls, local_api_socket_path: str, timeout_seconds: float) -> LocalApiMcpClient: ...
+    def call_tool(self, tool_name: str, arguments_json: str) -> str:
+        """Call `tool_name` with a JSON object of arguments; answer the text its result carries.
+
+        A tool that ran and failed, or answered no text, raises
+        `LocalApiMcpToolCallFailed`; a call the node refused outright raises
+        `LocalApiMcpRequestRefused`.
+        """
+
+    def close(self) -> None:
+        """End the client's connection. Idempotent."""
+
+    def __enter__(self) -> LocalApiMcpClient: ...
     def __exit__(
         self,
         exception_type: type[BaseException] | None = ...,

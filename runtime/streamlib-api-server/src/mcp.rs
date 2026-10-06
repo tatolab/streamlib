@@ -1,33 +1,25 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Model Context Protocol (MCP) veneer over the api-server's control-plane ops.
+//! The node's MCP server, served by the official SDK, `rmcp`.
 //!
-//! The MCP dispatch is transport-free: [`dispatch_jsonrpc`] answers one parsed
-//! JSON-RPC 2.0 message against an `Arc<dyn RuntimeOperations>` and knows
-//! nothing about how the bytes arrived. It has exactly one transport: the
-//! Streamable-HTTP endpoint (`POST /mcp`, [`mcp_endpoint`]) on the existing axum
-//! stack, served on the node's local API socket. That endpoint is mounted with
-//! the node and shares its lifecycle — there is nothing to start and nothing to
-//! attach. It exposes the runtime as MCP *tools* so an LLM agent observes the
-//! live graph the same way the REST client does, and beside them serves the
-//! node catalog and the live graph as *resources*
-//! ([`crate::mcp_resources`]) and recipes over those tools as *prompts*
-//! ([`crate::mcp_prompts`]).
+//! [`LocalApiMcpServerHandler`] is the node's whole MCP surface: its tools are
+//! the control vocabulary — the observation verbs graph, tap, logs, exchange
+//! and shutdown, beside the graph-mutation verbs `add_node`, `remove_node`,
+//! `connect` and `disconnect`, each naming a node by its name — and beside
+//! them it serves the node catalog and the live graph as resources
+//! ([`crate::mcp_resources`]) and recipes over those tools as prompts
+//! ([`crate::mcp_prompts`]). `rmcp` owns the protocol; this module owns only
+//! what the node says through it.
 //!
-//! The vocabulary is the observation verbs — graph, tap, logs, exchange,
-//! shutdown — beside the four graph-mutation verbs, each naming a node by its
-//! name: `add_node`, `remove_node`, `connect` and `disconnect`. A mutation tool
-//! answers when the engine accepted the change
-//! into its graph; the wiring itself commits on the engine's own compile task,
-//! whose failure `graph` and `logs` show rather than this call.
+//! A mutation tool answers when the engine accepted the change into its graph;
+//! the wiring itself commits on the engine's own compile task, whose failure
+//! `graph` and `logs` show rather than this call.
 //!
 //! `exchange` is the one tool whose result is not text: it answers a
 //! published surface id with the frame itself, as an image content block the
-//! host renders in-session — so an agent on another machine sees the pixels
-//! with no shared filesystem and no screenshot tooling. It composes with
-//! `tap` entirely at the caller, which decodes a bag and reads whatever field
-//! it knows carries a surface id; `tap` itself is untouched.
+//! host renders in-session. It composes with `tap` entirely at the caller,
+//! which decodes a bag and reads whatever field it knows carries a surface id.
 //!
 //! Two of the tools (`tap`, `logs`) front WebSocket *streams* in the REST API.
 //! MCP tools are request/response, so each bridges its stream to a **bounded
@@ -35,38 +27,46 @@
 //! idle event stream returns the partial sample rather than blocking the tool
 //! call) — and returns the collected sample as the tool result.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
 use base64::Engine as _;
 use parking_lot::Mutex;
+use rmcp::handler::server::router::prompt::PromptRouter;
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{
+    CallToolResult, ContentBlock, Implementation, ListResourcesResult, PaginatedRequestParams,
+    ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse, ServerCapabilities,
+    ServerConfig, SubscriptionFilter,
+};
+use rmcp::schemars::JsonSchema;
+use rmcp::service::{RequestContext, SubscriptionContext};
+use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
+use rmcp::{prompt_handler, tool, tool_handler, tool_router};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
-use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::{ExchangedPublishedSurfaceFramePngImage, RuntimeOperations};
+use tokio_util::sync::CancellationToken;
 
-use crate::state::{AppState, RuntimeShutdownRequest};
+/// The only protocol revision the node serves: the latest `rmcp` implements.
+const SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
 
-/// MCP protocol revision this server implements (the date-stamped spec version
-/// echoed back on `initialize`). Advertised verbatim; a client that requested a
-/// different revision negotiates down to this one.
-const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+/// Server identity carried in every result's `serverInfo`.
+const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 
-/// Server identity reported in the `initialize` result's `serverInfo`.
-const MCP_SERVER_NAME: &str = "streamlib-api-server";
-
-/// Server version reported in `serverInfo` — the api-server crate version.
+/// Server version carried in `serverInfo` — the api-server crate version.
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The guidance `server/discover` hands an agent before its first call.
+const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib runtime control plane for one running node. Observe it with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the app can import — a file beside the app, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports on this node. The resource `streamlib://node-catalog` lists every type `add_node` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.";
 
 /// Bounded sample sizes for the streaming-tool → request/response bridge when
 /// the caller does not pin its own `count`.
@@ -124,561 +124,472 @@ const LOGS_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 /// [`LOGS_SAMPLE_WINDOW`].
 const TAP_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 
-// ============================================================================
-// JSON-RPC envelope
-// ============================================================================
-
-/// An inbound MCP message. A *request* carries an `id` and expects a paired
-/// response; a *notification* (e.g. `notifications/initialized`) omits `id` and
-/// is dispatched for effect with no reply (HTTP acks it `202 Accepted`; stdio
-/// writes no response line).
-#[derive(Deserialize)]
-pub(crate) struct JsonRpcRequest {
-    #[serde(default)]
-    id: Option<Value>,
-    method: String,
-    #[serde(default)]
-    params: Option<Value>,
+/// The node's MCP server handler: its tools, resources and prompts over the
+/// node's [`RuntimeOperations`].
+#[derive(Clone)]
+pub(crate) struct LocalApiMcpServerHandler {
+    pub(crate) runtime: Arc<dyn RuntimeOperations>,
+    local_api_stopping_token: CancellationToken,
+    tool_router: Arc<ToolRouter<Self>>,
+    prompt_router: Arc<PromptRouter<Self>>,
 }
 
-/// A JSON-RPC error (method-not-found / invalid-params). Tool-execution
-/// failures are NOT these — they surface as a successful `tools/call` result
-/// with `isError: true`, per the MCP tool-error convention.
-pub(crate) struct RpcError {
-    code: i64,
-    message: String,
-}
-
-/// A JSON-RPC method's answer: its result, or the error the envelope carries.
-pub(crate) type RpcResult<T> = std::result::Result<T, RpcError>;
-
-impl RpcError {
-    fn method_not_found(method: &str) -> Self {
+impl LocalApiMcpServerHandler {
+    /// `local_api_stopping_token` ends every held `subscriptions/listen` with its
+    /// final result, so the server's graceful shutdown never waits on a host
+    /// that holds one open.
+    pub(crate) fn new(
+        runtime: Arc<dyn RuntimeOperations>,
+        local_api_stopping_token: CancellationToken,
+    ) -> Self {
         Self {
-            code: -32601,
-            message: format!("method not found: {method}"),
-        }
-    }
-    pub(crate) fn invalid_params(message: impl Into<String>) -> Self {
-        Self {
-            code: -32602,
-            message: message.into(),
-        }
-    }
-    pub(crate) fn internal(message: impl Into<String>) -> Self {
-        Self {
-            code: -32603,
-            message: message.into(),
-        }
-    }
-    /// `-32002`, the code the MCP specification assigns an unknown resource URI.
-    pub(crate) fn resource_not_found(uri: &str) -> Self {
-        Self {
-            code: -32002,
-            message: format!(
-                "no resource at `{uri}`; `resources/list` names the ones this node serves"
-            ),
+            runtime,
+            local_api_stopping_token,
+            tool_router: Arc::new(Self::tool_router()),
+            prompt_router: Arc::new(Self::prompt_router()),
         }
     }
 }
 
-/// `POST /mcp` — the MCP Streamable-HTTP endpoint. Dispatches one JSON-RPC
-/// message through the transport-free [`dispatch_jsonrpc`] and answers with a
-/// single `application/json` response (this server's tools are all
-/// request/response, so it never opens an SSE stream); a notification is acked
-/// `202 Accepted` with no body.
-#[tracing::instrument(skip_all, fields(mcp_method = %request.method))]
-pub(crate) async fn mcp_endpoint(
-    State(state): State<AppState>,
-    Json(request): Json<JsonRpcRequest>,
-) -> Response {
-    match dispatch_jsonrpc(&state.runtime, &request).await {
-        Some(response) => Json(response).into_response(),
-        None => StatusCode::ACCEPTED.into_response(),
-    }
-}
-
-/// Dispatch one parsed MCP JSON-RPC 2.0 message against `runtime`, transport-free.
-///
-/// Returns the full JSON-RPC response envelope (`result` or `error`) for a
-/// request, or `None` for a notification (no `id`) — the caller decides how a
-/// no-reply is framed on its transport (HTTP: `202`; stdio: no output line).
-/// This is the single MCP surface both the HTTP endpoint and the stdio server
-/// call, so the two transports can never diverge.
-#[tracing::instrument(skip_all, fields(mcp_method = %request.method))]
-pub(crate) async fn dispatch_jsonrpc(
-    runtime: &Arc<dyn RuntimeOperations>,
-    request: &JsonRpcRequest,
-) -> Option<Value> {
-    let id = request.id.clone()?;
-    let params = request.params.clone().unwrap_or(Value::Null);
-    let envelope = match dispatch(runtime, &request.method, params).await {
-        Ok(result) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": result,
-        }),
-        Err(error) => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": { "code": error.code, "message": error.message },
-        }),
-    };
-    Some(envelope)
-}
-
-async fn dispatch(
-    runtime: &Arc<dyn RuntimeOperations>,
-    method: &str,
-    params: Value,
-) -> RpcResult<Value> {
-    match method {
-        "initialize" => Ok(initialize_result()),
-        "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tool_definitions() })),
-        "tools/call" => tools_call(runtime, params).await,
-        "resources/list" => Ok(crate::mcp_resources::resources_list_result()),
-        "resources/templates/list" => Ok(crate::mcp_resources::resource_templates_list_result()),
-        "resources/read" => crate::mcp_resources::read_resource(runtime, params).await,
-        "prompts/list" => Ok(crate::mcp_prompts::prompts_list_result()),
-        "prompts/get" => crate::mcp_prompts::get_prompt(runtime, params).await,
-        other => Err(RpcError::method_not_found(other)),
-    }
-}
-
-fn initialize_result() -> Value {
-    json!({
-        "protocolVersion": MCP_PROTOCOL_VERSION,
-        "capabilities": {
-            "tools": { "listChanged": false },
-            "resources": { "subscribe": false, "listChanged": false },
-            "prompts": { "listChanged": false },
-        },
-        "serverInfo": { "name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION },
-        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the app can import — a file beside the app, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports on this node. The resource `streamlib://node-catalog` lists every type `add_node` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
-    })
+/// `/mcp`'s service: `rmcp`'s Streamable HTTP transport over one
+/// [`LocalApiMcpServerHandler`], stateless, serving only
+/// [`SERVED_MCP_PROTOCOL_VERSIONS`].
+pub(crate) fn local_api_mcp_streamable_http_service(
+    runtime: Arc<dyn RuntimeOperations>,
+    local_api_stopping_token: CancellationToken,
+) -> StreamableHttpService<LocalApiMcpServerHandler, NeverSessionManager> {
+    let handler = LocalApiMcpServerHandler::new(runtime, local_api_stopping_token);
+    StreamableHttpService::new(
+        move || Ok(handler.clone()),
+        Arc::new(NeverSessionManager::default()),
+        StreamableHttpServerConfig::default()
+            .with_legacy_session_mode(false)
+            .with_stateless_protocol_metadata_required(true)
+            .with_json_response(true)
+            // The socket's file mode is the gate; DNS rebinding needs a TCP
+            // port a browser can reach, and the local API has none.
+            .disable_allowed_hosts(),
+    )
 }
 
 // ============================================================================
-// Tool catalog
+// Tool arguments
 // ============================================================================
 
-/// The MCP tool catalog returned by `tools/list`. Each entry mirrors an
-/// api-server control-plane op; the `inputSchema` is the JSON Schema a client
-/// validates its `arguments` against.
-fn tool_definitions() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "graph",
-            "description": "Export the current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, the capability extensions loaded in this process, and this runtime's name (`runtime_name`), the first part of every tap channel.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-        }),
-        json!({
-            "name": "tap",
-            "description": "Attach a read-only tap to a channel and collect a bounded sample of raw bags (FrameHeader-framed bytes; the hex plus byte length per bag). Bags arrive whole unless one exceeds `max_bag_bytes`, which is flagged as `hex_truncated`. The whole result is also byte-budgeted: the sample stops at the first bag that would exceed it, so `bags_withheld_at_byte_budget` is 0 or 1 — that one bag was received and discarded, and it accounts for the whole gap between `requested` and `received` when the window had time left.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "channel": { "type": "string", "description": "The output port's address, `<runtime_name>/<node>/<port>`, under this node's own runtime name (the top-level `runtime_name` in `graph`). A port is tappable once a link carries from it." },
-                    "count": { "type": "integer", "minimum": 1, "description": "Number of bags to collect before returning. Defaults to a small sample." },
-                    "max_bag_bytes": { "type": "integer", "minimum": 1, "maximum": MAX_TAP_RESPONSE_BAG_BYTES, "description": "Per-bag ceiling on the bytes hex-encoded into the result. A bag over the cap comes back flagged `hex_truncated` and cannot be decoded, so raise this rather than accept one. Defaults high enough to carry any audio block whole." }
-                },
-                "required": ["channel"],
-                "additionalProperties": false
-            },
-        }),
-        json!({
-            "name": "logs",
-            "description": "Collect a bounded sample of the runtime event stream (all topics) within a short monotonic window.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "count": { "type": "integer", "minimum": 1, "description": "Max events to collect before returning. Defaults to a small sample." }
-                },
-                "additionalProperties": false
-            },
-        }),
-        json!({
-            "name": "exchange",
-            "description": "Exchange a published surface id for that frame's pixels, returned as a PNG image block you can see directly. Ids come from bags a `tap` returned — this tool never reads a channel itself. The image is downscaled to a declared long-edge cap; the result states the surface's true extent and the REST route that returns the exact full-resolution bytes.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "surface_id": { "type": "string", "description": "A surface id a bag published, e.g. the `{slot}#{generation}` of a pooled frame. A retired id is refused rather than answered with the slot's newer pixels — tap a newer bag and exchange that." },
-                    "downscale_long_edge_pixel_cap": { "type": "integer", "minimum": 1, "maximum": EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP, "description": "Bound the returned image's long edge to this many pixels, aspect preserved and never upscaled. Defaults to the maximum, and a larger value is clamped to it: full resolution is the REST route's job, never an inline block." }
-                },
-                "required": ["surface_id"],
-                "additionalProperties": false
-            },
-        }),
-        json!({
-            "name": "shutdown",
-            "description": "Ask the runtime to shut down. This is a request observed by whoever owns the run loop, which then runs a normal teardown — not an immediate kill. Idempotent: requesting twice is not an error. Returns as soon as the request is accepted; teardown is not awaited.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "reason": { "type": "string", "description": "Human-readable attribution logged with the request. Omit for unspecified." }
-                },
-                "additionalProperties": false
-            },
-        }),
-        json!({
-            "name": "add_node",
-            "description": "Add a node to the running graph by its class import path — the `type` string `graph` reports for every node and `streamlib://node-catalog` lists. A Python class is named `module:QualifiedClassName` and must be importable from the app's own environment (a module beside the app, or a pip-installed package); a built-in is named by the `type` an existing node of that kind shows. Returns the name the node received, which `connect` and `remove_node` take, once the engine has spawned it — a Python class in its own helper process, which imports the module fresh, so edited code is picked up by every new add. The class's port declaration is read the first time it is added and kept; to change a class's ports, add it under a new class name. Read `graph` to see its state and ports.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "type": { "type": "string", "description": "The node's class import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`." },
-                    "config": { "type": "object", "description": "The node's configuration, as the keys its config schema declares. Omit for none." },
-                    "name": { "type": "string", "description": "The node's name: cast to lowercase URL-safe (`Front Camera` becomes `front-camera`), and refused when a node already has that name. Omit it to take the class's short name, cast, with the next free `-2`, `-3` … when one is taken. The name is the node's part of its ports' addresses." }
-                },
-                "required": ["type"],
-                "additionalProperties": false
-            },
-        }),
-        json!({
-            "name": "remove_node",
-            "description": "Remove a node from the running graph by name, stopping it. Its links go with it.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string", "description": "A node's name, as `graph` or `add_node` reported it." }
-                },
-                "required": ["name"],
-                "additionalProperties": false
-            },
-        }),
-        json!({
-            "name": "connect",
-            "description": "Link an output port to an input port on this node, and answer the new link's `link_id`. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "from_node": { "type": "string", "description": "The source node's name." },
-                    "from_port": { "type": "string", "description": "The source's output port name." },
-                    "to_node": { "type": "string", "description": "The destination node's name." },
-                    "to_port": { "type": "string", "description": "The destination's input port name." }
-                },
-                "required": ["from_node", "from_port", "to_node", "to_port"],
-                "additionalProperties": false
-            },
-        }),
-        json!({
-            "name": "disconnect",
-            "description": "Remove a link from a running graph by the id `graph` or `connect` reported.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "link_id": { "type": "string", "description": "A link id `graph` or `connect` reported." }
-                },
-                "required": ["link_id"],
-                "additionalProperties": false
-            },
-        }),
-    ]
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct TapToolArguments {
+    #[schemars(
+        description = "The output port's address, `<runtime_name>/<node>/<port>`, under this node's own runtime name (the top-level `runtime_name` in `graph`). A port is tappable once a link carries from it."
+    )]
+    channel: String,
+    #[schemars(
+        range(min = 1),
+        description = "Number of bags to collect before returning. Defaults to a small sample."
+    )]
+    count: Option<usize>,
+    #[schemars(
+        range(min = 1, max = MAX_TAP_RESPONSE_BAG_BYTES),
+        description = "Per-bag ceiling on the bytes hex-encoded into the result. A bag over the cap comes back flagged `hex_truncated` and cannot be decoded, so raise this rather than accept one. Defaults high enough to carry any audio block whole."
+    )]
+    max_bag_bytes: Option<usize>,
 }
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct LogsToolArguments {
+    #[schemars(
+        range(min = 1),
+        description = "Max events to collect before returning. Defaults to a small sample."
+    )]
+    count: Option<usize>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ExchangeToolArguments {
+    #[schemars(
+        description = "A surface id a bag published, e.g. the `{slot}#{generation}` of a pooled frame. A retired id is refused rather than answered with the slot's newer pixels — tap a newer bag and exchange that."
+    )]
+    surface_id: String,
+    #[schemars(
+        range(min = 1, max = EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP),
+        description = "Bound the returned image's long edge to this many pixels, aspect preserved and never upscaled. Defaults to the maximum, and a larger value is clamped to it: full resolution is the REST route's job, never an inline block."
+    )]
+    downscale_long_edge_pixel_cap: Option<u32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ShutdownToolArguments {
+    #[schemars(
+        description = "Human-readable attribution logged with the request. Omit for unspecified."
+    )]
+    reason: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct AddNodeToolArguments {
+    #[serde(rename = "type")]
+    #[schemars(
+        description = "The node's class import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`."
+    )]
+    processor_class_import_path: String,
+    #[schemars(
+        description = "The node's configuration, as the keys its config schema declares. Omit for none."
+    )]
+    config: Option<Map<String, Value>>,
+    #[schemars(
+        description = "The node's name: cast to lowercase URL-safe (`Front Camera` becomes `front-camera`), and refused when a node already has that name. Omit it to take the class's short name, cast, with the next free `-2`, `-3` … when one is taken. The name is the node's part of its ports' addresses."
+    )]
+    name: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct RemoveNodeToolArguments {
+    #[schemars(description = "A node's name, as `graph` or `add_node` reported it.")]
+    name: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct ConnectToolArguments {
+    #[schemars(description = "The source node's name.")]
+    from_node: String,
+    #[schemars(description = "The source's output port name.")]
+    from_port: String,
+    #[schemars(description = "The destination node's name.")]
+    to_node: String,
+    #[schemars(description = "The destination's input port name.")]
+    to_port: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
+struct DisconnectToolArguments {
+    #[schemars(description = "A link id `graph` or `connect` reported.")]
+    link_id: String,
+}
+
+/// A tool's answer: its result, or the message an `isError` result carries.
+type ToolCallAnswer = Result<CallToolResult, String>;
 
 // ============================================================================
-// tools/call dispatch
+// Tools
 // ============================================================================
 
-async fn tools_call(runtime: &Arc<dyn RuntimeOperations>, params: Value) -> RpcResult<Value> {
-    #[derive(Deserialize)]
-    struct ToolCallParams {
-        name: String,
-        #[serde(default)]
-        arguments: Value,
+#[tool_router]
+impl LocalApiMcpServerHandler {
+    #[tool(
+        description = "Export the current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, the capability extensions loaded in this process, and this runtime's name (`runtime_name`), the first part of every tap channel."
+    )]
+    async fn graph(&self) -> ToolCallAnswer {
+        let graph = self
+            .runtime
+            .to_json_async()
+            .await
+            .map_err(|e| format!("graph export failed: {e}"))?;
+        Ok(json_text_tool_result(&graph))
     }
-    let ToolCallParams { name, arguments } = serde_json::from_value(params)
-        .map_err(|e| RpcError::invalid_params(format!("malformed tools/call params: {e}")))?;
-    let arguments = if arguments.is_null() {
-        json!({})
-    } else {
-        arguments
-    };
 
-    let result = match name.as_str() {
-        "graph" => call_graph(runtime).await,
-        "tap" => call_tap(runtime, arguments).await,
-        "logs" => call_logs(runtime, arguments).await,
-        "exchange" => call_exchange(runtime, arguments).await,
-        "shutdown" => call_shutdown(runtime, arguments),
-        "add_node" => call_add_node(runtime, arguments).await,
-        "remove_node" => call_remove_node(runtime, arguments).await,
-        "connect" => call_connect(runtime, arguments).await,
-        "disconnect" => call_disconnect(runtime, arguments).await,
-        other => tool_error(format!("unknown tool: {other}")),
-    };
-    Ok(result)
-}
+    #[tool(
+        description = "Attach a read-only tap to a channel and collect a bounded sample of raw bags (FrameHeader-framed bytes; the hex plus byte length per bag). Bags arrive whole unless one exceeds `max_bag_bytes`, which is flagged as `hex_truncated`. The whole result is also byte-budgeted: the sample stops at the first bag that would exceed it, so `bags_withheld_at_byte_budget` is 0 or 1 — that one bag was received and discarded, and it accounts for the whole gap between `requested` and `received` when the window had time left."
+    )]
+    async fn tap(
+        &self,
+        Parameters(TapToolArguments {
+            channel,
+            count,
+            max_bag_bytes,
+        }): Parameters<TapToolArguments>,
+    ) -> ToolCallAnswer {
+        let sample = bounded_sample_count(count, DEFAULT_TAP_SAMPLE_COUNT);
+        let max_bag_bytes = bounded_tap_bag_bytes(max_bag_bytes);
 
-async fn call_graph(runtime: &Arc<dyn RuntimeOperations>) -> Value {
-    match runtime.to_json_async().await {
-        Ok(graph) => tool_ok(graph),
-        Err(e) => tool_error(format!("graph export failed: {e}")),
-    }
-}
+        let mut subscription = self
+            .runtime
+            .tap_async(channel.clone(), Some(sample))
+            .await
+            .map_err(|e| format!("tap attach failed: {e}"))?;
 
-async fn call_tap(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    #[derive(Deserialize)]
-    struct TapArgs {
-        channel: String,
-        #[serde(default)]
-        count: Option<usize>,
-        #[serde(default)]
-        max_bag_bytes: Option<usize>,
-    }
-    let TapArgs {
-        channel,
-        count,
-        max_bag_bytes,
-    } = match serde_json::from_value(arguments) {
-        Ok(args) => args,
-        Err(e) => return tool_error(format!("tap arguments: {e}")),
-    };
-    let sample = bounded_sample_count(count, DEFAULT_TAP_SAMPLE_COUNT);
-    let max_bag_bytes = bounded_tap_bag_bytes(max_bag_bytes);
-
-    let mut subscription = match runtime.tap_async(channel.clone(), Some(sample)).await {
-        Ok(subscription) => subscription,
-        Err(e) => return tool_error(format!("tap attach failed: {e}")),
-    };
-
-    let mut bags: Vec<Value> = Vec::with_capacity(sample);
-    let mut remaining_response_bytes = MAX_TAP_RESPONSE_BAG_BYTES;
-    let mut bags_withheld_at_byte_budget = 0usize;
-    let deadline = tokio::time::Instant::now() + TAP_SAMPLE_WINDOW;
-    while bags.len() < sample {
-        match tokio::time::timeout_at(deadline, subscription.recv()).await {
-            Ok(Some(bytes)) => {
-                let encoded_len = bytes.len().min(max_bag_bytes);
-                if encoded_len > remaining_response_bytes {
-                    // Counted rather than silently eaten: this bag was received
-                    // and is being dropped, so a caller reconciling `requested`
-                    // against `received` is not short by an unexplained one.
-                    bags_withheld_at_byte_budget += 1;
-                    break;
+        let mut bags: Vec<Value> = Vec::with_capacity(sample);
+        let mut remaining_response_bytes = MAX_TAP_RESPONSE_BAG_BYTES;
+        let mut bags_withheld_at_byte_budget = 0usize;
+        let deadline = tokio::time::Instant::now() + TAP_SAMPLE_WINDOW;
+        while bags.len() < sample {
+            match tokio::time::timeout_at(deadline, subscription.recv()).await {
+                Ok(Some(bytes)) => {
+                    let encoded_len = bytes.len().min(max_bag_bytes);
+                    if encoded_len > remaining_response_bytes {
+                        // Counted rather than silently eaten: this bag was received
+                        // and is being dropped, so a caller reconciling `requested`
+                        // against `received` is not short by an unexplained one.
+                        bags_withheld_at_byte_budget += 1;
+                        break;
+                    }
+                    remaining_response_bytes -= encoded_len;
+                    bags.push(tap_bag_json(&bytes[..encoded_len], bytes.len()));
                 }
-                remaining_response_bytes -= encoded_len;
-                bags.push(tap_bag_json(&bytes[..encoded_len], bytes.len()));
+                // Tap exhausted (count reached / forwarder ended), or the bounded
+                // sample window elapsed on a quiet channel — return the partial sample.
+                Ok(None) | Err(_) => break,
             }
-            // Tap exhausted (count reached / forwarder ended), or the bounded
-            // sample window elapsed on a quiet channel — return the partial sample.
-            Ok(None) | Err(_) => break,
         }
-    }
-    let dropped_bags = subscription.dropped_bags();
+        let dropped_bags = subscription.dropped_bags();
 
-    // `TapSubscription::drop` joins the forwarder OS thread; a synchronous join
-    // must never run on a tokio worker, so detach it off the async runtime.
-    if let Err(join_error) = tokio::task::spawn_blocking(move || drop(subscription)).await {
-        tracing::warn!(channel = %channel, "tap detach task failed to join: {join_error}");
-    }
-
-    tool_ok(json!({
-        "channel": channel,
-        "requested": sample,
-        "received": bags.len(),
-        "window_ms": TAP_SAMPLE_WINDOW.as_millis(),
-        "dropped_bags": dropped_bags,
-        "max_bag_bytes": max_bag_bytes,
-        "bags_withheld_at_byte_budget": bags_withheld_at_byte_budget,
-        "bags": bags,
-    }))
-}
-
-async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    let _ = runtime;
-    #[derive(Deserialize)]
-    struct LogsArgs {
-        #[serde(default)]
-        count: Option<usize>,
-    }
-    let LogsArgs { count } = match serde_json::from_value(arguments) {
-        Ok(args) => args,
-        Err(e) => return tool_error(format!("logs arguments: {e}")),
-    };
-    let sample = bounded_sample_count(count, DEFAULT_LOGS_SAMPLE_COUNT);
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
-    let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(McpEventForwarder { tx }));
-    // Without a subscriber the sample would be an honest-looking zero.
-    if let Err(subscribe_error) = PUBSUB.subscribe(topics::ALL, Arc::clone(&listener)) {
-        return tool_error(format!("logs subscription: {subscribe_error}"));
-    }
-
-    let mut events: Vec<Value> = Vec::with_capacity(sample);
-    let deadline = tokio::time::Instant::now() + LOGS_SAMPLE_WINDOW;
-    while events.len() < sample {
-        match tokio::time::timeout_at(deadline, rx.recv()).await {
-            Ok(Some(event)) => events.push(event_json(&event)),
-            // Forwarder channel closed, or the bounded sample window elapsed.
-            Ok(None) | Err(_) => break,
+        // `TapSubscription::drop` joins the forwarder OS thread; a synchronous join
+        // must never run on a tokio worker, so detach it off the async runtime.
+        if let Err(join_error) = tokio::task::spawn_blocking(move || drop(subscription)).await {
+            tracing::warn!(channel = %channel, "tap detach task failed to join: {join_error}");
         }
+
+        Ok(json_text_tool_result(&json!({
+            "channel": channel,
+            "requested": sample,
+            "received": bags.len(),
+            "window_ms": TAP_SAMPLE_WINDOW.as_millis(),
+            "dropped_bags": dropped_bags,
+            "max_bag_bytes": max_bag_bytes,
+            "bags_withheld_at_byte_budget": bags_withheld_at_byte_budget,
+            "bags": bags,
+        })))
     }
-    // The bus removes the subscription at its next publish or subscribe.
-    drop(listener);
 
-    tool_ok(json!({
-        "requested": sample,
-        "received": events.len(),
-        "window_ms": LOGS_SAMPLE_WINDOW.as_millis(),
-        "events": events,
-    }))
-}
+    #[tool(
+        description = "Collect a bounded sample of the runtime event stream (all topics) within a short monotonic window."
+    )]
+    async fn logs(
+        &self,
+        Parameters(LogsToolArguments { count }): Parameters<LogsToolArguments>,
+    ) -> ToolCallAnswer {
+        let sample = bounded_sample_count(count, DEFAULT_LOGS_SAMPLE_COUNT);
 
-/// Exchange a published surface id for that frame's pixels, inline.
-///
-/// The cap defaults to [`EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP`] and is clamped
-/// to it: a caller may ask for less than the ceiling and never more.
-async fn call_exchange(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    // The catalog advertises `additionalProperties: false`, and here that is
-    // enforced rather than advisory: a misspelled cap key would otherwise be
-    // dropped and answered with a differently-sized picture.
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct ExchangeArgs {
-        surface_id: String,
-        #[serde(default)]
-        downscale_long_edge_pixel_cap: Option<u32>,
-    }
-    let ExchangeArgs {
-        surface_id,
-        downscale_long_edge_pixel_cap,
-    } = match serde_json::from_value(arguments) {
-        Ok(args) => args,
-        Err(e) => return tool_error(format!("exchange arguments: {e}")),
-    };
-    let long_edge_pixel_cap = downscale_long_edge_pixel_cap
-        .unwrap_or(EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP)
-        .clamp(1, EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+        let listener: Arc<Mutex<dyn EventListener>> =
+            Arc::new(Mutex::new(McpEventForwarder { tx }));
+        // Without a subscriber the sample would be an honest-looking zero.
+        PUBSUB
+            .subscribe(topics::ALL, Arc::clone(&listener))
+            .map_err(|subscribe_error| format!("logs subscription: {subscribe_error}"))?;
 
-    match runtime
-        .exchange_published_surface_id_for_png_image_bytes_async(
-            surface_id.clone(),
-            Some(long_edge_pixel_cap),
-        )
-        .await
-    {
-        Ok(exchanged) => {
-            exchanged_frame_image_tool_call_result(&surface_id, long_edge_pixel_cap, &exchanged)
+        let mut events: Vec<Value> = Vec::with_capacity(sample);
+        let deadline = tokio::time::Instant::now() + LOGS_SAMPLE_WINDOW;
+        while events.len() < sample {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(event)) => events.push(event_json(&event)),
+                // Forwarder channel closed, or the bounded sample window elapsed.
+                Ok(None) | Err(_) => break,
+            }
         }
-        Err(e) => tool_error(format!("exchange failed: {e}")),
+        // The bus removes the subscription at its next publish or subscribe.
+        drop(listener);
+
+        Ok(json_text_tool_result(&json!({
+            "requested": sample,
+            "received": events.len(),
+            "window_ms": LOGS_SAMPLE_WINDOW.as_millis(),
+            "events": events,
+        })))
     }
-}
 
-/// Sync, unlike every other tool call: `request_runtime_shutdown` is
-/// fire-and-forget with no completion payload, so there is nothing to await
-/// and nothing to block on.
-fn call_shutdown(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    let request: RuntimeShutdownRequest = match serde_json::from_value(arguments) {
-        Ok(request) => request,
-        Err(e) => return tool_error(format!("shutdown arguments: {e}")),
-    };
-    let reason = request.reason.unwrap_or_default();
+    /// The cap defaults to [`EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP`] and is clamped
+    /// to it: a caller may ask for less than the ceiling and never more.
+    #[tool(
+        description = "Exchange a published surface id for that frame's pixels, returned as a PNG image block you can see directly. Ids come from bags a `tap` returned — this tool never reads a channel itself. The image is downscaled to a declared long-edge cap; the result states the surface's true extent and the REST route that returns the exact full-resolution bytes."
+    )]
+    async fn exchange(
+        &self,
+        Parameters(ExchangeToolArguments {
+            surface_id,
+            downscale_long_edge_pixel_cap,
+        }): Parameters<ExchangeToolArguments>,
+    ) -> ToolCallAnswer {
+        let long_edge_pixel_cap = downscale_long_edge_pixel_cap
+            .unwrap_or(EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP)
+            .clamp(1, EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP);
 
-    match runtime.request_runtime_shutdown(&reason) {
-        Ok(()) => tool_ok(json!({
+        let exchanged = self
+            .runtime
+            .exchange_published_surface_id_for_png_image_bytes_async(
+                surface_id.clone(),
+                Some(long_edge_pixel_cap),
+            )
+            .await
+            .map_err(|e| format!("exchange failed: {e}"))?;
+        Ok(exchanged_frame_image_tool_call_result(
+            &surface_id,
+            long_edge_pixel_cap,
+            &exchanged,
+        ))
+    }
+
+    #[tool(
+        description = "Ask the runtime to shut down. This is a request observed by whoever owns the run loop, which then runs a normal teardown — not an immediate kill. Idempotent: requesting twice is not an error. Returns as soon as the request is accepted; teardown is not awaited."
+    )]
+    fn shutdown(
+        &self,
+        Parameters(ShutdownToolArguments { reason }): Parameters<ShutdownToolArguments>,
+    ) -> ToolCallAnswer {
+        let reason = reason.unwrap_or_default();
+        self.runtime
+            .request_runtime_shutdown(&reason)
+            .map_err(|e| format!("shutdown request failed: {e}"))?;
+        Ok(json_text_tool_result(&json!({
             "status": crate::state::RUNTIME_SHUTDOWN_REQUESTED_STATUS,
             "reason": reason,
-        })),
-        Err(e) => tool_error(format!("shutdown request failed: {e}")),
+        })))
+    }
+
+    #[tool(
+        description = "Add a node to the running graph by its class import path — the `type` string `graph` reports for every node and `streamlib://node-catalog` lists. A Python class is named `module:QualifiedClassName` and must be importable from the app's own environment (a module beside the app, or a pip-installed package); a built-in is named by the `type` an existing node of that kind shows. Returns the name the node received, which `connect` and `remove_node` take, once the engine has spawned it — a Python class in its own helper process, which imports the module fresh, so edited code is picked up by every new add. The class's port declaration is read the first time it is added and kept; to change a class's ports, add it under a new class name. Read `graph` to see its state and ports."
+    )]
+    async fn add_node(
+        &self,
+        Parameters(arguments): Parameters<AddNodeToolArguments>,
+    ) -> ToolCallAnswer {
+        let processor_class_import_path =
+            ProcessorClassImportPath::new(&arguments.processor_class_import_path)
+                .map_err(|e| format!("add_node `type`: {e}"))?;
+        // Absent is an empty object: a config struct deserializes from `{}`.
+        let config = Value::Object(arguments.config.unwrap_or_default());
+        let mut spec = ProcessorSpec::new(processor_class_import_path, config);
+        spec.display_name = arguments.name;
+
+        let added = self
+            .runtime
+            .add_processor_async(spec)
+            .await
+            .map_err(|e| format!("add_node failed: {e}"))?;
+        Ok(json_text_tool_result(&json!({ "name": added.name })))
+    }
+
+    #[tool(
+        description = "Remove a node from the running graph by name, stopping it. Its links go with it."
+    )]
+    async fn remove_node(
+        &self,
+        Parameters(RemoveNodeToolArguments { name }): Parameters<RemoveNodeToolArguments>,
+    ) -> ToolCallAnswer {
+        let node = self
+            .runtime
+            .the_node_named(&name)
+            .map_err(|e| format!("remove_node failed: {e}"))?;
+        self.runtime
+            .remove_processor_async(node.processor_id)
+            .await
+            .map_err(|e| format!("remove_node failed: {e}"))?;
+        Ok(json_text_tool_result(&json!({ "removed_name": node.name })))
+    }
+
+    #[tool(
+        description = "Link an output port to an input port on this node, and answer the new link's `link_id`. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs`."
+    )]
+    async fn connect(
+        &self,
+        Parameters(arguments): Parameters<ConnectToolArguments>,
+    ) -> ToolCallAnswer {
+        let from = self
+            .runtime
+            .the_node_named(&arguments.from_node)
+            .map(|node| OutputLinkPortRef::new(node.processor_id, arguments.from_port))
+            .map_err(|e| format!("connect failed: {e}"))?;
+        let to = self
+            .runtime
+            .the_node_named(&arguments.to_node)
+            .map(|node| InputLinkPortRef::new(node.processor_id, arguments.to_port))
+            .map_err(|e| format!("connect failed: {e}"))?;
+
+        let link_id = self
+            .runtime
+            .connect_async(from, to)
+            .await
+            .map_err(|e| format!("connect failed: {e}"))?;
+        let how_the_graph_reads_it = how_the_graph_reads_one_link(&self.runtime, &link_id).await;
+        Ok(json_text_tool_result(&json!({
+            "link_id": link_id.as_str(),
+            "state": how_the_graph_reads_it.state,
+        })))
+    }
+
+    #[tool(
+        description = "Remove a link from a running graph by the id `graph` or `connect` reported."
+    )]
+    async fn disconnect(
+        &self,
+        Parameters(DisconnectToolArguments { link_id }): Parameters<DisconnectToolArguments>,
+    ) -> ToolCallAnswer {
+        self.runtime
+            .disconnect_async(LinkUniqueId::from(link_id.as_str()))
+            .await
+            .map_err(|e| format!("disconnect failed: {e}"))?;
+        Ok(json_text_tool_result(
+            &json!({ "disconnected_link_id": link_id }),
+        ))
     }
 }
 
-async fn call_add_node(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct AddNodeArguments {
-        #[serde(rename = "type")]
-        processor_class_import_path: String,
-        #[serde(default)]
-        config: Option<Value>,
-        #[serde(default)]
-        name: Option<String>,
+#[tool_handler(router = self.tool_router)]
+#[prompt_handler(router = self.prompt_router)]
+impl ServerHandler for LocalApiMcpServerHandler {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_prompts()
+                .build(),
+        )
+        .with_server_info(Implementation::new(MCP_SERVER_NAME, MCP_SERVER_VERSION))
+        .with_instructions(LOCAL_API_MCP_SERVER_INSTRUCTIONS)
     }
-    let arguments: AddNodeArguments = match serde_json::from_value(arguments) {
-        Ok(arguments) => arguments,
-        Err(e) => return tool_error(format!("add_node arguments: {e}")),
-    };
-    let processor_class_import_path =
-        match ProcessorClassImportPath::new(&arguments.processor_class_import_path) {
-            Ok(path) => path,
-            Err(e) => return tool_error(format!("add_node `type`: {e}")),
-        };
-    // Absent is an empty object, never null: a config struct deserializes from
-    // `{}` and not from `null`.
-    let config = match arguments.config {
-        None | Some(Value::Null) => Value::Object(serde_json::Map::new()),
-        Some(object @ Value::Object(_)) => object,
-        Some(other) => {
-            return tool_error(format!(
-                "add_node `config` must be a JSON object, got {other}"
-            ));
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(SERVED_MCP_PROTOCOL_VERSIONS)
+    }
+
+    /// No list ever changes under a host, so a listen is acknowledged with
+    /// nothing subscribed and held until it is cancelled.
+    fn accepted_subscription_filter(
+        &self,
+        _requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        Some(SubscriptionFilter::default())
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
+        tokio::select! {
+            () = context.cancelled() => {}
+            () = self.local_api_stopping_token.cancelled() => {}
         }
-    };
-    let mut spec = ProcessorSpec::new(processor_class_import_path, config);
-    spec.display_name = arguments.name;
-
-    match runtime.add_processor_async(spec).await {
-        Ok(added) => tool_ok(json!({ "name": added.name })),
-        Err(e) => tool_error(format!("add_node failed: {e}")),
+        Ok(())
     }
-}
 
-async fn call_remove_node(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct RemoveNodeArguments {
-        name: String,
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(crate::mcp_resources::resources_list_result())
     }
-    let arguments: RemoveNodeArguments = match serde_json::from_value(arguments) {
-        Ok(arguments) => arguments,
-        Err(e) => return tool_error(format!("remove_node arguments: {e}")),
-    };
-    let node = match runtime.the_node_named(&arguments.name) {
-        Ok(node) => node,
-        Err(e) => return tool_error(format!("remove_node failed: {e}")),
-    };
-    match runtime.remove_processor_async(node.processor_id).await {
-        Ok(()) => tool_ok(json!({ "removed_name": node.name })),
-        Err(e) => tool_error(format!("remove_node failed: {e}")),
-    }
-}
 
-async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    // Unknown fields are refused rather than ignored, so a misspelled key never
-    // wires a link the caller did not name.
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct ConnectArguments {
-        from_node: String,
-        from_port: String,
-        to_node: String,
-        to_port: String,
-    }
-    let arguments: ConnectArguments = match serde_json::from_value(arguments) {
-        Ok(arguments) => arguments,
-        Err(e) => return tool_error(format!("connect arguments: {e}")),
-    };
-    let from = match runtime.the_node_named(&arguments.from_node) {
-        Ok(node) => OutputLinkPortRef::new(node.processor_id, arguments.from_port),
-        Err(e) => return tool_error(format!("connect failed: {e}")),
-    };
-    let to = match runtime.the_node_named(&arguments.to_node) {
-        Ok(node) => InputLinkPortRef::new(node.processor_id, arguments.to_port),
-        Err(e) => return tool_error(format!("connect failed: {e}")),
-    };
-
-    match runtime.connect_async(from, to).await {
-        Ok(link_id) => {
-            let how_the_graph_reads_it = how_the_graph_reads_one_link(runtime, &link_id).await;
-            tool_ok(json!({
-                "link_id": link_id.as_str(),
-                "state": how_the_graph_reads_it.state,
-            }))
-        }
-        Err(e) => tool_error(format!("connect failed: {e}")),
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, McpError> {
+        crate::mcp_resources::read_resource(&self.runtime, &request.uri)
+            .await
+            .map(Into::into)
     }
 }
 
@@ -724,54 +635,19 @@ async fn how_the_graph_reads_one_link(
     HowTheGraphReadsOneLink { state }
 }
 
-async fn call_disconnect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct DisconnectArguments {
-        link_id: String,
-    }
-    let arguments: DisconnectArguments = match serde_json::from_value(arguments) {
-        Ok(arguments) => arguments,
-        Err(e) => return tool_error(format!("disconnect arguments: {e}")),
-    };
-    match runtime
-        .disconnect_async(LinkUniqueId::from(arguments.link_id.as_str()))
-        .await
-    {
-        Ok(()) => tool_ok(json!({ "disconnected_link_id": arguments.link_id })),
-        Err(e) => tool_error(format!("disconnect failed: {e}")),
-    }
-}
-
 // ============================================================================
-// Result shaping
+// Result content
 // ============================================================================
 
-/// A successful `tools/call` result: the value rendered as a pretty-JSON text
-/// content block (the universally-supported MCP tool-result form).
-fn tool_ok(value: Value) -> Value {
-    tool_ok_content_blocks(vec![json_text_content_block(&value)])
+/// A successful tool result: the value as one pretty-JSON text block, the form
+/// every tool here states a result a caller parses in.
+fn json_text_tool_result(value: &Value) -> CallToolResult {
+    CallToolResult::success(vec![json_text_content_block(value)])
 }
 
-/// The successful `tools/call` envelope around whatever blocks a tool built.
-fn tool_ok_content_blocks(content_blocks: Vec<Value>) -> Value {
-    json!({ "content": content_blocks, "isError": false })
-}
-
-/// One pretty-JSON text content block — how every tool here states a result a
-/// caller parses.
-fn json_text_content_block(value: &Value) -> Value {
+fn json_text_content_block(value: &Value) -> ContentBlock {
     let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
-    json!({ "type": "text", "text": text })
-}
-
-/// One PNG image content block, base64 as the MCP content encoding requires.
-fn png_image_content_block(png_image_bytes: &[u8]) -> Value {
-    json!({
-        "type": "image",
-        "data": base64::engine::general_purpose::STANDARD.encode(png_image_bytes),
-        "mimeType": "image/png",
-    })
+    ContentBlock::text(text)
 }
 
 /// A successful `exchange` result: the frame as an image block the host
@@ -785,7 +661,7 @@ fn exchanged_frame_image_tool_call_result(
     published_surface_id: &str,
     downscale_long_edge_pixel_cap: u32,
     exchanged: &ExchangedPublishedSurfaceFramePngImage,
-) -> Value {
+) -> CallToolResult {
     let stated = json!({
         "surface_id": published_surface_id,
         "source_surface_pixel_width": exchanged.source_surface_pixel_width,
@@ -798,20 +674,13 @@ fn exchanged_frame_image_tool_call_result(
             crate::handlers::surface_image_exchange_route_path_for_surface_id(published_surface_id)
         ),
     });
-    tool_ok_content_blocks(vec![
-        png_image_content_block(&exchanged.png_image_bytes),
+    CallToolResult::success(vec![
+        ContentBlock::image(
+            base64::engine::general_purpose::STANDARD.encode(&exchanged.png_image_bytes),
+            "image/png",
+        ),
         json_text_content_block(&stated),
     ])
-}
-
-/// A failed `tools/call` result: an `isError` text block. Tool failures are
-/// surfaced this way (not as a JSON-RPC error) so the calling agent sees the
-/// message in-band and can react.
-fn tool_error(message: impl Into<String>) -> Value {
-    json!({
-        "content": [{ "type": "text", "text": message.into() }],
-        "isError": true,
-    })
 }
 
 /// Clamp a requested sample count into `[1, MAX_SAMPLE_COUNT]`, defaulting when
@@ -874,7 +743,7 @@ struct McpEventForwarder {
 }
 
 impl EventListener for McpEventForwarder {
-    fn on_event(&mut self, event: &Event) -> Result<()> {
+    fn on_event(&mut self, event: &Event) -> streamlib::sdk::error::Result<()> {
         let _ = self.tx.send(event.clone());
         Ok(())
     }
@@ -882,26 +751,34 @@ impl EventListener for McpEventForwarder {
 
 #[cfg(test)]
 mod tests {
-    //! MCP-veneer wire tests: drive the real `POST /mcp` endpoint that
-    //! [`crate::handlers::build_router`] wires in, exercising the JSON-RPC
-    //! handshake, the tool catalog, and each observation tool through to the
-    //! runtime. The router is the real one; only the `RuntimeOperations`
+    //! MCP wire tests: an `rmcp` client drives the real `/mcp` endpoint that
+    //! [`crate::handlers::build_router`] wires in, served on a real local API
+    //! socket, through discovery, the tool catalog, and each tool through to
+    //! the runtime. The router is the real one; only the `RuntimeOperations`
     //! backend is a stub, so the MCP → runtime seam is what's under test.
     //!
     //! The catalog assertions are two-sided on purpose — what is advertised,
     //! and what must never be again.
 
     use crate::control_plane_stub_support::{
-        STUB_EXCHANGED_FRAME_SURFACE_ID, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-        STUB_EXCHANGED_IMAGE_BYTES, STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
+        LocalApiServedOnAFreshSocket, STUB_EXCHANGED_FRAME_SURFACE_ID,
+        STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED, STUB_EXCHANGED_IMAGE_BYTES,
+        STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
     };
-    use axum::Router;
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
     use base64::Engine as _;
-    use streamlib::sdk::error::Error;
+    use rmcp::RoleClient;
+    use rmcp::model::{
+        CallToolRequestParams, ClientCapabilities, GetPromptRequestParams,
+        ReadResourceRequestParams, RequestMetaObject,
+    };
+    use rmcp::service::{
+        ClientInitializeError, ClientLifecycleMode, ClientServiceExt, RunningService, ServiceError,
+        SubscriptionEnd,
+    };
+    use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+    use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
+    use streamlib::sdk::error::{Error, Result};
     use streamlib::sdk::runtime::{BoxFuture, RuntimeOperations, TapSubscription};
-    use tower::ServiceExt;
 
     use super::*;
 
@@ -1028,7 +905,7 @@ mod tests {
         }
     }
 
-    /// The control vocabulary, in catalog order. This is the whole of it —
+    /// The control vocabulary. This is the whole of it —
     /// `tools/list` is asserted equal to this, not merely a superset.
     const CONTROL_TOOL_NAMES: &[&str] = &[
         "graph",
@@ -1042,86 +919,345 @@ mod tests {
         "disconnect",
     ];
 
-    fn mcp_router(runtime: Arc<dyn RuntimeOperations>) -> Router {
-        crate::handlers::build_router(runtime)
+    /// The authority the MCP client names in `Host`; the socket path is the
+    /// address.
+    const LOCAL_API_MCP_URI: &str = "http://localhost/mcp";
+
+    fn mcp_transport_to(
+        served: &LocalApiServedOnAFreshSocket,
+    ) -> StreamableHttpClientTransport<UnixSocketHttpClient> {
+        mcp_transport_naming(served, LOCAL_API_MCP_URI)
     }
 
-    /// POST one JSON-RPC message to `/mcp` and return the parsed JSON body (or
-    /// `Value::Null` for an empty `202` notification ack) with the status.
-    async fn mcp_call(runtime: Arc<dyn RuntimeOperations>, message: Value) -> (StatusCode, Value) {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/mcp")
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(message.to_string()))
-            .unwrap();
-        let response = mcp_router(runtime).oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+    fn mcp_transport_naming(
+        served: &LocalApiServedOnAFreshSocket,
+        local_api_mcp_uri: &str,
+    ) -> StreamableHttpClientTransport<UnixSocketHttpClient> {
+        StreamableHttpClientTransport::with_client(
+            UnixSocketHttpClient::new(
+                served.local_api_socket_path.to_str().unwrap(),
+                local_api_mcp_uri,
+            ),
+            StreamableHttpClientTransportConfig::with_uri(local_api_mcp_uri.to_string()),
+        )
+    }
+
+    /// An `rmcp` client at the latest revision, connected to the real router
+    /// over `runtime`.
+    async fn connected_mcp_client(
+        runtime: Arc<dyn RuntimeOperations>,
+    ) -> (LocalApiServedOnAFreshSocket, RunningService<RoleClient, ()>) {
+        let served = LocalApiServedOnAFreshSocket::over(runtime);
+        let client = ()
+            .serve_with_lifecycle(
+                mcp_transport_to(&served),
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::LATEST],
+                },
+            )
             .await
-            .unwrap();
-        let body = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes).unwrap()
-        };
-        (status, body)
+            .expect("the node answers `server/discover` at the latest revision");
+        (served, client)
+    }
+
+    /// One `tools/call`: the result as it crossed the wire, or the protocol
+    /// error that refused it.
+    async fn tool_call_outcome(
+        runtime: Arc<dyn RuntimeOperations>,
+        tool_name: &str,
+        arguments: Value,
+    ) -> std::result::Result<Value, McpError> {
+        let (_served, client) = connected_mcp_client(runtime).await;
+        let request = CallToolRequestParams::new(tool_name.to_string())
+            .with_arguments(arguments.as_object().cloned().unwrap_or_default());
+        wire_outcome(client.call_tool(request).await)
+    }
+
+    /// A result or refusal as it crossed the wire.
+    fn wire_outcome<T: serde::Serialize>(
+        outcome: std::result::Result<T, ServiceError>,
+    ) -> std::result::Result<Value, McpError> {
+        match outcome {
+            Ok(result) => Ok(serde_json::to_value(result).unwrap()),
+            Err(ServiceError::McpError(refusal)) => Err(refusal),
+            Err(other) => panic!("the request failed below the protocol: {other}"),
+        }
+    }
+
+    /// The JSON a successful tool result states in its first text block.
+    fn first_text_block_json(tool_result: &Value) -> Value {
+        assert_eq!(tool_result["isError"], false, "{tool_result}");
+        serde_json::from_str(
+            tool_result["content"][0]["text"]
+                .as_str()
+                .expect("a text block"),
+        )
+        .expect("the text block is JSON")
+    }
+
+    async fn tool_call_result(
+        runtime: Arc<dyn RuntimeOperations>,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Value {
+        tool_call_outcome(runtime, tool_name, arguments)
+            .await
+            .unwrap_or_else(|refusal| panic!("`{tool_name}` was refused: {refusal:?}"))
+    }
+
+    async fn tool_call_refusal(
+        runtime: Arc<dyn RuntimeOperations>,
+        tool_name: &str,
+        arguments: Value,
+    ) -> McpError {
+        match tool_call_outcome(runtime, tool_name, arguments).await {
+            Ok(result) => panic!("`{tool_name}` answered a result: {result}"),
+            Err(refusal) => refusal,
+        }
+    }
+
+    async fn listed_tools(runtime: Arc<dyn RuntimeOperations>) -> Vec<Value> {
+        let (_served, client) = connected_mcp_client(runtime).await;
+        client
+            .list_all_tools()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|tool| serde_json::to_value(tool).unwrap())
+            .collect()
     }
 
     #[tokio::test]
-    async fn initialize_handshake_reports_the_tools_resources_and_prompts_capabilities() {
-        let (status, body) = mcp_call(
-            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            json!({
-                "jsonrpc": "2.0", "id": 1, "method": "initialize",
-                "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
-            }),
-        )
-        .await;
+    async fn discover_answers_the_latest_revision_alone_with_the_tools_resources_and_prompts_capabilities()
+     {
+        let (_served, client) =
+            connected_mcp_client(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
 
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["id"], 1);
-        assert_eq!(body["result"]["protocolVersion"], "2025-06-18");
-        assert_eq!(body["result"]["serverInfo"]["name"], "streamlib-api-server");
-        for capability in ["tools", "resources", "prompts"] {
-            assert!(
-                body["result"]["capabilities"][capability].is_object(),
-                "server must advertise the {capability} capability: {body}"
-            );
+        let discovered = client
+            .discover(RequestMetaObject::with_client_context(
+                ProtocolVersion::LATEST,
+                Implementation::new("discover-test", "0"),
+                ClientCapabilities::default(),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(discovered.supported_versions, [ProtocolVersion::LATEST]);
+        assert_eq!(
+            discovered.server_info().map(|server_info| server_info.name),
+            Some(MCP_SERVER_NAME.to_string())
+        );
+        assert!(discovered.capabilities.tools.is_some(), "{discovered:?}");
+        assert!(
+            discovered.capabilities.resources.is_some(),
+            "{discovered:?}"
+        );
+        assert!(discovered.capabilities.prompts.is_some(), "{discovered:?}");
+        assert_eq!(
+            discovered.instructions.as_deref(),
+            Some(LOCAL_API_MCP_SERVER_INSTRUCTIONS)
+        );
+    }
+
+    /// A client that knows the handshake revisions only.
+    struct HandshakeRevisionMcpClient {
+        handshake_protocol_version: ProtocolVersion,
+    }
+
+    impl rmcp::ClientHandler for HandshakeRevisionMcpClient {
+        fn get_info(&self) -> rmcp::model::ClientConfig {
+            rmcp::model::ClientConfig::new(
+                ClientCapabilities::default(),
+                Implementation::new("handshake-test", "0"),
+            )
+            .with_protocol_version(self.handshake_protocol_version.clone())
         }
     }
 
     #[tokio::test]
-    async fn notifications_are_acked_with_202_and_no_body() {
-        let (status, body) = mcp_call(
-            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    async fn an_initialize_handshake_is_refused_with_the_unsupported_version_error_naming_the_latest()
+     {
+        for handshake_protocol_version in [
+            ProtocolVersion::V_2025_06_18,
+            ProtocolVersion::LATEST_WITH_INITIALIZE,
+        ] {
+            let served = LocalApiServedOnAFreshSocket::over(Arc::new(
+                ControlPlaneMcpDispatchStubRuntime::new(),
+            ));
+            let refusal = HandshakeRevisionMcpClient {
+                handshake_protocol_version: handshake_protocol_version.clone(),
+            }
+            .serve_with_lifecycle(mcp_transport_to(&served), ClientLifecycleMode::Initialize)
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{handshake_protocol_version} must not be served"));
+
+            let ClientInitializeError::JsonRpcError(refusal) = refusal else {
+                panic!("{handshake_protocol_version}: expected a JSON-RPC refusal, got {refusal}");
+            };
+            assert_eq!(
+                refusal.code,
+                rmcp::model::ErrorCode::UNSUPPORTED_PROTOCOL_VERSION
+            );
+            let data = refusal
+                .data
+                .expect("the refusal names the served revisions");
+            assert_eq!(
+                data["supported"],
+                json!([ProtocolVersion::LATEST]),
+                "{data}"
+            );
+            assert_eq!(
+                data["requested"],
+                json!(handshake_protocol_version),
+                "{data}"
+            );
+        }
+    }
+
+    fn serve_one_mcp_tool_call() {
+        let request_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime builds");
+        request_runtime.block_on(async {
+            tool_call_result(
+                Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+                "graph",
+                json!({}),
+            )
+            .await;
+        });
+    }
+
+    fn rmcp_trace_targets_under(env_filter_directives: &str) -> Vec<&'static str> {
+        crate::control_plane_stub_support::CapturedTracingTargets::captured_from_the_second_of_two_runs(
+            env_filter_directives,
+            serve_one_mcp_tool_call,
         )
-        .await;
-        assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(body, Value::Null);
+        .into_iter()
+        .filter(|target| target.starts_with("rmcp"))
+        .collect()
+    }
+
+    /// At the engine's default filter a node's control plane adds nothing to
+    /// the app's own log, MCP included.
+    #[test]
+    #[serial_test::serial]
+    fn a_routine_mcp_request_says_nothing_at_the_engines_default_filter() {
+        assert!(
+            !rmcp_trace_targets_under("info").is_empty(),
+            "the SDK speaks at info, so the default has to hold it"
+        );
+        let targets = rmcp_trace_targets_under(
+            streamlib::sdk::logging::ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES,
+        );
+        assert!(
+            targets.is_empty(),
+            "an MCP request must be silent at the engine's default filter, got: {targets:?}"
+        );
+    }
+
+    /// The settings that make the endpoint the latest revision's alone: no
+    /// session, every request carrying its own revision, and no `Host`
+    /// allowlist on a socket no browser can dial.
+    #[test]
+    fn the_endpoint_is_stateless_demands_per_request_metadata_and_admits_any_host() {
+        let service = local_api_mcp_streamable_http_service(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            CancellationToken::new(),
+        );
+        assert!(!service.config.legacy_session_mode);
+        assert!(service.config.stateless_protocol_metadata_required);
+        assert!(
+            service.config.allowed_hosts.is_empty(),
+            "{:?}",
+            service.config.allowed_hosts
+        );
+    }
+
+    #[tokio::test]
+    async fn a_client_naming_any_host_over_the_socket_is_answered() {
+        let served =
+            LocalApiServedOnAFreshSocket::over(Arc::new(ControlPlaneMcpDispatchStubRuntime::new()));
+        let client = ()
+            .serve_with_lifecycle(
+                mcp_transport_naming(&served, "http://streamlib-node/mcp"),
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::LATEST],
+                },
+            )
+            .await
+            .expect("the socket's file mode is the gate, not the Host header");
+        assert!(client.list_all_tools().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_client_speaking_only_a_handshake_revision_finds_no_compatible_revision() {
+        let served =
+            LocalApiServedOnAFreshSocket::over(Arc::new(ControlPlaneMcpDispatchStubRuntime::new()));
+        let refusal = ()
+            .serve_with_lifecycle(
+                mcp_transport_to(&served),
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::V_2025_06_18],
+                },
+            )
+            .await
+            .expect_err("a handshake revision must not be served");
+        let ClientInitializeError::NoCompatibleProtocolVersion {
+            server_supported, ..
+        } = refusal
+        else {
+            panic!("expected the unsupported-version refusal, got {refusal}");
+        };
+        assert_eq!(server_supported, [ProtocolVersion::LATEST]);
+    }
+
+    /// A host that holds `subscriptions/listen` open must not hold the node's
+    /// shutdown: stopping the local API ends the stream with its final result.
+    #[tokio::test]
+    async fn a_listen_stream_ends_gracefully_when_the_local_api_stops_serving() {
+        let (mut served, client) =
+            connected_mcp_client(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
+        let mut subscription = client
+            .listen(SubscriptionFilter::default())
+            .await
+            .expect("the node acknowledges a listen");
+        assert_eq!(
+            serde_json::to_value(subscription.acknowledged()).unwrap(),
+            json!({}),
+            "no list ever changes under a host, so nothing is subscribed"
+        );
+
+        served.stop_serving();
+
+        let ended = tokio::time::timeout(Duration::from_secs(5), subscription.next())
+            .await
+            .expect("the stream ends once the local API stops");
+        assert!(matches!(ended, Ok(None)), "{ended:?}");
+        assert!(
+            matches!(subscription.end(), Some(SubscriptionEnd::Graceful(_))),
+            "the stream closes with the listen request's own final result"
+        );
     }
 
     #[tokio::test]
     async fn tools_list_advertises_exactly_the_control_vocabulary() {
-        let (status, body) = mcp_call(
-            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        let tools = body["result"]["tools"].as_array().expect("tools array");
-        let names: Vec<&str> = tools
+        let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
+        let mut names: Vec<&str> = tools
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect();
+        names.sort_unstable();
+        let mut control_tool_names = CONTROL_TOOL_NAMES.to_vec();
+        control_tool_names.sort_unstable();
 
         // Exact, not a superset: the catalog IS the control vocabulary, so a
         // tool appearing here that is not in this list is a surface the plan
         // does not grant.
         assert_eq!(
-            names, CONTROL_TOOL_NAMES,
+            names, control_tool_names,
             "tools/list must advertise exactly the control vocabulary"
         );
         for tool in tools {
@@ -1138,22 +1274,18 @@ mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
-        let (status, body) = mcp_call(
+        let body = tool_call_result(
             runtime,
+            "add_node",
             json!({
-                "jsonrpc": "2.0", "id": 30, "method": "tools/call",
-                "params": { "name": "add_node", "arguments": {
-                    "type": "processors.grayscale_effect:GrayscaleEffect",
-                    "config": { "strength": 0.5 },
-                    "name": "Gray"
-                } }
+                "type": "processors.grayscale_effect:GrayscaleEffect",
+                "config": { "strength": 0.5 },
+                "name": "Gray"
             }),
         )
         .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], false, "body={body}");
+        let text = body["content"][0]["text"].as_str().unwrap();
         let stated: Value = serde_json::from_str(text).unwrap();
         assert_eq!(
             stated,
@@ -1184,21 +1316,17 @@ mod tests {
             refusal,
         ));
 
-        let (status, body) = mcp_call(
+        let body = tool_call_result(
             runtime,
+            "add_node",
             json!({
-                "jsonrpc": "2.0", "id": 32, "method": "tools/call",
-                "params": { "name": "add_node", "arguments": {
-                    "type": "processors.grayscale_effect:GrayscaleEffect",
-                    "name": "gray"
-                } }
+                "type": "processors.grayscale_effect:GrayscaleEffect",
+                "name": "gray"
             }),
         )
         .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], true, "body={body}");
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], true, "body={body}");
+        let text = body["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("add_node failed"), "{text}");
         assert!(
             text.contains(refusal),
@@ -1212,18 +1340,13 @@ mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
-        let (_, body) = mcp_call(
+        let body = tool_call_result(
             runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 31, "method": "tools/call",
-                "params": { "name": "add_node", "arguments": { "type": "streamlib:CameraSource" } }
-            }),
+            "add_node",
+            json!({ "type": "streamlib:CameraSource" }),
         )
         .await;
-
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        let stated: Value =
-            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        let stated = first_text_block_json(&body);
         assert_eq!(
             stated["name"],
             crate::control_plane_stub_support::STUB_ADDED_NODE_NAME,
@@ -1247,21 +1370,18 @@ mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
-        let (_, body) = mcp_call(
+        let body = tool_call_result(
             runtime,
+            "add_node",
             json!({
-                "jsonrpc": "2.0", "id": 33, "method": "tools/call",
-                "params": { "name": "add_node", "arguments": {
-                    "type": "processors.grayscale_effect:GrayscaleEffect",
-                    "display_name": "gray"
-                } }
+                "type": "processors.grayscale_effect:GrayscaleEffect",
+                "display_name": "gray"
             }),
         )
         .await;
 
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
-        assert_eq!(body["result"]["isError"], true, "{text}");
-        assert!(text.contains("add_node arguments"), "{text}");
+        let text = body["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], true, "{text}");
         assert!(text.contains("display_name"), "{text}");
         assert!(recorded.lock().is_empty(), "nothing was added");
     }
@@ -1272,44 +1392,24 @@ mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
-        let (_, connect_body) = mcp_call(
+        let connect_body = tool_call_result(
             runtime.clone(),
+            "connect",
             json!({
-                "jsonrpc": "2.0", "id": 32, "method": "tools/call",
-                "params": { "name": "connect", "arguments": {
-                    "from_node": "camera", "from_port": "video",
-                    "to_node": "fx", "to_port": "video_from_upstream"
-                } }
+                "from_node": "camera", "from_port": "video",
+                "to_node": "fx", "to_port": "video_from_upstream"
             }),
         )
         .await;
-        assert_eq!(
-            connect_body["result"]["isError"], false,
-            "body={connect_body}"
-        );
-        let stated: Value = serde_json::from_str(
-            connect_body["result"]["content"][0]["text"]
-                .as_str()
-                .unwrap(),
-        )
-        .unwrap();
+        let stated = first_text_block_json(&connect_body);
         assert_eq!(
             stated["link_id"],
             crate::control_plane_stub_support::STUB_CREATED_LINK_ID
         );
 
-        let (_, disconnect_body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 33, "method": "tools/call",
-                "params": { "name": "disconnect", "arguments": { "link_id": "link-9" } }
-            }),
-        )
-        .await;
-        assert_eq!(
-            disconnect_body["result"]["isError"], false,
-            "body={disconnect_body}"
-        );
+        let disconnect_body =
+            tool_call_result(runtime, "disconnect", json!({ "link_id": "link-9" })).await;
+        assert_eq!(disconnect_body["isError"], false, "body={disconnect_body}");
 
         let recorded = recorded.lock();
         let [
@@ -1343,7 +1443,7 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(body["result"]["isError"], false, "body={body}");
+        assert_eq!(body["isError"], false, "body={body}");
 
         let recorded = recorded.lock();
         let [crate::control_plane_stub_support::RecordedGraphMutation::Connect(from, to)] =
@@ -1362,15 +1462,7 @@ mod tests {
         runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
         arguments: Value,
     ) -> Value {
-        let (_, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 36, "method": "tools/call",
-                "params": { "name": "connect", "arguments": arguments }
-            }),
-        )
-        .await;
-        body
+        tool_call_result(runtime, "connect", arguments).await
     }
 
     /// Call `disconnect` with `arguments` and hand back the whole tool result.
@@ -1378,15 +1470,7 @@ mod tests {
         runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
         arguments: Value,
     ) -> Value {
-        mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": { "name": "disconnect", "arguments": arguments }
-            }),
-        )
-        .await
-        .1
+        tool_call_result(runtime, "disconnect", arguments).await
     }
 
     /// Every end needs its node and its port, and a call missing one is
@@ -1407,9 +1491,8 @@ mod tests {
             let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
             let body = call_the_connect_tool(runtime, arguments.clone()).await;
 
-            let text = body["result"]["content"][0]["text"].as_str().unwrap();
-            assert_eq!(body["result"]["isError"], true, "{arguments} gave {text}");
-            assert!(text.contains("connect arguments"), "{text}");
+            let text = body["content"][0]["text"].as_str().unwrap();
+            assert_eq!(body["isError"], true, "{arguments} gave {text}");
             assert!(
                 text.contains(missing_field),
                 "{arguments} must be refused naming {missing_field}: {text}"
@@ -1441,9 +1524,8 @@ mod tests {
             let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
             let body = call_the_connect_tool(runtime, arguments.clone()).await;
 
-            let text = body["result"]["content"][0]["text"].as_str().unwrap();
-            assert_eq!(body["result"]["isError"], true, "{arguments} gave {text}");
-            assert!(text.contains("connect arguments"), "{text}");
+            let text = body["content"][0]["text"].as_str().unwrap();
+            assert_eq!(body["isError"], true, "{arguments} gave {text}");
             assert!(
                 text.contains(unknown_field),
                 "{arguments} must be refused naming {unknown_field}: {text}"
@@ -1472,8 +1554,8 @@ mod tests {
         )
         .await;
 
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
-        assert_eq!(body["result"]["isError"], true, "{text}");
+        let text = body["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], true, "{text}");
         assert!(text.contains("to_prot"), "{text}");
         assert!(recorded_calls.lock().is_empty(), "nothing was wired");
     }
@@ -1500,8 +1582,8 @@ mod tests {
 
             let body = call_the_connect_tool(runtime, arguments.clone()).await;
 
-            let text = body["result"]["content"][0]["text"].as_str().unwrap();
-            assert_eq!(body["result"]["isError"], true, "{arguments} gave {text}");
+            let text = body["content"][0]["text"].as_str().unwrap();
+            assert_eq!(body["isError"], true, "{arguments} gave {text}");
             assert!(text.contains("connect failed"), "{text}");
             assert!(
                 text.contains(crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME),
@@ -1526,9 +1608,8 @@ mod tests {
             let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
             let body = call_the_disconnect_tool(runtime, arguments.clone()).await;
 
-            let text = body["result"]["content"][0]["text"].as_str().unwrap();
-            assert_eq!(body["result"]["isError"], true, "{arguments} gave {text}");
-            assert!(text.contains("disconnect arguments"), "{text}");
+            let text = body["content"][0]["text"].as_str().unwrap();
+            assert_eq!(body["isError"], true, "{arguments} gave {text}");
             assert!(
                 text.contains(what_the_refusal_must_name),
                 "{arguments} must be refused naming {what_the_refusal_must_name}: {text}"
@@ -1562,8 +1643,7 @@ mod tests {
         )
         .await;
 
-        let stated: Value =
-            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        let stated = first_text_block_json(&body);
         assert_eq!(
             stated["link_id"],
             crate::control_plane_stub_support::STUB_CREATED_LINK_ID
@@ -1580,17 +1660,8 @@ mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
-        let (_, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 34, "method": "tools/call",
-                "params": { "name": "remove_node", "arguments": { "name": "FX" } }
-            }),
-        )
-        .await;
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        let stated: Value =
-            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        let body = tool_call_result(runtime, "remove_node", json!({ "name": "FX" })).await;
+        let stated = first_text_block_json(&body);
         assert_eq!(
             stated,
             json!({ "removed_name": "fx" }),
@@ -1618,20 +1689,16 @@ mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
-        let (status, body) = mcp_call(
+        let body = tool_call_result(
             runtime,
+            "remove_node",
             json!({
-                "jsonrpc": "2.0", "id": 37, "method": "tools/call",
-                "params": { "name": "remove_node", "arguments": {
-                    "name": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME
-                } }
+                "name": crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME
             }),
         )
         .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], true, "body={body}");
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], true, "body={body}");
+        let text = body["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("remove_node failed"), "{text}");
         assert!(
             text.contains(crate::control_plane_stub_support::STUB_ABSENT_NODE_NAME),
@@ -1645,16 +1712,8 @@ mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded = runtime.recorded_graph_mutations.clone();
 
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 35, "method": "tools/call",
-                "params": { "name": "connect", "arguments": { "from_node": "camera" } }
-            }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], true, "body={body}");
+        let body = tool_call_result(runtime, "connect", json!({ "from_node": "camera" })).await;
+        assert_eq!(body["isError"], true, "body={body}");
         assert!(
             recorded.lock().is_empty(),
             "a refused call must reach no runtime op"
@@ -1663,44 +1722,27 @@ mod tests {
 
     #[tokio::test]
     async fn tools_call_graph_returns_the_runtime_json() {
-        let (status, body) = mcp_call(
+        let body = tool_call_result(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "graph", "arguments": {} } }),
+            "graph",
+            json!({}),
         )
         .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false);
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], false);
+        let text = body["content"][0]["text"].as_str().unwrap();
         let graph: Value = serde_json::from_str(text).unwrap();
         assert!(graph["nodes"].is_array());
     }
 
     #[tokio::test]
-    async fn tools_call_unknown_tool_is_an_in_band_tool_error() {
-        let (status, body) = mcp_call(
+    async fn tools_call_unknown_tool_is_refused_as_invalid_params() {
+        let refusal = tool_call_refusal(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": { "name": "does_not_exist", "arguments": {} } }),
+            "does_not_exist",
+            json!({}),
         )
         .await;
-
-        // A missing TOOL is an isError result, not a JSON-RPC error — the call
-        // itself succeeded.
-        assert_eq!(status, StatusCode::OK);
-        assert!(body["error"].is_null());
-        assert_eq!(body["result"]["isError"], true);
-    }
-
-    #[tokio::test]
-    async fn unknown_jsonrpc_method_is_a_method_not_found_error() {
-        let (status, body) = mcp_call(
-            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            json!({ "jsonrpc": "2.0", "id": 6, "method": "no_such_method" }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["error"]["code"], -32601);
+        assert_eq!(refusal.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     }
 
     /// One 1024-sample stereo `f32` `AudioBlock`, msgpack-framed — the exact
@@ -1711,18 +1753,7 @@ mod tests {
         runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
         arguments: Value,
     ) -> Value {
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 10, "method": "tools/call",
-                "params": { "name": "tap", "arguments": arguments }
-            }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap())
-            .expect("tap result text is JSON")
+        first_text_block_json(&tool_call_result(runtime, "tap", arguments).await)
     }
 
     /// A bag is a msgpack map, so a decoder needs all of it or none — which
@@ -1875,17 +1906,8 @@ mod tests {
             7,
         ));
 
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 10, "method": "tools/call",
-                "params": { "name": "tap", "arguments": { "channel": "cam/frame" } }
-            }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        let result = &body["result"];
+        let body = tool_call_result(runtime, "tap", json!({ "channel": "cam/frame" })).await;
+        let result = &body;
         assert_eq!(result["isError"], false, "body={body}");
         let text = result["content"][0]["text"].as_str().unwrap();
         let sample: Value = serde_json::from_str(text).expect("tap result text is JSON");
@@ -1925,19 +1947,15 @@ mod tests {
         ]));
 
         let started = tokio::time::Instant::now();
-        let (status, body) = mcp_call(
+        let body = tool_call_result(
             runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 11, "method": "tools/call",
-                "params": { "name": "tap", "arguments": { "channel": "cam/frame", "count": 4 } }
-            }),
+            "tap",
+            json!({ "channel": "cam/frame", "count": 4 }),
         )
         .await;
         let elapsed = started.elapsed();
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], false, "body={body}");
+        let text = body["content"][0]["text"].as_str().unwrap();
         let sample: Value = serde_json::from_str(text).unwrap();
         assert_eq!(sample["requested"], 4);
         assert_eq!(
@@ -1956,19 +1974,15 @@ mod tests {
         // sample may fill before the window ends; either way the call returns
         // rather than hanging.
         let started = tokio::time::Instant::now();
-        let (status, body) = mcp_call(
+        let body = tool_call_result(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            json!({
-                "jsonrpc": "2.0", "id": 12, "method": "tools/call",
-                "params": { "name": "logs", "arguments": { "count": 4 } }
-            }),
+            "logs",
+            json!({ "count": 4 }),
         )
         .await;
         let elapsed = started.elapsed();
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], false, "body={body}");
+        let text = body["content"][0]["text"].as_str().unwrap();
         let sample: Value = serde_json::from_str(text).unwrap();
         assert_eq!(sample["requested"], 4);
         assert_eq!(
@@ -1993,19 +2007,15 @@ mod tests {
             }
         });
 
-        let (status, body) = mcp_call(
+        let body = tool_call_result(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            json!({
-                "jsonrpc": "2.0", "id": 13, "method": "tools/call",
-                "params": { "name": "logs", "arguments": { "count": 4 } }
-            }),
+            "logs",
+            json!({ "count": 4 }),
         )
         .await;
         publisher.abort();
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["isError"], false, "body={body}");
+        let text = body["content"][0]["text"].as_str().unwrap();
         let sample: Value = serde_json::from_str(text).unwrap();
         assert_eq!(sample["received"], 4, "sample={sample}");
         assert!(
@@ -2023,18 +2033,9 @@ mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
 
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 16, "method": "tools/call",
-                "params": { "name": "shutdown", "arguments": { "reason": "agent asked" } }
-            }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let body = tool_call_result(runtime, "shutdown", json!({ "reason": "agent asked" })).await;
+        assert_eq!(body["isError"], false, "body={body}");
+        let text = body["content"][0]["text"].as_str().unwrap();
         let outcome: Value = serde_json::from_str(text).unwrap();
         assert_eq!(outcome["status"], "RuntimeShutdownRequested");
         assert_eq!(outcome["reason"], "agent asked");
@@ -2053,24 +2054,14 @@ mod tests {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
 
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 17, "method": "tools/call",
-                "params": { "name": "shutdown", "arguments": { "reason": 42 } }
-            }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert!(body.get("error").is_none(), "not a JSON-RPC error: {body}");
-        assert_eq!(body["result"]["isError"], true, "body={body}");
+        let body = tool_call_result(runtime, "shutdown", json!({ "reason": 42 })).await;
+        assert_eq!(body["isError"], true, "body={body}");
         assert!(
-            body["result"]["content"][0]["text"]
+            body["content"][0]["text"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("shutdown arguments"),
-            "the tool error must name the offending argument set: {body}"
+                .contains("42"),
+            "the tool error must name the offending argument: {body}"
         );
         assert!(
             recorded_shutdowns.lock().is_empty(),
@@ -2093,28 +2084,17 @@ mod tests {
     /// `result` object and the `(surface id, cap)` pairs the tool handed the
     /// operation.
     async fn call_exchange_tool(arguments: Value) -> (Value, Vec<(String, Option<u32>)>) {
-        let (body, calls) =
-            call_exchange_tool_on(exchange_stub(StubSurfaceExchange::default()), arguments).await;
-        (body["result"].clone(), calls)
+        call_exchange_tool_on(exchange_stub(StubSurfaceExchange::default()), arguments).await
     }
 
-    /// The same call against a stub the test chose, returning the whole
-    /// JSON-RPC body — so a refusal test can assert it is an in-band tool
-    /// error and not a JSON-RPC one.
+    /// The same call against a stub the test chose, returning the tool result
+    /// and the exchange calls the stub recorded.
     async fn call_exchange_tool_on(
         runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
         arguments: Value,
     ) -> (Value, Vec<(String, Option<u32>)>) {
         let recorded = runtime.exchange.recorded_calls.clone();
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 20, "method": "tools/call",
-                "params": { "name": "exchange", "arguments": arguments }
-            }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
+        let body = tool_call_result(runtime, "exchange", arguments).await;
         let calls = recorded.lock().clone();
         (body, calls)
     }
@@ -2276,9 +2256,7 @@ mod tests {
             json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID }),
         )
         .await;
-
-        assert!(body.get("error").is_none(), "not a JSON-RPC error: {body}");
-        let result = &body["result"];
+        let result = &body;
         assert_eq!(result["isError"], true, "body={body}");
         let reported = result["content"][0]["text"].as_str().unwrap();
         assert!(
@@ -2302,35 +2280,33 @@ mod tests {
     /// silent: dropped, then answered with a differently-sized picture.
     #[tokio::test]
     async fn tools_call_exchange_with_arguments_the_schema_forbids_is_an_in_band_tool_error() {
-        for (case, arguments) in [
+        for (case, arguments, offending) in [
             (
                 "no surface id",
                 json!({ "downscale_long_edge_pixel_cap": 64 }),
+                "surface_id",
             ),
             (
                 "a cap of the wrong type",
                 json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID, "downscale_long_edge_pixel_cap": "big" }),
+                "big",
             ),
             (
                 "a misspelled cap key",
                 json!({ "surface_id": STUB_EXCHANGED_FRAME_SURFACE_ID, "downscal_long_edge_pixel_cap": 512 }),
+                "downscal_long_edge_pixel_cap",
             ),
         ] {
             let (body, calls) =
                 call_exchange_tool_on(exchange_stub(StubSurfaceExchange::default()), arguments)
                     .await;
-
+            assert_eq!(body["isError"], true, "{case}: {body}");
             assert!(
-                body.get("error").is_none(),
-                "{case} must not be a JSON-RPC error: {body}"
-            );
-            assert_eq!(body["result"]["isError"], true, "{case}: {body}");
-            assert!(
-                body["result"]["content"][0]["text"]
+                body["content"][0]["text"]
                     .as_str()
                     .unwrap_or_default()
-                    .contains("exchange arguments"),
-                "{case} must name the offending argument set: {body}"
+                    .contains(offending),
+                "{case} must name `{offending}`: {body}"
             );
             assert!(
                 calls.is_empty(),
@@ -2344,15 +2320,8 @@ mod tests {
     /// catalog beside it.
     #[tokio::test]
     async fn the_tap_tool_schema_is_unchanged_by_the_exchange_joining_the_catalog() {
-        let (_, body) = mcp_call(
-            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            json!({ "jsonrpc": "2.0", "id": 24, "method": "tools/list" }),
-        )
-        .await;
-
-        let tap = body["result"]["tools"]
-            .as_array()
-            .expect("tools array")
+        let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
+        let tap = tools
             .iter()
             .find(|tool| tool["name"] == "tap")
             .expect("the tap tool");
@@ -2444,14 +2413,8 @@ mod tests {
         let runtime = ControlPlaneMcpDispatchStubRuntime::new();
         *runtime.exported_graph.lock() = two_linked_nodes_graph_whose_link_a_helper_refused();
 
-        let (status, body) = mcp_call(
-            Arc::new(runtime),
-            json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": { "name": "graph", "arguments": {} } }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let body = tool_call_result(Arc::new(runtime), "graph", json!({})).await;
+        let text = body["content"][0]["text"].as_str().unwrap();
         let graph: Value = serde_json::from_str(text).unwrap();
         assert_eq!(graph["links"][0]["state"], "error");
         assert!(
@@ -2471,10 +2434,7 @@ mod tests {
         register_a_virtual_camera_sink_probe_once();
         let mut texts = vec![(
             "instructions",
-            initialize_result()["instructions"]
-                .as_str()
-                .expect("the handshake carries instructions")
-                .to_string(),
+            LOCAL_API_MCP_SERVER_INSTRUCTIONS.to_string(),
         )];
         for (recipe, arguments) in [
             (
@@ -2539,36 +2499,48 @@ mod tests {
         });
     }
 
-    async fn rpc_result(runtime: Arc<dyn RuntimeOperations>, method: &str, params: Value) -> Value {
-        let (status, body) = mcp_call(
-            runtime,
-            json!({ "jsonrpc": "2.0", "id": 40, "method": method, "params": params }),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(
-            body["error"].is_null(),
-            "{method} answered an error: {body}"
-        );
-        body["result"].clone()
+    async fn listed_resources_result(runtime: Arc<dyn RuntimeOperations>) -> Value {
+        let (_served, client) = connected_mcp_client(runtime).await;
+        wire_outcome(client.list_resources(None).await).unwrap()
     }
 
-    async fn rpc_error(runtime: Arc<dyn RuntimeOperations>, method: &str, params: Value) -> Value {
-        let (status, body) = mcp_call(
-            runtime,
-            json!({ "jsonrpc": "2.0", "id": 41, "method": method, "params": params }),
+    async fn listed_resource_templates_result(runtime: Arc<dyn RuntimeOperations>) -> Value {
+        let (_served, client) = connected_mcp_client(runtime).await;
+        wire_outcome(client.list_resource_templates(None).await).unwrap()
+    }
+
+    async fn listed_prompts_result(runtime: Arc<dyn RuntimeOperations>) -> Value {
+        let (_served, client) = connected_mcp_client(runtime).await;
+        wire_outcome(client.list_prompts(None).await).unwrap()
+    }
+
+    async fn resource_read_outcome(
+        runtime: Arc<dyn RuntimeOperations>,
+        uri: &str,
+    ) -> std::result::Result<Value, McpError> {
+        let (_served, client) = connected_mcp_client(runtime).await;
+        wire_outcome(
+            client
+                .read_resource(ReadResourceRequestParams::new(uri))
+                .await,
         )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(
-            body["result"].is_null(),
-            "{method} answered a result: {body}"
-        );
-        body["error"].clone()
+    }
+
+    async fn prompt_outcome(
+        runtime: Arc<dyn RuntimeOperations>,
+        prompt_name: &str,
+        arguments: Value,
+    ) -> std::result::Result<Value, McpError> {
+        let (_served, client) = connected_mcp_client(runtime).await;
+        let request = GetPromptRequestParams::new(prompt_name)
+            .with_arguments(arguments.as_object().cloned().unwrap_or_default());
+        wire_outcome(client.get_prompt(request).await)
     }
 
     async fn resource_document(runtime: Arc<dyn RuntimeOperations>, uri: &str) -> Value {
-        let result = rpc_result(runtime, "resources/read", json!({ "uri": uri })).await;
+        let result = resource_read_outcome(runtime, uri)
+            .await
+            .unwrap_or_else(|refusal| panic!("reading `{uri}` was refused: {refusal:?}"));
         let contents = result["contents"].as_array().expect("a contents array");
         assert_eq!(contents.len(), 1, "one document per resource: {result}");
         assert_eq!(contents[0]["uri"], uri);
@@ -2582,12 +2554,9 @@ mod tests {
         prompt_name: &str,
         arguments: Value,
     ) -> String {
-        let result = rpc_result(
-            runtime,
-            "prompts/get",
-            json!({ "name": prompt_name, "arguments": arguments }),
-        )
-        .await;
+        let result = prompt_outcome(runtime, prompt_name, arguments)
+            .await
+            .unwrap_or_else(|refusal| panic!("`{prompt_name}` was refused: {refusal:?}"));
         let messages = result["messages"].as_array().expect("a messages array");
         assert_eq!(messages.len(), 1, "{result}");
         assert_eq!(messages[0]["role"], "user");
@@ -2612,20 +2581,17 @@ mod tests {
     }
 
     fn served_tool_names() -> Vec<String> {
-        tool_definitions()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap().to_string())
+        LocalApiMcpServerHandler::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.into_owned())
             .collect()
     }
 
     #[tokio::test]
     async fn resources_list_names_the_node_catalog_and_the_live_graph() {
-        let result = rpc_result(
-            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            "resources/list",
-            json!({}),
-        )
-        .await;
+        let result =
+            listed_resources_result(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
 
         let uris: Vec<&str> = result["resources"]
             .as_array()
@@ -2643,13 +2609,10 @@ mod tests {
             );
         }
 
-        let templates = rpc_result(
-            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            "resources/templates/list",
-            json!({}),
-        )
-        .await;
-        assert_eq!(templates, json!({ "resourceTemplates": [] }));
+        let templates =
+            listed_resource_templates_result(Arc::new(ControlPlaneMcpDispatchStubRuntime::new()))
+                .await;
+        assert_eq!(templates["resourceTemplates"], json!([]), "{templates}");
     }
 
     /// Mental revert: render the catalog once at startup and cache it, and the
@@ -2719,30 +2682,23 @@ mod tests {
 
     #[tokio::test]
     async fn reading_a_resource_the_node_does_not_serve_is_refused_naming_the_uri() {
-        let error = rpc_error(
+        let refusal = resource_read_outcome(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            "resources/read",
-            json!({ "uri": "streamlib://contracts" }),
+            "streamlib://contracts",
         )
-        .await;
-        assert_eq!(error["code"], -32002);
+        .await
+        .expect_err("an unserved uri is refused");
+        assert_eq!(refusal.code, rmcp::model::ErrorCode::INVALID_PARAMS);
         assert!(
-            error["message"]
-                .as_str()
-                .unwrap()
-                .contains("streamlib://contracts"),
-            "{error}"
+            refusal.message.contains("streamlib://contracts"),
+            "{refusal:?}"
         );
     }
 
     #[tokio::test]
     async fn prompts_list_names_the_four_recipes_and_their_arguments() {
-        let result = rpc_result(
-            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
-            "prompts/list",
-            json!({}),
-        )
-        .await;
+        let result =
+            listed_prompts_result(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
         let prompts = result["prompts"].as_array().expect("a prompts array");
 
         let described: Vec<(String, Vec<(String, bool)>)> = prompts
@@ -2771,31 +2727,32 @@ mod tests {
                     .collect::<Vec<_>>(),
             )
         };
-        assert_eq!(
-            described,
-            vec![
-                owned(
-                    "insert_node_between_linked_nodes",
-                    &[("link_id", true), ("type", true)]
-                ),
-                owned(
-                    "fan_output_to_another_consumer",
-                    &[("from_node", true), ("from_port", true), ("type", true)]
-                ),
-                owned(
-                    "show_channel_on_virtual_camera",
-                    &[
-                        ("from_node", true),
-                        ("from_port", true),
-                        ("camera_name", false)
-                    ]
-                ),
-                owned(
-                    "look_at_what_a_channel_carries",
-                    &[("from_node", true), ("from_port", true)]
-                ),
-            ]
-        );
+        let mut expected = vec![
+            owned(
+                "insert_node_between_linked_nodes",
+                &[("link_id", true), ("type", true)],
+            ),
+            owned(
+                "fan_output_to_another_consumer",
+                &[("from_node", true), ("from_port", true), ("type", true)],
+            ),
+            owned(
+                "show_channel_on_virtual_camera",
+                &[
+                    ("from_node", true),
+                    ("from_port", true),
+                    ("camera_name", false),
+                ],
+            ),
+            owned(
+                "look_at_what_a_channel_carries",
+                &[("from_node", true), ("from_port", true)],
+            ),
+        ];
+        let mut described = described;
+        described.sort();
+        expected.sort();
+        assert_eq!(described, expected);
     }
 
     /// A prompt is a recipe over the tool set, never a verb of its own: every
@@ -2999,19 +2956,26 @@ mod tests {
                 "an argument that is not a string",
                 "look_at_what_a_channel_carries",
                 json!({ "from_node": 7, "from_port": "video" }),
-                "from_node",
+                "7",
+            ),
+            (
+                "a misspelled argument",
+                "show_channel_on_virtual_camera",
+                json!({ "from_node": "pattern", "from_port": "video", "camera_nme": "desk" }),
+                "camera_nme",
             ),
         ] {
-            let error = rpc_error(
-                stub_serving_two_linked_nodes(),
-                "prompts/get",
-                json!({ "name": prompt_name, "arguments": arguments }),
-            )
-            .await;
-            assert_eq!(error["code"], -32602, "{case}: {error}");
+            let refusal = prompt_outcome(stub_serving_two_linked_nodes(), prompt_name, arguments)
+                .await
+                .expect_err(case);
+            assert_eq!(
+                refusal.code,
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "{case}: {refusal:?}"
+            );
             assert!(
-                error["message"].as_str().unwrap().contains(named),
-                "{case} must be refused naming `{named}`: {error}"
+                refusal.message.contains(named),
+                "{case} must be refused naming `{named}`: {refusal:?}"
             );
         }
     }
