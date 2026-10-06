@@ -5,6 +5,8 @@
 //! `@node` declares a Python port, and `connect` reaches it by the spelling the
 //! author declared or by the cast.
 
+#![deny(non_camel_case_types)]
+
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
     PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,

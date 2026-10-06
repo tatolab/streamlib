@@ -4404,6 +4404,7 @@ dependencies = [
  "serde_json",
  "streamlib-processor-schema",
  "syn 2.0.117",
+ "unicode-normalization",
 ]
 
 [[package]]

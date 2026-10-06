@@ -286,7 +286,10 @@ fn generate_port_marker_module(
         })
         .collect();
 
+    // A marker is named by the author's spelling, `video_in` as often as
+    // `VideoIn`, and its span is the author's literal, so rustc would lint it.
     quote! {
+        #[allow(non_camel_case_types)]
         pub mod #module_name {
             #(#port_markers)*
         }

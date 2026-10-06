@@ -35,6 +35,7 @@ use streamlib_processor_schema::{
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
 use syn::{Ident, LitInt, LitStr, Path, Token, parenthesized};
+use unicode_normalization::UnicodeNormalization;
 
 /// Which side of a link a port sits on. `delivery_profile` is a consumer-side
 /// setting only valid on an `input(...)`; the grammar rejects it on an
@@ -274,12 +275,12 @@ fn refuse_ports_that_cast_alike<'port>(
 ) -> syn::Result<()> {
     let mut declared_marker_ident_by_cast_name = std::collections::HashMap::new();
     for port in ports {
-        let Some(first_spelling) = declared_marker_ident_by_cast_name
+        let Some(first_declared_marker_ident) = declared_marker_ident_by_cast_name
             .insert(port.cast_name.as_str(), &port.declared_marker_ident)
         else {
             continue;
         };
-        let refusal = if *first_spelling == port.declared_marker_ident {
+        let refusal = if *first_declared_marker_ident == port.declared_marker_ident {
             format!(
                 "the port name `{}` is declared more than once — every port, input or output, \
                  needs its own name",
@@ -287,7 +288,7 @@ fn refuse_ports_that_cast_alike<'port>(
             )
         } else {
             format!(
-                "the ports `{first_spelling}` and `{}` both cast to `{}` — a port name is \
+                "the ports `{first_declared_marker_ident}` and `{}` both cast to `{}` — a port name is \
                  lowercased with its accents dropped and anything outside a-z 0-9 - . _ ~ \
                  turned into '-', so two ports need names that stay apart once cast",
                 port.declared_marker_ident, port.cast_name
@@ -350,7 +351,9 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     parenthesized!(content in input);
 
     let name_lit: LitStr = content.parse()?;
-    let name = name_lit.value();
+    // rustc's lexer NFC-normalizes an identifier and proc_macro2's fallback
+    // does not, so the spelling is normalized first for the two to agree.
+    let name: String = name_lit.value().nfc().collect();
     // `parse_str` skips whitespace and comments and lexes `r#`, none of which
     // the marker's `Ident` can carry, so only a spelling that parses back to
     // itself is one.
@@ -360,8 +363,8 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
             return Err(syn::Error::new(
                 name_lit.span(),
                 format!(
-                    "port `{name}` is not a plain Rust identifier — the declared name is the \
-                     port marker's type (`{}::{name}`), so it can carry no space, punctuation, \
+                    "port {name:?} is not a plain Rust identifier — the declared name is the \
+                     port marker's type (`{}::<name>`), so it can carry no space, punctuation, \
                      keyword or `r#` prefix",
                     direction.port_marker_module_ident()
                 ),
@@ -970,11 +973,23 @@ mod tests {
             });
             assert!(
                 msg.contains(&format!(
-                    "port `{not_an_identifier}` is not a plain Rust identifier"
+                    "port {not_an_identifier:?} is not a plain Rust identifier"
                 )),
                 "{not_an_identifier:?} got: {msg}"
             );
         }
+    }
+
+    /// A decomposed accent names the same identifier rustc's lexer composes it
+    /// into, so it is accepted as that identifier.
+    #[test]
+    fn a_decomposed_spelling_is_declared_as_its_composed_identifier() {
+        let parsed = parse_ok(quote! {
+            execution = manual,
+            output("Vide\u{301}oOut"),
+        });
+        assert_eq!(parsed.outputs[0].declared_marker_ident, "Vid\u{e9}oOut");
+        assert_eq!(parsed.outputs[0].cast_name, "videoout");
     }
 
     #[test]
