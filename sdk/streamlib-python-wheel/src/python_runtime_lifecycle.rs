@@ -783,8 +783,12 @@ impl PythonRuntimeHandle {
     /// elapses first; the message names the node and the state it was
     /// left in, so forgetting `run()` altogether reads as every node
     /// still `Pending`.
-    #[pyo3(signature = (*, timeout = 30.0))]
-    fn wait_until_every_node_is_running(&self, python: Python<'_>, timeout: f64) -> PyResult<()> {
+    #[pyo3(name = "wait_until_every_node_is_running", signature = (*, timeout = 30.0))]
+    fn wait_until_every_processor_is_running(
+        &self,
+        python: Python<'_>,
+        timeout: f64,
+    ) -> PyResult<()> {
         // Checked rather than `from_secs_f64`, which panics on a negative, a
         // NaN, or a value too large for a `Duration` — all reachable from
         // Python, none of them a reason to abort the interpreter.
