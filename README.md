@@ -50,8 +50,7 @@ and the data-collection rigs that train them.
   redeploy.
 
 > **Alpha.** APIs will change. There is no fleet orchestration, device-to-device transport, OTA
-> deployment, ROS integration, aarch64/Jetson wheel, or control-plane authentication —
-> see [what ships today](#what-ships-today).
+> deployment, ROS integration, or aarch64/Jetson wheel — see [what ships today](#what-ships-today).
 
 ## Built for
 
@@ -213,8 +212,8 @@ rather than off an offline pipeline that has already drifted from it.
 $ claude mcp add --transport http streamlib http://127.0.0.1:9000/mcp
 ```
 
-Served at `POST /mcp`, mounted with the node and sharing its lifecycle — there is no bridge
-process to run; the node's log names the port it actually bound. The tools are
+Served at `POST /mcp` on the node's local API socket, mounted with the node and sharing its
+lifecycle — there is no bridge process to run. The tools are
 `graph`, `tap`, `logs`, `exchange` and `shutdown` to observe, and `add_node`, `connect`,
 `disconnect` and `remove_node` to change the running graph: an agent writes a processor
 class into a module beside `stream.py` — or `pip install`s one — names it to the node by its
@@ -375,7 +374,6 @@ These do not exist yet:
 | **Fleet & networking** | No device-to-device transport, no orchestration, no OTA. Undesigned. The one decision made: cross-machine interop happens on the wire, never in-graph. |
 | **ROS** | No integration of any kind. |
 | **Jetson / aarch64** | No wheel published. x86_64 only today. |
-| **Control-plane auth** | Undesigned. A node binds all interfaces and does not authenticate callers. |
 | **GPU kernels from Python** | Compute, graphics, ray tracing, and acceleration structures exist Rust-side. The Python kernel API is in flight, not shipped. |
 | **DMA-BUF import** | Export from Python works; importing a foreign fd into a graph does not yet. |
 
