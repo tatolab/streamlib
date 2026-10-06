@@ -35,7 +35,7 @@
 # that cannot be asked at all is an error, before any node starts.
 #
 # Usage:
-#   ./verify_audio_loopback.sh [--count N] [--port PORT]
+#   ./verify_audio_loopback.sh [--count N]
 #                              [--path tap-muted|tap-audible|acoustic]
 #
 # INJECT_BUG=silence|drop|gain publishes a deliberately broken signal, so a run
@@ -52,12 +52,10 @@ PYTHON="${PYTHON:-python3}"
 # sample window in practice, which is why the signal itself is measured off the
 # waveform the node writes rather than off the tap.
 BAG_COUNT=64
-CONTROL_PORT="${CONTROL_PORT:-9077}"
 LOOPBACK_PATH=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --count) BAG_COUNT="$2"; shift 2 ;;
-        --port) CONTROL_PORT="$2"; shift 2 ;;
         --path) LOOPBACK_PATH="$2"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -86,7 +84,6 @@ fi
 # suffix under $TMPDIR — so the directory is where the skill looks on both.
 TEMPORARY_DIRECTORY="${TMPDIR:-/tmp}"
 OUTPUT_DIR="$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-loopback-XXXXXX")"
-CONTROL_URL="http://127.0.0.1:$CONTROL_PORT"
 
 if ! "$HERE/virtual_audio_device.sh" check >&2; then
     echo "SKIP: no virtual audio device available on this machine" >&2
@@ -172,35 +169,71 @@ if [ "$PLATFORM" = Darwin ]; then
             STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$CAPTURE_DEVICE_ID" \
             STREAMLIB_COREAUDIO_PROCESS_TAP_MUTE_BEHAVIOUR="$PROCESS_TAP_MUTE_BEHAVIOUR" \
             STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
-            CONTROL_PORT="$CONTROL_PORT" \
             STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
             exec "$PYTHON" audio_loopback_node.py
     ) >"$OUTPUT_DIR/node.log" 2>&1 &
 else
     echo "starting the loopback node against $SINK" >&2
+    # `exec`, so NODE_PID is the node itself and matches its registry entry.
     (
         cd "$HERE" || exit 1
-        STREAMLIB_AUDIO_SINK="$SINK" CONTROL_PORT="$CONTROL_PORT" \
+        STREAMLIB_AUDIO_SINK="$SINK" \
             STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
             STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
-            "$PYTHON" audio_loopback_node.py
+            exec "$PYTHON" audio_loopback_node.py
     ) >"$OUTPUT_DIR/node.log" 2>&1 &
 fi
 NODE_PID=$!
 
+# The runtime_id of the live node the launched process runs: the pid itself, or
+# its child when the interpreter is a wrapper that forks rather than execs.
+runtime_id_of_the_node_launched_as() {
+    "$PYTHON" -c '
+import subprocess, sys
+from streamlib._node_registry import live_nodes
+
+launched_pid = int(sys.argv[1])
+
+def parent_pid(pid):
+    ps = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
+    return int(ps.stdout.strip() or 0)
+
+matching = [
+    node.runtime_id
+    for node in live_nodes()
+    if launched_pid in (node.pid, parent_pid(node.pid))
+]
+if len(matching) != 1:
+    sys.exit(1)
+print(matching[0])
+' "$1"
+}
+
 # Polled rather than slept: the node has a GPU context and an iceoryx2 node to
 # bring up, and a fixed sleep is either flaky or slow.
+RUNTIME_ID=""
+NODE_ANSWERED=0
 for _ in $(seq 60); do
     if ! kill -0 "$NODE_PID" 2>/dev/null; then
-        echo "ERROR: the loopback node exited before serving its control plane" >&2
+        echo "ERROR: the loopback node exited before serving its local API" >&2
         cat "$OUTPUT_DIR/node.log" >&2
         exit 1
     fi
-    if "$PYTHON" -m streamlib.cli graph --url "$CONTROL_URL" >/dev/null 2>&1; then
+    if [ -z "$RUNTIME_ID" ]; then
+        RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$NODE_PID")" || RUNTIME_ID=""
+    fi
+    if [ -n "$RUNTIME_ID" ] \
+        && "$PYTHON" -m streamlib.cli graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        NODE_ANSWERED=1
         break
     fi
     sleep 0.5
 done
+if [ "$NODE_ANSWERED" -ne 1 ]; then
+    echo "ERROR: the loopback node never answered over its local API socket" >&2
+    tail -40 "$OUTPUT_DIR/node.log" >&2
+    exit 1
+fi
 
 # The first line in node.log matching `pattern`, polled for while the node is
 # up: the audio built-ins probe and open their devices in setup, which can land
@@ -280,7 +313,7 @@ fi
 # First verdict: the block-level contract on the microphone's own port —
 # cadence, timestamp continuity, and a frame the engine did not re-stamp.
 if ! "$HERE/verify_audio_channel.sh" microphonesource \
-    --url "$CONTROL_URL" --count "$BAG_COUNT" --port audio \
+    --node "$RUNTIME_ID" --count "$BAG_COUNT" --port audio \
     --expect-frame-not-restamped >&2; then
     echo "ERROR: the microphone's channel failed its block-level contract" >&2
     exit 1

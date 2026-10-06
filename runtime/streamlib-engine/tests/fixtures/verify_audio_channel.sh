@@ -10,10 +10,13 @@
 # doing the checking — the tap reads what the source put on the wire.
 #
 # Usage:
-#   ./verify_audio_channel.sh <node-name> [--url URL] [--count N]
-#                             [--port NAME] [--expect-frame-not-restamped]
+#   ./verify_audio_channel.sh <node-name> [--node RUNTIME_NAME_OR_ID]
+#                             [--count N] [--port NAME]
+#                             [--expect-frame-not-restamped]
 #
-# `<node-name>` is the node's `name` as `streamlib graph` lists it. `--port`
+# `<node-name>` is the node's `name` as `streamlib graph` lists it. `--node`
+# picks the running runtime the way the CLI's own `--node` does; without it the
+# sole live runtime is the one read. `--port`
 # names which output to tap. Without it the node must declare exactly one,
 # because guessing at a node that declares several would tap whichever the
 # graph happened to list first.
@@ -29,15 +32,15 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3}"
 
-NODE_NAME="${1:?usage: verify_audio_channel.sh <node-name> [--url URL] [--count N]}"
+NODE_NAME="${1:?usage: verify_audio_channel.sh <node-name> [--node RUNTIME_NAME_OR_ID] [--count N]}"
 shift
-CONTROL_URL="http://127.0.0.1:9000"
+RUNTIME_NAME_OR_ID=""
 BAG_COUNT=8
 OUTPUT_PORT=""
 EXPECT_FRAME_NOT_RESTAMPED=""
 while [ $# -gt 0 ]; do
     case "$1" in
-        --url) CONTROL_URL="$2"; shift 2 ;;
+        --node) RUNTIME_NAME_OR_ID="$2"; shift 2 ;;
         --count) BAG_COUNT="$2"; shift 2 ;;
         --port) OUTPUT_PORT="$2"; shift 2 ;;
         --expect-frame-not-restamped) EXPECT_FRAME_NOT_RESTAMPED="--expect-frame-not-restamped"; shift ;;
@@ -58,12 +61,20 @@ OUTPUT_DIR="$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-channel-XXXXXX
 read -r -d '' CHANNEL_RESOLVING_PROGRAM <<'PY'
 import json, sys
 
-# The engine's own client rather than a hand-written URL, so this cannot drift
-# from the endpoint `streamlib graph` actually drives.
-from streamlib._control_plane_client import call_tool
+# The engine's own resolver and client, so this cannot drift from the node and
+# socket `streamlib graph --node` actually drives.
+from streamlib._control_plane_client import (
+    ControlPlaneError,
+    call_tool,
+    resolve_control_plane_endpoint,
+)
 
-control_url, wanted, requested_port = sys.argv[1], sys.argv[2], sys.argv[3]
-graph = json.loads(call_tool(control_url, "graph", {}))
+runtime_name_or_id, wanted, requested_port = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    endpoint = resolve_control_plane_endpoint(None, runtime_name_or_id or None)
+    graph = json.loads(call_tool(endpoint, "graph", {}))
+except ControlPlaneError as control_plane_error:
+    sys.exit(str(control_plane_error))
 for node in graph["nodes"]:
     if node["name"] != wanted:
         continue
@@ -92,11 +103,17 @@ else:
     sys.exit(f"no node named {wanted} in the running graph")
 PY
 CHANNEL="$("$PYTHON" -c "$CHANNEL_RESOLVING_PROGRAM" \
-    "$CONTROL_URL" "$NODE_NAME" "$OUTPUT_PORT")" || exit 1
+    "$RUNTIME_NAME_OR_ID" "$NODE_NAME" "$OUTPUT_PORT")" || exit 1
+
+RUNTIME_SELECTION=()
+if [ -n "$RUNTIME_NAME_OR_ID" ]; then
+    RUNTIME_SELECTION=(--node "$RUNTIME_NAME_OR_ID")
+fi
 
 echo "tapping $CHANNEL for $BAG_COUNT bags" >&2
 if ! "$PYTHON" -m streamlib.cli tap "$CHANNEL" --count "$BAG_COUNT" \
-    --url "$CONTROL_URL" > "$OUTPUT_DIR/tapped.json" 2>"$OUTPUT_DIR/tap.err"; then
+    ${RUNTIME_SELECTION[@]+"${RUNTIME_SELECTION[@]}"} \
+    > "$OUTPUT_DIR/tapped.json" 2>"$OUTPUT_DIR/tap.err"; then
     cat "$OUTPUT_DIR/tap.err" >&2
     exit 1
 fi

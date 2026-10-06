@@ -61,7 +61,6 @@
 #                         rounds and each round is a ~500 ms window, so at the
 #                         5 fps vivid negotiates about 19 bags reach the run.
 #                         Asking for more returns short, which is a failure.
-#   CONTROL_PLANE_PORT — port the rig's control plane binds (default 9402)
 #   RUN_SECONDS        — rig budget (default 60)
 #   TOLERANCE          — abs channel-mean drift bound on [0,1] scale
 #                         (default 0.05; the bug-injection negative test must
@@ -97,7 +96,6 @@ CODEC="${2:-h264}"
 
 SAMPLE_COUNT="${SAMPLE_COUNT:-6}"
 SAMPLE_EVERY="${SAMPLE_EVERY:-2}"
-CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT:-9402}"
 RUN_SECONDS="${RUN_SECONDS:-60}"
 TOLERANCE="${TOLERANCE:-0.05}"
 BASELINE_CAPTURE="${BASELINE_CAPTURE:-}"
@@ -156,16 +154,17 @@ if [ ! -x "$STREAMLIB_CLI" ]; then
     echo "[vivid-color] SKIP: no streamlib CLI on PATH or at $STREAMLIB_CLI" >&2
     exit 77
 fi
+# The interpreter beside the CLI reads the node registry and runs the python
+# arm, because that is the one whose environment the CLI ships in; a bare
+# `python3` can be an unrelated one that happens to be first on PATH.
+STREAMLIB_CLI_PYTHON="$(dirname "$STREAMLIB_CLI")/python3"
+if [ ! -x "$STREAMLIB_CLI_PYTHON" ]; then
+    STREAMLIB_CLI_PYTHON="$(command -v python3)"
+fi
 
 FIXTURE_NODE_PYTHON=""
 if [ "$PIPELINE" = "python" ]; then
-    # The interpreter beside the CLI, because that is the one whose environment
-    # the CLI ships in; a bare `python3` can be an unrelated one that happens to
-    # be first on PATH.
-    FIXTURE_NODE_PYTHON="$(dirname "$STREAMLIB_CLI")/python3"
-    if [ ! -x "$FIXTURE_NODE_PYTHON" ]; then
-        FIXTURE_NODE_PYTHON="$(command -v python3)"
-    fi
+    FIXTURE_NODE_PYTHON="$STREAMLIB_CLI_PYTHON"
     # This arm scores whatever `_engine.abi3.so` that interpreter imports, so an
     # extension predating the codec markers would be measured and reported as a
     # PASS for code that is not in the tree. Refused by name instead.
@@ -211,7 +210,6 @@ fi
 mkdir -p "$OUTPUT_DIR"
 EXCHANGED_DIR="$OUTPUT_DIR/exchanged"
 LOG_FILE="$OUTPUT_DIR/pipeline.log"
-CONTROL_PLANE_URL="http://127.0.0.1:$CONTROL_PLANE_PORT"
 
 # Force vivid into the requested pattern; restore on exit. Captured value
 # covers the case where another rig left vivid in a non-default state — we
@@ -264,7 +262,6 @@ echo "[vivid-color] Vivid device:      $VIVID_DEVICE"
 echo "[vivid-color] Test pattern:      $VIVID_TEST_PATTERN (was $ORIGINAL_PATTERN, restored on exit)"
 echo "[vivid-color] Codec:             $CODEC"
 echo "[vivid-color] Pipeline:          $PIPELINE"
-echo "[vivid-color] Control plane:     $CONTROL_PLANE_URL"
 
 # ── Build ────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
@@ -297,7 +294,6 @@ if [ "$PIPELINE" = "python" ]; then
         "$FIXTURE_NODE_PYTHON" "$SCRIPT_DIR/codec_roundtrip_node.py"
         --codec "$CODEC"
         --camera "$VIVID_DEVICE"
-        --control-plane-port "$CONTROL_PLANE_PORT"
     )
 else
     PIPELINE_LAUNCH_COMMAND=(
@@ -305,7 +301,6 @@ else
         --source camera
         --codec "$CODEC"
         --camera "$VIVID_DEVICE"
-        --control-plane-port "$CONTROL_PLANE_PORT"
     )
 fi
 DISPLAY="${DISPLAY:-:0}" \
@@ -315,17 +310,54 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         > "$LOG_FILE" 2>&1 &
 RIG_PID=$!
 
+# The runtime_id of the live node the launched process runs. `timeout` wraps
+# either arm, so the runtime is the launched pid's child rather than the pid
+# itself.
+runtime_id_of_the_node_launched_as() {
+    "$STREAMLIB_CLI_PYTHON" -c '
+import subprocess, sys
+from streamlib._node_registry import live_nodes
+
+launched_pid = int(sys.argv[1])
+
+def parent_pid(pid):
+    ps = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
+    return int(ps.stdout.strip() or 0)
+
+matching = [
+    node.runtime_id
+    for node in live_nodes()
+    if launched_pid in (node.pid, parent_pid(node.pid))
+]
+if len(matching) != 1:
+    sys.exit(1)
+print(matching[0])
+' "$1"
+}
+
+RUNTIME_ID=""
+NODE_ANSWERED=0
 for _ in $(seq 1 60); do
-    if "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" >/dev/null 2>&1; then
+    kill -0 "$RIG_PID" 2>/dev/null || break
+    if [ -z "$RUNTIME_ID" ]; then
+        RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$RIG_PID")" || RUNTIME_ID=""
+    fi
+    if [ -n "$RUNTIME_ID" ] && "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        NODE_ANSWERED=1
         break
     fi
     sleep 0.5
 done
+if [ "$NODE_ANSWERED" -ne 1 ]; then
+    echo "[vivid-color] FAIL: the rig never answered over its local API socket" >&2
+    tail -30 "$LOG_FILE" >&2
+    exit 1
+fi
 
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
-DECODED_CHANNEL="$("$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
+DECODED_CHANNEL="$("$STREAMLIB_CLI" graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -346,7 +378,7 @@ if ! "$STREAMLIB_CLI" exchange \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \
         --every "$SAMPLE_EVERY" \
-        --url "$CONTROL_PLANE_URL" \
+        --node "$RUNTIME_ID" \
         > "$OUTPUT_DIR/exchanged_paths.txt" 2> "$OUTPUT_DIR/exchange.log"; then
     echo "[vivid-color] FAIL: exchanged fewer frames than asked for" >&2
     cat "$OUTPUT_DIR/exchange.log" >&2

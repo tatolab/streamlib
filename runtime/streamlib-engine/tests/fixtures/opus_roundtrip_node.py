@@ -70,7 +70,6 @@ def main() -> None:
         "captured_waveform",
         help="where to write the WAV the analysis then scores",
     )
-    parser.add_argument("--control-plane-port", type=int, default=9000)
     parser.add_argument(
         "--record-seconds",
         type=float,
@@ -103,11 +102,7 @@ def main() -> None:
     runtime = streamlib.Runtime()
     runtime.load(graph)
 
-    # Loopback rather than the default every interface: this node exists to be
-    # tapped from the machine it runs on, and it carries no authentication.
-    runtime.host_control_plane(
-        bind_host="127.0.0.1", bind_port=arguments.control_plane_port
-    )
+    runtime.host_control_plane()
     runtime.run()
 
 
