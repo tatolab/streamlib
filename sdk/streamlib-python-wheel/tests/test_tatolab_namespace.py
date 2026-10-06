@@ -181,7 +181,11 @@ def test_every_public_tatolab_module_is_swept_for_processor():
 
 
 def test_no_name_tatolab_publishes_nor_any_public_member_of_one_says_processor():
-    names_saying_processor: "list[str]" = []
+    names_saying_processor: "list[str]" = [
+        public_module.__name__
+        for public_module in _public_tatolab_modules()
+        if "processor" in public_module.__name__.rsplit(".", 1)[-1].lower()
+    ]
     for qualified_name, exported in _public_names_tatolab_publishes():
         if "processor" in qualified_name.rsplit(".", 1)[1].lower():
             names_saying_processor.append(qualified_name)
@@ -198,11 +202,6 @@ def test_no_name_tatolab_publishes_nor_any_public_member_of_one_says_processor()
         )
 
     assert names_saying_processor == []
-
-
-# Public parameters that say "processor" and are not this rename's to change.
-# Each is named here so the sweep below stays exhaustive for everything else.
-PUBLIC_PARAMETERS_SAYING_PROCESSOR_OUTSIDE_THIS_RENAME: "tuple[str, ...]" = ()
 
 
 def _public_callables_tatolab_publishes() -> "list[tuple[str, Callable[..., object]]]":
@@ -247,11 +246,7 @@ def test_no_parameter_of_a_public_callable_tatolab_publishes_says_processor():
         if "processor" in parameter_name.lower()
     ]
 
-    assert [
-        parameter
-        for parameter in parameters_saying_processor
-        if parameter not in PUBLIC_PARAMETERS_SAYING_PROCESSOR_OUTSIDE_THIS_RENAME
-    ] == []
+    assert parameters_saying_processor == []
 
 
 def test_every_engine_class_tatolab_stream_publishes_names_tatolab_stream_as_its_module():
