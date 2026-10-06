@@ -830,18 +830,12 @@ mod linux_rig {
         }
     }
 
-    /// The port the hosted control plane binds, so `streamlib nodes` finds
-    /// the run. The wheel's own default; the api-server increments on
-    /// collision.
-    const DEFAULT_CONTROL_PLANE_PORT: u16 = 9000;
-
     /// What the command line asked for.
     struct RoundTripRigArguments {
         source_arm: RoundTripSourceArm,
         codec_arm: RoundTripCodecArm,
         fixtures_directory: String,
         frames_per_reference: u32,
-        control_plane_port: u16,
         /// V4L2 node the camera arm opens. Absent: the first capture-capable
         /// device the engine finds — which on a rig carrying both a virtual
         /// and a real camera is whichever enumerates first, so the arm that
@@ -863,7 +857,6 @@ mod linux_rig {
             codec_arm: RoundTripCodecArm::H264,
             fixtures_directory: source_defaults.fixtures_directory,
             frames_per_reference: source_defaults.frames_per_reference,
-            control_plane_port: DEFAULT_CONTROL_PLANE_PORT,
             camera_device_id: None,
             camera_max_width: None,
             camera_max_height: None,
@@ -925,11 +918,6 @@ mod linux_rig {
                             Error::Runtime("--camera-max-height takes a whole number".into())
                         })?)
                 }
-                "--control-plane-port" => {
-                    arguments.control_plane_port = next_value_for_this_flag()?
-                        .parse()
-                        .map_err(|_| Error::Runtime("--control-plane-port takes a port".into()))?
-                }
                 "--frames-per-reference" => {
                     arguments.frames_per_reference =
                         next_value_for_this_flag()?.parse().map_err(|_| {
@@ -939,8 +927,8 @@ mod linux_rig {
                 unknown => {
                     return Err(Error::Runtime(format!(
                         "unknown flag {unknown}; the rig takes --source, --codec, --camera, \
-                         --camera-max-width, --camera-max-height, --fixtures, \
-                         --frames-per-reference and --control-plane-port"
+                         --camera-max-width, --camera-max-height, --fixtures and \
+                         --frames-per-reference"
                     )));
                 }
             }
@@ -1015,10 +1003,7 @@ mod linux_rig {
         // exchanging its surface ids for exact pixels.
         streamlib_api_server::control_plane_host::register_api_server_control_plane_processor_on_runtime(
             app.runner(),
-            streamlib_api_server::control_plane_host::ApiServerControlPlaneHostConfig {
-                bind_host: "127.0.0.1".to_string(),
-                bind_port: arguments.control_plane_port,
-            },
+            streamlib_api_server::control_plane_host::ApiServerControlPlaneHostConfig::default(),
         )?;
 
         match &encoder {

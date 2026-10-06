@@ -17,6 +17,16 @@ pub struct ApiServerControlPlaneHostConfig {
     pub bind_port: u16,
 }
 
+impl Default for ApiServerControlPlaneHostConfig {
+    /// The wheel's `host_control_plane()` defaults: every interface, port 9000.
+    fn default() -> Self {
+        Self {
+            bind_host: "0.0.0.0".to_string(),
+            bind_port: 9000,
+        }
+    }
+}
+
 /// Register the `ApiServer` processor type in-process and add one instance to
 /// `runtime`, so that starting the runtime binds a control endpoint and
 /// publishes the node-registry entry `streamlib nodes` discovers, under the
