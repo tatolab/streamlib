@@ -43,7 +43,7 @@ from streamlib._control_plane_client import (
     call_tool,
     control_plane_answers,
     fetch_surface_image_png_bytes,
-    resolve_control_plane_endpoint,
+    resolve_local_api_socket_of_requested_node,
 )
 from streamlib import _node_registry
 from streamlib._node_registry import registry_directory, scan_check_and_prune
@@ -245,7 +245,7 @@ def targeted_stub_control_plane(stub_control_plane, monkeypatch):
         server = stub_control_plane(**kwargs)
         monkeypatch.setattr(
             cli,
-            "resolve_control_plane_endpoint",
+            "resolve_local_api_socket_of_requested_node",
             lambda requested_node: server.local_api_socket,
         )
         return server
@@ -407,7 +407,7 @@ def test_the_sole_live_node_is_the_default_target(isolated_registry, stub_contro
     server = stub_control_plane()
     write_registry_entry(isolated_registry, "Ronly", server.local_api_socket_path)
 
-    assert resolve_control_plane_endpoint(None) == server.local_api_socket
+    assert resolve_local_api_socket_of_requested_node(None) == server.local_api_socket
 
 
 def test_a_named_node_resolves_to_its_local_api_socket(isolated_registry, stub_control_plane):
@@ -416,7 +416,7 @@ def test_a_named_node_resolves_to_its_local_api_socket(isolated_registry, stub_c
     write_registry_entry(isolated_registry, "Rfirst", first.local_api_socket_path)
     write_registry_entry(isolated_registry, "Rsecond", second.local_api_socket_path)
 
-    assert resolve_control_plane_endpoint("Rsecond") == second.local_api_socket
+    assert resolve_local_api_socket_of_requested_node("Rsecond") == second.local_api_socket
 
 
 def test_two_live_nodes_and_no_flag_is_an_error_that_lists_them(
@@ -428,7 +428,7 @@ def test_two_live_nodes_and_no_flag_is_an_error_that_lists_them(
     write_registry_entry(isolated_registry, "Rsecond", second.local_api_socket_path)
 
     with pytest.raises(ControlPlaneError) as failure:
-        resolve_control_plane_endpoint(None)
+        resolve_local_api_socket_of_requested_node(None)
 
     message = str(failure.value)
     assert "Rfirst" in message and "Rsecond" in message
@@ -437,7 +437,7 @@ def test_two_live_nodes_and_no_flag_is_an_error_that_lists_them(
 
 def test_no_live_nodes_names_the_command_that_starts_one(isolated_registry):
     with pytest.raises(ControlPlaneError) as failure:
-        resolve_control_plane_endpoint(None)
+        resolve_local_api_socket_of_requested_node(None)
 
     assert "streamlib dev" in str(failure.value)
 
@@ -1446,8 +1446,8 @@ def test_a_verb_targets_a_node_by_its_runtime_name(
         isolated_registry, "Rother", other.local_api_socket_path, runtime_name="rig-lab-c3d4"
     )
 
-    assert resolve_control_plane_endpoint("rig-desk-a1b2") == server.local_api_socket
-    assert resolve_control_plane_endpoint("Rnamed") == server.local_api_socket, (
+    assert resolve_local_api_socket_of_requested_node("rig-desk-a1b2") == server.local_api_socket
+    assert resolve_local_api_socket_of_requested_node("Rnamed") == server.local_api_socket, (
         "the runtime_id keeps resolving beside the name"
     )
 
@@ -1461,7 +1461,7 @@ def test_a_node_flag_naming_nothing_says_so_and_lists_what_is_live(
     )
 
     with pytest.raises(ControlPlaneError) as refusal:
-        resolve_control_plane_endpoint("rig-nowhere-0000")
+        resolve_local_api_socket_of_requested_node("rig-nowhere-0000")
 
     assert "rig-nowhere-0000" in str(refusal.value)
     assert "rig-desk-a1b2" in str(refusal.value), (
@@ -1482,7 +1482,7 @@ def test_two_nodes_answering_to_one_name_are_named_rather_than_picked_between(
     )
 
     with pytest.raises(ControlPlaneError) as refusal:
-        resolve_control_plane_endpoint("rig-desk-a1b2")
+        resolve_local_api_socket_of_requested_node("rig-desk-a1b2")
 
     for named_row in (
         "Rfirst",

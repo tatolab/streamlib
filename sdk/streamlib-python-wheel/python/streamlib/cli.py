@@ -56,7 +56,7 @@ from . import Runtime, _stream_graph_builder
 from ._control_plane_client import (
     ControlPlaneError,
     call_tool,
-    resolve_control_plane_endpoint,
+    resolve_local_api_socket_of_requested_node,
 )
 from ._cross_floor_check import (
     check_app_directory_for_floor_bindings,
@@ -907,7 +907,7 @@ def call_observation_tool(
     arguments: "Optional[dict[str, Any]]" = None,
 ) -> int:
     """Resolve the target node, drive one tool, print its result."""
-    local_api_socket = resolve_control_plane_endpoint(requested_node)
+    local_api_socket = resolve_local_api_socket_of_requested_node(requested_node)
     print(call_tool(local_api_socket, tool_name, arguments or {}))
     return 0
 
@@ -1525,7 +1525,7 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
                 f"{', '.join(channel_form_flags)} sample a channel, and a surface id "
                 f"names one frame already. Use `--channel` instead of SURFACE_ID."
             )
-        local_api_socket = resolve_control_plane_endpoint(arguments.requested_node)
+        local_api_socket = resolve_local_api_socket_of_requested_node(arguments.requested_node)
         try:
             written_image_path = exchange_one_published_surface_id_into_directory(
                 local_api_socket, arguments.surface_id, arguments.output_directory
@@ -1546,7 +1546,7 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
     if every_nth_bag < 1:
         raise ObservationVerbUsageError("`--every` must be at least 1.")
 
-    local_api_socket = resolve_control_plane_endpoint(arguments.requested_node)
+    local_api_socket = resolve_local_api_socket_of_requested_node(arguments.requested_node)
     report = sample_channel_into_exchanged_surface_images(
         local_api_socket,
         arguments.channel,

@@ -55,7 +55,7 @@ from streamlib._control_plane_client import (
     ControlPlaneError,
     LocalApiSocket,
     call_tool,
-    resolve_control_plane_endpoint,
+    resolve_local_api_socket_of_requested_node,
 )
 from streamlib._engine import (
     TestBagCollector,
@@ -866,7 +866,7 @@ def local_api_socket_once_the_registry_lists(runtime_name: str) -> LocalApiSocke
     deadline = time.monotonic() + SERVED_GRAPH_CONTROL_PLANE_REGISTRATION_DEADLINE_SECONDS
     while True:
         try:
-            return resolve_control_plane_endpoint(runtime_name)
+            return resolve_local_api_socket_of_requested_node(runtime_name)
         except ControlPlaneError:
             if time.monotonic() >= deadline:
                 raise

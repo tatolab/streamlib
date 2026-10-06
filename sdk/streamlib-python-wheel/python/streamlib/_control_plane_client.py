@@ -39,7 +39,7 @@ __all__ = [
     "ExchangedSurfaceImage",
     "LocalApiSocket",
     "control_plane_answers",
-    "resolve_control_plane_endpoint",
+    "resolve_local_api_socket_of_requested_node",
     "call_tool",
     "fetch_surface_image_png_bytes",
 ]
@@ -178,7 +178,7 @@ def control_plane_answers(local_api_socket: LocalApiSocket) -> bool:
     return True
 
 
-def resolve_control_plane_endpoint(requested_node: "Optional[str]") -> LocalApiSocket:
+def resolve_local_api_socket_of_requested_node(requested_node: "Optional[str]") -> LocalApiSocket:
     """The local API socket a verb targets.
 
     `--node` resolves that node's socket from the registry, matching a runtime
