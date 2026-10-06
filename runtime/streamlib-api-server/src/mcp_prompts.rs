@@ -9,10 +9,14 @@
 //! a served tool, so the tool set stays the whole of the control vocabulary.
 
 use std::fmt::Write as _;
-use std::sync::Arc;
 
+use rmcp::ErrorData as McpError;
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::{GetPromptResult, PromptMessage, Role};
+use rmcp::{prompt, prompt_router};
+use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::json;
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
@@ -24,9 +28,8 @@ use streamlib::sdk::json_schema::{
     ProcessorNodeOutput,
 };
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::runtime::RuntimeOperations;
 
-use crate::mcp::{RpcError, RpcResult};
+use crate::mcp::LocalApiMcpServerHandler;
 use crate::mcp_resources::exported_live_graph_json;
 
 /// The import path `VirtualCameraSink` registers under, which the virtual
@@ -35,146 +38,127 @@ use crate::mcp_resources::exported_live_graph_json;
 pub const VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH: &str =
     "streamlib_media_builtins::virtual_camera_sink::VirtualCameraSink";
 
-struct GraphRecipePromptArgument {
-    name: &'static str,
-    description: &'static str,
-    required: bool,
+const LINK_ID_ARGUMENT_DESCRIPTION: &str =
+    "The id of the link to splice into, as `graph` lists it under `links`.";
+const TYPE_ARGUMENT_DESCRIPTION: &str = "The import path of the node class to add — a type the `streamlib://node-catalog` resource lists, or a Python class's `module:QualifiedClassName`.";
+const FROM_NODE_ARGUMENT_DESCRIPTION: &str =
+    "The name of the node whose output this is about, as `graph` lists it.";
+const FROM_PORT_ARGUMENT_DESCRIPTION: &str =
+    "The name of that node's output port, as `graph` lists it under `ports.outputs`.";
+const CAMERA_NAME_ARGUMENT_DESCRIPTION: &str =
+    "The camera's name in every picker. Omit for the default name.";
+
+#[derive(Deserialize, JsonSchema)]
+struct InsertNodeBetweenLinkedNodesPromptArguments {
+    #[schemars(description = LINK_ID_ARGUMENT_DESCRIPTION)]
+    link_id: String,
+    #[serde(rename = "type")]
+    #[schemars(description = TYPE_ARGUMENT_DESCRIPTION)]
+    node_type: String,
 }
 
-type GraphRecipeRendering =
-    fn(&GraphResponse, &GraphRecipePromptArguments) -> RpcResult<GraphRecipe>;
-
-struct GraphRecipePromptDefinition {
-    name: &'static str,
-    title: &'static str,
-    description: &'static str,
-    arguments: &'static [GraphRecipePromptArgument],
-    render_recipe_against_live_graph: GraphRecipeRendering,
+#[derive(Deserialize, JsonSchema)]
+struct FanOutputToAnotherConsumerPromptArguments {
+    #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
+    from_node: String,
+    #[schemars(description = FROM_PORT_ARGUMENT_DESCRIPTION)]
+    from_port: String,
+    #[serde(rename = "type")]
+    #[schemars(description = TYPE_ARGUMENT_DESCRIPTION)]
+    node_type: String,
 }
 
-const LINK_ID_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
-    name: "link_id",
-    description: "The id of the link to splice into, as `graph` lists it under `links`.",
-    required: true,
-};
-const TYPE_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
-    name: "type",
-    description: "The import path of the node class to add — a type the `streamlib://node-catalog` resource lists, or a Python class's `module:QualifiedClassName`.",
-    required: true,
-};
-const FROM_NODE_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
-    name: "from_node",
-    description: "The name of the node whose output this is about, as `graph` lists it.",
-    required: true,
-};
-const FROM_PORT_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
-    name: "from_port",
-    description: "The name of that node's output port, as `graph` lists it under `ports.outputs`.",
-    required: true,
-};
-const CAMERA_NAME_ARGUMENT: GraphRecipePromptArgument = GraphRecipePromptArgument {
-    name: "camera_name",
-    description: "The camera's name in every picker. Omit for the default name.",
-    required: false,
-};
-
-const GRAPH_RECIPE_PROMPT_DEFINITIONS: &[GraphRecipePromptDefinition] = &[
-    GraphRecipePromptDefinition {
-        name: "insert_node_between_linked_nodes",
-        title: "Insert a node into a link",
-        description: "Splice a new node into an existing link, so what the link carried passes through it.",
-        arguments: &[LINK_ID_ARGUMENT, TYPE_ARGUMENT],
-        render_recipe_against_live_graph: insert_node_between_linked_nodes_recipe,
-    },
-    GraphRecipePromptDefinition {
-        name: "fan_output_to_another_consumer",
-        title: "Fan an output to another consumer",
-        description: "Add a node as one more consumer of an output port, leaving the consumers it already feeds as they are.",
-        arguments: &[FROM_NODE_ARGUMENT, FROM_PORT_ARGUMENT, TYPE_ARGUMENT],
-        render_recipe_against_live_graph: fan_output_to_another_consumer_recipe,
-    },
-    GraphRecipePromptDefinition {
-        name: "show_channel_on_virtual_camera",
-        title: "Show a channel on a virtual camera",
-        description: "Present an output's video frames as a camera every other application on the machine can select.",
-        arguments: &[FROM_NODE_ARGUMENT, FROM_PORT_ARGUMENT, CAMERA_NAME_ARGUMENT],
-        render_recipe_against_live_graph: show_channel_on_virtual_camera_recipe,
-    },
-    GraphRecipePromptDefinition {
-        name: "look_at_what_a_channel_carries",
-        title: "Look at what a channel carries",
-        description: "Sample one bag an output port publishes, decode it, and see the frame it names when it names one.",
-        arguments: &[FROM_NODE_ARGUMENT, FROM_PORT_ARGUMENT],
-        render_recipe_against_live_graph: look_at_what_a_channel_carries_recipe,
-    },
-];
-
-/// The `prompts/list` result.
-pub(crate) fn prompts_list_result() -> Value {
-    let prompts: Vec<Value> = GRAPH_RECIPE_PROMPT_DEFINITIONS
-        .iter()
-        .map(|definition| {
-            let arguments: Vec<Value> = definition
-                .arguments
-                .iter()
-                .map(|argument| {
-                    json!({
-                        "name": argument.name,
-                        "description": argument.description,
-                        "required": argument.required,
-                    })
-                })
-                .collect();
-            json!({
-                "name": definition.name,
-                "title": definition.title,
-                "description": definition.description,
-                "arguments": arguments,
-            })
-        })
-        .collect();
-    json!({ "prompts": prompts })
+#[derive(Deserialize, JsonSchema)]
+struct ShowChannelOnVirtualCameraPromptArguments {
+    #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
+    from_node: String,
+    #[schemars(description = FROM_PORT_ARGUMENT_DESCRIPTION)]
+    from_port: String,
+    #[schemars(description = CAMERA_NAME_ARGUMENT_DESCRIPTION)]
+    camera_name: Option<String>,
 }
 
-/// Answer `prompts/get`, rendering the named recipe against the node as it is
-/// now.
-pub(crate) async fn get_prompt(
-    runtime: &Arc<dyn RuntimeOperations>,
-    params: Value,
-) -> RpcResult<Value> {
-    #[derive(Deserialize)]
-    struct GetPromptParams {
-        name: String,
-        #[serde(default)]
-        arguments: Map<String, Value>,
+#[derive(Deserialize, JsonSchema)]
+struct LookAtWhatAChannelCarriesPromptArguments {
+    #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
+    from_node: String,
+    #[schemars(description = FROM_PORT_ARGUMENT_DESCRIPTION)]
+    from_port: String,
+}
+
+#[prompt_router(vis = "pub(crate)")]
+impl LocalApiMcpServerHandler {
+    #[prompt(
+        name = "insert_node_between_linked_nodes",
+        title = "Insert a node into a link",
+        description = "Splice a new node into an existing link, so what the link carried passes through it."
+    )]
+    async fn insert_node_between_linked_nodes(
+        &self,
+        Parameters(arguments): Parameters<InsertNodeBetweenLinkedNodesPromptArguments>,
+    ) -> Result<GetPromptResult, McpError> {
+        let live_graph = self.live_graph().await?;
+        let recipe = insert_node_between_linked_nodes_recipe(&live_graph, &arguments)?;
+        Ok(recipe.prompt_result(
+            "Splice a new node into an existing link, so what the link carried passes through it.",
+        ))
     }
-    let GetPromptParams { name, arguments } = serde_json::from_value(params)
-        .map_err(|e| RpcError::invalid_params(format!("malformed prompts/get params: {e}")))?;
-    let definition = GRAPH_RECIPE_PROMPT_DEFINITIONS
-        .iter()
-        .find(|definition| definition.name == name)
-        .ok_or_else(|| {
-            RpcError::invalid_params(format!(
-                "no prompt named `{name}`; `prompts/list` names the ones this node serves"
-            ))
-        })?;
-    let prompt_arguments = GraphRecipePromptArguments {
-        prompt_name: definition.name,
-        arguments,
-    };
-    let live_graph: GraphResponse =
-        serde_json::from_value(exported_live_graph_json(runtime).await?)
-            .map_err(|e| RpcError::internal(format!("graph export did not parse: {e}")))?;
 
-    let recipe = (definition.render_recipe_against_live_graph)(&live_graph, &prompt_arguments)?;
+    #[prompt(
+        name = "fan_output_to_another_consumer",
+        title = "Fan an output to another consumer",
+        description = "Add a node as one more consumer of an output port, leaving the consumers it already feeds as they are."
+    )]
+    async fn fan_output_to_another_consumer(
+        &self,
+        Parameters(arguments): Parameters<FanOutputToAnotherConsumerPromptArguments>,
+    ) -> Result<GetPromptResult, McpError> {
+        let live_graph = self.live_graph().await?;
+        let recipe = fan_output_to_another_consumer_recipe(&live_graph, &arguments)?;
+        Ok(recipe.prompt_result(
+            "Add a node as one more consumer of an output port, leaving the consumers it already feeds as they are.",
+        ))
+    }
 
-    Ok(json!({
-        "description": definition.description,
-        "messages": [{
-            "role": "user",
-            "content": { "type": "text", "text": recipe.rendered_text() },
-        }],
-    }))
+    #[prompt(
+        name = "show_channel_on_virtual_camera",
+        title = "Show a channel on a virtual camera",
+        description = "Present an output's video frames as a camera every other application on the machine can select."
+    )]
+    async fn show_channel_on_virtual_camera(
+        &self,
+        Parameters(arguments): Parameters<ShowChannelOnVirtualCameraPromptArguments>,
+    ) -> Result<GetPromptResult, McpError> {
+        let live_graph = self.live_graph().await?;
+        let recipe = show_channel_on_virtual_camera_recipe(&live_graph, &arguments)?;
+        Ok(recipe.prompt_result(
+            "Present an output's video frames as a camera every other application on the machine can select.",
+        ))
+    }
+
+    #[prompt(
+        name = "look_at_what_a_channel_carries",
+        title = "Look at what a channel carries",
+        description = "Sample one bag an output port publishes, decode it, and see the frame it names when it names one."
+    )]
+    async fn look_at_what_a_channel_carries(
+        &self,
+        Parameters(arguments): Parameters<LookAtWhatAChannelCarriesPromptArguments>,
+    ) -> Result<GetPromptResult, McpError> {
+        let live_graph = self.live_graph().await?;
+        let recipe = look_at_what_a_channel_carries_recipe(&live_graph, &arguments)?;
+        Ok(recipe.prompt_result(
+            "Sample one bag an output port publishes, decode it, and see the frame it names when it names one.",
+        ))
+    }
+}
+
+impl LocalApiMcpServerHandler {
+    /// The node's graph as it is now, which every recipe is rendered against.
+    async fn live_graph(&self) -> Result<GraphResponse, McpError> {
+        serde_json::from_value(exported_live_graph_json(&self.runtime).await?)
+            .map_err(|e| McpError::internal_error(format!("graph export did not parse: {e}"), None))
+    }
 }
 
 /// One numbered step of a recipe: the served tool it calls and what to pass.
@@ -192,6 +176,15 @@ struct GraphRecipe {
 }
 
 impl GraphRecipe {
+    /// The recipe as a `prompts/get` result: one user message carrying its text.
+    fn prompt_result(&self, description: &str) -> GetPromptResult {
+        GetPromptResult::new(vec![PromptMessage::new_text(
+            Role::User,
+            self.rendered_text(),
+        )])
+        .with_description(description)
+    }
+
     /// The text an agent follows. Each step is its own line, `N. `tool` — …`.
     fn rendered_text(&self) -> String {
         let mut text = format!(
@@ -225,64 +218,22 @@ fn graph_recipe_step_calling_tool(
     }
 }
 
-/// A prompt's string arguments, read through the declarations `prompts/list`
-/// advertises and refused by name when a required one is absent.
-struct GraphRecipePromptArguments {
-    prompt_name: &'static str,
-    arguments: Map<String, Value>,
-}
-
-impl GraphRecipePromptArguments {
-    fn required(&self, argument: &GraphRecipePromptArgument) -> RpcResult<&str> {
-        debug_assert!(
-            argument.required,
-            "`{}` is declared optional",
-            argument.name
-        );
-        self.string_value(argument)?.ok_or_else(|| {
-            RpcError::invalid_params(format!(
-                "prompt `{}` needs the `{}` argument",
-                self.prompt_name, argument.name
-            ))
-        })
-    }
-
-    fn optional(&self, argument: &GraphRecipePromptArgument) -> RpcResult<Option<&str>> {
-        debug_assert!(
-            !argument.required,
-            "`{}` is declared required",
-            argument.name
-        );
-        self.string_value(argument)
-    }
-
-    fn string_value(&self, argument: &GraphRecipePromptArgument) -> RpcResult<Option<&str>> {
-        match self.arguments.get(argument.name) {
-            None => Ok(None),
-            Some(Value::String(value)) => Ok(Some(value.as_str())),
-            Some(other) => Err(RpcError::invalid_params(format!(
-                "prompt `{}` argument `{}` must be a string, got {other}",
-                self.prompt_name, argument.name
-            ))),
-        }
-    }
-}
-
 /// The node `node_name` names once cast.
 fn node_named<'graph>(
     graph: &'graph GraphResponse,
     node_name: &str,
-) -> RpcResult<&'graph ProcessorNodeOutput> {
+) -> Result<&'graph ProcessorNodeOutput, McpError> {
     let cast = cast_exposed_name_to_url_safe(node_name)
-        .map_err(|names_nothing| RpcError::invalid_params(names_nothing.to_string()))?;
+        .map_err(|names_nothing| McpError::invalid_params(names_nothing.to_string(), None))?;
     graph
         .nodes
         .iter()
         .find(|node| node.name == cast)
         .ok_or_else(|| {
-            RpcError::invalid_params(format!(
-                "no node named `{node_name}` is in the graph; `graph` lists the names"
-            ))
+            McpError::invalid_params(
+                format!("no node named `{node_name}` is in the graph; `graph` lists the names"),
+                None,
+            )
         })
 }
 
@@ -297,10 +248,10 @@ fn input_port_of<'graph>(
 /// checked that port is one of its outputs.
 fn output_port_named_by_arguments<'graph, 'arguments>(
     graph: &'graph GraphResponse,
-    prompt_arguments: &'arguments GraphRecipePromptArguments,
-) -> RpcResult<(&'graph ProcessorNodeOutput, &'arguments str)> {
-    let node = node_named(graph, prompt_arguments.required(&FROM_NODE_ARGUMENT)?)?;
-    let from_port = prompt_arguments.required(&FROM_PORT_ARGUMENT)?;
+    from_node: &str,
+    from_port: &'arguments str,
+) -> Result<(&'graph ProcessorNodeOutput, &'arguments str), McpError> {
+    let node = node_named(graph, from_node)?;
     if !node.ports.outputs.iter().any(|port| port.name == from_port) {
         let output_port_names: Vec<&str> = node
             .ports
@@ -308,10 +259,13 @@ fn output_port_named_by_arguments<'graph, 'arguments>(
             .iter()
             .map(|port| port.name.as_str())
             .collect();
-        return Err(RpcError::invalid_params(format!(
-            "node `{}` has no output port `{from_port}`; its outputs are {output_port_names:?}",
-            node.name
-        )));
+        return Err(McpError::invalid_params(
+            format!(
+                "node `{}` has no output port `{from_port}`; its outputs are {output_port_names:?}",
+                node.name
+            ),
+            None,
+        ));
     }
     Ok((node, from_port))
 }
@@ -333,9 +287,10 @@ fn catalog_entry_for(processor_type: &str) -> Option<ProcessorDescriptorOutput> 
         .map(|descriptor| ProcessorDescriptorOutput::from(&descriptor))
 }
 
-fn catalog_entry_json_block(entry: &ProcessorDescriptorOutput) -> RpcResult<String> {
-    let text = serde_json::to_string_pretty(entry)
-        .map_err(|e| RpcError::internal(format!("catalog entry rendering failed: {e}")))?;
+fn catalog_entry_json_block(entry: &ProcessorDescriptorOutput) -> Result<String, McpError> {
+    let text = serde_json::to_string_pretty(entry).map_err(|e| {
+        McpError::internal_error(format!("catalog entry rendering failed: {e}"), None)
+    })?;
     Ok(format!("```json\n{text}\n```"))
 }
 
@@ -344,7 +299,7 @@ fn catalog_entry_json_block(entry: &ProcessorDescriptorOutput) -> RpcResult<Stri
 fn catalog_introduction_for(
     node_type: &str,
     entry: Option<&ProcessorDescriptorOutput>,
-) -> RpcResult<String> {
+) -> Result<String, McpError> {
     match entry {
         Some(entry) => Ok(format!(
             "This node's catalog entry for `{node_type}`, read now — `config_schema` is what \
@@ -378,18 +333,19 @@ fn find_the_added_node_step(port_directions: &str) -> GraphRecipeStep {
 
 fn insert_node_between_linked_nodes_recipe(
     graph: &GraphResponse,
-    prompt_arguments: &GraphRecipePromptArguments,
-) -> RpcResult<GraphRecipe> {
-    let link_id = prompt_arguments.required(&LINK_ID_ARGUMENT)?;
-    let node_type = prompt_arguments.required(&TYPE_ARGUMENT)?;
+    arguments: &InsertNodeBetweenLinkedNodesPromptArguments,
+) -> Result<GraphRecipe, McpError> {
+    let link_id = arguments.link_id.as_str();
+    let node_type = arguments.node_type.as_str();
     let link = graph
         .links
         .iter()
         .find(|link| link.id == link_id)
         .ok_or_else(|| {
-            RpcError::invalid_params(format!(
-                "no link with id `{link_id}` is in the graph; `graph` lists the links"
-            ))
+            McpError::invalid_params(
+                format!("no link with id `{link_id}` is in the graph; `graph` lists the links"),
+                None,
+            )
         })?;
     let source = node_named(graph, &link.source.node)?;
     let target = node_named(graph, &link.target.node)?;
@@ -472,10 +428,11 @@ fn insert_node_between_linked_nodes_recipe(
 
 fn fan_output_to_another_consumer_recipe(
     graph: &GraphResponse,
-    prompt_arguments: &GraphRecipePromptArguments,
-) -> RpcResult<GraphRecipe> {
-    let (source, from_port) = output_port_named_by_arguments(graph, prompt_arguments)?;
-    let node_type = prompt_arguments.required(&TYPE_ARGUMENT)?;
+    arguments: &FanOutputToAnotherConsumerPromptArguments,
+) -> Result<GraphRecipe, McpError> {
+    let (source, from_port) =
+        output_port_named_by_arguments(graph, &arguments.from_node, &arguments.from_port)?;
+    let node_type = arguments.node_type.as_str();
     let source_name = source.name.as_str();
     let consumer_type_entry = catalog_entry_for(node_type);
 
@@ -513,23 +470,27 @@ fn fan_output_to_another_consumer_recipe(
 
 fn show_channel_on_virtual_camera_recipe(
     graph: &GraphResponse,
-    prompt_arguments: &GraphRecipePromptArguments,
-) -> RpcResult<GraphRecipe> {
-    let (source, from_port) = output_port_named_by_arguments(graph, prompt_arguments)?;
-    let camera_name = prompt_arguments.optional(&CAMERA_NAME_ARGUMENT)?;
+    arguments: &ShowChannelOnVirtualCameraPromptArguments,
+) -> Result<GraphRecipe, McpError> {
+    let (source, from_port) =
+        output_port_named_by_arguments(graph, &arguments.from_node, &arguments.from_port)?;
+    let camera_name = arguments.camera_name.as_deref();
     let virtual_camera_sink = catalog_entry_for(VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH)
         .ok_or_else(|| {
-            RpcError::invalid_params(format!(
+            McpError::invalid_params(format!(
                 "this node's catalog has no `{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}`: \
                  the virtual camera is a Linux built-in"
-            ))
+            ), None)
         })?;
     let video_input = sole_input_port(&virtual_camera_sink).ok_or_else(|| {
-        RpcError::internal(format!(
-            "`{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}` is registered with {} input \
+        McpError::internal_error(
+            format!(
+                "`{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}` is registered with {} input \
              ports rather than one",
-            virtual_camera_sink.inputs.len()
-        ))
+                virtual_camera_sink.inputs.len()
+            ),
+            None,
+        )
     })?;
     let video_input_port = video_input.name.as_str();
     let config_instruction = match camera_name {
@@ -577,9 +538,10 @@ fn show_channel_on_virtual_camera_recipe(
 
 fn look_at_what_a_channel_carries_recipe(
     graph: &GraphResponse,
-    prompt_arguments: &GraphRecipePromptArguments,
-) -> RpcResult<GraphRecipe> {
-    let (source, from_port) = output_port_named_by_arguments(graph, prompt_arguments)?;
+    arguments: &LookAtWhatAChannelCarriesPromptArguments,
+) -> Result<GraphRecipe, McpError> {
+    let (source, from_port) =
+        output_port_named_by_arguments(graph, &arguments.from_node, &arguments.from_port)?;
     let channel = format!("{}/{}/{from_port}", graph.runtime_name, source.name);
 
     Ok(GraphRecipe {
