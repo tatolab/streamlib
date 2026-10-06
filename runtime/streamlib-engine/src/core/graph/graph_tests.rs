@@ -1357,7 +1357,7 @@ mod node_names {
         let refusal = add_a_mock_processor_named(&mut graph, Some("✨"));
 
         assert!(
-            matches!(refusal, Err(Error::ExposedNameCastsToNothing { .. })),
+            matches!(refusal, Err(Error::ExposedNameCastsToNothing(_))),
             "got {refusal:?}"
         );
         assert!(node_names_in_the_graph(&graph).is_empty());

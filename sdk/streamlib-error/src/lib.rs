@@ -91,6 +91,26 @@ pub enum Error {
     #[error("Unknown processor type: {ident} (not registered)")]
     UnknownProcessorType { ident: ProcessorClassImportPath },
 
+    #[error(
+        "processor `{processor_class_import_path}` declares the port `{port_name}`, which is \
+         not a cast name — a descriptor carries every port the way `#[processor]` and `@node` \
+         declare it: lowercase a-z 0-9 - . _ ~, no leading, trailing or doubled '-', at most \
+         63 characters"
+    )]
+    DescriptorPortNameNotCast {
+        processor_class_import_path: ProcessorClassImportPath,
+        port_name: String,
+    },
+
+    #[error(
+        "processor `{processor_class_import_path}` declares the port `{port_name}` more than \
+         once — every port, input or output, needs its own name"
+    )]
+    DescriptorPortNameDeclaredTwice {
+        processor_class_import_path: ProcessorClassImportPath,
+        port_name: String,
+    },
+
     #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
     ProcessorPortNotFound {
         processor_id: String,

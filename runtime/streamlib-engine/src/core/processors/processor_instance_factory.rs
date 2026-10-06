@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
 use parking_lot::RwLock;
@@ -11,7 +11,7 @@ use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
-use crate::core::graph::{PortInfo, ProcessorNode};
+use crate::core::graph::{PortInfo, ProcessorNode, is_in_exposed_name_cast_form};
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 
@@ -325,6 +325,7 @@ impl ProcessorInstanceFactory {
         descriptor: ProcessorDescriptor,
         constructor: DynamicProcessorConstructorFn,
     ) -> Result<()> {
+        refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
@@ -380,6 +381,7 @@ impl ProcessorInstanceFactory {
     /// [`Self::install_constructor_for_registered_descriptor`] supplies the
     /// constructor — which a first add does.
     pub fn register_descriptor_only(&self, descriptor: ProcessorDescriptor) -> Result<()> {
+        refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
@@ -627,10 +629,34 @@ fn duplicate_class_import_path(processor_class_import_path: &ProcessorClassImpor
     ))
 }
 
+/// Refuse a descriptor whose ports are not each in cast form under a name of
+/// their own.
+///
+/// Refused rather than cast, because a descriptor built by hand or by an older
+/// plugin would otherwise register names its own data plane never writes to.
+fn refuse_port_names_not_cast_or_declared_twice(descriptor: &ProcessorDescriptor) -> Result<()> {
+    let mut port_names_seen = HashSet::new();
+    for port in descriptor.inputs.iter().chain(&descriptor.outputs) {
+        if !is_in_exposed_name_cast_form(&port.name) {
+            return Err(Error::DescriptorPortNameNotCast {
+                processor_class_import_path: descriptor.processor_class_import_path.clone(),
+                port_name: port.name.clone(),
+            });
+        }
+        if !port_names_seen.insert(port.name.as_str()) {
+            return Err(Error::DescriptorPortNameDeclaredTwice {
+                processor_class_import_path: descriptor.processor_class_import_path.clone(),
+                port_name: port.name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::descriptors::ProcessorClassShortName;
+    use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName};
 
     fn class_import_path(path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(path).expect("the fixture path names a class")
@@ -979,6 +1005,98 @@ mod tests {
             resolver_calls.load(std::sync::atomic::Ordering::SeqCst),
             1,
             "the resolver runs once for the miss and never for a registered type"
+        );
+    }
+
+    fn port_named(name: &str) -> PortDescriptor {
+        PortDescriptor {
+            name: name.to_string(),
+            description: String::new(),
+            required: true,
+            delivery_profile: None,
+            audio_window: None,
+        }
+    }
+
+    /// Both registration paths refuse one, and nothing of the refused
+    /// descriptor stays registered.
+    fn assert_refused_by_either_registration(
+        descriptor: ProcessorDescriptor,
+        is_the_expected_refusal: impl Fn(&Error) -> bool,
+    ) {
+        let path = descriptor.processor_class_import_path.clone();
+        let factory = ProcessorInstanceFactory::new();
+
+        let refusal = factory
+            .register_descriptor_only(descriptor.clone())
+            .expect_err("register_descriptor_only must refuse it");
+        assert!(is_the_expected_refusal(&refusal), "got {refusal:?}");
+
+        let constructor: DynamicProcessorConstructorFn =
+            Box::new(|_node| Err(Error::Configuration("unreachable".into())));
+        let refusal = factory
+            .register_dynamic(descriptor, constructor)
+            .expect_err("register_dynamic must refuse it");
+        assert!(is_the_expected_refusal(&refusal), "got {refusal:?}");
+
+        assert!(factory.descriptor(&path).is_none());
+        assert!(factory.port_info(&path).is_none());
+    }
+
+    #[test]
+    fn a_descriptor_whose_port_name_is_not_cast_is_refused_by_name() {
+        let path = "my_app.filters:BlurProcessor";
+        assert_refused_by_either_registration(
+            descriptor_for(path).with_output(port_named("videoOut")),
+            |refusal| {
+                matches!(
+                    refusal,
+                    Error::DescriptorPortNameNotCast { processor_class_import_path, port_name }
+                        if processor_class_import_path.as_str() == path && port_name == "videoOut"
+                )
+            },
+        );
+    }
+
+    #[test]
+    fn a_descriptor_declaring_one_port_name_twice_is_refused_by_name() {
+        let path = "my_app.filters:BlurProcessor";
+        assert_refused_by_either_registration(
+            descriptor_for(path)
+                .with_input(port_named("video"))
+                .with_output(port_named("video")),
+            |refusal| {
+                matches!(
+                    refusal,
+                    Error::DescriptorPortNameDeclaredTwice { processor_class_import_path, port_name }
+                        if processor_class_import_path.as_str() == path && port_name == "video"
+                )
+            },
+        );
+    }
+
+    /// The port marker names the port in the author's spelling and resolves to
+    /// the cast the descriptor registered.
+    #[test]
+    fn a_rust_processor_declaring_a_camel_case_port_registers_its_cast() {
+        use crate::core::graph::OutputPortMarker;
+        use crate::core::test_support::MockProcessorWithACamelCaseOutputPort;
+
+        let factory = ProcessorInstanceFactory::new();
+        factory.register::<MockProcessorWithACamelCaseOutputPort::Processor>();
+
+        let descriptor = factory
+            .descriptor(&MockProcessorWithACamelCaseOutputPort::processor_class_import_path())
+            .expect("the macro-declared processor registers");
+        let output_port_names: Vec<&str> = descriptor
+            .outputs
+            .iter()
+            .map(|port| port.name.as_str())
+            .collect();
+        assert_eq!(output_port_names, ["outone"]);
+        assert_eq!(
+            <MockProcessorWithACamelCaseOutputPort::OutputLink::outOne as OutputPortMarker>::PORT_NAME,
+            "outone"
         );
     }
 }

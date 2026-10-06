@@ -128,9 +128,11 @@ jobs:
             -p streamlib-surface-client --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # A `graph` document loads back as the same graph, and a node's name
-          # is cast, suffixed when defaulted and refused when typed twice.
+          # is cast, suffixed when defaulted and refused when typed twice. A
+          # Rust processor's port is cast as `@node` casts a Python one.
           cargo test --locked -p streamlib-engine \
-            --test graph_snapshot_round_trip_test --test node_name_test
+            --test graph_snapshot_round_trip_test --test node_name_test \
+            --test rust_port_name_cast_test
           # The compile-fail half of the same locks. The descriptor carries the
           # config type's schema, so the derive is a requirement, and the note
           # naming the fix is the only thing standing between an author and a
@@ -312,8 +314,9 @@ jobs:
           # skipped, growth to the cap and the refusal there — no device.
           # The swapchain acquire barrier's source stage, which must chain off
           # the image-available semaphore wait.
-          # The exposed-name cast, held to the fixture the wheel's Python twin
-          # reads too.
+          # A port named in any spelling that casts to it, on the read and the
+          # write side, and registration refusing a descriptor whose ports are
+          # not cast or not distinct.
           cargo test --locked -p streamlib-engine --lib -- \
             vulkan::rhi::vulkan_video_session::tests \
             vulkan::rhi::vulkan_present_target::tests::acquire_barrier_source_stage_chains_off_the_image_available_wait \
@@ -604,7 +607,11 @@ jobs:
             core::graph::components::state_component::tests::a_failure_keeps_the_reason_it_failed_for \
             core::graph::graph_readiness::tests::a_failed_processors_reason_rides_the_readiness_error \
             core::graph::graph_readiness::tests::a_failure_without_a_reason_reports_the_state_alone \
-            core::graph::exposed_name_cast::tests \
+            iceoryx2::input::tests::a_port_is_read_by_any_spelling_that_casts_to_its_name \
+            iceoryx2::output::tests::a_write_reaches_its_port_by_any_spelling_that_casts_to_its_name \
+            core::processors::processor_instance_factory::tests::a_descriptor_whose_port_name_is_not_cast_is_refused_by_name \
+            core::processors::processor_instance_factory::tests::a_descriptor_declaring_one_port_name_twice_is_refused_by_name \
+            core::processors::processor_instance_factory::tests::a_rust_processor_declaring_a_camel_case_port_registers_its_cast \
             core::context::gpu_context::tests::an_owned_color_converter_shares_no_kernel_with_the_cached_one \
             core::color::matrix::tests::identity_rgb_to_yuv_is_a_pass_through \
             core::context::surface_store::fd_ownership_tests::a_texture_lookup_of_a_pixel_buffer_slot_is_refused_and_closes_the_plane_it_received \
