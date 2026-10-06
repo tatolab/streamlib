@@ -11,6 +11,7 @@ pub mod audio_window_contract;
 pub mod config_schema_document;
 pub mod descriptors;
 pub mod error;
+pub mod exposed_name_cast;
 pub mod processor_class_import_path;
 pub mod processor_class_short_name;
 pub mod processor_schema;
@@ -28,6 +29,10 @@ pub use audio_window_contract::{
 };
 pub use config_schema_document::ProcessorConfigJsonSchema;
 pub use error::{SchemaError, SchemaResult};
+pub use exposed_name_cast::{
+    EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe,
+    is_in_exposed_name_cast_form,
+};
 pub use processor_class_import_path::ProcessorClassImportPath;
 pub use processor_class_short_name::ProcessorClassShortName;
 pub use processor_schema::{

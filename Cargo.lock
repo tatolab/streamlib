@@ -4368,7 +4368,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "trybuild",
- "unicode-normalization",
  "utoipa",
  "uuid",
  "v4l",
@@ -4441,6 +4440,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "thiserror 2.0.18",
+ "unicode-normalization",
  "utoipa",
 ]
 

@@ -9,7 +9,7 @@
 //! `ProcessorClassImportPath` (from `streamlib-processor-schema`) and, on
 //! Linux, the engine-free `ConsumerRhiError` conversion.
 
-use streamlib_processor_schema::ProcessorClassImportPath;
+use streamlib_processor_schema::{ExposedNameCastsToNothingError, ProcessorClassImportPath};
 
 /// The StreamLib error type.
 #[derive(thiserror::Error, Debug)]
@@ -71,12 +71,8 @@ pub enum Error {
         max: usize,
     },
 
-    #[error(
-        "the name `{name}` casts to `{cast}`, which cannot name anything — a name has to keep \
-         at least one of a-z 0-9 - . _ ~ once lowercased with its accents dropped, and cannot \
-         be `.` or `..`"
-    )]
-    ExposedNameCastsToNothing { name: String, cast: String },
+    #[error(transparent)]
+    ExposedNameCastsToNothing(#[from] ExposedNameCastsToNothingError),
 
     #[error(
         "the node name `{name}` casts to `{cast}`, which node `{cast}` in this graph already \

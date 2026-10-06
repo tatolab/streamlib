@@ -15,6 +15,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }  # used by schemars for enum_values literals
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
+unicode-normalization = { workspace = true }  # NFKD + combining-mark test the exposed-name cast drops accents with
 schemars = "0.8"  # JsonSchema impls on the processor-schema and descriptor types
 # Host-only OpenAPI schema derive for the wire-facing types, behind the
 # off-by-default `utoipa` feature. The engine's API layer enables it; a
