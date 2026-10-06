@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.1](https://github.com/tatolab/streamlib/compare/v0.32.0...v0.32.1) (2026-10-06)
+
+
+### Features
+
+* **sdk:** a port declared in Rust is cast like one declared with [@node](https://github.com/node) ([#2658](https://github.com/tatolab/streamlib/issues/2658)) ([6aec1b1](https://github.com/tatolab/streamlib/commit/6aec1b1fb9c1608e06882e14e631455e200cd0fc))
+
 ## [0.32.0](https://github.com/tatolab/streamlib/compare/v0.31.0...v0.32.0) (2026-10-06)
 
 
