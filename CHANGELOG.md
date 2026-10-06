@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.34.1](https://github.com/tatolab/streamlib/compare/v0.34.0...v0.34.1) (2026-10-06)
+
+
+### Features
+
+* **sdk:** MCP hosts connect by launching `streamlib mcp`, a byte pipe to the runtime's socket ([#2667](https://github.com/tatolab/streamlib/issues/2667)) ([1e65660](https://github.com/tatolab/streamlib/commit/1e6566043f562743d6151997034e26531a5e5079))
+
 ## [0.34.0](https://github.com/tatolab/streamlib/compare/v0.33.0...v0.34.0) (2026-10-06)
 
 
