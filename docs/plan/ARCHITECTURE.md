@@ -21,7 +21,7 @@ fact about the shipped tree until the change that removes them ships and folds i
 direction, and nothing new is built on it. Off a machine, the direction is §Networking's
 `[moq-on-the-tailnet]` entries.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
+## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting, authoring-names)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
@@ -180,7 +180,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [runtime-hosting; one-runtime-per-machine]
 
-## Packages & extension model — IN-FLIGHT (→ package-split-and-lend)
+## Packages & extension model — IN-FLIGHT (→ package-split-and-lend, authoring-names)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
