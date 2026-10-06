@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.2](https://github.com/tatolab/streamlib/compare/v0.32.1...v0.32.2) (2026-10-06)
+
+
+### Features
+
+* **api-server:** the local API is served on a user-only socket, and the CLI talks through it ([#2660](https://github.com/tatolab/streamlib/issues/2660)) ([221b399](https://github.com/tatolab/streamlib/commit/221b399c689a7ad3afc0e4019c6391c9186627fb))
+
 ## [0.32.1](https://github.com/tatolab/streamlib/compare/v0.32.0...v0.32.1) (2026-10-06)
 
 
