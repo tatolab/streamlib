@@ -35,6 +35,7 @@ use super::helper_process_loss_count_board::OutputPortRefusedBagCountBoardMirror
 use super::loss_counters::{OutputPortRefusedBagCounter, RefusedBagCountsByOutputPort};
 use super::{ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
+use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::media_clock::MediaClock;
 
 /// Map the engine's [`ChannelTrustTier`] onto the engine-free
@@ -467,6 +468,9 @@ impl Default for OutputWriterInner {
 /// The sole field is an opaque pointer to the host's
 /// [`OutputWriterInner`]. `Clone` bumps the `Arc<OutputWriterInner>`
 /// strong count; `Drop` decrements it.
+///
+/// A port is named in any spelling that casts to its declared name, so
+/// `"videoOut"` reaches the port registered as `videoout`.
 pub struct OutputWriter {
     /// Opaque handle: `Arc::into_raw(Arc<OutputWriterInner>)`. Null
     /// on a freshly-constructed processor before
@@ -568,14 +572,14 @@ impl OutputWriter {
                 port
             )));
         };
-        inner.write_raw(port, data, timestamp_ns)
+        inner.write_raw(&cast_exposed_name_to_url_safe(port)?, data, timestamp_ns)
     }
 
     /// Check if a port is configured.
     pub fn has_port(&self, port: &str) -> bool {
-        match self.host_inner() {
-            Some(inner) => inner.has_port(port),
-            None => false,
+        match (self.host_inner(), cast_exposed_name_to_url_safe(port)) {
+            (Some(inner), Ok(port)) => inner.has_port(&port),
+            _ => false,
         }
     }
 }
@@ -953,6 +957,42 @@ mod tests {
         assert!(
             format!("{refused}").contains("Unknown output port"),
             "an undeclared port is refused by name; got {refused}"
+        );
+    }
+
+    /// A processor names its own port in the spelling it declared, and the
+    /// handle casts it to the name the port was registered under.
+    #[test]
+    fn a_write_reaches_its_port_by_any_spelling_that_casts_to_its_name() {
+        let pubsub = open_channel_data_service("cast/pubsub", 2);
+        let subscriber = pubsub.create_subscriber(4).unwrap();
+        let inner = Arc::new(OutputWriterInner::new());
+        inner.set_channel_publisher(
+            "videoout",
+            pubsub.create_publisher(64).unwrap(),
+            ChannelEgressConfig {
+                service_name: "test/videoout".to_string(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 64,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            },
+        );
+        let writer = OutputWriter::from_inner_arc(inner);
+
+        assert!(writer.has_port("videoOut"));
+        writer
+            .write_raw("videoOut", b"bag", 0)
+            .expect("a cast-alike spelling names the port");
+        let sample = subscriber
+            .receive()
+            .unwrap()
+            .expect("the write reached the channel");
+        assert_eq!(&sample.payload()[FRAME_HEADER_SIZE..], b"bag");
+
+        let refusal = writer.write_raw("%%", b"bag", 0).unwrap_err();
+        assert!(
+            matches!(refusal, Error::ExposedNameCastsToNothing(_)),
+            "a name that casts to nothing names no port; got {refusal}"
         );
     }
 
