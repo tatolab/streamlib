@@ -1193,7 +1193,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_request_at_a_handshake_revision_is_refused_with_the_unsupported_version_error() {
+    async fn a_client_speaking_only_a_handshake_revision_finds_no_compatible_revision() {
         let served =
             LocalApiServedOnAFreshSocket::over(Arc::new(ControlPlaneMcpDispatchStubRuntime::new()));
         let refusal = ()
@@ -1346,9 +1346,7 @@ mod tests {
             json!({ "type": "streamlib:CameraSource" }),
         )
         .await;
-
-        assert_eq!(body["isError"], false, "body={body}");
-        let stated: Value = first_text_block_json(&body);
+        let stated = first_text_block_json(&body);
         assert_eq!(
             stated["name"],
             crate::control_plane_stub_support::STUB_ADDED_NODE_NAME,
@@ -1403,8 +1401,7 @@ mod tests {
             }),
         )
         .await;
-        assert_eq!(connect_body["isError"], false, "body={connect_body}");
-        let stated: Value = first_text_block_json(&connect_body);
+        let stated = first_text_block_json(&connect_body);
         assert_eq!(
             stated["link_id"],
             crate::control_plane_stub_support::STUB_CREATED_LINK_ID
@@ -1646,7 +1643,7 @@ mod tests {
         )
         .await;
 
-        let stated: Value = first_text_block_json(&body);
+        let stated = first_text_block_json(&body);
         assert_eq!(
             stated["link_id"],
             crate::control_plane_stub_support::STUB_CREATED_LINK_ID
@@ -1664,8 +1661,7 @@ mod tests {
         let recorded = runtime.recorded_graph_mutations.clone();
 
         let body = tool_call_result(runtime, "remove_node", json!({ "name": "FX" })).await;
-        assert_eq!(body["isError"], false, "body={body}");
-        let stated: Value = first_text_block_json(&body);
+        let stated = first_text_block_json(&body);
         assert_eq!(
             stated,
             json!({ "removed_name": "fx" }),

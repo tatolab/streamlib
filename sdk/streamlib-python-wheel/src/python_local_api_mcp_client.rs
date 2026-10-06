@@ -11,7 +11,9 @@ use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rmcp::RoleClient;
-use rmcp::model::{CallToolRequestParams, CallToolResult, JsonObject, ProtocolVersion};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, ContentBlock, JsonObject, ProtocolVersion,
+};
 use rmcp::service::{
     ClientInitializeError, ClientLifecycleMode, ClientServiceExt, RunningService, ServiceError,
 };
@@ -161,7 +163,7 @@ impl PythonLocalApiMcpClient {
             None => Err(LocalApiMcpServerUnreachable::new_err(
                 "this MCP client is closed",
             )),
-            Some(Ok(Ok(result))) => tool_result_text(&tool_name, &result),
+            Some(Ok(Ok(result))) => tool_result_text(&tool_name, result),
             Some(Ok(Err(failure))) => Err(self.python_error_for_service_error(&tool_name, failure)),
             Some(Err(_elapsed)) => Err(LocalApiMcpServerUnreachable::new_err(format!(
                 "`{tool_name}` to the node at {} did not answer within {:?}",
@@ -225,13 +227,13 @@ impl PythonLocalApiMcpClient {
 }
 
 /// The first text block of a tool's result, or the failure it reported.
-fn tool_result_text(tool_name: &str, result: &CallToolResult) -> PyResult<String> {
-    let text = result
-        .content
-        .iter()
-        .find_map(|block| block.as_text())
-        .map(|text_block| text_block.text.clone());
-    match (result.is_error.unwrap_or(false), text) {
+fn tool_result_text(tool_name: &str, result: CallToolResult) -> PyResult<String> {
+    let is_error = result.is_error.unwrap_or(false);
+    let text = result.content.into_iter().find_map(|block| match block {
+        ContentBlock::Text(text_block) => Some(text_block.text),
+        _ => None,
+    });
+    match (is_error, text) {
         (false, Some(text)) => Ok(text),
         (true, text) => Err(LocalApiMcpToolCallFailed::new_err(format!(
             "{tool_name} failed: {}",
