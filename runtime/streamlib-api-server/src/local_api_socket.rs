@@ -19,9 +19,7 @@ pub const LOCAL_API_SOCKET_FILE_MODE: u32 = 0o600;
 /// Bind the local API's listener at `local_api_socket_path`, refusing a path a
 /// live runtime answers on, replacing a stale file, and leaving the socket at
 /// [`LOCAL_API_SOCKET_FILE_MODE`]. Must run inside a tokio runtime.
-pub fn bind_local_api_unix_listener(
-    local_api_socket_path: &Path,
-) -> Result<tokio::net::UnixListener> {
+fn bind_local_api_unix_listener(local_api_socket_path: &Path) -> Result<tokio::net::UnixListener> {
     let cleared = clear_unix_socket_path_for_bind(local_api_socket_path)
         .map_err(|refusal| Error::Runtime(format!("Local API socket: {refusal}")))?;
     if cleared == UnixSocketPathClearedForBind::StaleSocketFileRemoved {
@@ -51,25 +49,21 @@ pub fn bind_local_api_unix_listener(
     Ok(listener)
 }
 
-/// The local API socket being served. Stopping it, or dropping it, ends the
-/// server; only [`RunningLocalApiSocketServer::stop`] also removes the socket file.
+/// The local API socket being served. Dropping it stops serving and removes
+/// the socket file.
 #[must_use = "dropping this stops the local API server"]
 #[derive(Debug)]
 pub struct RunningLocalApiSocketServer {
-    stop_serving_sender: tokio::sync::oneshot::Sender<()>,
+    stop_serving_sender: Option<tokio::sync::oneshot::Sender<()>>,
     local_api_socket_path: PathBuf,
 }
 
-impl RunningLocalApiSocketServer {
-    /// The path the server's socket is bound at.
-    pub fn local_api_socket_path(&self) -> &Path {
-        &self.local_api_socket_path
-    }
-
-    /// Stop serving and remove the socket file. A failed removal is logged:
-    /// the next bind at the path clears a stale file anyway.
-    pub fn stop(self) {
-        let _ = self.stop_serving_sender.send(());
+impl Drop for RunningLocalApiSocketServer {
+    fn drop(&mut self) {
+        if let Some(stop_serving_sender) = self.stop_serving_sender.take() {
+            let _ = stop_serving_sender.send(());
+        }
+        // Logged, not raised: the next bind at the path clears a stale file anyway.
         if let Err(error) = remove_local_api_socket_file(&self.local_api_socket_path) {
             tracing::warn!(
                 %error,
@@ -82,7 +76,7 @@ impl RunningLocalApiSocketServer {
 
 /// Bind the local API socket at `local_api_socket_path` and serve
 /// `control_plane_router` on it from `tokio_handle` until the returned server
-/// is stopped or dropped.
+/// is dropped.
 pub fn serve_router_on_local_api_socket(
     control_plane_router: axum::Router,
     tokio_handle: &tokio::runtime::Handle,
@@ -99,7 +93,7 @@ pub fn serve_router_on_local_api_socket(
         stop_serving_receiver,
     ));
     Ok(RunningLocalApiSocketServer {
-        stop_serving_sender,
+        stop_serving_sender: Some(stop_serving_sender),
         local_api_socket_path: local_api_socket_path.to_path_buf(),
     })
 }
@@ -191,21 +185,45 @@ mod tests {
         .unwrap()
     }
 
-    /// Serve the real router, stub runtime behind it, on a socket bound in a
-    /// fresh temp directory.
-    fn serve_the_router_on_a_fresh_socket() -> (tempfile::TempDir, RunningLocalApiSocketServer) {
+    /// The stub router served on a socket in a fresh temp directory, for as
+    /// long as this lives.
+    struct StubRouterServedOnAFreshSocket {
+        local_api_socket_path: PathBuf,
+        _running_server: RunningLocalApiSocketServer,
+        _directory: tempfile::TempDir,
+    }
+
+    fn serve_the_stub_router_on_a_fresh_socket() -> StubRouterServedOnAFreshSocket {
         let directory = tempfile::tempdir().unwrap();
-        let running_server =
-            serve_the_stub_router_at(&directory.path().join("local-api-Rtest.sock"));
-        (directory, running_server)
+        let local_api_socket_path = directory.path().join("local-api-Rtest.sock");
+        StubRouterServedOnAFreshSocket {
+            _running_server: serve_the_stub_router_at(&local_api_socket_path),
+            local_api_socket_path,
+            _directory: directory,
+        }
+    }
+
+    /// Probe `GET /health` over the socket, assert it answered 200, and hand
+    /// the answer back for any further check.
+    async fn assert_the_local_api_socket_answers_health(
+        local_api_socket_path: &Path,
+    ) -> RawHttpResponseOverTheSocket {
+        let health =
+            http_exchange_over_unix_socket(local_api_socket_path, "GET /health HTTP/1.1", b"")
+                .await;
+        assert!(
+            health.status_line.contains(" 200 "),
+            "{}",
+            health.status_line
+        );
+        health
     }
 
     #[tokio::test]
     async fn the_socket_is_only_its_owners_to_open() {
-        let (_directory, running_server) = serve_the_router_on_a_fresh_socket();
-        let local_api_socket_path = running_server.local_api_socket_path();
+        let served = serve_the_stub_router_on_a_fresh_socket();
 
-        let mode = std::fs::metadata(local_api_socket_path)
+        let mode = std::fs::metadata(&served.local_api_socket_path)
             .unwrap()
             .permissions()
             .mode();
@@ -220,17 +238,10 @@ mod tests {
 
     #[tokio::test]
     async fn the_router_answers_rest_over_the_socket() {
-        let (_directory, running_server) = serve_the_router_on_a_fresh_socket();
-        let local_api_socket_path = running_server.local_api_socket_path();
+        let served = serve_the_stub_router_on_a_fresh_socket();
+        let local_api_socket_path = &served.local_api_socket_path;
 
-        let health =
-            http_exchange_over_unix_socket(local_api_socket_path, "GET /health HTTP/1.1", b"")
-                .await;
-        assert!(
-            health.status_line.contains(" 200 "),
-            "{}",
-            health.status_line
-        );
+        let health = assert_the_local_api_socket_answers_health(local_api_socket_path).await;
         assert_eq!(health.body, b"ok");
 
         let exchanged_image = http_exchange_over_unix_socket(
@@ -251,8 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_router_answers_an_mcp_tool_call_over_the_socket() {
-        let (_directory, running_server) = serve_the_router_on_a_fresh_socket();
-        let local_api_socket_path = running_server.local_api_socket_path();
+        let served = serve_the_stub_router_on_a_fresh_socket();
         let tool_call = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -262,7 +272,7 @@ mod tests {
         .to_string();
 
         let answered = http_exchange_over_unix_socket(
-            local_api_socket_path,
+            &served.local_api_socket_path,
             "POST /mcp HTTP/1.1\r\nContent-Type: application/json",
             tool_call.as_bytes(),
         )
@@ -281,9 +291,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_router_upgrades_a_websocket_over_the_socket() {
-        let (_directory, running_server) = serve_the_router_on_a_fresh_socket();
-        let local_api_socket_path = running_server.local_api_socket_path();
-        let mut stream = tokio::net::UnixStream::connect(local_api_socket_path)
+        let served = serve_the_stub_router_on_a_fresh_socket();
+        let mut stream = tokio::net::UnixStream::connect(&served.local_api_socket_path)
             .await
             .unwrap();
         stream
@@ -308,8 +317,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_bind_while_the_first_serves_is_refused_naming_the_socket() {
-        let (_directory, running_server) = serve_the_router_on_a_fresh_socket();
-        let local_api_socket_path = running_server.local_api_socket_path();
+        let served = serve_the_stub_router_on_a_fresh_socket();
+        let local_api_socket_path = &served.local_api_socket_path;
 
         let refusal = bind_local_api_unix_listener(local_api_socket_path)
             .unwrap_err()
@@ -323,14 +332,7 @@ mod tests {
             refusal.contains("already bound by a live process"),
             "{refusal}"
         );
-        let still_served =
-            http_exchange_over_unix_socket(local_api_socket_path, "GET /health HTTP/1.1", b"")
-                .await;
-        assert!(
-            still_served.status_line.contains(" 200 "),
-            "{}",
-            still_served.status_line
-        );
+        assert_the_local_api_socket_answers_health(local_api_socket_path).await;
     }
 
     #[tokio::test]
@@ -342,14 +344,7 @@ mod tests {
 
         let _running_server = serve_the_stub_router_at(&local_api_socket_path);
 
-        let health =
-            http_exchange_over_unix_socket(&local_api_socket_path, "GET /health HTTP/1.1", b"")
-                .await;
-        assert!(
-            health.status_line.contains(" 200 "),
-            "{}",
-            health.status_line
-        );
+        let health = assert_the_local_api_socket_answers_health(&local_api_socket_path).await;
         assert!(
             health
                 .head
@@ -422,39 +417,34 @@ mod tests {
     }
 
     /// Serving the real router through [`serve_router_on_local_api_socket`]
-    /// leaves this process holding no new TCP listener, loopback included. A
-    /// launched node's own proof is the rig test
+    /// leaves this process holding no new TCP listener, loopback included. The
+    /// scan covers the whole test process, so no other test in this binary may
+    /// hold a TCP listener. A launched node's own proof is the rig test
     /// `test_a_launched_node_listens_on_no_tcp_socket`.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn serving_the_router_on_the_local_api_socket_opens_no_tcp_listener() {
         use std::os::fd::AsRawFd;
 
-        let tcp_listener_the_scan_must_see = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let inode_the_scan_must_see =
-            socket_inode_of_descriptor(tcp_listener_the_scan_must_see.as_raw_fd())
+        let mut tcp_listeners_the_scan_must_see =
+            vec![std::net::TcpListener::bind("127.0.0.1:0").unwrap()];
+        // A host without IPv6 loopback has no `tcp6` row to check the scan against.
+        tcp_listeners_the_scan_must_see.extend(std::net::TcpListener::bind("[::1]:0").ok());
+        let listening_while_holding_them = listening_tcp_socket_inodes_held_by_this_process();
+        for tcp_listener in &tcp_listeners_the_scan_must_see {
+            let inode_the_scan_must_see = socket_inode_of_descriptor(tcp_listener.as_raw_fd())
                 .expect("a bound TCP listener's descriptor names a socket inode");
-        assert!(
-            listening_tcp_socket_inodes_held_by_this_process().contains(&inode_the_scan_must_see),
-            "the scan must see the TCP listener this test holds"
-        );
-        drop(tcp_listener_the_scan_must_see);
+            assert!(
+                listening_while_holding_them.contains(&inode_the_scan_must_see),
+                "the scan must see the TCP listener this test holds at {}",
+                tcp_listener.local_addr().unwrap()
+            );
+        }
+        drop(tcp_listeners_the_scan_must_see);
         let listening_before_serving = listening_tcp_socket_inodes_held_by_this_process();
 
-        let directory = tempfile::tempdir().unwrap();
-        let running_server =
-            serve_the_stub_router_at(&directory.path().join("local-api-Rno-tcp.sock"));
-        let health = http_exchange_over_unix_socket(
-            running_server.local_api_socket_path(),
-            "GET /health HTTP/1.1",
-            b"",
-        )
-        .await;
-        assert!(
-            health.status_line.contains(" 200 "),
-            "{}",
-            health.status_line
-        );
+        let served = serve_the_stub_router_on_a_fresh_socket();
+        assert_the_local_api_socket_answers_health(&served.local_api_socket_path).await;
 
         let listening_while_serving = listening_tcp_socket_inodes_held_by_this_process();
         let opened_by_serving: Vec<&u64> = listening_while_serving
@@ -464,51 +454,43 @@ mod tests {
             opened_by_serving.is_empty(),
             "serving the local API opened TCP listeners: {opened_by_serving:?}"
         );
-        running_server.stop();
     }
 
-    /// Dropping the running server ends serving: the socket file stays, and
-    /// takes no new connection.
+    /// Dropping the running server removes its socket file and stops serving:
+    /// a connection held open across the drop is closed by the server.
     #[tokio::test]
-    async fn dropping_the_running_server_stops_serving() {
+    async fn dropping_the_running_server_stops_serving_and_removes_its_socket_file() {
         let directory = tempfile::tempdir().unwrap();
         let local_api_socket_path = directory.path().join("local-api-Rdrop.sock");
         let running_server = serve_the_stub_router_at(&local_api_socket_path);
-        let health =
-            http_exchange_over_unix_socket(&local_api_socket_path, "GET /health HTTP/1.1", b"")
-                .await;
-        assert!(
-            health.status_line.contains(" 200 "),
-            "{}",
-            health.status_line
-        );
+        let mut held_connection = tokio::net::UnixStream::connect(&local_api_socket_path)
+            .await
+            .unwrap();
+        held_connection
+            .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        let mut answered = Vec::new();
+        while !answered.ends_with(b"\r\n\r\nok") {
+            let mut chunk = [0u8; 256];
+            let read = held_connection.read(&mut chunk).await.unwrap();
+            assert_ne!(read, 0, "the server closed the connection before answering");
+            answered.extend_from_slice(&chunk[..read]);
+        }
 
         drop(running_server);
 
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            while tokio::net::UnixStream::connect(&local_api_socket_path)
-                .await
-                .is_ok()
-            {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("the socket must refuse connections once its server is dropped");
-        assert!(local_api_socket_path.exists());
-    }
-
-    /// Stopping the running server removes its socket file, so the path is
-    /// free for the next runtime to bind.
-    #[tokio::test]
-    async fn stopping_the_running_server_removes_its_socket_file() {
-        let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rstop.sock");
-        let running_server = serve_the_stub_router_at(&local_api_socket_path);
-        assert!(local_api_socket_path.exists());
-
-        running_server.stop();
-
         assert!(!local_api_socket_path.exists());
+        let mut after_the_drop = [0u8; 1];
+        let read_after_the_drop = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            held_connection.read(&mut after_the_drop),
+        )
+        .await
+        .expect("the server must close a held connection once it is dropped");
+        assert!(
+            matches!(read_after_the_drop, Ok(0) | Err(_)),
+            "the held connection must be closed, not answered: {read_after_the_drop:?}"
+        );
     }
 }

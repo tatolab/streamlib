@@ -143,9 +143,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         {
             tracing::warn!(%error, "failed to remove node registry entry on stop");
         }
-        if let Some(running_local_api_socket_server) = self.running_local_api_socket_server.take() {
-            running_local_api_socket_server.stop();
-        }
+        drop(self.running_local_api_socket_server.take());
         Ok(())
     }
 }
