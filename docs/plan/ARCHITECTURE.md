@@ -3890,7 +3890,6 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   verification reading a private port's snapshot instead]
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route -->
-  <!-- verify: cargo test -p streamlib-api-server the_exchange_route_rejects_a_missing_token_with_401_when_auth_on -->
 - **DECIDED** — There is no observer effect: reading a channel does not require terminating
   it in a window, so a mid-graph channel is observable in the topology that ships. Window capture survives only where
   the window is genuinely the subject — the present and swapchain path.

@@ -106,6 +106,9 @@ matters most where the id *is* per-frame.
 - The verb joins the bearer-gated set beside the tap WebSocket. That is mechanism
   parity, not a trust boundary the exchange imposes: whatever the open auth and
   remote-access question decides later, it decides for this verb the same as the rest.
+
+  > Amended 2026-10-01 by `local-api.md`: control carries no token, so the bearer gate
+  > retired with the network listener (#2575).
 - Latency is a client-shape question, not an operation cost. A warm client holding one
   connection round-trips on localhost in low single-digit milliseconds, inside the
   publish-to-claim window a 60 fps source with pool depth 4 allows. A cold process spawn
