@@ -188,16 +188,8 @@ placement-independent by construction (construction happens in the processor's h
 process; config travels as JSON on the graph node, which a closure never could across a
 process boundary).
 
-- **Ports are class attributes, not decorated methods.** `frames_from_upstream =
-  LinkInputDataPort()` makes the attribute name the port name, so a port is named once and
-  `self.frames_from_upstream.read()` is a typed, completable expression. The alternative —
-  decorating a stub method that exists only to carry metadata, then reading and writing by string
-  through a context object — repeats every port name and gives an editor nothing to complete
-  against. The engine binds a fresh per-instance port object when it constructs the processor;
-  the class attribute stays a declaration, so two instances of one class read different links.
-- **Lifecycle hooks take no arguments.** With ports on `self`, logging module-level and the clock
-  module-level, a context parameter would carry nothing. `def process(self) -> None` is the whole
-  signature.
+> ~~- **Ports are class attributes, not decorated methods.** `frames_from_upstream = LinkInputDataPort()` makes the attribute name the port name, so a port is named once and `self.frames_from_upstream.read()` is a typed, completable expression. The alternative — decorating a stub method that exists only to carry metadata, then reading and writing by string through a context object — repeats every port name and gives an editor nothing to complete against. The engine binds a fresh per-instance port object when it constructs the processor; the class attribute stays a declaration, so two instances of one class read different links.~~ — Superseded 2026-10-06 by the owner's 2026-08-03 ruling restoring decorated port methods (`@input` / `@output`, now `@input_port` / `@output_port`) and a context object in each hook.
+> ~~- **Lifecycle hooks take no arguments.** With ports on `self`, logging module-level and the clock module-level, a context parameter would carry nothing. `def process(self) -> None` is the whole signature.~~ — Superseded 2026-10-06 by the same ruling: every lifecycle hook takes a capability-typed context.
 - **`execution=` defaults to reactive only where reacting is possible.** A class declaring at
   least one input port defaults; one declaring none must say what it is. A source has nothing to
   react to, so the default would hand the author a processor that silently never runs — the one
