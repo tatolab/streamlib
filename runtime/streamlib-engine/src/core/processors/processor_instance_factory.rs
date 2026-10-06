@@ -630,10 +630,8 @@ fn duplicate_class_import_path(processor_class_import_path: &ProcessorClassImpor
 }
 
 /// Refuse a descriptor whose ports are not each in cast form under a name of
-/// their own.
-///
-/// Refused rather than cast, because a descriptor built by hand or by an older
-/// plugin would otherwise register names its own data plane never writes to.
+/// their own — every lookup casts its argument, so a port registered under an
+/// uncast name could never be reached.
 fn refuse_port_names_not_cast_or_declared_twice(descriptor: &ProcessorDescriptor) -> Result<()> {
     let mut port_names_seen = HashSet::new();
     for port in descriptor.inputs.iter().chain(&descriptor.outputs) {

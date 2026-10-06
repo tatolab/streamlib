@@ -6,8 +6,9 @@
 //! Shared by `streamlib-engine` (which re-exports it at
 //! `core::error`) and the engine-free authoring surface. Every variant
 //! is String / std / anyhow based plus the engine-free
-//! `ProcessorClassImportPath` (from `streamlib-processor-schema`) and, on
-//! Linux, the engine-free `ConsumerRhiError` conversion.
+//! `ProcessorClassImportPath` and `ExposedNameCastsToNothingError` (from
+//! `streamlib-processor-schema`) and, on Linux, the engine-free
+//! `ConsumerRhiError` conversion.
 
 use streamlib_processor_schema::{ExposedNameCastsToNothingError, ProcessorClassImportPath};
 
@@ -95,7 +96,8 @@ pub enum Error {
         "processor `{processor_class_import_path}` declares the port `{port_name}`, which is \
          not a cast name — a descriptor carries every port the way `#[processor]` and `@node` \
          declare it: lowercase a-z 0-9 - . _ ~, no leading, trailing or doubled '-', at most \
-         63 characters"
+         {max} characters",
+        max = streamlib_processor_schema::EXPOSED_NAME_MAXIMUM_LENGTH
     )]
     DescriptorPortNameNotCast {
         processor_class_import_path: ProcessorClassImportPath,

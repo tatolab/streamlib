@@ -469,8 +469,8 @@ impl Default for OutputWriterInner {
 /// [`OutputWriterInner`]. `Clone` bumps the `Arc<OutputWriterInner>`
 /// strong count; `Drop` decrements it.
 ///
-/// A port is named in any spelling that casts to its declared name, so
-/// `"videoOut"` reaches the port registered as `videoout`.
+/// A port is named in any spelling that casts to the name it registered
+/// under, so `"videoOut"` reaches the port registered as `videoout`.
 pub struct OutputWriter {
     /// Opaque handle: `Arc::into_raw(Arc<OutputWriterInner>)`. Null
     /// on a freshly-constructed processor before

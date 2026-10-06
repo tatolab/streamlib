@@ -52,6 +52,13 @@ impl PortDirection {
             PortDirection::Output => "output",
         }
     }
+
+    fn port_marker_module_name(self) -> &'static str {
+        match self {
+            PortDirection::Input => "InputLink",
+            PortDirection::Output => "OutputLink",
+        }
+    }
 }
 
 /// A parsed input/output port declaration.
@@ -335,6 +342,16 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
 
     let name_lit: LitStr = content.parse()?;
     let name = name_lit.value();
+    if syn::parse_str::<Ident>(&name).is_err() {
+        return Err(syn::Error::new(
+            name_lit.span(),
+            format!(
+                "port `{name}` is not a Rust identifier — the declared name is the port \
+                 marker's type (`{}::{name}`), so it must be one, and not a keyword",
+                direction.port_marker_module_name()
+            ),
+        ));
+    }
     let cast_name = cast_exposed_name_to_url_safe(&name)
         .map_err(|casts_to_nothing| syn::Error::new(name_lit.span(), casts_to_nothing))?
         .into_owned();
@@ -906,28 +923,42 @@ mod tests {
     fn a_port_is_declared_under_its_cast_and_keeps_its_spelling_for_the_marker() {
         let parsed = parse_ok(quote! {
             execution = manual,
-            input("Vidéo In", delivery_profile = "newest"),
+            input("VidéoIn", delivery_profile = "newest"),
             output("videoOut"),
         });
-        assert_eq!(parsed.inputs[0].declared_spelling, "Vidéo In");
-        assert_eq!(parsed.inputs[0].cast_name, "video-in");
+        assert_eq!(parsed.inputs[0].declared_spelling, "VidéoIn");
+        assert_eq!(parsed.inputs[0].cast_name, "videoin");
         assert_eq!(parsed.outputs[0].declared_spelling, "videoOut");
         assert_eq!(parsed.outputs[0].cast_name, "videoout");
 
         let schema = parsed.to_processor_schema();
-        assert_eq!(schema.inputs[0].name, "video-in");
+        assert_eq!(schema.inputs[0].name, "videoin");
         assert_eq!(schema.outputs[0].name, "videoout");
     }
 
     #[test]
-    fn a_port_name_casting_to_nothing_is_an_error() {
-        for unnameable in ["", "..", "%%"] {
+    fn a_port_name_that_is_not_an_identifier_is_an_error() {
+        for not_an_identifier in ["", "..", "video in", "video-out", "type"] {
             let msg = parse_err(quote! {
                 execution = manual,
-                output(#unnameable),
+                output(#not_an_identifier),
             });
-            assert!(msg.contains("cannot name anything"), "{unnameable:?} got: {msg}");
+            assert!(
+                msg.contains(&format!(
+                    "port `{not_an_identifier}` is not a Rust identifier"
+                )),
+                "{not_an_identifier:?} got: {msg}"
+            );
         }
+    }
+
+    #[test]
+    fn a_port_name_casting_to_nothing_is_an_error() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("日本"),
+        });
+        assert!(msg.contains("cannot name anything"), "got: {msg}");
     }
 
     #[test]

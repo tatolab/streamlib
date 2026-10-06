@@ -13,38 +13,36 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
 use streamlib_processor_schema::ProcessorSchema;
 
-use crate::grammar::ParsedPort;
+use crate::grammar::{ParsedPort, ParsedProcessorAttr};
+use syn::ItemStruct;
 use syn::spanned::Spanned;
-use syn::{ItemStruct, Path};
 
-/// Generate a processor module from the attribute-declared [`ProcessorSchema`].
-/// Execution and ports are authored in the `#[processor(...)]` attribute —
-/// nothing here reads a file, and nothing authors identity.
+/// Generate a processor module from the parsed `#[processor(...)]` attribute.
+/// Execution and ports are authored in the attribute — nothing here reads a
+/// file, and nothing authors identity.
 ///
-/// `config_type_path` is the Rust type path for the processor's typed `Config`
-/// alias, taken verbatim from the attribute's `config = <Path>`; `None` binds
-/// `EmptyConfig`, whose schema is the empty object a processor declaring no
-/// config publishes. `config_field_name` is the generated struct field
-/// (present iff `config_type_path` is `Some`). The declared ports name the
-/// port markers, whose identifiers keep the author's spelling where `schema`
-/// carries only the cast.
-pub fn generate_from_processor_schema(
+/// The descriptor is emitted from the attribute's [`ProcessorSchema`], which
+/// carries each port's cast name; the port markers keep the author's spelling.
+/// A config declared as `config = <Path>` binds that typed `Config` alias and a
+/// generated struct field; none binds `EmptyConfig`, whose schema is the empty
+/// object a processor declaring no config publishes.
+pub fn generate_from_parsed_processor_attr(
     item: &ItemStruct,
-    schema: &ProcessorSchema,
-    declared_input_ports: &[ParsedPort],
-    declared_output_ports: &[ParsedPort],
-    config_type_path: Option<&Path>,
-    config_field_name: Option<&str>,
+    parsed: &ParsedProcessorAttr,
     sdk_root: TokenStream,
 ) -> TokenStream {
     let module_name = &item.ident;
+    let schema = &parsed.to_processor_schema();
 
-    let config_type = match config_type_path {
+    let config_type = match &parsed.config_type {
         Some(path) => quote! { #path },
         None => quote! { __streamlib_sdk::processors::EmptyConfig },
     };
 
-    let config_field_name = config_field_name.map(|name| Ident::new(name, Span::call_site()));
+    let config_field_name = parsed
+        .config_type
+        .as_ref()
+        .map(|_| Ident::new(&parsed.config_field_name, Span::call_site()));
 
     // Extract custom fields from the user's struct
     let custom_fields = extract_custom_fields(item);
@@ -52,8 +50,16 @@ pub fn generate_from_processor_schema(
 
     let processor_struct =
         generate_processor_struct_from_schema(schema, &config_field_name, &custom_fields);
-    let input_link_module = generate_input_link_module(declared_input_ports);
-    let output_link_module = generate_output_link_module(declared_output_ports);
+    let input_link_module = generate_port_marker_module(
+        quote! { InputLink },
+        quote! { InputPortMarker },
+        &parsed.inputs,
+    );
+    let output_link_module = generate_port_marker_module(
+        quote! { OutputLink },
+        quote! { OutputPortMarker },
+        &parsed.outputs,
+    );
     let processor_impl = generate_processor_impl_from_schema(
         schema,
         &config_type,
@@ -265,17 +271,21 @@ fn generate_processor_struct_from_schema(
     }
 }
 
-/// Generate the `InputLink` module: one marker per declared input port, named by
-/// its declared spelling and carrying its cast name.
-fn generate_input_link_module(declared_input_ports: &[ParsedPort]) -> TokenStream {
-    let port_markers: Vec<TokenStream> = declared_input_ports
+/// Generate a port-marker module (`InputLink` / `OutputLink`): one marker per
+/// declared port, named by its declared spelling and carrying its cast name.
+fn generate_port_marker_module(
+    module_name: TokenStream,
+    port_marker_trait: TokenStream,
+    declared_ports: &[ParsedPort],
+) -> TokenStream {
+    let port_markers: Vec<TokenStream> = declared_ports
         .iter()
         .map(|port| {
-            let marker_name = Ident::new(&port.declared_spelling, proc_macro2::Span::call_site());
+            let marker_name = Ident::new(&port.declared_spelling, port.declared_spelling_span);
             let cast_name = &port.cast_name;
             quote! {
                 pub struct #marker_name;
-                impl super::__streamlib_sdk::processors::InputPortMarker for #marker_name {
+                impl super::__streamlib_sdk::processors::#port_marker_trait for #marker_name {
                     const PORT_NAME: &'static str = #cast_name;
                     type Processor = super::Processor;
                 }
@@ -284,32 +294,7 @@ fn generate_input_link_module(declared_input_ports: &[ParsedPort]) -> TokenStrea
         .collect();
 
     quote! {
-        pub mod InputLink {
-            #(#port_markers)*
-        }
-    }
-}
-
-/// Generate the `OutputLink` module: one marker per declared output port, named by
-/// its declared spelling and carrying its cast name.
-fn generate_output_link_module(declared_output_ports: &[ParsedPort]) -> TokenStream {
-    let port_markers: Vec<TokenStream> = declared_output_ports
-        .iter()
-        .map(|port| {
-            let marker_name = Ident::new(&port.declared_spelling, proc_macro2::Span::call_site());
-            let cast_name = &port.cast_name;
-            quote! {
-                pub struct #marker_name;
-                impl super::__streamlib_sdk::processors::OutputPortMarker for #marker_name {
-                    const PORT_NAME: &'static str = #cast_name;
-                    type Processor = super::Processor;
-                }
-            }
-        })
-        .collect();
-
-    quote! {
-        pub mod OutputLink {
+        pub mod #module_name {
             #(#port_markers)*
         }
     }
@@ -1292,15 +1277,9 @@ mod processor_struct_emit_tests {
     }
 
     fn expand_probe_processor(item: &ItemStruct) -> TokenStream {
-        generate_from_processor_schema(
-            item,
-            &minimal_schema(),
-            &[],
-            &[],
-            None,
-            None,
-            quote! { streamlib },
-        )
+        let parsed = crate::grammar::parse2(quote! { execution = manual }, &item.ident)
+            .expect("a minimal attribute parses");
+        generate_from_parsed_processor_attr(item, &parsed, quote! { streamlib })
     }
 
     fn struct_with_cfg_attr_on_a_field() -> ItemStruct {
@@ -1553,7 +1532,12 @@ mod processor_struct_emit_tests {
             delivery_profile: None,
             audio_window: None,
         };
-        let rendered = generate_output_link_module(&[declared_output_port]).to_string();
+        let rendered = generate_port_marker_module(
+            quote! { OutputLink },
+            quote! { OutputPortMarker },
+            &[declared_output_port],
+        )
+        .to_string();
         assert!(rendered.contains("pub struct videoOut"), "got: {rendered}");
         assert!(
             rendered.contains(r#"const PORT_NAME : & 'static str = "videoout""#),

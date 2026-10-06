@@ -18,10 +18,12 @@ mod graph_tests;
 // top level
 pub(crate) use data_structure::node_names_listed_for_a_refusal;
 pub use data_structure::{Graph, GraphState};
-pub use streamlib_processor_schema::{EXPOSED_NAME_MAXIMUM_LENGTH, cast_exposed_name_to_url_safe};
-pub(crate) use streamlib_processor_schema::is_in_exposed_name_cast_form;
 pub use graph_readiness::ObservableGraphReadiness;
 pub use processor_state_ecs_component::{ProcessorState, ProcessorStateComponent};
+pub(crate) use streamlib_processor_schema::is_in_exposed_name_cast_form;
+pub use streamlib_processor_schema::{
+    EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe,
+};
 pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
 pub use validation::validate_graph;
 

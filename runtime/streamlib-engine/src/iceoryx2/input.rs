@@ -1271,8 +1271,8 @@ impl Default for InputMailboxesInner {
 /// [`InputMailboxesInner`]. `Clone` bumps the `Arc<InputMailboxesInner>`
 /// strong count; `Drop` decrements it.
 ///
-/// A port is named in any spelling that casts to its declared name, so
-/// `"videoOut"` reaches the port registered as `videoout`.
+/// A port is named in any spelling that casts to the name it registered
+/// under, so `"videoOut"` reaches the port registered as `videoout`.
 pub struct InputMailboxes {
     /// Opaque handle: `Arc::into_raw(Arc<InputMailboxesInner>)`. Null
     /// on a freshly-constructed processor before
@@ -2319,14 +2319,31 @@ mod tests {
         );
         assert!(!mailboxes.has_data("videoIn"));
 
-        publish_one_frame(&publisher, "videoout", b"bag");
+        publish_one_frame(&publisher, "videoout", b"first");
+        publish_one_frame(&publisher, "videoout", b"second");
+        publish_one_frame(
+            &publisher,
+            "videoout",
+            &rmp_serde::to_vec_named("third").expect("the bag encodes"),
+        );
 
         assert!(mailboxes.has_data("videoIn"));
         let (payload, _timestamp_ns) = mailboxes
             .read_raw("videoIn")
             .expect("a cast-alike spelling names the port")
-            .expect("one bag was published");
-        assert_eq!(payload, b"bag");
+            .expect("three bags were published");
+        assert_eq!(payload, b"first");
+        let (payload, _timestamp_ns, inbound_link_name) = mailboxes
+            .read_raw_from_inbound_link("VideoIn")
+            .expect("a cast-alike spelling names the port")
+            .expect("two bags remain");
+        assert_eq!(payload, b"second");
+        assert_eq!(inbound_link_name.as_str(), "pcamera/videoout");
+        let (bag, _inbound_link_name) = mailboxes
+            .read_from_inbound_link::<String>("VIDEOIN")
+            .expect("a cast-alike spelling names the port")
+            .expect("one bag remains");
+        assert_eq!(bag, "third");
 
         let refusal = mailboxes.read_raw("%%").unwrap_err();
         assert!(

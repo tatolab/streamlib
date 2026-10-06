@@ -43,7 +43,11 @@ fn video_sink_registered() -> ProcessorClassImportPath {
         "rust port name cast test",
     )
     .with_input(PortDescriptor::new("video_in", "", false));
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+    match PROCESSOR_REGISTRY.register_descriptor_only(descriptor) {
+        // Registered by an earlier test in this binary.
+        Ok(()) | Err(Error::Configuration(_)) => {}
+        Err(refusal) => panic!("the sink fixture is refused: {refusal}"),
+    }
     import_path
 }
 
