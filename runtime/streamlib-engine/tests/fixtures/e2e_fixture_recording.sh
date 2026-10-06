@@ -125,7 +125,7 @@ fi
 # The interpreter beside the CLI, because that is the one whose environment the
 # CLI ships in; a bare `python3` can be an unrelated one that happens to be
 # first on PATH.
-FIXTURE_NODE_PYTHON="$(dirname "$STREAMLIB_CLI")/python3"
+FIXTURE_NODE_PYTHON="$(dirname "$(readlink -f "$STREAMLIB_CLI" 2>/dev/null || echo "$STREAMLIB_CLI")")/python3"
 if [ ! -x "$FIXTURE_NODE_PYTHON" ]; then
     FIXTURE_NODE_PYTHON="$(command -v python3)"
 fi

@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
 """Print the runtime_id of the live registered node a fixture launched.
 
 Usage: python runtime_id_of_launched_node.py <launched pid>

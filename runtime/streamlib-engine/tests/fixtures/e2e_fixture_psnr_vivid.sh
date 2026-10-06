@@ -157,7 +157,7 @@ fi
 # The interpreter beside the CLI reads the node registry and runs the python
 # arm, because that is the one whose environment the CLI ships in; a bare
 # `python3` can be an unrelated one that happens to be first on PATH.
-STREAMLIB_CLI_PYTHON="$(dirname "$STREAMLIB_CLI")/python3"
+STREAMLIB_CLI_PYTHON="$(dirname "$(readlink -f "$STREAMLIB_CLI" 2>/dev/null || echo "$STREAMLIB_CLI")")/python3"
 if [ ! -x "$STREAMLIB_CLI_PYTHON" ]; then
     STREAMLIB_CLI_PYTHON="$(command -v python3)"
 fi

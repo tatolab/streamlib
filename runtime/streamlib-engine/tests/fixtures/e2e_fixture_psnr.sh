@@ -106,7 +106,7 @@ if [ ! -x "$STREAMLIB_CLI" ]; then
 fi
 # The interpreter beside the CLI reads the node registry, because that is the
 # one whose environment the CLI ships in.
-STREAMLIB_CLI_PYTHON="$(dirname "$STREAMLIB_CLI")/python3"
+STREAMLIB_CLI_PYTHON="$(dirname "$(readlink -f "$STREAMLIB_CLI" 2>/dev/null || echo "$STREAMLIB_CLI")")/python3"
 if [ ! -x "$STREAMLIB_CLI_PYTHON" ]; then
     STREAMLIB_CLI_PYTHON="$(command -v python3)"
 fi
