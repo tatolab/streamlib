@@ -88,7 +88,7 @@ fn read_config_schema_document(processor_class: &Bound<'_, PyAny>) -> PyResult<s
         PyTypeError::new_err(format!(
             "__streamlib_processor_config_schema__ must be a JSON object, got a {} — the \
              decorator derives this document, so a class reaching here was built by hand \
-             rather than by @streamlib.node",
+             rather than by @tatolab.stream.node",
             python_type_name_for_error_message(&stamped, "value of unknown type")
         ))
     })?;
@@ -117,7 +117,7 @@ fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<Executi
         unknown => {
             return Err(PyTypeError::new_err(format!(
                 "unknown execution mode {unknown:?} — the decorator validates this, so a class \
-                 reaching here was built by hand rather than by @streamlib.node"
+                 reaching here was built by hand rather than by @tatolab.stream.node"
             )));
         }
     };
@@ -427,7 +427,7 @@ mod tests {
     use streamlib::sdk::descriptors::ProcessorConfigJsonSchema;
     use streamlib::sdk::processors::EmptyConfig;
 
-    /// A class carrying what `@streamlib.node` attaches.
+    /// A class carrying what `@tatolab.stream.node` attaches.
     const DECLARED_CLASS_SOURCE: &str = "\
 __name__ = 'my_app.filters'
 
@@ -476,17 +476,17 @@ class BlurProcessor:
     /// `sys.path`, and the point is to read a marker the real decorator built
     /// rather than one this test hand-wrote.
     const PROCESSOR_DECLARATION_MODULE_SOURCE: &str =
-        include_str!("../python/streamlib/_processor_declaration.py");
+        include_str!("../python/tatolab/stream/_processor_declaration.py");
 
     /// A namespace with the real decorator module already run in it.
     ///
-    /// Marked as belonging to a stand-in `streamlib` package, because the
+    /// Marked as belonging to a stand-in `tatolab.stream` package, because the
     /// decorator module imports a sibling relatively and a bare run of its
     /// source resolves that against nothing.
     fn declaration_module_namespace(python: Python<'_>) -> Bound<'_, PyDict> {
-        install_stand_in_streamlib_package(python);
+        install_stand_in_tatolab_stream_package(python);
         let namespace = PyDict::new(python);
-        namespace.set_item("__package__", "streamlib").unwrap();
+        namespace.set_item("__package__", "tatolab.stream").unwrap();
         python
             .run(
                 &std::ffi::CString::new(PROCESSOR_DECLARATION_MODULE_SOURCE).unwrap(),
@@ -497,27 +497,27 @@ class BlurProcessor:
         namespace
     }
 
-    /// The wheel's own Python directory, where the decorator module's siblings
-    /// live.
-    const WHEEL_PYTHON_PACKAGE_DIRECTORY: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/python/streamlib");
+    /// The `tatolab.stream` package directory, where the decorator module's
+    /// siblings live.
+    const WHEEL_PYTHON_TATOLAB_STREAM_PACKAGE_DIRECTORY: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/python/tatolab/stream");
 
-    /// Put a `streamlib` package on `sys.modules` whose search path is the real
-    /// source directory, so the decorator module's relative imports resolve
-    /// without an installed wheel.
+    /// Put a `tatolab.stream` package on `sys.modules` whose search path is the
+    /// real source directory, so the decorator module's relative imports
+    /// resolve without an installed wheel.
     ///
     /// A package object already on `sys.modules` is never initialised again, so
     /// `__init__.py` — which imports the compiled `_engine` a `cargo test` run
     /// does not have — is not executed. Only the siblings actually imported are
     /// loaded, and each is the same file `include_str!` above reads.
     ///
-    /// `_engine` is the one sibling that cannot be: it is the compiled artifact
-    /// this binary *is* a copy of, and a `maturin develop` leaves one in the
-    /// source directory that the search path would otherwise load — a second
-    /// engine, with its own process-global registry, deciding whether these
-    /// tests pass. A stand-in stands in for it, so a decoration here reads the
-    /// grammar and registers nothing.
-    fn install_stand_in_streamlib_package(python: Python<'_>) {
+    /// `tatolab.runtime._engine` is the one module that cannot be: it is the
+    /// compiled artifact this binary *is* a copy of, and a `maturin develop`
+    /// leaves one in the source directory that a search path would otherwise
+    /// load — a second engine, with its own process-global registry, deciding
+    /// whether these tests pass. A stand-in stands in for it, so a decoration
+    /// here reads the grammar and registers nothing.
+    fn install_stand_in_tatolab_stream_package(python: Python<'_>) {
         let sys_modules = python
             .import("sys")
             .unwrap()
@@ -525,34 +525,35 @@ class BlurProcessor:
             .unwrap()
             .cast_into::<PyDict>()
             .unwrap();
-        // Each half is claimed on its own: a `streamlib` already on `sys.modules` without
-        // `streamlib._engine` would otherwise skip the stand-in and leave the relative import
-        // to find the compiled artifact this binary is a copy of.
-        if !sys_modules.contains("streamlib").unwrap() {
+        // Each module is claimed on its own: a `tatolab.stream` already on
+        // `sys.modules` without `tatolab.runtime._engine` would otherwise skip the
+        // stand-in and leave the import to find the compiled artifact this binary
+        // is a copy of.
+        if !sys_modules.contains("tatolab.stream").unwrap() {
             let package = python
                 .import("types")
                 .unwrap()
-                .call_method1("ModuleType", ("streamlib",))
+                .call_method1("ModuleType", ("tatolab.stream",))
                 .unwrap();
             package
                 .setattr(
                     "__path__",
-                    PyList::new(python, [WHEEL_PYTHON_PACKAGE_DIRECTORY]).unwrap(),
+                    PyList::new(python, [WHEEL_PYTHON_TATOLAB_STREAM_PACKAGE_DIRECTORY]).unwrap(),
                 )
                 .unwrap();
-            sys_modules.set_item("streamlib", package).unwrap();
+            sys_modules.set_item("tatolab.stream", package).unwrap();
         }
 
-        if !sys_modules.contains("streamlib._engine").unwrap() {
+        if !sys_modules.contains("tatolab.runtime._engine").unwrap() {
             let stand_in_engine = PyModule::from_code(
                 python,
                 c"def register_declared_processor_class(processor_class): pass",
-                c"streamlib/_engine.py",
-                c"streamlib._engine",
+                c"tatolab/runtime/_engine.py",
+                c"tatolab.runtime._engine",
             )
             .unwrap();
             sys_modules
-                .set_item("streamlib._engine", stand_in_engine)
+                .set_item("tatolab.runtime._engine", stand_in_engine)
                 .unwrap();
         }
     }

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`streamlib.MicrophoneSource` — the audio built-in, marker to numpy view.
+"""`tatolab.stream.MicrophoneSource` — the audio built-in, marker to numpy view.
 
 The marker tests are pure Python. The graph tests boot a real engine, which
 initializes a GPU context, so they carry `requires_gpu` like every other graph
@@ -24,9 +24,10 @@ from pathlib import Path
 
 import pytest
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from microphone_source_named_device_app import UNOPENABLE_DEVICE_ID
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 MICROPHONE_SOURCE_APP = Path(__file__).parent / "microphone_source_app.py"
 NAMED_DEVICE_APP = Path(__file__).parent / "microphone_source_named_device_app.py"
@@ -45,19 +46,19 @@ DEVICE_CLOCK_TOLERANCE_NS_PER_BLOCK = 100_000
 
 def test_the_marker_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        streamlib.MicrophoneSource()
+        tatolab.stream.MicrophoneSource()
 
 
 @stream
 def one_microphone_source_left_unnamed(stream: Stream) -> None:
-    stream.add(streamlib.MicrophoneSource)
+    stream.add(tatolab.stream.MicrophoneSource)
 
 
 def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(one_microphone_source_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == ["microphonesource"]
 
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(graph)
     finally:

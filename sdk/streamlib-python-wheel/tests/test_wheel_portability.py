@@ -310,7 +310,7 @@ def _native_binaries_in(package_directory: Path) -> list[Path]:
 
 @pytest.fixture(scope="module")
 def native_extension_path() -> Path:
-    engine = importlib.import_module("streamlib._engine")
+    engine = importlib.import_module("tatolab.runtime._engine")
     assert engine.__file__ is not None, "the native extension has no file on disk"
     return Path(engine.__file__)
 
@@ -322,9 +322,12 @@ def native_extension_needed_libraries(native_extension_path: Path) -> list[str]:
 
 @pytest.fixture(scope="module")
 def native_binaries_the_package_carries() -> list[Path]:
-    package_spec = importlib.util.find_spec("streamlib")
-    assert package_spec is not None and package_spec.origin is not None
-    return _native_binaries_in(Path(package_spec.origin).parent)
+    native_binaries: list[Path] = []
+    for package_name in ("tatolab.stream", "tatolab.runtime"):
+        package_spec = importlib.util.find_spec(package_name)
+        assert package_spec is not None and package_spec.origin is not None, package_name
+        native_binaries.extend(_native_binaries_in(Path(package_spec.origin).parent))
+    return native_binaries
 
 
 @pytest.fixture(scope="module")

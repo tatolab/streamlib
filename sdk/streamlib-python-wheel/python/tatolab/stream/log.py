@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from ._engine import log_event
+from tatolab.runtime._engine import log_event
 
 __all__ = ["debug", "error", "info", "trace", "warn", "warning"]
 
@@ -23,7 +23,7 @@ HelperProcessLogSink = Callable[[str, str, "Optional[dict[str, Any]]"], None]
 
 # A helper process has no engine in it, so its records travel to the parent's
 # pipeline instead of being handed straight to one. Installed by
-# `streamlib._helper` at startup and never by app code.
+# `tatolab.runtime._helper` at startup and never by app code.
 _helper_process_sink: "Optional[HelperProcessLogSink]" = None
 
 

@@ -27,10 +27,11 @@ them from the device rather than writing them down.
 import json
 import threading
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from speaker_sink_probes import AudioBlockCountingProbe
-from streamlib import Stream, compile_stream_to_graph, stream
-from streamlib._control_plane_client import call_tool
+from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.runtime._control_plane_client import call_tool
 from this_processes_node_registry_entry import this_processes_local_api_socket
 
 READINESS_TIMEOUT_SECONDS = 20.0
@@ -59,8 +60,8 @@ def _report_the_speakers_settled_window_contract(speaker_node_name: str) -> None
 
 @stream
 def microphone_into_a_speaker_and_a_block_counting_probe(stream: Stream) -> None:
-    microphone = stream.add(streamlib.MicrophoneSource)
-    speaker = stream.add(streamlib.SpeakerSink, name=SPEAKER_NODE_NAME)
+    microphone = stream.add(tatolab.stream.MicrophoneSource)
+    speaker = stream.add(tatolab.stream.SpeakerSink, name=SPEAKER_NODE_NAME)
     stream.connect(microphone.output("audio"), speaker.input("audio"))
 
     probe = stream.add(AudioBlockCountingProbe)
@@ -71,13 +72,13 @@ def main() -> None:
     graph = compile_stream_to_graph(
         microphone_into_a_speaker_and_a_block_counting_probe
     )
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.host_control_plane()
 
     def watch_readiness() -> None:
         try:
-            runtime.wait_until_every_processor_is_running(
+            runtime.wait_until_every_node_is_running(
                 timeout=READINESS_TIMEOUT_SECONDS
             )
             print("MARKER:EVERY_PROCESSOR_RUNNING", flush=True)

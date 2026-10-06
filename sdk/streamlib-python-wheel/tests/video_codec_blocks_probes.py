@@ -22,7 +22,7 @@ overlap.
 
 import json
 
-from streamlib import EncodedVideoFrame, input, log, node
+from tatolab.stream import EncodedVideoFrame, input, log, node
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "

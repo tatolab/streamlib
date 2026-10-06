@@ -146,7 +146,7 @@ def test_a_context_stashed_from_setup_keeps_answering(start_app_under_test):
     observation = run_probe(start_app_under_test, "ContextStasher")
     assert observation["stashed_is_paused"] is False
     assert observation["stashed_config"] == {}
-    assert observation["stashed_processor_id"]
+    assert observation["stashed_node_id"]
 
 
 # ---------------------------------------------------------------------------

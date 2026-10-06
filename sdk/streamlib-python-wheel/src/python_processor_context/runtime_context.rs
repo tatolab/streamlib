@@ -21,7 +21,7 @@ use super::link_data_access::{PythonLinkInputDataReader, PythonLinkOutputDataWri
 /// Built in the helper process the processor runs in — there is no engine in
 /// that process to borrow a view from, so everything a hook reads is either
 /// local or was passed down by the parent.
-#[pyclass(name = "RuntimeContextFullAccess", module = "streamlib", frozen)]
+#[pyclass(name = "RuntimeContextFullAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonRuntimeContextFullAccess {
     runtime_id: String,
     processor_id: String,
@@ -45,13 +45,13 @@ impl PythonRuntimeContextFullAccess {
     /// with both and the surface-share socket the parent's env names, the GPU
     /// surface works here — without any of them, GPU calls refuse by name.
     #[staticmethod]
-    #[pyo3(signature = (configuration, link_data_access, runtime_id, processor_id, escalate_request_to_parent = None, release_to_parent_without_waiting = None))]
+    #[pyo3(signature = (configuration, link_data_access, runtime_id, node_id, escalate_request_to_parent = None, release_to_parent_without_waiting = None))]
     fn open_for_helper_process(
         python: Python<'_>,
         configuration: &Bound<'_, PyAny>,
         link_data_access: &Bound<'_, PythonProcessorLinkDataAccess>,
         runtime_id: String,
-        processor_id: String,
+        node_id: String,
         escalate_request_to_parent: Option<&Bound<'_, PyAny>>,
         release_to_parent_without_waiting: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
@@ -70,7 +70,7 @@ impl PythonRuntimeContextFullAccess {
                     // service's crash watchdog sweeps registrations by
                     // runtime id, and this child's crash must sweep only
                     // this child's adoptions.
-                    format!("helper:{processor_id}"),
+                    format!("helper:{node_id}"),
                 )))
             }
             _ => None,
@@ -85,7 +85,7 @@ impl PythonRuntimeContextFullAccess {
         )?;
         Ok(Self {
             runtime_id,
-            processor_id,
+            processor_id: node_id,
             configuration: python_object_to_json_value(configuration)?,
             link_input_data_reader: Py::new(
                 python,
@@ -175,7 +175,7 @@ impl PythonRuntimeContextFullAccess {
         self.runtime_id.clone()
     }
 
-    #[getter]
+    #[getter(node_id)]
     fn processor_id(&self) -> String {
         self.processor_id.clone()
     }
@@ -195,7 +195,11 @@ impl PythonRuntimeContextFullAccess {
 ///
 /// `gpu_full_access` is deliberately absent — reaching for it raises
 /// `AttributeError`, mirroring the Rust capability split.
-#[pyclass(name = "RuntimeContextLimitedAccess", module = "streamlib", frozen)]
+#[pyclass(
+    name = "RuntimeContextLimitedAccess",
+    module = "tatolab.stream",
+    frozen
+)]
 pub(crate) struct PythonRuntimeContextLimitedAccess {
     runtime_id: String,
     processor_id: String,
@@ -241,7 +245,7 @@ impl PythonRuntimeContextLimitedAccess {
         self.runtime_id.clone()
     }
 
-    #[getter]
+    #[getter(node_id)]
     fn processor_id(&self) -> String {
         self.processor_id.clone()
     }

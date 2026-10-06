@@ -25,8 +25,9 @@ from pathlib import Path
 
 import pytest
 
-import streamlib
-from streamlib import (
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import (
     H264Decoder,
     H264Encoder,
     H265Decoder,
@@ -74,10 +75,10 @@ def _add_a_codec_round_trip_into_a_window(
     encoder_class: "type[H264Encoder] | type[H265Encoder]",
     decoder_class: "type[H264Decoder] | type[H265Decoder]",
 ) -> None:
-    pattern = stream.add(streamlib.TestPatternSource)
+    pattern = stream.add(tatolab.stream.TestPatternSource)
     encoder = stream.add(encoder_class)
     decoder = stream.add(decoder_class)
-    window = stream.add(streamlib.DisplayWindow)
+    window = stream.add(tatolab.stream.DisplayWindow)
     stream.connect(pattern.output("video"), encoder.input("video"))
     stream.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
     stream.connect(decoder.output("video"), window.input("video"))
@@ -155,7 +156,7 @@ def test_node_name_defaults_to_the_type_name(marker_class):
         node for node in graph["nodes"] if node["type"] == marker_class.type
     ]
     assert codec_node["name"] == marker_class.__name__.lower()
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(graph)
     finally:
@@ -169,7 +170,7 @@ def test_the_round_trip_wires_without_an_adapter(codec):
     calls and three `stream.connect` calls the whole of a codec round trip.
     The builder checks no port name, so the proof is the engine's `load`."""
     graph = compile_stream_to_graph(CODEC_ROUND_TRIPS[codec]["stream"])
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(graph)
     finally:

@@ -39,8 +39,8 @@ if [ "$(uname -s)" = Darwin ]; then
                 echo "UNAVAILABLE: $PYTHON cannot import numpy"
                 exit 1
             fi
-            if ! "$PYTHON" -c "import streamlib" &>/dev/null; then
-                echo "UNAVAILABLE: $PYTHON cannot import streamlib — build the wheel with" \
+            if ! "$PYTHON" -c "import tatolab.runtime" &>/dev/null; then
+                echo "UNAVAILABLE: $PYTHON cannot import tatolab.runtime — build the wheel with" \
                     "maturin develop --release in sdk/streamlib-python-wheel"
                 exit 1
             fi

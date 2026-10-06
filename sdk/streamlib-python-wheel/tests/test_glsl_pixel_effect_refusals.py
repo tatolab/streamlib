@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import pytest
 
-from streamlib import (
+from tatolab.stream import (
     GlslPixelEffect,
     GpuContextFullAccess,
     GpuContextLimitedAccess,
@@ -57,7 +57,7 @@ class GpuLimitedAccessStandIn:
     def __init__(self) -> None:
         self.calls: "list[str]" = []
 
-    def acquire_texture_from_processor_output_pool(
+    def acquire_texture_from_node_output_pool(
         self, pool_key: str, rotation_depth: int, width: int, height: int,
         texture_format: str, usage: "list[str]",
     ) -> SurfaceHandleStandIn:

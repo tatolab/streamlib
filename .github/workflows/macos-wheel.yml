@@ -98,11 +98,24 @@ jobs:
           # Named, so a driver maturin left out fails here by name rather than
           # passing every check below with less to check.
           for staged_file in libvulkan.1.dylib libMoltenVK.dylib MoltenVK_icd.json; do
-            if [ ! -f "/tmp/unzipped-wheel/streamlib/_vulkan_driver/$staged_file" ]; then
+            if [ ! -f "/tmp/unzipped-wheel/tatolab/runtime/_vulkan_driver/$staged_file" ]; then
               echo "::error::the wheel does not carry _vulkan_driver/$staged_file"
               exit 1
             fi
           done
+          # PEP 420: `tatolab` is a namespace package. A regular
+          # `tatolab/__init__.py` would shadow every other distribution's
+          # `tatolab.*` portion installed beside this wheel.
+          for regular_package in stream runtime; do
+            if [ ! -f "/tmp/unzipped-wheel/tatolab/$regular_package/__init__.py" ]; then
+              echo "::error::the wheel does not carry tatolab/$regular_package/__init__.py"
+              exit 1
+            fi
+          done
+          if [ -e /tmp/unzipped-wheel/tatolab/__init__.py ]; then
+            echo "::error::the wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
           # `-exec … +`, not a `while read` loop: find's status is non-zero if
           # any codesign fails, where a loop reports only the last one.
           find /tmp/unzipped-wheel \( -name '*.so' -o -name '*.dylib' \) \
@@ -117,11 +130,11 @@ jobs:
           # Compared against the venv's own site-packages, resolved on both
           # sides: macOS's `/tmp` is a symlink to `/private/tmp`.
           installed_package="$(/tmp/wheel-check/bin/python - <<'EOF'
-          import pathlib, sysconfig, streamlib
-          installed_package = pathlib.Path(streamlib.__file__).resolve().parent
+          import pathlib, sysconfig, tatolab.runtime
+          installed_package = pathlib.Path(tatolab.runtime.__file__).resolve().parent
           site_packages = pathlib.Path(sysconfig.get_path("purelib")).resolve()
-          assert installed_package.parent == site_packages, (
-              f"streamlib imported from {installed_package}, not the installed wheel in {site_packages}"
+          assert installed_package.parent.parent == site_packages, (
+              f"tatolab.runtime imported from {installed_package}, not the installed wheel in {site_packages}"
           )
           print(installed_package)
           EOF

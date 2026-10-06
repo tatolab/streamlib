@@ -11,7 +11,7 @@ spawned but never received traffic has not made the pipeline live.
 
 import os
 
-from streamlib import input, log, node  # noqa: A004 — streamlib's port decorator
+from tatolab.stream import input, log, node  # noqa: A004 — tatolab.stream's port decorator
 
 
 @node

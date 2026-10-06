@@ -6,10 +6,10 @@
 """The helper process one Python processor runs in.
 
 Every `@node` class runs here — its own interpreter, its own GIL, one
-processor per process. The parent execs `sys.executable -m streamlib._helper`;
-this module imports the class by the import path the parent derived from it,
-opens that processor's own iceoryx2 ports from the wiring the parent sends,
-and drives its lifecycle.
+processor per process. The parent execs
+`sys.executable -m tatolab.runtime._helper`; this module imports the class by
+the import path the parent derived from it, opens that processor's own
+iceoryx2 ports from the wiring the parent sends, and drives its lifecycle.
 
 Startup order is load-bearing: the escalate socket comes up first so logging
 has somewhere to go, and the user's module is imported last so anything it
@@ -33,13 +33,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from . import log
+from tatolab.stream import log
+
 from ._capability_extensions import (
     load_installed_capability_extensions_once_per_process,
 )
 from ._engine import (
     MonotonicTimer,
-    ProcessorLinkDataAccess,
+    NodeLinkDataAccess,
     RuntimeContextFullAccess,
     capability_extension_host_for_the_helper_process,
     capture_this_helper_processes_engine_log_records,
@@ -577,7 +578,7 @@ class ParentProcessLogSink:
                 "attrs": attrs,
             }
             # Named only where there is one to name: the two columns an engine
-            # record fills are absent from every `streamlib.log` document,
+            # record fills are absent from every `tatolab.stream.log` document,
             # which is the document helpers have always sent.
             if target is not None:
                 record["target"] = target
@@ -708,7 +709,7 @@ def load_processor_class(import_path: str) -> type:
 
 
 def wire_link_data_access(
-    link_data_access: ProcessorLinkDataAccess, port_wiring: "dict[str, Any]"
+    link_data_access: NodeLinkDataAccess, port_wiring: "dict[str, Any]"
 ) -> None:
     """Open this processor's publishers and subscribers, one call per link.
 
@@ -753,7 +754,7 @@ def wire_link_data_access(
 
 
 def unwire_link_data_access(
-    link_data_access: ProcessorLinkDataAccess, command: "dict[str, Any]"
+    link_data_access: NodeLinkDataAccess, command: "dict[str, Any]"
 ) -> None:
     """Release this processor's own port for one link the engine disconnected.
 
@@ -851,7 +852,7 @@ class HostedProcessor:
 def construct_hosted_processor(
     processor_class: type,
     configuration: "Optional[dict[str, Any]]",
-    link_data_access: ProcessorLinkDataAccess,
+    link_data_access: NodeLinkDataAccess,
     runtime_id: str,
     processor_id: str,
     bridge: ParentProcessBridge,
@@ -885,7 +886,7 @@ class HelperProcessLifecycle:
         processor_class: type,
         runtime_id: str,
         processor_id: str,
-        link_data_access: ProcessorLinkDataAccess,
+        link_data_access: NodeLinkDataAccess,
     ) -> None:
         self._bridge = bridge
         self._processor_class = processor_class
@@ -1350,7 +1351,7 @@ def main() -> None:
 
     try:
         processor_class = load_processor_class(import_path)
-        link_data_access = ProcessorLinkDataAccess()
+        link_data_access = NodeLinkDataAccess()
     except Exception as startup_failure:
         engine_log_forwarder.stop_after_forwarding_what_is_left()
         log.error(

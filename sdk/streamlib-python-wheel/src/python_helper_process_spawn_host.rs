@@ -41,7 +41,7 @@ use streamlib::sdk::iceoryx2::{
 use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
 
 /// The module CPython is launched with in a helper process.
-const HELPER_PROCESS_MODULE: &str = "streamlib._helper";
+const HELPER_PROCESS_MODULE: &str = "tatolab.runtime._helper";
 
 /// The environment variable carrying the class import path a helper process
 /// hosts — set here and nowhere else, so its presence is what tells code
@@ -726,7 +726,7 @@ impl PythonHelperProcessSpawnHostProcessor {
             );
         }
 
-        // fd1/fd2 carry anything that bypasses `streamlib.log` — a raw
+        // fd1/fd2 carry anything that bypasses `tatolab.stream.log` — a raw
         // `os.write`, a C extension's `printf`, an interpreter-level fatal —
         // and each line becomes an `intercepted` record in the unified JSONL.
         if let Some(child_stdout) = child.stdout.take() {
@@ -1823,7 +1823,7 @@ sys.exit(0)
         );
         assert_eq!(command.get_program(), OsStr::new("/venv/bin/python"));
         let arguments: Vec<_> = command.get_args().collect();
-        assert_eq!(arguments, ["-m", "streamlib._helper"]);
+        assert_eq!(arguments, ["-m", "tatolab.runtime._helper"]);
     }
 
     /// The class the child imports, and the identifiers it reports itself by,

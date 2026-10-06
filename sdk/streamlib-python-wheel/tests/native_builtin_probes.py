@@ -10,7 +10,7 @@ production in the app process reaching a Python processor in its own child.
 
 import json
 
-from streamlib import input, log, node
+from tatolab.stream import input, log, node
 
 RESULT_MARKER = "MARKER:FRAMES_SEEN "
 

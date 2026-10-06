@@ -425,7 +425,7 @@ fn absent_optionals_are_omitted_on_a_response() {
 /// The log record's three nullable-required fields are the exception: they
 /// carry an explicit null rather than dropping out of the document, because a
 /// runtime-level record has no pipeline and an uncaptured one has no channel.
-/// Its two engine-record fields follow the ordinary rule — a `streamlib.log`
+/// Its two engine-record fields follow the ordinary rule — a `tatolab.stream.log`
 /// call names neither, and its document is the one helpers have always sent.
 #[test]
 fn a_log_records_nullable_required_fields_encode_as_null() {

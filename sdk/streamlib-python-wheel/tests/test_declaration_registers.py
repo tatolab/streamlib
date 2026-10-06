@@ -17,11 +17,11 @@ from pathlib import Path
 
 import pytest
 
-from streamlib import node
-from streamlib._engine import (
+from tatolab.stream import node
+from tatolab.runtime._engine import (
     processor_class_import_paths_in_this_processes_catalog,
 )
-from streamlib._helper import ENTRYPOINT_ENV
+from tatolab.runtime._helper import ENTRYPOINT_ENV
 
 # What a real helper imports and hosts — its own module, as every processor
 # class must be.
@@ -60,7 +60,7 @@ def _declare_in_a_module_named(module_name: str, class_name: str) -> type:
     module = types.ModuleType(module_name)
     sys.modules[module_name] = module
     source = (
-        "from streamlib import node\n"
+        "from tatolab.stream import node\n"
         "@node(execution='manual')\n"
         f"class {class_name}:\n"
         "    pass\n"
@@ -119,7 +119,7 @@ def test_one_import_path_decorated_twice_is_refused_naming_the_reload():
     module = types.ModuleType("a_module_loaded_twice")
     sys.modules["a_module_loaded_twice"] = module
     source = compile(
-        "from streamlib import node\n"
+        "from tatolab.stream import node\n"
         "@node(execution='manual')\n"
         "class DecoratedTwice:\n"
         "    pass\n",
@@ -142,7 +142,7 @@ def test_a_refused_second_decoration_leaves_the_first_registration_standing():
 
     module = sys.modules["a_module_reloaded_once"]
     source = compile(
-        "from streamlib import node\n"
+        "from tatolab.stream import node\n"
         "@node(execution='manual')\n"
         "class SurvivesTheReload:\n"
         "    pass\n",
@@ -188,7 +188,7 @@ def _catalog_of_an_interpreter_carrying(environment: "dict[str, str]") -> "list[
     reporter = (
         f"import {PROCESSOR_MODULE_A_HELPER_HOSTS}\n"
         "import json\n"
-        "from streamlib._engine import "
+        "from tatolab.runtime._engine import "
         "processor_class_import_paths_in_this_processes_catalog as registered\n"
         "print(json.dumps(registered()))\n"
     )

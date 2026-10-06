@@ -10,9 +10,10 @@ needs a GPU.
 
 import pytest
 
-import streamlib
+import tatolab.stream
 from engine_media_clock import engine_media_clock_now_ns
-from streamlib import MonotonicTimer, _engine, clock, log, monotonic_now_ns
+from tatolab.runtime import _engine
+from tatolab.stream import MonotonicTimer, clock, log, monotonic_now_ns
 
 # Small, so the one wiring test below returns at once.
 TIMER_TEST_INTERVAL_NS = 1_000_000
@@ -36,29 +37,29 @@ def test_monotonic_now_ns_is_non_decreasing_across_calls():
 
 
 def test_monotonic_now_ns_reads_the_engine_media_clock():
-    """Two streamlib reads bracket a `time` module read of the engine's clock.
+    """Two `monotonic_now_ns` reads bracket a `time` module read of the engine's clock.
 
     Pins the canonical-source contract: the value is the clock every engine
     stamp is taken on — `CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on
     macOS — so a helper's stamps are comparable with the engine's.
     """
-    first_streamlib_read = monotonic_now_ns()
+    first_monotonic_now_ns_read = monotonic_now_ns()
     kernel_read = engine_media_clock_now_ns()
-    second_streamlib_read = monotonic_now_ns()
+    second_monotonic_now_ns_read = monotonic_now_ns()
     # `mach_absolute_time` ticks are coarser than a nanosecond, and the kernel
     # and the engine round a tick to nanoseconds separately.
     tick_rounding_slack_ns = 1_000
     assert (
-        first_streamlib_read - tick_rounding_slack_ns
+        first_monotonic_now_ns_read - tick_rounding_slack_ns
         <= kernel_read
-        <= second_streamlib_read + tick_rounding_slack_ns
+        <= second_monotonic_now_ns_read + tick_rounding_slack_ns
     )
 
 
 def test_the_clock_module_re_exports_the_native_surface():
-    """Old-SDK parity: `from streamlib import clock` keeps working."""
-    assert clock.monotonic_now_ns is streamlib.monotonic_now_ns
-    assert clock.MonotonicTimer is streamlib.MonotonicTimer
+    """Old-SDK parity: `from tatolab.stream import clock` keeps working."""
+    assert clock.monotonic_now_ns is tatolab.stream.monotonic_now_ns
+    assert clock.MonotonicTimer is tatolab.stream.MonotonicTimer
 
 
 def test_python_exports_exactly_one_name_for_the_monotonic_clock():
@@ -74,7 +75,7 @@ def test_python_exports_exactly_one_name_for_the_monotonic_clock():
     spelling the deleted export here would hold `one-monotonic-clock` red for
     good.
     """
-    for exporting_module in (_engine, streamlib, clock):
+    for exporting_module in (_engine, tatolab.stream, clock):
         assert {
             name for name in dir(exporting_module) if name.endswith("_now_ns")
         } == {"monotonic_now_ns"}, (

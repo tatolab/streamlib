@@ -79,7 +79,7 @@ def test_adding_a_processor_loads_nothing_into_the_app(start_app_under_test):
     """The registration import is the only parent-side load.
 
     Mentally restore an in-process host and this fails on the first line: the
-    engine would import `streamlib._processor_hosting` to construct the class
+    engine would import `tatolab.runtime._processor_hosting` to construct the class
     in this interpreter.
     """
     app = run_scenario(start_app_under_test, "the_app_never_hosts_the_processor")
@@ -227,7 +227,7 @@ def helper_process_is_still_alive(pid: int) -> bool:
     """
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as command_line:
-            return b"streamlib._helper" in command_line.read()
+            return b"tatolab.runtime._helper" in command_line.read()
     except (FileNotFoundError, ProcessLookupError, PermissionError):
         return False
 

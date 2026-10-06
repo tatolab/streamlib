@@ -14,9 +14,9 @@ import json
 import sys
 import threading
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
-from streamlib._control_plane_client import _request_over_the_local_api_socket
+import tatolab.runtime
+from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.runtime._control_plane_client import _request_over_the_local_api_socket
 from this_processes_node_registry_entry import this_processes_local_api_socket
 
 import processor_config_catalog_probes as probes
@@ -38,13 +38,13 @@ def four_probes_each_configured_its_own_way(stream: Stream) -> None:
 
 def main() -> None:
     graph = compile_stream_to_graph(four_probes_each_configured_its_own_way)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.host_control_plane()
 
     def read_the_catalog_this_node_serves() -> None:
         try:
-            runtime.wait_until_every_processor_is_running(
+            runtime.wait_until_every_node_is_running(
                 timeout=GRAPH_READY_TIMEOUT_SECONDS
             )
             answered = _request_over_the_local_api_socket(

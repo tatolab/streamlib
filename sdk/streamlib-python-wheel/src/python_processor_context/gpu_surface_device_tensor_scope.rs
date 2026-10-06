@@ -45,7 +45,11 @@ use super::left_by_a_propagating_exception;
 /// Holds its own share of the owned memory, so the surface (and an
 /// acquired texture's pool slot) outlives the handle for as long as the
 /// scope or any capsule minted inside it does.
-#[pyclass(name = "GpuSurfaceDeviceTensorScope", module = "streamlib", frozen)]
+#[pyclass(
+    name = "GpuSurfaceDeviceTensorScope",
+    module = "tatolab.stream",
+    frozen
+)]
 pub(crate) struct PythonGpuSurfaceDeviceTensorScope {
     owned_memory: Arc<GpuSurfaceOwnedMemory>,
     /// The export prepared at `__enter__` — the blit has run and the

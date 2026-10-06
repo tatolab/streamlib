@@ -12,8 +12,9 @@ the calling thread until teardown.
 
 import threading
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 UNOPENABLE_DEVICE_ID = "not-a-real-audio-device"
 READINESS_TIMEOUT_SECONDS = 10.0
@@ -21,17 +22,17 @@ READINESS_TIMEOUT_SECONDS = 10.0
 
 @stream
 def speaker_sink_naming_an_unopenable_device(stream: Stream) -> None:
-    stream.add(streamlib.SpeakerSink, config={"device_id": UNOPENABLE_DEVICE_ID})
+    stream.add(tatolab.stream.SpeakerSink, config={"device_id": UNOPENABLE_DEVICE_ID})
 
 
 def main() -> None:
     graph = compile_stream_to_graph(speaker_sink_naming_an_unopenable_device)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
 
     def watch_readiness() -> None:
         try:
-            runtime.wait_until_every_processor_is_running(
+            runtime.wait_until_every_node_is_running(
                 timeout=READINESS_TIMEOUT_SECONDS
             )
             print("MARKER:EVERY_PROCESSOR_RUNNING", flush=True)

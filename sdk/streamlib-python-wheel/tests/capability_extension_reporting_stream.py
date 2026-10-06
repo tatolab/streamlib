@@ -4,7 +4,7 @@
 """The one-processor stream `capability_extension_app.py`'s helper scenarios load."""
 
 from capability_extension_processor import ReportsTheExtensionItsHelperLoaded
-from streamlib import Stream, stream
+from tatolab.stream import Stream, stream
 
 
 @stream

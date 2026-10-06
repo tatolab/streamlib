@@ -31,9 +31,9 @@ from typing import Callable
 import pytest
 from app_under_test import ENGINE_READY_LOG_LINE
 
-from streamlib import cli
-from streamlib._control_plane_client import LocalApiSocket, call_tool
-from streamlib._surface_image_exchange import (
+from tatolab.runtime import cli
+from tatolab.runtime._control_plane_client import LocalApiSocket, call_tool
+from tatolab.runtime._surface_image_exchange import (
     DEFAULT_SURFACE_ID_BAG_FIELD_NAME,
     _surface_id_in_bag,
     _tapped_bag_frames,
@@ -60,7 +60,7 @@ SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS = SCAFFOLD_OBSERVATION_WINDOW_SE
 MINIMUM_FRAMES_FOR_LIVE_VIDEO = 120
 
 STREAM_WITH_ONE_NATIVE_SOURCE = '''\
-from streamlib import Stream, TestPatternSource, stream
+from tatolab.stream import Stream, TestPatternSource, stream
 
 
 @stream
@@ -91,7 +91,7 @@ FIRST_FRAME_REPORTER_MODULE = Path(__file__).parent / "first_frame_reporter.py"
 # scaffold suite already covers the packaged one.
 STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE = '''\
 from first_frame_reporter import ReportsItsProcessOnFirstFrame
-from streamlib import Stream, TestPatternSource, stream
+from tatolab.stream import Stream, TestPatternSource, stream
 
 
 @stream
@@ -264,7 +264,7 @@ def launch_node(isolated_runtime_directory: Path):
         try:
             process = subprocess.Popen(
                 [
-                    sys.executable, "-m", "streamlib.cli", verb,
+                    sys.executable, "-m", "tatolab.runtime.cli", verb,
                     "--dir", str(app_directory),
                     *extra_arguments,
                 ],
@@ -470,7 +470,7 @@ def run_cli_verb(
 ) -> "subprocess.CompletedProcess[str]":
     """One `streamlib` verb in its own process, seeing the launched node's runtime directory."""
     return subprocess.run(
-        [sys.executable, "-m", "streamlib.cli", *arguments],
+        [sys.executable, "-m", "tatolab.runtime.cli", *arguments],
         capture_output=True,
         text=True,
         timeout=CLI_VERB_TIMEOUT_SECONDS,
@@ -680,7 +680,7 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
     reader resolving exactly as the engine does is the contract. The launch
     tests above all set `XDG_RUNTIME_DIR`, so none of them reaches this arm.
     """
-    from streamlib._node_registry import registry_directory, runtime_directory, scan_check_and_prune
+    from tatolab.runtime._node_registry import registry_directory, runtime_directory, scan_check_and_prune
 
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     per_user_fallback = Path("/tmp") / f"streamlib-{os.getuid()}"
@@ -695,7 +695,7 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
     with open(output_file, "w", encoding="utf-8") as output_sink:
         process = subprocess.Popen(
             [
-                sys.executable, "-m", "streamlib.cli", "run",
+                sys.executable, "-m", "tatolab.runtime.cli", "run",
                 "--dir", str(app_directory),
             ],
             stdout=output_sink,
@@ -758,7 +758,7 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
     app_directory = tmp_path / "app"
     app_directory.mkdir()
     (app_directory / "stream.py").write_text(
-        "from streamlib import Stream, TestPatternSource, stream\n"
+        "from tatolab.stream import Stream, TestPatternSource, stream\n"
         "\n"
         "\n"
         "@stream\n"
@@ -996,8 +996,8 @@ def edit_the_scaffolded_effect(app_directory: Path) -> None:
     edited = effect_module.read_text()
     for anchor, replacement in (
         (
-            "    input,  # noqa: A004 — streamlib's port decorator\n",
-            "    input,  # noqa: A004 — streamlib's port decorator\n    log,\n",
+            "    input,  # noqa: A004 — tatolab.stream's port decorator\n",
+            "    input,  # noqa: A004 — tatolab.stream's port decorator\n    log,\n",
         ),
         (
             '    @input(delivery_profile="newest")',
@@ -1078,7 +1078,7 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     app_directory = tmp_path / "app"
     app_directory.mkdir()
     (app_directory / "stream.py").write_text(
-        "from streamlib import Stream, TestPatternSource, stream\n"
+        "from tatolab.stream import Stream, TestPatternSource, stream\n"
         "\n"
         "\n"
         "@stream\n"
@@ -1105,7 +1105,7 @@ def test_a_stream_function_that_raises_publishes_no_node(
     app_directory = tmp_path / "app"
     app_directory.mkdir()
     (app_directory / "stream.py").write_text(
-        "from streamlib import Stream, stream\n"
+        "from tatolab.stream import Stream, stream\n"
         "\n"
         "\n"
         "@stream\n"

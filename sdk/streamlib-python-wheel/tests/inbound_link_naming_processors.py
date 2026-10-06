@@ -8,7 +8,7 @@ path, and a class declared inside a pytest module would have the child import
 the test suite.
 """
 
-from streamlib import (
+from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     input,

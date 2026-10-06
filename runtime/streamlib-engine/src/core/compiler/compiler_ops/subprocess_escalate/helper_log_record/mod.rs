@@ -34,7 +34,7 @@ pub(super) fn log_record_from_wire(log: EscalateRequestLog) -> LogRecord {
     };
     // A captured engine record carries the target of the call site that made
     // it, so it reads in the log exactly as it would from the app process; a
-    // `streamlib.log` call has no target of its own and takes its source's.
+    // `tatolab.stream.log` call has no target of its own and takes its source's.
     let target = log.target.unwrap_or_else(|| {
         match source {
             Source::Python => "streamlib::polyglot::python",

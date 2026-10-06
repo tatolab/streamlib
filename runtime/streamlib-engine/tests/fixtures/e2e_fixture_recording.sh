@@ -135,13 +135,13 @@ fi
 if ! MARKER_IMPORT_FAILURE="$("$FIXTURE_NODE_PYTHON" -c '
 import sys
 
-import streamlib
+import tatolab.stream
 
-streamlib.Mp4Sink
-streamlib.OpusEncoder
-getattr(streamlib, sys.argv[1].upper() + "Encoder")
+tatolab.stream.Mp4Sink
+tatolab.stream.OpusEncoder
+getattr(tatolab.stream, sys.argv[1].upper() + "Encoder")
 ' "$CODEC" 2>&1)"; then
-    echo "[recording] SKIP: $FIXTURE_NODE_PYTHON cannot import streamlib's Mp4Sink," >&2
+    echo "[recording] SKIP: $FIXTURE_NODE_PYTHON cannot import tatolab.stream's Mp4Sink," >&2
     echo "[recording] OpusEncoder or $CODEC encoder. Rebuild the wheel with" >&2
     echo "[recording] \`maturin develop\` — this measures the extension, not the tree." >&2
     echo "$MARKER_IMPORT_FAILURE" >&2

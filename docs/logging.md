@@ -9,7 +9,7 @@ keep everyone on the same path.
 | Runtime     | API                                    |
 | ----------- | -------------------------------------- |
 | Rust        | `tracing::{trace,debug,info,warn,error}!` |
-| Python SDK  | `streamlib.log.{trace,debug,info,warn,error}(message, **attrs)` |
+| Python SDK  | `tatolab.stream.log.{trace,debug,info,warn,error}(message, **attrs)` |
 
 The Python SDK and the Rust host produce the same unified JSONL
 stream on disk (`<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at_millis>.jsonl`,
@@ -178,7 +178,7 @@ Verify the effective level at compile time via
 
 ## Recap
 
-- One API per language: `tracing::*!` (Rust) / `streamlib.log.*` (Python).
+- One API per language: `tracing::*!` (Rust) / `tatolab.stream.log.*` (Python).
 - Three enforcement layers: clippy, xtask lint, runtime fd capture.
 - `trace!` is zero-cost in release; `debug!` is opt-out via
   `strip_debug_logging`; `warn!` / `error!` are never stripped.

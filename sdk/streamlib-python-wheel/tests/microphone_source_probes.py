@@ -13,7 +13,7 @@ import json
 
 import numpy
 
-from streamlib import AudioBlock, input, log, node
+from tatolab.stream import AudioBlock, input, log, node
 
 RESULT_MARKER = "MARKER:BLOCKS_SEEN "
 

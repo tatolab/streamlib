@@ -9,8 +9,8 @@ boot, so only a parent reading the pipe observes it reliably — capfd inside th
 test process sees nothing once another test booted an engine first.
 """
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 from zero_argument_process_processor import ZeroArgumentProcess
 
 
@@ -22,7 +22,7 @@ def zero_argument_process(stream: Stream) -> None:
 
 if __name__ == "__main__":
     graph = compile_stream_to_graph(zero_argument_process)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

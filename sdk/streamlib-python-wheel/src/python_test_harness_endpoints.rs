@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The graph endpoints `SingleProcessorTestPipeline` feeds and collects
+//! The graph endpoints `SingleNodeTestPipeline` feeds and collects
 //! through.
 //!
 //! A test hands bags to a processor and asserts on what comes back, so the
@@ -224,13 +224,14 @@ pub(crate) fn register_test_harness_processor_types() {
 
 native_processor_marker_classes! {
     added_to_the_module_by: add_test_harness_marker_classes_to_the_module,
+    python_module: "tatolab.runtime._engine",
     markers: [
-        /// `streamlib.testing`'s feeder, as the marker class `stream.add` takes.
+        /// `tatolab.runtime.testing`'s feeder, as the marker class `stream.add` takes.
         PythonTestBagFeederBlock as "TestBagFeeder" {
             dunder_test: false,
             import_path: TestBagFeeder::Processor::processor_class_import_path(),
         }
-        /// `streamlib.testing`'s collector, as the marker class `stream.add` takes.
+        /// `tatolab.runtime.testing`'s collector, as the marker class `stream.add` takes.
         PythonTestBagCollectorBlock as "TestBagCollector" {
             dunder_test: false,
             import_path: TestBagCollector::Processor::processor_class_import_path(),

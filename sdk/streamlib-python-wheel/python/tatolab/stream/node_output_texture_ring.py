@@ -1,18 +1,18 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A processor's output textures, one engine-pooled slot per frame.
+"""A node's output textures, one engine-pooled slot per frame.
 
 The cross-process sibling of the engine's `TextureRing` (which is
 same-process-only by design — its slots are non-exportable and Path-1-only, so
-no helper can resolve them). This ring names a processor output pool the engine
+no helper can resolve them). This ring names a node output pool the engine
 owns: each frame asks it for the next slot, and the answer is a fresh
 `<slot>#<generation>` id, registered with the surface-share service so a
 consumer in another process can resolve it.
 
 The engine, not this class, decides which slot is next: one a consumer still
 holds — claimed by a typed cast, or resolved — is skipped and never rewritten,
-so a downstream processor holding an earlier output keeps seeing its pixels.
+so a downstream node holding an earlier output keeps seeing its pixels.
 The pool rotates through `depth` slots while nobody holds anything, grows while
 consumers hold frames, and at its cap refuses by name: the producer drops its
 own frame, and never waits on a consumer. A frame nobody claimed stays
@@ -25,21 +25,21 @@ from __future__ import annotations
 import uuid
 from typing import Union
 
-from ._engine import (
+from tatolab.runtime._engine import (
     GpuContextFullAccess,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,
 )
 
-__all__ = ["ProcessorOutputTextureRing"]
+__all__ = ["NodeOutputTextureRing"]
 
 STANDARD_RING_DEPTH = 2
 
 _GpuContextWithAcquireTexture = Union[GpuContextLimitedAccess, GpuContextFullAccess]
 
 
-class ProcessorOutputTextureRing:
-    """Output textures a processor publishes frames from, one slot per frame."""
+class NodeOutputTextureRing:
+    """Output textures a node publishes frames from, one slot per frame."""
 
     def __init__(
         self,
@@ -85,7 +85,7 @@ class ProcessorOutputTextureRing:
         Raises when every slot the pool may grow to is held by a consumer: the
         frame is dropped, and the next one asks again.
         """
-        return gpu_context.acquire_texture_from_processor_output_pool(
+        return gpu_context.acquire_texture_from_node_output_pool(
             self._processor_output_pool_key,
             self._depth,
             width,

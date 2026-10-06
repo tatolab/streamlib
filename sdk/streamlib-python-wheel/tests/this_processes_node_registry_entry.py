@@ -5,8 +5,8 @@
 
 import os
 
-from streamlib._control_plane_client import LocalApiSocket
-from streamlib._node_registry import live_nodes
+from tatolab.runtime._control_plane_client import LocalApiSocket
+from tatolab.runtime._node_registry import live_nodes
 
 
 def this_processes_local_api_socket() -> LocalApiSocket:

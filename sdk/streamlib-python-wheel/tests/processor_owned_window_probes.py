@@ -23,7 +23,7 @@ import struct
 import traceback
 from dataclasses import dataclass
 
-from streamlib import (
+from tatolab.stream import (
     ClaimedSurfacePixelAccess,
     ColorInfo,
     ContentLight,
@@ -36,7 +36,7 @@ from streamlib import (
     log,
     node,
 )
-from streamlib._engine import ComputeKernel, ProcessorOwnedWindow
+from tatolab.runtime._engine import ComputeKernel, NodeOwnedWindow
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 # A second line, and only for the gesture: the result line is reported once
@@ -114,7 +114,7 @@ class _WindowOwningProbeBase:
 
     # Declared, not merely assigned: `setup` assigns these inside a nested
     # closure, which a type checker does not walk for attribute inference.
-    debug_window: ProcessorOwnedWindow
+    debug_window: NodeOwnedWindow
     gradient_kernel: ComputeKernel
     kernel_output: GpuSurfaceHandle
 
@@ -337,7 +337,7 @@ class AProcessThatCanGetNoWindowRefusesAtSetupProbe:
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
-        self.debug_window: "ProcessorOwnedWindow | None" = None
+        self.debug_window: "NodeOwnedWindow | None" = None
         self.refusal = ""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:

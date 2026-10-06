@@ -11,7 +11,7 @@ Nodes live in their own modules, never in this file: each one runs in its
 own child interpreter, which imports the class by name.
 """
 
-from streamlib import CameraSource, DisplayWindow, Stream, stream
+from tatolab.stream import CameraSource, DisplayWindow, Stream, stream
 
 from nodes.brightness_meter import BrightnessMeter
 from nodes.inverting_effect import InvertingEffect

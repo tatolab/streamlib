@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The wheel's window object: a window a Python processor owns.
+//! The wheel's window object: a window a Python node owns.
 //!
 //! Requested in `setup()` where the capability is Full, named frames from
 //! `process()`. The window itself lives in the app process, on the engine's
@@ -56,7 +56,7 @@ pub(crate) struct SurfaceNamedForTheWindowsPresentLoop {
 /// A snapshot, not a queue: the pump coalesces, so an owner that drains once
 /// a frame sees the same extent and the same one close request it would have
 /// seen draining every microsecond.
-#[pyclass(name = "ProcessorOwnedWindowEvents", module = "streamlib", frozen)]
+#[pyclass(name = "NodeOwnedWindowEvents", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonProcessorOwnedWindowEvents {
     current_width_in_physical_pixels: u32,
     current_height_in_physical_pixels: u32,
@@ -96,7 +96,7 @@ impl PythonProcessorOwnedWindowEvents {
 
     fn __repr__(&self) -> String {
         format!(
-            "ProcessorOwnedWindowEvents({}x{}, close_requested_by_user={}, window_is_closed={})",
+            "NodeOwnedWindowEvents({}x{}, close_requested_by_user={}, window_is_closed={})",
             self.current_width_in_physical_pixels,
             self.current_height_in_physical_pixels,
             self.close_requested_by_user,
@@ -105,7 +105,7 @@ impl PythonProcessorOwnedWindowEvents {
     }
 }
 
-/// A window this processor owns, presented by the engine at vsync.
+/// A window this node owns, presented by the engine at vsync.
 ///
 /// Constructed in `setup()` through `ctx.gpu_full_access.create_window(...)`;
 /// named frames per frame in `process()`. No window handle, swapchain or
@@ -114,7 +114,7 @@ impl PythonProcessorOwnedWindowEvents {
 /// Defined on every platform so the stub's surface is honest everywhere; where
 /// the engine has no present loop it is unconstructible, because
 /// `create_window` refuses before reaching it.
-#[pyclass(name = "ProcessorOwnedWindow", module = "streamlib", frozen)]
+#[pyclass(name = "NodeOwnedWindow", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonProcessorOwnedWindow {
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     window_id: String,
@@ -224,7 +224,7 @@ impl PythonProcessorOwnedWindow {
     /// Close this window and release its present thread.
     ///
     /// Never an error for a window already closed, and never required: the
-    /// engine closes what a processor still owns at teardown.
+    /// engine closes what a node still owns at teardown.
     fn close(&self, python: Python<'_>) -> PyResult<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
@@ -244,7 +244,7 @@ impl PythonProcessorOwnedWindow {
 
     fn __repr__(&self) -> String {
         format!(
-            "ProcessorOwnedWindow(title={:?}, is_closed={})",
+            "NodeOwnedWindow(title={:?}, is_closed={})",
             self.window_title,
             self.window_is_closed.load(Ordering::Relaxed),
         )

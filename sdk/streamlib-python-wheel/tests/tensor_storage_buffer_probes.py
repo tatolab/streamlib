@@ -16,7 +16,7 @@ import sys
 import traceback
 import uuid
 
-from streamlib import clock, input, log, node, output
+from tatolab.stream import clock, input, log, node, output
 
 MODEL_INPUT_TENSOR_SHAPE = [1, 3, 640, 640]
 ODD_TENSOR_SHAPE = [3, 7, 11]
@@ -143,7 +143,7 @@ class TensorStorageBufferPublishingSource:
             return
         self._last_publish_ns = now_ns
 
-        with ctx.gpu_limited_access.acquire_storage_buffer_from_processor_output_pool(
+        with ctx.gpu_limited_access.acquire_storage_buffer_from_node_output_pool(
             self._pool_key,
             POOL_ROTATION_DEPTH,
             self._shape,

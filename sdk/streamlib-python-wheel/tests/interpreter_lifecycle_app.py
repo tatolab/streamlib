@@ -17,8 +17,8 @@ import threading
 import time
 from collections.abc import Callable
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 from interpreter_lifecycle_processors import (
     AsleepInItsCallbackAndSlowToTearDownProbe,
     AsleepInItsCallbackProbe,
@@ -70,7 +70,7 @@ def a_helper_still_importing(stream: Stream) -> None:
 def run_stream_until_it_returns(stream_function: Callable[[Stream], None]) -> None:
     """Load `stream_function`'s graph on a fresh `Runtime`, run it, and say it returned."""
     graph = compile_stream_to_graph(stream_function)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     marker("RUN_RETURNED")
@@ -78,7 +78,7 @@ def run_stream_until_it_returns(stream_function: Callable[[Stream], None]) -> No
 
 def scenario_ctrl_c() -> None:
     """The demo: boot, block, and exit cleanly when the driver sends Ctrl-C."""
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.run()
     marker("RUN_RETURNED")
 
@@ -102,7 +102,7 @@ def scenario_gil_released_while_running() -> None:
     counting_thread = threading.Thread(target=count, daemon=True)
     counting_thread.start()
 
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     ticks_before_run = progress["ticks"]
     runtime.run()
     ticks_during_run = progress["ticks"] - ticks_before_run
@@ -119,7 +119,7 @@ def scenario_sigint_handed_back_to_cpython() -> None:
     because the point is what happens to a signal raised *after* `run()` has
     handed the disposition back.
     """
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.run()
     marker("RUN_RETURNED")
 
@@ -139,7 +139,7 @@ def scenario_sigint_handed_back_to_cpython() -> None:
 def scenario_exception_inside_context_manager() -> None:
     """An exception must not strand the engine, and must still propagate."""
     try:
-        with streamlib.Runtime():
+        with tatolab.runtime.Runtime():
             raise ValueError("failure inside the with-block")
     except ValueError:
         marker("EXCEPTION_PROPAGATED")
@@ -151,7 +151,7 @@ def scenario_never_run() -> None:
     The result is unbound, so CPython refcounts it to zero immediately and this
     exercises the pyclass `Drop` — not the `atexit` hook.
     """
-    streamlib.Runtime()
+    tatolab.runtime.Runtime()
     marker("CONSTRUCTED_WITHOUT_RUNNING")
 
 
@@ -168,7 +168,7 @@ def scenario_held_by_a_live_thread_at_exit() -> None:
     holding_thread_is_parked = threading.Event()
 
     def hold_runtime_forever() -> None:
-        _runtime_held_in_this_frame = streamlib.Runtime()  # noqa: F841
+        _runtime_held_in_this_frame = tatolab.runtime.Runtime()  # noqa: F841
         holding_thread_is_parked.set()
         # Never returns, so the frame — and the only reference — stays alive.
         threading.Event().wait()
@@ -180,7 +180,7 @@ def scenario_held_by_a_live_thread_at_exit() -> None:
 
 def scenario_second_run_is_refused() -> None:
     """`run()` consumes the engine, so a second call must fail loudly."""
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.run()
     marker("RUN_RETURNED")
     try:
@@ -199,7 +199,7 @@ def scenario_shutdown_from_another_thread() -> None:
     driver cannot see, so it uses the same readiness the driver does: it is
     started only once `run()` is about to be entered.
     """
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
 
     stop_requested = threading.Event()
 
@@ -226,13 +226,13 @@ def scenario_readiness_wait_across_teardown() -> None:
     the wait makes that join find the engine still borrowed, and `run()` raises
     instead of returning — a non-zero exit the driver sees.
     """
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
 
     def wait_then_stop() -> None:
         # The same stdin handshake the cross-thread shutdown scenario uses:
         # until the driver closes it, `run()` may not yet hold the engine.
         sys.stdin.read()
-        runtime.wait_until_every_processor_is_running(timeout=30.0)
+        runtime.wait_until_every_node_is_running(timeout=30.0)
         marker("GRAPH_READY")
         runtime.shutdown()
 
@@ -251,7 +251,7 @@ def scenario_shutdown_spun_across_the_run_loop_exit() -> None:
     observing but before the handle is marked torn down. Any request that
     escapes is inherited by the second pipeline, which then returns instantly.
     """
-    first_runtime = streamlib.Runtime()
+    first_runtime = tatolab.runtime.Runtime()
     keep_requesting = threading.Event()
     keep_requesting.set()
 
@@ -273,7 +273,7 @@ def scenario_shutdown_spun_across_the_run_loop_exit() -> None:
     spinner.join(timeout=10.0)
     marker("PIPELINE_1_RETURNED")
 
-    with streamlib.Runtime() as second_runtime:
+    with tatolab.runtime.Runtime() as second_runtime:
         marker("PIPELINE_2_RUNNING")
         started = time.monotonic()
         second_runtime.run()
@@ -290,11 +290,11 @@ def scenario_two_pipelines_in_one_process() -> None:
     logging pathway once per process, so the second runtime emits no log lines
     of its own and this scenario announces its own readiness instead.
     """
-    with streamlib.Runtime() as first_runtime:
+    with tatolab.runtime.Runtime() as first_runtime:
         first_runtime.run()
     marker("PIPELINE_1_RETURNED")
 
-    with streamlib.Runtime() as second_runtime:
+    with tatolab.runtime.Runtime() as second_runtime:
         marker("PIPELINE_2_RUNNING")
         started = time.monotonic()
         second_runtime.run()
@@ -343,7 +343,7 @@ def scenario_a_process_the_app_started_outlives_it() -> None:
     the stdio interceptor's copies of the app's own output included, were they
     inheritable.
     """
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     survivor = subprocess.Popen(["sleep", "30"], close_fds=False, stdin=subprocess.DEVNULL)
     marker(f"SURVIVOR_PID={survivor.pid}")
     runtime.run()

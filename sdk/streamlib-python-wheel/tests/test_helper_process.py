@@ -27,9 +27,9 @@ from typing import Callable, cast
 
 import pytest
 
-from streamlib import _helper
-from streamlib._engine import engine_build_id_compiled_into_this_extension
-from streamlib._helper import (
+from tatolab.runtime import _helper
+from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
+from tatolab.runtime._helper import (
     HelperProcessLifecycle,
     HelperProcessProtocolError,
     ParentProcessBridge,
@@ -184,12 +184,12 @@ def test_a_helper_handed_no_iceoryx2_domain_root_refuses_to_start_by_name(
     Fail-without-fix: fall back to any root when the variable is absent and the
     constructor below returns a data plane that silently reaches nobody.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     monkeypatch.delenv("STREAMLIB_ICEORYX2_DOMAIN_ROOT")
 
     with pytest.raises(RuntimeError, match="STREAMLIB_ICEORYX2_DOMAIN_ROOT is not set"):
-        ProcessorLinkDataAccess()
+        NodeLinkDataAccess()
 
 
 def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
@@ -201,9 +201,9 @@ def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
     Fail-without-fix: without the declaration the write below raises on every
     frame a live-added effect sees before its output is connected.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
-    link_data_access = ProcessorLinkDataAccess()
+    link_data_access = NodeLinkDataAccess()
     link_data_access.declare_ports(["frames_from_upstream"], ["frames_to_downstream"])
 
     assert link_data_access.read_from_input_port("frames_from_upstream") is None
@@ -223,9 +223,9 @@ def test_a_port_lookup_casts_its_argument_to_the_declared_name():
     Fail-without-fix: an uncast lookup raises "not one this processor declared"
     for every spelling here but the cast one.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
-    link_data_access = ProcessorLinkDataAccess()
+    link_data_access = NodeLinkDataAccess()
     link_data_access.declare_ports(["video"], ["frames-out"])
 
     assert link_data_access.read_from_input_port("Video") is None
@@ -245,14 +245,14 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     the destination is wired first because a send with no subscriber attached
     is dropped.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     link_id = "L-envelope-test"
-    destination = ProcessorLinkDataAccess()
+    destination = NodeLinkDataAccess()
     _helper.wire_link_data_access(
         destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
     )
-    source = ProcessorLinkDataAccess()
+    source = NodeLinkDataAccess()
     _helper.wire_link_data_access(
         source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
     )
@@ -275,7 +275,7 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     port's ring depth and the second destination's open is refused
     (`DoesNotSupportRequestedMinBufferSize`).
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     bags_published_while_neither_reads = 10
     shallow_wiring = engine_shaped_link_wiring("input", "L-shallow-port")
@@ -292,17 +292,17 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     for wiring in (shallow_wiring, deep_wiring, source_wiring):
         wiring["max_subscribers"] = 3
 
-    shallow_destination = ProcessorLinkDataAccess()
+    shallow_destination = NodeLinkDataAccess()
     _helper.wire_link_data_access(shallow_destination, {"inputs": [shallow_wiring]})
-    deep_destination = ProcessorLinkDataAccess()
+    deep_destination = NodeLinkDataAccess()
     _helper.wire_link_data_access(deep_destination, {"inputs": [deep_wiring]})
-    source = ProcessorLinkDataAccess()
+    source = NodeLinkDataAccess()
     _helper.wire_link_data_access(source, {"outputs": [source_wiring]})
 
     for frame_index in range(bags_published_while_neither_reads):
         source.write_to_output_port("frames_to_downstream", {"frame_index": frame_index})
 
-    def every_bag_read(destination: ProcessorLinkDataAccess) -> list:
+    def every_bag_read(destination: NodeLinkDataAccess) -> list:
         read = []
         while (bag := destination.read_from_input_port("frames_from_upstream")) is not None:
             read.append(bag["frame_index"])
@@ -329,11 +329,11 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     The Python-surface mirror of the engine's
     `disconnect_reconnect_cycle_reclaims_notifier_and_data_service`.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     link_id = "L-reconnect-cycle"
-    destination = ProcessorLinkDataAccess()
-    source = ProcessorLinkDataAccess()
+    destination = NodeLinkDataAccess()
+    source = NodeLinkDataAccess()
 
     # The destination is wired first both times: a send with no subscriber
     # attached is dropped.
@@ -379,14 +379,14 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
     `RuntimeError: Link error: Unknown input port` — the mailbox went with
     the subscriber that was dropped out from under it.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     link_id = "L-unknown-direction"
-    destination = ProcessorLinkDataAccess()
+    destination = NodeLinkDataAccess()
     _helper.wire_link_data_access(
         destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
     )
-    source = ProcessorLinkDataAccess()
+    source = NodeLinkDataAccess()
     _helper.wire_link_data_access(
         source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
     )
@@ -442,7 +442,7 @@ def test_a_closed_channel_surfaces_as_a_command_of_none(stand_in_parent):
 
 
 def test_a_log_record_rides_the_escalate_log_op_to_the_parent(stand_in_parent):
-    """A helper has no engine in it, so `streamlib.log` cannot hand a record to
+    """A helper has no engine in it, so `tatolab.stream.log` cannot hand a record to
     one — it travels to the parent's pipeline as a fire-and-forget escalate op."""
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     sink = ParentProcessLogSink(bridge, "P-helper-test")
@@ -734,7 +734,7 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     reader, the one thread that delivers answers, so every frame behind it —
     the parent's next command included — waits out the escalate timeout.
     """
-    from streamlib import ProcessorLinkDataAccess, RuntimeContextFullAccess
+    from tatolab.stream import NodeLinkDataAccess, RuntimeContextFullAccess
 
     monkeypatch.setenv("STREAMLIB_SURFACE_SOCKET", "/nonexistent/streamlib-surface.sock")
     decode_the_frame = _helper._decode_frame_payload
@@ -752,7 +752,7 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     bridge.start_reading()
     context = RuntimeContextFullAccess.open_for_helper_process(
         {},
-        ProcessorLinkDataAccess(),
+        NodeLinkDataAccess(),
         "R-helper-test",
         "P-helper-test",
         bridge.request_from_parent,
@@ -833,7 +833,7 @@ def drive_lifecycle_on_a_thread(bridge, processor_class):
     created and driven on the one thread that owns it — which is exactly how a
     real helper runs.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     def drive() -> None:
         HelperProcessLifecycle(
@@ -841,7 +841,7 @@ def drive_lifecycle_on_a_thread(bridge, processor_class):
             processor_class,
             "R-helper-test",
             "P-helper-test",
-            ProcessorLinkDataAccess(),
+            NodeLinkDataAccess(),
         ).run_until_the_parent_is_done()
 
     lifecycle_thread = threading.Thread(target=drive, name="helper-lifecycle")
@@ -853,7 +853,7 @@ def drive_lifecycle_on_a_thread_and_hand_it_back(bridge, processor_class):
     """The same, with the lifecycle object once its thread has built it, so a
     test can swap in a counting data plane after `setup` has handed the real
     one to the engine's context."""
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     lifecycle_holder: "list[HelperProcessLifecycle]" = []
     lifecycle_built = threading.Event()
@@ -864,7 +864,7 @@ def drive_lifecycle_on_a_thread_and_hand_it_back(bridge, processor_class):
             processor_class,
             "R-helper-test",
             "P-helper-test",
-            ProcessorLinkDataAccess(),
+            NodeLinkDataAccess(),
         )
         lifecycle_holder.append(lifecycle)
         lifecycle_built.set()
@@ -1011,7 +1011,7 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
     A processor left with no inputs has nothing to wake it but the parent,
     which is exactly what it must fall back to.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
@@ -1031,7 +1031,7 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
     assert stand_in_parent.receive()["rpc"] == "ready"
     counting = _CountingLinkDataAccess(lifecycle._link_data_access)
     # A duck-typed stand-in: the loop only ever calls methods on it.
-    lifecycle._link_data_access = cast(ProcessorLinkDataAccess, counting)
+    lifecycle._link_data_access = cast(NodeLinkDataAccess, counting)
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
     stand_in_parent.send(
@@ -1116,7 +1116,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
     select()`; it escapes the loop, the helper's thread dies, and neither the
     bag nor the `on_pause` below is ever answered.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
     descriptors_needed = 2048
@@ -1144,7 +1144,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
 
         inbound_link_id = "L-high-fd-in"
         outbound_link_id = "L-high-fd-out"
-        downstream = ProcessorLinkDataAccess()
+        downstream = NodeLinkDataAccess()
         _helper.wire_link_data_access(
             downstream,
             {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
@@ -1163,7 +1163,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
         assert stand_in_parent.receive()["rpc"] == "ready"
         stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
-        upstream = ProcessorLinkDataAccess()
+        upstream = NodeLinkDataAccess()
         _helper.wire_link_data_access(
             upstream,
             {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
@@ -1427,7 +1427,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     logs an unknown command, its input never opens, and the bag published
     below never comes back.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
@@ -1443,7 +1443,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     outbound_link_id = "L-wired-late-out"
     # The far end of the child's output is opened first, so nothing the child
     # publishes is dropped for want of a subscriber.
-    downstream = ProcessorLinkDataAccess()
+    downstream = NodeLinkDataAccess()
     _helper.wire_link_data_access(
         downstream,
         {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
@@ -1462,7 +1462,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
             "link": engine_shaped_link_wiring("input", inbound_link_id),
         }
     )
-    upstream = ProcessorLinkDataAccess()
+    upstream = NodeLinkDataAccess()
     _helper.wire_link_data_access(
         upstream,
         {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
@@ -1648,7 +1648,7 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
     Fail-without-fix: move the drain back under the idle branch and the burst
     below is processed with a drain or two at most, all after it ended.
     """
-    from streamlib import ProcessorLinkDataAccess
+    from tatolab.stream import NodeLinkDataAccess
 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
@@ -1660,7 +1660,7 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
             load_processor_class(f"{PROBE_MODULE}:SlowPassThroughProbe"),
             "R-helper-test",
             "P-helper-test",
-            ProcessorLinkDataAccess(),
+            NodeLinkDataAccess(),
         )
         lifecycle_holder.append(lifecycle)
         lifecycle.run_until_the_parent_is_done()
@@ -1670,7 +1670,7 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
 
     inbound_link_id = "L-slow-in"
     outbound_link_id = "L-slow-out"
-    downstream = ProcessorLinkDataAccess()
+    downstream = NodeLinkDataAccess()
     _helper.wire_link_data_access(
         downstream,
         {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
@@ -1692,10 +1692,10 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
     (lifecycle,) = lifecycle_holder
     counting = _CountingLinkDataAccess(lifecycle._link_data_access)
     # A duck-typed stand-in: the loop only ever calls methods on it.
-    lifecycle._link_data_access = cast(ProcessorLinkDataAccess, counting)
+    lifecycle._link_data_access = cast(NodeLinkDataAccess, counting)
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
-    upstream = ProcessorLinkDataAccess()
+    upstream = NodeLinkDataAccess()
     _helper.wire_link_data_access(
         upstream,
         {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
@@ -1941,7 +1941,7 @@ def start_a_real_helper_process(
     *,
     rust_log: "str | None" = None,
 ) -> subprocess.Popen:
-    """`python -m streamlib._helper` as the spawn host starts it — its channel,
+    """`python -m tatolab.runtime._helper` as the spawn host starts it — its channel,
     its class, its domain — handed `parent_engine_build_id`, or no id at all.
 
     Everything a helper needs to reach its own iceoryx2 node is supplied, so a
@@ -1973,7 +1973,7 @@ def start_a_real_helper_process(
         }
     )
     return subprocess.Popen(
-        [sys.executable, "-m", "streamlib._helper"],
+        [sys.executable, "-m", "tatolab.runtime._helper"],
         env=environment,
         pass_fds=[parent.child_end.fileno()],
         stdin=subprocess.DEVNULL,
@@ -1997,7 +1997,7 @@ def standard_error_of_a_helper_that_refused_its_start(helper: subprocess.Popen) 
 def test_a_helper_that_imported_another_engine_build_refuses_before_it_opens_anything(
     stand_in_parent, empty_iceoryx2_domain_root
 ):
-    """A stale `streamlib` earlier on a helper's `sys.path`, or an engine built
+    """A stale `tatolab.runtime` earlier on a helper's `sys.path`, or an engine built
     against another iceoryx2, otherwise fails every service open as a
     corrupted service. The refusal is on raw stderr, naming both builds,
     because the log channel does not exist yet — and no node has opened.
@@ -2070,7 +2070,7 @@ def test_a_helper_handed_its_own_engine_build_id_starts_and_opens_its_node(
 
 
 def test_the_helper_module_is_runnable_as_a_module():
-    """The parent execs `python -m streamlib._helper`; a module without a
+    """The parent execs `python -m tatolab.runtime._helper`; a module without a
     `__main__` guard would exec cleanly and do nothing."""
     helper_source = os.path.join(os.path.dirname(_helper.__file__), "_helper.py")
     with open(helper_source, encoding="utf-8") as source:

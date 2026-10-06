@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from streamlib import ProcessorLinkDataAccess
-from streamlib._control_plane_client import LocalApiSocket
+from tatolab.stream import NodeLinkDataAccess
+from tatolab.runtime._control_plane_client import LocalApiSocket
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
     NODE_READY_TIMEOUT_SECONDS,
     await_sole_registry_entry,
@@ -221,7 +221,7 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
 GAPPED_AUDIO_PROCESSORS_SOURCE = '''\
 """A mono source whose every block starts a second after the last one ended."""
 
-from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
     AudioBlock,
     AudioWindowContract,
     RuntimeContextLimitedAccess,
@@ -279,7 +279,7 @@ class WindowedMonoConsumer:
 '''
 
 GAPPED_AUDIO_STREAM_SOURCE = '''\
-from streamlib import Stream, stream
+from tatolab.stream import Stream, stream
 
 from processors.gapped_audio import GappedMonoSource, WindowedMonoConsumer
 
@@ -344,12 +344,12 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
 # ---- the child's own reading of the envelope (no device, no GPU) ------------
 
 
-def a_helper_process_data_plane() -> ProcessorLinkDataAccess:
+def a_helper_process_data_plane() -> NodeLinkDataAccess:
     """The object a child builds for itself, with its own iceoryx2 node."""
-    return ProcessorLinkDataAccess()
+    return NodeLinkDataAccess()
 
 
-def wire_with_window(data_plane: ProcessorLinkDataAccess, audio_window) -> None:
+def wire_with_window(data_plane: NodeLinkDataAccess, audio_window) -> None:
     data_plane.wire_input_link(
         "audio",
         "streamlib/tests/audio-window/never-opened",

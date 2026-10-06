@@ -41,7 +41,7 @@ static THE_RING_THIS_HELPERS_ENGINE_LOG_RECORDS_QUEUE_IN: OnceLock<
 /// own included, for [`drain_the_engine_log_records_this_helper_captured`] to
 /// hand the parent.
 ///
-/// Called by `streamlib._helper` once its channel to the parent is up and
+/// Called by `tatolab.runtime._helper` once its channel to the parent is up and
 /// before it opens anything, and by nothing else. Refuses a second call: the
 /// records of a process that already installed a subscriber are already going
 /// somewhere.
@@ -143,7 +143,7 @@ pub(crate) fn monotonic_clock_now_ns() -> u64 {
 /// Emit one record on the engine's log pipeline, with structured attrs.
 ///
 /// This is the app process's own Python logging. A processor's records never
-/// come through here — it runs in its own child, whose `streamlib.log` routes
+/// come through here — it runs in its own child, whose `tatolab.stream.log` routes
 /// to the parent over the escalate `Log` op.
 #[pyfunction]
 #[pyo3(signature = (level, message, attrs = None))]

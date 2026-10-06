@@ -21,12 +21,12 @@ from typing import Callable, Iterator
 
 import pytest
 
-from streamlib import _node_registry, cli
-from streamlib._local_api_mcp_stdio_pipe import (
+from tatolab.runtime import _node_registry, cli
+from tatolab.runtime._local_api_mcp_stdio_pipe import (
     MCP_STDIO_UPGRADE_REQUEST,
     pipe_stdio_to_the_runtimes_mcp_server,
 )
-from streamlib._node_registry import NodeRegistryEntry
+from tatolab.runtime._node_registry import NodeRegistryEntry
 
 SCRIPTED_RUNTIME_NAME = "scripted-runtime"
 SCRIPTED_RUNTIME_ID = "Rscripted"

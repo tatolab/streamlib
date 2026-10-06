@@ -17,7 +17,7 @@ import json
 import os
 import traceback
 
-from streamlib import (
+from tatolab.stream import (
     GpuContextFullAccess,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,
@@ -26,7 +26,7 @@ from streamlib import (
     log,
     node,
 )
-from streamlib._engine import ComputeKernel, KernelDispatchBatch
+from tatolab.runtime._engine import ComputeKernel, KernelDispatchBatch
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 64

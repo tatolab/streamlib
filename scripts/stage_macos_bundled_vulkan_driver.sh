@@ -6,9 +6,9 @@
 # `maturin build` ships them and a stock Apple Silicon Mac needs no Vulkan SDK.
 #
 # Writes `libvulkan.1.dylib`, `libMoltenVK.dylib` and `MoltenVK_icd.json` into
-# `sdk/streamlib-python-wheel/python/streamlib/_vulkan_driver/` (or the
+# `sdk/streamlib-python-wheel/python/tatolab/runtime/_vulkan_driver/` (or the
 # directory given as $1). The engine dlopens the loader there by absolute path,
-# and `streamlib/__init__.py` points the loader at the ICD manifest beside it.
+# and `tatolab/runtime/__init__.py` points the loader at the ICD manifest beside it.
 #
 # Every binary this writes ends in `codesign -f -s -`. Any post-link rewrite —
 # `lipo -thin` here — invalidates the signature, and an arm64 dylib with a
@@ -25,7 +25,7 @@ VULKAN_LOADER_TAG="vulkan-sdk-1.4.357.0"
 
 workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 wheel_project_root="$workspace_root/sdk/streamlib-python-wheel"
-bundled_vulkan_driver_directory="${1:-$wheel_project_root/python/streamlib/_vulkan_driver}"
+bundled_vulkan_driver_directory="${1:-$wheel_project_root/python/tatolab/runtime/_vulkan_driver}"
 
 # The wheel's own deployment target, read from the one place it is pinned so the
 # loader cannot be built for a newer macOS than the wheel's tag claims.

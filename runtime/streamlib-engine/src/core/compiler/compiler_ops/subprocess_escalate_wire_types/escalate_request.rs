@@ -307,7 +307,7 @@ pub(crate) enum EscalateRequestLogLevel {
     Warn,
 }
 
-/// Origin runtime of the record: "python" for a `streamlib.log` call in the
+/// Origin runtime of the record: "python" for a `tatolab.stream.log` call in the
 /// helper, "rust" for an engine `tracing` record the helper captured and
 /// drained. An engine record made in the app process never comes this way —
 /// it reaches the pipeline through `tracing::*!()` directly.
@@ -335,7 +335,7 @@ pub(crate) struct EscalateRequestLog {
 
     /// True when the record was captured from subprocess stdout/stderr,
     /// console.log, root logging handler, or a raw fd write, rather than a
-    /// direct `streamlib.log.*` call.
+    /// direct `tatolab.stream.log.*` call.
     pub(crate) intercepted: bool,
 
     /// Severity level of the record. Maps 1:1 onto tracing::Level.
@@ -352,11 +352,11 @@ pub(crate) struct EscalateRequestLog {
 
     /// RHI operation the record was made inside, for a captured engine
     /// record that names one. Absent from a record that names none, and from
-    /// every `streamlib.log` call.
+    /// every `tatolab.stream.log` call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) rhi_op: Option<String>,
 
-    /// Origin runtime of the record: "python" for a `streamlib.log` call,
+    /// Origin runtime of the record: "python" for a `tatolab.stream.log` call,
     /// "rust" for an engine `tracing` record the helper captured.
     pub(crate) source: EscalateRequestLogSource,
 
@@ -372,7 +372,7 @@ pub(crate) struct EscalateRequestLog {
     pub(crate) source_ts: String,
 
     /// The record's `tracing` target, for a captured engine record. Absent
-    /// from a `streamlib.log` call, whose target is the source's own.
+    /// from a `tatolab.stream.log` call, whose target is the source's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) target: Option<String>,
 }

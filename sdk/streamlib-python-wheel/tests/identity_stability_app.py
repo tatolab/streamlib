@@ -15,9 +15,9 @@ buy the test nothing but a GPU context.
 
 import sys
 
-import streamlib
+import tatolab.runtime
 from identity_stable_processor import IdentityStableProcessor
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 DIRECT_LAUNCH_ARGUMENT = "load-then-exit"
 
@@ -29,7 +29,7 @@ def identity_stability(stream: Stream) -> None:
 
 
 def load_then_exit() -> None:
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(compile_stream_to_graph(identity_stability))
         print("MARKER:ADDED", flush=True)

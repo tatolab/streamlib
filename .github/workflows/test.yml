@@ -860,7 +860,7 @@ jobs:
       # fails here.
       - name: Type stubs match the compiled module
         working-directory: sdk/streamlib-python-wheel
-        run: .venv/bin/python -m mypy.stubtest streamlib._engine
+        run: .venv/bin/python -m mypy.stubtest tatolab.runtime._engine
 
       # The suite the Linux wheel job runs. A test absent on macOS carries
       # `linux_only_capability` (the closed list) or `awaiting_macos_parity`

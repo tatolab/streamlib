@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`streamlib.EncodedAudioPacket` — the encoded bag's cast, over a live link.
+"""`tatolab.stream.EncodedAudioPacket` — the encoded bag's cast, over a live link.
 
 An encoded packet carries its payload inline, so what has to survive the wire
 is the payload's msgpack *type*: `bin`, which reaches Python as `bytes`. That
@@ -22,8 +22,8 @@ from typing import Any
 
 import pytest
 
-from streamlib import EncodedAudioPacket, ProcessorLinkDataAccess
-from streamlib.encoded_audio_packet import _CODECS_ON_THE_WIRE, _REQUIRED_BAG_KEYS
+from tatolab.stream import EncodedAudioPacket, NodeLinkDataAccess
+from tatolab.stream.encoded_audio_packet import _CODECS_ON_THE_WIRE, _REQUIRED_BAG_KEYS
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
@@ -73,7 +73,7 @@ class WiredLinkUnderTest:
     """One live link, from the writing end to the reading end."""
 
     def __init__(
-        self, source: ProcessorLinkDataAccess, destination: ProcessorLinkDataAccess
+        self, source: NodeLinkDataAccess, destination: NodeLinkDataAccess
     ) -> None:
         self.source = source
         self.destination = destination
@@ -95,7 +95,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     notify_service_name = f"{unique}_dest/notify"
     link_id = f"L-{unique}"
 
-    destination = ProcessorLinkDataAccess()
+    destination = NodeLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT,
         channel_service_name,
@@ -108,7 +108,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
         1,
         link_id,
     )
-    source = ProcessorLinkDataAccess()
+    source = NodeLinkDataAccess()
     source.wire_output_link(
         OUTPUT_PORT,
         channel_service_name,

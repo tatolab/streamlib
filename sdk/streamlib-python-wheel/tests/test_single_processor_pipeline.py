@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`streamlib.testing.SingleProcessorTestPipeline`, driving a real processor.
+"""`tatolab.runtime.testing.SingleNodeTestPipeline`, driving a real processor.
 
 The harness is public API a user writes their own tests against, so what is
 worth breaking a build over is that it works end to end: a bag fed from the
@@ -20,7 +20,7 @@ from single_processor_under_test import (
     DoublingFilter,
     MixedCasePortDoubler,
 )
-from streamlib.testing import SingleProcessorTestPipeline
+from tatolab.runtime.testing import SingleNodeTestPipeline
 
 pytestmark = [pytest.mark.requires_gpu]
 
@@ -37,7 +37,7 @@ def test_a_fed_bag_reaches_the_processor_and_its_output_comes_back():
     feeder publishes into a link the helper attaches to tens of milliseconds
     later, and the link drops what it carries in the meantime.
     """
-    with SingleProcessorTestPipeline(DoublingFilter) as pipeline:
+    with SingleNodeTestPipeline(DoublingFilter) as pipeline:
         pipeline.feed("numbers_from_upstream", {"value": 21})
         assert pipeline.await_bag("numbers_to_downstream") == {"value": 42}
 
@@ -46,7 +46,7 @@ def test_every_fed_bag_comes_back_in_order():
     """`ordered` on the collector is what makes an assertion honest: a
     profile that skipped to the freshest bag under a burst would let a broken
     processor look correct."""
-    with SingleProcessorTestPipeline(DoublingFilter) as pipeline:
+    with SingleNodeTestPipeline(DoublingFilter) as pipeline:
         for value in range(8):
             pipeline.feed("numbers_from_upstream", {"value": value})
         collected = pipeline.await_bags("numbers_to_downstream", 8)
@@ -55,7 +55,7 @@ def test_every_fed_bag_comes_back_in_order():
 
 def test_the_processor_under_test_is_constructed_with_the_config():
     """`config=` reaches the processor's constructor in its own process."""
-    with SingleProcessorTestPipeline(ConfiguredScaler, config={"factor": 5}) as pipeline:
+    with SingleNodeTestPipeline(ConfiguredScaler, config={"factor": 5}) as pipeline:
         pipeline.feed("numbers_from_upstream", {"value": 3})
         assert pipeline.await_bag("numbers_to_downstream") == {"value": 15}
 
@@ -64,7 +64,7 @@ def test_a_port_is_found_by_any_spelling_that_casts_to_its_name():
     """`@node` declared `Numbers` as `numbers`; the helper's own reads and writes
     and the harness's lookups all cast their argument, so the author's spelling,
     the cast one and a shouted one meet at one port."""
-    with SingleProcessorTestPipeline(MixedCasePortDoubler) as pipeline:
+    with SingleNodeTestPipeline(MixedCasePortDoubler) as pipeline:
         pipeline.feed("Numbers", {"value": 4})
         assert pipeline.await_bag("doubled-numbers") == {"value": 8}
         pipeline.feed("numbers", {"value": 5})
@@ -74,7 +74,7 @@ def test_a_port_is_found_by_any_spelling_that_casts_to_its_name():
 def test_a_port_the_processor_does_not_declare_is_named_in_the_error():
     """A typo'd port name has to come back as the typo plus the real names —
     `feed` names inputs, so the output port is not among them."""
-    with SingleProcessorTestPipeline(DoublingFilter) as pipeline:
+    with SingleNodeTestPipeline(DoublingFilter) as pipeline:
         with pytest.raises(KeyError, match="no_such_port"):
             pipeline.feed("no_such_port", {"value": 1})
         with pytest.raises(KeyError, match="numbers_from_upstream"):
@@ -84,7 +84,7 @@ def test_a_port_the_processor_does_not_declare_is_named_in_the_error():
 def test_a_processor_that_never_produces_fails_rather_than_hanging():
     """The failure a test is actually looking for is "nothing came back", so it
     has to arrive as an assertion rather than a wedged run."""
-    with SingleProcessorTestPipeline(DoublingFilter) as pipeline:
+    with SingleNodeTestPipeline(DoublingFilter) as pipeline:
         with pytest.raises(AssertionError, match="produced nothing"):
             pipeline.await_bag("numbers_to_downstream", timeout=2.0)
 
@@ -92,9 +92,9 @@ def test_a_processor_that_never_produces_fails_rather_than_hanging():
 def test_two_pipelines_at_once_are_refused_by_name():
     """One engine owns the process's shutdown signals, so pipelines run one at
     a time — caught here rather than surfacing as a signals error."""
-    with SingleProcessorTestPipeline(DoublingFilter):
+    with SingleNodeTestPipeline(DoublingFilter):
         with pytest.raises(RuntimeError, match="one at a time"):
-            with SingleProcessorTestPipeline(DoublingFilter):
+            with SingleNodeTestPipeline(DoublingFilter):
                 pass
 
 
@@ -109,7 +109,7 @@ def test_a_bag_carrying_bytes_crosses_both_process_boundaries():
     nowhere before this change.
     """
     payload = struct.pack("<4f", -1.0, -0.5, 0.0, 0.5)
-    with SingleProcessorTestPipeline(AudioBlockInspector) as pipeline:
+    with SingleNodeTestPipeline(AudioBlockInspector) as pipeline:
         pipeline.feed(
             "audio_from_upstream",
             {

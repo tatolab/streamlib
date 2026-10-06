@@ -20,8 +20,8 @@ import pytest
 # wheel's own test environment installs; `typing.Required` arrives only at 3.11.
 from typing_extensions import NotRequired, Required
 
-from streamlib import node
-from streamlib._processor_hosting import (
+from tatolab.stream import node
+from tatolab.runtime._processor_hosting import (
     apply_configuration,
     construct_processor_instance,
 )

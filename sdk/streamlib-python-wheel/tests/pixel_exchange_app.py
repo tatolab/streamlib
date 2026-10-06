@@ -10,8 +10,9 @@ the same log forwarding every child's records ride.
 
 import sys
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 import pixel_exchange_probes
 
@@ -22,7 +23,7 @@ def _probe_class_named_on_the_command_line() -> type:
 
 def _add_the_cross_process_edit(stream: Stream, *, skip_edit: bool) -> None:
     pattern = stream.add(
-        streamlib.TestPatternSource, config={"width": 320, "height": 180}
+        tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
     )
     effect = stream.add(
         pixel_exchange_probes.ReportingInvertingEffect, config={"skip_edit": skip_edit}
@@ -44,7 +45,7 @@ def a_test_pattern_into_an_inverting_effect(stream: Stream) -> None:
     """Native source → Python effect, the user-facing story: the frames a
     native processor produces are edited in place by a child interpreter."""
     pattern = stream.add(
-        streamlib.TestPatternSource, config={"width": 320, "height": 180}
+        tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
     )
     effect = stream.add(pixel_exchange_probes.InvertingEffect)
     stream.connect(
@@ -78,7 +79,7 @@ if __name__ == "__main__":
     graph = compile_stream_to_graph(
         STREAM_BY_SCENARIO.get(sys.argv[1], one_pixel_exchange_probe)
     )
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

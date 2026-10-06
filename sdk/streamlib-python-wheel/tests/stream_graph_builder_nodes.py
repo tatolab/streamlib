@@ -8,7 +8,7 @@ path of its class, `stream_graph_builder_nodes:<qualname>` — a name a child
 process can import.
 """
 
-from streamlib import RuntimeContextLimitedAccess, input, node, output
+from tatolab.stream import RuntimeContextLimitedAccess, input, node, output
 
 
 @node

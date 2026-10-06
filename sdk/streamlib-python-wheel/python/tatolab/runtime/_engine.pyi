@@ -19,7 +19,7 @@ from types import TracebackType
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar, Literal, TypeVar, final, overload
 
-from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
+from tatolab.stream.claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 
 from typing_extensions import Self, disjoint_base
 
@@ -46,9 +46,9 @@ __all__ = [
     "LocalApiMcpToolCallFailed",
     "MonotonicTimer",
     "OpaqueFdTextureExport",
-    "ProcessorOwnedWindow",
-    "ProcessorOwnedWindowEvents",
-    "ProcessorLinkDataAccess",
+    "NodeOwnedWindow",
+    "NodeOwnedWindowEvents",
+    "NodeLinkDataAccess",
     "CameraSource",
     "CapabilityExtensionHost",
     "DisplayWindow",
@@ -101,8 +101,8 @@ class CameraSource:
     camera on macOS, ahead of external cameras and camera extensions.
     `max_width` and `max_height` (1920 and 1080 by default) cap the negotiated
     format, which is clamped to fit. Output `video` publishes an ordinary
-    `streamlib.VideoFrame`. Camera→GPU transport auto-selects zero-copy (DMA-BUF on Linux, IOSurface on
-    macOS) or CPU upload. A named `device_id` that cannot be opened is refused
+    `tatolab.stream.VideoFrame`. Camera→GPU transport auto-selects zero-copy
+    (DMA-BUF on Linux, IOSurface on macOS) or CPU upload. A named `device_id` that cannot be opened is refused
     at `setup()` by name, as is every camera on a platform no capture backend
     serves. Each frame's `timestamp_ns` is the instant the device captured it,
     on the machine's monotonic clock.
@@ -125,7 +125,7 @@ class DisplayWindow:
     interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`. `width` and
     `height` (1280 and 720 by default) are the window's initial size in the
     desktop's logical pixels, so it is the same size on a 1x and a 2x display.
-    Input `video` (`newest`) takes any published `streamlib.VideoFrame`.
+    Input `video` (`newest`) takes any published `tatolab.stream.VideoFrame`.
 
     Add as many as the graph needs: each instance registers its own window
     with the engine's shared event pump and renders on its own thread. An
@@ -148,7 +148,7 @@ class H264Decoder:
     Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
     shape `H264Encoder` publishes; a bag the decoder cannot read is refused
     by name, never reshaped. Output `video` publishes an ordinary
-    `streamlib.VideoFrame` on a pooled RGBA pixel-buffer surface at the
+    `tatolab.stream.VideoFrame` on a pooled RGBA pixel-buffer surface at the
     conformance-windowed extent — never the coded picture — carrying the
     encoded frame's own timestamp and `color_info`, with `fps`,
     `texture_layout` and the HDR sidecars absent, so `DisplayWindow` and a
@@ -166,8 +166,8 @@ class H264Decoder:
 
     The decode session is minted at `setup()`. On a device with no hardware
     decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox
-    hardware decoder — setup refuses by name: the processor never reaches
-    Running, and `Runtime.wait_until_every_processor_is_running` raises
+    hardware decoder — setup refuses by name: the node never reaches
+    Running, and `Runtime.wait_until_every_node_is_running` raises
     rather than the graph running with an empty channel.
     """
 
@@ -182,7 +182,7 @@ class H264Encoder:
     (`stream.add(H264Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
-    Input `video` (`ordered`) takes any published `streamlib.VideoFrame` —
+    Input `video` (`ordered`) takes any published `tatolab.stream.VideoFrame` —
     buffer-backed (camera, test pattern) or texture-backed (a kernel
     output). Output `encoded_video` publishes encoded-frame bags: one
     Annex-B access unit per bag, beside the stream metadata keys. A frame
@@ -221,7 +221,7 @@ class H265Decoder:
     Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
     shape `H265Encoder` publishes; a bag the decoder cannot read is refused
     by name, never reshaped. Output `video` publishes an ordinary
-    `streamlib.VideoFrame` on a pooled RGBA pixel-buffer surface at the
+    `tatolab.stream.VideoFrame` on a pooled RGBA pixel-buffer surface at the
     conformance-windowed extent — never the coded picture — carrying the
     encoded frame's own timestamp and `color_info`, with `fps`,
     `texture_layout` and the HDR sidecars absent, so `DisplayWindow` and a
@@ -239,8 +239,8 @@ class H265Decoder:
 
     The decode session is minted at `setup()`. On a device with no hardware
     decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox
-    hardware decoder — setup refuses by name: the processor never reaches
-    Running, and `Runtime.wait_until_every_processor_is_running` raises
+    hardware decoder — setup refuses by name: the node never reaches
+    Running, and `Runtime.wait_until_every_node_is_running` raises
     rather than the graph running with an empty channel.
     """
 
@@ -255,7 +255,7 @@ class H265Encoder:
     (`stream.add(H265Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
-    Input `video` (`ordered`) takes any published `streamlib.VideoFrame` —
+    Input `video` (`ordered`) takes any published `tatolab.stream.VideoFrame` —
     buffer-backed (camera, test pattern) or texture-backed (a kernel
     output). Output `encoded_video` publishes encoded-frame bags: one
     Annex-B access unit per bag, beside the stream metadata keys. A frame
@@ -295,7 +295,7 @@ class MicrophoneSource:
     `device_id` takes the backend's default device; naming one the backend
     cannot open raises rather than landing on a different device.
 
-    Blocks arrive on the `audio` output as bags `streamlib.AudioBlock` casts.
+    Blocks arrive on the `audio` output as bags `tatolab.stream.AudioBlock` casts.
 
     On macOS the backend is CoreAudio and `device_id` is a CoreAudio device
     UID; naming one that is not attached is refused with the UIDs that are.
@@ -370,7 +370,7 @@ class OpusDecoder:
     refused by name: a `codec` other than `"opus"`, a `bitstream` that is not
     msgpack bin, a `sample_rate` other than 48 000, or a `pre_skip` past the
     5 760 samples one Opus packet can span. Output `audio` publishes ordinary
-    `streamlib.AudioBlock` bags — `f32` at 48 000 Hz in the packet's own
+    `tatolab.stream.AudioBlock` bags — `f32` at 48 000 Hz in the packet's own
     channel count.
 
     It enters the stream at any packet, since every Opus packet is a sync
@@ -438,7 +438,7 @@ class SpeakerSink:
     backend cannot open raises rather than landing on a different device.
 
     Blocks to play arrive on the `audio` input as bags in the
-    `streamlib.AudioBlock` shape. The port declares
+    `tatolab.stream.AudioBlock` shape. The port declares
     `audio_window = match_device`, so the engine resamples every block to the
     device's rate and re-frames it into device-period windows — `graph` renders
     the resolved values on the port. Conversion is not unconditional: `dtype`
@@ -515,7 +515,7 @@ class VirtualCameraSink:
 
 @final
 class TestBagFeeder:
-    """`streamlib.testing`'s feeder endpoint: publishes bags a test queued.
+    """`tatolab.runtime.testing`'s feeder endpoint: publishes bags a test queued.
 
     A marker type, like the media built-ins — never instantiated, passed to
     `stream.add`. Native so that its queue lives in the app process, where the
@@ -529,7 +529,7 @@ class TestBagFeeder:
 
 @final
 class TestBagCollector:
-    """`streamlib.testing`'s collector endpoint: records every bag produced."""
+    """`tatolab.runtime.testing`'s collector endpoint: records every bag produced."""
 
     type: ClassVar[str]
 
@@ -636,15 +636,15 @@ class Runtime:
         SIGTERM are never handed back to Python, and SIGHUP is not owned.
         """
 
-    def wait_until_every_processor_is_running(self, *, timeout: float = 30.0) -> None:
-        """Block until every processor in the graph is running.
+    def wait_until_every_node_is_running(self, *, timeout: float = 30.0) -> None:
+        """Block until every node in the graph is running.
 
         Call it before `run()` or from another thread while `run()` blocks — a
         graph that has not started yet is waited through, not refused. A Python
-        processor is running once its helper process has registered and wired
+        node is running once its helper process has registered and wired
         its ports; anything published into the graph before that is dropped by
-        the link. Raises `RuntimeError` if a processor failed instead of
-        starting — carrying that processor's own refusal text, so a built-in
+        the link. Raises `RuntimeError` if a node failed instead of
+        starting — carrying that node's own refusal text, so a built-in
         that refused at setup is read by name — if `timeout` elapses, or if
         this runtime has already been shut down; and `ValueError` for a
         `timeout` that is negative, NaN, or too large to be a duration.
@@ -696,16 +696,16 @@ class CapabilityExtensionHost:
         """
 
 @final
-class ProcessorLinkDataAccess:
-    """One processor's links. The engine binds it; app code never builds one.
+class NodeLinkDataAccess:
+    """One node's links. The engine binds it; app code never builds one.
 
     Constructing one opens a helper process's own data plane, with its own
-    iceoryx2 node — only `streamlib._helper` does that. The node opens in the
+    iceoryx2 node — only `tatolab.runtime._helper` does that. The node opens in the
     domain root the parent runtime hands over in `STREAMLIB_ICEORYX2_DOMAIN_ROOT`,
     and construction raises `RuntimeError` naming that variable when it is unset.
     """
 
-    def __new__(cls) -> ProcessorLinkDataAccess: ...
+    def __new__(cls) -> NodeLinkDataAccess: ...
     def declare_ports(
         self, input_port_names: Sequence[str], output_port_names: Sequence[str]
     ) -> None:
@@ -741,7 +741,7 @@ class ProcessorLinkDataAccess:
         link_id: str,
         output_port_wiring_generation: int | None = None,
     ) -> None:
-        """Open this processor's publisher and one notifier for a link out of
+        """Open this node's publisher and one notifier for a link out of
         `port_name`.
 
         Once a loss-count board is open, `output_port_wiring_generation` names
@@ -765,7 +765,7 @@ class ProcessorLinkDataAccess:
         loss_count_slot: int | None = None,
         wiring_generation: int | None = None,
     ) -> None:
-        """Open this processor's subscriber for one link into `port_name`.
+        """Open this node's subscriber for one link into `port_name`.
 
         `channel_service_name` is what this end subscribes to;
         `inbound_link_name` is what a read hands back as the link's name.
@@ -821,15 +821,15 @@ class RuntimeContextFullAccess:
     @property
     def runtime_id(self) -> str: ...
     @property
-    def processor_id(self) -> str: ...
+    def node_id(self) -> str: ...
     def is_paused(self) -> bool: ...
     def should_process(self) -> bool: ...
     @staticmethod
     def open_for_helper_process(
         configuration: Mapping[str, Any],
-        link_data_access: ProcessorLinkDataAccess,
+        link_data_access: NodeLinkDataAccess,
         runtime_id: str,
-        processor_id: str,
+        node_id: str,
         escalate_request_to_parent: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         release_to_parent_without_waiting: Callable[[dict[str, Any]], None] | None = None,
     ) -> RuntimeContextFullAccess: ...
@@ -857,7 +857,7 @@ class RuntimeContextLimitedAccess:
     @property
     def runtime_id(self) -> str: ...
     @property
-    def processor_id(self) -> str: ...
+    def node_id(self) -> str: ...
     def is_paused(self) -> bool: ...
     def should_process(self) -> bool: ...
 
@@ -976,7 +976,7 @@ class GpuContextLimitedAccess:
         on Linux, through its own IOSurface on macOS — without the caller
         spelling a transfer usage.
         """
-    def acquire_texture_from_processor_output_pool(
+    def acquire_texture_from_node_output_pool(
         self,
         pool_key: str,
         rotation_depth: int,
@@ -985,14 +985,14 @@ class GpuContextLimitedAccess:
         format: str,
         usage: list[str],
     ) -> GpuSurfaceHandle:
-        """The texture this frame publishes into, from the processor output pool `pool_key`.
+        """The texture this frame publishes into, from the node output pool `pool_key`.
 
         Every call names a new frame, `<slot>#<generation>`, in a slot the pool
         owns; a slot any consumer still holds is skipped, never rewritten. The
         pool rotates through `rotation_depth` slots, grows while consumers hold
         frames, and at its cap raises naming the pool — the producer drops its
-        own frame rather than wait. `ProcessorOutputTextureRing` is the
-        spelling a processor reaches for.
+        own frame rather than wait. `NodeOutputTextureRing` is the
+        spelling a node reaches for.
         """
     def acquire_storage_buffer(
         self,
@@ -1010,18 +1010,18 @@ class GpuContextLimitedAccess:
         publish the id after it; an MLX write is ordered by the `mx.eval` it
         owes inside the block. A one-off is released at close; a tensor
         published downstream comes from
-        `acquire_storage_buffer_from_processor_output_pool`.
+        `acquire_storage_buffer_from_node_output_pool`.
         """
-    def acquire_storage_buffer_from_processor_output_pool(
+    def acquire_storage_buffer_from_node_output_pool(
         self,
         pool_key: str,
         rotation_depth: int,
         shape: Sequence[int],
         dtype: Literal["float32", "float16", "uint8", "int32"],
     ) -> GpuSurfaceHandle:
-        """The tensor this frame publishes into, from the processor output pool `pool_key`.
+        """The tensor this frame publishes into, from the node output pool `pool_key`.
 
-        The pool contract `acquire_texture_from_processor_output_pool` states:
+        The pool contract `acquire_texture_from_node_output_pool` states:
         a new `<slot>#<generation>` per call, a slot a consumer still holds is
         never rewritten, and at the cap the call raises naming the pool.
         """
@@ -1094,7 +1094,7 @@ class GpuContextFullAccess:
         on Linux, through its own IOSurface on macOS — without the caller
         spelling a transfer usage.
         """
-    def acquire_texture_from_processor_output_pool(
+    def acquire_texture_from_node_output_pool(
         self,
         pool_key: str,
         rotation_depth: int,
@@ -1103,14 +1103,14 @@ class GpuContextFullAccess:
         format: str,
         usage: list[str],
     ) -> GpuSurfaceHandle:
-        """The texture this frame publishes into, from the processor output pool `pool_key`.
+        """The texture this frame publishes into, from the node output pool `pool_key`.
 
         Every call names a new frame, `<slot>#<generation>`, in a slot the pool
         owns; a slot any consumer still holds is skipped, never rewritten. The
         pool rotates through `rotation_depth` slots, grows while consumers hold
         frames, and at its cap raises naming the pool — the producer drops its
-        own frame rather than wait. `ProcessorOutputTextureRing` is the
-        spelling a processor reaches for.
+        own frame rather than wait. `NodeOutputTextureRing` is the
+        spelling a node reaches for.
         """
     def acquire_storage_buffer(
         self,
@@ -1128,33 +1128,33 @@ class GpuContextFullAccess:
         publish the id after it; an MLX write is ordered by the `mx.eval` it
         owes inside the block. A one-off is released at close; a tensor
         published downstream comes from
-        `acquire_storage_buffer_from_processor_output_pool`.
+        `acquire_storage_buffer_from_node_output_pool`.
         """
-    def acquire_storage_buffer_from_processor_output_pool(
+    def acquire_storage_buffer_from_node_output_pool(
         self,
         pool_key: str,
         rotation_depth: int,
         shape: Sequence[int],
         dtype: Literal["float32", "float16", "uint8", "int32"],
     ) -> GpuSurfaceHandle:
-        """The tensor this frame publishes into, from the processor output pool `pool_key`.
+        """The tensor this frame publishes into, from the node output pool `pool_key`.
 
-        The pool contract `acquire_texture_from_processor_output_pool` states:
+        The pool contract `acquire_texture_from_node_output_pool` states:
         a new `<slot>#<generation>` per call, a slot a consumer still holds is
         never rewritten, and at the cap the call raises naming the pool.
         """
 
     def create_window(
         self, title: str, width: int = 1280, height: int = 720
-    ) -> ProcessorOwnedWindow:
-        """Request a window this processor owns, presented by the engine.
+    ) -> NodeOwnedWindow:
+        """Request a window this node owns, presented by the engine.
 
         `width` and `height` are the window's initial size in the desktop's
         logical pixels, so it is the same size on a 1x and a 2x display.
 
         Constructed once in `setup()`, named frames per frame in `process()`.
         The window lives in the app process on its own present loop, so it
-        keeps its frame rate whatever this processor's pace is, and naming no
+        keeps its frame rate whatever this node's pace is, and naming no
         frame leaves the last one up.
 
         Raises when the process can get no window at all — no display server,
@@ -1805,8 +1805,8 @@ class ComputeKernel:
         """
 
 @final
-class ProcessorOwnedWindow:
-    """A window this processor owns, presented by the engine at vsync.
+class NodeOwnedWindow:
+    """A window this node owns, presented by the engine at vsync.
 
     Constructed in `setup()` through `ctx.gpu_full_access.create_window(...)`;
     named frames per frame in `process()`. No window handle, swapchain or
@@ -1851,7 +1851,7 @@ class ProcessorOwnedWindow:
         shut.
         """
 
-    def drain_events(self) -> ProcessorOwnedWindowEvents:
+    def drain_events(self) -> NodeOwnedWindowEvents:
         """Take this window's coalesced state.
 
         Polling is optional — an owner that never drains still presents; it
@@ -1862,13 +1862,13 @@ class ProcessorOwnedWindow:
         """Close this window and release its present thread.
 
         Never an error for a window already closed, and never required: the
-        engine closes what a processor still owns at teardown.
+        engine closes what a node still owns at teardown.
         """
 
     def __repr__(self) -> str: ...
 
 @final
-class ProcessorOwnedWindowEvents:
+class NodeOwnedWindowEvents:
     """The coalesced state one `drain_events()` took off a window."""
 
     @property
@@ -2204,7 +2204,7 @@ def capture_this_helper_processes_engine_log_records() -> None:
     iceoryx2's own included, into the ring
     `drain_the_engine_log_records_this_helper_captured` empties.
 
-    Called by `streamlib._helper` once its channel to the parent is up and
+    Called by `tatolab.runtime._helper` once its channel to the parent is up and
     before it opens anything, and by nothing else. Raises on a second call and
     on a process that already has a `tracing` subscriber.
     """
@@ -2234,7 +2234,7 @@ if sys.platform == "darwin":
         `PR_SET_PDEATHSIG`. Either signal shuts `parent_channel_fd` down, so
         the helper reads the end of its channel and runs `stop` and
         `teardown()`; whatever is still alive about six and a half seconds
-        later has its process group killed. Called by `streamlib._helper`
+        later has its process group killed. Called by `tatolab.runtime._helper`
         before any processor code runs, and by nothing else. Raises on a
         second call and when the pid watch cannot be armed.
         """

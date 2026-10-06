@@ -11,8 +11,9 @@ log forwarding.
 
 import sys
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 import device_exchange_probes
 from camera_under_test import camera_source_config
@@ -27,7 +28,7 @@ def a_test_pattern_into_one_frame_probe(stream: Stream) -> None:
     """A native test pattern into one probe: the probe reports on its first
     frame, and the graph runs until the test has read the result."""
     pattern = stream.add(
-        streamlib.TestPatternSource,
+        tatolab.stream.TestPatternSource,
         config={
             "width": device_exchange_probes.SURFACE_WIDTH,
             "height": device_exchange_probes.SURFACE_HEIGHT,
@@ -42,7 +43,7 @@ def camera_into_the_lagged_consumer_probe(stream: Stream) -> None:
     """The camera's ring re-registers a different texture under one surface id
     every frame, and its pool recycles a slot every few frames — the two ways
     the pixels under a published id used to change underneath a reader."""
-    camera = stream.add(streamlib.CameraSource, config=camera_source_config())
+    camera = stream.add(tatolab.stream.CameraSource, config=camera_source_config())
     probe = stream.add(device_exchange_probes.LaggedConsumerHoldsItsFrameProbe)
     stream.connect(camera.output("video"), probe.input("video_from_upstream"))
 
@@ -79,7 +80,7 @@ if __name__ == "__main__":
     else:
         stream_function = a_test_pattern_into_one_frame_probe
     graph = compile_stream_to_graph(stream_function)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

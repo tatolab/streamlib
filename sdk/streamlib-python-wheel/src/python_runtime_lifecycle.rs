@@ -229,9 +229,9 @@ impl RuntimeGraphLoadRecord {
 ///
 /// Single-use by construction: [`run`](PythonRuntimeHandle::run) takes the
 /// engine out and drops it before returning.
-// `subclass` so the Python-side `streamlib.Runtime` can extend this to register
+// `subclass` so the Python-side `tatolab.runtime.Runtime` can extend this to register
 // itself with the `atexit` teardown hook.
-#[pyclass(name = "Runtime", module = "streamlib", subclass)]
+#[pyclass(name = "Runtime", module = "tatolab.runtime", subclass)]
 pub struct PythonRuntimeHandle {
     lifecycle: Mutex<PythonRuntimeLifecycleState>,
     /// Locked after `lifecycle` wherever both are held, so `run()`'s check of
@@ -762,28 +762,28 @@ impl PythonRuntimeHandle {
                 // to the torn-down state before its teardown and clears the
                 // escalation only after it, so this request cannot outlive the
                 // run loop it is meant for.
-                request_runtime_shutdown("streamlib.Runtime.shutdown()")
+                request_runtime_shutdown("tatolab.runtime.Runtime.shutdown()")
                     .map_err(|request_failure| PyRuntimeError::new_err(request_failure.to_string()))
             }
             PythonRuntimeLifecycleState::EngineTornDownWithThreadsJoinedOrAbandoned => Ok(()),
         }
     }
 
-    /// Block until every processor in the graph is running, then return.
+    /// Block until every node in the graph is running, then return.
     ///
     /// Call it around `run()` — before it, or from another thread while it
     /// blocks; a graph that has not started yet is waited through rather than
-    /// refused. A processor runs once its `setup` has returned, and for a
-    /// Python processor `setup` is what waits for its helper process to
+    /// refused. A node runs once its `setup` has returned, and for a
+    /// Python node `setup` is what waits for its helper process to
     /// register and wire its ports. Publishing into the graph before that
     /// point loses bags: a link drops what it carries while its consumer is
     /// not yet attached.
     ///
-    /// Raises if a processor failed instead of starting, or if `timeout`
-    /// elapses first; the message names the processor and the state it was
-    /// left in, so forgetting `run()` altogether reads as every processor
+    /// Raises if a node failed instead of starting, or if `timeout`
+    /// elapses first; the message names the node and the state it was
+    /// left in, so forgetting `run()` altogether reads as every node
     /// still `Pending`.
-    #[pyo3(signature = (*, timeout = 30.0))]
+    #[pyo3(name = "wait_until_every_node_is_running", signature = (*, timeout = 30.0))]
     fn wait_until_every_processor_is_running(
         &self,
         python: Python<'_>,

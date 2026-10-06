@@ -13,7 +13,7 @@ a startup transient from a stream losing a period at a time; a couple of
 seconds of blocks can.
 """
 
-from streamlib import RuntimeContextLimitedAccess, input, log, node
+from tatolab.stream import RuntimeContextLimitedAccess, input, log, node
 
 RESULT_MARKER = "MARKER:BLOCKS_COUNTED "
 

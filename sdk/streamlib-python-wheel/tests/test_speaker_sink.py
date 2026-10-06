@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`streamlib.SpeakerSink` — the playback built-in, marker to device callback.
+"""`tatolab.stream.SpeakerSink` — the playback built-in, marker to device callback.
 
 The marker tests are pure Python. The graph tests boot a real engine, which
 initializes a GPU context, so they carry `requires_gpu` like every other graph
@@ -23,9 +23,10 @@ from pathlib import Path
 
 import pytest
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from speaker_sink_named_device_app import UNOPENABLE_DEVICE_ID
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 SPEAKER_SINK_APP = Path(__file__).parent / "speaker_sink_app.py"
 NAMED_DEVICE_APP = Path(__file__).parent / "speaker_sink_named_device_app.py"
@@ -47,19 +48,19 @@ UNDERRUN_BYTES_A_COLD_START_MAY_COST = 8 * 1024 * 2 * 4
 
 def test_the_marker_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        streamlib.SpeakerSink()
+        tatolab.stream.SpeakerSink()
 
 
 @stream
 def one_speaker_sink_left_unnamed(stream: Stream) -> None:
-    stream.add(streamlib.SpeakerSink)
+    stream.add(tatolab.stream.SpeakerSink)
 
 
 def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(one_speaker_sink_left_unnamed)
     assert [node["name"] for node in graph["nodes"]] == ["speakersink"]
 
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(graph)
     finally:
@@ -68,8 +69,8 @@ def test_node_name_defaults_to_the_type_name():
 
 @stream
 def microphone_wired_straight_into_a_speaker(stream: Stream) -> None:
-    microphone = stream.add(streamlib.MicrophoneSource)
-    speaker = stream.add(streamlib.SpeakerSink)
+    microphone = stream.add(tatolab.stream.MicrophoneSource)
+    speaker = stream.add(tatolab.stream.SpeakerSink)
     stream.connect(microphone.output("audio"), speaker.input("audio"))
 
 
@@ -78,7 +79,7 @@ def test_the_speaker_declares_the_input_a_microphone_can_be_wired_to():
     which is what makes one `stream.connect(microphone.output("audio"),
     speaker.input("audio"))` the whole of wiring audio through. The builder
     checks no port names, so the engine accepting the load is the proof."""
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(compile_stream_to_graph(microphone_wired_straight_into_a_speaker))
     finally:

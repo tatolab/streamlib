@@ -395,7 +395,7 @@ def _cast_name(name: str, what_the_name_names: str) -> str:
 
 def _not_a_node_refusal(node_class: object) -> str:
     return (
-        f"{node_class!r} is not a node: decorate the class with @streamlib.node, and "
+        f"{node_class!r} is not a node: decorate the class with @tatolab.stream.node, and "
         f"pass the class itself rather than an instance of it"
     )
 

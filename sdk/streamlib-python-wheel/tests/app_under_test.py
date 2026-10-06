@@ -252,5 +252,5 @@ def start_app_under_the_streamlib_cli(app_path: Path, *arguments: str) -> AppUnd
     `sys.path` itself, so this arm needs no working directory either.
     """
     return start_command(
-        [sys.executable, "-m", "streamlib.cli", "dev", "-f", str(app_path), *arguments]
+        [sys.executable, "-m", "tatolab.runtime.cli", "dev", "-f", str(app_path), *arguments]
     )

@@ -27,13 +27,13 @@ from typing import Any
 
 import pytest
 
-from streamlib import (
+from tatolab.stream import (
     ClaimedSurfacePixelAccess,
-    ProcessorLinkDataAccess,
+    NodeLinkDataAccess,
     RuntimeContextFullAccess,
     VideoFrame,
 )
-from streamlib import claimed_surface_pixel_access as composable_module
+from tatolab.stream import claimed_surface_pixel_access as composable_module
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
@@ -1004,13 +1004,13 @@ def test_a_composing_type_read_over_a_link_arrives_built_from_the_bag():
     # The destination subscribes first: iceoryx2 drops a send with no
     # subscriber attached. Both planes live on this thread — its ports are
     # `!Send`.
-    destination = ProcessorLinkDataAccess()
+    destination = NodeLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT, channel_service_name, channel_service_name,
         notify_service_name,
         "read_next_in_order", 8, 8, 2, 1, link_id,
     )  # fmt: skip
-    source = ProcessorLinkDataAccess()
+    source = NodeLinkDataAccess()
     source.wire_output_link(
         OUTPUT_PORT, channel_service_name, notify_service_name,
         1024, 1 << 20, 8, 2, 1, link_id,

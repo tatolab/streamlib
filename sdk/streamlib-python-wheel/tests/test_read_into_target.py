@@ -24,7 +24,7 @@ import pytest
 from typing_extensions import TypedDict as TypedDictFromTypingExtensions
 from typing_extensions import assert_type
 
-from streamlib import ProcessorLinkDataAccess
+from tatolab.stream import NodeLinkDataAccess
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
@@ -66,7 +66,7 @@ class WiredLinkUnderTest:
     """One live link, from the writing end to the reading end."""
 
     def __init__(
-        self, source: ProcessorLinkDataAccess, destination: ProcessorLinkDataAccess
+        self, source: NodeLinkDataAccess, destination: NodeLinkDataAccess
     ) -> None:
         self.source = source
         self.destination = destination
@@ -88,7 +88,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     notify_service_name = f"{unique}_dest/notify"
     link_id = f"L-{unique}"
 
-    destination = ProcessorLinkDataAccess()
+    destination = NodeLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT,
         channel_service_name,
@@ -101,7 +101,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
         1,
         link_id,
     )
-    source = ProcessorLinkDataAccess()
+    source = NodeLinkDataAccess()
     source.wire_output_link(
         OUTPUT_PORT,
         channel_service_name,

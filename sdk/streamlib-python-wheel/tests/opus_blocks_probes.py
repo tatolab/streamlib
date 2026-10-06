@@ -24,7 +24,7 @@ import json
 import math
 import struct
 
-from streamlib import (
+from tatolab.stream import (
     AudioBlock,
     EncodedAudioPacket,
     RuntimeContextLimitedAccess,

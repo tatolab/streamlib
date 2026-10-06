@@ -121,7 +121,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   `compile_stream_to_graph`), `_processor_config_schema`, the data types (`AudioBlock`,
   `EncodedAudioPacket`, `VideoFrame` and its colour types, `EncodedVideoFrame`), the composable
   pieces (`ClaimedSurfacePixelAccess`, `PixelAccessToOneClaimedSurface`, `GlslPixelEffect`, the
-  `ModelInputTensor` family, `ProcessorOutputTextureRing`), `clock`, `log`, and
+  `ModelInputTensor` family, `NodeOutputTextureRing`), `clock`, `log`, and
   `_cross_floor_check`, which the compile entry runs.
 - **Built-ins are generated pure classes.** `cargo xtask generate-built-in-node-classes` writes
   `_built_in_nodes.py` from each built-in's descriptor and `Config` `JsonSchema` — its `type`
@@ -136,8 +136,8 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   stream.add(CameraSource, config={"device_id": "/dev/video2"})  # pyright checks the keys
   ```
 - **Runtime-backed names are declared once, here**: the contexts, `LinkInputDataReader`,
-  `LinkOutputDataWriter`, `ProcessorLinkDataAccess`, `GpuContext*`, `GpuSurfaceHandle`, the
-  kernels, `MonotonicTimer`, the texture exports, `ProcessorOwnedWindow*`, the bag codec pair, `monotonic_now_ns`,
+  `LinkOutputDataWriter`, `NodeLinkDataAccess`, `GpuContext*`, `GpuSurfaceHandle`, the
+  kernels, `MonotonicTimer`, the texture exports, `NodeOwnedWindow*`, the bag codec pair, `monotonic_now_ns`,
   `this_machines_stamp_clock_identity`. A class is a `typing.Protocol` carrying today's stub
   signatures; a function resolves the runtime's on first call and, with nothing lent, raises
   `RuntimeError` naming itself and saying it runs in a processor interpreter. `_engine.pyi`
@@ -150,7 +150,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
 ## ADDED: §Packages — `tatolab.runtime` and the lend directory
 
 - `tatolab/runtime/`, a regular package: `__init__.py` naming the bundled ICD before `_engine`
-  loads (today's `streamlib/__init__.py:18-21`); `_engine` (`module-name =
+  loads (today's `tatolab/runtime/__init__.py:17-20`); `_engine` (`module-name =
   "tatolab.runtime._engine"`), the bindings only; `_processor_interpreter_bootstrap.py`
   (today's `_helper.py`); on macOS `_vulkan_driver/`. No `Runtime`,
   no CLI, no `testing`, no control-plane client: the Python-hosted engine is deleted.
@@ -249,11 +249,11 @@ its PR. Paths under `sdk/streamlib-python-wheel/` unless rooted. One file per ro
 
 | Old shape | Ends | Slice |
 |---|---|---|
-| `src/python_runtime_lifecycle.rs` (715 lines, the `Runtime` pyclass: capture, resolver, `load`, control-plane hosting, `run`'s GIL detach and signal hand-back, shutdown, `__enter__`, atexit), `src/python_control_plane_hosting.rs`, `src/python_test_harness_endpoints.rs`, `python/streamlib/testing.py`, the `Runtime` subclass and `_live_runtimes` (`__init__.py:184-229`) | deleted | S4 |
+| `src/python_runtime_lifecycle.rs` (715 lines, the `Runtime` pyclass: capture, resolver, `load`, control-plane hosting, `run`'s GIL detach and signal hand-back, shutdown, `__enter__`, atexit), `src/python_control_plane_hosting.rs`, `src/python_test_harness_endpoints.rs`, `python/tatolab/runtime/testing.py`, the `Runtime` subclass and `_live_runtimes` (`tatolab/runtime/__init__.py:35-72`) | deleted | S4 |
 | `src/python_native_builtin_blocks.rs`, `src/python_processor_registration.rs`, `src/python_processor_import_path.rs` (identity checked at decoration and registration) | deleted; identity is checked by the builder and by describe | S2, S3 |
 | `src/python_helper_process_spawn_host.rs` (2074 lines), `src/helper_process_shutdown_ladder.rs` (798) | moved into the engine, Python-free | S3 |
 | `src/python_logging.rs:162-186` and `core/logging/mod.rs:31` (app-process Python log records) | deleted; the helper drain stays | S4 |
-| The hook: `src/python_capability_extension_host.rs`, `python/streamlib/_capability_extensions.py`, its two call sites (`Runtime.__init__`, `_helper.py`), `graph`'s `extensions` key in `GraphResponse`, OpenAPI and MCP, `generate_third_party_notices.rs:1277-1312`'s entry-point discovery, `test_capability_extensions`, `extension_fixtures/` | deleted; the notices find `packages/*` by path | S7 |
+| The hook: `src/python_capability_extension_host.rs`, `python/tatolab/runtime/_capability_extensions.py`, its two call sites (`Runtime.__init__`, `_helper.py`), `graph`'s `extensions` key in `GraphResponse`, OpenAPI and MCP, `generate_third_party_notices.rs:1277-1312`'s entry-point discovery, `test_capability_extensions`, `extension_fixtures/` | deleted; the notices find `packages/*` by path | S7 |
 | `src/python_runtime_mesh_observation.rs`, `cli.py`, `_control_plane_client.py`, `_node_registry.py`, `_runtime_log_reader.py`, `_surface_image_exchange.py` | rewritten in `tatolab`, then deleted | S5 |
 | `runtime/streamlib-engine/src/core/signals.rs:9-12` (names CPython), the hand-back bookkeeping | the doc and the dead arm deleted; the ladder is reused as-is through `start_and_wait_for_shutdown` | S4 |
 | `_engine.pyi` beyond the bootstrap's surface | replaced by the Protocols and the conformance gate | S2 |

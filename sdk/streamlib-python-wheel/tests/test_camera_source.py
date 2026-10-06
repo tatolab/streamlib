@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`streamlib.CameraSource` — the camera built-in over the video device seam.
+"""`tatolab.stream.CameraSource` — the camera built-in over the video device seam.
 
 The marker tests are pure Python. The graph test boots a real engine, which
 initializes a GPU context, so it carries `requires_gpu` like every other graph
@@ -14,9 +14,10 @@ from pathlib import Path
 
 import pytest
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from camera_source_named_device_app import UNOPENABLE_DEVICE_ID
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 NAMED_DEVICE_APP = Path(__file__).parent / "camera_source_named_device_app.py"
 
@@ -26,18 +27,18 @@ NAMED_DEVICE_APP = Path(__file__).parent / "camera_source_named_device_app.py"
 
 def test_the_marker_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        streamlib.CameraSource()
+        tatolab.stream.CameraSource()
 
 
 @stream
 def a_camera_source_alone(stream: Stream) -> None:
-    stream.add(streamlib.CameraSource)
+    stream.add(tatolab.stream.CameraSource)
 
 
 def test_node_name_defaults_to_the_type_name():
     graph = compile_stream_to_graph(a_camera_source_alone)
     assert [node["name"] for node in graph["nodes"]] == ["camerasource"]
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(graph)
     finally:

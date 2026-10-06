@@ -52,23 +52,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
-from . import Runtime, _stream_graph_builder
+from tatolab.stream import _stream_graph_builder
+from tatolab.stream._cross_floor_check import (
+    check_app_directory_for_floor_bindings,
+    render_cross_floor_warning_block,
+)
+from tatolab.stream._exposed_name_cast import (
+    ExposedNameCastsToNothingError,
+    cast_exposed_name_to_url_safe,
+)
+from tatolab.stream._stream_graph_builder import compile_stream_to_graph, is_stream_function
+
+from . import Runtime
 from ._control_plane_client import (
     ControlPlaneError,
     call_tool,
     resolve_local_api_socket_of_requested_node,
 )
-from ._cross_floor_check import (
-    check_app_directory_for_floor_bindings,
-    render_cross_floor_warning_block,
-)
-from ._exposed_name_cast import (
-    ExposedNameCastsToNothingError,
-    cast_exposed_name_to_url_safe,
-)
 from ._local_api_mcp_stdio_pipe import pipe_stdio_to_the_runtimes_mcp_server
 from ._node_registry import UntrustedRuntimeDirectoryError
-from ._stream_graph_builder import compile_stream_to_graph, is_stream_function
 from ._surface_image_exchange import (
     DEFAULT_SURFACE_ID_BAG_FIELD_NAME,
     SampledChannelExchangeReport,
@@ -120,7 +122,7 @@ STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE = (
     "A stream is a module-level function decorated `@stream` that adds, links and "
     "exposes its nodes on the `Stream` it is given:\n"
     "\n"
-    "    from streamlib import CameraSource, DisplayWindow, Stream, stream\n"
+    "    from tatolab.stream import CameraSource, DisplayWindow, Stream, stream\n"
     "\n"
     "    @stream\n"
     "    def main(stream: Stream) -> None:\n"
@@ -789,15 +791,15 @@ def render_scaffold_template_files(
         if use_test_pattern_source
         else ("CameraSource", "camera")
     )
-    streamlib_import_names = ", ".join(
+    tatolab_stream_import_names = ", ".join(
         sorted([source_class_name, "DisplayWindow", "Stream", "stream"])
     )
     substitutions_for_template_file = {
         "stream.py": {
             "A StreamLib stream: camera →": f"A StreamLib stream: {source_description} →",
             # The whole line, so each variant's names stay in sorted order.
-            "from streamlib import CameraSource, DisplayWindow, Stream, stream": (
-                f"from streamlib import {streamlib_import_names}"
+            "from tatolab.stream import CameraSource, DisplayWindow, Stream, stream": (
+                f"from tatolab.stream import {tatolab_stream_import_names}"
             ),
             '"""Camera, inverted,': f'"""{source_description.capitalize()}, inverted,',
             "stream.add(CameraSource)": f"stream.add({source_class_name})",

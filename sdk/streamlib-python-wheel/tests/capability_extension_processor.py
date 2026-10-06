@@ -10,7 +10,7 @@ capability-extension hooks ran in that child, before this module was imported.
 
 import sys
 
-from streamlib import log, node, output
+from tatolab.stream import log, node, output
 
 
 @node(execution="continuous", interval_ms=100)

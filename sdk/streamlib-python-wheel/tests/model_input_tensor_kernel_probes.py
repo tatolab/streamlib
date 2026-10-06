@@ -14,7 +14,7 @@ import sys
 import traceback
 from typing import Any, Callable, Tuple, TypedDict
 
-from streamlib import (
+from tatolab.stream import (
     GpuSurfaceHandle,
     ModelInputTensorChannelOrder,
     ModelInputTensorDtype,

@@ -16,7 +16,7 @@ from typing import cast
 
 import pytest
 
-from streamlib import GpuContextLimitedAccess, ProcessorOutputTextureRing
+from tatolab.stream import GpuContextLimitedAccess, NodeOutputTextureRing
 
 RING_FORMAT = "rgba8_unorm"
 RING_USAGE = ["render_attachment", "texture_binding"]
@@ -33,7 +33,7 @@ class GpuContextStandIn:
     def __init__(self) -> None:
         self.acquires: "list[tuple[object, ...]]" = []
 
-    def acquire_texture_from_processor_output_pool(
+    def acquire_texture_from_node_output_pool(
         self,
         pool_key: str,
         rotation_depth: int,
@@ -57,7 +57,7 @@ def test_every_frame_asks_the_engine_for_its_slot() -> None:
     """The engine decides reuse; a ring that rotated on its own would publish
     into a slot a consumer still holds."""
     gpu = GpuContextStandIn()
-    ring = ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=3)
+    ring = NodeOutputTextureRing(RING_FORMAT, RING_USAGE, depth=3)
     published = [
         ring.next_texture_for_this_frame(capability(gpu), 640, 360).surface_id
         for _ in range(5)
@@ -68,8 +68,8 @@ def test_every_frame_asks_the_engine_for_its_slot() -> None:
 
 def test_one_ring_asks_under_one_pool_key_and_two_rings_never_share_one() -> None:
     gpu = GpuContextStandIn()
-    first_ring = ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE)
-    second_ring = ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE)
+    first_ring = NodeOutputTextureRing(RING_FORMAT, RING_USAGE)
+    second_ring = NodeOutputTextureRing(RING_FORMAT, RING_USAGE)
     for _ in range(3):
         first_ring.next_texture_for_this_frame(capability(gpu), 64, 64)
     second_ring.next_texture_for_this_frame(capability(gpu), 64, 64)
@@ -80,7 +80,7 @@ def test_one_ring_asks_under_one_pool_key_and_two_rings_never_share_one() -> Non
 
 def test_the_depth_format_usage_and_extent_reach_every_acquire_as_given() -> None:
     gpu = GpuContextStandIn()
-    ring = ProcessorOutputTextureRing("bgra8_unorm", ["texture_binding"], depth=3)
+    ring = NodeOutputTextureRing("bgra8_unorm", ["texture_binding"], depth=3)
     ring.next_texture_for_this_frame(capability(gpu), 64, 32)
     ring.next_texture_for_this_frame(capability(gpu), 1920, 1080)
     assert [acquire[1:] for acquire in gpu.acquires] == [
@@ -91,17 +91,17 @@ def test_the_depth_format_usage_and_extent_reach_every_acquire_as_given() -> Non
 
 def test_a_depthless_ring_is_refused_naming_the_depth() -> None:
     with pytest.raises(ValueError, match="depth must be at least 1"):
-        ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=0)
+        NodeOutputTextureRing(RING_FORMAT, RING_USAGE, depth=0)
 
 
 def test_a_fractional_or_boolean_depth_is_refused_at_construction() -> None:
     """A fractional depth names no whole number of slots to rotate through,
     and `True` would silently become a one-deep ring."""
     with pytest.raises(ValueError, match="whole"):
-        ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=1.5)  # type: ignore[arg-type]
+        NodeOutputTextureRing(RING_FORMAT, RING_USAGE, depth=1.5)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="whole"):
-        ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=True)
+        NodeOutputTextureRing(RING_FORMAT, RING_USAGE, depth=True)
 
 
 def test_the_standard_depth_matches_the_engines_own_ring() -> None:
-    assert ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE).depth == 2
+    assert NodeOutputTextureRing(RING_FORMAT, RING_USAGE).depth == 2

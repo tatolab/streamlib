@@ -22,9 +22,9 @@ from typing import Any
 import numpy
 import pytest
 
-import streamlib
+import tatolab.stream
 from stream_graph_builder_nodes import BrightnessReader, FrameFilters, FrameInverter
-from streamlib import (
+from tatolab.stream import (
     NodeInputPortReference,
     NodeOutputPortReference,
     NodeReference,
@@ -35,14 +35,14 @@ from streamlib import (
     output,
     stream,
 )
-from streamlib._exposed_name_cast import (
+from tatolab.stream._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
     ExposedNameCastsToNothingError,
 )
-from streamlib._stream_graph_builder import is_stream_function
+from tatolab.stream._stream_graph_builder import is_stream_function
 
 STREAM_GRAPH_BUILDER_SOURCE = (
-    Path(streamlib.__file__).resolve().parent / "_stream_graph_builder.py"
+    Path(tatolab.stream.__file__).resolve().parent / "_stream_graph_builder.py"
 )
 
 TEST_PATTERN_SOURCE_TYPE = "tatolab.stream:TestPatternSource"
@@ -115,13 +115,13 @@ def every_kind_of_node(stream: Stream) -> None:
 def camera_rig(stream: Stream) -> None:
     """A marker source fanned out to an inverter feeding two readers and to a second inverter."""
     source = stream.add(
-        streamlib.TestPatternSource, config={"width": 1280, "height": 720}
+        tatolab.stream.TestPatternSource, config={"width": 1280, "height": 720}
     )
     inverter = stream.add(FrameInverter)
     first_reader = stream.add(BrightnessReader)
     backup_reader = stream.add(BrightnessReader, name="Backup Meter")
     second_inverter = stream.add(FrameInverter)
-    window = stream.add(streamlib.DisplayWindow, config={"title": "Rig"})
+    window = stream.add(tatolab.stream.DisplayWindow, config={"title": "Rig"})
     stream.connect(source.output("video"), inverter.input("video_from_upstream"))
     stream.connect(
         inverter.output("video_to_downstream"),
@@ -142,13 +142,13 @@ def camera_rig(stream: Stream) -> None:
 
 @stream
 def two_markers(stream: Stream) -> None:
-    stream.add(streamlib.TestPatternSource)
-    stream.add(streamlib.DisplayWindow)
+    stream.add(tatolab.stream.TestPatternSource)
+    stream.add(tatolab.stream.DisplayWindow)
 
 
 @stream
 def a_virtual_camera(stream: Stream) -> None:
-    stream.add(streamlib.VirtualCameraSink)
+    stream.add(tatolab.stream.VirtualCameraSink)
 
 
 @stream
@@ -456,7 +456,7 @@ def test_an_undecorated_class_is_refused_naming_node() -> None:
         Stream("rig").add(UndecoratedFilter)
 
     message = str(refusal.value)
-    assert "is not a node: decorate the class with @streamlib.node" in message
+    assert "is not a node: decorate the class with @tatolab.stream.node" in message
     assert "pass the class itself rather than an instance of it" in message
 
 
@@ -1241,8 +1241,8 @@ def test_the_builder_is_on_the_public_surface_and_the_cli_helper_is_not() -> Non
         "compile_stream_to_graph",
         "stream",
     ):
-        assert public_name in streamlib.__all__
-    assert "is_stream_function" not in streamlib.__all__
+        assert public_name in tatolab.stream.__all__
+    assert "is_stream_function" not in tatolab.stream.__all__
 
 
 def test_the_builder_module_imports_nothing_native() -> None:

@@ -104,7 +104,7 @@ const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
         reason: "stamps host receipt for records relayed from a helper process",
     },
     PermittedWallClockSurface {
-        path: "sdk/streamlib-python-wheel/python/streamlib/_helper.py",
+        path: "sdk/streamlib-python-wheel/python/tatolab/runtime/_helper.py",
         surface: ObservabilitySurface::LogRecordSourceTimestamp,
         reason: "stamps the record at its Python origin, before the relay hop",
     },
@@ -487,7 +487,7 @@ mod tests {
         let mut tree: Vec<(&str, &str)> = vec![
             ("runtime/streamlib-engine/src/lib.rs", "pub fn ok() {}\n"),
             (
-                "sdk/streamlib-python-wheel/python/streamlib/ok.py",
+                "sdk/streamlib-python-wheel/python/tatolab/stream/ok.py",
                 "OK = 1\n",
             ),
             (
@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn flags_the_python_realtime_clock_id() {
         let (_tmp, report) = scan_fixture(&[(
-            "sdk/streamlib-python-wheel/python/streamlib/stamp.py",
+            "sdk/streamlib-python-wheel/python/tatolab/stream/stamp.py",
             "stamp = time.clock_gettime_ns(time.CLOCK_REALTIME)\n",
         )]);
         assert_eq!(report.violations.len(), 1, "got {:?}", report.violations);
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn flags_a_python_wall_clock_read() {
         let (_tmp, report) = scan_fixture(&[(
-            "sdk/streamlib-python-wheel/python/streamlib/stamp.py",
+            "sdk/streamlib-python-wheel/python/tatolab/stream/stamp.py",
             "import time\n\n\ndef stamp() -> int:\n    return time.time_ns()\n",
         )]);
         assert_eq!(report.violations.len(), 1, "got {:?}", report.violations);
@@ -609,11 +609,11 @@ mod tests {
     #[test]
     fn skips_a_python_module_docstring_naming_the_banned_apis() {
         let (_tmp, report) = scan_fixture(&[(
-            "sdk/streamlib-python-wheel/python/streamlib/clock.py",
+            "sdk/streamlib-python-wheel/python/tatolab/stream/clock.py",
             "\"\"\"Canonical monotonic-clock timestamp source.\n\n\
              Wall-clock APIs (`time.time`, `datetime.now`, `time.time_ns`) are NOT\n\
              comparable across processes.\n\"\"\"\n\n\
-             from ._engine import monotonic_now_ns as monotonic_now_ns\n",
+             from tatolab.runtime._engine import monotonic_now_ns as monotonic_now_ns\n",
         )]);
         assert!(
             report.violations.is_empty(),
@@ -634,7 +634,7 @@ mod tests {
     #[test]
     fn flags_code_that_follows_a_closed_docstring_on_one_line() {
         let (_tmp, report) = scan_fixture(&[(
-            "sdk/streamlib-python-wheel/python/streamlib/stamp.py",
+            "sdk/streamlib-python-wheel/python/tatolab/stream/stamp.py",
             "\"\"\"doc\"\"\"\nstamp = time.time()\n",
         )]);
         assert_eq!(report.violations.len(), 1, "got {:?}", report.violations);
@@ -652,7 +652,7 @@ mod tests {
     #[test]
     fn an_unterminated_span_fails_the_scan_rather_than_hiding_the_file() {
         let tmp = TempDir::new().unwrap();
-        let relative_path = "sdk/streamlib-python-wheel/python/streamlib/broken.py";
+        let relative_path = "sdk/streamlib-python-wheel/python/tatolab/stream/broken.py";
         let path = tmp.path().join(relative_path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "'''never closed\nstamp = time.time_ns()\n").unwrap();
@@ -669,7 +669,7 @@ mod tests {
                 "let stamp = MediaClock::now().as_nanos() as u64;\nlet t = Instant::now();\n",
             ),
             (
-                "sdk/streamlib-python-wheel/python/streamlib/stamp.py",
+                "sdk/streamlib-python-wheel/python/tatolab/stream/stamp.py",
                 "stamp = monotonic_now_ns()\nalso = time.clock_gettime_ns(time.CLOCK_MONOTONIC)\n",
             ),
         ]);
@@ -763,10 +763,8 @@ mod tests {
         .unwrap();
 
         assert!(
-            tracked
-                .iter()
-                .any(|path| path
-                    == Path::new("sdk/streamlib-python-wheel/python/streamlib/clock.py")),
+            tracked.iter().any(|path| path
+                == Path::new("sdk/streamlib-python-wheel/python/tatolab/stream/clock.py")),
             "the wheel's Python package is inside the scan roots",
         );
         for path in &tracked {

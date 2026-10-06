@@ -189,6 +189,21 @@ jobs:
             fi
             glslc --version
 
+      # PEP 420: `tatolab` is a namespace package. A regular `tatolab/__init__.py`
+      # in this wheel would shadow every other distribution's `tatolab.*`
+      # portion installed beside it. The listing is required to name both regular
+      # packages' `__init__.py`, so a wheel missing either, or an empty or
+      # unreadable listing, fails rather than passing.
+      - name: The wheel ships tatolab as a namespace package
+        run: |
+          unzip -Z1 sdk/streamlib-python-wheel/dist/*.whl > /tmp/wheel-member-names.txt
+          grep -qx 'tatolab/stream/__init__.py' /tmp/wheel-member-names.txt
+          grep -qx 'tatolab/runtime/__init__.py' /tmp/wheel-member-names.txt
+          if grep -qx 'tatolab/__init__.py' /tmp/wheel-member-names.txt; then
+            echo "::error::the wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+
       # A wheel that cannot be installed and cannot answer `--help` is not a
       # release artifact. This is the first moment the console script exists as
       # a real entry point rather than a table in pyproject.toml.

@@ -3,7 +3,7 @@
 
 """A helper-placed Python processor producing texture-backed frames.
 
-`ProcessorOutputTextureRing` is the surface a Python source publishes frames
+`NodeOutputTextureRing` is the surface a Python source publishes frames
 from, and its unit tests stand the capability in — they own the slot
 bookkeeping and cannot reach the engine that allocates. What is proven here is
 the half a stand-in cannot: the engine hands back slots that stay registered

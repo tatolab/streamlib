@@ -22,7 +22,7 @@ from typing import Callable, TypeVar
 
 import pytest
 
-from streamlib._control_plane_client import ControlPlaneError, LocalApiSocket, call_tool
+from tatolab.runtime._control_plane_client import ControlPlaneError, LocalApiSocket, call_tool
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
     NODE_READY_TIMEOUT_SECONDS,
     LaunchedNode,
@@ -48,7 +48,7 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 # The node the test launches: one native source and nothing else. Everything
 # downstream of it is added live.
 STREAM_WITH_ONE_PATTERN_SOURCE = '''\
-from streamlib import Stream, TestPatternSource, stream
+from tatolab.stream import Stream, TestPatternSource, stream
 
 
 @stream
@@ -66,8 +66,8 @@ LIVE_ADDED_EFFECT_SOURCE = '''\
 
 import dataclasses
 
-from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
-    ProcessorOutputTextureRing,
+from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
+    NodeOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
@@ -98,7 +98,7 @@ class LiveAddedEffect:
     def video_to_downstream(self) -> None: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.output_ring = ProcessorOutputTextureRing("rgba8_unorm", ["texture_binding"])
+        self.output_ring = NodeOutputTextureRing("rgba8_unorm", ["texture_binding"])
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         bag = ctx.inputs.read("video_from_upstream")
@@ -378,7 +378,7 @@ SLOWLY_IMPORTING_SINK_SOURCE = f'''\
 import os
 import time
 
-from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
     RuntimeContextLimitedAccess,
     input,
     node,

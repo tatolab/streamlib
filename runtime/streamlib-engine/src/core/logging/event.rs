@@ -99,7 +99,7 @@ pub struct RuntimeLogEvent {
 
     /// Primary human-readable message. Corresponds to the `message` field
     /// of a `tracing::*!()` call, or the first positional argument of a
-    /// polyglot `streamlib.log.*` call.
+    /// polyglot `tatolab.stream.log.*` call.
     pub message: String,
 
     /// `tracing` target (module path, typically).

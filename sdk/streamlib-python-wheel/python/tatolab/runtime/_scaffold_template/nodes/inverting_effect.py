@@ -7,12 +7,12 @@ Importable as `nodes.inverting_effect:InvertingEffect`, which is the
 name the engine spawns this node's child interpreter with.
 """
 
-from streamlib import (
+from tatolab.stream import (
     GlslPixelEffect,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,  # noqa: A004 — streamlib's port decorator
+    input,  # noqa: A004 — tatolab.stream's port decorator
     node,
     output,
 )

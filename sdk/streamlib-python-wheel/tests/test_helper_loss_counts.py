@@ -23,7 +23,7 @@ from typing import Callable
 
 import pytest
 
-from streamlib._control_plane_client import LocalApiSocket, call_tool
+from tatolab.runtime._control_plane_client import LocalApiSocket, call_tool
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
     NODE_READY_TIMEOUT_SECONDS,
     LaunchedNode,
@@ -50,7 +50,7 @@ LOSS_COUNTING_PROCESSORS_SOURCE = f'''\
 import os
 import time
 
-from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     input,
@@ -114,7 +114,7 @@ class NewestSink:
 '''
 
 LOSS_COUNTING_STREAM_SOURCE = f'''\
-from streamlib import Stream, stream
+from tatolab.stream import Stream, stream
 
 from {LOSS_COUNTING_PROCESSORS_MODULE} import FastBagSource, NewestSink, SlowOrderedSink
 

@@ -1414,7 +1414,7 @@ pub(crate) mod tests {
         let body = tool_call_result(
             runtime,
             "add_node",
-            json!({ "type": "streamlib:CameraSource" }),
+            json!({ "type": "tatolab.stream:CameraSource" }),
         )
         .await;
         let stated = first_text_block_json(&body);

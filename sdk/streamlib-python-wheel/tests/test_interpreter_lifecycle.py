@@ -167,7 +167,7 @@ def test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit(app_under_test):
     marker is what makes this a lock: a clean exit code alone is also what you
     get when no teardown runs at all.
 
-    Mental-revert: removing `@atexit.register` from `streamlib/__init__.py`
+    Mental-revert: removing `@atexit.register` from `tatolab/runtime/__init__.py`
     leaves the shutdown line absent entirely.
     """
     app = run_scenario_to_completion(app_under_test, "held_by_a_live_thread_at_exit")
@@ -188,7 +188,7 @@ def test_a_second_pipeline_in_one_process_still_blocks(app_under_test):
     Regression lock on a real defect. The shutdown escalation is process-global
     and taken only when a run ends, so a `shutdown()` issued once the
     engine was already torn down — which `__exit__` does on every
-    `with streamlib.Runtime()` block — left it set, and the next `run()`
+    `with tatolab.runtime.Runtime()` block — left it set, and the next `run()`
     returned immediately having run nothing.
 
     The second run is timed by the app against a monotonic clock rather than

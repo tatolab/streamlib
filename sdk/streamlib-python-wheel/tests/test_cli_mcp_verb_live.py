@@ -57,7 +57,7 @@ LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"
 
 
 def mcp_verb_command(runtime_name: str) -> "list[str]":
-    return [sys.executable, "-m", "streamlib.cli", "mcp", "--node", runtime_name]
+    return [sys.executable, "-m", "tatolab.runtime.cli", "mcp", "--node", runtime_name]
 
 
 def environment_reaching(runtime_directory: Path) -> "dict[str, str]":

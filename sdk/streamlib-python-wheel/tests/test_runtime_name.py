@@ -12,7 +12,7 @@ constructor outranks the environment.
 
 import pytest
 
-import streamlib
+import tatolab.runtime
 
 RUNTIME_NAME_ENVIRONMENT_VARIABLE = "STREAMLIB_RUNTIME_NAME"
 
@@ -24,17 +24,17 @@ def an_unnamed_environment(monkeypatch):
 
 
 def test_the_constructor_takes_a_runtime_name_by_keyword_only():
-    runtime = streamlib.Runtime(runtime_name="desk rig")
+    runtime = tatolab.runtime.Runtime(runtime_name="desk rig")
     runtime.shutdown()
 
     with pytest.raises(TypeError):
-        streamlib.Runtime("desk rig")  # type: ignore[call-arg]
+        tatolab.runtime.Runtime("desk rig")  # type: ignore[call-arg]
 
 
 def test_a_runtime_name_that_cannot_be_an_address_chunk_is_refused_naming_the_character():
     for forbidden in ["/", "*", "$", "#", "?"]:
         with pytest.raises(RuntimeError) as refusal:
-            streamlib.Runtime(runtime_name=f"desk{forbidden}rig")
+            tatolab.runtime.Runtime(runtime_name=f"desk{forbidden}rig")
         assert repr(forbidden) in str(refusal.value), (
             f"the refusal must name {forbidden!r}: {refusal.value}"
         )
@@ -42,13 +42,13 @@ def test_a_runtime_name_that_cannot_be_an_address_chunk_is_refused_naming_the_ch
 
 def test_a_runtime_name_beginning_with_an_at_sign_is_refused():
     with pytest.raises(RuntimeError) as refusal:
-        streamlib.Runtime(runtime_name="@runtime")
+        tatolab.runtime.Runtime(runtime_name="@runtime")
     assert "@" in str(refusal.value)
 
 
 def test_an_empty_runtime_name_is_refused_rather_than_read_as_unset():
     with pytest.raises(RuntimeError) as refusal:
-        streamlib.Runtime(runtime_name="")
+        tatolab.runtime.Runtime(runtime_name="")
     assert "empty" in str(refusal.value)
 
 
@@ -56,7 +56,7 @@ def test_the_environment_names_the_runtime_when_the_constructor_does_not(monkeyp
     monkeypatch.setenv(RUNTIME_NAME_ENVIRONMENT_VARIABLE, "desk/rig")
 
     with pytest.raises(RuntimeError) as refusal:
-        streamlib.Runtime()
+        tatolab.runtime.Runtime()
 
     # The variable is what the engine read, and the refusal says so — which is
     # what tells this arm apart from the constructor's.
@@ -69,28 +69,28 @@ def test_the_constructors_name_outranks_the_environments(monkeypatch):
     # the environment was never consulted.
     monkeypatch.setenv(RUNTIME_NAME_ENVIRONMENT_VARIABLE, "desk/rig")
 
-    runtime = streamlib.Runtime(runtime_name="desk rig")
+    runtime = tatolab.runtime.Runtime(runtime_name="desk rig")
     runtime.shutdown()
 
 
 def test_an_empty_environment_value_reads_as_unset(monkeypatch):
     monkeypatch.setenv(RUNTIME_NAME_ENVIRONMENT_VARIABLE, "")
 
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.shutdown()
 
 
 def test_an_unnamed_runtime_takes_the_engines_default():
     """Named by nothing, a runtime still constructs — the default is the engine's."""
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.shutdown()
 
 
 def test_two_runtimes_given_one_runtime_name_in_one_directory_both_construct():
     """A second Runtime() under a name the first already holds is not refused."""
-    first_runtime = streamlib.Runtime(runtime_name="desk rig")
+    first_runtime = tatolab.runtime.Runtime(runtime_name="desk rig")
     try:
-        second_runtime = streamlib.Runtime(runtime_name="desk rig")
+        second_runtime = tatolab.runtime.Runtime(runtime_name="desk rig")
         second_runtime.shutdown()
     finally:
         first_runtime.shutdown()
@@ -110,7 +110,7 @@ def test_the_constructor_takes_no_keyword_but_the_runtime_name(retired_keyword_p
     # here, where a source-walking gate would still find it.
     retired = {"_".join(retired_keyword_parts): None}
     with pytest.raises(TypeError):
-        streamlib.Runtime(runtime_name="desk rig", **retired)
+        tatolab.runtime.Runtime(runtime_name="desk rig", **retired)
 
 
 @pytest.mark.parametrize(
@@ -126,7 +126,7 @@ def test_hosting_the_control_plane_takes_no_argument(
 ):
     """The name belongs to the runtime and the socket's path to its runtime
     directory, so there is nothing to pass here."""
-    runtime = streamlib.Runtime(runtime_name="desk rig")
+    runtime = tatolab.runtime.Runtime(runtime_name="desk rig")
     try:
         # Joined at run time so the retired keyword's own text does not
         # survive here, where a source-walking gate would still find it.

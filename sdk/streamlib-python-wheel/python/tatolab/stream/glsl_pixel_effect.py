@@ -8,7 +8,7 @@ dials; this class supplies the rest of an ordinary compute kernel around it —
 the source sampler, the output image, the workgroup tile, the push-constant
 block — and per frame lands the frame with the engine copy, dispatches, and
 hands back the output bag. Wheel grammar over `create_compute_kernel`,
-`ProcessorOutputTextureRing`, `copy_surface_to_surface` and `dispatch`; the
+`NodeOutputTextureRing`, `copy_surface_to_surface` and `dispatch`; the
 engine sees nothing but a kernel and a copy.
 
 Pre-declared for the body, beside `dials.<name>` for each declared dial:
@@ -29,17 +29,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-from ._engine import (
+from tatolab.runtime._engine import (
     ComputeKernel,
     GpuContextFullAccess,
     monotonic_now_ns,
 )
+
 from ._sampled_source_landing import (
     SAMPLED_SOURCE_BINDING_NAME,
     GpuContextWithSurfaceCopy,
     SampledSourceLandingTextureRing,
 )
-from .processor_output_texture_ring import ProcessorOutputTextureRing
+from .node_output_texture_ring import NodeOutputTextureRing
 from .video_frame import VideoFrame
 
 __all__ = ["GlslPixelEffect", "GlslPixelEffectDialType"]
@@ -241,7 +242,7 @@ class GlslPixelEffect:
             member.name for member in push_constant_block_layout.dial_members
         )
         self._source_landing_ring = SampledSourceLandingTextureRing()
-        self._output_ring = ProcessorOutputTextureRing(
+        self._output_ring = NodeOutputTextureRing(
             _EFFECT_TEXTURE_FORMAT, _OUTPUT_TEXTURE_USAGE
         )
         self._first_apply_monotonic_ns: "int | None" = None

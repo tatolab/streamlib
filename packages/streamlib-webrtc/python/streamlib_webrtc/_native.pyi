@@ -32,7 +32,8 @@ def monotonic_now_ns() -> int:
     """Nanoseconds on the clock this wheel stamps bags with.
 
     The engine's clock, read here rather than asked of the engine, so a
-    reading compares with `streamlib.monotonic_now_ns()` taken on this machine.
+    reading compares with `tatolab.stream.monotonic_now_ns()` taken on this
+    machine.
     """
 
 @final

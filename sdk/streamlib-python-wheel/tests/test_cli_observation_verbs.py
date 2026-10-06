@@ -41,8 +41,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 
-from streamlib import cli
-from streamlib._control_plane_client import (
+from tatolab.runtime import cli
+from tatolab.runtime._control_plane_client import (
     ControlPlaneError,
     LocalApiSocket,
     SurfaceImageExchangeRefusal,
@@ -51,9 +51,9 @@ from streamlib._control_plane_client import (
     fetch_surface_image_png_bytes,
     resolve_local_api_socket_of_requested_node,
 )
-from streamlib import _node_registry
-from streamlib._node_registry import registry_directory, scan_check_and_prune
-from streamlib._runtime_log_reader import (
+from tatolab.runtime import _node_registry
+from tatolab.runtime._node_registry import registry_directory, scan_check_and_prune
+from tatolab.runtime._runtime_log_reader import (
     LogRecordFilters,
     RuntimeLogFile,
     _held_segment_was_rotated_away,
@@ -956,7 +956,7 @@ def lines_pulled_across_a_change_made_at_the_live_edge(
         change_made.wait(FOLLOW_LINE_TIMEOUT_SECONDS)
         real_sleep(seconds)
 
-    monkeypatch.setattr("streamlib._runtime_log_reader.time.sleep", sleep_once_the_change_is_made)
+    monkeypatch.setattr("tatolab.runtime._runtime_log_reader.time.sleep", sleep_once_the_change_is_made)
     collected: "list[str]" = []
     puller = threading.Thread(
         target=lambda: collected.extend(next(lines) for _ in range(count)), daemon=True
@@ -1006,7 +1006,7 @@ def test_a_segment_retention_removed_before_it_was_read_is_skipped_with_a_note(
     active_segment_path = tmp_path / "Rabc-1000.jsonl"
     write_segment(tmp_path / "Rabc-1000.2.jsonl", ["survivor"])
     write_segment(active_segment_path, ["active"])
-    monkeypatch.setattr("streamlib._runtime_log_reader._rotated_segment_sequences", lambda _active: [1, 2])
+    monkeypatch.setattr("tatolab.runtime._runtime_log_reader._rotated_segment_sequences", lambda _active: [1, 2])
     errors = io.StringIO()
 
     rendered = list(
@@ -1060,7 +1060,7 @@ def test_a_record_flushed_just_before_a_rotation_is_read_before_the_segment_afte
         checks.append(path)
         return real_check(held_segment_file, path)
 
-    monkeypatch.setattr("streamlib._runtime_log_reader._held_segment_was_rotated_away", flush_then_rotate_before_the_first_check
+    monkeypatch.setattr("tatolab.runtime._runtime_log_reader._held_segment_was_rotated_away", flush_then_rotate_before_the_first_check
     )
     errors = io.StringIO()
 
@@ -1086,7 +1086,7 @@ def test_a_rotation_between_listing_and_opening_keeps_the_segment_it_rotated(
         listings.append(listed)
         return listed
 
-    monkeypatch.setattr("streamlib._runtime_log_reader._rotated_segment_sequences", rotate_right_after_the_first_listing
+    monkeypatch.setattr("tatolab.runtime._runtime_log_reader._rotated_segment_sequences", rotate_right_after_the_first_listing
     )
 
     rendered = read_every_line(active_segment_path, io.StringIO())
@@ -1109,7 +1109,7 @@ def test_a_rotation_the_writer_backed_out_of_repeats_no_record(tmp_path, monkeyp
         finally:
             os.rename(rotated_segment_path, active_segment_path)
 
-    monkeypatch.setattr("streamlib._runtime_log_reader._held_segment_was_rotated_away", look_while_the_name_is_renamed_away
+    monkeypatch.setattr("tatolab.runtime._runtime_log_reader._held_segment_was_rotated_away", look_while_the_name_is_renamed_away
     )
 
     rendered = read_every_line(active_segment_path, io.StringIO())
@@ -1134,7 +1134,7 @@ def test_a_held_segment_is_matched_to_its_rotated_name_rather_than_counted(
         checks.append(path)
         return real_check(held_segment_file, path)
 
-    monkeypatch.setattr("streamlib._runtime_log_reader._held_segment_was_rotated_away", rotate_to_five_before_the_first_check
+    monkeypatch.setattr("tatolab.runtime._runtime_log_reader._held_segment_was_rotated_away", rotate_to_five_before_the_first_check
     )
     errors = io.StringIO()
 
@@ -1603,7 +1603,7 @@ def test_a_count_without_a_control_target_is_refused(isolated_registry, capsys):
 
 def test_logs_without_a_runtime_id_names_list(isolated_registry, capsys, monkeypatch):
     monkeypatch.setattr(
-        "streamlib._runtime_log_reader.runtime_log_directory_path",
+        "tatolab.runtime._runtime_log_reader.runtime_log_directory_path",
         lambda: Path("/nonexistent"),
     )
 

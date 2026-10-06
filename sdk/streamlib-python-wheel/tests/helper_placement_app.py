@@ -17,8 +17,9 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 from helper_placement_processors import (
     DiesAbruptlyProbe,
     ForksAWorkerThatOutlivesItProbe,
@@ -29,7 +30,7 @@ from helper_placement_processors import (
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
 )
-from streamlib._engine import (
+from tatolab.runtime._engine import (
     engine_build_id_compiled_into_this_extension,
     processor_class_import_paths_in_this_processes_catalog,
 )
@@ -98,7 +99,7 @@ def stale_build_labelled_source(stream: Stream) -> None:
 def native_test_pattern_into_python_video_sink(stream: Stream) -> None:
     """A native 64x32 test pattern into a Python sink reporting its own process."""
     pattern = stream.add(
-        streamlib.TestPatternSource, config={"width": 64, "height": 32}
+        tatolab.stream.TestPatternSource, config={"width": 64, "height": 32}
     )
     sink = stream.add(ReportsItsOwnProcessVideoSink)
     stream.connect(pattern.output("video"), sink.input("video_from_upstream"))
@@ -128,9 +129,9 @@ def one_probe_sleeping_through_its_own_setup(stream: Stream) -> None:
     stream.add(SleepsThroughItsOwnSetupProbe)
 
 
-def _runtime_loaded_with(stream_function: Callable[[Stream], None]) -> streamlib.Runtime:
+def _runtime_loaded_with(stream_function: Callable[[Stream], None]) -> tatolab.runtime.Runtime:
     graph = compile_stream_to_graph(stream_function)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     return runtime
 
@@ -141,7 +142,7 @@ def scenario_the_app_never_hosts_the_processor() -> None:
     The app's own `from helper_placement_processors import …` is the
     registration import and the only parent-side load there is. What must not
     happen is the engine loading anything more to host an instance —
-    `streamlib._helper` constructs the class, and it lives in another process.
+    `tatolab.runtime._helper` constructs the class, and it lives in another process.
     """
     modules_before_load = set(sys.modules)
     runtime = _runtime_loaded_with(first_labelled_source_into_sink)
@@ -156,7 +157,7 @@ def scenario_the_app_never_hosts_the_processor() -> None:
             f"MODULES_ADDED_WHILE_RUNNING="
             f"{sorted(set(sys.modules) - modules_before_load)}"
         )
-        marker(f"HELPER_MODULE_IN_APP={'streamlib._helper' in sys.modules}")
+        marker(f"HELPER_MODULE_IN_APP={'tatolab.runtime._helper' in sys.modules}")
         runtime.shutdown()
 
     threading.Timer(SECONDS_OF_RUNNING_BEFORE_RECHECK, report_modules_once_bags_are_flowing).start()
@@ -252,7 +253,7 @@ def scenario_a_helper_that_imported_another_engine_build_is_refused() -> None:
 
     The child is made to see another build the one way a test can reach it
     before `main()` runs: a `sitecustomize` on the child's `PYTHONPATH` rewrites
-    the id the parent handed it, which is what a stale `streamlib` earlier on
+    the id the parent handed it, which is what a stale `tatolab.runtime` earlier on
     the child's `sys.path` amounts to from the check's side.
     """
     child_startup_directory = Path(tempfile.mkdtemp(prefix="streamlib-stale-build-"))
@@ -271,7 +272,7 @@ def scenario_a_helper_that_imported_another_engine_build_is_refused() -> None:
 
     def report_whether_the_processor_ever_started() -> None:
         try:
-            runtime.wait_until_every_processor_is_running(timeout=30.0)
+            runtime.wait_until_every_node_is_running(timeout=30.0)
         except RuntimeError as never_started:
             marker(f"PROCESSOR_REFUSED={never_started}")
         else:

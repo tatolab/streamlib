@@ -29,8 +29,8 @@ latency.
 
 from __future__ import annotations
 
-from ._engine import MonotonicTimer as MonotonicTimer
-from ._engine import monotonic_now_ns as monotonic_now_ns
+from tatolab.runtime._engine import MonotonicTimer as MonotonicTimer
+from tatolab.runtime._engine import monotonic_now_ns as monotonic_now_ns
 
 __all__ = [
     "MonotonicTimer",

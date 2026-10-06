@@ -20,7 +20,7 @@ import threading
 import traceback
 
 from engine_media_clock import engine_media_clock_now_ns
-from streamlib import (
+from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     input,
@@ -188,7 +188,7 @@ class ContextStasher:
             return {
                 "stashed_is_paused": self._stashed_context.is_paused(),
                 "stashed_config": self._stashed_context.config,
-                "stashed_processor_id": self._stashed_context.processor_id,
+                "stashed_node_id": self._stashed_context.node_id,
             }
 
         _report(observe)

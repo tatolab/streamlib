@@ -10,8 +10,8 @@ helper process, and the observation reaches this app — and the test driving it
 
 import sys
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 import capability_context_probes
 
@@ -58,7 +58,7 @@ if __name__ == "__main__":
     else:
         stream_function = one_capability_context_probe
     graph = compile_stream_to_graph(stream_function)
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

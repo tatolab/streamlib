@@ -7,8 +7,9 @@ probe in its real placement, a helper process."""
 import sys
 from typing import Any
 
-import streamlib
-from streamlib import Stream, compile_stream_to_graph, stream
+import tatolab.runtime
+import tatolab.stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 import model_input_tensor_kernel_probes
 
@@ -29,7 +30,7 @@ def _probe_class_name_and_config_named_on_the_command_line() -> tuple[
 @stream
 def a_test_pattern_into_one_model_input_tensor_kernel_probe(stream: Stream) -> None:
     pattern = stream.add(
-        streamlib.TestPatternSource,
+        tatolab.stream.TestPatternSource,
         config={
             "width": model_input_tensor_kernel_probes.FRAME_WIDTH,
             "height": model_input_tensor_kernel_probes.FRAME_HEIGHT,
@@ -49,7 +50,7 @@ if __name__ == "__main__":
     graph = compile_stream_to_graph(
         a_test_pattern_into_one_model_input_tensor_kernel_probe
     )
-    runtime = streamlib.Runtime()
+    runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

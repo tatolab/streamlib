@@ -5,7 +5,7 @@
 
 import os
 
-from streamlib import CameraSource, DisplayWindow, Stream, stream
+from tatolab.stream import CameraSource, DisplayWindow, Stream, stream
 
 
 @stream

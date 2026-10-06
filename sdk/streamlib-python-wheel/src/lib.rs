@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The native half of the streamlib wheel — the extension module CPython
-//! imports as `streamlib._engine`.
+//! imports as `tatolab.runtime._engine`.
 
 use pyo3::prelude::*;
 

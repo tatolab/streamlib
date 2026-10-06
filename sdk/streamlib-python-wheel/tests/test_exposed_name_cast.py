@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from streamlib._exposed_name_cast import (
+from tatolab.stream._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )

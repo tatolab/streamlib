@@ -136,7 +136,7 @@ fn acquire_storage_buffer_through_the_helper_process_exchange(
 /// Every call crosses to the parent through the exchange client — the
 /// engine and its pools live one process away. `None` means this helper
 /// has no surface-share channel, and every call refuses by name.
-#[pyclass(name = "GpuContextLimitedAccess", module = "streamlib", frozen)]
+#[pyclass(name = "GpuContextLimitedAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGpuContextLimitedAccess {
     helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
 }
@@ -210,7 +210,7 @@ impl PythonGpuContextLimitedAccess {
         )
     }
 
-    /// The texture this frame publishes into, from the processor output pool
+    /// The texture this frame publishes into, from the node output pool
     /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
     /// consumer still holds.
     ///
@@ -218,6 +218,7 @@ impl PythonGpuContextLimitedAccess {
     /// hold frames, and at its cap refuses by name — the producer drops its
     /// own frame rather than wait.
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(name = "acquire_texture_from_node_output_pool")]
     fn acquire_texture_from_processor_output_pool(
         &self,
         python: Python<'_>,
@@ -260,9 +261,10 @@ impl PythonGpuContextLimitedAccess {
         )
     }
 
-    /// The tensor this frame publishes into, from the processor output pool
+    /// The tensor this frame publishes into, from the node output pool
     /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
     /// consumer still holds; at the pool's cap, refused by name.
+    #[pyo3(name = "acquire_storage_buffer_from_node_output_pool")]
     fn acquire_storage_buffer_from_processor_output_pool(
         &self,
         python: Python<'_>,
@@ -398,7 +400,7 @@ impl PythonGpuContextLimitedAccess {
 ///
 /// What does not survive the process boundary is a *scope* spanning
 /// several ops — see this capability's `escalate` refusal.
-#[pyclass(name = "GpuContextFullAccess", module = "streamlib", frozen)]
+#[pyclass(name = "GpuContextFullAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGpuContextFullAccess {
     /// `None` means this helper was started without its GPU channels, and
     /// every method refuses by name.
@@ -453,7 +455,7 @@ impl PythonGpuContextFullAccess {
         )
     }
 
-    /// The texture this frame publishes into, from the processor output pool
+    /// The texture this frame publishes into, from the node output pool
     /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
     /// consumer still holds.
     ///
@@ -461,6 +463,7 @@ impl PythonGpuContextFullAccess {
     /// hold frames, and at its cap refuses by name — the producer drops its
     /// own frame rather than wait.
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(name = "acquire_texture_from_node_output_pool")]
     fn acquire_texture_from_processor_output_pool(
         &self,
         python: Python<'_>,
@@ -503,9 +506,10 @@ impl PythonGpuContextFullAccess {
         )
     }
 
-    /// The tensor this frame publishes into, from the processor output pool
+    /// The tensor this frame publishes into, from the node output pool
     /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
     /// consumer still holds; at the pool's cap, refused by name.
+    #[pyo3(name = "acquire_storage_buffer_from_node_output_pool")]
     fn acquire_storage_buffer_from_processor_output_pool(
         &self,
         python: Python<'_>,
@@ -526,11 +530,11 @@ impl PythonGpuContextFullAccess {
         )
     }
 
-    /// Request a window this processor owns, presented by the engine.
+    /// Request a window this node owns, presented by the engine.
     ///
     /// Constructed once in `setup()`, named frames per frame in `process()`.
     /// The window lives in the app process on its own present loop, so it
-    /// keeps its frame rate whatever this processor's pace is, and naming no
+    /// keeps its frame rate whatever this node's pace is, and naming no
     /// frame leaves the last one up.
     ///
     /// Raises when the process can get no window at all — no display server,

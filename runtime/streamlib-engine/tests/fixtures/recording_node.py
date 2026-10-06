@@ -33,13 +33,14 @@ their `/encoded_video` and `/encoded_audio` suffixes instead.
 import argparse
 import functools
 
-import streamlib
+import tatolab.runtime
+import tatolab.stream
 from known_audio_signal_source import KnownAudioSignalSource
-from streamlib import Stream, compile_stream_to_graph, stream
+from tatolab.stream import Stream, compile_stream_to_graph, stream
 
 _VIDEO_ENCODER_MARKERS_BY_CODEC: dict[str, type] = {
-    "h264": streamlib.H264Encoder,
-    "h265": streamlib.H265Encoder,
+    "h264": tatolab.stream.H264Encoder,
+    "h265": tatolab.stream.H265Encoder,
 }
 
 # Stated rather than left to the encoder's own default, because the fragment
@@ -78,13 +79,13 @@ def camera_and_known_signal_recorded_into_one_file(stream: Stream) -> None:
     arguments = _parse_fixture_arguments()
 
     recorder = stream.add(
-        streamlib.Mp4Sink,
+        tatolab.stream.Mp4Sink,
         name="recorder",
         config={"path": arguments.path},
     )
 
     camera = stream.add(
-        streamlib.CameraSource,
+        tatolab.stream.CameraSource,
         name="camera",
         config={"device_id": arguments.camera} if arguments.camera else {},
     )
@@ -97,7 +98,7 @@ def camera_and_known_signal_recorded_into_one_file(stream: Stream) -> None:
     stream.connect(video_encoder.output("encoded_video"), recorder.input("tracks"))
 
     signal = stream.add(KnownAudioSignalSource, name="known_signal")
-    audio_encoder = stream.add(streamlib.OpusEncoder, name="audio_encoder")
+    audio_encoder = stream.add(tatolab.stream.OpusEncoder, name="audio_encoder")
     stream.connect(signal.output("audio"), audio_encoder.input("audio"))
     stream.connect(audio_encoder.output("encoded_audio"), recorder.input("tracks"))
 
@@ -105,7 +106,7 @@ def camera_and_known_signal_recorded_into_one_file(stream: Stream) -> None:
 def main() -> None:
     _parse_fixture_arguments()
     graph = compile_stream_to_graph(camera_and_known_signal_recorded_into_one_file)
-    runtime = streamlib.Runtime(runtime_name="recording-node")
+    runtime = tatolab.runtime.Runtime(runtime_name="recording-node")
     runtime.load(graph)
 
     runtime.host_control_plane()

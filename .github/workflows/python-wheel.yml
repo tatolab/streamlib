@@ -114,6 +114,22 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 build --out dist
 
+      # PEP 420: `tatolab` is a namespace package. A regular `tatolab/__init__.py`
+      # in this wheel would shadow every other distribution's `tatolab.*`
+      # portion installed beside it. The listing is required to name both regular
+      # packages' `__init__.py`, so a wheel missing either, or an empty or
+      # unreadable listing, fails rather than passing.
+      - name: The wheel ships tatolab as a namespace package
+        working-directory: sdk/streamlib-python-wheel
+        run: |
+          unzip -Z1 dist/*.whl > /tmp/wheel-member-names.txt
+          grep -qx 'tatolab/stream/__init__.py' /tmp/wheel-member-names.txt
+          grep -qx 'tatolab/runtime/__init__.py' /tmp/wheel-member-names.txt
+          if grep -qx 'tatolab/__init__.py' /tmp/wheel-member-names.txt; then
+            echo "::error::the wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
           name: streamlib-wheel
@@ -154,7 +170,7 @@ jobs:
       # binary dropped still reads as 100% complete.
       - name: Type stubs match the compiled module
         working-directory: sdk/streamlib-python-wheel
-        run: .venv/bin/python -m mypy.stubtest streamlib._engine
+        run: .venv/bin/python -m mypy.stubtest tatolab.runtime._engine
 
       # The runner has no GPU. `Runner::start()` initializes a GPU context whose
       # DMA-BUF pool pre-warm needs a driver that can allocate exportable device
