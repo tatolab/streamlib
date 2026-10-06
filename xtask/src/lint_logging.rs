@@ -1129,16 +1129,16 @@ mod tests {
     }
 
     #[test]
-    fn a_streamlib_log_line_naming_a_banned_pattern_is_flagged() {
+    fn a_log_call_not_spelled_tatolab_stream_log_is_not_exempted() {
         let v = scan_fixture_tree(
             lint_target_named("python"),
-            "streamlib.log.info(\"never call print( here\")\n",
+            "log.info(\"never call print( here\")\n",
             "src/app.py",
         );
         assert_eq!(
             v.len(),
             1,
-            "the retired streamlib.log spelling must not exempt a line"
+            "only a line spelling tatolab.stream.log. is exempt from the banned patterns"
         );
         assert_eq!(v[0].matched_pattern, "print(");
     }
