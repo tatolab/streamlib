@@ -51,7 +51,12 @@ from streamlib import (
     compile_stream_to_graph,
     stream,
 )
-from streamlib._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
+from streamlib._control_plane_client import (
+    ControlPlaneEndpoint,
+    ControlPlaneError,
+    call_tool,
+    resolve_control_plane_endpoint,
+)
 from streamlib._engine import (
     TestBagCollector,
     TestBagFeeder,
@@ -856,12 +861,12 @@ def named_pattern_into_a_named_collector(stream: Stream) -> None:
     stream.connect(pattern.output("video"), collector.input("bags_from_upstream"))
 
 
-def control_url_once_the_registry_lists(runtime_name: str) -> str:
-    """The control URL the node registry lists for `runtime_name`, polled until it lists one."""
+def local_api_socket_once_the_registry_lists(runtime_name: str) -> ControlPlaneEndpoint:
+    """The local API socket the node registry lists for `runtime_name`, polled until it lists one."""
     deadline = time.monotonic() + SERVED_GRAPH_CONTROL_PLANE_REGISTRATION_DEADLINE_SECONDS
     while True:
         try:
-            return resolve_control_url(None, runtime_name)
+            return resolve_control_plane_endpoint(None, runtime_name)
         except ControlPlaneError:
             if time.monotonic() >= deadline:
                 raise
@@ -889,7 +894,9 @@ def test_a_loaded_streams_nodes_and_link_are_served_by_name_over_its_control_pla
         run_loop.start()
         runtime.wait_until_every_processor_is_running(timeout=SERVED_GRAPH_READY_TIMEOUT_SECONDS)
         served_graph = json.loads(
-            call_tool(control_url_once_the_registry_lists(SERVED_GRAPH_RUNTIME_NAME), "graph", {})
+            call_tool(
+                local_api_socket_once_the_registry_lists(SERVED_GRAPH_RUNTIME_NAME), "graph", {}
+            )
         )
     finally:
         runtime.shutdown()

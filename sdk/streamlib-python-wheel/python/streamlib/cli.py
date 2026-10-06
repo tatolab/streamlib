@@ -53,7 +53,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 from . import Runtime, _stream_graph_builder
-from ._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
+from ._control_plane_client import (
+    ControlPlaneError,
+    call_tool,
+    resolve_control_plane_endpoint,
+)
 from ._cross_floor_check import (
     check_app_directory_for_floor_bindings,
     render_cross_floor_warning_block,
@@ -881,19 +885,20 @@ def print_the_node_registry_table() -> int:
     runtime_id_width = max(
         [len(node.entry.runtime_id) for node in nodes] + [len("RUNTIME_ID")]
     )
-    control_url_width = max(
-        [len(node.entry.control_url) for node in nodes] + [len("CONTROL_URL")]
+    local_api_socket_width = max(
+        [len(node.entry.local_api_socket_path) for node in nodes]
+        + [len("LOCAL_API_SOCKET")]
     )
     print(
         f"{'RUNTIME_NAME':<{runtime_name_width}}  {'RUNTIME_ID':<{runtime_id_width}}  "
-        f"{'CONTROL_URL':<{control_url_width}}  "
+        f"{'LOCAL_API_SOCKET':<{local_api_socket_width}}  "
         f"{'PID':>7}  {'ALIVE?':<6}  HINT"
     )
     for node in nodes:
         print(
             f"{node.entry.runtime_name:<{runtime_name_width}}  "
             f"{node.entry.runtime_id:<{runtime_id_width}}  "
-            f"{node.entry.control_url:<{control_url_width}}  "
+            f"{node.entry.local_api_socket_path:<{local_api_socket_width}}  "
             f"{node.entry.pid:>7}  {'yes' if node.reachable else 'no':<6}  "
             f"{node.entry.hint}"
         )
@@ -908,8 +913,8 @@ def call_observation_tool(
     arguments: "Optional[dict[str, Any]]" = None,
 ) -> int:
     """Resolve the target node, drive one tool, print its result."""
-    url = resolve_control_url(requested_url, requested_node)
-    print(call_tool(url, tool_name, arguments or {}))
+    endpoint = resolve_control_plane_endpoint(requested_url, requested_node)
+    print(call_tool(endpoint, tool_name, arguments or {}))
     return 0
 
 
@@ -1304,7 +1309,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "--node",
             dest="requested_node",
             metavar="RUNTIME_NAME_OR_ID",
-            help="Registered runtime name or runtime_id to target (resolved via the node registry).",
+            help=(
+                "Registered runtime name or runtime_id to target, reached through its "
+                "local API socket (resolved via the node registry)."
+            ),
         )
 
     subcommands.add_parser(
@@ -1313,7 +1321,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         description=(
             "Scans the node registry, liveness-checks every entry, prunes the "
             "ones that are gone, and prints runtime_name, runtime_id, "
-            "control_url, pid, alive? and hint. Only runtimes hosting a "
+            "local_api_socket, pid, alive? and hint. Only runtimes hosting a "
             "control plane register."
         ),
     )
@@ -1547,10 +1555,12 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
                 f"{', '.join(channel_form_flags)} sample a channel, and a surface id "
                 f"names one frame already. Use `--channel` instead of SURFACE_ID."
             )
-        url = resolve_control_url(arguments.requested_url, arguments.requested_node)
+        endpoint = resolve_control_plane_endpoint(
+            arguments.requested_url, arguments.requested_node
+        )
         try:
             written_image_path = exchange_one_published_surface_id_into_directory(
-                url, arguments.surface_id, arguments.output_directory
+                endpoint, arguments.surface_id, arguments.output_directory
             )
         except OSError as write_failure:
             # A `--out` that names an existing file, or a directory this user
@@ -1568,9 +1578,9 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
     if every_nth_bag < 1:
         raise ObservationVerbUsageError("`--every` must be at least 1.")
 
-    url = resolve_control_url(arguments.requested_url, arguments.requested_node)
+    endpoint = resolve_control_plane_endpoint(arguments.requested_url, arguments.requested_node)
     report = sample_channel_into_exchanged_surface_images(
-        url,
+        endpoint,
         arguments.channel,
         arguments.output_directory,
         wanted_image_count=wanted_image_count,

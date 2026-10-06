@@ -602,8 +602,10 @@ class Runtime:
         """Host the control plane in this process, so the node is discoverable.
 
         Binds all interfaces (`0.0.0.0`) and port 9000 by default, incrementing
-        the port on collision. Opt-in: a runtime that never calls this
-        publishes no node-registry entry. Call it before `run()`.
+        the port on collision, and serves the same API on
+        `<runtime directory>/local-api-<runtime_id>.sock`, a Unix socket only
+        this user can open. Opt-in: a runtime that never calls this publishes no
+        node-registry entry. Call it before `run()`.
 
         The entry it publishes carries the runtime's own name, which
         `streamlib nodes` lists and `--node` resolves; the control plane never

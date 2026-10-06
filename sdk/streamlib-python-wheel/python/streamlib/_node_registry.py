@@ -7,7 +7,8 @@ A node that hosts a control plane writes one JSON file per live node into the
 `nodes/` folder of the StreamLib runtime directory. This reads that registry, liveness-checks each
 entry, and prunes the ones that are definitively gone.
 
-Liveness has two independent signals: whether the control plane answers, and
+Liveness has two independent signals: whether the control plane answers on the
+entry's local API socket, and
 whether the host process still exists. An entry is deleted only when BOTH say
 dead, so a live node that is briefly slow to answer is never pruned out from
 under its own process.
@@ -32,7 +33,7 @@ __all__ = [
     "live_nodes",
 ]
 
-NODE_REGISTRY_SCHEMA_VERSION = 2
+NODE_REGISTRY_SCHEMA_VERSION = 3
 
 
 class NodeRegistryEntry(NamedTuple):
@@ -44,6 +45,8 @@ class NodeRegistryEntry(NamedTuple):
     #: runs of one app, and what `--node` resolves alongside the id.
     runtime_name: str
     control_url: str
+    #: The Unix socket the node's local API is served on, openable only by its user.
+    local_api_socket_path: str
     pid: int
     hint: str
 
@@ -125,7 +128,10 @@ def _read_entry_file(path: Path) -> "Optional[NodeRegistryEntry]":
 
     An entry whose `schema_version` this reader does not know is skipped for the
     same reason the field exists — and skipping it here is what keeps it OUT of
-    the prune path, so a reader never deletes a record it cannot parse.
+    the prune path, so a reader never deletes a record it cannot parse. The
+    version is checked before any other field, so a schema-2 entry, which has no
+    socket, is refused by its version: entries are per run, and there is nothing
+    to migrate.
 
     Every field is required to be the exact JSON type the writing runtime emits,
     rather than coerced into one. Coercing is what made "skipped rather than
@@ -134,25 +140,33 @@ def _read_entry_file(path: Path) -> "Optional[NodeRegistryEntry]":
     """
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
+        schema_version = record["schema_version"]
+        # `type(...) is` rather than `isinstance`: JSON `true` is an `int` to
+        # `isinstance`, and a pid of `True` is not a pid.
+        if type(schema_version) is not int or schema_version != NODE_REGISTRY_SCHEMA_VERSION:
+            return None
         entry = NodeRegistryEntry(
-            schema_version=record["schema_version"],
+            schema_version=schema_version,
             runtime_id=record["runtime_id"],
             runtime_name=record["runtime_name"],
             control_url=record["control_url"],
+            local_api_socket_path=record["local_api_socket_path"],
             pid=record["pid"],
             hint=record.get("hint", ""),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    # `type(...) is` rather than `isinstance`: JSON `true` is an `int` to
-    # `isinstance`, and a pid of `True` is not a pid.
-    if type(entry.schema_version) is not int or type(entry.pid) is not int:
-        return None
-    if entry.schema_version != NODE_REGISTRY_SCHEMA_VERSION:
+    if type(entry.pid) is not int:
         return None
     if any(
         type(field) is not str
-        for field in (entry.runtime_id, entry.runtime_name, entry.control_url, entry.hint)
+        for field in (
+            entry.runtime_id,
+            entry.runtime_name,
+            entry.control_url,
+            entry.local_api_socket_path,
+            entry.hint,
+        )
     ):
         return None
     return entry
@@ -187,9 +201,9 @@ def scan_check_and_prune() -> "list[DiscoveredNode]":
     `reachable=False` rather than pruned.
     """
     # Imported here rather than at module scope: the client imports this module
-    # for the URL resolver, and a module-level cycle would break either import
-    # depending on which the CLI reached first.
-    from ._control_plane_client import control_plane_answers
+    # for the endpoint resolver, and a module-level cycle would break either
+    # import depending on which the CLI reached first.
+    from ._control_plane_client import LocalApiSocket, control_plane_answers
 
     directory = registry_directory()
     try:
@@ -202,7 +216,7 @@ def scan_check_and_prune() -> "list[DiscoveredNode]":
         entry = _read_entry_file(entry_file)
         if entry is None:
             continue
-        reachable = control_plane_answers(entry.control_url)
+        reachable = control_plane_answers(LocalApiSocket(entry.local_api_socket_path))
         if not reachable and not _process_exists(entry.pid):
             try:
                 entry_file.unlink()
