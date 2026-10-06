@@ -14,7 +14,7 @@
 # sample-exact match no codec would give.
 #
 # Usage:
-#   ./verify_opus_roundtrip.sh [--port PORT] [--record-seconds SECONDS]
+#   ./verify_opus_roundtrip.sh [--record-seconds SECONDS]
 #
 # Exit status is the verdict, stdout is the report JSON and nothing else, so a
 # caller can pipe it. Progress goes to stderr.
@@ -23,14 +23,12 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3}"
 
-CONTROL_PORT="${CONTROL_PORT:-9078}"
 # The signal is 2.78 s and the source stops publishing at 3.78 s, so the record
 # window sits between them: past the source's end nothing further arrives and
 # the recorder would never write.
 RECORD_SECONDS=3.0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --port) CONTROL_PORT="$2"; shift 2 ;;
         --record-seconds) RECORD_SECONDS="$2"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -45,22 +43,7 @@ if ! compgen -G "/dev/dri/renderD*" >/dev/null; then
     exit 77
 fi
 
-# A busy control port misdirects this run rather than failing it, so it is
-# refused up front. The API server walks up to ten ports when the one it was
-# given is taken and says which it landed on only at INFO, while this script
-# keeps asking for the one it passed — so a second node already on this port,
-# declaring an OpusDecoder of its own, would be measured instead and could
-# report PASS for a graph that is not the one under test. Bash's own /dev/tcp
-# rather than `ss`, so nothing extra has to be installed.
-if (echo >"/dev/tcp/127.0.0.1/$CONTROL_PORT") 2>/dev/null; then
-    echo "ERROR: something is already listening on 127.0.0.1:$CONTROL_PORT." >&2
-    echo "       This run would measure that node instead of its own. Stop it," >&2
-    echo "       or pass --port with a free one." >&2
-    exit 1
-fi
-
 OUTPUT_DIR="$(mktemp -d -t streamlib-opus-roundtrip-XXXXXX)"
-CONTROL_URL="http://127.0.0.1:$CONTROL_PORT"
 CAPTURED_WAVEFORM="$OUTPUT_DIR/decoded.wav"
 
 NODE_PID=""
@@ -73,36 +56,45 @@ trap 'kill "$NODE_PID" 2>/dev/null' EXIT
 trap 'exit 130' INT TERM
 
 echo "starting the Opus round-trip node" >&2
+# `exec`, so NODE_PID is the node itself and matches its registry entry.
 (
     cd "$HERE" || exit 1
-    "$PYTHON" opus_roundtrip_node.py "$CAPTURED_WAVEFORM" \
-        --control-plane-port "$CONTROL_PORT" \
+    exec "$PYTHON" opus_roundtrip_node.py "$CAPTURED_WAVEFORM" \
         --record-seconds "$RECORD_SECONDS"
 ) >"$OUTPUT_DIR/node.log" 2>&1 &
 NODE_PID=$!
 
+# The runtime_id of the live node the launched process runs: the pid itself, or
+# its child when the interpreter is a wrapper that forks rather than execs.
+# Matched by pid rather than by name, so another node on the machine declaring
+# an OpusDecoder of its own is never the one measured.
+runtime_id_of_the_node_launched_as() {
+    "$PYTHON" "$HERE/runtime_id_of_launched_node.py" "$1"
+}
+
 # Polled rather than slept: the node has a GPU context and an iceoryx2 node to
 # bring up, and a fixed sleep is either flaky or slow.
+RUNTIME_ID=""
+NODE_ANSWERED=0
 for _ in $(seq 60); do
     if ! kill -0 "$NODE_PID" 2>/dev/null; then
-        echo "ERROR: the round-trip node exited before serving its control plane" >&2
+        echo "ERROR: the round-trip node exited before serving its local API" >&2
         cat "$OUTPUT_DIR/node.log" >&2
         exit 1
     fi
-    if "$PYTHON" -m streamlib.cli graph --url "$CONTROL_URL" >/dev/null 2>&1; then
+    if [ -z "$RUNTIME_ID" ]; then
+        RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$NODE_PID")" || RUNTIME_ID=""
+    fi
+    if [ -n "$RUNTIME_ID" ] \
+        && "$PYTHON" -m streamlib.cli graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        NODE_ANSWERED=1
         break
     fi
     sleep 0.5
 done
-
-# The other half of the port guard, closing the gap between the check above and
-# the node's own bind: if it walked, the control plane answering on the
-# requested port belongs to somebody else and every verdict below would be
-# about their graph.
-if grep -q "in use, bound to" "$OUTPUT_DIR/node.log"; then
-    echo "ERROR: the node could not take port $CONTROL_PORT and walked —" >&2
-    grep "in use, bound to" "$OUTPUT_DIR/node.log" >&2
-    echo "       whatever answered on $CONTROL_PORT is not this run's node." >&2
+if [ "$NODE_ANSWERED" -ne 1 ]; then
+    echo "ERROR: the round-trip node never answered over its local API socket" >&2
+    tail -40 "$OUTPUT_DIR/node.log" >&2
     exit 1
 fi
 
@@ -131,7 +123,7 @@ fi
 # cadence and timestamp continuity, read off the wire rather than from the
 # recorder that also does the measuring.
 if ! "$HERE/verify_audio_channel.sh" opusdecoder \
-    --url "$CONTROL_URL" --count 64 --port audio >&2; then
+    --node "$RUNTIME_ID" --count 64 --port audio >&2; then
     echo "ERROR: the decoder's channel failed its block-level contract" >&2
     exit 1
 fi

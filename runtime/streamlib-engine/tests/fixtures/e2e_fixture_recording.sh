@@ -49,8 +49,6 @@
 #                             SAMPLE_COUNT x SAMPLE_EVERY is a bag budget, not a
 #                             wish: `exchange` gives up after 8 tap rounds of a
 #                             ~500 ms window each.
-#   CONTROL_PLANE_PORT     — port recording_node.py binds (default 9403)
-#   REPLAY_CONTROL_PLANE_PORT — port the replay rig binds (default 9404)
 #   REPLAY_SECONDS         — ceiling on the replay phase (default 90)
 #   TOLERANCE              — abs channel-mean drift bound on [0,1] (default 0.05)
 #   INJECT_BUG             — bt601-bt709 | swap-channels | swap-chroma, the
@@ -79,8 +77,6 @@ MIN_RECORDED_FRAMES="${MIN_RECORDED_FRAMES:-120}"
 RECORD_SECONDS="${RECORD_SECONDS:-90}"
 SAMPLE_COUNT="${SAMPLE_COUNT:-6}"
 SAMPLE_EVERY="${SAMPLE_EVERY:-2}"
-CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT:-9403}"
-REPLAY_CONTROL_PLANE_PORT="${REPLAY_CONTROL_PLANE_PORT:-9404}"
 REPLAY_SECONDS="${REPLAY_SECONDS:-90}"
 TOLERANCE="${TOLERANCE:-0.05}"
 INJECT_BUG="${INJECT_BUG:-}"
@@ -129,7 +125,7 @@ fi
 # The interpreter beside the CLI, because that is the one whose environment the
 # CLI ships in; a bare `python3` can be an unrelated one that happens to be
 # first on PATH.
-FIXTURE_NODE_PYTHON="$(dirname "$STREAMLIB_CLI")/python3"
+FIXTURE_NODE_PYTHON="$(dirname "$(readlink -f "$STREAMLIB_CLI" 2>/dev/null || echo "$STREAMLIB_CLI")")/python3"
 if [ ! -x "$FIXTURE_NODE_PYTHON" ]; then
     FIXTURE_NODE_PYTHON="$(command -v python3)"
 fi
@@ -179,8 +175,6 @@ RECORDING_PATH="$OUTPUT_DIR/recording.mp4"
 RECORD_LOG="$OUTPUT_DIR/recording.log"
 REPLAY_LOG="$OUTPUT_DIR/replay.log"
 EXCHANGED_DIR="$OUTPUT_DIR/exchanged"
-CONTROL_PLANE_URL="http://127.0.0.1:$CONTROL_PLANE_PORT"
-REPLAY_CONTROL_PLANE_URL="http://127.0.0.1:$REPLAY_CONTROL_PLANE_PORT"
 
 # `v4l2-ctl -C test_pattern` formats as "test_pattern: 7 (100% Red)"; field $2
 # gives the numeric id only, which is what `-c` takes. Captured rather than
@@ -264,6 +258,30 @@ restore_pattern_and_stop() {
 }
 trap restore_pattern_and_stop EXIT
 
+# The runtime_id of the live node the launched process runs. `timeout` wraps
+# both phases, so the runtime is the launched pid's child rather than the pid
+# itself.
+runtime_id_of_the_node_launched_as() {
+    "$FIXTURE_NODE_PYTHON" "$SCRIPT_DIR/runtime_id_of_launched_node.py" "$1"
+}
+
+# Wait for the launched node to register and answer a graph round trip over its
+# local API socket. Sets RUNTIME_ID.
+wait_for_the_launched_node() {
+    RUNTIME_ID=""
+    for _ in $(seq 1 60); do
+        kill -0 "$1" 2>/dev/null || return 1
+        if [ -z "$RUNTIME_ID" ]; then
+            RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$1")" || RUNTIME_ID=""
+        fi
+        if [ -n "$RUNTIME_ID" ] && "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.5
+    done
+    return 1
+}
+
 if ! v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$VIVID_TEST_PATTERN" 2>"$OUTPUT_DIR/vivid-ctl.log"; then
     echo "[recording] FAIL: could not set vivid test_pattern=$VIVID_TEST_PATTERN" >&2
     cat "$OUTPUT_DIR/vivid-ctl.log" >&2
@@ -300,16 +318,14 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         --codec "$CODEC" \
         --camera "$VIVID_DEVICE" \
         --path "$RECORDING_PATH" \
-        --control-plane-port "$CONTROL_PLANE_PORT" \
         > "$RECORD_LOG" 2>&1 &
 RUNNING_PID=$!
 
-for _ in $(seq 1 60); do
-    if "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" >/dev/null 2>&1; then
-        break
-    fi
-    sleep 0.5
-done
+if ! wait_for_the_launched_node "$RUNNING_PID"; then
+    echo "[recording] FAIL: the recording node never answered over its local API socket" >&2
+    tail -30 "$RECORD_LOG" >&2
+    exit 1
+fi
 
 # How much video has landed on disk so far. The writer buffers, so this lags
 # what the graph has produced — which is the point: the phase ends when the
@@ -441,21 +457,19 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         "$REPO_ROOT/target/release/examples/codec_roundtrip_rig" \
         --source "mp4:$RECORDING_PATH" \
         --codec "$CODEC" \
-        --control-plane-port "$REPLAY_CONTROL_PLANE_PORT" \
         > "$REPLAY_LOG" 2>&1 &
 RUNNING_PID=$!
 
-for _ in $(seq 1 60); do
-    if "$STREAMLIB_CLI" graph --url "$REPLAY_CONTROL_PLANE_URL" >/dev/null 2>&1; then
-        break
-    fi
-    sleep 0.5
-done
+if ! wait_for_the_launched_node "$RUNNING_PID"; then
+    echo "[recording] FAIL: the replay rig never answered over its local API socket" >&2
+    tail -30 "$REPLAY_LOG" >&2
+    exit 1
+fi
 
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
-DECODED_CHANNEL="$("$STREAMLIB_CLI" graph --url "$REPLAY_CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
+DECODED_CHANNEL="$("$STREAMLIB_CLI" graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -476,7 +490,7 @@ if ! "$STREAMLIB_CLI" exchange \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \
         --every "$SAMPLE_EVERY" \
-        --url "$REPLAY_CONTROL_PLANE_URL" \
+        --node "$RUNTIME_ID" \
         > "$OUTPUT_DIR/exchanged_paths.txt" 2> "$OUTPUT_DIR/exchange.log"; then
     echo "[recording] FAIL: exchanged fewer frames than asked for" >&2
     cat "$OUTPUT_DIR/exchange.log" >&2

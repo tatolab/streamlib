@@ -51,7 +51,6 @@ def _parse_fixture_arguments() -> argparse.Namespace:
         default=None,
         help="V4L2 node to capture from (default: the first the engine finds)",
     )
-    parser.add_argument("--control-plane-port", type=int, default=9000)
     return parser.parse_args()
 
 
@@ -85,17 +84,12 @@ def camera_through_the_codec_into_a_window(stream: Stream) -> None:
 
 
 def main() -> None:
-    arguments = _parse_fixture_arguments()
+    _parse_fixture_arguments()
     graph = compile_stream_to_graph(camera_through_the_codec_into_a_window)
     runtime = streamlib.Runtime(runtime_name="codec-roundtrip-node")
     runtime.load(graph)
 
-    # Loopback rather than the default every interface: this node exists to be
-    # tapped from the machine it runs on, and it carries no authentication.
-    runtime.host_control_plane(
-        bind_host="127.0.0.1",
-        bind_port=arguments.control_plane_port,
-    )
+    runtime.host_control_plane(bind_host="127.0.0.1")
     runtime.run()
 
 

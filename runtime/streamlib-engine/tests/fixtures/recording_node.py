@@ -70,7 +70,6 @@ def _parse_fixture_arguments() -> argparse.Namespace:
         required=True,
         help="the file to record into, created or truncated at startup",
     )
-    parser.add_argument("--control-plane-port", type=int, default=9000)
     return parser.parse_args()
 
 
@@ -104,17 +103,12 @@ def camera_and_known_signal_recorded_into_one_file(stream: Stream) -> None:
 
 
 def main() -> None:
-    arguments = _parse_fixture_arguments()
+    _parse_fixture_arguments()
     graph = compile_stream_to_graph(camera_and_known_signal_recorded_into_one_file)
     runtime = streamlib.Runtime(runtime_name="recording-node")
     runtime.load(graph)
 
-    # Loopback rather than the default every interface: this node exists to be
-    # watched from the machine it runs on, and it carries no authentication.
-    runtime.host_control_plane(
-        bind_host="127.0.0.1",
-        bind_port=arguments.control_plane_port,
-    )
+    runtime.host_control_plane(bind_host="127.0.0.1")
     runtime.run()
 
 

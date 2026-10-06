@@ -9,7 +9,7 @@
 `WhepPlayer -> H264Decoder -> DisplayWindow` beside `-> OpusDecoder ->
 SpeakerSink`. It is `examples/camera-webrtc-publish` with the playback half
 attached: the same publish shape, with node names the driving script can
-find processors by and a control plane it can read them through.
+find processors by and a local API socket it can read them through.
 
 Nothing joins the two halves locally. Every frame the decoder publishes was
 packetised into RTP, ingested by the endpoint, and depacketised back out of it,
@@ -82,7 +82,6 @@ def _parse_fixture_arguments() -> argparse.Namespace:
             "the network (default: the backend's own default device)"
         ),
     )
-    parser.add_argument("--control-plane-port", type=int, default=9000)
     return parser.parse_args()
 
 
@@ -154,20 +153,13 @@ def whip_whep_roundtrip(stream: Stream) -> None:
 
 
 def main() -> None:
-    arguments = _parse_fixture_arguments()
+    _parse_fixture_arguments()
     graph = compile_stream_to_graph(whip_whep_roundtrip)
 
     runtime = streamlib.Runtime(runtime_name="whip-whep-roundtrip-node")
     runtime.load(graph)
 
-    # Loopback rather than the default every interface: this node exists to be
-    # tapped from the machine it runs on, and it carries no authentication —
-    # which matters more than usual here, because `graph` renders each
-    # processor's config and this graph's config holds both endpoint URLs.
-    runtime.host_control_plane(
-        bind_host="127.0.0.1",
-        bind_port=arguments.control_plane_port,
-    )
+    runtime.host_control_plane(bind_host="127.0.0.1")
     runtime.run()
 
 

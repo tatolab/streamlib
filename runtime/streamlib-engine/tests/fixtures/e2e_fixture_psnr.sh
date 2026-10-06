@@ -43,7 +43,6 @@
 #   RUN_SECONDS           — per-reference rig budget (default 40)
 #   REFERENCE_STEMS       — space-separated subset of reference names to run
 #                            (default: every PNG in the checked-in set)
-#   CONTROL_PLANE_PORT    — port the rig's control plane binds (default 9401)
 #   PSNR_INJECT_BUG       — post-decode bug injection; verifies the FAIL
 #                            threshold trips for colour-management
 #                            regressions. One of:
@@ -79,7 +78,6 @@ CODEC="${2:-h264}"
 
 SAMPLES_PER_REFERENCE="${SAMPLES_PER_REFERENCE:-2}"
 RUN_SECONDS="${RUN_SECONDS:-40}"
-CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT:-9401}"
 PSNR_INJECT_BUG="${PSNR_INJECT_BUG:-}"
 
 # ── Prerequisites ────────────────────────────────────────────────────
@@ -105,6 +103,12 @@ fi
 if [ ! -x "$STREAMLIB_CLI" ]; then
     echo "[psnr] SKIP: no streamlib CLI on PATH or at $STREAMLIB_CLI" >&2
     exit 77
+fi
+# The interpreter beside the CLI reads the node registry, because that is the
+# one whose environment the CLI ships in.
+STREAMLIB_CLI_PYTHON="$(dirname "$(readlink -f "$STREAMLIB_CLI" 2>/dev/null || echo "$STREAMLIB_CLI")")/python3"
+if [ ! -x "$STREAMLIB_CLI_PYTHON" ]; then
+    STREAMLIB_CLI_PYTHON="$(command -v python3)"
 fi
 
 if [ ! -d "$REFERENCES_DIR" ]; then
@@ -140,13 +144,11 @@ ARMS_DIR="$OUTPUT_DIR/arms"
 SCORED_REFERENCES_DIR="$OUTPUT_DIR/references"
 mkdir -p "$DECODED_DIR" "$ARMS_DIR" "$SCORED_REFERENCES_DIR"
 
-CONTROL_PLANE_URL="http://127.0.0.1:$CONTROL_PLANE_PORT"
-
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
 decoded_channel_of_running_rig() {
-    "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
+    "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -161,7 +163,6 @@ print(graph["runtime_name"] + "/" + decoder["name"] + "/video")
 echo "[psnr] Output dir:   $OUTPUT_DIR"
 echo "[psnr] Codec:        $CODEC"
 echo "[psnr] References:   ${#REFERENCE_PNGS[@]} (one cold rig run each, ${SAMPLES_PER_REFERENCE} sample(s) per run)"
-echo "[psnr] Control plane: $CONTROL_PLANE_URL"
 
 # ── Build ────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
@@ -232,11 +233,22 @@ stop_rig() {
 }
 trap stop_rig EXIT
 
-# Wait for the hosted control plane to answer a graph round trip, which is the
-# first moment a tap can attach.
-wait_for_control_plane() {
+# The runtime_id of the live node the launched process runs. `timeout` wraps the
+# rig, so the runtime is the launched pid's child rather than the pid itself.
+runtime_id_of_the_node_launched_as() {
+    "$STREAMLIB_CLI_PYTHON" "$SCRIPT_DIR/runtime_id_of_launched_node.py" "$1"
+}
+
+# Wait for the launched node to register and answer a graph round trip over its
+# local API socket, which is the first moment a tap can attach. Sets RUNTIME_ID.
+wait_for_the_launched_node() {
+    RUNTIME_ID=""
     for _ in $(seq 1 60); do
-        if "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" >/dev/null 2>&1; then
+        kill -0 "$1" 2>/dev/null || return 1
+        if [ -z "$RUNTIME_ID" ]; then
+            RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$1")" || RUNTIME_ID=""
+        fi
+        if [ -n "$RUNTIME_ID" ] && "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.5
@@ -260,12 +272,11 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
             --source fixture \
             --codec "$CODEC" \
             --fixtures "$arm_dir/fixtures" \
-            --control-plane-port "$CONTROL_PLANE_PORT" \
             > "$pipeline_log" 2>&1 &
     RIG_PID=$!
 
-    if ! wait_for_control_plane; then
-        echo "[psnr] FAIL: $stem — control plane never answered on $CONTROL_PLANE_URL" >&2
+    if ! wait_for_the_launched_node "$RIG_PID"; then
+        echo "[psnr] FAIL: $stem — the rig never answered over its local API socket" >&2
         tail -30 "$pipeline_log" >&2
         stop_rig
         exit 1
@@ -287,7 +298,7 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
             --channel "$decoded_channel" \
             --out "$arm_dir/exchanged" \
             --count "$SAMPLES_PER_REFERENCE" \
-            --url "$CONTROL_PLANE_URL" \
+            --node "$RUNTIME_ID" \
             > "$arm_dir/exchanged_paths.txt" 2> "$exchange_log"; then
         echo "[psnr] FAIL: $stem — exchanged fewer frames than asked for" >&2
         cat "$exchange_log" >&2
@@ -323,8 +334,7 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
         tail -30 "$pipeline_log" >&2
         exit 1
     fi
-    # The control plane's port has to be free before the next arm binds it, and
-    # the GPU has to release the encode/decode sessions.
+    # The GPU has to release the encode/decode sessions before the next arm.
     sleep 2
 done
 

@@ -33,12 +33,7 @@ def main() -> None:
     graph = compile_stream_to_graph(microphone_into_an_audio_channel_drain)
     runtime = streamlib.Runtime()
     runtime.load(graph)
-    # Loopback rather than the default every interface: this node exists to be
-    # tapped from the machine it runs on, and it carries no authentication.
-    runtime.host_control_plane(
-        bind_host="127.0.0.1",
-        bind_port=int(os.environ.get("CONTROL_PORT", "9000")),
-    )
+    runtime.host_control_plane(bind_host="127.0.0.1")
     runtime.run()
 
 
