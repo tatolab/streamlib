@@ -589,13 +589,13 @@ class Runtime:
         platform does not have (naming the platform), a setting a built-in
         does not take or a value of the wrong kind for one (naming the node and
         the setting), a taken node name, a link to a port no node has — raise
-        `RuntimeError` with the engine's own text. A refused load can leave part of its graph behind,
-        so every refused call is recorded — save one refused because this
-        Runtime is already running or shut down, which `run()` refuses anyway
-        — and so is a panic inside the load; `run()` then raises naming the
-        load's own refusal or panic, else the first refusal recorded, and
-        raises while a load is still underway. Construct a new Runtime and
-        load a corrected graph.
+        `RuntimeError` with the engine's own text. A refused load can leave part
+        of its graph behind, so every refused call is recorded — save one
+        refused because this Runtime is already running or shut down, which
+        `run()` refuses anyway — and so is a panic inside the load; `run()` then
+        raises naming the load's own refusal or panic, else the first refusal
+        recorded, and raises while a load is still underway. Construct a new
+        Runtime and load a corrected graph.
         """
 
     def host_control_plane(self) -> None:

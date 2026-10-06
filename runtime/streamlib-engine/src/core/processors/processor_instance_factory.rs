@@ -294,7 +294,9 @@ impl ProcessorInstanceFactory {
     /// Register host-compiled Rust type `P` under its descriptor's import
     /// path, returned, with a constructor and a check that refuses a config
     /// `P::Config` would not take before any node of it is added.
-    pub fn register_host_compiled_processor_type<P>(&self) -> Result<ProcessorClassImportPath>
+    pub(crate) fn register_host_compiled_processor_type<P>(
+        &self,
+    ) -> Result<ProcessorClassImportPath>
     where
         P: GeneratedProcessor + 'static,
         P::Config: Config,

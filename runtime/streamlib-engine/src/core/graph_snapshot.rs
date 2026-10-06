@@ -55,6 +55,10 @@ struct GraphSnapshotAsWritten {
     exposed: Vec<ExposedOutputPortOutput>,
 }
 
+/// One JSON object of a graph document: the graph, a node, a link, a link end
+/// or an exposure.
+type GraphDocumentObject = serde_json::Map<String, serde_json::Value>;
+
 /// The keys one kind of object in a graph document is written with: the spec
 /// a load reads, and the live keys `graph` renders beside it, which a load
 /// skips. A live key `graph` stops rendering stays listed, so a graph recorded
@@ -249,7 +253,6 @@ impl GraphSnapshot {
 /// reported as the key it stands in for being missing. An object the walk
 /// expects and does not find is left for the read to refuse.
 fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -> Result<()> {
-    type GraphDocumentObject = serde_json::Map<String, serde_json::Value>;
     fn text_at<'o>(object: &'o GraphDocumentObject, key: &str) -> &'o str {
         object
             .get(key)
@@ -321,7 +324,7 @@ fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -
 /// Refuse `object`'s first key that is neither a spec key nor a live key of its
 /// kind, naming it where `object_named` says it sits.
 fn refuse_a_key_no_such_object_holds(
-    object: &serde_json::Map<String, serde_json::Value>,
+    object: &GraphDocumentObject,
     keys: &GraphDocumentObjectKeys,
     object_named: impl FnOnce() -> String,
 ) -> Result<()> {

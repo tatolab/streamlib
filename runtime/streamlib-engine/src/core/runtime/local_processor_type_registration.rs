@@ -28,7 +28,7 @@ impl Runner {
         P: GeneratedProcessor + 'static,
         P::Config: Config,
     {
-        serde_json::from_value::<P::Config>(config).map_err(|config_mismatch| {
+        serde_path_to_error::deserialize::<_, P::Config>(&config).map_err(|config_mismatch| {
             Error::Configuration(format!(
                 "config does not match {}'s Config type: {config_mismatch}",
                 std::any::type_name::<P>()

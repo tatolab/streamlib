@@ -20,9 +20,10 @@ use crate::error::{SchemaError, SchemaResult};
 /// never parsed — splitting on `:` or `::` to recover a short name re-invents
 /// the identity grammar this type replaced.
 ///
-/// Every inhabitant is valid: the inner string is private, [`Self::new`] is the
-/// only constructor, there is no `Default`, and [`Deserialize`] validates
-/// rather than inheriting `String`'s.
+/// Every inhabitant is valid: the inner string is private, [`Self::new`] and
+/// [`Self::of_built_in_node`], which cannot be blank, are the only
+/// constructors, there is no `Default`, and [`Deserialize`] validates rather
+/// than inheriting `String`'s.
 ///
 /// One module is read: a path in [`BUILT_IN_NODE_CLASS_MODULE`] names one of
 /// the runtime's built-ins, resolved from its own registry and never imported.
