@@ -294,7 +294,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   reads `importlib.metadata.entry_points(group="streamlib.extensions")` and calls each
   `load(host)` once per process taking an engine role — from `Runtime.__init__` in the app
   process, and from `_helper.py` between the log sink's installation and the processor
-  class's import. `host` is `streamlib.CapabilityExtensionHost`, a `#[pyclass]` with a stub
+  class's import. `host` is `tatolab.runtime.CapabilityExtensionHost`, a `#[pyclass]` with a stub
   entry: `role` (`"app"` or `"helper"`) and `register_capability(name, version)`. In the
   app process a registration lands on the runtime and renders in `graph`; in a helper it is
   recorded for the extension's own reads. A hook that raises fails `Runtime()` with the
@@ -891,7 +891,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `graph`** and read lock-free under the graph lock, so `graph` never waits on the child.
   And **the flush count rides the same slot**, because a windowed port on a helper is where
   both losses happen together.
-  The wheel's stub carries `ProcessorLinkDataAccess.open_loss_count_board` and one optional
+  The wheel's stub carries `NodeLinkDataAccess.open_loss_count_board` and one optional
   keyword on each of its two link-opening methods, which the helper passes and no processor
   author ever names. The engine half of the
   proof is CI-run; the end-to-end wheel arm — an overrun helper, a ceiling refusal and a
@@ -2833,7 +2833,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_marker_class_cannot_be_instantiated -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_node_name_defaults_to_the_type_name -->
-- **DECIDED** — `streamlib.EncodedVideoFrame` is the Python cast over the encoded-frame
+- **DECIDED** — `tatolab.stream.EncodedVideoFrame` is the Python cast over the encoded-frame
   bag's wire keys: pure Python beside `audio_block.py`, read with
   `ctx.inputs.read("encoded_video", into=EncodedVideoFrame)`, owing no `.pyi` entry
   because pyright checks it from source. It composes nothing surface-shaped — the
@@ -2891,7 +2891,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_audio_packet::tests::encoded_audio_packet_msgpack_wire_carries_the_documented_keys -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_audio_packet::tests::the_bitstream_crosses_the_wire_as_a_binary_payload_not_an_array -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_audio_packet::tests::a_bag_with_no_encoded_packet_keys_is_refused_naming_the_keys -->
-- **DECIDED** — `streamlib.EncodedAudioPacket` is the Python cast, pure Python beside
+- **DECIDED** — `tatolab.stream.EncodedAudioPacket` is the Python cast, pure Python beside
   `encoded_video_frame.py`, read with `into=EncodedAudioPacket`, every rule of the video
   cast verbatim: the wire keys are the constructor keywords, `bool` is refused where an
   integer is required, unknown keys are read past, the payload is stored under the Rust
