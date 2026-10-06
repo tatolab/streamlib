@@ -12,10 +12,9 @@
 //!
 //! `streamlib mcp` is the client: it sends the upgrade, then copies bytes.
 
-use axum::body::Body;
 use axum::extract::Request;
 use axum::http::header::{CONNECTION, UPGRADE};
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get};
 use hyper_util::rt::TokioIo;
@@ -24,8 +23,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::mcp::LocalApiMcpServerHandler;
 
-/// The `Upgrade` protocol token `/mcp/stdio` switches to.
-pub(crate) const MCP_STDIO_UPGRADE_PROTOCOL: &str = "mcp-stdio";
+/// The `Upgrade` protocol token `/mcp/stdio` switches to; `streamlib mcp`
+/// sends it verbatim.
+const MCP_STDIO_UPGRADE_PROTOCOL: &str = "mcp-stdio";
 
 /// `/mcp/stdio`'s route: each upgraded connection is served until it closes
 /// or `local_api_stopping_token` is cancelled.
@@ -49,13 +49,7 @@ async fn answer_the_mcp_stdio_upgrade(
     if !requests_the_mcp_stdio_upgrade(request.headers()) {
         return (
             StatusCode::UPGRADE_REQUIRED,
-            [
-                (
-                    UPGRADE,
-                    HeaderValue::from_static(MCP_STDIO_UPGRADE_PROTOCOL),
-                ),
-                (CONNECTION, HeaderValue::from_static("upgrade")),
-            ],
+            mcp_stdio_upgrade_response_headers(),
             "`/mcp/stdio` serves MCP only after `Connection: upgrade` and `Upgrade: mcp-stdio`",
         )
             .into_response();
@@ -78,34 +72,43 @@ async fn answer_the_mcp_stdio_upgrade(
         }
     });
 
-    Response::builder()
-        .status(StatusCode::SWITCHING_PROTOCOLS)
-        .header(CONNECTION, "upgrade")
-        .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL)
-        .body(Body::empty())
-        .expect("a 101 built from static headers is a valid response")
+    (
+        StatusCode::SWITCHING_PROTOCOLS,
+        mcp_stdio_upgrade_response_headers(),
+    )
+        .into_response()
 }
 
-/// `Connection` lists `upgrade` and `Upgrade` names `mcp-stdio`, each
-/// case-insensitively as HTTP reads them.
+/// The headers that name the upgrade, on its `101` and on a `426` refusing a
+/// request that did not ask for it.
+fn mcp_stdio_upgrade_response_headers() -> [(HeaderName, HeaderValue); 2] {
+    [
+        (CONNECTION, HeaderValue::from_static("upgrade")),
+        (
+            UPGRADE,
+            HeaderValue::from_static(MCP_STDIO_UPGRADE_PROTOCOL),
+        ),
+    ]
+}
+
 fn requests_the_mcp_stdio_upgrade(request_headers: &HeaderMap) -> bool {
-    let connection_lists_upgrade = request_headers
-        .get_all(CONNECTION)
+    header_lists_token(request_headers, CONNECTION, "upgrade")
+        && header_lists_token(request_headers, UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL)
+}
+
+/// Whether any `header_name` value, read as HTTP's comma-separated list, holds
+/// `expected_token`, case-insensitively.
+fn header_lists_token(
+    request_headers: &HeaderMap,
+    header_name: HeaderName,
+    expected_token: &str,
+) -> bool {
+    request_headers
+        .get_all(header_name)
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(','))
-        .any(|token| token.trim().eq_ignore_ascii_case("upgrade"));
-    let upgrade_names_mcp_stdio = request_headers
-        .get_all(UPGRADE)
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|value| value.split(','))
-        .any(|protocol| {
-            protocol
-                .trim()
-                .eq_ignore_ascii_case(MCP_STDIO_UPGRADE_PROTOCOL)
-        });
-    connection_lists_upgrade && upgrade_names_mcp_stdio
+        .any(|token| token.trim().eq_ignore_ascii_case(expected_token))
 }
 
 async fn serve_local_api_mcp_over_the_upgraded_stream(
@@ -147,8 +150,12 @@ mod tests {
     use tokio::net::UnixStream;
     use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
-    use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
-    use crate::mcp::tests::{CONTROL_TOOL_NAMES, ControlPlaneMcpDispatchStubRuntime};
+    use crate::control_plane_stub_support::{
+        LocalApiServedOnAFreshSocket, response_head_over_the_socket,
+    };
+    use crate::mcp::tests::{
+        ControlPlaneMcpDispatchStubRuntime, assert_names_exactly_the_control_vocabulary,
+    };
     use crate::mcp_resources::LIVE_GRAPH_RESOURCE_URI;
 
     /// Longer than the stub's quiet `tap`, which answers when its 500 ms
@@ -163,24 +170,11 @@ mod tests {
         ))
     }
 
-    /// Send `request_head` and read the response head, byte by byte so
-    /// nothing past it is consumed.
-    async fn response_head_to(stream: &mut UnixStream, request_head: &str) -> String {
-        stream.write_all(request_head.as_bytes()).await.unwrap();
-        let mut head = Vec::new();
-        let mut byte = [0u8; 1];
-        while !head.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).await.unwrap();
-            head.push(byte[0]);
-        }
-        String::from_utf8(head).unwrap()
-    }
-
     async fn upgraded_mcp_stdio_stream(served: &LocalApiServedOnAFreshSocket) -> UnixStream {
         let mut stream = UnixStream::connect(&served.local_api_socket_path)
             .await
             .unwrap();
-        let head = response_head_to(
+        let head = response_head_over_the_socket(
             &mut stream,
             "GET /mcp/stdio HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n\
              Upgrade: mcp-stdio\r\n\r\n",
@@ -285,7 +279,7 @@ mod tests {
             .await
             .unwrap();
 
-        let head = response_head_to(
+        let head = response_head_over_the_socket(
             &mut stream,
             "GET /mcp/stdio HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
         )
@@ -322,17 +316,10 @@ mod tests {
         let served = served_over_a_quiet_tap();
         let client = rmcp_client_over_the_upgraded_stream(&served).await;
 
-        let mut tool_names: Vec<String> = client
-            .list_all_tools()
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|tool| tool.name.to_string())
-            .collect();
-        tool_names.sort_unstable();
-        let mut control_tool_names = CONTROL_TOOL_NAMES.to_vec();
-        control_tool_names.sort_unstable();
-        assert_eq!(tool_names, control_tool_names);
+        let tools = client.list_all_tools().await.unwrap();
+        assert_names_exactly_the_control_vocabulary(
+            tools.iter().map(|tool| tool.name.as_ref()).collect(),
+        );
 
         let live_graph = client
             .read_resource(ReadResourceRequestParams::new(LIVE_GRAPH_RESOURCE_URI))
@@ -379,6 +366,12 @@ mod tests {
         assert_eq!(lines.next_message().await["id"], 2);
         let late = lines.next_line_within(LONGER_THAN_A_QUIET_TAP).await;
         assert_eq!(late, None, "the cancelled tap was answered");
+        lines.send_tool_call(3, "graph", json!({})).await;
+        assert_eq!(
+            lines.next_message().await["id"],
+            3,
+            "the stream outlives the cancel, so the silence was the dropped answer"
+        );
     }
 
     /// `streamlib mcp` half-closes on its stdin's end; what the node already

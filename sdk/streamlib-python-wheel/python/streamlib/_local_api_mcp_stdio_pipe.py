@@ -7,6 +7,11 @@ The verb sends one `Upgrade: mcp-stdio` request over the runtime's local API
 socket and then only copies bytes, stdin → socket and socket → stdout. It
 parses no message, so the protocol revision is the runtime's alone. stdout
 carries nothing but what the runtime wrote.
+
+streamlib:lint-logging:allow-file — stdout is the MCP host's protocol stream,
+and the stderr lines are the console script's refusals, said to the host that
+launched it; neither is a log event, and a log line on stdout would corrupt the
+stream.
 """
 
 from __future__ import annotations
@@ -51,11 +56,9 @@ def pipe_stdio_to_the_runtimes_mcp_server(
             file=sys.stderr,
         )
         return 1
-    runtime_named = f"runtime `{node.runtime_name}` ({node.runtime_id})"
-    if mcp_host_input_fd is None:
-        mcp_host_input_fd = sys.stdin.fileno()
-    if mcp_host_output is None:
-        mcp_host_output = sys.stdout.buffer
+    runtime_name_and_id_for_stderr = f"runtime `{node.runtime_name}` ({node.runtime_id})"
+    mcp_host_input = sys.stdin.fileno() if mcp_host_input_fd is None else mcp_host_input_fd
+    mcp_host_output_stream = sys.stdout.buffer if mcp_host_output is None else mcp_host_output
 
     local_api_stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -64,27 +67,30 @@ def pipe_stdio_to_the_runtimes_mcp_server(
             local_api_stream.sendall(MCP_STDIO_UPGRADE_REQUEST)
             first_streamed_bytes = _bytes_after_the_switching_protocols_head(local_api_stream)
         except (OSError, _UpgradeRefused) as failure:
-            print(f"error: {runtime_named} did not open its MCP stream: {failure}", file=sys.stderr)
+            print(
+                f"error: {runtime_name_and_id_for_stderr} did not open its MCP stream: {failure}",
+                file=sys.stderr,
+            )
             return 1
 
         mcp_host_input_ended = threading.Event()
         threading.Thread(
             target=_copy_mcp_host_input_to_the_runtime,
-            args=(mcp_host_input_fd, local_api_stream, mcp_host_input_ended),
+            args=(mcp_host_input, local_api_stream, mcp_host_input_ended),
             name="streamlib-mcp-stdin-to-runtime",
             daemon=True,
         ).start()
 
         try:
             _copy_the_runtime_to_mcp_host_output(
-                local_api_stream, first_streamed_bytes, mcp_host_output
+                local_api_stream, first_streamed_bytes, mcp_host_output_stream
             )
         except BrokenPipeError:
             # The host stopped reading; nobody is left to answer.
             return 0
         if mcp_host_input_ended.is_set():
             return 0
-        print(f"error: {runtime_named} closed its MCP stream.", file=sys.stderr)
+        print(f"error: {runtime_name_and_id_for_stderr} closed its MCP stream.", file=sys.stderr)
         return 1
     finally:
         local_api_stream.close()

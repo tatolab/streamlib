@@ -488,3 +488,21 @@ impl LocalApiServedOnAFreshSocket {
         drop(self.running_server.take());
     }
 }
+
+/// Send `request_head` over `stream` and read the response head back, byte by
+/// byte so nothing an upgraded protocol streams after it is consumed.
+pub(crate) async fn response_head_over_the_socket(
+    stream: &mut ::tokio::net::UnixStream,
+    request_head: &str,
+) -> String {
+    use ::tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    stream.write_all(request_head.as_bytes()).await.unwrap();
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        stream.read_exact(&mut byte).await.unwrap();
+        head.push(byte[0]);
+    }
+    String::from_utf8(head).unwrap()
+}

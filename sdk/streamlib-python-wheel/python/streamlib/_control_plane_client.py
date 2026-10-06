@@ -170,7 +170,8 @@ def resolve_requested_live_node(requested_node: "Optional[str]") -> "NodeRegistr
     `--node` resolves that node from the registry, matching a runtime name
     first and a runtime_id second — the name is the one an app chooses and
     keeps across runs. Without it, the sole live node, which is the
-    zero-ceremony case. Zero live nodes raises `NoLiveNodeError`; more than one
+    zero-ceremony case. Zero live nodes raises `NoLiveNodeError`, `--node` or
+    not; a `--node` that matches nothing, more than one
     matching `--node`, or more than one live node with no `--node` given, is an
     error that lists what it found.
     """
@@ -178,17 +179,17 @@ def resolve_requested_live_node(requested_node: "Optional[str]") -> "NodeRegistr
 
     nodes = live_nodes()
 
-    if requested_node:
-        return _sole_node_matching(nodes, requested_node)
-
-    if len(nodes) == 1:
-        return nodes[0]
-
     if not nodes:
         raise NoLiveNodeError(
             "no running StreamLib nodes found.\n"
             "Start one with `streamlib dev`."
         )
+
+    if requested_node:
+        return _sole_node_matching(nodes, requested_node)
+
+    if len(nodes) == 1:
+        return nodes[0]
 
     raise ControlPlaneError(
         f"{len(nodes)} live nodes — pick one with `--node <runtime name or id>`."

@@ -67,7 +67,11 @@ class ScriptedLocalApiSocket:
         self._script_thread.start()
 
     def _serve(self, script: Callable[[socket.socket], None]) -> None:
-        connection, _ = self._listener.accept()
+        try:
+            connection, _ = self._listener.accept()
+        except OSError:
+            # Closed with nothing connected: a test that never opened the stream.
+            return
         connection.settimeout(SCRIPT_TIMEOUT_SECONDS)
         try:
             script(connection)
@@ -263,11 +267,26 @@ def test_no_live_runtime_is_a_one_line_refusal_naming_streamlib_nodes(monkeypatc
     assert "`streamlib nodes`" in stderr_lines[0]
 
 
-def test_a_node_flag_naming_no_live_runtime_is_refused_naming_it(monkeypatch, capfd):
+def test_no_live_runtime_is_the_same_refusal_when_node_names_one(monkeypatch, capfd):
     monkeypatch.setattr(_node_registry, "live_nodes", lambda: [])
 
     assert cli.main(["mcp", "--node", "absent-runtime"]) == 1
 
     captured = capfd.readouterr()
     assert captured.out == ""
+    stderr_lines = captured.err.splitlines()
+    assert len(stderr_lines) == 1, stderr_lines
+    assert "`streamlib nodes`" in stderr_lines[0]
+
+
+def test_a_node_flag_matching_no_live_runtime_is_refused_naming_it(
+    scripted_live_runtime, capfd
+):
+    scripted_live_runtime(lambda connection: None)
+
+    assert cli.main(["mcp", "--node", "absent-runtime"]) == 1
+
+    captured = capfd.readouterr()
+    assert captured.out == ""
     assert "absent-runtime" in captured.err
+    assert SCRIPTED_RUNTIME_NAME in captured.err, "the refusal lists the live runtimes"

@@ -905,7 +905,7 @@ pub(crate) mod tests {
 
     /// The control vocabulary. This is the whole of it —
     /// `tools/list` is asserted equal to this, not merely a superset.
-    pub(crate) const CONTROL_TOOL_NAMES: &[&str] = &[
+    const CONTROL_TOOL_NAMES: &[&str] = &[
         "graph",
         "tap",
         "logs",
@@ -916,6 +916,21 @@ pub(crate) mod tests {
         "connect",
         "disconnect",
     ];
+
+    /// Exact, not a superset: the catalog IS the control vocabulary, so a
+    /// tool appearing that is not in this list is a surface the plan does not
+    /// grant.
+    pub(crate) fn assert_names_exactly_the_control_vocabulary(
+        mut advertised_tool_names: Vec<&str>,
+    ) {
+        advertised_tool_names.sort_unstable();
+        let mut control_tool_names = CONTROL_TOOL_NAMES.to_vec();
+        control_tool_names.sort_unstable();
+        assert_eq!(
+            advertised_tool_names, control_tool_names,
+            "tools/list must advertise exactly the control vocabulary"
+        );
+    }
 
     /// The authority the MCP client names in `Host`; the socket path is the
     /// address.
@@ -1243,20 +1258,11 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn tools_list_advertises_exactly_the_control_vocabulary() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
-        let mut names: Vec<&str> = tools
-            .iter()
-            .filter_map(|tool| tool["name"].as_str())
-            .collect();
-        names.sort_unstable();
-        let mut control_tool_names = CONTROL_TOOL_NAMES.to_vec();
-        control_tool_names.sort_unstable();
-
-        // Exact, not a superset: the catalog IS the control vocabulary, so a
-        // tool appearing here that is not in this list is a surface the plan
-        // does not grant.
-        assert_eq!(
-            names, control_tool_names,
-            "tools/list must advertise exactly the control vocabulary"
+        assert_names_exactly_the_control_vocabulary(
+            tools
+                .iter()
+                .filter_map(|tool| tool["name"].as_str())
+                .collect(),
         );
         for tool in tools {
             assert_eq!(
