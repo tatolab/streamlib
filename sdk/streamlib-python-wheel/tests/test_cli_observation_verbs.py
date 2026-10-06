@@ -1380,31 +1380,36 @@ def test_a_retired_flag_is_a_usage_error(isolated_registry, capsys, verb, retire
     assert retired_flag in capsys.readouterr().err
 
 
+# Each flag carries a value: argparse refuses a value-taking flag given none
+# with the same exit status, so a bare flag would pass whether or not the verb
+# still took it.
 @pytest.mark.parametrize(
-    "arguments_ending_in_a_network_address_flag",
+    "verb_arguments, network_address_flag, network_address",
     [
-        ("run", "--host"),
-        ("run", "--port"),
-        ("run", "-p"),
-        ("dev", "--host"),
-        ("dev", "--port"),
-        ("dev", "-p"),
-        ("graph", "--url"),
-        ("tap", "rig/pattern/video", "--url"),
-        ("logs", "--url"),
-        ("exchange", "s#1", "--out", "unwritten", "--url"),
+        (("run",), "--host", "127.0.0.1"),
+        (("run",), "--port", "9100"),
+        (("run",), "-p", "9100"),
+        (("dev",), "--host", "127.0.0.1"),
+        (("dev",), "--port", "9100"),
+        (("dev",), "-p", "9100"),
+        (("graph",), "--url", "http://127.0.0.1:9100"),
+        (("tap", "rig/pattern/video"), "--url", "http://127.0.0.1:9100"),
+        (("logs",), "--url", "http://127.0.0.1:9100"),
+        (("exchange", "s#1", "--out", "unwritten"), "--url", "http://127.0.0.1:9100"),
     ],
 )
 def test_no_verb_takes_a_network_address_for_the_control_plane(
-    isolated_registry, capsys, arguments_ending_in_a_network_address_flag
+    isolated_registry, capsys, verb_arguments, network_address_flag, network_address
 ):
     """Control is reachable only through a node's local API socket, so a launch
     verb binds no address and an observation verb dials none."""
     with pytest.raises(SystemExit) as usage_error:
-        cli.main(list(arguments_ending_in_a_network_address_flag))
+        cli.main([*verb_arguments, network_address_flag, network_address])
 
     assert usage_error.value.code == 2
-    assert arguments_ending_in_a_network_address_flag[-1] in capsys.readouterr().err
+    refusal = capsys.readouterr().err
+    assert "unrecognized arguments" in refusal, refusal
+    assert network_address_flag in refusal, refusal
 
 
 def test_a_verb_targets_a_node_by_its_runtime_name(
