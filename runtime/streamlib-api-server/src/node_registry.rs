@@ -5,7 +5,7 @@
 //!
 //! A runtime that hosts an [`crate::ApiServerProcessor`] writes one JSON entry
 //! per runtime into `<runtime directory>/nodes/<runtime_id>.json` once its
-//! listeners bind, and removes it on clean teardown. The runtime directory
+//! local API socket binds, and removes it on clean teardown. The runtime directory
 //! is the one the engine resolved and checked as the runtime started. A CLI discovers
 //! live control planes by scanning that directory. Entry existence is tied to
 //! the control endpoint existing: a runtime without an ApiServer never appears.
@@ -37,8 +37,6 @@ pub struct NodeRegistryEntry {
     /// The name the runtime's tap channels carry — stable across runs of one
     /// app, and what `--node` resolves.
     pub runtime_name: String,
-    /// The control plane's reachable base URL (`http://127.0.0.1:<bound_port>`).
-    pub control_url: String,
     /// The Unix socket the runtime's local API is served on, openable only by its user.
     pub local_api_socket_path: PathBuf,
     /// OS process id hosting the control plane.
@@ -49,19 +47,17 @@ pub struct NodeRegistryEntry {
 
 impl NodeRegistryEntry {
     /// Build an entry for the runtime named `runtime_name` reachable at
-    /// `control_url` and `local_api_socket_path`, stamping the current process
-    /// id and a hint derived from this process's arg0 and cwd.
+    /// `local_api_socket_path`, stamping the current process id and a hint
+    /// derived from this process's arg0 and cwd.
     pub fn for_current_process(
         runtime_id: String,
         runtime_name: &RuntimeName,
-        control_url: String,
         local_api_socket_path: PathBuf,
     ) -> Self {
         Self {
             schema_version: NODE_REGISTRY_SCHEMA_VERSION,
             runtime_id,
             runtime_name: runtime_name.as_str().to_string(),
-            control_url,
             local_api_socket_path,
             pid: std::process::id(),
             hint: current_process_hint(),
@@ -316,12 +312,11 @@ mod tests {
         f(&runtime_directory.path().join("nodes"))
     }
 
-    fn sample_entry(runtime_id: &str, port: u16) -> NodeRegistryEntry {
+    fn sample_entry(runtime_id: &str) -> NodeRegistryEntry {
         NodeRegistryEntry {
             schema_version: NODE_REGISTRY_SCHEMA_VERSION,
             runtime_id: runtime_id.to_string(),
-            runtime_name: format!("rig-example-{port}"),
-            control_url: format!("http://127.0.0.1:{port}"),
+            runtime_name: format!("rig-example-{runtime_id}"),
             local_api_socket_path: PathBuf::from(format!(
                 "/tmp/streamlib-1000/local-api-{runtime_id}.sock"
             )),
@@ -333,7 +328,7 @@ mod tests {
     #[test]
     fn write_then_scan_round_trips_the_entry_in_the_registry_directory() {
         with_isolated_registry_directory(|registry_directory| {
-            let entry = sample_entry("Rnode-alpha", 8080);
+            let entry = sample_entry("Rnode-alpha");
             let path = write_entry(registry_directory, &entry).expect("write");
             assert!(
                 path.starts_with(registry_directory),
@@ -349,7 +344,7 @@ mod tests {
 
     #[test]
     fn schema_version_survives_a_serde_round_trip() {
-        let entry = sample_entry("Rnode-beta", 9090);
+        let entry = sample_entry("Rnode-beta");
         let json = serde_json::to_string(&entry).expect("encode");
         assert!(
             json.contains("\"schema_version\""),
@@ -368,7 +363,7 @@ mod tests {
     #[test]
     fn remove_entry_deletes_the_file_and_is_idempotent() {
         with_isolated_registry_directory(|registry_directory| {
-            let entry = sample_entry("Rnode-gamma", 7000);
+            let entry = sample_entry("Rnode-gamma");
             write_entry(registry_directory, &entry).expect("write");
             assert_eq!(scan_entries(registry_directory).expect("scan").len(), 1);
 
@@ -387,7 +382,7 @@ mod tests {
                     .expect("read missing")
                     .is_none()
             );
-            let entry = sample_entry("Rnode-delta", 6001);
+            let entry = sample_entry("Rnode-delta");
             write_entry(registry_directory, &entry).expect("write");
             assert_eq!(
                 read_entry(registry_directory, &entry.runtime_id).expect("read"),
@@ -399,7 +394,7 @@ mod tests {
     #[test]
     fn scan_skips_a_corrupt_entry_and_still_returns_the_valid_ones() {
         with_isolated_registry_directory(|registry_directory| {
-            let good = sample_entry("Rgood", 5000);
+            let good = sample_entry("Rgood");
             write_entry(registry_directory, &good).expect("write good");
             let corrupt_path = registry_directory.join("Rcorrupt.json");
             std::fs::write(&corrupt_path, b"not json").expect("write corrupt");
@@ -412,7 +407,7 @@ mod tests {
     #[test]
     fn scan_skips_an_entry_with_an_unrecognized_schema_version() {
         with_isolated_registry_directory(|registry_directory| {
-            let mut future = sample_entry("Rfuture", 5100);
+            let mut future = sample_entry("Rfuture");
             future.schema_version = NODE_REGISTRY_SCHEMA_VERSION + 1;
             write_entry(registry_directory, &future).expect("write future");
             assert!(
@@ -425,7 +420,7 @@ mod tests {
     #[test]
     fn read_entry_rejects_an_entry_with_an_unrecognized_schema_version() {
         with_isolated_registry_directory(|registry_directory| {
-            let mut future = sample_entry("Rfuture-read", 5200);
+            let mut future = sample_entry("Rfuture-read");
             future.schema_version = NODE_REGISTRY_SCHEMA_VERSION + 1;
             write_entry(registry_directory, &future).expect("write future");
             let error = read_entry(registry_directory, &future.runtime_id)
@@ -437,8 +432,8 @@ mod tests {
         });
     }
 
-    /// Entries are per run, so a schema-2 entry — a `control_url` and no socket —
-    /// has nothing to migrate: it is refused by its version, not by the field it lacks.
+    /// Entries are per run, so a schema-2 entry — one with no socket — has
+    /// nothing to migrate: it is refused by its version, not by the field it lacks.
     #[test]
     fn a_schema_two_entry_is_refused_by_its_version() {
         with_isolated_registry_directory(|registry_directory| {
@@ -447,7 +442,6 @@ mod tests {
                 "schema_version": 2,
                 "runtime_id": "Rschema-two",
                 "runtime_name": "rig-schema-two",
-                "control_url": "http://127.0.0.1:9000",
                 "pid": 4242,
                 "hint": "streamlib (/tmp/example)",
             });
@@ -474,15 +468,35 @@ mod tests {
         });
     }
 
+    /// The socket is the one way an entry says where to reach its runtime: the
+    /// wire form names nothing a network client could dial.
     #[test]
-    fn the_wire_form_carries_the_local_api_socket_path() {
-        let entry = sample_entry("Rnode-socket", 9100);
+    fn the_wire_form_carries_the_local_api_socket_path_and_nothing_else_to_dial() {
+        let entry = sample_entry("Rnode-socket");
         let wire: serde_json::Value = serde_json::to_value(&entry).unwrap();
         assert_eq!(
             wire["local_api_socket_path"],
             "/tmp/streamlib-1000/local-api-Rnode-socket.sock"
         );
         assert_eq!(wire["schema_version"], 3);
+        let mut field_names: Vec<&str> = wire
+            .as_object()
+            .expect("an entry encodes as a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        field_names.sort_unstable();
+        assert_eq!(
+            field_names,
+            [
+                "hint",
+                "local_api_socket_path",
+                "pid",
+                "runtime_id",
+                "runtime_name",
+                "schema_version"
+            ]
+        );
     }
 
     #[test]

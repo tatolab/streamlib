@@ -13,11 +13,11 @@ agent discovering an app's effects reads.
 import json
 import sys
 import threading
-import urllib.request
 
 import streamlib
 from streamlib import Stream, compile_stream_to_graph, stream
-from this_processes_node_registry_entry import this_processes_control_url
+from streamlib._control_plane_client import _request_over_the_local_api_socket
+from this_processes_node_registry_entry import this_processes_local_api_socket
 
 import processor_config_catalog_probes as probes
 
@@ -47,10 +47,15 @@ def main() -> None:
             runtime.wait_until_every_processor_is_running(
                 timeout=GRAPH_READY_TIMEOUT_SECONDS
             )
-            registry_url = f"{this_processes_control_url()}/api/registry"
-            # A loopback URL this app minted, read back off itself.
-            with urllib.request.urlopen(registry_url, timeout=READ_TIMEOUT_SECONDS) as response:
-                served = json.load(response)
+            answered = _request_over_the_local_api_socket(
+                this_processes_local_api_socket(),
+                method="GET",
+                path="/api/registry",
+                timeout_seconds=READ_TIMEOUT_SECONDS,
+            )
+            if answered.status != 200:
+                raise RuntimeError(f"GET /api/registry answered {answered.status}")
+            served = json.loads(answered.body)
             catalog = {
                 entry["type"]: entry
                 for entry in served["nodes"]

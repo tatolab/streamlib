@@ -26,9 +26,9 @@ from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
 from ._control_plane_client import (
-    ControlPlaneEndpoint,
     ControlPlaneError,
     ExchangedSurfaceImage,
+    LocalApiSocket,
     SurfaceImageExchangeRefusal,
     call_tool,
     fetch_surface_image_png_bytes,
@@ -112,10 +112,10 @@ def _write_exchanged_surface_image(
 
 
 def exchange_one_published_surface_id_into_directory(
-    endpoint: ControlPlaneEndpoint, published_surface_id: str, output_directory: Path
+    local_api_socket: LocalApiSocket, published_surface_id: str, output_directory: Path
 ) -> Path:
     """Exchange one id for its frame's exact pixels, written as a PNG."""
-    exchanged = fetch_surface_image_png_bytes(endpoint, published_surface_id)
+    exchanged = fetch_surface_image_png_bytes(local_api_socket, published_surface_id)
     return _write_exchanged_surface_image(
         output_directory,
         f"{_file_name_stem_for_surface_id(published_surface_id)}.png",
@@ -124,7 +124,7 @@ def exchange_one_published_surface_id_into_directory(
 
 
 def _tapped_bag_frames(
-    endpoint: ControlPlaneEndpoint, channel: str, requested_bag_count: int
+    local_api_socket: LocalApiSocket, channel: str, requested_bag_count: int
 ) -> "list[TappedBagFrame]":
     """One `tap` call's bags, as the framed bytes the channel carried.
 
@@ -134,7 +134,7 @@ def _tapped_bag_frames(
     away the readable bags that came before it.
     """
     result_text = call_tool(
-        endpoint, "tap", {"channel": channel, "count": max(1, requested_bag_count)}
+        local_api_socket, "tap", {"channel": channel, "count": max(1, requested_bag_count)}
     )
     try:
         tap_tool_result = json.loads(result_text)
@@ -203,7 +203,7 @@ def _surface_id_in_bag(
 
 
 def sample_channel_into_exchanged_surface_images(
-    endpoint: ControlPlaneEndpoint,
+    local_api_socket: LocalApiSocket,
     channel: str,
     output_directory: Path,
     *,
@@ -234,7 +234,7 @@ def sample_channel_into_exchanged_surface_images(
             tap_rounds += 1
             still_wanted = wanted_image_count - len(written_image_paths)
             for tapped_bag in _tapped_bag_frames(
-                endpoint, channel, still_wanted * every_nth_bag
+                local_api_socket, channel, still_wanted * every_nth_bag
             ):
                 selected = bags_examined % every_nth_bag == 0
                 bags_examined += 1
@@ -265,7 +265,7 @@ def sample_channel_into_exchanged_surface_images(
                     continue
 
                 try:
-                    exchanged = fetch_surface_image_png_bytes(endpoint, published_surface_id)
+                    exchanged = fetch_surface_image_png_bytes(local_api_socket, published_surface_id)
                 except SurfaceImageExchangeRefusal as refusal:
                     # A recycled frame is the one refusal that composes: the id
                     # was real and its slot has moved on, so the next bag is the

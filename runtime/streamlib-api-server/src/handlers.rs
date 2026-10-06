@@ -28,7 +28,6 @@ use tracing::Level;
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::auth::{ApiServerBearerToken, ForbiddenResponse, UnauthorizedResponse};
 use crate::state::{
     ApiDoc, AppState, ErrorResponse, RuntimeShutdownAcceptedResponse, RuntimeShutdownRequest,
 };
@@ -37,22 +36,17 @@ use crate::state::{
 // Router Construction
 // ============================================================================
 
-/// The REST routes that are open regardless of the auth posture.
-fn always_open_routes() -> OpenApiRouter<AppState> {
+/// The REST routes the control plane serves, each with its OpenAPI registration.
+fn control_plane_rest_routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::new()
         .routes(routes!(health))
         .routes(routes!(get_graph))
         .routes(routes!(get_registry))
-}
-
-/// The REST routes the bearer middleware covers when auth is opted in.
-fn bearer_gated_routes() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new()
         .routes(routes!(request_runtime_shutdown))
         .routes(routes!(exchange_published_surface_id_for_png_image))
 }
 
-/// The OpenAPI document for the REST surface, built from the same two route
+/// The OpenAPI document for the REST surface, built from the same route
 /// registrations `build_router` installs.
 ///
 /// The codegen binary reads the spec through here rather than declaring its own
@@ -60,8 +54,7 @@ fn bearer_gated_routes() -> OpenApiRouter<AppState> {
 /// generated client rather than failing a build.
 pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
     OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .merge(always_open_routes())
-        .merge(bearer_gated_routes())
+        .merge(control_plane_rest_routes())
         .split_for_parts()
         .1
 }
@@ -71,37 +64,11 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
 /// The route surface is observation-shaped: a node's graph is defined by its
 /// code, so nothing here creates, replaces, connects, or removes a processor.
 /// `POST /api/runtime/shutdown` is the one route that acts on the node rather
-/// than reporting on it, and it sits behind the bearer-token auth middleware
-/// when `auth_token` is `Some` (auth opted in); with `None` — the
-/// zero-ceremony default — it is open like every other route. The GET routes,
-/// health check, WebSocket event stream, and OpenAPI spec are always open.
-/// `route_layer` binds the auth layer to exactly the routes already on the
-/// protected sub-router, so a later `merge` leaves the open routes ungated.
-pub(crate) fn build_router(
-    runtime: Arc<dyn RuntimeOperations>,
-    auth_token: Option<ApiServerBearerToken>,
-) -> Router {
-    // The read-only tap WebSocket is gated exactly like the shutdown route WHEN
-    // auth is opted in — same bearer middleware, same route_layer binding; the
-    // default (auth off) leaves it open like every other route. This is
-    // mechanism parity, not a trust boundary the tap itself imposes. Clone the
-    // token before it is moved into the protected-route middleware below.
-    let tap_auth_token = auth_token.clone();
-    // The MCP endpoint fronts the same shutdown op as a tool, so it is gated
-    // the same way when auth is opted in.
-    let mcp_auth_token = auth_token.clone();
-
-    let mut protected = bearer_gated_routes();
-    if let Some(auth_token) = auth_token {
-        protected = protected.route_layer(axum::middleware::from_fn_with_state(
-            auth_token,
-            crate::auth::require_bearer_token,
-        ));
-    }
-
+/// than reporting on it. No route asks for a credential: whoever can open the
+/// local API socket may call every one.
+pub(crate) fn build_router(runtime: Arc<dyn RuntimeOperations>) -> Router {
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .merge(always_open_routes())
-        .merge(protected)
+        .merge(control_plane_rest_routes())
         .split_for_parts();
 
     let state = AppState { runtime, openapi };
@@ -115,27 +82,11 @@ pub(crate) fn build_router(
         .on_request(DefaultOnRequest::new().level(Level::DEBUG))
         .on_response(DefaultOnResponse::new().level(Level::DEBUG));
 
-    let mut tap_router = Router::new().route("/ws/tap/{channel}", get(tap_websocket_handler));
-    if let Some(tap_auth_token) = tap_auth_token {
-        tap_router = tap_router.route_layer(axum::middleware::from_fn_with_state(
-            tap_auth_token,
-            crate::auth::require_bearer_token,
-        ));
-    }
-
-    let mut mcp_router = Router::new().route("/mcp", post(crate::mcp::mcp_endpoint));
-    if let Some(mcp_auth_token) = mcp_auth_token {
-        mcp_router = mcp_router.route_layer(axum::middleware::from_fn_with_state(
-            mcp_auth_token,
-            crate::auth::require_bearer_token,
-        ));
-    }
-
     let router = router
         .route("/ws/events", get(websocket_handler))
         .route("/api/openapi.json", get(get_openapi_spec))
-        .merge(tap_router)
-        .merge(mcp_router);
+        .route("/ws/tap/{channel}", get(tap_websocket_handler))
+        .route("/mcp", post(crate::mcp::mcp_endpoint));
 
     router.layer(trace_layer).with_state(state)
 }
@@ -183,8 +134,6 @@ pub(crate) async fn get_graph(
     request_body = RuntimeShutdownRequest,
     responses(
         (status = 202, description = "Shutdown request accepted and handed to the runtime; teardown proceeds asynchronously and is NOT awaited by this response", body = RuntimeShutdownAcceptedResponse),
-        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
-        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 500, description = "The request could not be handed to the runtime", body = ErrorResponse)
     )
 )]
@@ -292,8 +241,6 @@ pub(crate) struct SurfaceImageExchangeQuery {
     ),
     responses(
         (status = 200, description = "The frame as a lossless RGBA8 PNG. `x-streamlib-surface-pixel-width` / `-height` report the surface's own extent, which differs from the image's when a downscale cap applied.", content_type = "image/png"),
-        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
-        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 404, description = "No surface of that id resolves on this node", body = ErrorResponse),
         (status = 410, description = "The id named a frame whose pool slot has since been recycled; tap a newer bag and exchange that", body = ErrorResponse),
         (status = 501, description = "The surface resolves, but its pixel format has no conversion arm in the RHI yet", body = ErrorResponse),
@@ -484,9 +431,7 @@ pub(crate) struct TapQuery {
         ("count" = Option<usize>, Query, description = "Stream exactly this many bags then close; absent streams live until the client disconnects")
     ),
     responses(
-        (status = 101, description = "WebSocket upgraded. Read-only observability tap: each channel bag is forwarded verbatim (FrameHeader-framed) as a binary WS frame with no encode, containerize, or transcode — decoding is the client's concern. To observe a viewable video feed, tap an encoded (h264/h265/jpeg) or container (CMAF/fMP4) channel; a raw video channel carries zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels, and this is not a realtime-video transport (use the WebRTC/display processors)."),
-        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
-        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse)
+        (status = 101, description = "WebSocket upgraded. Read-only observability tap: each channel bag is forwarded verbatim (FrameHeader-framed) as a binary WS frame with no encode, containerize, or transcode — decoding is the client's concern. To observe a viewable video feed, tap an encoded (h264/h265/jpeg) or container (CMAF/fMP4) channel; a raw video channel carries zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels, and this is not a realtime-video transport (use the WebRTC/display processors).")
     )
 )]
 pub(crate) async fn tap_websocket_handler(
@@ -600,14 +545,13 @@ fn truncate_on_char_boundary(mut text: String, max_bytes: usize) -> String {
 }
 
 #[cfg(test)]
-pub(crate) mod router_surface_and_auth_gate_tests {
-    //! What [`build_router`] exposes, and how the bearer gate binds to it.
+pub(crate) mod router_surface_tests {
+    //! What [`build_router`] exposes.
     //!
-    //! Two things are under test. First, the route *surface*: the control plane
-    //! is observation-shaped, so the router must expose no route that mutates
-    //! the graph — a node's graph comes from its code. Second, the auth gate:
-    //! `POST /api/runtime/shutdown` is the one route that acts on the node, and
-    //! it carries the bearer middleware when auth is opted in.
+    //! The control plane is observation-shaped, so the router must expose no
+    //! route that mutates the graph — a node's graph comes from its code. And
+    //! no route asks for a credential: file permission on the local API socket
+    //! is the whole gate.
     //!
     //! The router is the real one; only the `RuntimeOperations` backend is a
     //! stub.
@@ -618,10 +562,7 @@ pub(crate) mod router_surface_and_auth_gate_tests {
         STUB_EXCHANGED_IMAGE_BYTES, STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
     };
     use axum::body::Body;
-    use axum::http::{
-        Request, StatusCode,
-        header::{AUTHORIZATION, CONTENT_TYPE},
-    };
+    use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
     use streamlib::sdk::descriptors::{
         ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
     };
@@ -668,8 +609,6 @@ pub(crate) mod router_surface_and_auth_gate_tests {
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
     }
 
-    const TEST_TOKEN: &str = "test-bearer-secret";
-
     /// The routes this control plane deliberately does not have: every graph
     /// mutation the pre-pivot api-server served. Method + path exactly as they
     /// were, so this reads as the inventory it is.
@@ -682,36 +621,32 @@ pub(crate) mod router_surface_and_auth_gate_tests {
         ("DELETE", "/api/connections/some-id"),
     ];
 
-    fn auth_enabled_router() -> Router {
-        build_router(
-            Arc::new(ControlPlaneRouterStubRuntime::default()),
-            Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
-        )
+    fn control_plane_router_over(runtime: ControlPlaneRouterStubRuntime) -> Router {
+        build_router(Arc::new(runtime))
     }
 
-    /// Router in the default (auth-off) mode — every route is open with no token.
-    pub(crate) fn auth_disabled_router() -> Router {
-        build_router(Arc::new(ControlPlaneRouterStubRuntime::default()), None)
-    }
-
-    async fn status_on(router: Router, request: Request<Body>) -> StatusCode {
-        router.oneshot(request).await.unwrap().status()
+    /// The real router over a default stub runtime.
+    pub(crate) fn control_plane_router_over_a_stub_runtime() -> Router {
+        control_plane_router_over(ControlPlaneRouterStubRuntime::default())
     }
 
     async fn status_of(request: Request<Body>) -> StatusCode {
-        status_on(auth_enabled_router(), request).await
+        control_plane_router_over_a_stub_runtime()
+            .oneshot(request)
+            .await
+            .unwrap()
+            .status()
     }
 
     fn runtime_shutdown_body() -> Body {
         Body::from(serde_json::json!({ "reason": "operator asked" }).to_string())
     }
 
-    fn bearer(token: &str) -> String {
-        format!("Bearer {token}")
-    }
-
-    async fn json_body_on(router: Router, request: Request<Body>) -> serde_json::Value {
-        let response = router.oneshot(request).await.unwrap();
+    async fn json_body_of(request: Request<Body>) -> serde_json::Value {
+        let response = control_plane_router_over_a_stub_runtime()
+            .oneshot(request)
+            .await
+            .unwrap();
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -719,9 +654,6 @@ pub(crate) mod router_surface_and_auth_gate_tests {
     }
 
     /// The load-bearing surface assertion: no graph-mutation route is served.
-    /// Checked with auth OFF so a 401 from the bearer gate can never be
-    /// mistaken for the route's absence — with the gate out of the way, only a
-    /// genuinely unrouted path answers 404/405.
     #[tokio::test]
     async fn the_router_serves_no_graph_mutation_route() {
         for (method, uri) in DELETED_GRAPH_MUTATION_ROUTES {
@@ -731,7 +663,7 @@ pub(crate) mod router_surface_and_auth_gate_tests {
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from("{}"))
                 .unwrap();
-            let status = status_on(auth_disabled_router(), request).await;
+            let status = status_of(request).await;
             assert!(
                 status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED,
                 "{method} {uri} must not be routed; got {status}"
@@ -748,7 +680,7 @@ pub(crate) mod router_surface_and_auth_gate_tests {
             .uri("/api/openapi.json")
             .body(Body::empty())
             .unwrap();
-        let spec = json_body_on(auth_enabled_router(), request).await;
+        let spec = json_body_of(request).await;
         let paths = &spec["paths"];
 
         // Positive control. Indexing a `Value` yields `Null` for a missing key
@@ -806,7 +738,7 @@ pub(crate) mod router_surface_and_auth_gate_tests {
             .uri("/api/registry")
             .body(Body::empty())
             .unwrap();
-        let served = json_body_on(auth_enabled_router(), request).await;
+        let served = json_body_of(request).await;
 
         let probe = served["nodes"]
             .as_array()
@@ -828,7 +760,7 @@ pub(crate) mod router_surface_and_auth_gate_tests {
             .uri("/api/openapi.json")
             .body(Body::empty())
             .unwrap();
-        let served = json_body_on(auth_enabled_router(), request).await;
+        let served = json_body_of(request).await;
         let generated = serde_json::to_value(control_plane_openapi_spec())
             .expect("the generated spec serializes");
         assert_eq!(
@@ -838,9 +770,13 @@ pub(crate) mod router_surface_and_auth_gate_tests {
     }
 
     #[tokio::test]
-    async fn open_routes_need_no_authorization_header() {
-        let open = ["/health", "/api/registry", "/api/openapi.json"];
-        for uri in open {
+    async fn the_observation_routes_answer_ok() {
+        for uri in [
+            "/health",
+            "/api/graph",
+            "/api/registry",
+            "/api/openapi.json",
+        ] {
             let request = Request::builder()
                 .method("GET")
                 .uri(uri)
@@ -849,30 +785,48 @@ pub(crate) mod router_surface_and_auth_gate_tests {
             assert_eq!(
                 status_of(request).await,
                 StatusCode::OK,
-                "GET {uri} must stay open (no bearer token)"
+                "GET {uri} must answer 200"
             );
         }
     }
 
+    /// File permission on the local API socket is the whole gate, so a request
+    /// carrying no credential reaches every route — the one that acts on the
+    /// node included — rather than a 401 or 403.
     #[tokio::test]
-    async fn graph_is_open_and_reaches_the_runtime() {
-        let request = Request::builder()
-            .method("GET")
-            .uri("/api/graph")
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn runtime_shutdown_rejects_a_missing_token_with_401() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/runtime/shutdown")
-            .header(CONTENT_TYPE, "application/json")
-            .body(runtime_shutdown_body())
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::UNAUTHORIZED);
+    async fn no_route_asks_for_a_credential() {
+        let requests_carrying_no_credential = [
+            ("POST", "/api/runtime/shutdown".to_string(), "{}"),
+            (
+                "GET",
+                exchange_uri(STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED),
+                "",
+            ),
+            ("GET", "/ws/tap/some-channel".to_string(), ""),
+            (
+                "POST",
+                "/mcp".to_string(),
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+            ),
+        ];
+        for (method, uri, body) in requests_carrying_no_credential {
+            let request = Request::builder()
+                .method(method)
+                .uri(&uri)
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            let status = status_of(request).await;
+            assert!(
+                ![
+                    StatusCode::UNAUTHORIZED,
+                    StatusCode::FORBIDDEN,
+                    StatusCode::NOT_FOUND
+                ]
+                .contains(&status),
+                "{method} {uri} must reach its handler with no credential; got {status}"
+            );
+        }
     }
 
     /// The shutdown request must reach the runtime handle — a 202 alone would
@@ -880,14 +834,13 @@ pub(crate) mod router_surface_and_auth_gate_tests {
     /// and it must answer 202 (accepted), never 200, because teardown is not
     /// awaited.
     #[tokio::test]
-    async fn runtime_shutdown_with_token_is_202_and_reaches_the_runtime() {
+    async fn runtime_shutdown_is_202_and_reaches_the_runtime() {
         let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(runtime, Some(ApiServerBearerToken::from_secret(TEST_TOKEN)));
+        let router = build_router(runtime);
         let request = Request::builder()
             .method("POST")
             .uri("/api/runtime/shutdown")
-            .header(AUTHORIZATION, bearer(TEST_TOKEN))
             .header(CONTENT_TYPE, "application/json")
             .body(runtime_shutdown_body())
             .unwrap();
@@ -907,43 +860,13 @@ pub(crate) mod router_surface_and_auth_gate_tests {
         );
     }
 
-    /// A wrong token is a 403 (present but invalid), distinct from the 401 a
-    /// missing token earns.
-    #[tokio::test]
-    async fn runtime_shutdown_with_a_wrong_token_is_403() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/runtime/shutdown")
-            .header(AUTHORIZATION, bearer("not-the-secret"))
-            .header(CONTENT_TYPE, "application/json")
-            .body(runtime_shutdown_body())
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::FORBIDDEN);
-    }
-
-    /// The zero-ceremony default: auth off leaves the shutdown route open.
-    #[tokio::test]
-    async fn runtime_shutdown_is_open_with_auth_off() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/runtime/shutdown")
-            .header(CONTENT_TYPE, "application/json")
-            .body(runtime_shutdown_body())
-            .unwrap();
-        assert_eq!(
-            status_on(auth_disabled_router(), request).await,
-            StatusCode::ACCEPTED,
-            "POST /api/runtime/shutdown must be open with auth off (no token)"
-        );
-    }
-
     /// An omitted `reason` is unspecified, not a 400 — the request is the
     /// point, the attribution is a courtesy.
     #[tokio::test]
     async fn runtime_shutdown_without_a_reason_is_accepted_as_unspecified() {
         let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(runtime, None);
+        let router = build_router(runtime);
         let request = Request::builder()
             .method("POST")
             .uri("/api/runtime/shutdown")
@@ -958,60 +881,9 @@ pub(crate) mod router_surface_and_auth_gate_tests {
         assert_eq!(*recorded.lock(), vec![String::new()]);
     }
 
-    fn tap_ws_request() -> Request<Body> {
-        // A plain GET (no upgrade headers): enough to exercise the bearer gate,
-        // which runs as a `route_layer` BEFORE the WS upgrade extractor.
-        Request::builder()
-            .method("GET")
-            .uri("/ws/tap/some-channel")
-            .body(Body::empty())
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn tap_ws_rejects_missing_token_with_401_when_auth_on() {
-        // With auth opted in, the read-only tap is gated exactly like the
-        // shutdown route — mechanism parity, not a trust boundary the tap
-        // imposes. Deleting the tap_router `.route_layer(...)` flips this from
-        // 401 to the WS extractor's own (non-401) rejection, going red here.
-        assert_eq!(status_of(tap_ws_request()).await, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn tap_ws_with_token_clears_the_auth_gate() {
-        // A valid token passes the gate; the request then reaches the WS handler,
-        // whose upgrade extractor rejects this non-upgrade GET with a non-401
-        // status — proving the gate admitted it rather than rejecting it.
-        let mut request = tap_ws_request();
-        request
-            .headers_mut()
-            .insert(AUTHORIZATION, bearer(TEST_TOKEN).try_into().unwrap());
-        assert_ne!(status_of(request).await, StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn tap_ws_is_open_with_auth_off() {
-        assert_ne!(
-            status_on(auth_disabled_router(), tap_ws_request()).await,
-            StatusCode::UNAUTHORIZED,
-            "GET /ws/tap/{{channel}} must be reachable with auth off (no token)"
-        );
-    }
-
     // ------------------------------------------------------------------
     // Surface exchange: a published surface id in, image bytes out
     // ------------------------------------------------------------------
-
-    fn router_with_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
-        build_router(
-            Arc::new(runtime),
-            Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
-        )
-    }
-
-    fn router_without_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
-        build_router(Arc::new(runtime), None)
-    }
 
     fn exchange_request(uri: &str) -> Request<Body> {
         Request::builder()
@@ -1032,7 +904,7 @@ pub(crate) mod router_surface_and_auth_gate_tests {
     async fn the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image() {
         let runtime = ControlPlaneRouterStubRuntime::default();
         let recorded = runtime.exchange.recorded_calls.clone();
-        let response = router_without_bearer_auth(runtime)
+        let response = control_plane_router_over(runtime)
             .oneshot(exchange_request(&exchange_uri(
                 STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
             )))
@@ -1082,7 +954,7 @@ pub(crate) mod router_surface_and_auth_gate_tests {
     async fn the_downscale_cap_reaches_the_operation_from_the_query_string() {
         let runtime = ControlPlaneRouterStubRuntime::default();
         let recorded = runtime.exchange.recorded_calls.clone();
-        let status = router_without_bearer_auth(runtime)
+        let status = control_plane_router_over(runtime)
             .oneshot(exchange_request(&format!(
                 "{}?downscale_long_edge_pixel_cap=1568",
                 exchange_uri(STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED)
@@ -1108,7 +980,7 @@ pub(crate) mod router_surface_and_auth_gate_tests {
             exchange: StubSurfaceExchange::refusing_as_recycled(STUB_EXCHANGED_FRAME_SURFACE_ID),
             ..ControlPlaneRouterStubRuntime::default()
         };
-        let response = router_without_bearer_auth(runtime)
+        let response = control_plane_router_over(runtime)
             .oneshot(exchange_request(&exchange_uri(
                 STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
             )))
@@ -1124,75 +996,6 @@ pub(crate) mod router_surface_and_auth_gate_tests {
         assert!(
             reported.contains(STUB_EXCHANGED_FRAME_SURFACE_ID),
             "the refusal must name the id asked for: {reported}"
-        );
-    }
-
-    /// The exchange joins the bearer-gated set beside the tap WebSocket —
-    /// same middleware, same binding. Deleting it from `bearer_gated_routes`
-    /// flips this from 401 to 200.
-    #[tokio::test]
-    async fn the_exchange_route_rejects_a_missing_token_with_401_when_auth_on() {
-        assert_eq!(
-            status_on(
-                router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
-                exchange_request(&exchange_uri(
-                    STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED
-                ))
-            )
-            .await,
-            StatusCode::UNAUTHORIZED
-        );
-    }
-
-    #[tokio::test]
-    async fn the_exchange_route_rejects_a_wrong_token_with_403() {
-        let mut request = exchange_request(&exchange_uri(
-            STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-        ));
-        request
-            .headers_mut()
-            .insert(AUTHORIZATION, bearer("not-the-secret").try_into().unwrap());
-        assert_eq!(
-            status_on(
-                router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
-                request
-            )
-            .await,
-            StatusCode::FORBIDDEN
-        );
-    }
-
-    #[tokio::test]
-    async fn the_exchange_route_serves_the_image_with_a_valid_token() {
-        let mut request = exchange_request(&exchange_uri(
-            STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
-        ));
-        request
-            .headers_mut()
-            .insert(AUTHORIZATION, bearer(TEST_TOKEN).try_into().unwrap());
-        assert_eq!(
-            status_on(
-                router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
-                request
-            )
-            .await,
-            StatusCode::OK
-        );
-    }
-
-    /// The zero-ceremony default: with auth off the exchange is open like
-    /// every other observation route.
-    #[tokio::test]
-    async fn the_exchange_route_is_open_with_auth_off() {
-        assert_eq!(
-            status_on(
-                auth_disabled_router(),
-                exchange_request(&exchange_uri(
-                    STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED
-                ))
-            )
-            .await,
-            StatusCode::OK
         );
     }
 
@@ -1228,9 +1031,9 @@ mod control_plane_request_trace_level_tests {
     //! nothing to the app's own log. The trace is levelled, not deleted, so
     //! `RUST_LOG=tower_http=debug` brings all three records back.
 
-    use super::router_surface_and_auth_gate_tests::auth_disabled_router;
+    use super::router_surface_tests::control_plane_router_over_a_stub_runtime;
     use super::*;
-    use crate::control_plane_stub_support::CapturedTracingRecords;
+    use crate::control_plane_stub_support::CapturedTracingTargets;
     use axum::body::Body;
     use axum::http::Request;
     use serial_test::serial;
@@ -1242,7 +1045,7 @@ mod control_plane_request_trace_level_tests {
             .build()
             .expect("a current-thread runtime builds");
         request_runtime.block_on(async {
-            let response = auth_disabled_router()
+            let response = control_plane_router_over_a_stub_runtime()
                 .oneshot(
                     Request::builder()
                         .uri("/api/graph")
@@ -1255,14 +1058,13 @@ mod control_plane_request_trace_level_tests {
         });
     }
 
-    fn tower_http_trace_targets_under(env_filter_directives: &str) -> Vec<String> {
-        CapturedTracingRecords::captured_from_the_second_of_two_runs(
+    fn tower_http_trace_targets_under(env_filter_directives: &str) -> Vec<&'static str> {
+        CapturedTracingTargets::captured_from_the_second_of_two_runs(
             env_filter_directives,
             serve_one_graph_request,
         )
-        .iter()
-        .filter(|record| record.target.starts_with("tower_http"))
-        .map(|record| record.target.clone())
+        .into_iter()
+        .filter(|target| target.starts_with("tower_http"))
         .collect()
     }
 
@@ -1286,7 +1088,7 @@ mod control_plane_request_trace_level_tests {
             "tower_http::trace::on_response",
         ] {
             assert!(
-                targets.iter().any(|target| target == hook),
+                targets.contains(&hook),
                 "asking for the request trace must yield {hook}, got: {targets:?}"
             );
         }

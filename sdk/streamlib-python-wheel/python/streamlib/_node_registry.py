@@ -44,7 +44,6 @@ class NodeRegistryEntry(NamedTuple):
     #: The runtime's name — the first chunk of its tap channels, stable across
     #: runs of one app, and what `--node` resolves alongside the id.
     runtime_name: str
-    control_url: str
     #: The Unix socket the node's local API is served on, openable only by its user.
     local_api_socket_path: str
     pid: int
@@ -149,7 +148,6 @@ def _read_entry_file(path: Path) -> "Optional[NodeRegistryEntry]":
             schema_version=schema_version,
             runtime_id=record["runtime_id"],
             runtime_name=record["runtime_name"],
-            control_url=record["control_url"],
             local_api_socket_path=record["local_api_socket_path"],
             pid=record["pid"],
             hint=record.get("hint", ""),
@@ -163,7 +161,6 @@ def _read_entry_file(path: Path) -> "Optional[NodeRegistryEntry]":
         for field in (
             entry.runtime_id,
             entry.runtime_name,
-            entry.control_url,
             entry.local_api_socket_path,
             entry.hint,
         )

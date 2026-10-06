@@ -394,8 +394,8 @@ def recorded_launch_runtime_calls(
             if recorded.load_refusal is not None:
                 raise RuntimeError(recorded.load_refusal)
 
-        def host_control_plane(self, *, bind_host: str, bind_port: int) -> None:
-            recorded.calls.append(("host_control_plane", bind_host, bind_port))
+        def host_control_plane(self) -> None:
+            recorded.calls.append(("host_control_plane",))
 
         def run(self) -> None:
             recorded.calls.append(("run",))
@@ -429,8 +429,6 @@ def test_the_sole_stream_is_compiled_then_loaded_then_hosted_then_run(
         [
             "dev",
             "--dir", str(tmp_path),
-            "--host", "127.0.0.1",
-            "--port", "9123",
             "--runtime-name", "desk-rig",
         ]
     )  # fmt: skip
@@ -443,7 +441,7 @@ def test_the_sole_stream_is_compiled_then_loaded_then_hosted_then_run(
             {"runtime_name": "desk-rig"},
         ),
         ("load", FRONT_STREAM_GRAPH),
-        ("host_control_plane", "127.0.0.1", 9123),
+        ("host_control_plane",),
         ("run",),
     ]
 
@@ -1325,14 +1323,6 @@ def test_the_wheel_serves_no_mcp_verb(tmp_path: Path):
     )
 
 
-def test_the_control_plane_binds_every_interface_by_default():
-    """§Control plane: "`dev` and `run` bind the control plane identically: all
-    interfaces". Reachability is not the lever that scopes exposure — auth is —
-    so no narrower bind default is set ahead of the auth posture.
-    """
-    assert cli.DEFAULT_CONTROL_PLANE_BIND_HOST == "0.0.0.0"
-
-
 # ---------------------------------------------------------------------------
 # `streamlib new`
 # ---------------------------------------------------------------------------
@@ -1838,8 +1828,6 @@ def test_the_launcher_names_the_apps_directory_for_the_built_ins(tmp_path: Path,
         requested_entry_file=None,
         requested_stream_target=None,
         requested_stream_name=None,
-        bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
-        bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
         runtime_name=None,
     )
 
@@ -1865,8 +1853,6 @@ def test_a_runtime_name_the_engine_refuses_reads_as_a_launcher_error(tmp_path):
             requested_entry_file=None,
             requested_stream_target=None,
             requested_stream_name=None,
-            bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
-            bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
             runtime_name="a/b",
         )
 

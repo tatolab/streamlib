@@ -124,14 +124,6 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 LOCAL_API_SOCKET_FILE_MODE = 0o600
 
 
-def free_port() -> int:
-    """A port the OS reports free. The control plane increments on collision,
-    so a caller that loses the race still binds nearby."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 def registry_entry_paths(runtime_directory: Path) -> "list[Path]":
     nodes_directory = runtime_directory / "streamlib" / "nodes"
     if not nodes_directory.is_dir():
@@ -259,7 +251,6 @@ def launch_node(isolated_runtime_directory: Path):
     def launch(
         verb: str,
         app_directory: Path,
-        port: int,
         capture_output: bool = False,
         extra_arguments: "tuple[str, ...]" = (),
         extra_environment: "dict[str, str] | None" = None,
@@ -275,8 +266,6 @@ def launch_node(isolated_runtime_directory: Path):
                 [
                     sys.executable, "-m", "streamlib.cli", verb,
                     "--dir", str(app_directory),
-                    "--host", "127.0.0.1",
-                    "--port", str(port),
                     *extra_arguments,
                 ],
                 stdout=output_sink if output_sink is not None else subprocess.DEVNULL,
@@ -321,7 +310,7 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     (app_directory / "stream.py").write_text(STREAM_WITH_ONE_NATIVE_SOURCE)
     runtime_directory = isolated_runtime_directory
 
-    node = launch_node(verb, app_directory, free_port())
+    node = launch_node(verb, app_directory)
     entry = await_sole_registry_entry(runtime_directory, NODE_READY_TIMEOUT_SECONDS)
 
     assert entry["pid"] == node.process.pid, "the entry must name the hosting process"
@@ -348,6 +337,122 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
         "clean teardown must remove the node-registry entry"
     )
     assert not local_api_socket_path.exists(), "clean teardown must remove the local API socket"
+
+
+def socket_inodes_held_by(pid: int) -> "set[str]":
+    """The inode of every socket `pid` holds a descriptor on."""
+    held_socket_inodes: "set[str]" = set()
+    for descriptor in Path(f"/proc/{pid}/fd").iterdir():
+        try:
+            descriptor_target = os.readlink(descriptor)
+        except OSError:
+            # Closed between the listing and the read.
+            continue
+        socket_inode = re.fullmatch(r"socket:\[(\d+)\]", descriptor_target)
+        if socket_inode is not None:
+            held_socket_inodes.add(socket_inode.group(1))
+    return held_socket_inodes
+
+
+def listening_tcp_socket_inodes_in_the_network_namespace_of(pid: int) -> "set[str]":
+    """The inode of every TCP socket in LISTEN, IPv4 and IPv6, that `pid` can see."""
+    listening_tcp_socket_inodes: "set[str]" = set()
+    for tcp_table_name in ("tcp", "tcp6"):
+        tcp_table_path = Path(f"/proc/{pid}/net/{tcp_table_name}")
+        if not tcp_table_path.exists():
+            # A kernel booted without IPv6 has no `tcp6` table.
+            continue
+        # Columns: sl, local_address, rem_address, st, tx_queue:rx_queue,
+        # tr:tm->when, retrnsmt, uid, timeout, inode. `st` 0A is TCP_LISTEN.
+        for row in tcp_table_path.read_text().splitlines()[1:]:
+            columns = row.split()
+            if columns[3] == "0A":
+                listening_tcp_socket_inodes.add(columns[9])
+    return listening_tcp_socket_inodes
+
+
+def assert_the_tcp_listener_scan_sees_the_listeners_this_process_holds() -> None:
+    """Bind loopback TCP listeners here and require the scan to find each one."""
+    tcp_listeners = [socket.create_server(("127.0.0.1", 0))]
+    try:
+        tcp_listeners.append(socket.create_server(("::1", 0), family=socket.AF_INET6))
+    except OSError:
+        # A host without IPv6 loopback has no `tcp6` row to check the scan against.
+        pass
+    try:
+        this_pid = os.getpid()
+        listening_tcp_socket_inodes_this_process_holds = socket_inodes_held_by(
+            this_pid
+        ) & listening_tcp_socket_inodes_in_the_network_namespace_of(this_pid)
+        for tcp_listener in tcp_listeners:
+            tcp_listener_inode = str(os.fstat(tcp_listener.fileno()).st_ino)
+            assert tcp_listener_inode in listening_tcp_socket_inodes_this_process_holds, (
+                f"the TCP scan must see the listener this test holds at "
+                f"{tcp_listener.getsockname()} (inode {tcp_listener_inode}); it saw "
+                f"{sorted(listening_tcp_socket_inodes_this_process_holds)}"
+            )
+    finally:
+        for tcp_listener in tcp_listeners:
+            tcp_listener.close()
+
+
+def unix_socket_listener_inode_at(pid: int, unix_socket_path: str) -> "str | None":
+    """The inode of the Unix socket listening at `unix_socket_path`, as `pid` sees it."""
+    # Columns: Num, RefCount, Protocol, Flags, Type, St, Inode, Path. An accepted
+    # connection carries the listener's path too; only a listener has Flags
+    # 00010000 (__SO_ACCEPTCON).
+    for row in Path(f"/proc/{pid}/net/unix").read_text().splitlines()[1:]:
+        columns = row.split(maxsplit=7)
+        if len(columns) == 8 and columns[7] == unix_socket_path and columns[3] == "00010000":
+            return columns[6]
+    return None
+
+
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
+def test_a_launched_node_listens_on_no_tcp_socket(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    """Nothing on the network can reach a node's control API: the node holds no
+    TCP socket in LISTEN, on any address, loopback included.
+
+    The same scan, read off Linux's `/proc`, has to find the TCP listeners the
+    test itself holds and the local API socket's listener, and the node has to
+    answer over it, so an empty TCP answer is the node's own and not a scan
+    that saw nothing.
+    """
+    app_directory = tmp_path / "app"
+    app_directory.mkdir()
+    (app_directory / "stream.py").write_text(STREAM_WITH_ONE_NATIVE_SOURCE)
+
+    node = launch_node("run", app_directory, capture_output=True)
+    entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
+    node.await_captured_output_containing(ENGINE_READY_LOG_LINE, NODE_READY_TIMEOUT_SECONDS)
+    local_api_socket_path = entry["local_api_socket_path"]
+    graph = json.loads(call_tool(LocalApiSocket(local_api_socket_path), "graph", {}))
+    assert graph["runtime_name"] == entry["runtime_name"]
+
+    assert_the_tcp_listener_scan_sees_the_listeners_this_process_holds()
+    node_pid = node.process.pid
+    held_socket_inodes = socket_inodes_held_by(node_pid)
+    local_api_listener_inode = unix_socket_listener_inode_at(node_pid, local_api_socket_path)
+    assert local_api_listener_inode is not None, (
+        f"no Unix socket listens at {local_api_socket_path} in /proc/{node_pid}/net/unix"
+    )
+    assert local_api_listener_inode in held_socket_inodes, (
+        f"the node's descriptors must include its local API listener (inode "
+        f"{local_api_listener_inode}); they hold sockets {sorted(held_socket_inodes)}"
+    )
+    listening_tcp_socket_inodes_the_node_holds = (
+        held_socket_inodes & listening_tcp_socket_inodes_in_the_network_namespace_of(node_pid)
+    )
+    assert listening_tcp_socket_inodes_the_node_holds == set(), (
+        f"the node holds TCP sockets in LISTEN (inodes "
+        f"{sorted(listening_tcp_socket_inodes_the_node_holds)}); output ended:\n"
+        f"{node.recent_output()}"
+    )
+
+    node.interrupt()
+    assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 def assert_only_its_owner_can_open(local_api_socket_path: Path) -> None:
@@ -392,7 +497,7 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
     only once a connect has wired its output."""
     app_directory = tmp_path / "app"
     write_app_with_helper_placed_processors(app_directory, 1)
-    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    node = launch_node("run", app_directory, capture_output=True)
     entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
     node.await_captured_output_containing(ENGINE_READY_LOG_LINE, NODE_READY_TIMEOUT_SECONDS)
     runtime_name = entry["runtime_name"]
@@ -487,7 +592,6 @@ def test_a_second_runtime_with_a_live_runtimes_id_is_refused_naming_its_local_ap
         node = launch_node(
             "run",
             app_directory,
-            free_port(),
             capture_output=True,
             extra_environment={"STREAMLIB_RUNTIME_ID": pinned_runtime_id},
         )
@@ -525,7 +629,6 @@ def test_a_stale_local_api_socket_file_is_replaced(
     node = launch_node(
         "run",
         app_directory,
-        free_port(),
         extra_environment={"STREAMLIB_RUNTIME_ID": pinned_runtime_id},
     )
     entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
@@ -552,7 +655,6 @@ def test_a_launched_app_takes_the_runtime_name_its_command_line_gave_it(
     node = launch_node(
         "run",
         app_directory,
-        free_port(),
         extra_arguments=("--runtime-name", "desk rig"),
     )
     entry = await_sole_registry_entry(
@@ -595,8 +697,6 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
             [
                 sys.executable, "-m", "streamlib.cli", "run",
                 "--dir", str(app_directory),
-                "--host", "127.0.0.1",
-                "--port", str(free_port()),
             ],
             stdout=output_sink,
             stderr=subprocess.STDOUT,
@@ -666,7 +766,7 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
         "    stream.add(TestPatternSource)\n"
     )
 
-    node = launch_node("run", app_directory, free_port())
+    node = launch_node("run", app_directory)
     entry = await_sole_registry_entry(
         isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
     )
@@ -697,7 +797,7 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     app_directory = tmp_path / "app"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
 
-    node = launch_node("dev", app_directory, free_port(), capture_output=True)
+    node = launch_node("dev", app_directory, capture_output=True)
     entry = await_sole_registry_entry(
         isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
     )
@@ -756,7 +856,7 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
         '    return torch.device("cuda")\n'
     )
 
-    node = launch_node("dev", app_directory, free_port(), capture_output=True)
+    node = launch_node("dev", app_directory, capture_output=True)
     node.await_captured_output_containing(ENGINE_READY_LOG_LINE, NODE_READY_TIMEOUT_SECONDS)
     node.interrupt()
     node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS)
@@ -861,7 +961,7 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     """
     fleet_app = tmp_path / "fleet"
     write_app_with_helper_placed_processors(fleet_app, HELPER_PLACED_PROCESSOR_COUNT)
-    fleet_node = launch_node("dev", fleet_app, free_port(), capture_output=True)
+    fleet_node = launch_node("dev", fleet_app, capture_output=True)
     seconds_for_every_helper = seconds_until_every_helper_reports(
         fleet_node, HELPER_PLACED_PROCESSOR_COUNT
     )
@@ -941,7 +1041,7 @@ def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
     effect_module = app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH
     last_good_effect_source = effect_module.read_text()
 
-    surviving_node = launch_node("dev", app_directory, free_port(), capture_output=True)
+    surviving_node = launch_node("dev", app_directory, capture_output=True)
     await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
 
     time.sleep(SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS)
@@ -961,7 +1061,7 @@ def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
     effect_module.write_text(last_good_effect_source)
     edit_the_scaffolded_effect(app_directory)
 
-    edited_node = launch_node("dev", app_directory, free_port(), capture_output=True)
+    edited_node = launch_node("dev", app_directory, capture_output=True)
     edited_node.await_captured_output_containing(
         "MARKER:EDITED_EFFECT", NODE_READY_TIMEOUT_SECONDS
     )
@@ -987,7 +1087,7 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
         '    stream.add(TestPatternSource, config={"width": "not a number"})\n'
     )
 
-    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    node = launch_node("run", app_directory, capture_output=True)
 
     assert node.await_exit(NODE_READY_TIMEOUT_SECONDS) == 1
     output = node.captured_output()
@@ -1013,7 +1113,7 @@ def test_a_stream_function_that_raises_publishes_no_node(
     )
     runtime_directory = isolated_runtime_directory
 
-    node = launch_node("dev", app_directory, free_port())
+    node = launch_node("dev", app_directory)
 
     assert node.await_exit(NODE_READY_TIMEOUT_SECONDS) == 1, (
         "a raising stream function must exit non-zero"

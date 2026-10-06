@@ -33,7 +33,7 @@ from video_codec_blocks_probes import (
 )
 from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib._control_plane_client import call_tool
-from this_processes_node_registry_entry import this_processes_control_url
+from this_processes_node_registry_entry import this_processes_local_api_socket
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
@@ -83,7 +83,7 @@ def _report_the_codec_nodes_rendered_types(
 ) -> None:
     """Print the `type` `graph` renders for the two codec nodes, keyed by the
     marker class each was added as."""
-    graph = json.loads(call_tool(this_processes_control_url(), "graph", {}))
+    graph = json.loads(call_tool(this_processes_local_api_socket(), "graph", {}))
     rendered_types = {
         marker_class_name_by_node_name[node["name"]]: node["type"]
         for node in graph["nodes"]

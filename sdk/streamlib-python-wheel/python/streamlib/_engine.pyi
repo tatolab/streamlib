@@ -590,21 +590,13 @@ class Runtime:
         load a corrected graph.
         """
 
-    # `bind_host` is `...` rather than its literal default because the binding
-    # builds that string at call time, which is what the compiled signature
-    # reports — the same shape `__exit__` below has.
-    def host_control_plane(
-        self,
-        *,
-        bind_host: str = ...,
-        bind_port: int = 9000,
-    ) -> None:
+    def host_control_plane(self) -> None:
         """Host the control plane in this process, so the node is discoverable.
 
-        Binds all interfaces (`0.0.0.0`) and port 9000 by default, incrementing
-        the port on collision, and serves the same API on
+        Serves the control API on
         `<runtime directory>/local-api-<runtime_id>.sock`, a Unix socket only
-        this user can open. Opt-in: a runtime that never calls this publishes no
+        this user can open, and on nothing else: control is reachable only on
+        its machine. Opt-in: a runtime that never calls this publishes no
         node-registry entry. Call it before `run()`.
 
         The entry it publishes carries the runtime's own name, which

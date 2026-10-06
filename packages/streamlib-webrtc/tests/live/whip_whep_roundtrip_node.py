@@ -159,7 +159,7 @@ def main() -> None:
     runtime = streamlib.Runtime(runtime_name="whip-whep-roundtrip-node")
     runtime.load(graph)
 
-    runtime.host_control_plane(bind_host="127.0.0.1")
+    runtime.host_control_plane()
     runtime.run()
 
 

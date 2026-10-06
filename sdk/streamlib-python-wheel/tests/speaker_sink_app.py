@@ -31,7 +31,7 @@ import streamlib
 from speaker_sink_probes import AudioBlockCountingProbe
 from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib._control_plane_client import call_tool
-from this_processes_node_registry_entry import this_processes_control_url
+from this_processes_node_registry_entry import this_processes_local_api_socket
 
 READINESS_TIMEOUT_SECONDS = 20.0
 SPEAKER_NODE_NAME = "speakersink"
@@ -39,7 +39,7 @@ SPEAKER_NODE_NAME = "speakersink"
 
 def _report_the_speakers_settled_window_contract(speaker_node_name: str) -> None:
     """Print what `graph` renders for the speaker's `audio` port."""
-    graph = json.loads(call_tool(this_processes_control_url(), "graph", {}))
+    graph = json.loads(call_tool(this_processes_local_api_socket(), "graph", {}))
     for node in graph["nodes"]:
         if node["name"] != speaker_node_name:
             continue

@@ -30,7 +30,7 @@ import streamlib
 from opus_blocks_probes import StereoToneSource
 from streamlib import Stream, compile_stream_to_graph, stream
 from streamlib._control_plane_client import call_tool
-from this_processes_node_registry_entry import this_processes_control_url
+from this_processes_node_registry_entry import this_processes_local_api_socket
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
@@ -67,7 +67,7 @@ def _recorded_track_names() -> "list[str]":
     A track is named by the channel its link subscribed to: the producing
     processor's id lowercased over its output port — what `graph` and `tap` show.
     """
-    graph = json.loads(call_tool(this_processes_control_url(), "graph", {}))
+    graph = json.loads(call_tool(this_processes_local_api_socket(), "graph", {}))
     processor_id_by_node_name = {node["name"]: node["id"] for node in graph["nodes"]}
     return [
         f"{processor_id_by_node_name[f'{pair_name}_encoder'].lower()}/encoded_audio"

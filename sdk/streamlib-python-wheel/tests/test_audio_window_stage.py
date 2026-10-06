@@ -21,10 +21,10 @@ from pathlib import Path
 import pytest
 
 from streamlib import ProcessorLinkDataAccess
+from streamlib._control_plane_client import LocalApiSocket
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
     NODE_READY_TIMEOUT_SECONDS,
     await_sole_registry_entry,
-    free_port,
     isolated_runtime_directory,
     launch_node,
 )
@@ -311,15 +311,17 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
         GAPPED_AUDIO_PROCESSORS_SOURCE
     )
     (app_directory / "stream.py").write_text(GAPPED_AUDIO_STREAM_SOURCE)
-    node = launch_node("run", app_directory, free_port(), capture_output=True)
-    control_url = await_sole_registry_entry(
-        isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
-    )["control_url"]
+    node = launch_node("run", app_directory, capture_output=True)
+    local_api_socket = LocalApiSocket(
+        await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)[
+            "local_api_socket_path"
+        ]
+    )
     node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
-    link_id = the_link_into(mcp_json(control_url, "graph", {}), "windowed-consumer")
+    link_id = the_link_into(mcp_json(local_api_socket, "graph", {}), "windowed-consumer")
 
     metrics = await_metrics_satisfying(
-        control_url,
+        local_api_socket,
         "windowed-consumer",
         lambda metrics: metrics.get("discarded_samples_by_link", {}).get(link_id, 0) > 0,
         f"discarded samples on {link_id}",

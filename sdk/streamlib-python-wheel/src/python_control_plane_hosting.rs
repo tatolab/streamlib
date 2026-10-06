@@ -18,20 +18,12 @@ use streamlib_api_server::control_plane_host::{
 ///
 /// Registration touches the process-global processor registry and the engine's
 /// graph, neither of which needs the interpreter.
-pub(crate) fn host_control_plane_on_engine(
-    python: Python<'_>,
-    engine: &Runner,
-    bind_host: String,
-    bind_port: u16,
-) -> PyResult<()> {
+pub(crate) fn host_control_plane_on_engine(python: Python<'_>, engine: &Runner) -> PyResult<()> {
     python
         .detach(|| {
             register_api_server_control_plane_processor_on_runtime(
                 engine,
-                ApiServerControlPlaneHostConfig {
-                    bind_host,
-                    bind_port,
-                },
+                ApiServerControlPlaneHostConfig::default(),
             )
         })
         .map_err(|hosting_failure| PyRuntimeError::new_err(hosting_failure.to_string()))

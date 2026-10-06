@@ -16,7 +16,6 @@ wearing one name.
 """
 
 import re
-import socket
 from pathlib import Path
 
 import pytest
@@ -91,14 +90,6 @@ def test_the_same_class_in_an_importable_module_is_accepted(entry_file_processor
     )
 
 
-def _free_port() -> int:
-    """A port the OS reports free. The control plane increments on collision,
-    so a caller that loses the race still binds nearby."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 def _identities_the_engine_has_logged(app) -> list[str]:
     """Every identity the engine derived in the output read so far, off its own log records."""
     return [
@@ -154,10 +145,7 @@ def test_the_launch_arrangement_never_changes_the_identity(start_app_under_test)
         start_app_as_module, start_app_under_test, DIRECT_LAUNCH_ARGUMENT
     )
     under_the_launcher = _identity_under(
-        start_app_under_the_streamlib_cli,
-        start_app_under_test,
-        "--port",
-        str(_free_port()),
+        start_app_under_the_streamlib_cli, start_app_under_test
     )
 
     assert as_a_script == as_a_module == under_the_launcher, (

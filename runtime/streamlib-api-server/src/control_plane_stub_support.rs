@@ -379,25 +379,15 @@ macro_rules! surface_exchange_op_answers_the_stub {
 
 pub(crate) use surface_exchange_op_answers_the_stub;
 
-/// One tracing span or event raised while [`CapturedTracingRecords`] was
-/// installed. A span carries its name as the message; it has no other.
-pub(crate) struct CapturedTracingRecord {
-    pub(crate) level: ::tracing::Level,
-    pub(crate) target: String,
-    pub(crate) message: String,
-}
-
-/// Every tracing span and event raised on the calling thread while this is its
-/// default subscriber's layer.
+/// The target of every tracing span and event raised on the calling thread
+/// while this is its default subscriber's layer.
 ///
 /// Spans are captured alongside events because the control plane's request
 /// trace levels a span that raises no event of its own.
 #[derive(Clone, Default)]
-pub(crate) struct CapturedTracingRecords(
-    ::std::sync::Arc<::parking_lot::Mutex<Vec<::std::sync::Arc<CapturedTracingRecord>>>>,
-);
+pub(crate) struct CapturedTracingTargets(::std::sync::Arc<::parking_lot::Mutex<Vec<&'static str>>>);
 
-impl CapturedTracingRecords {
+impl CapturedTracingTargets {
     /// Run `raising_them` twice under an `env_filter_directives`-filtered
     /// subscriber, and answer with what the second run raised.
     ///
@@ -416,7 +406,7 @@ impl CapturedTracingRecords {
     pub(crate) fn captured_from_the_second_of_two_runs(
         env_filter_directives: &str,
         raising_them: impl Fn(),
-    ) -> Vec<::std::sync::Arc<CapturedTracingRecord>> {
+    ) -> Vec<&'static str> {
         use ::tracing_subscriber::layer::SubscriberExt;
 
         let captured = Self::default();
@@ -436,21 +426,14 @@ impl CapturedTracingRecords {
     }
 }
 
-impl<S: ::tracing::Subscriber> ::tracing_subscriber::layer::Layer<S> for CapturedTracingRecords {
+impl<S: ::tracing::Subscriber> ::tracing_subscriber::layer::Layer<S> for CapturedTracingTargets {
     fn on_new_span(
         &self,
         span: &::tracing::span::Attributes<'_>,
         _id: &::tracing::span::Id,
         _context: ::tracing_subscriber::layer::Context<'_, S>,
     ) {
-        let metadata = span.metadata();
-        self.0
-            .lock()
-            .push(::std::sync::Arc::new(CapturedTracingRecord {
-                level: *metadata.level(),
-                target: metadata.target().to_string(),
-                message: metadata.name().to_string(),
-            }));
+        self.0.lock().push(span.metadata().target());
     }
 
     fn on_event(
@@ -458,27 +441,6 @@ impl<S: ::tracing::Subscriber> ::tracing_subscriber::layer::Layer<S> for Capture
         event: &::tracing::Event<'_>,
         _context: ::tracing_subscriber::layer::Context<'_, S>,
     ) {
-        let mut message = String::new();
-        event.record(&mut OneCapturedRecordMessage(&mut message));
-        let metadata = event.metadata();
-        self.0
-            .lock()
-            .push(::std::sync::Arc::new(CapturedTracingRecord {
-                level: *metadata.level(),
-                target: metadata.target().to_string(),
-                message,
-            }));
-    }
-}
-
-/// Renders an event's `message` field, the one field a log assertion reads.
-struct OneCapturedRecordMessage<'a>(&'a mut String);
-
-impl ::tracing::field::Visit for OneCapturedRecordMessage<'_> {
-    fn record_debug(&mut self, field: &::tracing::field::Field, value: &dyn ::std::fmt::Debug) {
-        use ::std::fmt::Write;
-        if field.name() == "message" {
-            let _ = write!(self.0, "{value:?}");
-        }
+        self.0.lock().push(event.metadata().target());
     }
 }

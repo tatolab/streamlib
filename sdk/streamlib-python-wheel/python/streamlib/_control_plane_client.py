@@ -9,9 +9,8 @@ every verb marshals its arguments into one `tools/call` against the node's
 local runtime — the control plane exists to observe nodes that are already
 running.
 
-A node found through the registry is reached through its local API socket, a
-Unix socket only its own user can open. A `--url` still reaches a node's TCP
-port.
+A node is found through the registry and reached through its local API
+socket, a Unix socket only its own user can open.
 
 One operation has a second spelling this also drives: the surface exchange
 serves the exact frame as a binary `image/png` over REST, where the MCP tool
@@ -27,12 +26,9 @@ from __future__ import annotations
 import email.message
 import http.client
 import json
-import os
 import socket
-import urllib.error
 import urllib.parse
-import urllib.request
-from typing import TYPE_CHECKING, Any, NamedTuple, Optional, Union
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 if TYPE_CHECKING:
     from ._node_registry import NodeRegistryEntry
@@ -42,16 +38,11 @@ __all__ = [
     "SurfaceImageExchangeRefusal",
     "ExchangedSurfaceImage",
     "LocalApiSocket",
-    "ControlPlaneEndpoint",
     "control_plane_answers",
-    "resolve_control_plane_endpoint",
+    "resolve_local_api_socket_of_requested_node",
     "call_tool",
     "fetch_surface_image_png_bytes",
 ]
-
-#: Bearer token forwarded when the node has auth enabled. Absent by default —
-#: a node runs locally with full permission unless its config opted in.
-BEARER_TOKEN_ENVIRONMENT_VARIABLE = "STREAMLIB_MCP_TOKEN"
 
 #: Bounds a liveness probe so a socket that accepts but never answers cannot
 #: stall a registry scan.
@@ -68,24 +59,12 @@ class LocalApiSocket(NamedTuple):
     local_api_socket_path: str
 
 
-#: Where a verb sends its requests: a runtime's local API socket, or a
-#: control-plane base URL given with `--url`.
-ControlPlaneEndpoint = Union[LocalApiSocket, str]
-
-
-def describe_control_plane_endpoint(endpoint: ControlPlaneEndpoint) -> str:
-    """The endpoint as a terminal message names it: the socket's path, or the URL."""
-    if isinstance(endpoint, LocalApiSocket):
-        return endpoint.local_api_socket_path
-    return endpoint
-
-
 class ControlPlaneError(Exception):
     """A control-plane call that failed, with a message shaped for a terminal.
 
     `server_answered` separates "the node replied, with a status I did not want"
     from "nothing is listening there". A liveness probe treats the first as
-    alive — an auth `401` still proves a control plane is up.
+    alive: any status at all proves a control plane is up.
     """
 
     def __init__(self, message: str, *, server_answered: bool = False) -> None:
@@ -95,16 +74,6 @@ class ControlPlaneError(Exception):
 
 #: The MCP endpoint's path on every control plane.
 MCP_ENDPOINT_PATH = "/mcp"
-
-
-def _refuse_a_non_http_url(url: str) -> None:
-    """Refuse a URL `urlopen` would dispatch to a non-HTTP handler.
-
-    `urlopen` dispatches on the scheme, so an unchecked `--url file:///etc/passwd`
-    would select a handler that is not HTTP at all.
-    """
-    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
-        raise ControlPlaneError(f"control-plane URL must be http or https; got `{url}`")
 
 
 class _ControlPlaneHttpResponse(NamedTuple):
@@ -139,16 +108,19 @@ def _request_over_the_local_api_socket(
     *,
     method: str,
     path: str,
-    body: "Optional[bytes]",
-    headers: "dict[str, str]",
+    body: "Optional[bytes]" = None,
+    headers: "Optional[dict[str, str]]" = None,
     timeout_seconds: float,
 ) -> _ControlPlaneHttpResponse:
-    """One request over the socket. No bearer token: the socket's file mode is the gate."""
+    """One request over the socket, answered with any status; only a transport failure raises.
+
+    It carries no credential: the socket's file mode is the whole gate.
+    """
     connection = _LocalApiSocketHttpConnection(
         local_api_socket.local_api_socket_path, timeout_seconds
     )
     try:
-        connection.request(method, path, body=body, headers=headers)
+        connection.request(method, path, body=body, headers=headers or {})
         response = connection.getresponse()
         return _ControlPlaneHttpResponse(response.status, response.msg, response.read())
     except (http.client.HTTPException, OSError) as transport_failure:
@@ -160,73 +132,14 @@ def _request_over_the_local_api_socket(
         connection.close()
 
 
-def _request_over_a_control_plane_url(
-    url: str,
-    *,
-    method: str,
-    path: str,
-    body: "Optional[bytes]",
-    headers: "dict[str, str]",
-    timeout_seconds: float,
-) -> _ControlPlaneHttpResponse:
-    """One request to a `--url`, carrying the node's bearer token when one is configured."""
-    _refuse_a_non_http_url(url)
-    request = urllib.request.Request(
-        f"{url.rstrip('/')}{path}", data=body, method=method, headers=headers
-    )
-    bearer_token = os.environ.get(BEARER_TOKEN_ENVIRONMENT_VARIABLE)
-    if bearer_token:
-        request.add_header("authorization", f"Bearer {bearer_token}")
-    try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-            return _ControlPlaneHttpResponse(response.status, response.headers, response.read())
-    except urllib.error.HTTPError as http_failure:
-        return _ControlPlaneHttpResponse(
-            http_failure.code, http_failure.headers, http_failure.read()
-        )
-    except (urllib.error.URLError, OSError, TimeoutError) as transport_failure:
-        raise ControlPlaneError(
-            f"no control plane reachable at {url} ({transport_failure})"
-        ) from transport_failure
-
-
-def _request_to_control_plane_endpoint(
-    endpoint: ControlPlaneEndpoint,
-    *,
-    method: str,
-    path: str,
-    body: "Optional[bytes]" = None,
-    headers: "Optional[dict[str, str]]" = None,
-    timeout_seconds: float,
-) -> _ControlPlaneHttpResponse:
-    """One request to `endpoint`, answered with any status; only a transport failure raises."""
-    if isinstance(endpoint, LocalApiSocket):
-        return _request_over_the_local_api_socket(
-            endpoint,
-            method=method,
-            path=path,
-            body=body,
-            headers=headers or {},
-            timeout_seconds=timeout_seconds,
-        )
-    return _request_over_a_control_plane_url(
-        endpoint,
-        method=method,
-        path=path,
-        body=body,
-        headers=headers or {},
-        timeout_seconds=timeout_seconds,
-    )
-
-
-def _post_jsonrpc(endpoint: ControlPlaneEndpoint, body: str, timeout_seconds: float) -> str:
-    """POST one JSON-RPC body to the endpoint's `/mcp` and return the response body.
+def _post_jsonrpc(local_api_socket: LocalApiSocket, body: str, timeout_seconds: float) -> str:
+    """POST one JSON-RPC body to the local API's `/mcp` and return the response body.
 
     Raises [`ControlPlaneError`] on a transport failure or a non-2xx status. A
     `202` (a notification ack) yields an empty string.
     """
-    answered = _request_to_control_plane_endpoint(
-        endpoint,
+    answered = _request_over_the_local_api_socket(
+        local_api_socket,
         method="POST",
         path=MCP_ENDPOINT_PATH,
         body=body.encode("utf-8"),
@@ -236,19 +149,19 @@ def _post_jsonrpc(endpoint: ControlPlaneEndpoint, body: str, timeout_seconds: fl
     if not 200 <= answered.status < 300:
         detail = answered.body.decode("utf-8", errors="replace").strip()
         raise ControlPlaneError(
-            f"control plane at {describe_control_plane_endpoint(endpoint)} answered "
+            f"control plane at {local_api_socket.local_api_socket_path} answered "
             f"{answered.status}" + (f": {detail}" if detail else ""),
             server_answered=True,
         )
     return answered.body.decode("utf-8")
 
 
-def control_plane_answers(endpoint: ControlPlaneEndpoint) -> bool:
-    """Whether the control plane at `endpoint` answers its `POST /mcp` at all.
+def control_plane_answers(local_api_socket: LocalApiSocket) -> bool:
+    """Whether the control plane on `local_api_socket` answers its `POST /mcp` at all.
 
-    Any HTTP status counts as alive, including an auth `401` — the server is up
-    and something answered. Only a transport failure is dead. This is what a
-    registry scan needs: "can a control verb reach it", not "may I call it".
+    Any HTTP status counts as alive — the server is up and something answered.
+    Only a transport failure is dead. This is what a registry scan needs: "can a
+    control verb reach it", not "did this call succeed".
     """
     probe = json.dumps(
         {
@@ -259,27 +172,22 @@ def control_plane_answers(endpoint: ControlPlaneEndpoint) -> bool:
         }
     )
     try:
-        _post_jsonrpc(endpoint, probe, REACHABILITY_PROBE_TIMEOUT_SECONDS)
+        _post_jsonrpc(local_api_socket, probe, REACHABILITY_PROBE_TIMEOUT_SECONDS)
     except ControlPlaneError as failure:
         return failure.server_answered
     return True
 
 
-def resolve_control_plane_endpoint(
-    requested_url: "Optional[str]", requested_node: "Optional[str]"
-) -> ControlPlaneEndpoint:
-    """The endpoint a verb targets.
+def resolve_local_api_socket_of_requested_node(requested_node: "Optional[str]") -> LocalApiSocket:
+    """The local API socket a verb targets.
 
-    `--url` wins outright, registered or not. Otherwise `--node` resolves that
-    node's local API socket from the registry, matching a runtime name first and
-    a runtime_id second — the name is the one an app chooses and keeps across
-    runs. Otherwise the sole live node, which is the zero-ceremony case. Zero
-    live nodes, more than one matching `--node`, or more than one live node with
-    neither flag given, is an error that lists what it found.
+    `--node` resolves that node's socket from the registry, matching a runtime
+    name first and a runtime_id second — the name is the one an app chooses and
+    keeps across runs. Without it, the sole live node, which is the
+    zero-ceremony case. Zero live nodes, more than one matching `--node`, or more
+    than one live node with no `--node` given, is an error that lists what it
+    found.
     """
-    if requested_url:
-        return requested_url
-
     from ._node_registry import live_nodes
 
     nodes = live_nodes()
@@ -293,7 +201,7 @@ def resolve_control_plane_endpoint(
     if not nodes:
         raise ControlPlaneError(
             "no running StreamLib nodes found.\n"
-            "Start one with `streamlib dev`, or point at a node with `--url`."
+            "Start one with `streamlib dev`."
         )
 
     raise ControlPlaneError(
@@ -341,7 +249,7 @@ def _live_node_hint(nodes: "list[NodeRegistryEntry]") -> str:
 
 
 def call_tool(
-    endpoint: ControlPlaneEndpoint, tool_name: str, arguments: "dict[str, Any]"
+    local_api_socket: LocalApiSocket, tool_name: str, arguments: "dict[str, Any]"
 ) -> str:
     """Drive one `tools/call` and return the tool result's text content.
 
@@ -358,7 +266,7 @@ def call_tool(
             "params": {"name": tool_name, "arguments": arguments},
         }
     )
-    response_body = _post_jsonrpc(endpoint, request_body, CONTROL_VERB_TIMEOUT_SECONDS)
+    response_body = _post_jsonrpc(local_api_socket, request_body, CONTROL_VERB_TIMEOUT_SECONDS)
 
     try:
         response = json.loads(response_body)
@@ -491,7 +399,7 @@ def _header_pixel_extent(
 
 
 def fetch_surface_image_png_bytes(
-    endpoint: ControlPlaneEndpoint,
+    local_api_socket: LocalApiSocket,
     published_surface_id: str,
     *,
     timeout_seconds: float = CONTROL_VERB_TIMEOUT_SECONDS,
@@ -501,8 +409,8 @@ def fetch_surface_image_png_bytes(
     The full-resolution REST spelling, not the MCP tool's downscaled block: this
     is what gets written to disk as evidence.
     """
-    answered = _request_to_control_plane_endpoint(
-        endpoint,
+    answered = _request_over_the_local_api_socket(
+        local_api_socket,
         method="GET",
         path=_surface_image_exchange_route_path(published_surface_id),
         timeout_seconds=timeout_seconds,
