@@ -68,7 +68,8 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
 /// than reporting on it. No route asks for a credential: whoever can open the
 /// local API socket may call every one. `local_api_stopping_token` is
 /// cancelled when the local API stops serving, ending every
-/// `subscriptions/listen` `/mcp` holds open.
+/// `subscriptions/listen` `/mcp` holds open and every stream `/mcp/stdio`
+/// upgraded.
 pub(crate) fn build_router(
     runtime: Arc<dyn RuntimeOperations>,
     local_api_stopping_token: CancellationToken,
@@ -77,10 +78,12 @@ pub(crate) fn build_router(
         .merge(control_plane_rest_routes())
         .split_for_parts();
 
-    let local_api_mcp_service = crate::mcp::local_api_mcp_streamable_http_service(
+    let local_api_mcp_server_handler = crate::mcp::LocalApiMcpServerHandler::new(
         runtime.clone(),
-        local_api_stopping_token,
+        local_api_stopping_token.clone(),
     );
+    let local_api_mcp_service =
+        crate::mcp::local_api_mcp_streamable_http_service(local_api_mcp_server_handler.clone());
     let state = AppState { runtime, openapi };
 
     // Method, path, status and latency for every request, at DEBUG so a client
@@ -96,7 +99,14 @@ pub(crate) fn build_router(
         .route("/ws/events", get(websocket_handler))
         .route("/api/openapi.json", get(get_openapi_spec))
         .route("/ws/tap/{channel}", get(tap_websocket_handler))
-        .route_service("/mcp", local_api_mcp_service);
+        .route_service("/mcp", local_api_mcp_service)
+        .route(
+            "/mcp/stdio",
+            crate::mcp_stdio_upgrade::local_api_mcp_stdio_upgrade_route(
+                local_api_mcp_server_handler,
+                local_api_stopping_token,
+            ),
+        );
 
     router.layer(trace_layer).with_state(state)
 }
