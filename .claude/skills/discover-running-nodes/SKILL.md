@@ -35,7 +35,7 @@ desk-my-app-8kq3  Rabc123     /run/user/1000/streamlib/local-api-Rabc123.sock  1
 
 ### 2. Read the outcome
 - **One `yes` row** — that is your target; control verbs with no `--node` default to this sole live node, so you can often skip pinning entirely.
-- **Several `yes` rows** — pick one and pin it with `--node <runtime name>` on every subsequent verb; a verb given no `--node` with more than one live node errors and lists the candidates.
+- **Several `yes` rows** — pick one and pin it with `--node <runtime name>` on every subsequent verb — or `--node <runtime_id>` when two rows share a name, since a shared name is refused; a verb given no `--node` with more than one live node errors and lists the candidates.
 - **`No running nodes found in <directory>`** — the message names the registry folder it scanned. Start a node first (`streamlib run --dir <app>`), or check that this shell's `XDG_RUNTIME_DIR` matches the one the node was launched with, then re-run.
 - **`error: the StreamLib runtime directory /tmp/streamlib-<uid> cannot be trusted: …`** — the fallback folder exists but is a symlink, owned by another uid, or open to group or other; entries planted there are never read. Remove the folder, or set `XDG_RUNTIME_DIR`.
 

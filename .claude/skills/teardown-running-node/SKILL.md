@@ -26,7 +26,7 @@ If it is a node you launched in this session's foreground, `Ctrl-C` is equivalen
 ```bash
 streamlib nodes
 ```
-The node's row should no longer appear (or the whole table reports `No running nodes found`). Its camera / GPU claim and its local API socket are now released for the next run or another worktree.
+The node's row should no longer appear (or the whole table reports `No running nodes found`). Its camera / GPU claim is now released for the next run or another worktree. A clean shutdown also removed its local API socket; after a hard kill the stale socket file stays until a later bind at that path clears it.
 
 ## Notes
 - Get the pid from `streamlib nodes` — it is the authoritative source; do not guess.
