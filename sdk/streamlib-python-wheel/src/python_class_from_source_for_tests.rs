@@ -23,7 +23,7 @@ pub(crate) fn class_from_source<'py>(
 
 /// The same, in a namespace the caller has already populated — for a class
 /// whose body reaches for a name the wheel exports at module level, which a
-/// test cannot `import streamlib` to get.
+/// test cannot `import tatolab.stream` to get.
 pub(crate) fn class_from_source_in_namespace<'py>(
     python: Python<'py>,
     source: &str,
