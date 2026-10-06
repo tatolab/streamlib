@@ -6,10 +6,11 @@
 //! Shared by `streamlib-engine` (which re-exports it at
 //! `core::error`) and the engine-free authoring surface. Every variant
 //! is String / std / anyhow based plus the engine-free
-//! `ProcessorClassImportPath` (from `streamlib-processor-schema`) and, on
-//! Linux, the engine-free `ConsumerRhiError` conversion.
+//! `ProcessorClassImportPath` and `ExposedNameCastsToNothingError` (from
+//! `streamlib-processor-schema`) and, on Linux, the engine-free
+//! `ConsumerRhiError` conversion.
 
-use streamlib_processor_schema::ProcessorClassImportPath;
+use streamlib_processor_schema::{ExposedNameCastsToNothingError, ProcessorClassImportPath};
 
 /// The StreamLib error type.
 #[derive(thiserror::Error, Debug)]
@@ -71,12 +72,8 @@ pub enum Error {
         max: usize,
     },
 
-    #[error(
-        "the name `{name}` casts to `{cast}`, which cannot name anything — a name has to keep \
-         at least one of a-z 0-9 - . _ ~ once lowercased with its accents dropped, and cannot \
-         be `.` or `..`"
-    )]
-    ExposedNameCastsToNothing { name: String, cast: String },
+    #[error(transparent)]
+    ExposedNameCastsToNothing(#[from] ExposedNameCastsToNothingError),
 
     #[error(
         "the node name `{name}` casts to `{cast}`, which node `{cast}` in this graph already \
@@ -94,6 +91,27 @@ pub enum Error {
 
     #[error("Unknown processor type: {ident} (not registered)")]
     UnknownProcessorType { ident: ProcessorClassImportPath },
+
+    #[error(
+        "processor `{processor_class_import_path}` declares the port `{port_name}`, which is \
+         not a cast name — a descriptor carries every port the way `#[processor]` and `@node` \
+         declare it: lowercase a-z 0-9 - . _ ~, no leading, trailing or doubled '-', at most \
+         {max} characters",
+        max = streamlib_processor_schema::EXPOSED_NAME_MAXIMUM_LENGTH
+    )]
+    DescriptorPortNameNotCast {
+        processor_class_import_path: ProcessorClassImportPath,
+        port_name: String,
+    },
+
+    #[error(
+        "processor `{processor_class_import_path}` declares the port `{port_name}` more than \
+         once — every port, input or output, needs its own name"
+    )]
+    DescriptorPortNameDeclaredTwice {
+        processor_class_import_path: ProcessorClassImportPath,
+        port_name: String,
+    },
 
     #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
     ProcessorPortNotFound {

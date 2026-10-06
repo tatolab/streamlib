@@ -17,6 +17,8 @@ proc-macro2 = "1.0"
 # packages, the streamlib facade for hosts) so emitted paths use real names
 # with no `streamlib` aliasing — the serde_derive pattern.
 proc-macro-crate = "3"
+# NFC-normalizes a declared port spelling, as rustc's lexer does an identifier.
+unicode-normalization.workspace = true
 
 # Execution types (shared with streamlib for code generation)
 streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.32.0" }

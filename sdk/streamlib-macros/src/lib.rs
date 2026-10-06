@@ -47,21 +47,11 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let schema = parsed.to_processor_schema();
-    let config_field_name = parsed
-        .config_type
-        .as_ref()
-        .map(|_| parsed.config_field_name.clone());
-
-    let generated = codegen::generate_from_processor_schema(
+    TokenStream::from(codegen::generate_from_parsed_processor_attr(
         &item_struct,
-        &schema,
-        parsed.config_type.as_ref(),
-        config_field_name.as_deref(),
+        &parsed,
         sdk_root(),
-    );
-
-    TokenStream::from(generated)
+    ))
 }
 
 /// Resolve the path to the `sdk` module the emitted code authors against.

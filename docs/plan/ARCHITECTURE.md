@@ -3328,10 +3328,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   covers two packs that each define a `main`; a **node** name is unique per stream — a
   defaulted duplicate (two unnamed `CameraSource`) is suffixed `-2`, `-3` …, while a duplicate
   the author *typed* is refused by name, because a typed name is an address; a **port** is a
-  method name on its class,
-  and two casting alike are refused at `@node` naming both. Every exposed name — machine,
-  stream, node, port — is cast, never refused for its spelling: lowercased, accents dropped,
-  every character outside RFC 3986's unreserved set (`a-z 0-9 - . _ ~`) turned into `-`, at most
+  method name on its class, and two casting alike are refused at `@node` — or a Rust
+  `#[processor]` — naming both. Every exposed name — machine, stream, node, port — is cast,
+  never refused for its spelling: lowercased, accents dropped, every character outside RFC
+  3986's unreserved set (`a-z 0-9 - . _ ~`) turned into `-`, at most
   63 characters; one that casts to empty, `.` or `..` is refused by name (the cast's detail, not
   the owner's: runs of `-` collapsed, ends trimmed, a suffix the next unused one with the name
   truncated to fit, a lookup casting its argument so `read("Video")` finds `video`). So

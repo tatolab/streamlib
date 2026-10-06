@@ -45,6 +45,7 @@ use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
 use super::{ChannelDataServiceSubscriber, FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
+use crate::core::graph::cast_exposed_name_to_url_safe;
 
 /// One windowed port's stage, shared out of the `ports` map so the resample,
 /// mixdown and framing work runs with that mutex released.
@@ -1269,6 +1270,9 @@ impl Default for InputMailboxesInner {
 /// The sole field is an opaque pointer to the host's
 /// [`InputMailboxesInner`]. `Clone` bumps the `Arc<InputMailboxesInner>`
 /// strong count; `Drop` decrements it.
+///
+/// A port is named in any spelling that casts to the name it registered
+/// under, so `"videoOut"` reaches the port registered as `videoout`.
 pub struct InputMailboxes {
     /// Opaque handle: `Arc::into_raw(Arc<InputMailboxesInner>)`. Null
     /// on a freshly-constructed processor before
@@ -1354,7 +1358,7 @@ impl InputMailboxes {
         let Some(inner) = self.host_inner() else {
             return Ok(None);
         };
-        inner.read_raw(port)
+        inner.read_raw(&cast_exposed_name_to_url_safe(port)?)
     }
 
     /// The next bag on `port` with the inbound link it arrived on.
@@ -1374,7 +1378,7 @@ impl InputMailboxes {
         let Some(inner) = self.host_inner() else {
             return Ok(None);
         };
-        inner.read_raw_from_inbound_link(port)
+        inner.read_raw_from_inbound_link(&cast_exposed_name_to_url_safe(port)?)
     }
 
     /// The next bag on `port` deserialized into `T`, with the inbound link it
@@ -1386,7 +1390,7 @@ impl InputMailboxes {
         let Some(inner) = self.host_inner() else {
             return Ok(None);
         };
-        inner.read_from_inbound_link(port)
+        inner.read_from_inbound_link(&cast_exposed_name_to_url_safe(port)?)
     }
 
     /// Every inbound link feeding `port`, in wiring order.
@@ -1395,26 +1399,26 @@ impl InputMailboxes {
     /// how many producers it owes before the first bag arrives. A port with no
     /// links lists none.
     pub fn inbound_link_names(&self, port: &str) -> Vec<InboundLinkName> {
-        match self.host_inner() {
-            Some(inner) => inner.inbound_link_names(port),
-            None => Vec::new(),
+        match (self.host_inner(), cast_exposed_name_to_url_safe(port)) {
+            (Some(inner), Ok(port)) => inner.inbound_link_names(&port),
+            _ => Vec::new(),
         }
     }
 
     /// Whether `port` has been configured — a port has a mailbox only once a
     /// link is wired into it.
     pub fn has_port(&self, port: &str) -> bool {
-        match self.host_inner() {
-            Some(inner) => inner.has_port(port),
-            None => false,
+        match (self.host_inner(), cast_exposed_name_to_url_safe(port)) {
+            (Some(inner), Ok(port)) => inner.has_port(&port),
+            _ => false,
         }
     }
 
     /// Check if a port has any payloads available.
     pub fn has_data(&self, port: &str) -> bool {
-        match self.host_inner() {
-            Some(inner) => inner.has_data(port),
-            None => false,
+        match (self.host_inner(), cast_exposed_name_to_url_safe(port)) {
+            (Some(inner), Ok(port)) => inner.has_data(&port),
+            _ => false,
         }
     }
 
@@ -1447,7 +1451,10 @@ impl InputMailboxes {
                  contract on. Connect the port, or drop the contract from it"
             )));
         };
-        inner.settle_a_ports_device_matched_audio_window_contract(port, matching)
+        inner.settle_a_ports_device_matched_audio_window_contract(
+            &cast_exposed_name_to_url_safe(port)?,
+            matching,
+        )
     }
 }
 
@@ -2286,6 +2293,62 @@ mod tests {
                 .expect("a drained port is not a failure")
                 .is_none(),
             "a drained port must end a sink's read loop rather than raise",
+        );
+    }
+
+    /// A processor names its own port in the spelling it declared, and the
+    /// handle casts it to the name the port was registered under.
+    #[test]
+    fn a_port_is_read_by_any_spelling_that_casts_to_its_name() {
+        let (publisher, subscriber) = open_channel_for_one_link("naming/cast", 4);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("videoin", 8, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber(
+            "videoin",
+            "L-camera",
+            &InboundLinkName::from("pcamera/videoout"),
+            subscriber,
+        );
+        let mailboxes = InputMailboxes::from_inner_arc(Arc::new(mailboxes));
+
+        assert!(mailboxes.has_port("videoIn"));
+        assert_eq!(
+            mailboxes.inbound_link_names("VideoIn"),
+            vec![InboundLinkName::from("pcamera/videoout")]
+        );
+        assert!(!mailboxes.has_data("videoIn"));
+
+        publish_one_frame(&publisher, "videoout", b"first");
+        publish_one_frame(&publisher, "videoout", b"second");
+        publish_one_frame(
+            &publisher,
+            "videoout",
+            &rmp_serde::to_vec_named("third").expect("the bag encodes"),
+        );
+
+        assert!(mailboxes.has_data("videoIn"));
+        let (payload, _timestamp_ns) = mailboxes
+            .read_raw("videoIn")
+            .expect("a cast-alike spelling names the port")
+            .expect("three bags were published");
+        assert_eq!(payload, b"first");
+        let (payload, _timestamp_ns, inbound_link_name) = mailboxes
+            .read_raw_from_inbound_link("VideoIn")
+            .expect("a cast-alike spelling names the port")
+            .expect("two bags remain");
+        assert_eq!(payload, b"second");
+        assert_eq!(inbound_link_name.as_str(), "pcamera/videoout");
+        let (bag, _inbound_link_name) = mailboxes
+            .read_from_inbound_link::<String>("VIDEOIN")
+            .expect("a cast-alike spelling names the port")
+            .expect("one bag remains");
+        assert_eq!(bag, "third");
+
+        let refusal = mailboxes.read_raw("%%").unwrap_err();
+        assert!(
+            matches!(refusal, Error::ExposedNameCastsToNothing(_)),
+            "a name that casts to nothing names no port; got {refusal}"
         );
     }
 

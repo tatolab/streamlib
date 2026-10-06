@@ -201,22 +201,15 @@ impl crate::core::ReactiveProcessor for MockDeviceMatchedAudioConsumerProcessor:
     }
 }
 
-/// Mock source whose one output port's name the channel-name grammar cannot
-/// carry — an uppercase letter inside the chunk.
-///
-/// Nothing between the declaration and the first `connect` validates a port name
-/// against that grammar, so this is what an author writing camelCase gets: a
-/// processor that adds, runs, and holds an output port whose channel can never
-/// be named.
+/// Mock source declaring its one output port in camelCase, `outOne`, which
+/// registers under its cast `outone`.
 #[crate::processor(
     execution = manual,
     output("outOne"),
 )]
-pub(crate) struct MockProcessorWhoseOutputPortTheChannelGrammarCannotName;
+pub(crate) struct MockProcessorWithACamelCaseOutputPort;
 
-impl crate::core::ManualProcessor
-    for MockProcessorWhoseOutputPortTheChannelGrammarCannotName::Processor
-{
+impl crate::core::ManualProcessor for MockProcessorWithACamelCaseOutputPort::Processor {
     fn start(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -239,8 +232,7 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockOrderedInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
-        PROCESSOR_REGISTRY
-            .register::<MockProcessorWhoseOutputPortTheChannelGrammarCannotName::Processor>();
+        PROCESSOR_REGISTRY.register::<MockProcessorWithACamelCaseOutputPort::Processor>();
     });
 }
 

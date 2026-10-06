@@ -3,29 +3,44 @@
 
 //! The cast every exposed name — machine, stream, node, port — goes through.
 //!
-//! The wheel's pure-Python twin (`streamlib._exposed_name_cast`) casts the same
-//! way, and both are held to `tests/fixtures/exposed_name_cast_cases.json`.
+//! The engine and `#[processor]` both cast through this one copy. The wheel's
+//! pure-Python twin (`streamlib._exposed_name_cast`) casts the same way, and both
+//! are held to `runtime/streamlib-engine/tests/fixtures/exposed_name_cast_cases.json`.
 
 use std::borrow::Cow;
 
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
-use crate::core::error::{Error, Result};
-
 /// Longest name the cast keeps, in characters — a DNS label's bound.
 pub const EXPOSED_NAME_MAXIMUM_LENGTH: usize = 63;
 
 const EXPOSED_NAME_REPLACEMENT_CHARACTER: char = '-';
+
+/// A name whose cast is empty, `.` or `..`, so it can name nothing.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the name `{name}` casts to `{cast}`, which cannot name anything — a name has to keep \
+     at least one of a-z 0-9 - . _ ~ once lowercased with its accents dropped, and cannot \
+     be `.` or `..`"
+)]
+pub struct ExposedNameCastsToNothingError {
+    /// The name as it was given.
+    pub name: String,
+    /// What the cast made of it.
+    pub cast: String,
+}
 
 /// Cast `name` to lowercase RFC 3986 unreserved characters (`a-z 0-9 - . _ ~`).
 ///
 /// Accents are dropped, every other character becomes `-`, runs of `-` collapse,
 /// `-` is trimmed from both ends and the result is cut to
 /// [`EXPOSED_NAME_MAXIMUM_LENGTH`]. A name casting to empty, `.` or `..` is
-/// [`Error::ExposedNameCastsToNothing`]. A name already in cast form comes back
-/// borrowed, so a lookup on the per-bag path allocates nothing.
-pub fn cast_exposed_name_to_url_safe(name: &str) -> Result<Cow<'_, str>> {
+/// refused. A name already in cast form comes back borrowed, so a lookup on the
+/// per-bag path allocates nothing.
+pub fn cast_exposed_name_to_url_safe(
+    name: &str,
+) -> Result<Cow<'_, str>, ExposedNameCastsToNothingError> {
     if is_in_exposed_name_cast_form(name) {
         return Ok(Cow::Borrowed(name));
     }
@@ -48,7 +63,7 @@ pub fn cast_exposed_name_to_url_safe(name: &str) -> Result<Cow<'_, str>> {
     }
 
     if cast_names_nothing(&cast) {
-        return Err(Error::ExposedNameCastsToNothing {
+        return Err(ExposedNameCastsToNothingError {
             name: name.to_string(),
             cast,
         });
@@ -57,7 +72,7 @@ pub fn cast_exposed_name_to_url_safe(name: &str) -> Result<Cow<'_, str>> {
 }
 
 /// Whether `name` is already what the cast makes of it.
-pub(crate) fn is_in_exposed_name_cast_form(name: &str) -> bool {
+pub fn is_in_exposed_name_cast_form(name: &str) -> bool {
     name.len() <= EXPOSED_NAME_MAXIMUM_LENGTH
         && !cast_names_nothing(name)
         && name.chars().all(is_rfc_3986_unreserved)
@@ -93,7 +108,7 @@ mod tests {
     #[test]
     fn every_shared_fixture_case_casts_as_written() {
         let cases: Vec<ExposedNameCastCase> = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/exposed_name_cast_cases.json"
+            "../../../runtime/streamlib-engine/tests/fixtures/exposed_name_cast_cases.json"
         ))
         .expect("the shared cast fixture parses");
         assert!(!cases.is_empty());
@@ -101,7 +116,7 @@ mod tests {
             let outcome = cast_exposed_name_to_url_safe(&case.name);
             if case.refused {
                 assert!(
-                    matches!(outcome, Err(Error::ExposedNameCastsToNothing { .. })),
+                    outcome.is_err(),
                     "{:?} should be refused, got {outcome:?}",
                     case.name
                 );

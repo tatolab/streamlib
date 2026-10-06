@@ -29,18 +29,19 @@
 use streamlib_processor_schema::{
     AudioWindowContract, AudioWindowContractDeclaredValues, DELIVERY_PROFILE_DECLARATION_VALUES,
     ProcessorPortSchema, ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution,
-    RuntimeConfig, RuntimeOptions, ThreadPriority,
+    RuntimeConfig, RuntimeOptions, ThreadPriority, cast_exposed_name_to_url_safe,
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
 use syn::{Ident, LitInt, LitStr, Path, Token, parenthesized};
+use unicode_normalization::UnicodeNormalization;
 
 /// Which side of a link a port sits on. `delivery_profile` is a consumer-side
 /// setting only valid on an `input(...)`; the grammar rejects it on an
 /// `output(...)`.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PortDirection {
+pub(crate) enum PortDirection {
     Input,
     Output,
 }
@@ -52,11 +53,34 @@ impl PortDirection {
             PortDirection::Output => "output",
         }
     }
+
+    /// The module the generated port markers for this direction live in.
+    pub(crate) fn port_marker_module_ident(self) -> Ident {
+        let name = match self {
+            PortDirection::Input => "InputLink",
+            PortDirection::Output => "OutputLink",
+        };
+        Ident::new(name, proc_macro2::Span::call_site())
+    }
+
+    /// The trait the generated port markers for this direction implement.
+    pub(crate) fn port_marker_trait_ident(self) -> Ident {
+        let name = match self {
+            PortDirection::Input => "InputPortMarker",
+            PortDirection::Output => "OutputPortMarker",
+        };
+        Ident::new(name, proc_macro2::Span::call_site())
+    }
 }
 
 /// A parsed input/output port declaration.
 pub struct ParsedPort {
-    pub name: String,
+    /// The name as the author wrote it, spanned at the declaration — the
+    /// marker type's identifier (`OutputLink::videoOut`).
+    pub declared_marker_ident: Ident,
+    /// The declared name as every exposed name is cast — what the
+    /// descriptor and the marker's `PORT_NAME` carry.
+    pub cast_name: String,
     pub description: Option<String>,
     /// Always `Some` on an input and always `None` on an output — the grammar
     /// requires it on the one and rejects it on the other.
@@ -95,7 +119,7 @@ impl ParsedProcessorAttr {
     /// release-core catalog entry.
     pub fn to_processor_schema(&self) -> ProcessorSchema {
         let to_port = |p: &ParsedPort| ProcessorPortSchema {
-            name: p.name.clone(),
+            name: p.cast_name.clone(),
             description: p.description.clone(),
             delivery_profile: p.delivery_profile.clone(),
             audio_window: p.audio_window.clone(),
@@ -219,9 +243,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
         }
     }
 
-    // Duplicate-port-name guard.
-    check_duplicate_ports(&inputs, "input", input.span())?;
-    check_duplicate_ports(&outputs, "output", input.span())?;
+    refuse_ports_that_cast_alike(inputs.iter().chain(&outputs))?;
 
     let execution = execution.ok_or_else(|| {
         syn::Error::new(
@@ -246,19 +268,33 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
     })
 }
 
-fn check_duplicate_ports(
-    ports: &[ParsedPort],
-    kind: &str,
-    span: proc_macro2::Span,
+/// Every port, input or output, needs a name of its own once cast — the rule
+/// `@node` holds a Python class to.
+fn refuse_ports_that_cast_alike<'port>(
+    ports: impl IntoIterator<Item = &'port ParsedPort>,
 ) -> syn::Result<()> {
-    let mut seen = std::collections::HashSet::new();
+    let mut declared_marker_ident_by_cast_name = std::collections::HashMap::new();
     for port in ports {
-        if !seen.insert(port.name.as_str()) {
-            return Err(syn::Error::new(
-                span,
-                format!("duplicate {kind} port name `{}`", port.name),
-            ));
-        }
+        let Some(first_declared_marker_ident) = declared_marker_ident_by_cast_name
+            .insert(port.cast_name.as_str(), &port.declared_marker_ident)
+        else {
+            continue;
+        };
+        let refusal = if *first_declared_marker_ident == port.declared_marker_ident {
+            format!(
+                "the port name `{}` is declared more than once — every port, input or output, \
+                 needs its own name",
+                port.declared_marker_ident
+            )
+        } else {
+            format!(
+                "the ports `{first_declared_marker_ident}` and `{}` both cast to `{}` — a port name is \
+                 lowercased with its accents dropped and anything outside a-z 0-9 - . _ ~ \
+                 turned into '-', so two ports need names that stay apart once cast",
+                port.declared_marker_ident, port.cast_name
+            )
+        };
+        return Err(syn::Error::new(port.declared_marker_ident.span(), refusal));
     }
     Ok(())
 }
@@ -315,13 +351,30 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     parenthesized!(content in input);
 
     let name_lit: LitStr = content.parse()?;
-    let name = name_lit.value();
-    if name.is_empty() {
-        return Err(syn::Error::new(
-            name_lit.span(),
-            "port name must not be empty",
-        ));
-    }
+    // rustc's lexer NFC-normalizes an identifier and proc_macro2's fallback
+    // does not, so the spelling is normalized first for the two to agree.
+    let name: String = name_lit.value().nfc().collect();
+    // `parse_str` skips whitespace and comments and lexes `r#`, none of which
+    // the marker's `Ident` can carry, so only a spelling that parses back to
+    // itself is one.
+    let mut declared_marker_ident = match syn::parse_str::<Ident>(&name) {
+        Ok(ident) if ident == name && !name.starts_with("r#") => ident,
+        _ => {
+            return Err(syn::Error::new(
+                name_lit.span(),
+                format!(
+                    "port {name:?} is not a plain Rust identifier — the declared name is the \
+                     port marker's type (`{}::<name>`), so it can carry no space, punctuation, \
+                     keyword or `r#` prefix",
+                    direction.port_marker_module_ident()
+                ),
+            ));
+        }
+    };
+    declared_marker_ident.set_span(name_lit.span());
+    let cast_name = cast_exposed_name_to_url_safe(&name)
+        .map_err(|casts_to_nothing| syn::Error::new(name_lit.span(), casts_to_nothing))?
+        .into_owned();
 
     let mut description = None;
     let mut delivery_profile = None;
@@ -400,7 +453,8 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     }
 
     Ok(ParsedPort {
-        name,
+        declared_marker_ident,
+        cast_name,
         description,
         delivery_profile,
         audio_window: audio_window.map(|(_, contract)| contract),
@@ -699,10 +753,10 @@ mod tests {
         assert_eq!(parsed.execution, ProcessorSchemaExecution::Manual);
         assert_eq!(parsed.scheduling, Some(ThreadPriority::High));
         assert_eq!(parsed.inputs.len(), 1);
-        assert_eq!(parsed.inputs[0].name, "video_in");
+        assert_eq!(parsed.inputs[0].cast_name, "video_in");
         assert_eq!(parsed.inputs[0].delivery_profile.as_deref(), Some("newest"));
         assert_eq!(parsed.outputs.len(), 1);
-        assert_eq!(parsed.outputs[0].name, "video");
+        assert_eq!(parsed.outputs[0].cast_name, "video");
         // Output ports never carry a delivery profile.
         assert_eq!(parsed.outputs[0].delivery_profile, None);
     }
@@ -845,29 +899,106 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_input_port_is_an_error() {
+    fn a_port_name_declared_twice_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
             input("dup", delivery_profile = "newest"),
             input("dup", delivery_profile = "newest"),
         });
         assert!(
-            msg.contains("duplicate input port name `dup`"),
+            msg.contains("the port name `dup` is declared more than once"),
             "got: {msg}"
         );
     }
 
     #[test]
-    fn duplicate_output_port_is_an_error() {
+    fn an_input_and_an_output_sharing_a_name_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("dup"),
-            output("dup"),
+            input("video", delivery_profile = "newest"),
+            output("video"),
         });
         assert!(
-            msg.contains("duplicate output port name `dup`"),
+            msg.contains("the port name `video` is declared more than once"),
             "got: {msg}"
         );
+    }
+
+    #[test]
+    fn two_ports_that_cast_alike_are_an_error_naming_both() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("videoOut"),
+            output("video_out"),
+            output("VideoOut"),
+        });
+        assert!(
+            msg.contains("the ports `videoOut` and `VideoOut` both cast to `videoout`"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_port_is_declared_under_its_cast_and_keeps_its_spelling_for_the_marker() {
+        let parsed = parse_ok(quote! {
+            execution = manual,
+            input("VidéoIn", delivery_profile = "newest"),
+            output("videoOut"),
+        });
+        assert_eq!(parsed.inputs[0].declared_marker_ident, "VidéoIn");
+        assert_eq!(parsed.inputs[0].cast_name, "videoin");
+        assert_eq!(parsed.outputs[0].declared_marker_ident, "videoOut");
+        assert_eq!(parsed.outputs[0].cast_name, "videoout");
+
+        let schema = parsed.to_processor_schema();
+        assert_eq!(schema.inputs[0].name, "videoin");
+        assert_eq!(schema.outputs[0].name, "videoout");
+    }
+
+    #[test]
+    fn a_port_name_that_is_not_an_identifier_is_an_error() {
+        for not_an_identifier in [
+            "",
+            "..",
+            "video in",
+            "video-out",
+            "type",
+            "r#type",
+            " videoOut ",
+            "videoOut /* c */",
+        ] {
+            let msg = parse_err(quote! {
+                execution = manual,
+                output(#not_an_identifier),
+            });
+            assert!(
+                msg.contains(&format!(
+                    "port {not_an_identifier:?} is not a plain Rust identifier"
+                )),
+                "{not_an_identifier:?} got: {msg}"
+            );
+        }
+    }
+
+    /// A decomposed accent names the same identifier rustc's lexer composes it
+    /// into, so it is accepted as that identifier.
+    #[test]
+    fn a_decomposed_spelling_is_declared_as_its_composed_identifier() {
+        let parsed = parse_ok(quote! {
+            execution = manual,
+            output("Vide\u{301}oOut"),
+        });
+        assert_eq!(parsed.outputs[0].declared_marker_ident, "Vid\u{e9}oOut");
+        assert_eq!(parsed.outputs[0].cast_name, "videoout");
+    }
+
+    #[test]
+    fn a_port_name_casting_to_nothing_is_an_error() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("日本"),
+        });
+        assert!(msg.contains("cannot name anything"), "got: {msg}");
     }
 
     #[test]
