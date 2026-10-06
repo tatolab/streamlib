@@ -29,7 +29,7 @@
 use streamlib_processor_schema::{
     AudioWindowContract, AudioWindowContractDeclaredValues, DELIVERY_PROFILE_DECLARATION_VALUES,
     ProcessorPortSchema, ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution,
-    RuntimeConfig, RuntimeOptions, ThreadPriority,
+    RuntimeConfig, RuntimeOptions, ThreadPriority, cast_exposed_name_to_url_safe,
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 use syn::ext::IdentExt;
@@ -56,7 +56,14 @@ impl PortDirection {
 
 /// A parsed input/output port declaration.
 pub struct ParsedPort {
-    pub name: String,
+    /// The name as the author wrote it — the marker type's identifier
+    /// (`OutputLink::videoOut`).
+    pub declared_spelling: String,
+    /// Where the declared spelling sits, for a refusal naming it.
+    pub declared_spelling_span: proc_macro2::Span,
+    /// The declared spelling as every exposed name is cast — what the
+    /// descriptor and the marker's `PORT_NAME` carry.
+    pub cast_name: String,
     pub description: Option<String>,
     /// Always `Some` on an input and always `None` on an output — the grammar
     /// requires it on the one and rejects it on the other.
@@ -95,7 +102,7 @@ impl ParsedProcessorAttr {
     /// release-core catalog entry.
     pub fn to_processor_schema(&self) -> ProcessorSchema {
         let to_port = |p: &ParsedPort| ProcessorPortSchema {
-            name: p.name.clone(),
+            name: p.cast_name.clone(),
             description: p.description.clone(),
             delivery_profile: p.delivery_profile.clone(),
             audio_window: p.audio_window.clone(),
@@ -219,9 +226,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
         }
     }
 
-    // Duplicate-port-name guard.
-    check_duplicate_ports(&inputs, "input", input.span())?;
-    check_duplicate_ports(&outputs, "output", input.span())?;
+    refuse_ports_that_cast_alike(inputs.iter().chain(&outputs))?;
 
     let execution = execution.ok_or_else(|| {
         syn::Error::new(
@@ -246,19 +251,33 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
     })
 }
 
-fn check_duplicate_ports(
-    ports: &[ParsedPort],
-    kind: &str,
-    span: proc_macro2::Span,
+/// Every port, input or output, needs a name of its own once cast — the rule
+/// `@node` holds a Python class to.
+fn refuse_ports_that_cast_alike<'port>(
+    ports: impl IntoIterator<Item = &'port ParsedPort>,
 ) -> syn::Result<()> {
-    let mut seen = std::collections::HashSet::new();
+    let mut declared_spelling_by_cast_name = std::collections::HashMap::new();
     for port in ports {
-        if !seen.insert(port.name.as_str()) {
-            return Err(syn::Error::new(
-                span,
-                format!("duplicate {kind} port name `{}`", port.name),
-            ));
-        }
+        let Some(first_spelling) =
+            declared_spelling_by_cast_name.insert(port.cast_name.as_str(), &port.declared_spelling)
+        else {
+            continue;
+        };
+        let refusal = if *first_spelling == port.declared_spelling {
+            format!(
+                "the port name `{}` is declared more than once — every port, input or output, \
+                 needs its own name",
+                port.declared_spelling
+            )
+        } else {
+            format!(
+                "the ports `{first_spelling}` and `{}` both cast to `{}` — a port name is \
+                 lowercased with its accents dropped and anything outside a-z 0-9 - . _ ~ \
+                 turned into '-', so two ports need names that stay apart once cast",
+                port.declared_spelling, port.cast_name
+            )
+        };
+        return Err(syn::Error::new(port.declared_spelling_span, refusal));
     }
     Ok(())
 }
@@ -316,12 +335,9 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
 
     let name_lit: LitStr = content.parse()?;
     let name = name_lit.value();
-    if name.is_empty() {
-        return Err(syn::Error::new(
-            name_lit.span(),
-            "port name must not be empty",
-        ));
-    }
+    let cast_name = cast_exposed_name_to_url_safe(&name)
+        .map_err(|casts_to_nothing| syn::Error::new(name_lit.span(), casts_to_nothing))?
+        .into_owned();
 
     let mut description = None;
     let mut delivery_profile = None;
@@ -400,7 +416,9 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     }
 
     Ok(ParsedPort {
-        name,
+        declared_spelling: name,
+        declared_spelling_span: name_lit.span(),
+        cast_name,
         description,
         delivery_profile,
         audio_window: audio_window.map(|(_, contract)| contract),
@@ -699,10 +717,10 @@ mod tests {
         assert_eq!(parsed.execution, ProcessorSchemaExecution::Manual);
         assert_eq!(parsed.scheduling, Some(ThreadPriority::High));
         assert_eq!(parsed.inputs.len(), 1);
-        assert_eq!(parsed.inputs[0].name, "video_in");
+        assert_eq!(parsed.inputs[0].cast_name, "video_in");
         assert_eq!(parsed.inputs[0].delivery_profile.as_deref(), Some("newest"));
         assert_eq!(parsed.outputs.len(), 1);
-        assert_eq!(parsed.outputs[0].name, "video");
+        assert_eq!(parsed.outputs[0].cast_name, "video");
         // Output ports never carry a delivery profile.
         assert_eq!(parsed.outputs[0].delivery_profile, None);
     }
@@ -845,29 +863,71 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_input_port_is_an_error() {
+    fn a_port_name_declared_twice_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
             input("dup", delivery_profile = "newest"),
             input("dup", delivery_profile = "newest"),
         });
         assert!(
-            msg.contains("duplicate input port name `dup`"),
+            msg.contains("the port name `dup` is declared more than once"),
             "got: {msg}"
         );
     }
 
     #[test]
-    fn duplicate_output_port_is_an_error() {
+    fn an_input_and_an_output_sharing_a_name_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
-            output("dup"),
-            output("dup"),
+            input("video", delivery_profile = "newest"),
+            output("video"),
         });
         assert!(
-            msg.contains("duplicate output port name `dup`"),
+            msg.contains("the port name `video` is declared more than once"),
             "got: {msg}"
         );
+    }
+
+    #[test]
+    fn two_ports_that_cast_alike_are_an_error_naming_both() {
+        let msg = parse_err(quote! {
+            execution = manual,
+            output("videoOut"),
+            output("video_out"),
+            output("VideoOut"),
+        });
+        assert!(
+            msg.contains("the ports `videoOut` and `VideoOut` both cast to `videoout`"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_port_is_declared_under_its_cast_and_keeps_its_spelling_for_the_marker() {
+        let parsed = parse_ok(quote! {
+            execution = manual,
+            input("Vidéo In", delivery_profile = "newest"),
+            output("videoOut"),
+        });
+        assert_eq!(parsed.inputs[0].declared_spelling, "Vidéo In");
+        assert_eq!(parsed.inputs[0].cast_name, "video-in");
+        assert_eq!(parsed.outputs[0].declared_spelling, "videoOut");
+        assert_eq!(parsed.outputs[0].cast_name, "videoout");
+
+        let schema = parsed.to_processor_schema();
+        assert_eq!(schema.inputs[0].name, "video-in");
+        assert_eq!(schema.outputs[0].name, "videoout");
+    }
+
+    #[test]
+    fn a_port_name_casting_to_nothing_is_an_error() {
+        for unnameable in ["", "..", "%%"] {
+            let msg = parse_err(quote! {
+                execution = manual,
+                output(#unnameable),
+            });
+            assert!(msg.contains("cannot name anything"), "{unnameable:?} got: {msg}");
+        }
     }
 
     #[test]

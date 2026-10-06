@@ -12,6 +12,8 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
 use streamlib_processor_schema::ProcessorSchema;
+
+use crate::grammar::ParsedPort;
 use syn::spanned::Spanned;
 use syn::{ItemStruct, Path};
 
@@ -23,10 +25,14 @@ use syn::{ItemStruct, Path};
 /// alias, taken verbatim from the attribute's `config = <Path>`; `None` binds
 /// `EmptyConfig`, whose schema is the empty object a processor declaring no
 /// config publishes. `config_field_name` is the generated struct field
-/// (present iff `config_type_path` is `Some`).
+/// (present iff `config_type_path` is `Some`). The declared ports name the
+/// port markers, whose identifiers keep the author's spelling where `schema`
+/// carries only the cast.
 pub fn generate_from_processor_schema(
     item: &ItemStruct,
     schema: &ProcessorSchema,
+    declared_input_ports: &[ParsedPort],
+    declared_output_ports: &[ParsedPort],
     config_type_path: Option<&Path>,
     config_field_name: Option<&str>,
     sdk_root: TokenStream,
@@ -46,8 +52,8 @@ pub fn generate_from_processor_schema(
 
     let processor_struct =
         generate_processor_struct_from_schema(schema, &config_field_name, &custom_fields);
-    let input_link_module = generate_input_link_module_from_schema(schema);
-    let output_link_module = generate_output_link_module_from_schema(schema);
+    let input_link_module = generate_input_link_module(declared_input_ports);
+    let output_link_module = generate_output_link_module(declared_output_ports);
     let processor_impl = generate_processor_impl_from_schema(
         schema,
         &config_type,
@@ -259,17 +265,18 @@ fn generate_processor_struct_from_schema(
     }
 }
 
-/// Generate InputLink module from schema.
-fn generate_input_link_module_from_schema(schema: &ProcessorSchema) -> TokenStream {
-    let port_markers: Vec<TokenStream> = schema
-        .inputs
+/// Generate the `InputLink` module: one marker per declared input port, named by
+/// its declared spelling and carrying its cast name.
+fn generate_input_link_module(declared_input_ports: &[ParsedPort]) -> TokenStream {
+    let port_markers: Vec<TokenStream> = declared_input_ports
         .iter()
         .map(|port| {
-            let port_name = Ident::new(&port.name, proc_macro2::Span::call_site());
+            let marker_name = Ident::new(&port.declared_spelling, proc_macro2::Span::call_site());
+            let cast_name = &port.cast_name;
             quote! {
-                pub struct #port_name;
-                impl super::__streamlib_sdk::processors::InputPortMarker for #port_name {
-                    const PORT_NAME: &'static str = stringify!(#port_name);
+                pub struct #marker_name;
+                impl super::__streamlib_sdk::processors::InputPortMarker for #marker_name {
+                    const PORT_NAME: &'static str = #cast_name;
                     type Processor = super::Processor;
                 }
             }
@@ -283,17 +290,18 @@ fn generate_input_link_module_from_schema(schema: &ProcessorSchema) -> TokenStre
     }
 }
 
-/// Generate OutputLink module from schema.
-fn generate_output_link_module_from_schema(schema: &ProcessorSchema) -> TokenStream {
-    let port_markers: Vec<TokenStream> = schema
-        .outputs
+/// Generate the `OutputLink` module: one marker per declared output port, named by
+/// its declared spelling and carrying its cast name.
+fn generate_output_link_module(declared_output_ports: &[ParsedPort]) -> TokenStream {
+    let port_markers: Vec<TokenStream> = declared_output_ports
         .iter()
         .map(|port| {
-            let port_name = Ident::new(&port.name, proc_macro2::Span::call_site());
+            let marker_name = Ident::new(&port.declared_spelling, proc_macro2::Span::call_site());
+            let cast_name = &port.cast_name;
             quote! {
-                pub struct #port_name;
-                impl super::__streamlib_sdk::processors::OutputPortMarker for #port_name {
-                    const PORT_NAME: &'static str = stringify!(#port_name);
+                pub struct #marker_name;
+                impl super::__streamlib_sdk::processors::OutputPortMarker for #marker_name {
+                    const PORT_NAME: &'static str = #cast_name;
                     type Processor = super::Processor;
                 }
             }
@@ -1284,7 +1292,15 @@ mod processor_struct_emit_tests {
     }
 
     fn expand_probe_processor(item: &ItemStruct) -> TokenStream {
-        generate_from_processor_schema(item, &minimal_schema(), None, None, quote! { streamlib })
+        generate_from_processor_schema(
+            item,
+            &minimal_schema(),
+            &[],
+            &[],
+            None,
+            None,
+            quote! { streamlib },
+        )
     }
 
     fn struct_with_cfg_attr_on_a_field() -> ItemStruct {
@@ -1523,5 +1539,25 @@ mod processor_struct_emit_tests {
                 "identity must never be reflected at runtime — got: {rendered}"
             );
         }
+    }
+
+    /// The marker keeps the author's spelling, so `OutputLink::videoOut` still
+    /// names it, while its `PORT_NAME` is the cast the descriptor registers.
+    #[test]
+    fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
+        let declared_output_port = ParsedPort {
+            declared_spelling: "videoOut".to_string(),
+            declared_spelling_span: Span::call_site(),
+            cast_name: "videoout".to_string(),
+            description: None,
+            delivery_profile: None,
+            audio_window: None,
+        };
+        let rendered = generate_output_link_module(&[declared_output_port]).to_string();
+        assert!(rendered.contains("pub struct videoOut"), "got: {rendered}");
+        assert!(
+            rendered.contains(r#"const PORT_NAME : & 'static str = "videoout""#),
+            "got: {rendered}"
+        );
     }
 }

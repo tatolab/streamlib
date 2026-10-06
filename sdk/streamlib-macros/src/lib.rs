@@ -56,6 +56,8 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     let generated = codegen::generate_from_processor_schema(
         &item_struct,
         &schema,
+        &parsed.inputs,
+        &parsed.outputs,
         parsed.config_type.as_ref(),
         config_field_name.as_deref(),
         sdk_root(),
