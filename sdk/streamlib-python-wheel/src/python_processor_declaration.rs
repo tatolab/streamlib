@@ -484,7 +484,7 @@ class BlurProcessor:
     /// decorator module imports a sibling relatively and a bare run of its
     /// source resolves that against nothing.
     fn declaration_module_namespace(python: Python<'_>) -> Bound<'_, PyDict> {
-        install_stand_in_tatolab_packages(python);
+        install_stand_in_tatolab_stream_package(python);
         let namespace = PyDict::new(python);
         namespace.set_item("__package__", "tatolab.stream").unwrap();
         python
@@ -497,37 +497,27 @@ class BlurProcessor:
         namespace
     }
 
-    /// The wheel's own Python source root, the directory the `tatolab`
-    /// namespace package spans.
-    const WHEEL_PYTHON_TATOLAB_NAMESPACE_DIRECTORY: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/python/tatolab");
-
     /// The `tatolab.stream` package directory, where the decorator module's
     /// siblings live.
     const WHEEL_PYTHON_TATOLAB_STREAM_PACKAGE_DIRECTORY: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/python/tatolab/stream");
 
-    /// The `tatolab.runtime` package directory.
-    const WHEEL_PYTHON_TATOLAB_RUNTIME_PACKAGE_DIRECTORY: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/python/tatolab/runtime");
-
-    /// Put `tatolab`, `tatolab.stream` and `tatolab.runtime` on `sys.modules`,
-    /// each searching its real source directory, so the decorator module's
-    /// imports resolve without an installed wheel.
+    /// Put a `tatolab.stream` package on `sys.modules` whose search path is the
+    /// real source directory, so the decorator module's relative imports
+    /// resolve without an installed wheel.
     ///
     /// A package object already on `sys.modules` is never initialised again, so
-    /// neither `__init__.py` — each of which reaches the compiled `_engine` a
-    /// `cargo test` run does not have — is executed. Only the modules actually
-    /// imported are loaded, and the decorator module is the same file
-    /// `include_str!` above reads.
+    /// `__init__.py` — which imports the compiled `_engine` a `cargo test` run
+    /// does not have — is not executed. Only the siblings actually imported are
+    /// loaded, and each is the same file `include_str!` above reads.
     ///
     /// `tatolab.runtime._engine` is the one module that cannot be: it is the
     /// compiled artifact this binary *is* a copy of, and a `maturin develop`
-    /// leaves one in the source directory that the search path would otherwise
+    /// leaves one in the source directory that a search path would otherwise
     /// load — a second engine, with its own process-global registry, deciding
     /// whether these tests pass. A stand-in stands in for it, so a decoration
     /// here reads the grammar and registers nothing.
-    fn install_stand_in_tatolab_packages(python: Python<'_>) {
+    fn install_stand_in_tatolab_stream_package(python: Python<'_>) {
         let sys_modules = python
             .import("sys")
             .unwrap()
@@ -535,36 +525,23 @@ class BlurProcessor:
             .unwrap()
             .cast_into::<PyDict>()
             .unwrap();
-        // Each module is claimed on its own: a `tatolab.runtime` already on
+        // Each module is claimed on its own: a `tatolab.stream` already on
         // `sys.modules` without `tatolab.runtime._engine` would otherwise skip the
         // stand-in and leave the import to find the compiled artifact this binary
         // is a copy of.
-        for (package_name, package_directory) in [
-            ("tatolab", WHEEL_PYTHON_TATOLAB_NAMESPACE_DIRECTORY),
-            (
-                "tatolab.stream",
-                WHEEL_PYTHON_TATOLAB_STREAM_PACKAGE_DIRECTORY,
-            ),
-            (
-                "tatolab.runtime",
-                WHEEL_PYTHON_TATOLAB_RUNTIME_PACKAGE_DIRECTORY,
-            ),
-        ] {
-            if sys_modules.contains(package_name).unwrap() {
-                continue;
-            }
+        if !sys_modules.contains("tatolab.stream").unwrap() {
             let package = python
                 .import("types")
                 .unwrap()
-                .call_method1("ModuleType", (package_name,))
+                .call_method1("ModuleType", ("tatolab.stream",))
                 .unwrap();
             package
                 .setattr(
                     "__path__",
-                    PyList::new(python, [package_directory]).unwrap(),
+                    PyList::new(python, [WHEEL_PYTHON_TATOLAB_STREAM_PACKAGE_DIRECTORY]).unwrap(),
                 )
                 .unwrap();
-            sys_modules.set_item(package_name, package).unwrap();
+            sys_modules.set_item("tatolab.stream", package).unwrap();
         }
 
         if !sys_modules.contains("tatolab.runtime._engine").unwrap() {
