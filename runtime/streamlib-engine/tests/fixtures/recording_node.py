@@ -108,7 +108,7 @@ def main() -> None:
     runtime = streamlib.Runtime(runtime_name="recording-node")
     runtime.load(graph)
 
-    runtime.host_control_plane()
+    runtime.host_control_plane(bind_host="127.0.0.1")
     runtime.run()
 
 

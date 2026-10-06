@@ -159,8 +159,6 @@ def main() -> None:
     runtime = streamlib.Runtime(runtime_name="whip-whep-roundtrip-node")
     runtime.load(graph)
 
-    # The graph's config carries the stream-key URLs and `graph` serves config;
-    # loopback keeps the TCP listener the socket still runs beside off the LAN.
     runtime.host_control_plane(bind_host="127.0.0.1")
     runtime.run()
 

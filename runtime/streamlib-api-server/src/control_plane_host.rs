@@ -18,10 +18,10 @@ pub struct ApiServerControlPlaneHostConfig {
 }
 
 impl Default for ApiServerControlPlaneHostConfig {
-    /// The wheel's `host_control_plane()` defaults: every interface, port 9000.
+    /// Loopback only, port 9000.
     fn default() -> Self {
         Self {
-            bind_host: "0.0.0.0".to_string(),
+            bind_host: "127.0.0.1".to_string(),
             bind_port: 9000,
         }
     }
