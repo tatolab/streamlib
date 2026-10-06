@@ -56,7 +56,7 @@ pub(crate) struct SurfaceNamedForTheWindowsPresentLoop {
 /// A snapshot, not a queue: the pump coalesces, so an owner that drains once
 /// a frame sees the same extent and the same one close request it would have
 /// seen draining every microsecond.
-#[pyclass(name = "ProcessorOwnedWindowEvents", module = "streamlib", frozen)]
+#[pyclass(name = "ProcessorOwnedWindowEvents", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonProcessorOwnedWindowEvents {
     current_width_in_physical_pixels: u32,
     current_height_in_physical_pixels: u32,
@@ -114,7 +114,7 @@ impl PythonProcessorOwnedWindowEvents {
 /// Defined on every platform so the stub's surface is honest everywhere; where
 /// the engine has no present loop it is unconstructible, because
 /// `create_window` refuses before reaching it.
-#[pyclass(name = "ProcessorOwnedWindow", module = "streamlib", frozen)]
+#[pyclass(name = "ProcessorOwnedWindow", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonProcessorOwnedWindow {
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     window_id: String,

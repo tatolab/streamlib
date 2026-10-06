@@ -13,7 +13,7 @@ use super::gpu_context::PythonGpuContextLimitedAccess;
 /// `ctx.gpu_limited_access` because this is where the two knowledges meet: the
 /// consumer names the type it is reading into, and the context holds the route
 /// to the engine's surfaces.
-#[pyclass(name = "LinkInputDataReader", module = "streamlib", frozen)]
+#[pyclass(name = "LinkInputDataReader", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonLinkInputDataReader {
     pub(super) link_data_access: Py<PythonProcessorLinkDataAccess>,
     pub(super) gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
@@ -122,7 +122,7 @@ impl PythonLinkInputDataReader {
 }
 
 /// A processor's output ports, as `ctx.outputs`.
-#[pyclass(name = "LinkOutputDataWriter", module = "streamlib", frozen)]
+#[pyclass(name = "LinkOutputDataWriter", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonLinkOutputDataWriter {
     pub(super) link_data_access: Py<PythonProcessorLinkDataAccess>,
 }

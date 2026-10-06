@@ -6,10 +6,10 @@
 """The helper process one Python processor runs in.
 
 Every `@node` class runs here — its own interpreter, its own GIL, one
-processor per process. The parent execs `sys.executable -m streamlib._helper`;
-this module imports the class by the import path the parent derived from it,
-opens that processor's own iceoryx2 ports from the wiring the parent sends,
-and drives its lifecycle.
+processor per process. The parent execs
+`sys.executable -m tatolab.runtime._helper`; this module imports the class by
+the import path the parent derived from it, opens that processor's own
+iceoryx2 ports from the wiring the parent sends, and drives its lifecycle.
 
 Startup order is load-bearing: the escalate socket comes up first so logging
 has somewhere to go, and the user's module is imported last so anything it
@@ -33,7 +33,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from . import log
+from tatolab.stream import log
+
 from ._capability_extensions import (
     load_installed_capability_extensions_once_per_process,
 )
@@ -577,7 +578,7 @@ class ParentProcessLogSink:
                 "attrs": attrs,
             }
             # Named only where there is one to name: the two columns an engine
-            # record fills are absent from every `streamlib.log` document,
+            # record fills are absent from every `tatolab.stream.log` document,
             # which is the document helpers have always sent.
             if target is not None:
                 record["target"] = target

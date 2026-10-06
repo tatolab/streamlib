@@ -28,11 +28,13 @@ import queue
 import threading
 from typing import Any, Dict, Mapping, Optional
 
-from . import Runtime
-from ._exposed_name_cast import (
+from tatolab.stream._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
+from tatolab.stream._stream_graph_builder import Stream
+
+from . import Runtime
 from ._engine import (
     TestBagCollector,
     TestBagFeeder,
@@ -41,7 +43,6 @@ from ._engine import (
     feed_test_harness_bag,
     open_test_harness_channel,
 )
-from ._stream_graph_builder import Stream
 
 __all__ = ["SingleProcessorTestPipeline"]
 
@@ -260,7 +261,7 @@ def _declared_port_names(processor_class: type, direction: str) -> "list[str]":
     if declared is None:
         raise TypeError(
             f"{processor_class.__name__} is not a processor: decorate it with "
-            f"@streamlib.node"
+            f"@tatolab.stream.node"
         )
     return [port["name"] for port in declared]
 

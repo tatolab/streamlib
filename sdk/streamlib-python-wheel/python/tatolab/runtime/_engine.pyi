@@ -19,7 +19,7 @@ from types import TracebackType
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, ClassVar, Literal, TypeVar, final, overload
 
-from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
+from tatolab.stream.claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 
 from typing_extensions import Self, disjoint_base
 
@@ -101,7 +101,7 @@ class CameraSource:
     camera on macOS, ahead of external cameras and camera extensions.
     `max_width` and `max_height` (1920 and 1080 by default) cap the negotiated
     format, which is clamped to fit. Output `video` publishes an ordinary
-    `streamlib.VideoFrame`. Camera→GPU transport auto-selects zero-copy (DMA-BUF on Linux, IOSurface on
+    `tatolab.stream.VideoFrame`. Camera→GPU transport auto-selects zero-copy (DMA-BUF on Linux, IOSurface on
     macOS) or CPU upload. A named `device_id` that cannot be opened is refused
     at `setup()` by name, as is every camera on a platform no capture backend
     serves. Each frame's `timestamp_ns` is the instant the device captured it,
@@ -125,7 +125,7 @@ class DisplayWindow:
     interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`. `width` and
     `height` (1280 and 720 by default) are the window's initial size in the
     desktop's logical pixels, so it is the same size on a 1x and a 2x display.
-    Input `video` (`newest`) takes any published `streamlib.VideoFrame`.
+    Input `video` (`newest`) takes any published `tatolab.stream.VideoFrame`.
 
     Add as many as the graph needs: each instance registers its own window
     with the engine's shared event pump and renders on its own thread. An
@@ -148,7 +148,7 @@ class H264Decoder:
     Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
     shape `H264Encoder` publishes; a bag the decoder cannot read is refused
     by name, never reshaped. Output `video` publishes an ordinary
-    `streamlib.VideoFrame` on a pooled RGBA pixel-buffer surface at the
+    `tatolab.stream.VideoFrame` on a pooled RGBA pixel-buffer surface at the
     conformance-windowed extent — never the coded picture — carrying the
     encoded frame's own timestamp and `color_info`, with `fps`,
     `texture_layout` and the HDR sidecars absent, so `DisplayWindow` and a
@@ -182,7 +182,7 @@ class H264Encoder:
     (`stream.add(H264Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
-    Input `video` (`ordered`) takes any published `streamlib.VideoFrame` —
+    Input `video` (`ordered`) takes any published `tatolab.stream.VideoFrame` —
     buffer-backed (camera, test pattern) or texture-backed (a kernel
     output). Output `encoded_video` publishes encoded-frame bags: one
     Annex-B access unit per bag, beside the stream metadata keys. A frame
@@ -221,7 +221,7 @@ class H265Decoder:
     Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
     shape `H265Encoder` publishes; a bag the decoder cannot read is refused
     by name, never reshaped. Output `video` publishes an ordinary
-    `streamlib.VideoFrame` on a pooled RGBA pixel-buffer surface at the
+    `tatolab.stream.VideoFrame` on a pooled RGBA pixel-buffer surface at the
     conformance-windowed extent — never the coded picture — carrying the
     encoded frame's own timestamp and `color_info`, with `fps`,
     `texture_layout` and the HDR sidecars absent, so `DisplayWindow` and a
@@ -255,7 +255,7 @@ class H265Encoder:
     (`stream.add(H265Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
-    Input `video` (`ordered`) takes any published `streamlib.VideoFrame` —
+    Input `video` (`ordered`) takes any published `tatolab.stream.VideoFrame` —
     buffer-backed (camera, test pattern) or texture-backed (a kernel
     output). Output `encoded_video` publishes encoded-frame bags: one
     Annex-B access unit per bag, beside the stream metadata keys. A frame
@@ -295,7 +295,7 @@ class MicrophoneSource:
     `device_id` takes the backend's default device; naming one the backend
     cannot open raises rather than landing on a different device.
 
-    Blocks arrive on the `audio` output as bags `streamlib.AudioBlock` casts.
+    Blocks arrive on the `audio` output as bags `tatolab.stream.AudioBlock` casts.
 
     On macOS the backend is CoreAudio and `device_id` is a CoreAudio device
     UID; naming one that is not attached is refused with the UIDs that are.
@@ -370,7 +370,7 @@ class OpusDecoder:
     refused by name: a `codec` other than `"opus"`, a `bitstream` that is not
     msgpack bin, a `sample_rate` other than 48 000, or a `pre_skip` past the
     5 760 samples one Opus packet can span. Output `audio` publishes ordinary
-    `streamlib.AudioBlock` bags — `f32` at 48 000 Hz in the packet's own
+    `tatolab.stream.AudioBlock` bags — `f32` at 48 000 Hz in the packet's own
     channel count.
 
     It enters the stream at any packet, since every Opus packet is a sync
@@ -438,7 +438,7 @@ class SpeakerSink:
     backend cannot open raises rather than landing on a different device.
 
     Blocks to play arrive on the `audio` input as bags in the
-    `streamlib.AudioBlock` shape. The port declares
+    `tatolab.stream.AudioBlock` shape. The port declares
     `audio_window = match_device`, so the engine resamples every block to the
     device's rate and re-frames it into device-period windows — `graph` renders
     the resolved values on the port. Conversion is not unconditional: `dtype`
@@ -515,7 +515,7 @@ class VirtualCameraSink:
 
 @final
 class TestBagFeeder:
-    """`streamlib.testing`'s feeder endpoint: publishes bags a test queued.
+    """`tatolab.runtime.testing`'s feeder endpoint: publishes bags a test queued.
 
     A marker type, like the media built-ins — never instantiated, passed to
     `stream.add`. Native so that its queue lives in the app process, where the
@@ -529,7 +529,7 @@ class TestBagFeeder:
 
 @final
 class TestBagCollector:
-    """`streamlib.testing`'s collector endpoint: records every bag produced."""
+    """`tatolab.runtime.testing`'s collector endpoint: records every bag produced."""
 
     type: ClassVar[str]
 
@@ -700,7 +700,7 @@ class ProcessorLinkDataAccess:
     """One processor's links. The engine binds it; app code never builds one.
 
     Constructing one opens a helper process's own data plane, with its own
-    iceoryx2 node — only `streamlib._helper` does that. The node opens in the
+    iceoryx2 node — only `tatolab.runtime._helper` does that. The node opens in the
     domain root the parent runtime hands over in `STREAMLIB_ICEORYX2_DOMAIN_ROOT`,
     and construction raises `RuntimeError` naming that variable when it is unset.
     """
@@ -2204,7 +2204,7 @@ def capture_this_helper_processes_engine_log_records() -> None:
     iceoryx2's own included, into the ring
     `drain_the_engine_log_records_this_helper_captured` empties.
 
-    Called by `streamlib._helper` once its channel to the parent is up and
+    Called by `tatolab.runtime._helper` once its channel to the parent is up and
     before it opens anything, and by nothing else. Raises on a second call and
     on a process that already has a `tracing` subscriber.
     """
@@ -2234,7 +2234,7 @@ if sys.platform == "darwin":
         `PR_SET_PDEATHSIG`. Either signal shuts `parent_channel_fd` down, so
         the helper reads the end of its channel and runs `stop` and
         `teardown()`; whatever is still alive about six and a half seconds
-        later has its process group killed. Called by `streamlib._helper`
+        later has its process group killed. Called by `tatolab.runtime._helper`
         before any processor code runs, and by nothing else. Raises on a
         second call and when the pid watch cannot be armed.
         """

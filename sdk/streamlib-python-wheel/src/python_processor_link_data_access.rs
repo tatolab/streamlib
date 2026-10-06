@@ -44,7 +44,7 @@ use crate::python_processor_declaration::read_a_channel_count_or_the_source_spel
 /// Frozen because the engine hands the same object to the processor's own
 /// thread and reads it from the wiring path; the interior `OnceLock`s are
 /// written once before the processor's first callback.
-#[pyclass(name = "ProcessorLinkDataAccess", module = "streamlib", frozen)]
+#[pyclass(name = "ProcessorLinkDataAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonProcessorLinkDataAccess {
     input_mailboxes: OnceLock<Arc<InputMailboxesInner>>,
     output_writer: OnceLock<Arc<OutputWriterInner>>,

@@ -24,7 +24,8 @@ import inspect
 import typing
 from typing import Any, Callable, Optional, TypeVar
 
-from ._engine import register_declared_processor_class
+from tatolab.runtime._engine import register_declared_processor_class
+
 from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,

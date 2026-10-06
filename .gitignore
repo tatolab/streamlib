@@ -18,7 +18,7 @@ build/
 htmlcov/
 # The macOS wheel's Vulkan loader and MoltenVK, staged by
 # scripts/stage_macos_bundled_vulkan_driver.sh at build time.
-sdk/streamlib-python-wheel/python/streamlib/_vulkan_driver/
+sdk/streamlib-python-wheel/python/tatolab/runtime/_vulkan_driver/
 
 # Output files
 output/

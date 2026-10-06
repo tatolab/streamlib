@@ -136,7 +136,7 @@ fn acquire_storage_buffer_through_the_helper_process_exchange(
 /// Every call crosses to the parent through the exchange client — the
 /// engine and its pools live one process away. `None` means this helper
 /// has no surface-share channel, and every call refuses by name.
-#[pyclass(name = "GpuContextLimitedAccess", module = "streamlib", frozen)]
+#[pyclass(name = "GpuContextLimitedAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGpuContextLimitedAccess {
     helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
 }
@@ -398,7 +398,7 @@ impl PythonGpuContextLimitedAccess {
 ///
 /// What does not survive the process boundary is a *scope* spanning
 /// several ops — see this capability's `escalate` refusal.
-#[pyclass(name = "GpuContextFullAccess", module = "streamlib", frozen)]
+#[pyclass(name = "GpuContextFullAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGpuContextFullAccess {
     /// `None` means this helper was started without its GPU channels, and
     /// every method refuses by name.

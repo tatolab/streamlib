@@ -17,7 +17,7 @@ use crate::python_helper_process_pixel_exchange::HelperSurfaceCheckOutLeaseDebt;
 ///
 /// Claims are counted, so holding one and resolving the same surface for its
 /// pixels are independent — neither releases the other's.
-#[pyclass(name = "GpuSurfaceCheckOutLease", module = "streamlib", frozen)]
+#[pyclass(name = "GpuSurfaceCheckOutLease", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGpuSurfaceCheckOutLease {
     pub(super) claimed_surface_id: String,
     /// Settled by its own `Drop`; nothing reads it, and that is the point.
@@ -42,7 +42,7 @@ impl PythonGpuSurfaceCheckOutLease {
 /// Deliberately outside the `GpuSurface*` family prefix: the object names
 /// an allocation, never a frame-bearing surface — the surface-id lifetime
 /// guarantees end at export.
-#[pyclass(name = "OpaqueFdTextureExport", module = "streamlib", frozen)]
+#[pyclass(name = "OpaqueFdTextureExport", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonOpaqueFdTextureExport {
     exported_memory_fd: i32,
     allocation_byte_size: u64,
@@ -192,7 +192,7 @@ impl PythonOpaqueFdTextureExport {
 /// Deliberately outside the `GpuSurface*` family prefix: the object names
 /// an allocation, never a frame-bearing surface — the surface-id lifetime
 /// guarantees end at export.
-#[pyclass(name = "IOSurfaceMachPortExport", module = "streamlib", frozen)]
+#[pyclass(name = "IOSurfaceMachPortExport", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonIOSurfaceMachPortExport {
     iosurface_mach_port_name: u32,
     allocation_byte_size: u64,

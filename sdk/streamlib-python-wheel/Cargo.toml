@@ -19,7 +19,7 @@ description = "streamlib — the importable Python wheel: the app imports the en
 publish = false
 
 [lib]
-# The extension module lands at `streamlib._engine`, so the cdylib maturin picks
+# The extension module lands at `tatolab.runtime._engine`, so the cdylib maturin picks
 # up must be named `_engine`. `rlib` rides alongside so the crate's own Rust
 # tests build against a normal interpreter link.
 name = "_engine"

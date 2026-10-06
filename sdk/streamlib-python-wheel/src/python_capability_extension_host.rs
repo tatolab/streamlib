@@ -31,7 +31,7 @@ impl EngineProcessRole {
 }
 
 /// What a capability extension's `load(host)` hook is handed.
-#[pyclass(name = "CapabilityExtensionHost", module = "streamlib", frozen)]
+#[pyclass(name = "CapabilityExtensionHost", module = "tatolab.runtime", frozen)]
 pub(crate) struct PythonCapabilityExtensionHost {
     role: EngineProcessRole,
     distribution: String,

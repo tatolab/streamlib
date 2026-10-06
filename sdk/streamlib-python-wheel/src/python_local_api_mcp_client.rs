@@ -44,7 +44,7 @@ create_exception!(
 );
 
 /// A connected MCP client of one node's local API.
-#[pyclass(name = "LocalApiMcpClient", module = "streamlib._engine", frozen)]
+#[pyclass(name = "LocalApiMcpClient", module = "tatolab.runtime._engine", frozen)]
 pub(crate) struct PythonLocalApiMcpClient {
     // Declared before the runtime so it is dropped while the runtime that
     // drives it still exists.

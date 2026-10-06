@@ -21,7 +21,7 @@ use super::link_data_access::{PythonLinkInputDataReader, PythonLinkOutputDataWri
 /// Built in the helper process the processor runs in — there is no engine in
 /// that process to borrow a view from, so everything a hook reads is either
 /// local or was passed down by the parent.
-#[pyclass(name = "RuntimeContextFullAccess", module = "streamlib", frozen)]
+#[pyclass(name = "RuntimeContextFullAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonRuntimeContextFullAccess {
     runtime_id: String,
     processor_id: String,
@@ -195,7 +195,7 @@ impl PythonRuntimeContextFullAccess {
 ///
 /// `gpu_full_access` is deliberately absent — reaching for it raises
 /// `AttributeError`, mirroring the Rust capability split.
-#[pyclass(name = "RuntimeContextLimitedAccess", module = "streamlib", frozen)]
+#[pyclass(name = "RuntimeContextLimitedAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonRuntimeContextLimitedAccess {
     runtime_id: String,
     processor_id: String,

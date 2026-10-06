@@ -47,7 +47,7 @@ use super::left_by_a_propagating_exception;
 /// releases it. The value itself sits behind an `Arc` shared with every DLPack
 /// capsule minted from this handle, so a tensor Python is still holding keeps
 /// the memory addressable after the handle is closed.
-#[pyclass(name = "GpuSurfaceHandle", module = "streamlib", frozen)]
+#[pyclass(name = "GpuSurfaceHandle", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGpuSurfaceHandle {
     /// `None` for pooled textures — see [`Self::surface_id`].
     minted_surface_id: Option<String>,

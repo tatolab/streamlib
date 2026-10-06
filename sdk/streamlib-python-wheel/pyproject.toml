@@ -40,7 +40,7 @@ classifiers = [
 # pip owns PATH: installing the wheel is what puts `streamlib` on it. There is
 # no second artifact to install and no shell setup step.
 [project.scripts]
-streamlib = "streamlib.cli:main"
+streamlib = "tatolab.runtime.cli:main"
 
 [project.optional-dependencies]
 # numpy, torch and mlx are test-and-types dependencies, not runtime ones — the
@@ -89,7 +89,7 @@ markers = [
 
 [tool.maturin]
 python-source = "python"
-module-name = "streamlib._engine"
+module-name = "tatolab.runtime._engine"
 features = ["extension-module"]
 # A local `maturin develop` leaves compiled bytecode next to the sources,
 # and maturin globs the directory — without this an incremental build ships
@@ -108,10 +108,10 @@ macos-deployment-target = "15.0"
 # ruff runs over the `streamlib new` renders only (tests/test_cli.py).
 # Rooted there so `nodes` sorts as the scaffolded app's own first-party
 # package, as it does in the project `new` writes.
-src = ["python/streamlib/_scaffold_template"]
+src = ["python/tatolab/runtime/_scaffold_template"]
 
 [tool.ruff.lint]
-# flake8-builtins, so the scaffold's `noqa: A004` on streamlib's `input` port
+# flake8-builtins, so the scaffold's `noqa: A004` on tatolab.stream's `input` port
 # decorator is checked rather than reported unused.
 extend-select = ["A"]
 
@@ -121,7 +121,7 @@ extend-select = ["A"]
 include = ["python", "tests"]
 # The package is checked from source, not from an install, so `tests/` needs
 # the package root on the search path. Without it a checkout that has not run
-# `maturin develop` reports every `import streamlib` unresolved — which is
+# `maturin develop` reports every `import tatolab.stream` unresolved — which is
 # precisely the state the no-build job runs in.
 extraPaths = ["python"]
 pythonVersion = "3.10"
@@ -140,6 +140,6 @@ reportMissingModuleSource = "none"
 # at the app directory, so `stream.py`'s `nodes` import resolves, and at
 # the Python version the scaffold pins.
 [[tool.pyright.executionEnvironments]]
-root = "python/streamlib/_scaffold_template"
+root = "python/tatolab/runtime/_scaffold_template"
 extraPaths = ["python"]
 pythonVersion = "3.12"

@@ -229,9 +229,9 @@ impl RuntimeGraphLoadRecord {
 ///
 /// Single-use by construction: [`run`](PythonRuntimeHandle::run) takes the
 /// engine out and drops it before returning.
-// `subclass` so the Python-side `streamlib.Runtime` can extend this to register
+// `subclass` so the Python-side `tatolab.runtime.Runtime` can extend this to register
 // itself with the `atexit` teardown hook.
-#[pyclass(name = "Runtime", module = "streamlib", subclass)]
+#[pyclass(name = "Runtime", module = "tatolab.runtime", subclass)]
 pub struct PythonRuntimeHandle {
     lifecycle: Mutex<PythonRuntimeLifecycleState>,
     /// Locked after `lifecycle` wherever both are held, so `run()`'s check of
@@ -762,7 +762,7 @@ impl PythonRuntimeHandle {
                 // to the torn-down state before its teardown and clears the
                 // escalation only after it, so this request cannot outlive the
                 // run loop it is meant for.
-                request_runtime_shutdown("streamlib.Runtime.shutdown()")
+                request_runtime_shutdown("tatolab.runtime.Runtime.shutdown()")
                     .map_err(|request_failure| PyRuntimeError::new_err(request_failure.to_string()))
             }
             PythonRuntimeLifecycleState::EngineTornDownWithThreadsJoinedOrAbandoned => Ok(()),

@@ -26,13 +26,18 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
-from ._engine import ComputeKernel, GpuContextFullAccess, GpuSurfaceHandle
+from tatolab.runtime._engine import (
+    ComputeKernel,
+    GpuContextFullAccess,
+    GpuSurfaceHandle,
+)
+
 from ._sampled_source_landing import (
     SAMPLED_SOURCE_BINDING_NAME,
     GpuContextWithSurfaceCopy,
     SampledSourceLandingTextureRing,
 )
-from .processor_output_texture_ring import STANDARD_RING_DEPTH
+from .node_output_texture_ring import STANDARD_RING_DEPTH
 
 __all__ = [
     "ModelInputTensor",

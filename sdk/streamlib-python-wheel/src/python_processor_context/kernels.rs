@@ -51,7 +51,7 @@ pub(super) fn reflected_binding_names(reflected: &[ReflectedKernelBinding]) -> V
 /// Defined on every platform so the stub's surface is honest everywhere;
 /// off Linux it is unconstructible, because `create_compute_kernel` refuses
 /// before reaching it.
-#[pyclass(name = "ComputeKernel", module = "streamlib", frozen)]
+#[pyclass(name = "ComputeKernel", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonComputeKernel {
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) kernel_id: String,
@@ -178,7 +178,7 @@ pub(super) struct KernelDispatchBatchRecording {
 /// Nothing about the synchronous contract changes: the scope returns when the
 /// GPU work has retired and the writes are visible, and no fence or timeline
 /// value reaches Python.
-#[pyclass(name = "KernelDispatchBatch", module = "streamlib", frozen)]
+#[pyclass(name = "KernelDispatchBatch", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonKernelDispatchBatch {
     /// `None` means this helper was started without its GPU channels.
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
@@ -344,7 +344,7 @@ impl PythonKernelDispatchBatch {
 /// Defined on every platform so the stub's surface is honest everywhere; off
 /// Linux it is unconstructible, because `create_graphics_kernel` refuses before
 /// reaching it.
-#[pyclass(name = "GraphicsKernel", module = "streamlib", frozen)]
+#[pyclass(name = "GraphicsKernel", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGraphicsKernel {
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) kernel_id: String,
@@ -470,7 +470,7 @@ impl PythonGraphicsKernel {
 /// Defined on every platform so the stub's surface is honest everywhere; off
 /// Linux it is unconstructible, because `create_ray_tracing_kernel` refuses
 /// before reaching it.
-#[pyclass(name = "RayTracingKernel", module = "streamlib", frozen)]
+#[pyclass(name = "RayTracingKernel", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonRayTracingKernel {
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) kernel_id: String,
@@ -543,7 +543,7 @@ impl PythonRayTracingKernel {
 /// Defined on every platform so the stub's surface is honest everywhere; off
 /// Linux it is unconstructible, because both builders refuse before reaching
 /// it.
-#[pyclass(name = "AccelerationStructureHandle", module = "streamlib", frozen)]
+#[pyclass(name = "AccelerationStructureHandle", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonAccelerationStructureHandle {
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) acceleration_structure_id: String,

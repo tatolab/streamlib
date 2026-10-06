@@ -9,10 +9,10 @@ swap the mean for a call to a model server and the app keeps its frame rate.
 """
 
 import numpy
-from streamlib import (
+from tatolab.stream import (
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,  # noqa: A004 — streamlib's port decorator
+    input,  # noqa: A004 — tatolab.stream's port decorator
     log,
     node,
 )

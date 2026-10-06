@@ -3,7 +3,7 @@
 
 //! The wheel-exported names for the native media built-ins.
 //!
-//! `streamlib.TestPatternSource` is a marker class: never instantiated, never
+//! `tatolab.stream.TestPatternSource` is a marker class: never instantiated, never
 //! subclassed, carrying no Python behavior. Its `type` class attribute is the
 //! import path a graph names the statically-linked native processor by, which
 //! `stream.add` records on the node — per-frame paths never enter the
@@ -17,6 +17,7 @@
 macro_rules! native_processor_marker_classes {
     (
         added_to_the_module_by: $add_marker_classes_to_the_module:ident,
+        python_module: $python_module:literal,
         markers: [$(
             $(#[$marker_attribute:meta])*
             $marker:ident as $python_class_name:literal {
@@ -27,7 +28,7 @@ macro_rules! native_processor_marker_classes {
     ) => {
         $(
             $(#[$marker_attribute])*
-            #[::pyo3::pyclass(name = $python_class_name, module = "streamlib", frozen)]
+            #[::pyo3::pyclass(name = $python_class_name, module = $python_module, frozen)]
             pub(crate) struct $marker;
 
             #[::pyo3::pymethods]
@@ -66,21 +67,22 @@ pub(crate) use native_processor_marker_classes;
 
 native_processor_marker_classes! {
     added_to_the_module_by: add_native_builtin_marker_classes_to_the_module,
+    python_module: "tatolab.stream",
     markers: [
-        /// `streamlib.TestPatternSource` — SMPTE-style color bars, no hardware.
+        /// `tatolab.stream.TestPatternSource` — SMPTE-style color bars, no hardware.
         PythonTestPatternSourceBlock as "TestPatternSource" {
             dunder_test: false,
             import_path:
                 streamlib_media_builtins::TestPatternSource::Processor::processor_class_import_path(),
         }
-        /// `streamlib.CameraSource` — live camera capture through the engine's video
+        /// `tatolab.stream.CameraSource` — live camera capture through the engine's video
         /// device seam (V4L2 on Linux; a platform with no capture backend refuses at
         /// `setup()`).
         PythonCameraSourceBlock as "CameraSource" {
             import_path:
                 streamlib_media_builtins::CameraSource::Processor::processor_class_import_path(),
         }
-        /// `streamlib.DisplayWindow` — video frames in a vsync'd window.
+        /// `tatolab.stream.DisplayWindow` — video frames in a vsync'd window.
         PythonDisplayWindowBlock as "DisplayWindow" {
             import_path: {
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -95,64 +97,64 @@ native_processor_marker_classes! {
                 }
             },
         }
-        /// `streamlib.MicrophoneSource` — audio capture on whichever backend the
+        /// `tatolab.stream.MicrophoneSource` — audio capture on whichever backend the
         /// chain probed, silence where none exists.
         PythonMicrophoneSourceBlock as "MicrophoneSource" {
             import_path:
                 streamlib_media_builtins::MicrophoneSource::Processor::processor_class_import_path(),
         }
-        /// `streamlib.SpeakerSink` — audio playback on whichever backend the chain
+        /// `tatolab.stream.SpeakerSink` — audio playback on whichever backend the chain
         /// probed, discarding where none exists.
         PythonSpeakerSinkBlock as "SpeakerSink" {
             import_path:
                 streamlib_media_builtins::SpeakerSink::Processor::processor_class_import_path(),
         }
-        /// `streamlib.H264Encoder` — video frames to H.264 encoded-frame bags via
+        /// `tatolab.stream.H264Encoder` — video frames to H.264 encoded-frame bags via
         /// hardware encode, on the platform's video codec arm.
         PythonH264EncoderBlock as "H264Encoder" {
             import_path:
                 streamlib_media_builtins::H264Encoder::Processor::processor_class_import_path(),
         }
-        /// `streamlib.H264Decoder` — H.264 encoded-frame bags to decoded video
+        /// `tatolab.stream.H264Decoder` — H.264 encoded-frame bags to decoded video
         /// frames via hardware decode, on the platform's video codec arm.
         PythonH264DecoderBlock as "H264Decoder" {
             import_path:
                 streamlib_media_builtins::H264Decoder::Processor::processor_class_import_path(),
         }
-        /// `streamlib.H265Encoder` — video frames to H.265 encoded-frame bags via
+        /// `tatolab.stream.H265Encoder` — video frames to H.265 encoded-frame bags via
         /// hardware encode, on the platform's video codec arm.
         PythonH265EncoderBlock as "H265Encoder" {
             import_path:
                 streamlib_media_builtins::H265Encoder::Processor::processor_class_import_path(),
         }
-        /// `streamlib.H265Decoder` — H.265 encoded-frame bags to decoded video
+        /// `tatolab.stream.H265Decoder` — H.265 encoded-frame bags to decoded video
         /// frames via hardware decode, on the platform's video codec arm.
         PythonH265DecoderBlock as "H265Decoder" {
             import_path:
                 streamlib_media_builtins::H265Decoder::Processor::processor_class_import_path(),
         }
-        /// `streamlib.OpusEncoder` — 20 ms windows of audio to Opus
+        /// `tatolab.stream.OpusEncoder` — 20 ms windows of audio to Opus
         /// encoded-audio-packet bags via statically linked libopus, on every
         /// platform the wheel builds for.
         PythonOpusEncoderBlock as "OpusEncoder" {
             import_path:
                 streamlib_media_builtins::OpusEncoder::Processor::processor_class_import_path(),
         }
-        /// `streamlib.OpusDecoder` — Opus encoded-audio-packet bags to decoded
+        /// `tatolab.stream.OpusDecoder` — Opus encoded-audio-packet bags to decoded
         /// audio blocks via statically linked libopus, on every platform the wheel
         /// builds for.
         PythonOpusDecoderBlock as "OpusDecoder" {
             import_path:
                 streamlib_media_builtins::OpusDecoder::Processor::processor_class_import_path(),
         }
-        /// `streamlib.Mp4Sink` — encoded video and audio bags recorded to one
+        /// `tatolab.stream.Mp4Sink` — encoded video and audio bags recorded to one
         /// fragmented MP4 file, one track per inbound link, on every platform the
         /// wheel builds for.
         PythonMp4SinkBlock as "Mp4Sink" {
             import_path:
                 streamlib_media_builtins::Mp4Sink::Processor::processor_class_import_path(),
         }
-        /// `streamlib.VirtualCameraSink` — video frames presented as a virtual
+        /// `tatolab.stream.VirtualCameraSink` — video frames presented as a virtual
         /// camera any Linux application can select (Linux).
         PythonVirtualCameraSinkBlock as "VirtualCameraSink" {
             import_path: {

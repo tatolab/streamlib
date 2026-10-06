@@ -12,8 +12,13 @@ from __future__ import annotations
 
 from typing import Union
 
-from ._engine import GpuContextFullAccess, GpuContextLimitedAccess, GpuSurfaceHandle
-from .processor_output_texture_ring import ProcessorOutputTextureRing
+from tatolab.runtime._engine import (
+    GpuContextFullAccess,
+    GpuContextLimitedAccess,
+    GpuSurfaceHandle,
+)
+
+from .node_output_texture_ring import ProcessorOutputTextureRing
 
 GpuContextWithSurfaceCopy = Union[GpuContextLimitedAccess, GpuContextFullAccess]
 

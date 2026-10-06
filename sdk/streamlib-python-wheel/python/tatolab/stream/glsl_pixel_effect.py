@@ -29,17 +29,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-from ._engine import (
+from tatolab.runtime._engine import (
     ComputeKernel,
     GpuContextFullAccess,
     monotonic_now_ns,
 )
+
 from ._sampled_source_landing import (
     SAMPLED_SOURCE_BINDING_NAME,
     GpuContextWithSurfaceCopy,
     SampledSourceLandingTextureRing,
 )
-from .processor_output_texture_ring import ProcessorOutputTextureRing
+from .node_output_texture_ring import ProcessorOutputTextureRing
 from .video_frame import VideoFrame
 
 __all__ = ["GlslPixelEffect", "GlslPixelEffectDialType"]
