@@ -36,6 +36,7 @@ import struct
 import sys
 import sysconfig
 import threading
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -945,6 +946,10 @@ def _end_the_describe_once_its_parent_closes_stdin() -> None:
             return
         if os.getpgrp() == os.getpid():
             os.killpg(os.getpgrp(), signal.SIGKILL)
+            # Darwin delivers a SIGKILL sent to the sender's own group after
+            # killpg returns, where Linux delivers it before; an exit here would
+            # race it, so wait for it to land.
+            time.sleep(5)
         os._exit(1)
 
     threading.Thread(
