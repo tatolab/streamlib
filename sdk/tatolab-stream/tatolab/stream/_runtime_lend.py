@@ -89,7 +89,7 @@ def native_callable_lent_by_the_runtime(
 
 
 def runtime_backed_function(
-    native_callable_name: str | None = None,
+    *, native_callable_name: str | None = None
 ) -> Callable[[RuntimeBackedFunctionDeclaration], RuntimeBackedFunctionDeclaration]:
     """Make the decorated def the one declaration of a runtime-backed function.
 

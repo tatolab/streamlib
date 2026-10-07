@@ -40,7 +40,7 @@ def install_helper_process_sink(sink: HelperProcessLogSink) -> None:
     _helper_process_sink = sink
 
 
-@runtime_backed_function("log_event")
+@runtime_backed_function(native_callable_name="log_event")
 def _emit_record_on_the_engine_log_pipeline(
     level: str, message: str, attrs: "Optional[dict[str, Any]]" = None
 ) -> None:
