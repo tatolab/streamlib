@@ -732,6 +732,7 @@ jobs:
             core::compiler::compiler_ops::processor_interpreter_describe::tests::an_interpreter_that_printed_no_document_refuses_every_type_naming_the_interpreter \
             core::compiler::compiler_ops::processor_interpreter_describe::tests::a_describe_past_its_bound_is_killed_with_its_group_and_refuses_every_type_naming_the_bound \
             core::compiler::compiler_ops::processor_interpreter_describe::tests::a_shutdown_requested_during_a_describe_kills_it_and_refuses_every_type_saying_so \
+            core::compiler::compiler_ops::processor_interpreter_describe::tests::a_standard_output_that_is_not_a_document_is_refused_quoting_its_head_and_the_parse_error \
             core::compiler::compiler_ops::processor_interpreter_describe::tests::a_project_directory_holding_the_path_list_separator_refuses_every_type_naming_it \
             core::compiler::compiler_ops::processor_interpreter_describe::tests::the_describe_command_carries_the_stream_environment_and_no_processors_variables \
             core::compiler::compiler_ops::processor_interpreter_describe::tests::a_started_describe_receives_its_arguments_working_directory_and_python_path \

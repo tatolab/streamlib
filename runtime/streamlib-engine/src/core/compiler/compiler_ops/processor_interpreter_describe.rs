@@ -64,6 +64,14 @@ const DESCRIBE_SHUTDOWN_OBSERVATION_INTERVAL: Duration = Duration::from_millis(5
 /// processor id a processor interpreter's are.
 const DESCRIBE_STANDARD_ERROR_LOG_LABEL: &str = "processor-interpreter-describe";
 
+/// How much of a describe's standard output is kept; the rest is read and
+/// dropped, so the describe never blocks on a full pipe.
+const DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// How much of a standard output that is not a describe document a refusal
+/// quotes.
+const DESCRIBE_STANDARD_OUTPUT_QUOTED_BYTES: usize = 512;
+
 /// The document a describe prints on its standard output.
 #[derive(serde::Deserialize)]
 struct ProcessorInterpreterDescribeDocument {
@@ -243,13 +251,26 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     let exit_status_rendered = exit_status
         .map(|exit_status| exit_status.to_string())
         .unwrap_or_else(|| "an exit status that could not be collected".to_string());
-    let Ok(describe_document) =
-        serde_json::from_slice::<ProcessorInterpreterDescribeDocument>(&standard_output_bytes)
-    else {
+    if standard_output_bytes.is_empty() {
         return Err(refuse_every_requested_type(format!(
             "the stream's interpreter `{interpreter}` printed no describe document and exited \
              with {exit_status_rendered}. {quoted_standard_error}"
         )));
+    }
+    let describe_document = match serde_json::from_slice::<ProcessorInterpreterDescribeDocument>(
+        &standard_output_bytes,
+    ) {
+        Ok(describe_document) => describe_document,
+        Err(not_a_describe_document) => {
+            return Err(refuse_every_requested_type(format!(
+                "the stream's interpreter `{interpreter}` exited with {exit_status_rendered}, \
+                 and its standard output is not a describe document \
+                 ({not_a_describe_document}); it began {}. What a `sitecustomize`, \
+                 `usercustomize` or `.pth` hook in the stream's environment prints lands ahead \
+                 of the document. {quoted_standard_error}",
+                standard_output_head_as_a_refusal_quotes_it(&standard_output_bytes)
+            )));
+        }
     };
 
     let refused_import_paths: Vec<ProcessorClassImportPath> = import_paths
@@ -371,7 +392,8 @@ fn take_the_describe_process_group_down_and_reap(child: &mut Child) -> Option<Ex
     }
 }
 
-/// Read a describe's standard output to its end on a thread of its own.
+/// Read a describe's standard output to its end on a thread of its own,
+/// keeping at most [`DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES`] of it.
 fn read_standard_output_to_its_end_on_a_thread(
     standard_output: Option<ChildStdout>,
 ) -> Receiver<Vec<u8>> {
@@ -382,10 +404,26 @@ fn read_standard_output_to_its_end_on_a_thread(
     };
     std::thread::spawn(move || {
         let mut standard_output_bytes = Vec::new();
-        let _ = standard_output.read_to_end(&mut standard_output_bytes);
+        let _ = (&mut standard_output)
+            .take(DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES)
+            .read_to_end(&mut standard_output_bytes);
+        let _ = std::io::copy(&mut standard_output, &mut std::io::sink());
         let _ = read_sender.send(standard_output_bytes);
     });
     read_receiver
+}
+
+/// The first [`DESCRIBE_STANDARD_OUTPUT_QUOTED_BYTES`] of a standard output, quoted.
+fn standard_output_head_as_a_refusal_quotes_it(standard_output_bytes: &[u8]) -> String {
+    let head = &standard_output_bytes[..standard_output_bytes
+        .len()
+        .min(DESCRIBE_STANDARD_OUTPUT_QUOTED_BYTES)];
+    let ellipsis = if head.len() < standard_output_bytes.len() {
+        "…"
+    } else {
+        ""
+    };
+    format!("{:?}{ellipsis}", String::from_utf8_lossy(head))
 }
 
 #[cfg(test)]
@@ -570,6 +608,33 @@ mod tests {
         );
         assert!(
             refusal.contains("cannot load the lent runtime: PyPy 3.9"),
+            "{refusal}"
+        );
+    }
+
+    /// A site hook that prints before the bootstrap reserves standard output
+    /// leaves the document unparseable; the refusal quotes what was printed.
+    #[test]
+    #[serial]
+    fn a_standard_output_that_is_not_a_document_is_refused_quoting_its_head_and_the_parse_error() {
+        let stub = StubProcessorInterpreter::running(&format!(
+            "echo 'sitecustomize says hello'\n{}",
+            print_on_standard_output(&serde_json::json!({
+                "described_node_types": [a_described_good_type()],
+                "refused_import_paths": [],
+            }))
+        ));
+
+        let (node_types, refusal) = stub.refusal_of(&[GOOD_TYPE]);
+
+        assert_eq!(node_types, [import_path(GOOD_TYPE)]);
+        assert!(
+            refusal.contains("is not a describe document ("),
+            "{refusal}"
+        );
+        assert!(refusal.contains("sitecustomize says hello"), "{refusal}");
+        assert!(
+            !refusal.contains("printed no describe document"),
             "{refusal}"
         );
     }

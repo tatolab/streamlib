@@ -41,6 +41,24 @@ from typing import Any, NoReturn, Optional
 
 OLDEST_PYTHON_THE_LENT_RUNTIME_LOADS_IN = (3, 10)
 
+DESCRIBE_ARGUMENT = "--describe"
+
+_described_document_fd: Optional[int] = None
+
+
+def _reserve_stdout_for_the_described_document() -> int:
+    """Hand back a duplicate of fd 1 and point fd 1 and `sys.stdout` at stderr,
+    so what an import prints cannot corrupt the one JSON document the parent
+    parses off stdout. Reserved once; a second call returns the same duplicate."""
+    global _described_document_fd
+    if _described_document_fd is None:
+        if sys.stdout is not None:
+            sys.stdout.flush()
+        _described_document_fd = os.dup(1)
+        os.dup2(2, 1)
+        sys.stdout = sys.stderr
+    return _described_document_fd
+
 
 def _this_interpreter_is_free_threaded() -> bool:
     return bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
@@ -98,6 +116,11 @@ def _import_the_lent_runtime_or_refuse() -> None:
 
 if __name__ == "__main__":
     _drop_this_bootstraps_own_directory_from_sys_path()
+    # Before the lent runtime and `tatolab.stream` import, so nothing their
+    # imports print reaches the document; only the interpreter's own site hooks
+    # run earlier.
+    if sys.argv[1:2] == [DESCRIBE_ARGUMENT]:
+        _reserve_stdout_for_the_described_document()
     _import_the_lent_runtime_or_refuse()
 
 from tatolab.stream import (
@@ -792,8 +815,6 @@ def load_processor_class(import_path: str) -> type:
 # Describing processor classes
 # =============================================================================
 
-DESCRIBE_ARGUMENT = "--describe"
-
 #: Each key of a described node type the class's own `@node` stamp fills, in wire order.
 DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
     ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
@@ -870,18 +891,6 @@ def describe_one_processor_class(import_path: str) -> "dict[str, Any]":
             f"its declaration is not JSON data: {not_json}"
         ) from None
     return described_node_type
-
-
-def _reserve_stdout_for_the_described_document() -> int:
-    """Hand back a duplicate of fd 1 and point fd 1 and `sys.stdout` at stderr,
-    so what a user module prints while it imports cannot corrupt the one JSON
-    document the parent parses off stdout."""
-    if sys.stdout is not None:
-        sys.stdout.flush()
-    described_document_fd = os.dup(1)
-    os.dup2(2, 1)
-    sys.stdout = sys.stderr
-    return described_document_fd
 
 
 def _end_the_describe_without_finalizing_the_interpreter(exit_status: int) -> NoReturn:
