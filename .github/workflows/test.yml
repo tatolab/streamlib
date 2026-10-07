@@ -858,6 +858,7 @@ jobs:
         run: |
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions ruff==0.16.9 mcp==2.3.0
+          VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # One `_engine.pyi` for both binaries: a method the macOS build lacks
