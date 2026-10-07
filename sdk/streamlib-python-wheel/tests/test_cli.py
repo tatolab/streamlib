@@ -377,7 +377,7 @@ def recorded_launch_runtime_calls(
 ) -> RecordedLaunchRuntimeCalls:
     """Stand a recorder in for `Runtime` in the launcher, so no engine is built here.
 
-    The launch also exports the app directory, which is restored with the rest.
+    The launch exports the app directory, which is restored with the rest.
     """
     recorded = RecordedLaunchRuntimeCalls()
     monkeypatch.delenv(cli.APP_DIRECTORY_ENVIRONMENT_VARIABLE, raising=False)

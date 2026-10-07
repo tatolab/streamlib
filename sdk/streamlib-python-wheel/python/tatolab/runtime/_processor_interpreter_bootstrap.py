@@ -794,6 +794,16 @@ def load_processor_class(import_path: str) -> type:
 
 DESCRIBE_ARGUMENT = "--describe"
 
+#: Each key of a described node type the class's own `@node` stamp fills, in wire order.
+DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
+    ("description", NODE_DECLARATION_DESCRIPTION_STAMP),
+    ("execution", NODE_DECLARATION_EXECUTION_STAMP),
+    ("scheduling_priority", NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP),
+    ("config_schema", NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
+    ("input_ports", NODE_DECLARATION_INPUT_PORTS_STAMP),
+    ("output_ports", NODE_DECLARATION_OUTPUT_PORTS_STAMP),
+)
+
 
 class ProcessorClassNotDescribable(Exception):
     """A requested import path names nothing this interpreter can describe."""
@@ -836,16 +846,23 @@ def describe_one_processor_class(import_path: str) -> "dict[str, Any]":
             f"the class it names identifies as `{own_import_path}`; a node is named by "
             f"its own import path, the one its processor interpreter imports it back by"
         )
-    described_node_type = {
+    described_node_type: "dict[str, Any]" = {
         "import_path": import_path,
         "short_name": resolved.__name__,
-        "description": getattr(resolved, NODE_DECLARATION_DESCRIPTION_STAMP),
-        "execution": getattr(resolved, NODE_DECLARATION_EXECUTION_STAMP),
-        "scheduling_priority": getattr(resolved, NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP),
-        "config_schema": getattr(resolved, NODE_DECLARATION_CONFIG_SCHEMA_STAMP),
-        "input_ports": getattr(resolved, NODE_DECLARATION_INPUT_PORTS_STAMP),
-        "output_ports": getattr(resolved, NODE_DECLARATION_OUTPUT_PORTS_STAMP),
     }
+    for (
+        described_node_type_key,
+        node_declaration_stamp,
+    ) in DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS:
+        try:
+            described_node_type[described_node_type_key] = getattr(
+                resolved, node_declaration_stamp
+            )
+        except AttributeError:
+            raise ProcessorClassNotDescribable(
+                f"the class `{resolved.__qualname__}` carries no `{node_declaration_stamp}`, "
+                f"which `@node` sets; a class stamped by hand is not a node"
+            ) from None
     try:
         json.dumps(described_node_type, allow_nan=False)
     except (TypeError, ValueError) as not_json:

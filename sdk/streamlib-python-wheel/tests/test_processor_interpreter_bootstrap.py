@@ -354,6 +354,36 @@ def test_several_paths_in_one_call_are_described_and_refused_in_order(project_di
     ]
 
 
+def test_a_class_stamped_by_hand_without_every_stamp_is_refused_and_the_rest_described(
+    project_directory: Path,
+):
+    write_project_module(
+        project_directory,
+        "hand_stamped_nodes",
+        """
+        class HandStamped:
+            __tatolab_node_declared__ = True
+            __tatolab_node_description__ = "declared by hand, missing every other stamp"
+        """,
+    )
+
+    described = describe(
+        project_directory, "hand_stamped_nodes:HandStamped", "described_nodes:Ticker"
+    )
+
+    assert described.returncode == 1
+    document = described_document(described)
+    assert document["refused_import_paths"] == ["hand_stamped_nodes:HandStamped"]
+    assert [
+        described_node_type["import_path"]
+        for described_node_type in document["described_node_types"]
+    ] == ["described_nodes:Ticker"]
+    assert (
+        "cannot describe hand_stamped_nodes:HandStamped: the class `HandStamped` carries no "
+        "`__tatolab_node_execution__`"
+    ) in described.stderr
+
+
 def test_describe_with_no_import_path_is_refused(project_directory: Path):
     described = run_the_bootstrap(project_directory, "--describe")
 
@@ -416,6 +446,68 @@ def test_an_interpreter_that_cannot_load_the_lent_runtime_is_refused_naming_what
     assert "free-threaded: no" in refused.stderr
     assert f"architecture: {platform.machine()}" in refused.stderr
     assert "No module named 'tatolab.runtime._engine'" in refused.stderr
+
+
+@pytest.mark.parametrize(
+    ("make_this_interpreter_unfit", "reported_fact", "reason_the_import_was_not_attempted"),
+    [
+        (
+            "platform.python_implementation = lambda: 'PyPy'",
+            "implementation: PyPy",
+            "not attempted: the runtime is a CPython extension module",
+        ),
+        (
+            "sys.version_info = (3, 9, 18, 'final', 0)",
+            f"version: {platform.python_version()}",
+            "not attempted: the runtime needs CPython 3.10 or newer",
+        ),
+        (
+            "_config_variable = sysconfig.get_config_var\n"
+            "sysconfig.get_config_var = lambda name: (\n"
+            "    1 if name == 'Py_GIL_DISABLED' else _config_variable(name)\n"
+            ")",
+            "free-threaded: yes",
+            "not attempted: the runtime is built for the GIL-enabled CPython",
+        ),
+    ],
+    ids=["not-cpython", "below-3.10", "free-threaded"],
+)
+def test_an_interpreter_the_runtime_cannot_load_in_is_refused_before_importing_it(
+    project_directory: Path,
+    make_this_interpreter_unfit: str,
+    reported_fact: str,
+    reason_the_import_was_not_attempted: str,
+):
+    """The interpreter's own facts stand in for another one's: the bootstrap runs
+    as `__main__` after they are rewritten, exactly as when run by path."""
+    run_the_bootstrap_in_an_unfit_interpreter = (
+        "import atexit, os, platform, runpy, sys, sysconfig\n"
+        "atexit.register(lambda: os.write(\n"
+        "    2, f\"RUNTIME_IMPORTED={'tatolab.runtime' in sys.modules}\\n\".encode()\n"
+        "))\n"
+        f"{make_this_interpreter_unfit}\n"
+        f"runpy.run_path({str(BOOTSTRAP_PATH)!r}, run_name='__main__')\n"
+    )
+
+    refused = subprocess.run(
+        [sys.executable, "-c", run_the_bootstrap_in_an_unfit_interpreter],
+        cwd=project_directory,
+        env=processor_interpreter_environment(LEND_DIRECTORY, project_directory),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=SECONDS_A_BOOTSTRAP_HAS_TO_ANSWER,
+        check=False,
+    )
+
+    assert refused.returncode == 1, refused.stderr
+    assert refused.stdout == ""
+    assert "cannot load the lent runtime" in refused.stderr
+    assert f"interpreter: {sys.executable}" in refused.stderr
+    assert reported_fact in refused.stderr
+    assert f"architecture: {platform.machine()}" in refused.stderr
+    assert f"import error: {reason_the_import_was_not_attempted}" in refused.stderr
+    assert "RUNTIME_IMPORTED=False" in refused.stderr
 
 
 def test_the_bootstrap_parses_as_python_3_7():
