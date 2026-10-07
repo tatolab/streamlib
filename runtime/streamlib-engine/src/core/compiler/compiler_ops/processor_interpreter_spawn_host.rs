@@ -179,7 +179,7 @@ pub(crate) struct ProcessorInterpreterSpawnHostProcessor {
     /// from `setup` because the sweep that reclaims a dead helper's nodes runs
     /// from a liveness poll that is handed no context.
     iceoryx2_domain_root: Option<PathBuf>,
-    child_standard_error_tail: Option<HelperProcessStandardErrorTail>,
+    child_standard_error_tail: Option<ChildStandardStreamRecording>,
     bridge: Option<SubprocessBridge>,
     /// Set once the child stops answering. The pipeline keeps running and the
     /// graph shows this processor in error; the frame in flight is lost, and
@@ -818,82 +818,118 @@ pub(super) fn standard_error_tail_as_a_refusal_quotes_it(standard_error_tail: &s
 }
 
 // =============================================================================
-// What a child last wrote to its standard error
+// What a child wrote to a standard stream
 // =============================================================================
 
-/// The end of what a helper process wrote to its standard error, and whether
-/// the pipe has closed.
-#[derive(Clone, Default)]
-pub(super) struct HelperProcessStandardErrorTail {
-    recorded_standard_error_and_pipe_closed_signal: Arc<(
-        parking_lot::Mutex<RecordedHelperProcessStandardError>,
+/// Which bytes of a child's standard stream a recording keeps.
+#[derive(Clone, Copy)]
+pub(super) enum ChildStandardStreamKeptBytes {
+    /// The first this many; the rest is read and dropped.
+    TheFirst(usize),
+    /// The last this many, each new byte pushing the oldest out.
+    TheLast(usize),
+}
+
+/// What a child wrote to one standard stream, bounded, and whether the pipe
+/// has closed.
+#[derive(Clone)]
+pub(super) struct ChildStandardStreamRecording {
+    recorded_bytes_and_pipe_closed_signal: Arc<(
+        parking_lot::Mutex<RecordedChildStandardStream>,
         parking_lot::Condvar,
     )>,
 }
 
-#[derive(Default)]
-struct RecordedHelperProcessStandardError {
-    tail_bytes: VecDeque<u8>,
+struct RecordedChildStandardStream {
+    kept_bytes: ChildStandardStreamKeptBytes,
+    recorded_bytes: VecDeque<u8>,
     pipe_closed: bool,
 }
 
-impl HelperProcessStandardErrorTail {
+impl ChildStandardStreamRecording {
+    pub(super) fn keeping(kept_bytes: ChildStandardStreamKeptBytes) -> Self {
+        Self {
+            recorded_bytes_and_pipe_closed_signal: Arc::new((
+                parking_lot::Mutex::new(RecordedChildStandardStream {
+                    kept_bytes,
+                    recorded_bytes: VecDeque::new(),
+                    pipe_closed: false,
+                }),
+                parking_lot::Condvar::new(),
+            )),
+        }
+    }
+
     fn record(&self, written_bytes: &[u8]) {
-        let (recorded_standard_error_lock, _) =
-            &*self.recorded_standard_error_and_pipe_closed_signal;
-        let mut recorded_standard_error = recorded_standard_error_lock.lock();
-        recorded_standard_error.tail_bytes.extend(written_bytes);
-        let overflow_byte_count = recorded_standard_error
-            .tail_bytes
-            .len()
-            .saturating_sub(STANDARD_ERROR_TAIL_BYTES);
-        recorded_standard_error
-            .tail_bytes
-            .drain(..overflow_byte_count);
+        let (recorded_stream_lock, _) = &*self.recorded_bytes_and_pipe_closed_signal;
+        let mut recorded_stream = recorded_stream_lock.lock();
+        match recorded_stream.kept_bytes {
+            ChildStandardStreamKeptBytes::TheFirst(kept_byte_count) => {
+                let room_byte_count =
+                    kept_byte_count.saturating_sub(recorded_stream.recorded_bytes.len());
+                recorded_stream
+                    .recorded_bytes
+                    .extend(&written_bytes[..written_bytes.len().min(room_byte_count)]);
+            }
+            ChildStandardStreamKeptBytes::TheLast(kept_byte_count) => {
+                recorded_stream.recorded_bytes.extend(written_bytes);
+                let overflow_byte_count = recorded_stream
+                    .recorded_bytes
+                    .len()
+                    .saturating_sub(kept_byte_count);
+                recorded_stream.recorded_bytes.drain(..overflow_byte_count);
+            }
+        }
     }
 
     fn mark_the_pipe_closed(&self) {
-        let (recorded_standard_error_lock, pipe_closed_signal) =
-            &*self.recorded_standard_error_and_pipe_closed_signal;
-        recorded_standard_error_lock.lock().pipe_closed = true;
+        let (recorded_stream_lock, pipe_closed_signal) =
+            &*self.recorded_bytes_and_pipe_closed_signal;
+        recorded_stream_lock.lock().pipe_closed = true;
         pipe_closed_signal.notify_all();
     }
 
     /// What was recorded, once the pipe has closed or `deadline` has passed.
-    pub(super) fn text_once_closed_or_after(&self, deadline: Duration) -> String {
-        let (recorded_standard_error_lock, pipe_closed_signal) =
-            &*self.recorded_standard_error_and_pipe_closed_signal;
-        let mut recorded_standard_error = recorded_standard_error_lock.lock();
+    pub(super) fn bytes_once_closed_or_after(&self, deadline: Duration) -> Vec<u8> {
+        let (recorded_stream_lock, pipe_closed_signal) =
+            &*self.recorded_bytes_and_pipe_closed_signal;
+        let mut recorded_stream = recorded_stream_lock.lock();
         pipe_closed_signal.wait_while_for(
-            &mut recorded_standard_error,
-            |recorded_standard_error| !recorded_standard_error.pipe_closed,
+            &mut recorded_stream,
+            |recorded_stream| !recorded_stream.pipe_closed,
             deadline,
         );
-        String::from_utf8_lossy(recorded_standard_error.tail_bytes.make_contiguous())
+        recorded_stream.recorded_bytes.make_contiguous().to_vec()
+    }
+
+    /// What was recorded as trimmed text, once the pipe has closed or
+    /// `deadline` has passed.
+    pub(super) fn text_once_closed_or_after(&self, deadline: Duration) -> String {
+        String::from_utf8_lossy(&self.bytes_once_closed_or_after(deadline))
             .trim()
             .to_string()
     }
 }
 
-/// A reader that records the tail of everything read through it, and marks the
-/// pipe closed when the line reader owning it lets go — at end of file, on a
-/// read error, or when its thread never started.
-struct StandardErrorTailRecordingReader<R> {
-    standard_error: R,
-    tail: HelperProcessStandardErrorTail,
+/// A reader that records everything read through it, and marks the pipe
+/// closed when whatever owns it lets go — at end of file, on a read error, or
+/// when its thread never started.
+struct ChildStandardStreamRecordingReader<R> {
+    child_standard_stream: R,
+    recording: ChildStandardStreamRecording,
 }
 
-impl<R: Read> Read for StandardErrorTailRecordingReader<R> {
+impl<R: Read> Read for ChildStandardStreamRecordingReader<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let read_byte_count = self.standard_error.read(buffer)?;
-        self.tail.record(&buffer[..read_byte_count]);
+        let read_byte_count = self.child_standard_stream.read(buffer)?;
+        self.recording.record(&buffer[..read_byte_count]);
         Ok(read_byte_count)
     }
 }
 
-impl<R> Drop for StandardErrorTailRecordingReader<R> {
+impl<R> Drop for ChildStandardStreamRecordingReader<R> {
     fn drop(&mut self) {
-        self.tail.mark_the_pipe_closed();
+        self.recording.mark_the_pipe_closed();
     }
 }
 
@@ -902,18 +938,40 @@ impl<R> Drop for StandardErrorTailRecordingReader<R> {
 pub(super) fn spawn_standard_error_reader_keeping_its_tail<R: Read + Send + 'static>(
     standard_error: R,
     processor_id: &str,
-) -> HelperProcessStandardErrorTail {
-    let tail = HelperProcessStandardErrorTail::default();
+) -> ChildStandardStreamRecording {
+    let tail = ChildStandardStreamRecording::keeping(ChildStandardStreamKeptBytes::TheLast(
+        STANDARD_ERROR_TAIL_BYTES,
+    ));
     spawn_fd_line_reader(
-        StandardErrorTailRecordingReader {
-            standard_error,
-            tail: tail.clone(),
+        ChildStandardStreamRecordingReader {
+            child_standard_stream: standard_error,
+            recording: tail.clone(),
         },
         "py-stderr",
         "fd2",
         processor_id,
     );
     tail
+}
+
+/// Read a child's standard output to its end on a thread of its own, keeping
+/// its first `kept_byte_count` bytes and dropping the rest, so the child never
+/// blocks on a full pipe.
+pub(super) fn spawn_standard_output_reader_keeping_its_head<R: Read + Send + 'static>(
+    standard_output: R,
+    kept_byte_count: usize,
+) -> ChildStandardStreamRecording {
+    let head = ChildStandardStreamRecording::keeping(ChildStandardStreamKeptBytes::TheFirst(
+        kept_byte_count,
+    ));
+    let mut recording_reader = ChildStandardStreamRecordingReader {
+        child_standard_stream: standard_output,
+        recording: head.clone(),
+    };
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut recording_reader, &mut std::io::sink());
+    });
+    head
 }
 
 /// Give the child its own process group and tie its lifetime to this process.
@@ -1956,7 +2014,9 @@ sys.exit(0)
     /// without bound cannot grow the parent's memory with it.
     #[test]
     fn only_the_last_bytes_of_a_long_standard_error_are_kept() {
-        let tail = HelperProcessStandardErrorTail::default();
+        let tail = ChildStandardStreamRecording::keeping(ChildStandardStreamKeptBytes::TheLast(
+            STANDARD_ERROR_TAIL_BYTES,
+        ));
         tail.record(b"the earliest bytes, overwritten");
         tail.record(&vec![b'x'; STANDARD_ERROR_TAIL_BYTES]);
         tail.record(b"the reason");
@@ -1966,6 +2026,27 @@ sys.exit(0)
 
         assert_eq!(text.len(), STANDARD_ERROR_TAIL_BYTES);
         assert!(text.ends_with("xthe reason"));
+    }
+
+    /// Only the start of a long standard output is kept, and a pipe that never
+    /// closes still hands over what arrived once the deadline passes.
+    #[test]
+    fn only_the_first_bytes_of_a_long_standard_output_are_kept_and_read_without_its_close() {
+        let (mut still_open_writer, reader) =
+            std::os::unix::net::UnixStream::pair().expect("socketpair");
+        let head = spawn_standard_output_reader_keeping_its_head(reader, 8);
+        std::io::Write::write_all(&mut still_open_writer, b"the head").unwrap();
+        std::io::Write::write_all(&mut still_open_writer, b", then what is dropped").unwrap();
+        let recorded_by = Instant::now() + Duration::from_secs(10);
+        while head.bytes_once_closed_or_after(Duration::ZERO).len() < 8 {
+            assert!(Instant::now() < recorded_by, "the head was never recorded");
+            std::thread::yield_now();
+        }
+
+        let bytes = head.bytes_once_closed_or_after(Duration::from_millis(200));
+
+        assert_eq!(bytes, b"the head");
+        drop(still_open_writer);
     }
 
     /// A helper that died writing nothing is still refused by name, and says

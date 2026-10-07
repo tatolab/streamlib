@@ -7,11 +7,9 @@
 //! command a processor interpreter is, with `--describe` and the import paths,
 //! and reads the one JSON document the bootstrap prints on its standard output.
 
-use std::io::Read;
 use std::path::Path;
-use std::process::{Child, ChildStdout, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use super::processor_interpreter_shutdown_ladder::{
@@ -25,7 +23,7 @@ use super::processor_interpreter_spawn_host::{
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio, processor_interpreter_bootstrap_command,
     spawn_host_for_processor_node, spawn_standard_error_reader_keeping_its_tail,
-    standard_error_tail_as_a_refusal_quotes_it,
+    spawn_standard_output_reader_keeping_its_head, standard_error_tail_as_a_refusal_quotes_it,
 };
 use super::python_processor_declaration::PythonProcessorDeclaration;
 use super::subprocess_bridge::ESCALATE_FD_ENV;
@@ -69,7 +67,7 @@ const DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL: &str =
 
 /// How much of a describe's standard output is kept; the rest is read and
 /// dropped, so the describe never blocks on a full pipe.
-const DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES: u64 = 16 * 1024 * 1024;
+const DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES: usize = 16 * 1024 * 1024;
 
 /// How much of a standard output that is not a describe document a refusal
 /// quotes.
@@ -233,7 +231,12 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
              kill it; the describe still ends itself when the app exits"
         );
     }
-    let standard_output = read_standard_output_to_its_end_on_a_thread(child.stdout.take());
+    let standard_output_head = child.stdout.take().map(|standard_output| {
+        spawn_standard_output_reader_keeping_its_head(
+            standard_output,
+            DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES,
+        )
+    });
     let standard_error_tail = child.stderr.take().map(|standard_error| {
         spawn_standard_error_reader_keeping_its_tail(
             standard_error,
@@ -283,8 +286,10 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
         }
     }
 
-    let standard_output_bytes = standard_output
-        .recv_timeout(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
+    // What arrived before the leader exited, whether or not a descendant that
+    // left its group still holds the pipe open.
+    let standard_output_bytes = standard_output_head
+        .map(|head| head.bytes_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE))
         .unwrap_or_default();
     let exit_status_rendered = exit_status
         .map(|exit_status| exit_status.to_string())
@@ -415,27 +420,6 @@ fn wait_for_the_describe_to_exit(
     }
 }
 
-/// Read a describe's standard output to its end on a thread of its own,
-/// keeping at most [`DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES`] of it.
-fn read_standard_output_to_its_end_on_a_thread(
-    standard_output: Option<ChildStdout>,
-) -> Receiver<Vec<u8>> {
-    let (read_sender, read_receiver) = std::sync::mpsc::channel();
-    let Some(mut standard_output) = standard_output else {
-        let _ = read_sender.send(Vec::new());
-        return read_receiver;
-    };
-    std::thread::spawn(move || {
-        let mut standard_output_bytes = Vec::new();
-        let _ = (&mut standard_output)
-            .take(DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES)
-            .read_to_end(&mut standard_output_bytes);
-        let _ = std::io::copy(&mut standard_output, &mut std::io::sink());
-        let _ = read_sender.send(standard_output_bytes);
-    });
-    read_receiver
-}
-
 /// The first [`DESCRIBE_STANDARD_OUTPUT_QUOTED_BYTES`] of a standard output, quoted.
 fn standard_output_head_as_a_refusal_quotes_it(standard_output_bytes: &[u8]) -> String {
     let head = &standard_output_bytes[..standard_output_bytes
@@ -564,6 +548,71 @@ mod tests {
         assert_eq!(
             declarations[0].execution_config.execution,
             crate::core::execution::ProcessExecution::Reactive
+        );
+    }
+
+    /// A process a stub started in a session of its own, which the describe's
+    /// group kill cannot reach; killed when the test ends, however it ends.
+    struct ProcessThatLeftTheDescribesProcessGroup {
+        process_id_file: PathBuf,
+    }
+
+    impl Drop for ProcessThatLeftTheDescribesProcessGroup {
+        fn drop(&mut self) {
+            let gives_up_at = Instant::now() + Duration::from_secs(5);
+            loop {
+                let recorded_process_id = std::fs::read_to_string(&self.process_id_file)
+                    .ok()
+                    .and_then(|text| text.trim().parse::<libc::pid_t>().ok());
+                if let Some(process_id) = recorded_process_id {
+                    // SAFETY: a plain signal to a pid this test's stub started.
+                    unsafe { libc::kill(process_id, libc::SIGKILL) };
+                    return;
+                }
+                if Instant::now() >= gives_up_at {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    /// A module that daemonizes at import leaves a process outside the
+    /// describe's group holding its standard output open, so the pipe never
+    /// closes; the document the interpreter printed before exiting is still read.
+    #[test]
+    #[serial]
+    fn a_document_printed_before_exiting_is_read_while_an_escaped_descendant_holds_standard_output()
+    {
+        let stub = StubProcessorInterpreter::running(&format!(
+            "python3 -c 'import os; os.setsid(); \
+             open(\"escaped-process-id\", \"w\").write(str(os.getpid())); \
+             os.execvp(\"sleep\", [\"sleep\", \"30\"])' &\n{}\nexit 0",
+            print_on_standard_output(&serde_json::json!({
+                "described_node_types": [a_described_good_type()],
+                "refused_node_types": [],
+            }))
+        ));
+        let _escaped_descendant = ProcessThatLeftTheDescribesProcessGroup {
+            process_id_file: stub.project_directory.path().join("escaped-process-id"),
+        };
+        let started = Instant::now();
+
+        let declarations = stub
+            .describe(&[GOOD_TYPE], PROCESSOR_INTERPRETER_DESCRIBE_BOUND)
+            .unwrap_or_else(|refusal| panic!("the printed document is read: {refusal}"));
+
+        assert_eq!(declarations.len(), 1);
+        assert_eq!(
+            declarations[0]
+                .descriptor
+                .processor_class_import_path
+                .as_str(),
+            GOOD_TYPE
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the describe waited on the escaped descendant"
         );
     }
 
