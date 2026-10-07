@@ -428,6 +428,76 @@ jobs:
       contents: read
     uses: ./.github/workflows/macos-wheel.yml
 
+  # The stream suite, on both floors. The division from the runtime's tests is
+  # structural: this venv holds `tatolab-stream`, its test group and nothing of
+  # the runtime, so a stream test that reaches for the runtime fails to import.
+  stream-suite:
+    name: Stream suite (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Runs PR-authored code; a persisted checkout token would be readable
+          # by it.
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # Built and installed, not editable, so the suite imports what the
+      # wheel ships rather than the checkout beside it.
+      - name: Install tatolab-stream and its test group, and nothing of the runtime
+        working-directory: sdk/tatolab-stream
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
+
+      # The console script, not `python -m pytest`, which would put the
+      # checkout's `tatolab/` ahead of the installed one on the path.
+      - name: The stream suite
+        working-directory: sdk/tatolab-stream
+        run: .venv/bin/pytest tests -v
+
+      - name: Type-check the stream package and its suite
+        working-directory: sdk/tatolab-stream
+        run: uvx pyright@1.1.411
+
+      # A stream is written, type-checked and compiled with no runtime in its
+      # venv: the scaffold's stream module, beside only `tatolab-stream` and
+      # the numpy the scaffold declares, imports, passes pyright and compiles
+      # to its graph.
+      - name: The scaffold compiles and type-checks with no runtime installed
+        run: |
+          cp -R sdk/streamlib-python-wheel/python/tatolab/runtime/_scaffold_template "$RUNNER_TEMP/scaffold"
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
+          uv venv --python 3.12 "$RUNNER_TEMP/scaffold-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl 'numpy>=2.1'
+          cd "$RUNNER_TEMP/scaffold"
+          "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
+          import importlib.util
+          import json
+          import sys
+
+          import stream
+          from tatolab.stream import compile_stream_to_graph
+
+          assert importlib.util.find_spec("tatolab.runtime") is None, "a runtime is installed"
+          graph = compile_stream_to_graph(stream.main)
+          runtime_modules_loaded = [name for name in sys.modules if name.startswith("tatolab.runtime")]
+          assert runtime_modules_loaded == [], runtime_modules_loaded
+          print(json.dumps([node["type"] for node in graph["nodes"]]))
+          EOF
+          uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
+
   python-types:
     name: Pyright (no build)
     runs-on: ubuntu-latest
