@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.0](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.9.0...streamlib-webrtc-v0.10.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** `from tatolab.stream import Stream`, `input` and `output` raise ImportError. Write `StreamBuilder`, `@node.input(...)` and `@node.output(...)`.
+
+### Features
+
+* **sdk:** the builder is `StreamBuilder` and ports are `[@node](https://github.com/node).input` / `[@node](https://github.com/node).output` ([#2682](https://github.com/tatolab/streamlib/issues/2682)) ([fd66702](https://github.com/tatolab/streamlib/commit/fd6670245d5df0d63bb697d13890fb3919c1ccff))
+
 ## [0.9.0](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.8.0...streamlib-webrtc-v0.9.0) (2026-10-06)
 
 
