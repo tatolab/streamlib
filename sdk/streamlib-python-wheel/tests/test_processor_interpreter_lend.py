@@ -68,9 +68,18 @@ def fixture_venv_interpreter(tmp_path_factory: pytest.TempPathFactory) -> Path:
     venv_interpreter = venv_directory / "bin" / "python"
     uv = shutil.which("uv")
     if uv is not None:
-        _run_building_the_fixture_venv([uv, "venv", "--python", sys.executable, str(venv_directory)])
         _run_building_the_fixture_venv(
-            [uv, "pip", "install", "--python", str(venv_interpreter), str(TATOLAB_STREAM_SOURCE_DIRECTORY)]
+            [uv, "venv", "--python", sys.executable, str(venv_directory)]
+        )
+        _run_building_the_fixture_venv(
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                str(venv_interpreter),
+                str(TATOLAB_STREAM_SOURCE_DIRECTORY),
+            ]
         )
     else:
         _run_building_the_fixture_venv([sys.executable, "-m", "venv", str(venv_directory)])
@@ -83,7 +92,7 @@ def fixture_venv_interpreter(tmp_path_factory: pytest.TempPathFactory) -> Path:
             str(venv_interpreter),
             "-c",
             "import importlib.util\n"
-            "assert importlib.util.find_spec('tatolab.runtime') is None, 'the runtime is installed'\n"
+            "assert importlib.util.find_spec('tatolab.runtime') is None, 'runtime installed'\n"
             "import tatolab.stream\n",
         ],
         capture_output=True,
