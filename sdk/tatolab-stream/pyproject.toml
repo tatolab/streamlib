@@ -50,8 +50,10 @@ only-include = ["tatolab/stream"]
 exclude = ["**/__pycache__"]
 
 [tool.hatch.build.targets.sdist]
-only-include = ["tatolab/stream", "LICENSE", "pyproject.toml"]
+only-include = ["tatolab/stream", "pyproject.toml", "hatch_build.py"]
 exclude = ["**/__pycache__"]
+
+[tool.hatch.build.targets.sdist.hooks.custom]
 
 [tool.pyright]
 include = ["tatolab", "tests"]
