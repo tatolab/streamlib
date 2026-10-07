@@ -78,14 +78,6 @@ class ConformanceFinding:
         return f"{self.held_name}: {self.disagreement}"
 
 
-@dataclass(frozen=True)
-class EngineStubDeclaration:
-    """One top-level name `_engine.pyi` declares, and how."""
-
-    declared_as: str
-    annotation_source: str | None = None
-
-
 def is_contract_member_name(member_name: str, machinery_dunder_names: frozenset[str]) -> bool:
     """Whether a member is part of a class's contract: public, or a dunder beyond machinery."""
     if not member_name.startswith("_"):
@@ -315,66 +307,27 @@ def _sys_platform_condition_holds_here(condition: ast.expr) -> bool | None:
     return platform_matches if isinstance(condition.ops[0], ast.Eq) else not platform_matches
 
 
-def _record_stub_declarations(
-    statements: Iterable[ast.stmt],
-    declarations_by_name: dict[str, EngineStubDeclaration],
+def _record_stub_declared_names(
+    statements: Iterable[ast.stmt], declared_names: set[str]
 ) -> None:
     for statement in statements:
         if isinstance(statement, ast.If):
             platform_condition_holds = _sys_platform_condition_holds_here(statement.test)
             if platform_condition_holds is not False:
-                _record_stub_declarations(statement.body, declarations_by_name)
+                _record_stub_declared_names(statement.body, declared_names)
             if platform_condition_holds is not True:
-                _record_stub_declarations(statement.orelse, declarations_by_name)
-        elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            declarations_by_name[statement.name] = EngineStubDeclaration("function")
-        elif isinstance(statement, ast.ClassDef):
-            declarations_by_name[statement.name] = EngineStubDeclaration("class")
+                _record_stub_declared_names(statement.orelse, declared_names)
+        elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            declared_names.add(statement.name)
         elif isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
-            declarations_by_name[statement.target.id] = EngineStubDeclaration(
-                "annotated name", ast.unparse(statement.annotation)
-            )
+            declared_names.add(statement.target.id)
 
 
-def declarations_in_engine_stub(stub_source: str) -> dict[str, EngineStubDeclaration]:
-    """Every top-level name `_engine.pyi` declares on this platform, by name."""
-    declarations_by_name: dict[str, EngineStubDeclaration] = {}
-    _record_stub_declarations(ast.parse(stub_source).body, declarations_by_name)
-    return declarations_by_name
-
-
-def _is_typed_as_the_class_of_its_protocol(
-    held_name: str, declaration: EngineStubDeclaration
-) -> bool:
-    if declaration.declared_as != "annotated name" or declaration.annotation_source is None:
-        return False
-    annotation = declaration.annotation_source
-    return annotation.startswith("type[") and (
-        annotation == f"type[{held_name}]" or annotation.endswith(f".{held_name}]")
-    )
-
-
-def constructor_findings_for_class_typed_as_its_protocol(
-    held_name: str, native_class: type
-) -> list[ConformanceFinding]:
-    """Whether a class the stub types as `type[<its Protocol>]` constructs with no arguments.
-
-    That annotation declares the constructor a Protocol inherits from
-    `object`, so a native constructor taking anything goes unchecked otherwise.
-    """
-    native_signature = _signature_or_refusal(native_class)
-    if isinstance(native_signature, str):
-        return [ConformanceFinding(held_name, f"the native constructor {native_signature}")]
-    native_shape = _parameter_shape(native_signature, drop_receiver=False)
-    if not native_shape:
-        return []
-    return [
-        ConformanceFinding(
-            held_name,
-            f"the native class constructs with {_render_parameter_shape(native_shape)}; "
-            f"`type[{held_name}]` declares a constructor taking no arguments",
-        )
-    ]
+def names_declared_in_engine_stub(stub_source: str) -> set[str]:
+    """Every top-level name `_engine.pyi` declares on this platform."""
+    declared_names: set[str] = set()
+    _record_stub_declared_names(ast.parse(stub_source).body, declared_names)
+    return declared_names
 
 
 def holding_findings(
@@ -393,8 +346,7 @@ def holding_findings(
     held_by_tatolab_stream = set(protocols_by_name) | set(
         native_names_runtime_backed_functions_forward_to
     )
-    stub_declarations = declarations_in_engine_stub(stub_source)
-    held_by_stub = set(stub_declarations)
+    held_by_stub = names_declared_in_engine_stub(stub_source)
     findings: list[ConformanceFinding] = []
     for exported_name in sorted(exported_names):
         in_stream = exported_name in held_by_tatolab_stream
@@ -408,21 +360,8 @@ def holding_findings(
                 )
             )
         elif in_stream and in_stub:
-            if exported_name in protocols_by_name and _is_typed_as_the_class_of_its_protocol(
-                exported_name, stub_declarations[exported_name]
-            ):
-                findings.extend(
-                    constructor_findings_for_class_typed_as_its_protocol(
-                        exported_name, getattr(engine_module, exported_name)
-                    )
-                )
-                continue
             findings.append(
-                ConformanceFinding(
-                    exported_name,
-                    "declared in tatolab.stream and in _engine.pyi; the stub may "
-                    "name a Protocol-held class only as `type[<its Protocol>]`",
-                )
+                ConformanceFinding(exported_name, "declared in tatolab.stream and in _engine.pyi")
             )
     for declared_name in sorted((held_by_tatolab_stream | held_by_stub) - exported_names):
         findings.append(
@@ -480,7 +419,7 @@ def stubtest_allowlist_of_names_held_by_tatolab_stream(
     the module's; this gate's holding check is what keeps the exports whole.
     """
     held_names = set(protocols_by_name) | set(native_names_runtime_backed_functions_forward_to)
-    held_names -= set(declarations_in_engine_stub(stub_source))
+    held_names -= names_declared_in_engine_stub(stub_source)
     escaped_module_name = ENGINE_MODULE_NAME.replace(".", r"\.")
     return [f"{escaped_module_name}\\.__all__"] + [
         f"{escaped_module_name}\\.{held_name}(\\..*)?" for held_name in sorted(held_names)

@@ -108,35 +108,49 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
     })
 }
 
+/// The limited-access view of the same node — same configuration, same links,
+/// same pause state.
+///
+/// A helper builds both views once and hands each hook the one its phase
+/// calls for.
+#[pyfunction]
+pub(crate) fn limited_access_view_of_runtime_context_for_helper_process(
+    python: Python<'_>,
+    full_access_context: &Bound<'_, PythonRuntimeContextFullAccess>,
+) -> PythonRuntimeContextLimitedAccess {
+    let full_access_context = full_access_context.get();
+    PythonRuntimeContextLimitedAccess {
+        runtime_id: full_access_context.runtime_id.clone(),
+        processor_id: full_access_context.processor_id.clone(),
+        configuration: full_access_context.configuration.clone(),
+        link_input_data_reader: full_access_context.link_input_data_reader.clone_ref(python),
+        link_output_data_writer: full_access_context
+            .link_output_data_writer
+            .clone_ref(python),
+        gpu_limited_access_context: full_access_context
+            .gpu_limited_access_context
+            .clone_ref(python),
+        pause_state_announced_by_parent: Arc::clone(
+            &full_access_context.pause_state_announced_by_parent,
+        ),
+    }
+}
+
+/// Record on a helper's context the pause state the parent just announced, so
+/// `is_paused` and `should_process` can answer without an engine to ask.
+#[pyfunction]
+pub(crate) fn note_pause_state_from_parent_on_runtime_context(
+    full_access_context: &Bound<'_, PythonRuntimeContextFullAccess>,
+    paused: bool,
+) {
+    full_access_context
+        .get()
+        .pause_state_announced_by_parent
+        .store(paused, Ordering::Relaxed);
+}
+
 #[pymethods]
 impl PythonRuntimeContextFullAccess {
-    /// The limited-access view of the same processor — same configuration,
-    /// same links, same pause state.
-    ///
-    /// A helper builds both views once and hands each hook the one its phase
-    /// calls for.
-    fn limited_access_view_for_helper_process(
-        &self,
-        python: Python<'_>,
-    ) -> PyResult<PythonRuntimeContextLimitedAccess> {
-        Ok(PythonRuntimeContextLimitedAccess {
-            runtime_id: self.runtime_id.clone(),
-            processor_id: self.processor_id.clone(),
-            configuration: self.configuration.clone(),
-            link_input_data_reader: self.link_input_data_reader.clone_ref(python),
-            link_output_data_writer: self.link_output_data_writer.clone_ref(python),
-            gpu_limited_access_context: self.gpu_limited_access_context.clone_ref(python),
-            pause_state_announced_by_parent: Arc::clone(&self.pause_state_announced_by_parent),
-        })
-    }
-
-    /// Record the pause state the parent just announced, so `is_paused` and
-    /// `should_process` can answer without an engine to ask.
-    fn note_pause_state_from_parent(&self, paused: bool) {
-        self.pause_state_announced_by_parent
-            .store(paused, Ordering::Relaxed);
-    }
-
     /// The processor's configuration, as the dict it was added with.
     #[getter]
     fn config<'py>(&self, python: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

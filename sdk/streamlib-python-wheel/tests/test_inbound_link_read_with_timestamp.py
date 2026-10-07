@@ -65,7 +65,7 @@ def two_links_into_one_port(
 
     # The destination subscribes first: iceoryx2 drops a send with no
     # subscriber attached.
-    destination = _engine.NodeLinkDataAccess()
+    destination = _engine.open_node_link_data_access_for_helper_process()
     sources: "dict[str, NodeLinkDataAccess]" = {}
     channel_named: "dict[str, str]" = {}
     for kind in ("video", "audio"):
@@ -75,7 +75,7 @@ def two_links_into_one_port(
             notify_service_name,
             "read_next_in_order", 8, 8, 2, 2, f"L-{unique}-{kind}",
         )  # fmt: skip
-        source = _engine.NodeLinkDataAccess()
+        source = _engine.open_node_link_data_access_for_helper_process()
         source.wire_output_link(
             OUTPUT_PORT, channel_service_name, notify_service_name,
             1024, 1 << 20, 8, 2, 2, f"L-{unique}-{kind}",
@@ -175,13 +175,13 @@ def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
     inbound_link_name = "bench-cam-a1b2/CameraSource/video"
     notify_service_name = f"{unique}_dest/notify"
 
-    destination = _engine.NodeLinkDataAccess()
+    destination = _engine.open_node_link_data_access_for_helper_process()
     destination.wire_input_link(
         INPUT_PORT, channel_service_name, inbound_link_name,
         notify_service_name,
         "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
-    source = _engine.NodeLinkDataAccess()
+    source = _engine.open_node_link_data_access_for_helper_process()
     source.wire_output_link(
         OUTPUT_PORT, channel_service_name, notify_service_name,
         1024, 1 << 20, 8, 2, 1, f"L-{unique}",

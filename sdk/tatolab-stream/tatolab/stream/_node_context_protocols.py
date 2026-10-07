@@ -217,14 +217,6 @@ class RuntimeContextFullAccess(_RuntimeContextMembersBothCapabilitiesShare, Prot
         """The privileged GPU capability."""
         ...
 
-    def limited_access_view_for_helper_process(self) -> RuntimeContextLimitedAccess:
-        """The limited-access view of this context, for the bootstrap's `process` calls."""
-        ...
-
-    def note_pause_state_from_parent(self, paused: bool) -> None:
-        """Record the pause state the parent runtime reported."""
-        ...
-
 
 @runtime_backed_protocol
 class RuntimeContextLimitedAccess(_RuntimeContextMembersBothCapabilitiesShare, Protocol):

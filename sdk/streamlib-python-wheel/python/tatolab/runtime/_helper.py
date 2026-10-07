@@ -43,13 +43,15 @@ from tatolab.stream import (
 from ._capability_extensions import (
     load_installed_capability_extensions_once_per_process,
 )
-from ._engine import NodeLinkDataAccess as NativeNodeLinkDataAccess
 from ._engine import (
     capability_extension_host_for_the_helper_process,
     capture_this_helper_processes_engine_log_records,
-    open_runtime_context_full_access_for_helper_process,
     drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
+    limited_access_view_of_runtime_context_for_helper_process,
+    note_pause_state_from_parent_on_runtime_context,
+    open_node_link_data_access_for_helper_process,
+    open_runtime_context_full_access_for_helper_process,
 )
 from ._processor_hosting import apply_configuration, construct_processor_instance
 
@@ -877,7 +879,7 @@ def construct_hosted_processor(
     return HostedProcessor(
         construct_processor_instance(processor_class, configuration, link_data_access),
         full_access_context,
-        full_access_context.limited_access_view_for_helper_process(),
+        limited_access_view_of_runtime_context_for_helper_process(full_access_context),
     )
 
 
@@ -1162,8 +1164,8 @@ class HelperProcessLifecycle:
 
     def _note_pause(self, verb: str) -> None:
         if self._hosted is not None:
-            self._hosted.full_access_context.note_pause_state_from_parent(
-                verb == "on_pause"
+            note_pause_state_from_parent_on_runtime_context(
+                self._hosted.full_access_context, verb == "on_pause"
             )
             self._hosted.call_hook(verb, self._hosted.limited_access_context)
         self._bridge.send({"rpc": "ok"})
@@ -1355,7 +1357,7 @@ def main() -> None:
 
     try:
         processor_class = load_processor_class(import_path)
-        link_data_access = NativeNodeLinkDataAccess()
+        link_data_access = open_node_link_data_access_for_helper_process()
     except Exception as startup_failure:
         engine_log_forwarder.stop_after_forwarding_what_is_left()
         log.error(

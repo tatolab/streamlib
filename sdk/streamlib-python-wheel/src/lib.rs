@@ -48,9 +48,21 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_capability_extension_host::PythonCapabilityExtensionHost>()?;
     python_test_harness_endpoints::add_test_harness_marker_classes_to_the_module(module)?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
+    module.add_function(wrap_pyfunction!(
+        python_processor_link_data_access::open_node_link_data_access_for_helper_process,
+        module
+    )?)?;
     module.add_class::<python_processor_context::PythonRuntimeContextFullAccess>()?;
     module.add_function(wrap_pyfunction!(
         python_processor_context::open_runtime_context_full_access_for_helper_process,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_processor_context::limited_access_view_of_runtime_context_for_helper_process,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_processor_context::note_pause_state_from_parent_on_runtime_context,
         module
     )?)?;
     module.add_class::<python_processor_context::PythonRuntimeContextLimitedAccess>()?;

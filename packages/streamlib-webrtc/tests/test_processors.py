@@ -31,10 +31,8 @@ from tatolab.runtime._processor_hosting import construct_processor_instance
 from tatolab.stream import (
     H264Decoder,
     H264Encoder,
-    NodeLinkDataAccess,
     OpusDecoder,
     OpusEncoder,
-    RuntimeContextFullAccess,
     StreamBuilder,
     compile_stream_to_graph,
     log,
@@ -239,7 +237,7 @@ class _PublisherUnderTest:
         config: "dict[str, Any]",
     ) -> None:
         unique = f"whipsetup{os.getpid()}_{request.node.name}"
-        link_data_access = _engine.NodeLinkDataAccess()
+        link_data_access = _engine.open_node_link_data_access_for_helper_process()
         for index in range(inbound_links):
             link_data_access.wire_input_link(
                 "tracks", f"{unique}/encoder{index}", f"{unique}/encoder{index}",
@@ -343,12 +341,12 @@ def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
     channel = f"{unique}/encoder"
     notify = f"{unique}_dest/notify"
 
-    destination = _engine.NodeLinkDataAccess()
+    destination = _engine.open_node_link_data_access_for_helper_process()
     destination.wire_input_link(
         "tracks", channel, channel, notify,
         "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
-    source = _engine.NodeLinkDataAccess()
+    source = _engine.open_node_link_data_access_for_helper_process()
     source.wire_output_link(
         "encoded_audio", channel, notify, 1024, 1 << 20, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
@@ -376,7 +374,7 @@ def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
     )
 
     with pytest.raises(ValueError, match="mono and stereo only"):
-        publisher.process(context.limited_access_view_for_helper_process())
+        publisher.process(_engine.limited_access_view_of_runtime_context_for_helper_process(context))
 
 
 class RecordingWhepSession:

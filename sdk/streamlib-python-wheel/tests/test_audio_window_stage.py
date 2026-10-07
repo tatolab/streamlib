@@ -345,7 +345,7 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
 
 def a_helper_process_data_plane() -> NodeLinkDataAccess:
     """The object a child builds for itself, with its own iceoryx2 node."""
-    return _engine.NodeLinkDataAccess()
+    return _engine.open_node_link_data_access_for_helper_process()
 
 
 def wire_with_window(data_plane: NodeLinkDataAccess, audio_window) -> None:

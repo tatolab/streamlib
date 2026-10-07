@@ -271,35 +271,36 @@ fn decode_one_bag_into<'py>(
     }
 }
 
+/// Build a helper process's own data plane, with its own iceoryx2 node.
+///
+/// The parent's copy of this object is built in Rust and wired by the
+/// compiler op; this is how a child builds the one it wires itself from the
+/// port wiring the parent sent it. The node opens in the domain root the
+/// parent handed over, and a process handed none is refused.
+#[pyfunction]
+pub(crate) fn open_node_link_data_access_for_helper_process(
+    python: Python<'_>,
+) -> PyResult<PythonProcessorLinkDataAccess> {
+    let iceoryx2_domain_root = std::env::var_os(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
+        .filter(|root| !root.is_empty())
+        .ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "{ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE} is not set: a helper process \
+                 opens its iceoryx2 node only in the domain its parent runtime hands it"
+            ))
+        })?;
+    let node_name = std::env::var(HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE).map_or_else(
+        |_| format!("streamlib-helper/pid{}", std::process::id()),
+        |processor_id| format!("streamlib-helper/{processor_id}"),
+    );
+    let node = python
+        .detach(|| Iceoryx2Node::new(std::path::Path::new(&iceoryx2_domain_root), &node_name))
+        .map_err(|node_failure| PyRuntimeError::new_err(node_failure.to_string()))?;
+    Ok(PythonProcessorLinkDataAccess::over_helper_process_iceoryx2_node(node))
+}
+
 #[pymethods]
 impl PythonProcessorLinkDataAccess {
-    /// Build a helper process's own data plane, with its own iceoryx2 node.
-    ///
-    /// The parent's copy of this object is built in Rust and wired by the
-    /// compiler op; this is the constructor a child uses to wire itself from
-    /// the port wiring the parent sent it. The node opens in the domain root
-    /// the parent handed over, and a process handed none is refused.
-    #[new]
-    fn open_for_helper_process(python: Python<'_>) -> PyResult<Self> {
-        let iceoryx2_domain_root = std::env::var_os(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
-            .filter(|root| !root.is_empty())
-            .ok_or_else(|| {
-                PyRuntimeError::new_err(format!(
-                    "{ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE} is not set: a helper process \
-                     opens its iceoryx2 node only in the domain its parent runtime hands it"
-                ))
-            })?;
-        let node_name = std::env::var(HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE)
-            .map_or_else(
-                |_| format!("streamlib-helper/pid{}", std::process::id()),
-                |processor_id| format!("streamlib-helper/{processor_id}"),
-            );
-        let node = python
-            .detach(|| Iceoryx2Node::new(std::path::Path::new(&iceoryx2_domain_root), &node_name))
-            .map_err(|node_failure| PyRuntimeError::new_err(node_failure.to_string()))?;
-        Ok(Self::over_helper_process_iceoryx2_node(node))
-    }
-
     /// Open the loss-count board the parent created for this spawn, so every
     /// link wired from here on mirrors its counts onto it.
     ///

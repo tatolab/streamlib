@@ -9,9 +9,8 @@ engine, the bootstrap's calls, the test harness and the local API client.
 
 What a node is handed while it runs is declared once, in `tatolab.stream`: its
 classes as `typing.Protocol`s and its functions as runtime-backed functions.
-None of it is declared here, save `NodeLinkDataAccess`, which the bootstrap
-constructs and so appears typed as the class of its Protocol, declaring no
-member of its own.
+None of it is declared here: the bootstrap reaches those classes only through
+the functions that open them, typed as their Protocols.
 
 Two gates keep this honest against the built module in CI.
 `tests/runtime_backed_protocol_conformance.py` holds every native class and
@@ -36,7 +35,6 @@ __all__ = [
     "LocalApiMcpRequestRefused",
     "LocalApiMcpServerUnreachable",
     "LocalApiMcpToolCallFailed",
-    "NodeLinkDataAccess",
     "CapabilityExtensionHost",
     "Runtime",
     "TestBagCollector",
@@ -50,6 +48,9 @@ __all__ = [
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
     "feed_test_harness_bag",
+    "limited_access_view_of_runtime_context_for_helper_process",
+    "note_pause_state_from_parent_on_runtime_context",
+    "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
     "open_test_harness_channel",
     "processor_class_import_paths_in_this_processes_catalog",
@@ -238,12 +239,11 @@ class CapabilityExtensionHost:
         `streamlib graph`; in a helper it is the process's own record.
         """
 
-# The one native class the bootstrap constructs itself. It is typed as the class
-# of its `tatolab.stream` Protocol and declares nothing of its own: a stub class
-# deriving from the Protocol would inherit its bodiless members as abstract, and
-# neither checker lets an abstract class be constructed. The conformance gate
-# holds the native constructor to the no-argument one this declares.
-NodeLinkDataAccess: type[_stream_protocols.NodeLinkDataAccess]
+def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
+    """A helper process's own data plane, opened in the iceoryx2 domain its parent handed it.
+
+    Raises `RuntimeError` in a process its parent handed no domain root.
+    """
 
 def open_runtime_context_full_access_for_helper_process(
     configuration: Mapping[str, Any],
@@ -259,6 +259,16 @@ def open_runtime_context_full_access_for_helper_process(
     names, the GPU surface works here; without any of them, GPU calls refuse by
     name.
     """
+
+def limited_access_view_of_runtime_context_for_helper_process(
+    full_access_context: _stream_protocols.RuntimeContextFullAccess,
+) -> _stream_protocols.RuntimeContextLimitedAccess:
+    """The limited-access view of the same node: same configuration, links and pause state."""
+
+def note_pause_state_from_parent_on_runtime_context(
+    full_access_context: _stream_protocols.RuntimeContextFullAccess, paused: bool
+) -> None:
+    """Record on a helper's context the pause state its parent just announced."""
 
 class LocalApiMcpServerUnreachable(Exception):
     """Nothing answered MCP on the local API socket."""

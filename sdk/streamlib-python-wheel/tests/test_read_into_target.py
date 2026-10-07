@@ -89,7 +89,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     notify_service_name = f"{unique}_dest/notify"
     link_id = f"L-{unique}"
 
-    destination = _engine.NodeLinkDataAccess()
+    destination = _engine.open_node_link_data_access_for_helper_process()
     destination.wire_input_link(
         INPUT_PORT,
         channel_service_name,
@@ -102,7 +102,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
         1,
         link_id,
     )
-    source = _engine.NodeLinkDataAccess()
+    source = _engine.open_node_link_data_access_for_helper_process()
     source.wire_output_link(
         OUTPUT_PORT,
         channel_service_name,
