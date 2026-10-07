@@ -455,3 +455,325 @@ fn json_kind_name(value: &serde_json::Value) -> &'static str {
         serde_json::Value::Object(_) => "an object",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn requested(import_path: &str) -> ProcessorClassImportPath {
+        ProcessorClassImportPath::new(import_path).expect("the test path names a class")
+    }
+
+    /// A described node type carrying what `@tatolab.stream.node` stamps,
+    /// with `input_ports` as given.
+    fn described_node_type_with_input_ports(input_ports: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "import_path": "my_app.audio:AudioConsumer",
+            "short_name": "AudioConsumer",
+            "description": "consumes audio",
+            "execution": {"mode": "continuous", "interval_ms": 20},
+            "scheduling_priority": "high",
+            "config_schema": {"type": "object"},
+            "input_ports": input_ports,
+            "output_ports": [{"name": "levels", "description": "the levels it measured"}],
+        })
+    }
+
+    fn read(described_node_type: &serde_json::Value) -> Result<PythonProcessorDeclaration, String> {
+        PythonProcessorDeclaration::read_from_described_node_type(
+            described_node_type,
+            &requested("my_app.audio:AudioConsumer"),
+        )
+    }
+
+    fn refusal_of(described_node_type: &serde_json::Value) -> String {
+        match read(described_node_type) {
+            Ok(_) => panic!("the described node type was accepted; a refusal was expected"),
+            Err(refusal) => refusal,
+        }
+    }
+
+    /// An audio window marker with `fields`, on a port declared `ordered`.
+    fn described_with_audio_window(fields: serde_json::Value) -> serde_json::Value {
+        described_node_type_with_input_ports(serde_json::json!([{
+            "name": "audio",
+            "description": "",
+            "delivery_profile": "ordered",
+            "audio_window": fields,
+        }]))
+    }
+
+    fn whole_declared_audio_window() -> serde_json::Map<String, serde_json::Value> {
+        serde_json::json!({
+            "resolved_from": "declaration",
+            "sample_rate": 48_000,
+            "channels": 2,
+            "dtype": "f32",
+            "window_size": 960,
+            "hop": 960,
+        })
+        .as_object()
+        .cloned()
+        .expect("an object")
+    }
+
+    #[test]
+    fn a_described_node_type_reads_into_a_python_descriptor_and_its_execution() {
+        let declaration = read(&described_node_type_with_input_ports(serde_json::json!([
+            {"name": "audio", "description": "what it hears", "delivery_profile": "ordered"}
+        ])))
+        .unwrap_or_else(|refusal| panic!("the described node type reads: {refusal}"));
+
+        let descriptor = &declaration.descriptor;
+        assert_eq!(
+            descriptor.processor_class_import_path.as_str(),
+            "my_app.audio:AudioConsumer"
+        );
+        assert_eq!(
+            descriptor.entrypoint.as_deref(),
+            Some("my_app.audio:AudioConsumer")
+        );
+        assert_eq!(
+            descriptor.processor_class_short_name.as_str(),
+            "AudioConsumer"
+        );
+        assert_eq!(descriptor.runtime, ProcessorRuntime::Python);
+        assert_eq!(descriptor.description, "consumes audio");
+        assert_eq!(descriptor.scheduling.priority, ThreadPriority::High);
+        assert_eq!(
+            descriptor.config_schema,
+            Some(serde_json::json!({"type": "object"}))
+        );
+        assert_eq!(descriptor.inputs[0].name, "audio");
+        assert_eq!(
+            descriptor.inputs[0].delivery_profile.as_deref(),
+            Some("ordered")
+        );
+        assert_eq!(descriptor.outputs[0].name, "levels");
+        assert_eq!(
+            declaration.execution_config.execution,
+            ProcessExecution::Continuous { interval_ms: 20 }
+        );
+    }
+
+    /// The interpreter answers for the path it was asked; a document naming
+    /// another class is refused rather than registered under the wrong name.
+    #[test]
+    fn a_described_node_type_naming_another_import_path_is_refused_naming_both() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["import_path"] = serde_json::json!("my_app.audio:SomethingElse");
+
+        let refusal = refusal_of(&described);
+
+        assert!(
+            refusal.contains("my_app.audio:SomethingElse")
+                && refusal.contains("my_app.audio:AudioConsumer"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_execution_mode_is_refused_naming_it() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["execution"] = serde_json::json!({"mode": "eventually"});
+
+        assert!(refusal_of(&described).contains("\"eventually\""));
+    }
+
+    #[test]
+    fn a_config_schema_that_is_not_an_object_is_refused() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["config_schema"] = serde_json::json!(["not", "an", "object"]);
+
+        assert!(refusal_of(&described).contains("config_schema must be a JSON object"));
+    }
+
+    /// The decorator refuses the sentinel; this reader does not, and must not.
+    /// A marker the decorator never built still carries `match_device` through
+    /// to the compiler, where the wire-time refusal — which knows the port's
+    /// placement, as nothing here does — is the guard that speaks.
+    #[test]
+    fn a_hand_built_match_device_marker_still_reaches_the_descriptor() {
+        let declaration = read(&described_with_audio_window(
+            serde_json::json!({"resolved_from": "match_device"}),
+        ))
+        .unwrap_or_else(|refusal| panic!("a hand-built sentinel reads: {refusal}"));
+
+        assert_eq!(
+            declaration.descriptor.inputs[0].audio_window,
+            Some(AudioWindowContract::MatchDevice {})
+        );
+    }
+
+    #[test]
+    fn a_hand_built_marker_smuggling_an_unhonourable_contract_is_refused_naming_both_numbers() {
+        let mut fields = whole_declared_audio_window();
+        fields.insert("window_size".to_string(), serde_json::json!(512));
+        fields.insert("hop".to_string(), serde_json::json!(4096));
+
+        let refusal = refusal_of(&described_with_audio_window(fields.into()));
+
+        assert!(
+            refusal.contains("4096") && refusal.contains("512"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_contract_beside_a_skipping_profile_is_refused_naming_both_knobs() {
+        let described = described_node_type_with_input_ports(serde_json::json!([{
+            "name": "audio",
+            "description": "",
+            "delivery_profile": "newest",
+            "audio_window": serde_json::Value::Object(whole_declared_audio_window()),
+        }]));
+
+        let refusal = refusal_of(&described);
+
+        assert!(
+            refusal.contains("audio_window")
+                && refusal.contains("newest")
+                && refusal.contains("ordered"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_negative_count_is_refused_naming_the_field_and_the_value() {
+        let mut fields = whole_declared_audio_window();
+        fields.insert("sample_rate".to_string(), serde_json::json!(-1));
+
+        let refusal = refusal_of(&described_with_audio_window(fields.into()));
+
+        assert!(
+            refusal.contains("sample_rate") && refusal.contains("-1"),
+            "{refusal}"
+        );
+    }
+
+    /// A Python `bool` is an `int` subclass, so a marker carrying `True` would
+    /// otherwise reach the stage as one channel — a plausible count nobody
+    /// wrote.
+    #[test]
+    fn a_bool_where_a_number_belongs_is_refused_naming_the_field_and_the_kind() {
+        for field in ["channels", "sample_rate", "window_size", "hop"] {
+            let mut fields = whole_declared_audio_window();
+            fields.insert(field.to_string(), serde_json::json!(true));
+
+            let refusal = refusal_of(&described_with_audio_window(fields.into()));
+
+            assert!(
+                refusal.contains(field) && refusal.contains("bool"),
+                "a bool in {field:?} must be refused naming the field and the kind; got {refusal}"
+            );
+        }
+    }
+
+    /// The count is the one value a marker may leave out, and the reader
+    /// carries the omission through: a port that follows its source is
+    /// spelled by saying nothing, or by the `"source"` word.
+    #[test]
+    fn an_omitted_or_source_spelled_channel_count_follows_the_source() {
+        let mut omitted = whole_declared_audio_window();
+        omitted.remove("channels");
+        let mut spelled = whole_declared_audio_window();
+        spelled.insert("channels".to_string(), serde_json::json!("source"));
+
+        for fields in [omitted, spelled] {
+            let declaration =
+                read(&described_with_audio_window(fields.into())).unwrap_or_else(|refusal| {
+                    panic!("an omitted count is a whole contract: {refusal}")
+                });
+
+            assert_eq!(
+                declaration.descriptor.inputs[0].audio_window,
+                Some(AudioWindowContract::Declaration(
+                    AudioWindowContractDeclaredValues {
+                        sample_rate: 48_000,
+                        channels: None,
+                        dtype: "f32".to_string(),
+                        window_size: 960,
+                        hop: 960,
+                    }
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn a_channel_count_naming_no_count_is_refused_offering_the_spelling() {
+        let mut fields = whole_declared_audio_window();
+        fields.insert("channels".to_string(), serde_json::json!("stereo"));
+
+        let refusal = refusal_of(&described_with_audio_window(fields.into()));
+
+        assert!(
+            refusal.contains("channels") && refusal.contains("source"),
+            "{refusal}"
+        );
+    }
+
+    /// Every field the contract requires names the port and the field when it
+    /// is missing; `channels` is the one a port may leave to its source.
+    #[test]
+    fn a_marker_missing_any_required_contract_field_is_refused_naming_the_port_and_the_field() {
+        for missing_field in [
+            "resolved_from",
+            "sample_rate",
+            "dtype",
+            "window_size",
+            "hop",
+        ] {
+            let mut fields = whole_declared_audio_window();
+            fields.remove(missing_field);
+
+            let refusal = refusal_of(&described_with_audio_window(fields.into()));
+
+            assert!(
+                refusal.contains("input port \"audio\"") && refusal.contains(missing_field),
+                "a missing {missing_field:?} must name the port and the field; got {refusal}"
+            );
+        }
+    }
+
+    /// An output port declares no contract — only a consuming input port
+    /// states the window it needs.
+    #[test]
+    fn an_output_port_declaring_a_contract_is_refused() {
+        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
+        described["output_ports"] = serde_json::json!([{
+            "name": "windows",
+            "description": "",
+            "audio_window": {"resolved_from": "match_device"},
+        }]);
+
+        let refusal = refusal_of(&described);
+
+        assert!(
+            refusal.contains("output port \"windows\"") && refusal.contains("consuming"),
+            "{refusal}"
+        );
+    }
+
+    /// The kind of a channel-count refusal travels with it, so a language host
+    /// raises the same mistake as the same exception on every field.
+    #[test]
+    fn a_channel_count_refusal_says_whether_the_value_was_the_wrong_kind_or_unusable() {
+        assert_eq!(
+            read_a_channel_count_or_the_source_spelling(&serde_json::json!(2)),
+            Ok(Some(2))
+        );
+        assert!(matches!(
+            read_a_channel_count_or_the_source_spelling(&serde_json::json!(1.5)),
+            Err(AudioWindowFieldRefusal::WrongKindOfValue(_))
+        ));
+        assert!(matches!(
+            read_a_channel_count_or_the_source_spelling(&serde_json::json!(-2)),
+            Err(AudioWindowFieldRefusal::UnusableValue(_))
+        ));
+        assert!(matches!(
+            read_a_channel_count_or_the_source_spelling(&serde_json::json!("stereo")),
+            Err(AudioWindowFieldRefusal::UnusableValue(_))
+        ));
+    }
+}

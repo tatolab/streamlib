@@ -104,3 +104,232 @@ impl ProcessorInterpreterLaunchRecord {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    use super::*;
+    use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
+    use crate::core::graph_snapshot::GraphSnapshot;
+    use crate::core::processors::ProcessorSpec;
+    use crate::core::runtime::Runner;
+
+    fn import_path(path: &str) -> ProcessorClassImportPath {
+        ProcessorClassImportPath::new(path).expect("the test path names a class")
+    }
+
+    /// A Rust-grammar type registered by its descriptor alone, which no load
+    /// describes.
+    fn a_rust_type_registered_as(short_name: &str) -> ProcessorClassImportPath {
+        let rust_type = import_path(&format!("{}::{short_name}", module_path!()));
+        let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+            ProcessorDescriptor::new(
+                ProcessorClassShortName::new(short_name).unwrap(),
+                rust_type.clone(),
+                "a launch-record test double",
+            )
+            .with_output(PortDescriptor::new("video", "", false)),
+        );
+        rust_type
+    }
+
+    fn a_graph_of(node_types: &[&ProcessorClassImportPath]) -> GraphSnapshot {
+        let nodes: Vec<_> = node_types
+            .iter()
+            .enumerate()
+            .map(|(node_index, node_type)| {
+                serde_json::json!({"name": format!("node-{node_index}"), "type": node_type.as_str()})
+            })
+            .collect();
+        GraphSnapshot::from_graph_document(serde_json::json!({ "nodes": nodes }))
+            .expect("the test graph reads")
+    }
+
+    /// A project directory holding a stand-in venv interpreter that answers
+    /// every describe with `described_node_types`.
+    fn a_project_whose_interpreter_describes(
+        described_node_types: serde_json::Value,
+    ) -> (tempfile::TempDir, StreamEnvironment) {
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let interpreter = project_directory.path().join("stub-python");
+        let describe_document = serde_json::json!({
+            "described_node_types": described_node_types,
+            "refused_import_paths": [],
+        });
+        std::fs::write(
+            &interpreter,
+            format!("#!/bin/sh\ncat <<'DESCRIBED'\n{describe_document}\nDESCRIBED\n"),
+        )
+        .expect("the stub interpreter is written");
+        std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub interpreter is executable");
+        let stream_environment = StreamEnvironment {
+            project_directory: project_directory.path().to_path_buf(),
+            interpreter,
+        };
+        (project_directory, stream_environment)
+    }
+
+    fn a_described_type(
+        node_type: &ProcessorClassImportPath,
+        input_port: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "import_path": node_type.as_str(),
+            "short_name": "Blur",
+            "description": "blurs",
+            "execution": {"mode": "reactive"},
+            "scheduling_priority": null,
+            "config_schema": {"type": "object"},
+            "input_ports": [{"name": input_port, "description": ""}],
+            "output_ports": [],
+        })
+    }
+
+    fn input_port_names_registered_for(node_type: &ProcessorClassImportPath) -> Vec<String> {
+        PROCESSOR_REGISTRY
+            .descriptor(node_type)
+            .expect("the type is registered")
+            .inputs
+            .into_iter()
+            .map(|port| port.name)
+            .collect()
+    }
+
+    fn refused_node_types(refusal: Error) -> (Vec<ProcessorClassImportPath>, String) {
+        match refusal {
+            Error::NodeTypesNotDescribed {
+                node_types,
+                refusal,
+            } => (node_types, refusal),
+            other => panic!("expected NodeTypesNotDescribed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_load_records_the_stream_environment_it_was_given() {
+        let rust_type = a_rust_type_registered_as("RecordedEnvironmentSource");
+        let stream_environment = StreamEnvironment {
+            project_directory: "/home/someone/my_app".into(),
+            interpreter: "/home/someone/my_app/.venv/bin/python".into(),
+        };
+        let runtime = Runner::new().unwrap();
+        assert_eq!(runtime.stream_environment_recorded_at_the_last_load(), None);
+
+        runtime
+            .load_graph_snapshot(&a_graph_of(&[&rust_type]), Some(stream_environment.clone()))
+            .expect("a graph of Rust types loads");
+
+        assert_eq!(
+            runtime.stream_environment_recorded_at_the_last_load(),
+            Some(stream_environment)
+        );
+    }
+
+    /// A Rust type is never described, so a graph naming only Rust types
+    /// loads with no environment and starts no interpreter.
+    #[test]
+    fn a_graph_of_rust_types_needs_no_stream_environment() {
+        let rust_type = a_rust_type_registered_as("NoEnvironmentSource");
+
+        Runner::new()
+            .unwrap()
+            .load_graph_snapshot(&a_graph_of(&[&rust_type]), None)
+            .expect("a graph of Rust types loads with no environment");
+    }
+
+    #[test]
+    fn a_load_naming_a_type_to_describe_with_no_environment_refuses_it_by_name() {
+        let rust_type = a_rust_type_registered_as("BesideAnUndescribedType");
+        let python_type = import_path("my_app.load_with_no_environment:Blur");
+        let runtime = Runner::new().unwrap();
+
+        let refusal = runtime
+            .load_graph_snapshot(&a_graph_of(&[&rust_type, &python_type]), None)
+            .expect_err("a type to describe needs an environment");
+
+        let (node_types, refusal) = refused_node_types(refusal);
+        assert_eq!(node_types, [python_type]);
+        assert!(refusal.contains("no stream environment"), "{refusal}");
+        assert_eq!(
+            runtime.to_json().unwrap()["nodes"],
+            serde_json::json!([]),
+            "a refused load adds nothing"
+        );
+    }
+
+    #[test]
+    fn a_load_with_no_lend_directory_refuses_a_type_to_describe_by_name() {
+        let python_type = import_path("my_app.load_with_no_lend_directory:Blur");
+        let (_project_directory, stream_environment) =
+            a_project_whose_interpreter_describes(serde_json::json!([]));
+
+        let refusal = Runner::new()
+            .unwrap()
+            .load_graph_snapshot(&a_graph_of(&[&python_type]), Some(stream_environment))
+            .expect_err("a type to describe needs a lend directory");
+
+        let (node_types, refusal) = refused_node_types(refusal);
+        assert_eq!(node_types, [python_type]);
+        assert!(refusal.contains("lend directory"), "{refusal}");
+    }
+
+    #[test]
+    fn a_live_add_of_an_undescribed_type_with_no_environment_recorded_is_refused_by_name() {
+        let python_type = import_path("my_app.live_add_with_no_environment:Blur");
+
+        let refusal = Runner::new()
+            .unwrap()
+            .add_processor(ProcessorSpec::new(
+                python_type.clone(),
+                serde_json::json!({}),
+            ))
+            .expect_err("an undescribed type needs an environment");
+
+        let (node_types, _) = refused_node_types(refusal);
+        assert_eq!(node_types, [python_type]);
+    }
+
+    /// Each load describes again what an earlier describe registered — the
+    /// class's ports may have changed since — and a live add describes a type
+    /// nothing has registered in the environment the load recorded.
+    #[test]
+    fn a_load_redescribes_its_types_and_a_live_add_describes_in_the_recorded_environment() {
+        let loaded_type = import_path("my_app.redescribed_at_load:Blur");
+        let added_live_type = import_path("my_app.described_at_a_live_add:Blur");
+
+        let runtime = Runner::new().unwrap();
+        runtime.set_processor_interpreter_lend_directory("/opt/tatolab/lib/tatolab/lend".into());
+        let (_first_project, first_environment) = a_project_whose_interpreter_describes(
+            serde_json::json!([a_described_type(&loaded_type, "video")]),
+        );
+        runtime
+            .load_graph_snapshot(&a_graph_of(&[&loaded_type]), Some(first_environment))
+            .expect("the described type loads");
+        assert_eq!(input_port_names_registered_for(&loaded_type), ["video"]);
+        assert!(PROCESSOR_REGISTRY.was_described_in_a_processor_interpreter(&loaded_type));
+
+        let (_second_project, second_environment) =
+            a_project_whose_interpreter_describes(serde_json::json!([
+                a_described_type(&loaded_type, "frames"),
+                a_described_type(&added_live_type, "audio"),
+            ]));
+        let second_runtime = Runner::new().unwrap();
+        second_runtime
+            .set_processor_interpreter_lend_directory(Path::new("/opt/tatolab/lend").into());
+        second_runtime
+            .load_graph_snapshot(&a_graph_of(&[&loaded_type]), Some(second_environment))
+            .expect("the type is described again");
+        assert_eq!(input_port_names_registered_for(&loaded_type), ["frames"]);
+
+        second_runtime
+            .add_processor(ProcessorSpec::new(
+                added_live_type.clone(),
+                serde_json::json!({}),
+            ))
+            .expect("a live add describes the type in the recorded environment");
+        assert_eq!(input_port_names_registered_for(&added_live_type), ["audio"]);
+    }
+}
