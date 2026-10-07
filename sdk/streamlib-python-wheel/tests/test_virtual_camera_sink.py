@@ -340,11 +340,6 @@ def read_yuyv_frames(video_node: Path, count: int):
 # ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_built_in_class_cannot_be_instantiated():
-    with pytest.raises(TypeError):
-        tatolab.stream.VirtualCameraSink()  # pyright: ignore[reportCallIssue]
-
-
 @stream
 def a_virtual_camera_sink_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(tatolab.stream.VirtualCameraSink)

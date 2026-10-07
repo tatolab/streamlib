@@ -1508,8 +1508,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine a_uniform_buffer_binding_is_refused_naming_its_kind -->
   <!-- verify: cargo test -p streamlib-engine a_trace_refuses_a_storage_buffer_binding_by_name -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_uniform_buffer_binding_is_refused_naming_its_kind -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_draw_takes_no_vertex_buffer_no_index_buffer_and_no_depth_target -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_graphics_kernel_carries_no_depth_or_vertex_input_state -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_graphics_kernel_surface.py::test_a_draw_takes_no_vertex_buffer_no_index_buffer_and_no_depth_target -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_graphics_kernel_surface.py::test_a_graphics_kernel_carries_no_depth_or_vertex_input_state -->
 - **DECIDED** — A kernel's output is an engine-owned texture that Python names by
   surface id and passes downstream in a bag, and that a third-party GPU library in its
   own Python package reaches through a scope. On Linux, entering blits the texture to a
@@ -2836,7 +2836,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   which is the camera's existing gap carried, not a new one.
   [python-codec-block-api — SHIPPED #2105; macos-capability-parity — SHIPPED #2413;
   stream-graph — SHIPPED #2567]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_marker_class_cannot_be_instantiated -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_node_name_defaults_to_the_type_name -->
 - **DECIDED** — `tatolab.stream.EncodedVideoFrame` is the Python cast over the encoded-frame
@@ -3083,7 +3083,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   stream-graph — SHIPPED #2567]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_opus_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_mp4_sink.py::test_two_encoders_wire_into_the_one_input_without_an_adapter -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_mp4_sink.py::test_the_marker_class_cannot_be_instantiated -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
 - **DECIDED** — The rung's CI-run, GPU-free proof: the stage with `channels` absent emits
   the source's count and converts when one is declared, in Rust and through the Python
   declaration; the link-naming read returns the link a synthetic frame was pushed on, with

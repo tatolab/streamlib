@@ -41,6 +41,14 @@ def test_a_built_in_is_named_by_its_own_class_in_the_stream_package(built_in_nod
     assert f"{class_name}Config" in tatolab.stream.__all__
 
 
+@pytest.mark.parametrize(
+    "built_in_node_class", GENERATED_BUILT_IN_NODE_CLASSES, ids=lambda cls: cls.__name__
+)
+def test_the_built_in_class_cannot_be_instantiated(built_in_node_class):
+    with pytest.raises(TypeError):
+        built_in_node_class()
+
+
 def test_a_built_in_is_never_constructed_and_says_how_to_add_it():
     with pytest.raises(TypeError, match=r"stream_builder\.add\(Mp4Sink, config="):
         tatolab.stream.Mp4Sink()  # pyright: ignore[reportCallIssue]

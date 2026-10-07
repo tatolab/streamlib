@@ -15,17 +15,15 @@ over is that the draw runs, and that every way of getting the bindings wrong is
 refused with a message naming what the shaders actually declare — the stage
 claim before a kernel exists, the rest before any GPU work is submitted.
 
-The device-dependent tests are `requires_gpu` and execute on the rig only; CI
-green is not proof for them. The two that read the surface itself are not, and
-they are what keeps "no vertex buffer, no index buffer, no depth target" from
-being a claim only prose makes.
+The tests here are `requires_gpu` and execute on the rig only; CI green is not
+proof for them. That a draw asks for no vertex buffer, index buffer or depth
+target is read off the declared surface in the stream suite.
 
 Every probe runs in its own helper process and reports one
 `MARKER:PROBE_RESULT` JSON line; the tests drive the app out of process and
 assert on that line.
 """
 
-import inspect
 import json
 import re
 from pathlib import Path
@@ -33,7 +31,6 @@ from pathlib import Path
 import pytest
 
 from graphics_kernel_probes import SOURCE_BINDING
-from tatolab.stream import GpuContextFullAccess, GraphicsKernel
 
 APP = Path(__file__).parent / "graphics_kernel_app.py"
 
@@ -62,44 +59,6 @@ def spelled_the_same_way(message: str) -> str:
     """A message with the two spellings of a binding kind — the wire's
     `storage_image` and the engine type's `StorageImage` — made comparable."""
     return message.lower().replace("_", "")
-
-
-def test_a_draw_takes_no_vertex_buffer_no_index_buffer_and_no_depth_target():
-    """The recon constraints, stated where a caller meets them.
-
-    No escalate op mints a `VertexBuffer` or an `IndexBuffer`, and the
-    offscreen pass a draw runs attaches colour targets only — so the honest
-    surface is one that cannot ask for them at all. Asserted against the
-    signature rather than a refusal message, because a parameter that quietly
-    reappears is exactly what this forbids.
-    """
-    parameters = inspect.signature(GraphicsKernel.draw).parameters
-    unsupported = [
-        name
-        for name in parameters
-        if "vertex_buffer" in name or "index_buffer" in name or "depth" in name
-    ]
-    assert unsupported == [], (
-        f"a draw cannot honour {unsupported}: no escalate op mints a vertex or "
-        "index buffer, and the pass attaches colour targets only"
-    )
-    assert "vertex_count" in parameters, (
-        "the vertices are the shaders' own — a draw still says how many of them"
-    )
-
-
-def test_a_graphics_kernel_carries_no_depth_or_vertex_input_state():
-    """The pipeline the wire builds has no depth attachment and no vertex
-    input, so neither is a knob `create_graphics_kernel` offers."""
-    parameters = inspect.signature(GpuContextFullAccess.create_graphics_kernel).parameters
-    unsupported = [
-        name
-        for name in parameters
-        if "depth" in name or "vertex_input" in name or "multisample" in name
-    ]
-    assert unsupported == [], (
-        f"the graphics kernel builds single-sampled colour-only pipelines: {unsupported}"
-    )
 
 
 @pytest.mark.requires_gpu

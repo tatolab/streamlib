@@ -70,12 +70,6 @@ DECODED_BLOCKS_TO_CROSS_CHECK = DECODED_BLOCKS_REPORTED // 2
 # ---- built-in class semantics (no GPU) -------------------------------------
 
 
-@pytest.mark.parametrize("marker_class", TWO_OPUS_MARKERS)
-def test_the_built_in_class_cannot_be_instantiated(marker_class):
-    with pytest.raises(TypeError):
-        marker_class()
-
-
 @stream
 def an_opus_encoder_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(OpusEncoder)

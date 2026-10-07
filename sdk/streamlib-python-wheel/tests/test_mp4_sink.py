@@ -118,11 +118,6 @@ def await_recording_with_at_least(mp4_inspect_binary, recording_path, fragments,
 # ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_built_in_class_cannot_be_instantiated():
-    with pytest.raises(TypeError):
-        Mp4Sink()  # pyright: ignore[reportCallIssue]
-
-
 @stream
 def one_mp4_sink_left_unnamed(stream_builder: StreamBuilder) -> None:
     stream_builder.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
