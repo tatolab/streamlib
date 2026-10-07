@@ -66,8 +66,9 @@ FLOOR_BOUND_MODULES: "dict[str, tuple[str, str]]" = {
     ),
 }
 
-# The runtime-backed and built-in names that exist on one floor -> (why, the other floor's peer if one exists).
-# Allowed on their floor; the finding exists so the choice is a known one.
+# The runtime-backed and built-in names that exist on one floor -> (why, the
+# other floor's peer if one exists). Allowed on their floor; the finding exists
+# so the choice is a known one.
 SINGLE_FLOOR_NAMES: "dict[str, tuple[str, Optional[str]]]" = {
     "VirtualCameraSink": ("Linux only: v4l2loopback and PipeWire", None),
     "create_ray_tracing_kernel": ("Linux only: MoltenVK has no ray tracing", None),

@@ -75,4 +75,3 @@ class ModelConfiguredProbe:
 class UnconfiguredProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         _report("UnconfiguredProbe", None)
-
