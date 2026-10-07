@@ -96,7 +96,7 @@ jobs:
       # `tatolab-stream` and pytest and nothing of the runtime: the lend is the
       # only `tatolab.runtime` on the path. The portability proof reads every
       # Mach-O the lend carries, and the macOS floor from its `.dist-info`.
-      - name: Portability and driver-search tests against the lend
+      - name: Portability, driver-search and describe tests against the lend
         run: |
           python3 -m venv /tmp/lend-check
           /tmp/lend-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
