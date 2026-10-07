@@ -385,7 +385,7 @@ def holding_findings(
         exported_name
         for exported_name, exported in vars(engine_module).items()
         if not exported_name.startswith("_")
-        and (inspect.isclass(exported) or callable(exported))
+        and callable(exported)
     }
     held_by_tatolab_stream = set(protocols_by_name) | set(
         native_names_runtime_backed_functions_forward_to

@@ -6,11 +6,12 @@
 The document is JSON Schema draft 2020-12 with no `$schema` key — the dialect the
 Rust schema crate's `config_schema_document.rs` emits for a Rust config type, so a
 node serves one dialect whichever language declared it. Nested classes are
-inlined and `Optional[T]` is an `anyOf` with null, so nothing here emits a `$ref`. One document can still carry `$defs`: a model
-handed in as the config class contributes its own schema, and a pydantic model
-writes its nested types that way. A model nested under a *property* is flattened
-instead, because its pointers are root-relative and resolve against nothing once
-the document is no longer the root.
+inlined and `Optional[T]` is an `anyOf` with null, so nothing here emits a
+`$ref`. One document can still carry `$defs`: a model handed in as the config
+class contributes its own schema, and a pydantic model writes its nested types
+that way. A model nested under a *property* is flattened instead, because its
+pointers are root-relative and resolve against nothing once the document is no
+longer the root.
 
 The dialect is shared; two spellings inside it are not, and both are valid
 2020-12. The Rust side writes a nullable as `"type": [T, "null"]` and stamps a

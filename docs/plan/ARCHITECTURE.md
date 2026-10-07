@@ -79,13 +79,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   handed is declared once in `tatolab.stream`, as Protocols and runtime-backed functions
   a conformance gate holds both binaries to member for member in CI, and the rest of the
   native module once in `_engine.pyi`, gated by `stubtest` against both binaries, so no
-  class or method exists on one floor and not the other; one Python suite runs on both floors — its
-  GPU-free half on both CI lanes, its `requires_gpu` half on each floor's rig; and a
-  test skipped off Linux carries `linux_only_capability(reason=…)`, whose reason
-  `test_platform_markers.py` holds to the closed list plus one named group — a test
-  whose body is itself a Linux mechanism (`XDG_RUNTIME_DIR`, v4l2loopback and udev, the
-  boot-session file, X11/Wayland, SIGHUP and SIGINT hand-back). A test red on macOS for
-  any other reason is a parity bug, never a skip.
+  class or method exists on one floor and not the other; one Python suite runs on both
+  floors — its GPU-free half on both CI lanes, its `requires_gpu` half on each floor's
+  rig; and a test skipped off Linux carries `linux_only_capability(reason=…)`, whose
+  reason `test_platform_markers.py` holds to the closed list plus one named group — a
+  test whose body is itself a Linux mechanism (`XDG_RUNTIME_DIR`, v4l2loopback and udev,
+  the boot-session file, X11/Wayland, SIGHUP and SIGINT hand-back). A test red on macOS
+  for any other reason is a parity bug, never a skip.
   [macos-capability-parity — SHIPPED #2400, #2403, #2405]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
   <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
@@ -99,10 +99,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   function) in the camera-to-window path, and a numpy `BrightnessMeter` on a fan-out of
   the effect's output that reads the frame through `frame.cpu()` and logs its mean once a
   second, paced on `ctx.time` — with dependencies `streamlib`, `tatolab-stream` and
-  `numpy>=2.1`, nothing more, the same on both floors. The files render from template files the wheel ships
-  (`tatolab/runtime/_scaffold_template/`), each placeholder its template's own default value so
-  the templates stay importable and checkable; ruff runs over every render, pyright over
-  the template tree, and the cross-floor check gates the output.
+  `numpy>=2.1`, nothing more, the same on both floors. The files render from template
+  files the wheel ships (`tatolab/runtime/_scaffold_template/`), each placeholder its
+  template's own default value so the templates stay importable and checkable; ruff runs
+  over every render, pyright over the template tree, and the cross-floor check gates the
+  output.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438; amended by stream-graph: the entry file and the nodes' directory re-spelled]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_tatolab_stream_and_numpy_only -->

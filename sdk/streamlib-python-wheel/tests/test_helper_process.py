@@ -185,7 +185,6 @@ def test_a_helper_handed_no_iceoryx2_domain_root_refuses_to_start_by_name(
     Fail-without-fix: fall back to any root when the variable is absent and the
     constructor below returns a data plane that silently reaches nobody.
     """
-
     monkeypatch.delenv("STREAMLIB_ICEORYX2_DOMAIN_ROOT")
 
     with pytest.raises(RuntimeError, match="STREAMLIB_ICEORYX2_DOMAIN_ROOT is not set"):
@@ -201,7 +200,6 @@ def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
     Fail-without-fix: without the declaration the write below raises on every
     frame a live-added effect sees before its output is connected.
     """
-
     link_data_access = _engine.open_node_link_data_access_for_helper_process()
     link_data_access.declare_ports(["frames_from_upstream"], ["frames_to_downstream"])
 
@@ -222,7 +220,6 @@ def test_a_port_lookup_casts_its_argument_to_the_declared_name():
     Fail-without-fix: an uncast lookup raises "not one this processor declared"
     for every spelling here but the cast one.
     """
-
     link_data_access = _engine.open_node_link_data_access_for_helper_process()
     link_data_access.declare_ports(["video"], ["frames-out"])
 
@@ -243,7 +240,6 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     the destination is wired first because a send with no subscriber attached
     is dropped.
     """
-
     link_id = "L-envelope-test"
     destination = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
@@ -326,7 +322,6 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     The Python-surface mirror of the engine's
     `disconnect_reconnect_cycle_reclaims_notifier_and_data_service`.
     """
-
     link_id = "L-reconnect-cycle"
     destination = _engine.open_node_link_data_access_for_helper_process()
     source = _engine.open_node_link_data_access_for_helper_process()
@@ -375,7 +370,6 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
     `RuntimeError: Link error: Unknown input port` — the mailbox went with
     the subscriber that was dropped out from under it.
     """
-
     link_id = "L-unknown-direction"
     destination = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
@@ -729,7 +723,6 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     reader, the one thread that delivers answers, so every frame behind it —
     the parent's next command included — waits out the escalate timeout.
     """
-
     monkeypatch.setenv("STREAMLIB_SURFACE_SOCKET", "/nonexistent/streamlib-surface.sock")
     decode_the_frame = _helper._decode_frame_payload
 
@@ -827,7 +820,6 @@ def drive_lifecycle_on_a_thread(bridge, processor_class):
     created and driven on the one thread that owns it — which is exactly how a
     real helper runs.
     """
-
     def drive() -> None:
         HelperProcessLifecycle(
             bridge,
@@ -846,7 +838,6 @@ def drive_lifecycle_on_a_thread_and_hand_it_back(bridge, processor_class):
     """The same, with the lifecycle object once its thread has built it, so a
     test can swap in a counting data plane after `setup` has handed the real
     one to the engine's context."""
-
     lifecycle_holder: "list[HelperProcessLifecycle]" = []
     lifecycle_built = threading.Event()
 
@@ -1108,7 +1099,6 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
     select()`; it escapes the loop, the helper's thread dies, and neither the
     bag nor the `on_pause` below is ever answered.
     """
-
     soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
     descriptors_needed = 2048
     if hard_limit != resource.RLIM_INFINITY and hard_limit < descriptors_needed:
@@ -1418,7 +1408,6 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     logs an unknown command, its input never opens, and the bag published
     below never comes back.
     """
-
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
