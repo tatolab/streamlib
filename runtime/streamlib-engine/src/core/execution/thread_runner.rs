@@ -90,9 +90,6 @@ pub fn run_processor_loop(
             tracing::info!("[{}] Invoking teardown()...", id);
             let full_ctx = RuntimeContextFullAccess::new(&runtime_ctx, full_access_grant);
             let mut guard = processor.lock();
-            // block_on is now internal to ProcessorInstance::teardown's
-            // dispatch (LegacyDyn variant) or the cdylib's vtable
-            // wrapper (VTable variant).
             match guard.teardown(&full_ctx) {
                 Ok(()) => tracing::info!("[{}] teardown() completed successfully", id),
                 Err(e) => tracing::warn!("[{}] teardown() failed: {}", id, e),

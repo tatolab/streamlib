@@ -18,9 +18,10 @@ use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 /// A created processor instance for runtime use.
 ///
 /// Every processor — host-compiled Rust types registered through
-/// `register::<P>()` / `add_local::<P>()` and subprocess host wrappers
-/// registered through [`ProcessorInstanceFactory::register_dynamic`] —
-/// dispatches through a boxed [`DynGeneratedProcessor`] trait object.
+/// `register::<P>()` / `add_local::<P>()` and the processor interpreter hosts
+/// registered through
+/// [`ProcessorInstanceFactory::register_a_type_described_in_a_processor_interpreter`]
+/// — dispatches through a boxed [`DynGeneratedProcessor`] trait object.
 ///
 /// # Iceoryx2 resource ownership (issue #894)
 ///
@@ -185,10 +186,7 @@ impl ProcessorInstance {
     }
 }
 
-/// Legacy-path factory function signature used by
-/// [`ProcessorInstanceFactory::register_dynamic`] for subprocess
-/// host wrappers (Python / Deno) that don't fit the generic vtable
-/// monomorphization shape.
+/// The constructor a registration builds each processor of its type with.
 pub type DynamicProcessorConstructorFn =
     Box<dyn Fn(&ProcessorNode) -> Result<Box<dyn DynGeneratedProcessor + Send>> + Send + Sync>;
 
@@ -199,13 +197,10 @@ type NodeConfigTakenCheckFn =
 
 /// Per-type registration entry the factory stores.
 enum RegistrationKind {
-    /// `Box<dyn Fn>` closure constructor — the one dispatch shape, used by
-    /// host-compiled Rust types and dynamic host wrappers alike. Never
-    /// replaced, and never described.
-    LegacyDyn {
+    /// A host-compiled Rust type. Never replaced, and never described.
+    HostCompiledRustType {
         constructor: DynamicProcessorConstructorFn,
-        /// Present for a typed Rust registration.
-        config_taken_check: Option<NodeConfigTakenCheckFn>,
+        config_taken_check: NodeConfigTakenCheckFn,
     },
     /// A type a processor interpreter described, whose constructor starts the
     /// processor in one. A later describe of the same type replaces it; its
@@ -218,9 +213,13 @@ enum RegistrationKind {
 impl RegistrationKind {
     fn constructor(&self) -> &DynamicProcessorConstructorFn {
         match self {
-            Self::LegacyDyn { constructor, .. }
+            Self::HostCompiledRustType { constructor, .. }
             | Self::DescribedInAProcessorInterpreter { constructor } => constructor,
         }
+    }
+
+    fn was_described_in_a_processor_interpreter(&self) -> bool {
+        matches!(self, Self::DescribedInAProcessorInterpreter { .. })
     }
 }
 
@@ -255,12 +254,8 @@ pub struct ProcessorInstanceFactory {
 
 /// Global processor registry for runtime lookups.
 ///
-/// Starts empty. Callers populate it through one of two paths:
-///
-/// In-process Rust callers invoke
-/// [`ProcessorInstanceFactory::register`] (typed) or
-/// [`ProcessorInstanceFactory::register_dynamic`] (subprocess host
-/// wrappers) directly on the registry.
+/// Starts empty, and is filled by [`ProcessorInstanceFactory::register`] for
+/// Rust types and by a describe for the types a processor interpreter hosts.
 pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> =
     LazyLock::new(ProcessorInstanceFactory::new);
 
@@ -328,35 +323,23 @@ impl ProcessorInstanceFactory {
                 config_the_node_type_takes::<P::Config>(node_name, node_type, config).map(drop)
             });
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
-        self.register_with_constructor(descriptor, constructor, Some(config_taken_check))?;
+        self.register_with_constructor(
+            descriptor,
+            RegistrationKind::HostCompiledRustType {
+                constructor,
+                config_taken_check,
+            },
+        )?;
         Ok(processor_class_import_path)
     }
 
-    /// Register a processor dynamically at runtime with a non-generic
-    /// `Box<dyn Fn>` constructor. Used for subprocess host wrappers
-    /// (Python / Deno) where the constructor isn't expressible as a
-    /// generic `register::<P>()` call.
-    ///
-    /// # Arguments
-    /// * `descriptor` - Processor metadata including name, ports, and config schema
-    /// * `constructor` - Factory function that creates processor instances
-    ///
-    /// # Returns
-    /// Error if a processor with the same class import path is already
-    /// registered.
-    pub fn register_dynamic(
-        &self,
-        descriptor: ProcessorDescriptor,
-        constructor: DynamicProcessorConstructorFn,
-    ) -> Result<()> {
-        self.register_with_constructor(descriptor, constructor, None)
-    }
-
+    /// Register `registration` under `descriptor`'s import path, refusing a
+    /// path already claimed — unless both the claim and `registration` came
+    /// from a describe, which replaces it.
     fn register_with_constructor(
         &self,
         descriptor: ProcessorDescriptor,
-        constructor: DynamicProcessorConstructorFn,
-        config_taken_check: Option<NodeConfigTakenCheckFn>,
+        registration: RegistrationKind,
     ) -> Result<()> {
         refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
@@ -370,7 +353,11 @@ impl ProcessorInstanceFactory {
         // paths write it, and reading the narrower map would let a
         // constructor-bearing registration displace a descriptor-only one.
         let mut descriptors = self.descriptors.write();
-        if descriptors.contains_key(&processor_class_import_path) {
+        let a_describe_replaces_a_describe = registration
+            .was_described_in_a_processor_interpreter()
+            && self.was_described_in_a_processor_interpreter(&processor_class_import_path);
+        if descriptors.contains_key(&processor_class_import_path) && !a_describe_replaces_a_describe
+        {
             return Err(duplicate_class_import_path(&processor_class_import_path));
         }
 
@@ -378,13 +365,9 @@ impl ProcessorInstanceFactory {
             .write()
             .insert(processor_class_import_path.clone(), (inputs, outputs));
 
-        self.registrations.write().insert(
-            processor_class_import_path.clone(),
-            RegistrationKind::LegacyDyn {
-                constructor,
-                config_taken_check,
-            },
-        );
+        self.registrations
+            .write()
+            .insert(processor_class_import_path.clone(), registration);
 
         descriptors.insert(processor_class_import_path.clone(), descriptor);
         drop(descriptors);
@@ -396,7 +379,7 @@ impl ProcessorInstanceFactory {
         // because that is what a log consumer can select on.
         tracing::info!(
             processor_class_import_path = processor_class_import_path.as_str(),
-            "[register_dynamic] new processor type registered"
+            "new processor type registered"
         );
 
         PUBSUB.publish(
@@ -420,7 +403,8 @@ impl ProcessorInstanceFactory {
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
         let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
 
-        // One guard across the check and the claim — see `register_dynamic`.
+        // One guard across the check and the claim — see
+        // `register_with_constructor`.
         let mut descriptors = self.descriptors.write();
         if descriptors.contains_key(&processor_class_import_path) {
             return Err(duplicate_class_import_path(&processor_class_import_path));
@@ -456,43 +440,10 @@ impl ProcessorInstanceFactory {
         descriptor: ProcessorDescriptor,
         constructor: DynamicProcessorConstructorFn,
     ) -> Result<()> {
-        refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
-        let processor_class_import_path = descriptor.processor_class_import_path.clone();
-
-        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
-        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
-
-        // One guard across the check and the claim — see `register_dynamic`.
-        let mut descriptors = self.descriptors.write();
-        if descriptors.contains_key(&processor_class_import_path)
-            && !self.was_described_in_a_processor_interpreter(&processor_class_import_path)
-        {
-            return Err(duplicate_class_import_path(&processor_class_import_path));
-        }
-
-        self.port_info
-            .write()
-            .insert(processor_class_import_path.clone(), (inputs, outputs));
-        self.registrations.write().insert(
-            processor_class_import_path.clone(),
+        self.register_with_constructor(
+            descriptor,
             RegistrationKind::DescribedInAProcessorInterpreter { constructor },
-        );
-        descriptors.insert(processor_class_import_path.clone(), descriptor);
-        drop(descriptors);
-
-        tracing::info!(
-            processor_class_import_path = processor_class_import_path.as_str(),
-            "[register_a_type_described_in_a_processor_interpreter] processor type registered"
-        );
-
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
-                processor_type: processor_class_import_path,
-            }),
-        );
-
-        Ok(())
+        )
     }
 
     /// Whether `processor_type`'s registration came from a processor
@@ -501,15 +452,15 @@ impl ProcessorInstanceFactory {
         &self,
         processor_type: &ProcessorClassImportPath,
     ) -> bool {
-        matches!(
-            self.registrations.read().get(processor_type),
-            Some(RegistrationKind::DescribedInAProcessorInterpreter { .. })
-        )
+        self.registrations
+            .read()
+            .get(processor_type)
+            .is_some_and(RegistrationKind::was_described_in_a_processor_interpreter)
     }
 
     /// Whether `processor_type` is registered other than by a describe — a
-    /// typed Rust registration, a dynamic one, or a descriptor alone — which no
-    /// describe replaces.
+    /// typed Rust registration or a descriptor alone — which no describe
+    /// replaces.
     pub fn is_registered_other_than_by_a_describe(
         &self,
         processor_type: &ProcessorClassImportPath,
@@ -630,9 +581,8 @@ impl ProcessorInstanceFactory {
         config: &serde_json::Value,
     ) -> Result<()> {
         match self.registrations.read().get(node_type) {
-            Some(RegistrationKind::LegacyDyn {
-                config_taken_check: Some(config_taken_check),
-                ..
+            Some(RegistrationKind::HostCompiledRustType {
+                config_taken_check, ..
             }) => config_taken_check(node_name, node_type, config),
             _ => Ok(()),
         }
@@ -903,9 +853,9 @@ mod tests {
         );
     }
 
-    /// `register_dynamic` and `register_descriptor_only` write the same key
-    /// into the same maps, so a path claimed through one is claimed against the
-    /// other — a Python class cannot quietly displace a native built-in.
+    /// A describe and `register_descriptor_only` write the same key into the
+    /// same maps, so a path claimed through one is claimed against the other —
+    /// a Python class cannot quietly displace a native built-in.
     #[test]
     fn the_two_registration_paths_share_one_key_space() {
         let factory = ProcessorInstanceFactory::new();
@@ -919,7 +869,10 @@ mod tests {
             Box::new(|_node| Err(Error::Configuration("unreachable".into())));
         assert!(
             factory
-                .register_dynamic(descriptor_for(path), constructor)
+                .register_a_type_described_in_a_processor_interpreter(
+                    descriptor_for(path),
+                    constructor
+                )
                 .is_err(),
             "a constructor-bearing registration must not overwrite a descriptor-only one"
         );
@@ -1021,27 +974,20 @@ mod tests {
         assert!(!factory.is_registered_other_than_by_a_describe(&class_import_path(path)));
     }
 
-    /// A typed Rust registration, a dynamic one and a descriptor alone are
-    /// never replaced by a describe claiming their path.
+    /// A typed Rust registration and a descriptor alone are never replaced by
+    /// a describe claiming their path.
     #[test]
     fn a_describe_never_replaces_a_registration_made_any_other_way() {
         use crate::core::test_support::MockSourceTakingOneSetting;
         let factory = ProcessorInstanceFactory::new();
         factory.register::<MockSourceTakingOneSetting::Processor>();
         let typed = MockSourceTakingOneSetting::processor_class_import_path();
-        let dynamic = class_import_path("my_app.filters:RegisteredDynamically");
-        factory
-            .register_dynamic(
-                descriptor_for(dynamic.as_str()),
-                a_constructor_this_test_never_calls(),
-            )
-            .unwrap();
         let descriptor_only = class_import_path("my_app.filters:RegisteredAsADescriptor");
         factory
             .register_descriptor_only(descriptor_for(descriptor_only.as_str()))
             .unwrap();
 
-        for registered_another_way in [&typed, &dynamic, &descriptor_only] {
+        for registered_another_way in [&typed, &descriptor_only] {
             assert!(factory.is_registered_other_than_by_a_describe(registered_another_way));
             let refused = factory
                 .register_a_type_described_in_a_processor_interpreter(
@@ -1086,8 +1032,8 @@ mod tests {
         let constructor: DynamicProcessorConstructorFn =
             Box::new(|_node| Err(Error::Configuration("unreachable".into())));
         let refusal = factory
-            .register_dynamic(descriptor, constructor)
-            .expect_err("register_dynamic must refuse it");
+            .register_a_type_described_in_a_processor_interpreter(descriptor, constructor)
+            .expect_err("a describe's registration must refuse it");
         assert!(is_the_expected_refusal(&refusal), "got {refusal:?}");
 
         assert!(factory.descriptor(&path).is_none());
