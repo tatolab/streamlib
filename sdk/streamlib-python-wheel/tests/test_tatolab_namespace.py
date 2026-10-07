@@ -243,9 +243,8 @@ def _public_callables_tatolab_publishes() -> "list[tuple[str, Callable[..., obje
     return public_callables
 
 
-def test_the_node_decorator_names_its_class_parameter_node_class():
+def test_no_parameter_of_the_node_decorator_says_processor():
     node_parameter_names = list(inspect.signature(tatolab.stream.node).parameters)
-    assert node_parameter_names[0] == "node_class"
     assert not [name for name in node_parameter_names if "processor" in name.lower()]
 
 

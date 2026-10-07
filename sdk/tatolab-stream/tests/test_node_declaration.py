@@ -8,6 +8,7 @@ half of the authoring surface that stays honest on a machine with no GPU.
 """
 
 import dataclasses
+import inspect
 
 import pytest
 
@@ -226,6 +227,10 @@ def test_the_package_exports_node():
     # That no public name says the retired word is the runtime suite's
     # `test_tatolab_namespace.py`, which sweeps both packages.
     assert "node" in tatolab.stream.__all__
+
+
+def test_the_node_decorator_names_its_class_parameter_node_class():
+    assert next(iter(inspect.signature(node).parameters)) == "node_class"
 
 
 def test_a_source_must_declare_its_execution_mode():
