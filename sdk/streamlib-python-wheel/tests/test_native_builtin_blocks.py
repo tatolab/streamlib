@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The native built-in blocks: marker classes resolved by `stream_builder.add`, frames
+"""The native built-in blocks: built-in classes resolved by `stream_builder.add`, frames
 produced by native code the interpreter never enters.
 
 The graph tests boot a real engine (GPU required); the marker and
@@ -31,12 +31,12 @@ NATIVE_BUILTIN_APP = Path(__file__).parent / "native_builtin_app.py"
 FRAMES_SEEN = re.compile(r"MARKER:FRAMES_SEEN (\[.*\])")
 
 
-# ---- marker semantics (no GPU) ---------------------------------------------
+# ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_marker_class_cannot_be_instantiated():
+def test_the_built_in_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        TestPatternSource()
+        TestPatternSource()  # pyright: ignore[reportCallIssue]
 
 
 # ---- VideoFrame cast (no GPU) ----------------------------------------------
@@ -138,7 +138,7 @@ def test_video_frame_wraps_malformed_nested_metadata_in_the_same_error():
 def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
     start_app_under_test,
 ):
-    """The whole built-in mechanism, end to end: marker class → native
+    """The whole built-in mechanism, end to end: built-in class → native
     registration → native production in the app process → bag read by a
     Python processor in its own helper process — no camera, no window."""
     app = start_app_under_test(NATIVE_BUILTIN_APP)

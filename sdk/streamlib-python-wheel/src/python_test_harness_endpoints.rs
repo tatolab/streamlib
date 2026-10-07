@@ -30,7 +30,6 @@ use streamlib::sdk::schemars::JsonSchema;
 
 use crate::python_bag_conversion::{decode_msgpack_to_python_object, encode_bag_to_msgpack};
 use crate::python_logging::monotonic_clock_now_ns;
-use crate::python_native_builtin_blocks::native_processor_marker_classes;
 
 /// Which channel an endpoint reads from or writes to.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -222,18 +221,65 @@ pub(crate) fn register_test_harness_processor_types() {
     streamlib::sdk::processors::PROCESSOR_REGISTRY.register::<TestBagCollector::Processor>();
 }
 
-native_processor_marker_classes! {
+/// Declare the harness's marker classes, each standing for one endpoint, and
+/// the function adding them to the module.
+///
+/// No marker has a `#[new]`: instantiating one is always a mistake, and PyO3's
+/// "no constructor defined" error says so.
+macro_rules! test_harness_marker_classes {
+    (
+        added_to_the_module_by: $add_marker_classes_to_the_module:ident,
+        markers: [$(
+            $(#[$marker_attribute:meta])*
+            $marker:ident as $python_class_name:literal {
+                import_path: $import_path:expr,
+            }
+        )+]
+    ) => {
+        $(
+            $(#[$marker_attribute])*
+            #[pyclass(name = $python_class_name, module = "tatolab.runtime._engine", frozen)]
+            pub(crate) struct $marker;
+
+            #[pymethods]
+            impl $marker {
+                /// pytest collects `Test*` classes by name; this tells it not to.
+                #[classattr]
+                #[pyo3(name = "__test__")]
+                fn dunder_test() -> bool {
+                    false
+                }
+
+                /// The path a graph names this endpoint's processor by.
+                #[classattr]
+                #[pyo3(name = "type")]
+                fn test_harness_processor_class_import_path() -> String {
+                    let test_harness_processor_class_import_path:
+                        streamlib::sdk::descriptors::ProcessorClassImportPath = $import_path;
+                    test_harness_processor_class_import_path.as_str().to_owned()
+                }
+            }
+        )+
+
+        /// Add every harness marker class to the module.
+        pub(crate) fn $add_marker_classes_to_the_module(
+            module: &Bound<'_, pyo3::types::PyModule>,
+        ) -> PyResult<()> {
+            $(pyo3::types::PyModuleMethods::add_class::<$marker>(module)?;)+
+            Ok(())
+        }
+    };
+}
+
+test_harness_marker_classes! {
     added_to_the_module_by: add_test_harness_marker_classes_to_the_module,
-    python_module: "tatolab.runtime._engine",
     markers: [
         /// `tatolab.runtime.testing`'s feeder, as the marker class `stream_builder.add` takes.
         PythonTestBagFeederBlock as "TestBagFeeder" {
-            dunder_test: false,
             import_path: TestBagFeeder::Processor::processor_class_import_path(),
         }
         /// `tatolab.runtime.testing`'s collector, as the marker class `stream_builder.add` takes.
         PythonTestBagCollectorBlock as "TestBagCollector" {
-            dunder_test: false,
             import_path: TestBagCollector::Processor::processor_class_import_path(),
         }
     ]

@@ -43,12 +43,12 @@ SETTLED_AUDIO_WINDOW = re.compile(r"MARKER:SPEAKER_AUDIO_WINDOW (.+)")
 UNDERRUN_BYTES_A_COLD_START_MAY_COST = 8 * 1024 * 2 * 4
 
 
-# ---- marker semantics (no GPU) ---------------------------------------------
+# ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_marker_class_cannot_be_instantiated():
+def test_the_built_in_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        tatolab.stream.SpeakerSink()
+        tatolab.stream.SpeakerSink()  # pyright: ignore[reportCallIssue]
 
 
 @stream
@@ -96,7 +96,7 @@ def test_the_speaker_declares_the_input_a_microphone_can_be_wired_to():
 def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     start_app_under_test,
 ):
-    """The playback path end to end: marker class → native registration → the
+    """The playback path end to end: built-in class → native registration → the
     probed backend's playback stream, fed over a real link by the capture
     built-in, with no interpreter anywhere in the sample path.
 

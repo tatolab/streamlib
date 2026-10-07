@@ -13,11 +13,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tatolab.stream import CameraSourceConfig
+
 CAMERA_DEVICE_ENVIRONMENT_VARIABLE = "STREAMLIB_CAMERA_DEVICE"
 LINUX_DEFAULT_CAMERA_DEVICE = "/dev/video0"
 
 
-def camera_source_config() -> dict:
+def camera_source_config() -> CameraSourceConfig:
     """The `CameraSource` config that opens this rig's camera."""
     named = os.environ.get(CAMERA_DEVICE_ENVIRONMENT_VARIABLE)
     if named:

@@ -45,7 +45,7 @@
 #   PIPELINE           — which authoring surface builds the graph: `rust`
 #                         (default) runs the `codec_roundtrip_rig` example,
 #                         `python` runs `codec_roundtrip_node.py` through the
-#                         wheel's marker classes. Only the argv differs; both
+#                         wheel's built-in classes. Only the argv differs; both
 #                         arms lock to the same baseline at the same tolerance,
 #                         so a python-arm mismatch is a finding, and the arm is
 #                         refused BASELINE_CAPTURE outright. It scores whatever

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`Mp4Sink` from Python, marker class to a file with two tracks in it.
+"""`Mp4Sink` from Python, built-in class to a file with two tracks in it.
 
 The marker tests are pure Python — constructing a `Runtime` and loading a graph
 into it needs no device, which is why they run in CI. The recording test starts
@@ -115,12 +115,12 @@ def await_recording_with_at_least(mp4_inspect_binary, recording_path, fragments,
     )
 
 
-# ---- marker semantics (no GPU) ---------------------------------------------
+# ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_marker_class_cannot_be_instantiated():
+def test_the_built_in_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        Mp4Sink()
+        Mp4Sink()  # pyright: ignore[reportCallIssue]
 
 
 @stream

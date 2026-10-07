@@ -152,6 +152,10 @@ jobs:
           # together name every built-in this floor registers. GPU-free — a load
           # adds nodes and links and starts nothing.
           cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
+          # `tatolab.stream`'s built-in classes are generated from these
+          # built-ins' descriptors; a declaration changed without regenerating
+          # them fails here. Linux, because Linux compiles in every built-in.
+          cargo run --locked -q -p xtask -- generate-built-in-node-classes --check
           # Compiled but not run. `speaker_sink_matches_its_device` is the only
           # thing that drives the two `match_device` production call sites —
           # `SpeakerSink::setup()` settling its port, and the spawn seam refusing

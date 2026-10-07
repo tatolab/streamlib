@@ -342,14 +342,14 @@ def test_a_typed_name_casting_to_nothing_is_refused_naming_it() -> None:
 
 def test_a_typed_name_that_is_not_a_string_is_refused() -> None:
     with pytest.raises(TypeError, match="node name"):
-        StreamBuilder("rig").add(FrameInverter, name=7)  # pyright: ignore[reportArgumentType]
+        StreamBuilder("rig").add(FrameInverter, name=7)  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
 def test_a_name_of_a_type_outside_builtins_is_refused_naming_its_module_and_the_fix() -> (
     None
 ):
     with pytest.raises(TypeError) as refusal:
-        StreamBuilder("rig").add(FrameInverter, name=numpy.int64(7))  # pyright: ignore[reportArgumentType]
+        StreamBuilder("rig").add(FrameInverter, name=numpy.int64(7))  # pyright: ignore[reportCallIssue, reportArgumentType]
 
     assert str(refusal.value) == (
         "a node name is a str; got np.int64(7), of type `numpy.int64` — pass the name "
@@ -1265,4 +1265,7 @@ def test_the_builder_module_imports_nothing_native() -> None:
         if level == 0:
             assert module_name.split(".")[0] in sys.stdlib_module_names, module_name
         else:
-            assert (level, module_name) == (1, "_exposed_name_cast"), module_name
+            assert (level, module_name) in {
+                (1, "_exposed_name_cast"),
+                (1, "_built_in_node"),
+            }, module_name

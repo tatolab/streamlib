@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`VirtualCameraSink` from Python: marker class to a camera other programs see.
+"""`VirtualCameraSink` from Python: built-in class to a camera other programs see.
 
 The marker tests are pure Python and run in CI. The camera tests start a graph,
 so they carry `requires_gpu` like every other graph test here — and they need
@@ -337,12 +337,12 @@ def read_yuyv_frames(video_node: Path, count: int):
         os.close(fd)
 
 
-# ---- marker semantics (no GPU) ---------------------------------------------
+# ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_marker_class_cannot_be_instantiated():
+def test_the_built_in_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        tatolab.stream.VirtualCameraSink()
+        tatolab.stream.VirtualCameraSink()  # pyright: ignore[reportCallIssue]
 
 
 @stream
