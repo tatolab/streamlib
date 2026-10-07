@@ -121,9 +121,9 @@ from code at need — do not create summary docs of what code already shows.
 ## Reading the Python surface
 
 `sdk/tatolab-stream/tatolab/stream/` is the reference for the Python surface. Its Protocols
-(`_node_context_protocols.py`, `_gpu_protocols.py`, `_node_owned_window_protocols.py`) write
-down each contract a node is handed, and `_built_in_nodes.py` writes down every built-in's
-config keys and ports — read them before reading Rust. A detour into `runtime/` to learn what a
+(`_node_context_protocols.py`, `_gpu_protocols.py`, `_node_owned_window_protocols.py`,
+`clock.py`) write down each contract a node is handed, and `_built_in_nodes.py` writes down
+every built-in's config keys and ports — read them before reading Rust. A detour into `runtime/` to learn what a
 built-in publishes on means you skipped it.
 
 - **The types live in `tatolab.stream`.** pyo3 publishes no annotations, so `help()` on a
