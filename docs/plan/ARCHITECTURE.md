@@ -95,14 +95,14 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   under `nodes/` — an `InvertingEffect` over `GlslPixelEffect` (one GLSL `effect`
   function) in the camera-to-window path, and a numpy `BrightnessMeter` on a fan-out of
   the effect's output that reads the frame through `frame.cpu()` and logs its mean once a
-  second, paced on `ctx.time` — with dependencies `streamlib` and `numpy>=2.1`, nothing
-  more, the same on both floors. The files render from template files the wheel ships
+  second, paced on `ctx.time` — with dependencies `streamlib`, `tatolab-stream` and
+  `numpy>=2.1`, nothing more, the same on both floors. The files render from template files the wheel ships
   (`tatolab/runtime/_scaffold_template/`), each placeholder its template's own default value so
   the templates stay importable and checkable; ruff runs over every render, pyright over
   the template tree, and the cross-floor check gates the output.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438; amended by stream-graph: the entry file and the nodes' directory re-spelled]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_and_numpy_only -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_tatolab_stream_and_numpy_only -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_exactly_the_rendered_templates -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_every_scaffolded_python_file_passes_ruff -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py::test_the_scaffold_binds_to_no_floor -->
@@ -511,7 +511,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `VirtualCameraSink`; torch is a dependency of neither the wheel nor the scaffold.
   [portable-gpu-interop — SHIPPED #2420, #2422, #2423, #2424]
   <!-- verify: git grep -n -e "copy_surface_to_surface" -e "torch.accelerator" -- examples -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_and_numpy_only -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_tatolab_stream_and_numpy_only -->
 - **DECIDED** — A frame's DLPack export honours a request for the host side on every
   floor: `dl_device=(kDLCPU, 0)` hands back the surface's host mapping, so
   `numpy.from_dlpack(frame, device="cpu")` is one line on both floors — on macOS the same
@@ -3559,7 +3559,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   one-runtime-per-machine: two distributions, a stream package and a runtime package; amended
   by tatolab-names: the crate is `tatolab-stream`; amended by package-split-and-lend: one
   version for everything (the entry below)]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_pins_streamlib_to_its_own_index -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_pins_streamlib_and_tatolab_stream_to_their_own_index -->
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
   ships — `tatolabd`, the `tatolab` CLI, the desktop app and `tatolab.runtime` — and the

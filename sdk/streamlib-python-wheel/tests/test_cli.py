@@ -1651,13 +1651,13 @@ def test_the_scaffolded_stream_compiles_to_its_graph_and_loads_without_a_device(
     }
 
 
-def test_the_scaffold_depends_on_streamlib_and_numpy_only(tmp_path: Path):
+def test_the_scaffold_depends_on_streamlib_tatolab_stream_and_numpy_only(tmp_path: Path):
     app_directory = tmp_path / "demo"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
     manifest = (app_directory / "pyproject.toml").read_text()
 
-    assert 'dependencies = ["streamlib", "numpy>=2.1"]\n' in manifest, (
+    assert 'dependencies = ["streamlib", "tatolab-stream", "numpy>=2.1"]\n' in manifest, (
         "the pixel effect needs no GPU package of the user's own — torch never enters"
     )
 
@@ -1679,14 +1679,25 @@ def test_the_test_pattern_scaffold_needs_no_capture_device(tmp_path: Path):
     ast.parse((app_directory / cli.SCAFFOLDED_METER_MODULE_PATH).read_text())
 
 
-def test_the_scaffold_pins_streamlib_to_its_own_index(tmp_path: Path):
+def test_the_scaffold_pins_streamlib_and_tatolab_stream_to_their_own_index(tmp_path: Path):
     app_directory = tmp_path / "demo"
 
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
 
     manifest = (app_directory / "pyproject.toml").read_text()
-    assert 'url = "https://tatolab.github.io/streamlib/simple/"' in manifest
     assert 'name = "demo"' in manifest, "the project takes its directory's name"
+    assert (
+        '[[tool.uv.index]]\nname = "streamlib"\n'
+        'url = "https://tatolab.github.io/streamlib/simple/"\nexplicit = true\n'
+    ) in manifest
+    assert manifest.endswith(
+        "[tool.uv.sources]\n"
+        'streamlib = { index = "streamlib" }\n'
+        'tatolab-stream = { index = "streamlib" }\n'
+    ), (
+        "uv reads an explicit index only for a dependency the project names, so the "
+        "tatolab-stream the engine wheel requires must be named and sourced here too"
+    )
 
 
 def test_new_refuses_to_overwrite_an_existing_app(tmp_path: Path):
