@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.38.0](https://github.com/tatolab/streamlib/compare/v0.37.1...v0.38.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **sdk:** `tatolab-stream` installs, type-checks and is tested with no runtime ([#2686](https://github.com/tatolab/streamlib/issues/2686))
+
+### Features
+
+* **sdk:** `tatolab-stream` installs, type-checks and is tested with no runtime ([#2686](https://github.com/tatolab/streamlib/issues/2686)) ([bb72729](https://github.com/tatolab/streamlib/commit/bb72729ba379584ab28f1db0f8e07fabae465ed0))
+
 ## [0.37.1](https://github.com/tatolab/streamlib/compare/v0.37.0...v0.37.1) (2026-10-07)
 
 
