@@ -21,6 +21,7 @@ pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
+pub mod generate_built_in_node_classes;
 pub mod generate_third_party_notices;
 pub mod lint_logging;
 mod mp4_inspect;
@@ -402,6 +403,22 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-media-builtins",
                 "--test",
                 "every_golden_graph_loads",
+            ],
+        ),
+        // Linux compiles in every built-in, so only Linux can render them all.
+        #[cfg(target_os = "linux")]
+        (
+            "generated built-in node classes match the runtime's built-ins",
+            "cargo",
+            &[
+                "run",
+                "--locked",
+                "-q",
+                "-p",
+                "xtask",
+                "--",
+                "generate-built-in-node-classes",
+                "--check",
             ],
         ),
         // The wheel's own Rust tests. CI runs these in `python-wheel.yml`
@@ -1167,6 +1184,17 @@ enum Commands {
     /// with, so nothing downstream needs ffprobe.
     Mp4Inspect(mp4_inspect::Mp4InspectCommand),
 
+    /// Regenerate `tatolab/stream/_built_in_nodes.py` — one Python class per
+    /// built-in, with a `TypedDict` for its config — from the runtime's own
+    /// descriptors. `--check` is the CI gate: it fails when the checked-in
+    /// module differs from a regeneration. Linux only, the floor that compiles
+    /// in every built-in. See [`generate_built_in_node_classes`].
+    GenerateBuiltInNodeClasses {
+        /// Fail when the checked-in module differs instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Regenerate `THIRD-PARTY-NOTICES.md` — the Rust closure's licence texts
     /// via `cargo about generate`, plus the vendored C++ projects that are not
     /// packages in the Cargo resolve graph and so reach the file only by being
@@ -1235,6 +1263,9 @@ fn main() -> Result<()> {
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::Mp4Inspect(inspect_command) => mp4_inspect::run(inspect_command)?,
+        Commands::GenerateBuiltInNodeClasses { check } => {
+            generate_built_in_node_classes::run(&workspace_root()?, check)?
+        }
         Commands::GenerateThirdPartyNotices {
             extension_package_directory,
         } => generate_third_party_notices::run(

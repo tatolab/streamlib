@@ -95,8 +95,7 @@ pub struct OpusEncoderConfig {
     /// Target bitrate in bits per second. Absent, libopus picks its own from
     /// the sample rate and channel count.
     pub bitrate_bps: Option<u32>,
-    /// Which tuning libopus encodes for. Absent means
-    /// [`OpusEncoderApplication::Audio`].
+    /// Which tuning libopus encodes for. Absent means `audio`.
     pub application: Option<OpusEncoderApplication>,
 }
 

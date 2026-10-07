@@ -63,7 +63,10 @@ const STREAM_RE_ENTRY_REPORT_INTERVAL: u64 = 20;
 #[serde(deny_unknown_fields)]
 pub struct HardwareVideoDecoderConfig {
     /// Upper bound on the coded width the DPB is allocated for. Absent:
-    /// auto-detected from the first SPS.
+    /// auto-detected from the first SPS. It caps the extent together with
+    /// [`Self::max_height`] or not at all: a half-specified pair warns and
+    /// auto-detects both. On macOS, where CoreMedia reports only the cropped
+    /// extent, a stream whose pictures pass the pair is refused by name.
     #[serde(default)]
     pub max_width: Option<u32>,
     /// Upper bound on the coded height, paired with [`Self::max_width`].

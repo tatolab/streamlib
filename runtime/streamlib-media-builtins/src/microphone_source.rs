@@ -82,7 +82,20 @@ pub struct MicrophoneSourceConfig {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Captures audio from the machine's audio backend as timestamped sample blocks (silence where no backend exists)",
+    description = "Captures audio from the machine's audio backend as timestamped sample blocks \
+                  (silence where no backend exists).\n\n\
+                  The backend chain is probed once per process with no configuration dial; where \
+                  no audio backend exists at all the blocks are silence, so a pipeline authored \
+                  on a workstation runs unchanged in a headless container. Blocks arrive on \
+                  `audio` as bags `AudioBlock` casts.\n\n\
+                  On macOS the backend is CoreAudio and `device_id` is a CoreAudio device UID; \
+                  naming one that is not attached is refused with the UIDs that are. Without a \
+                  `device_id` the stream follows the system default input as it changes, keeping \
+                  the format it opened with. The first run asks for microphone access without \
+                  waiting: the graph starts, and blocks begin once the user allows it. macOS \
+                  asks on behalf of the application that launched the process — the terminal, \
+                  not Python — so a refusal, or a prompt left unanswered, names that application \
+                  and the setting to change.",
     execution = manual,
     scheduling = realtime,
     config = crate::microphone_source::MicrophoneSourceConfig,
