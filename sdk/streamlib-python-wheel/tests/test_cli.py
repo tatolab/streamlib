@@ -377,20 +377,30 @@ def recorded_launch_runtime_calls(
 ) -> RecordedLaunchRuntimeCalls:
     """Stand a recorder in for `Runtime` in the launcher, so no engine is built here.
 
-    A real `Runtime` reads `sys.path[0]` once per process as the directory its
-    child interpreters import from, so constructing one in this process would
-    pin a test's temporary directory for every later suite. The launch also
-    exports the app directory, which is restored with the rest.
+    The launch also exports the app directory, which is restored with the rest.
     """
     recorded = RecordedLaunchRuntimeCalls()
     monkeypatch.delenv(cli.APP_DIRECTORY_ENVIRONMENT_VARIABLE, raising=False)
 
     class RecordingLaunchRuntime:
         def __init__(self, **runtime_keyword_arguments: Any) -> None:
-            recorded.calls.append(("construct", sys.path[0], runtime_keyword_arguments))
+            recorded.calls.append(("construct", runtime_keyword_arguments))
 
-        def load(self, graph: "dict[str, Any]", *, name: "str | None" = None) -> None:
-            recorded.calls.append(("load", graph))
+        def load(
+            self,
+            graph: "dict[str, Any]",
+            *,
+            project_directory: "str | os.PathLike[str]",
+            interpreter: "str | os.PathLike[str]",
+            name: "str | None" = None,
+        ) -> None:
+            recorded.calls.append(
+                (
+                    "load",
+                    graph,
+                    {"project_directory": project_directory, "interpreter": interpreter},
+                )
+            )
             if recorded.load_refusal is not None:
                 raise RuntimeError(recorded.load_refusal)
 
@@ -435,12 +445,12 @@ def test_the_sole_stream_is_compiled_then_loaded_then_hosted_then_run(
 
     assert exit_code == 0, capsys.readouterr().err
     assert recorded_launch_runtime_calls.calls == [
+        ("construct", {"runtime_name": "desk-rig"}),
         (
-            "construct",
-            str(tmp_path),
-            {"runtime_name": "desk-rig"},
+            "load",
+            FRONT_STREAM_GRAPH,
+            {"project_directory": tmp_path.resolve(), "interpreter": sys.executable},
         ),
-        ("load", FRONT_STREAM_GRAPH),
         ("host_control_plane",),
         ("run",),
     ]
@@ -482,8 +492,8 @@ def test_a_file_target_without_a_function_takes_its_sole_stream(
 def test_a_module_target_loads_the_stream_its_module_defines(
     tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
 ):
-    """The module imports with the anchor leading `sys.path`, and that is still
-    the slot's value when the `Runtime` is built — the slot it reads once."""
+    """The module imports with the anchor leading `sys.path`, and the anchor is
+    the project directory the stream loads with."""
     write_app(tmp_path, "module_target_rigs/__init__.py", "")
     write_app(tmp_path, "module_target_rigs/desk.py", TWO_STREAM_SOURCE)
 
@@ -491,8 +501,8 @@ def test_a_module_target_loads_the_stream_its_module_defines(
         cli.main(["dev", "--dir", str(tmp_path), "module_target_rigs.desk:front"]) == 0
     )
 
-    construct_call = recorded_launch_runtime_calls.calls[0]
-    assert construct_call[:2] == ("construct", str(tmp_path))
+    (load_call,) = [call for call in recorded_launch_runtime_calls.calls if call[0] == "load"]
+    assert load_call[2]["project_directory"] == tmp_path.resolve()
     assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
 
 
@@ -1549,10 +1559,10 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu(tmp_path: Pa
 
 
 # Run in a child with the scaffold as its working directory: compiling imports
-# the scaffold's `nodes` package, and a `Runtime` reads `sys.path[0]` once per
-# process, so neither may happen in this one.
+# the scaffold's `nodes` package, which must not land in this process.
 SCAFFOLDED_STREAM_COMPILE_AND_LOAD_SCRIPT = """
 import json
+import sys
 from pathlib import Path
 
 from tatolab.runtime import Runtime, cli
@@ -1562,7 +1572,9 @@ entry_namespace = cli.execute_app_entry_file(Path("stream.py").resolve())
 compiled_graph = compile_stream_to_graph(entry_namespace["main"])
 runtime = Runtime()
 try:
-    runtime.load(compiled_graph)
+    runtime.load(
+        compiled_graph, project_directory=Path.cwd(), interpreter=sys.executable
+    )
 finally:
     runtime.shutdown()
 print("COMPILED_GRAPH=" + json.dumps(compiled_graph))

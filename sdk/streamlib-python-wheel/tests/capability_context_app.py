@@ -9,6 +9,7 @@ helper process, and the observation reaches this app — and the test driving it
 """
 
 import sys
+from pathlib import Path
 
 import tatolab.runtime
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
@@ -59,6 +60,10 @@ if __name__ == "__main__":
         stream_function = one_capability_context_probe
     graph = compile_stream_to_graph(stream_function)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

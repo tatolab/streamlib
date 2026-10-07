@@ -25,7 +25,9 @@ them from the device rather than writing them down.
 """
 
 import json
+import sys
 import threading
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -73,7 +75,11 @@ def main() -> None:
         microphone_into_a_speaker_and_a_block_counting_probe
     )
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.host_control_plane()
 
     def watch_readiness() -> None:

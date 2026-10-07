@@ -10,6 +10,7 @@ cast are pure Python, tested in the stream suite.
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,10 @@ def test_node_name_defaults_to_the_type_name():
     assert [node["name"] for node in graph["nodes"]] == ["testpatternsource"]
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(graph)
+        runtime.load(
+            graph,
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
     finally:
         runtime.shutdown()

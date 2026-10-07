@@ -286,9 +286,13 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
         wiring["max_subscribers"] = 3
 
     shallow_destination = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(shallow_destination, {"inputs": [shallow_wiring]})
+    processor_interpreter_bootstrap.wire_link_data_access(
+        shallow_destination, {"inputs": [shallow_wiring]}
+    )
     deep_destination = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(deep_destination, {"inputs": [deep_wiring]})
+    processor_interpreter_bootstrap.wire_link_data_access(
+        deep_destination, {"inputs": [deep_wiring]}
+    )
     source = _engine.open_node_link_data_access_for_helper_process()
     processor_interpreter_bootstrap.wire_link_data_access(source, {"outputs": [source_wiring]})
 
@@ -2019,7 +2023,9 @@ def test_a_helper_handed_no_engine_build_id_refuses_rather_than_passing(
 
     standard_error = standard_error_of_a_helper_that_refused_its_start(helper)
 
-    assert f"{processor_interpreter_bootstrap.ENGINE_BUILD_ID_ENV} is not set" in standard_error, standard_error
+    assert (
+        f"{processor_interpreter_bootstrap.ENGINE_BUILD_ID_ENV} is not set" in standard_error
+    ), standard_error
     assert engine_build_id_compiled_into_this_extension() in standard_error
     assert list(empty_iceoryx2_domain_root.iterdir()) == []
 

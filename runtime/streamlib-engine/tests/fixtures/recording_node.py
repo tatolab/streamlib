@@ -32,6 +32,8 @@ their `/encoded_video` and `/encoded_audio` suffixes instead.
 
 import argparse
 import functools
+import sys
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -107,7 +109,11 @@ def main() -> None:
     _parse_fixture_arguments()
     graph = compile_stream_to_graph(camera_and_known_signal_recorded_into_one_file)
     runtime = tatolab.runtime.Runtime(runtime_name="recording-node")
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
     runtime.host_control_plane()
     runtime.run()

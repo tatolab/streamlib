@@ -24,7 +24,9 @@ producer's engine-minted processor id, not its node name.
 
 import argparse
 import json
+import sys
 import threading
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -79,7 +81,11 @@ def _recorded_track_names() -> "list[str]":
 def main() -> None:
     graph = compile_stream_to_graph(two_tone_pairs_recorded_into_one_mp4)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.host_control_plane()
 
     def watch_readiness() -> None:

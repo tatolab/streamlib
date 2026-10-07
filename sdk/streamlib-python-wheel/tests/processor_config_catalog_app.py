@@ -12,6 +12,7 @@ processor takes.
 import json
 import sys
 import threading
+from pathlib import Path
 
 import tatolab.runtime
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
@@ -36,7 +37,11 @@ def four_probes_each_configured_its_own_way(stream_builder: StreamBuilder) -> No
 def main() -> None:
     graph = compile_stream_to_graph(four_probes_each_configured_its_own_way)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.host_control_plane()
 
     def read_the_catalog_this_node_serves() -> None:

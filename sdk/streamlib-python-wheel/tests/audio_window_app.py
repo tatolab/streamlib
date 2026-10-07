@@ -9,6 +9,7 @@ which only a real child can show.
 """
 
 import sys
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -65,7 +66,11 @@ def main() -> None:
     scenario = sys.argv[1] if len(sys.argv) > 1 else "contiguous_windows"
     graph = compile_stream_to_graph(STREAM_BY_SCENARIO[scenario])
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
 

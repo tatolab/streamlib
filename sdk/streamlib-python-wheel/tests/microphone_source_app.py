@@ -8,6 +8,9 @@ for a block that needs no configuration, and the one that reaches the backend's
 default device.
 """
 
+import sys
+from pathlib import Path
+
 import tatolab.runtime
 import tatolab.stream
 from microphone_source_probes import AudioBlockProbe
@@ -24,7 +27,11 @@ def microphone_into_an_audio_block_probe(stream_builder: StreamBuilder) -> None:
 def main() -> None:
     graph = compile_stream_to_graph(microphone_into_an_audio_block_probe)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
 

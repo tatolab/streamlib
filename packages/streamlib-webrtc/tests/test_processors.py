@@ -9,7 +9,9 @@ extension model, so it is what these check — each stream's graph taken by
 """
 
 import os
+import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -100,7 +102,11 @@ def node_names_loaded_into(
     the engine holds.
     """
     graph = compile_stream_to_graph(stream_function)
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     return [loaded_node["name"] for loaded_node in graph["nodes"]]
 
 
@@ -128,16 +134,28 @@ def test_an_installed_extensions_processor_is_added_like_any_other(
 def test_the_publisher_wires_to_both_encoders_without_an_adapter(runtime):
     """One fan-in port takes both encoders, which is what makes a WHIP session
     with video and audio a matter of wiring rather than of config."""
-    runtime.load(compile_stream_to_graph(the_publisher_fed_by_both_encoders))
+    runtime.load(
+        compile_stream_to_graph(the_publisher_fed_by_both_encoders),
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
 
 def test_the_player_wires_to_both_decoders_without_an_adapter(runtime):
-    runtime.load(compile_stream_to_graph(the_player_feeding_both_decoders))
+    runtime.load(
+        compile_stream_to_graph(the_player_feeding_both_decoders),
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
 
 def test_a_publish_and_play_round_trip_composes_as_published(runtime):
     """The shape the live proof drives: encode, publish, play back, decode."""
-    runtime.load(compile_stream_to_graph(a_publish_and_play_round_trip))
+    runtime.load(
+        compile_stream_to_graph(a_publish_and_play_round_trip),
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
 
 def test_each_codec_names_the_track_it_belongs_on():

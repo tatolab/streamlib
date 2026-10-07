@@ -202,9 +202,9 @@ def start_command(
     spawned it — and so the group can be checked for survivors afterwards.
 
     `working_directory` stays unset unless an arrangement genuinely needs it: a
-    helper child inherits the app's cwd, and cwd leads `sys.path` in the child's
-    `-m` launch, so pointing it at the processor modules would import them for
-    free and mask a break in the `PYTHONPATH` the spawn host sets.
+    processor interpreter's working directory and import path come from the
+    project directory the stream loads with, never from the app's cwd, and an
+    app started in its processors' own directory would mask a break in that.
     """
     process = subprocess.Popen(
         command,

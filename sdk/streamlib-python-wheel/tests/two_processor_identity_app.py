@@ -7,6 +7,9 @@ Stops after `load`. Identity is derived there, and `run()` would buy the test
 nothing but a GPU context.
 """
 
+import sys
+from pathlib import Path
+
 import tatolab.runtime
 from identity_stable_processor import IdentityStableProcessor
 from second_identity_stable_processor import SecondIdentityStableProcessor
@@ -23,7 +26,11 @@ def two_identity_stable_processors(stream_builder: StreamBuilder) -> None:
 def load_then_exit() -> None:
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(compile_stream_to_graph(two_identity_stable_processors))
+        runtime.load(
+            compile_stream_to_graph(two_identity_stable_processors),
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
         print("MARKER:ADDED", flush=True)
     finally:
         runtime.shutdown()

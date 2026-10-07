@@ -119,10 +119,18 @@ def one_probe_sleeping_through_its_own_setup(stream_builder: StreamBuilder) -> N
     stream_builder.add(SleepsThroughItsOwnSetupProbe)
 
 
-def _runtime_loaded_with(stream_function: Callable[[StreamBuilder], None]) -> tatolab.runtime.Runtime:
+def _runtime_loaded_with(
+    stream_function: Callable[[StreamBuilder], None],
+    *,
+    project_directory: "Path | None" = None,
+) -> tatolab.runtime.Runtime:
     graph = compile_stream_to_graph(stream_function)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=project_directory or Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     return runtime
 
 
@@ -131,8 +139,9 @@ def scenario_the_app_never_hosts_the_processor() -> None:
 
     The app's own `from helper_placement_processors import …` is the
     registration import and the only parent-side load there is. What must not
-    happen is the engine loading anything more to host an instance —
-    `tatolab.runtime._helper` constructs the class, and it lives in another process.
+    happen is the engine loading anything more to host an instance or to learn
+    its ports — `tatolab/runtime/_processor_interpreter_bootstrap.py` describes and
+    constructs the class, and it runs in another process.
     """
     modules_before_load = set(sys.modules)
     runtime = _runtime_loaded_with(first_labelled_source_into_sink)
@@ -147,7 +156,10 @@ def scenario_the_app_never_hosts_the_processor() -> None:
             f"MODULES_ADDED_WHILE_RUNNING="
             f"{sorted(set(sys.modules) - modules_before_load)}"
         )
-        marker(f"HELPER_MODULE_IN_APP={'tatolab.runtime._helper' in sys.modules}")
+        marker(
+            "HELPER_MODULE_IN_APP="
+            f"{'tatolab.runtime._processor_interpreter_bootstrap' in sys.modules}"
+        )
         runtime.shutdown()
 
     threading.Timer(SECONDS_OF_RUNNING_BEFORE_RECHECK, report_modules_once_bags_are_flowing).start()
@@ -224,22 +236,25 @@ def scenario_a_helper_that_imported_another_engine_build_is_refused() -> None:
     """A child whose engine is not the app's is refused, and the refusal says why.
 
     The child is made to see another build the one way a test can reach it
-    before `main()` runs: a `sitecustomize` on the child's `PYTHONPATH` rewrites
-    the id the parent handed it, which is what a stale `tatolab.runtime` earlier on
-    the child's `sys.path` amounts to from the check's side.
+    before `main()` runs: a `sitecustomize` in the stream's project directory —
+    on the child's `PYTHONPATH` — rewrites the id the parent handed it, which is
+    what a stale `tatolab.runtime` amounts to from the check's side. Describing
+    sets no `STREAMLIB_ENTRYPOINT`, so the load itself is untouched, and the
+    `sitecustomize` puts this directory on the child's path for the processor's
+    own module.
     """
     child_startup_directory = Path(tempfile.mkdtemp(prefix="streamlib-stale-build-"))
     (child_startup_directory / "sitecustomize.py").write_text(
         "import os\n"
+        "import sys\n"
+        f"sys.path.append({str(Path(__file__).resolve().parent)!r})\n"
         "if 'STREAMLIB_ENTRYPOINT' in os.environ:\n"
         f"    os.environ['STREAMLIB_ENGINE_BUILD_ID'] = {ENGINE_BUILD_ID_OF_ANOTHER_BUILD!r}\n"
     )
-    inherited_python_path = os.environ.get("PYTHONPATH")
-    os.environ["PYTHONPATH"] = os.pathsep.join(
-        entry for entry in (str(child_startup_directory), inherited_python_path) if entry
-    )
 
-    runtime = _runtime_loaded_with(stale_build_labelled_source)
+    runtime = _runtime_loaded_with(
+        stale_build_labelled_source, project_directory=child_startup_directory
+    )
     marker(f"APP_ENGINE_BUILD_ID={engine_build_id_compiled_into_this_extension()}")
 
     def report_whether_the_processor_ever_started() -> None:
