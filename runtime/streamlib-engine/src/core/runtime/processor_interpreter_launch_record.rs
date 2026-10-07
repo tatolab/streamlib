@@ -17,7 +17,7 @@ use super::StreamEnvironment;
 
 /// What a runtime starts its processor interpreters with: the lend directory
 /// its host handed it, the stream environment recorded at the last load, and
-/// whether its host interrupted its describes.
+/// whether its host interrupted that load's describes.
 #[derive(Default)]
 pub(crate) struct ProcessorInterpreterLaunchRecord {
     processor_interpreter_lend_directory: Mutex<Option<PathBuf>>,
@@ -33,6 +33,11 @@ impl ProcessorInterpreterLaunchRecord {
     pub(crate) fn interrupt_every_describe(&self) {
         self.describes_interrupted_by_the_host
             .store(true, Ordering::SeqCst);
+    }
+
+    pub(crate) fn forget_the_interrupt_of_an_earlier_load(&self) {
+        self.describes_interrupted_by_the_host
+            .store(false, Ordering::SeqCst);
     }
 
     pub(crate) fn record_the_stream_environment_of_a_load(
@@ -313,6 +318,47 @@ mod tests {
         let (node_types, refusal) = refused_node_types(refusal);
         assert_eq!(node_types, [python_type]);
         assert!(refusal.contains("interrupted"), "{refusal}");
+    }
+
+    /// An interrupt belongs to the load it cut short: the next load on the
+    /// same runtime describes as if none had happened.
+    #[test]
+    #[serial]
+    fn a_load_after_one_its_host_interrupted_describes_normally() {
+        let interrupted_type = import_path("my_app.hangs_before_a_later_load:Blur");
+        let later_type = import_path("my_app.described_after_an_interrupted_load:Blur");
+        let hanging_project_directory = tempfile::tempdir().expect("a project directory");
+        let hanging_interpreter = hanging_project_directory.path().join("stub-python");
+        std::fs::write(&hanging_interpreter, "#!/bin/sh\nsleep 30 &\nwait\n")
+            .expect("the stub interpreter is written");
+        std::fs::set_permissions(&hanging_interpreter, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub interpreter is executable");
+        let runtime = std::sync::Arc::new(Runner::new().unwrap());
+        runtime.set_processor_interpreter_lend_directory("/opt/tatolab/lib/tatolab/lend".into());
+        let interrupting_runtime = std::sync::Arc::clone(&runtime);
+        let interrupter = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            interrupting_runtime.interrupt_every_processor_interpreter_describe();
+        });
+        runtime
+            .load_graph_snapshot(
+                &a_graph_of(&[&interrupted_type]),
+                Some(StreamEnvironment {
+                    project_directory: hanging_project_directory.path().to_path_buf(),
+                    interpreter: hanging_interpreter,
+                }),
+            )
+            .expect_err("the interrupted describe registers nothing");
+        interrupter.join().unwrap();
+
+        let (_later_project, later_environment) = a_project_whose_interpreter_describes(
+            serde_json::json!([a_described_type(&later_type, "video")]),
+        );
+        runtime
+            .load_graph_snapshot(&a_graph_of(&[&later_type]), Some(later_environment))
+            .expect("a later load describes its types");
+
+        assert_eq!(input_port_names_registered_for(&later_type), ["video"]);
     }
 
     #[test]

@@ -896,6 +896,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::processor_interpreter_launch_record::tests::a_graph_of_rust_types_needs_no_stream_environment",
                 "core::runtime::processor_interpreter_launch_record::tests::a_load_naming_a_type_to_describe_with_no_environment_refuses_it_by_name",
                 "core::runtime::processor_interpreter_launch_record::tests::a_load_whose_host_interrupts_its_describe_returns_refusing_the_type",
+                "core::runtime::processor_interpreter_launch_record::tests::a_load_after_one_its_host_interrupted_describes_normally",
                 "core::runtime::processor_interpreter_launch_record::tests::a_load_with_no_lend_directory_refuses_a_type_to_describe_by_name",
                 "core::runtime::processor_interpreter_launch_record::tests::a_live_add_of_an_undescribed_type_with_no_environment_recorded_is_refused_by_name",
                 "core::runtime::processor_interpreter_launch_record::tests::a_load_redescribes_its_types_and_a_live_add_describes_in_the_recorded_environment",

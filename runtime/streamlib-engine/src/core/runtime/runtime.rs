@@ -1196,8 +1196,9 @@ impl Runner {
             .set_processor_interpreter_lend_directory(lend_directory);
     }
 
-    /// Kill any describe this runtime is running and refuse every later one —
-    /// its host's user interrupted the load that started it.
+    /// Kill any describe this runtime is running and refuse every later one
+    /// until the next [`Self::load_graph_snapshot`] begins — its host's user
+    /// interrupted the load that started it.
     pub fn interrupt_every_processor_interpreter_describe(&self) {
         self.processor_interpreter_launch_record
             .interrupt_every_describe();
@@ -1216,10 +1217,11 @@ impl Runner {
     /// link connected by name, the exposures recorded on their nodes, and the
     /// stream's name recorded on the graph.
     ///
-    /// `stream_environment` is recorded first. Every `type` the graph names
-    /// that is neither a built-in nor registered in Rust is then described in
-    /// one start of the stream's own interpreter and registered, so a load
-    /// with no environment refuses such a type by name. A node name already in
+    /// A host interrupt of an earlier load is forgotten and `stream_environment`
+    /// recorded first. Every `type` the graph names that is neither a built-in
+    /// nor registered in Rust is then described in one start of the stream's
+    /// own interpreter and registered, so a load with no environment refuses
+    /// such a type by name. A node name already in
     /// the graph is refused rather than suffixed — a loaded graph's names are
     /// already resolved.
     pub fn load_graph_snapshot(
@@ -1233,6 +1235,8 @@ impl Runner {
             ExposedOutputPortsComponent, GraphNodeWithComponents, cast_exposed_name_to_url_safe,
         };
 
+        self.processor_interpreter_launch_record
+            .forget_the_interrupt_of_an_earlier_load();
         self.processor_interpreter_launch_record
             .record_the_stream_environment_of_a_load(stream_environment);
         self.processor_interpreter_launch_record
