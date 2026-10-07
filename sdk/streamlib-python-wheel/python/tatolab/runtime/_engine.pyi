@@ -242,7 +242,9 @@ class CapabilityExtensionHost:
 # The two native classes the bootstrap constructs itself. Each is typed as the
 # class of its `tatolab.stream` Protocol and declares nothing of its own: a stub
 # class deriving from the Protocol would inherit its bodiless members as
-# abstract, and neither checker lets an abstract class be constructed.
+# abstract, and neither checker lets an abstract class be constructed. The
+# conformance gate holds each native constructor to the no-argument one this
+# declares.
 NodeLinkDataAccess: type[_stream_protocols.NodeLinkDataAccess]
 RuntimeContextFullAccess: type[_stream_protocols.RuntimeContextFullAccess]
 

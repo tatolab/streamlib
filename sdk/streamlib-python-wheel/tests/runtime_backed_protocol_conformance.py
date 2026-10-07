@@ -336,6 +336,29 @@ def _is_typed_as_the_class_of_its_protocol(
     )
 
 
+def constructor_findings_for_class_typed_as_its_protocol(
+    held_name: str, native_class: type
+) -> list[ConformanceFinding]:
+    """Whether a class the stub types as `type[<its Protocol>]` constructs with no arguments.
+
+    That annotation declares the constructor a Protocol inherits from
+    `object`, so a native constructor taking anything goes unchecked otherwise.
+    """
+    native_signature = _signature_or_refusal(native_class)
+    if isinstance(native_signature, str):
+        return [ConformanceFinding(held_name, f"the native constructor {native_signature}")]
+    native_shape = _parameter_shape(native_signature, drop_receiver=False)
+    if not native_shape:
+        return []
+    return [
+        ConformanceFinding(
+            held_name,
+            f"the native class constructs with {_render_parameter_shape(native_shape)}; "
+            f"`type[{held_name}]` declares a constructor taking no arguments",
+        )
+    ]
+
+
 def holding_findings(
     engine_module: ModuleType,
     protocols_by_name: Mapping[str, type],
@@ -370,6 +393,11 @@ def holding_findings(
             if exported_name in protocols_by_name and _is_typed_as_the_class_of_its_protocol(
                 exported_name, stub_declarations[exported_name]
             ):
+                findings.extend(
+                    constructor_findings_for_class_typed_as_its_protocol(
+                        exported_name, getattr(engine_module, exported_name)
+                    )
+                )
                 continue
             findings.append(
                 ConformanceFinding(

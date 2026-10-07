@@ -225,6 +225,28 @@ def test_a_name_declared_in_the_stub_and_as_a_protocol_is_reported():
     assert "declared in tatolab.stream and in _engine.pyi" in findings["GpuSurfaceHandle"]
 
 
+def test_a_class_typed_as_its_protocol_that_constructs_with_arguments_is_reported():
+    class NodeLinkDataAccess:
+        def __init__(self, ring_capacity: int) -> None: ...
+
+    engine_with_a_changed_constructor = types.ModuleType(_engine.__name__)
+    vars(engine_with_a_changed_constructor).update(vars(_engine))
+    setattr(engine_with_a_changed_constructor, "NodeLinkDataAccess", NodeLinkDataAccess)
+
+    findings = _finding_texts_by_held_name(
+        holding_findings(
+            engine_with_a_changed_constructor,
+            protocols_tatolab_stream_publishes(tatolab.stream),
+            _real_registry_native_names(),
+            ENGINE_STUB_PATH.read_text(),
+        )
+    )
+    assert findings == {
+        "NodeLinkDataAccess": "the native class constructs with (ring_capacity); "
+        "`type[NodeLinkDataAccess]` declares a constructor taking no arguments"
+    }
+
+
 def test_a_name_the_engine_exports_and_nothing_declares_is_reported():
     stub_source = ENGINE_STUB_PATH.read_text().replace(
         "def runtime_log_directory() -> Path:", "def renamed_runtime_log_directory() -> Path:"
