@@ -3,7 +3,8 @@
 
 """A stream: a `@stream` function over a `StreamBuilder`, compiled to its graph.
 
-Pure Python — the standard library and the name cast, nothing native — so a
+Pure Python — the standard library, the name cast and the built-in node base,
+nothing native — so a
 stream module imports and compiles with no engine in the process. The graph
 `compile_stream_to_graph` returns is the mapping `Runtime.load` takes.
 """
@@ -16,8 +17,9 @@ import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import FunctionType
-from typing import TYPE_CHECKING, Any, TypeGuard, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, TypeVar, overload
 
+from ._built_in_node import BuiltInNode, ConfigTypeOfTheBuiltInNode
 from ._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
     cast_exposed_name_to_url_safe,
@@ -41,8 +43,8 @@ _STREAM_DESCRIPTION_ATTRIBUTE = "__streamlib_stream_description__"
 
 # The stamp `@node` leaves on a class it declares.
 _NODE_DECLARED_ATTRIBUTE = "__streamlib_processor_declared__"
-# The class attribute a native marker carries its registered import path in.
-_NATIVE_MARKER_TYPE_ATTRIBUTE = "type"
+# The class attribute a built-in node carries the path it is registered under in.
+_BUILT_IN_NODE_TYPE_ATTRIBUTE = "type"
 
 # The module name CPython gives the file it was launched with; a child process
 # importing this name gets its own entry file instead.
@@ -174,6 +176,18 @@ def is_stream_function(candidate: object) -> TypeGuard[Callable[..., Any]]:
     )
 
 
+class _NodeClassConstructedWithoutConfig(Protocol):
+    """A `@node` class its interpreter constructs as `cls()`."""
+
+    def __call__(self) -> object: ...
+
+
+class _NodeClassConstructedWithConfig(Protocol):
+    """A `@node` class its interpreter constructs as `cls(config=...)`."""
+
+    def __call__(self, *, config: Any) -> object: ...
+
+
 @dataclass(frozen=True, slots=True)
 class NodeOutputPortReference:
     """An output port of a node a `StreamBuilder` holds — a link's producing end; names cast."""
@@ -244,9 +258,28 @@ class StreamBuilder:
         """The stream's name, cast."""
         return self._name
 
+    @overload
     def add(
         self,
-        node_class: type,
+        node_class: _NodeClassConstructedWithoutConfig
+        | _NodeClassConstructedWithConfig,
+        *,
+        name: str | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> NodeReference: ...
+
+    @overload
+    def add(
+        self,
+        node_class: type[BuiltInNode[ConfigTypeOfTheBuiltInNode]],
+        *,
+        name: str | None = None,
+        config: ConfigTypeOfTheBuiltInNode | None = None,
+    ) -> NodeReference: ...
+
+    def add(
+        self,
+        node_class: object,
         *,
         name: str | None = None,
         config: Mapping[str, Any] | None = None,
@@ -404,9 +437,9 @@ def _not_a_node_refusal(node_class: object) -> str:
 def _node_type_of(node_class: type) -> str:
     if hasattr(node_class, _NODE_DECLARED_ATTRIBUTE):
         return _node_class_import_path(node_class)
-    native_marker_type = getattr(node_class, _NATIVE_MARKER_TYPE_ATTRIBUTE, None)
-    if isinstance(native_marker_type, str):
-        return native_marker_type
+    built_in_node_type = getattr(node_class, _BUILT_IN_NODE_TYPE_ATTRIBUTE, None)
+    if isinstance(built_in_node_type, str):
+        return built_in_node_type
     raise TypeError(_not_a_node_refusal(node_class))
 
 

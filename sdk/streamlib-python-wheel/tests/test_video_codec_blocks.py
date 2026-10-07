@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The four hardware video codec built-ins, marker class to decoded frame.
+"""The four hardware video codec built-ins, built-in class to decoded frame.
 
 The marker tests are pure Python. The graph tests boot a real engine and need
 a hardware encoder and decoder — Vulkan Video queues on Linux, VideoToolbox
@@ -140,11 +140,11 @@ CODEC_ROUND_TRIPS = {
 }
 
 
-# ---- marker semantics (no GPU) ---------------------------------------------
+# ---- built-in class semantics (no GPU) -------------------------------------
 
 
 @pytest.mark.parametrize("marker_class", FOUR_CODEC_MARKERS)
-def test_the_marker_class_cannot_be_instantiated(marker_class):
+def test_the_built_in_class_cannot_be_instantiated(marker_class):
     with pytest.raises(TypeError):
         marker_class()
 
@@ -185,7 +185,7 @@ def test_the_round_trip_wires_without_an_adapter(codec):
 def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
     start_app_under_test, codec
 ):
-    """The whole surface, end to end: marker class → native registration →
+    """The whole surface, end to end: built-in class → native registration →
     hardware encode and decode in the app process → decoded bags read by a
     Python processor in its own helper process.
 

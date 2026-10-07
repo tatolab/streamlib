@@ -41,12 +41,12 @@ BLOCKS_SEEN = re.compile(r"MARKER:BLOCKS_SEEN (\[.*\])")
 DEVICE_CLOCK_TOLERANCE_NS_PER_BLOCK = 100_000
 
 
-# ---- marker semantics (no GPU) ---------------------------------------------
+# ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_marker_class_cannot_be_instantiated():
+def test_the_built_in_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        tatolab.stream.MicrophoneSource()
+        tatolab.stream.MicrophoneSource()  # pyright: ignore[reportCallIssue]
 
 
 @stream
@@ -72,7 +72,7 @@ def test_node_name_defaults_to_the_type_name():
 def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
     start_app_under_test,
 ):
-    """The whole audio path, end to end: marker class → native registration →
+    """The whole audio path, end to end: built-in class → native registration →
     the probed backend capturing in the app process → an `AudioBlock` bag read
     as a numpy view by a Python processor in its own helper process.
 

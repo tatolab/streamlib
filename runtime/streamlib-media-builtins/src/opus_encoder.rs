@@ -24,7 +24,21 @@ use crate::audio_window_to_encoded_packet_encoder::{
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Encodes 20 ms windows of audio to Opus encoded-audio-packet bags via libopus",
+    description = "Encodes 20 ms windows of audio to Opus encoded-audio-packet bags via libopus.\n\n\
+                  `audio` declares `audio_window(sample_rate=48000, dtype=\"f32\", \
+                  window_size=960, hop=960)` and states no channel count, so the engine \
+                  resamples to Opus's own clock, converts to `f32` and frames into 20 ms windows \
+                  while the count follows whatever the source publishes — one microphone and one \
+                  ambisonic rig reach this encoder with nothing configured between them. One to \
+                  eight channels; more is refused by name. `encoded_audio` publishes one Opus \
+                  packet per bag, beside the codec, ordering pair and stream format.\n\n\
+                  The libopus encoder is minted from the first window's channel count — one or \
+                  two channels as a single stream, three to eight as a multistream under channel \
+                  mapping family 1 — and re-mints when the source's count changes, which libopus \
+                  offers no other mechanism for. A re-mint costs prediction state, not \
+                  decodability, and `sequence_index` does not reset across it, so a consumer \
+                  still reads a gap as loss and never as a restart. \
+                  In-band FEC and DTX are off and are not knobs.",
     execution = reactive,
     scheduling = high,
     config = crate::audio_window_to_encoded_packet_encoder::OpusEncoderConfig,

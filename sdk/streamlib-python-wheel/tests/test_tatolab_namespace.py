@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Callable
+from typing import Callable, is_typeddict
 
 import tatolab
 import tatolab.runtime
@@ -207,6 +207,8 @@ def test_no_name_tatolab_publishes_nor_any_public_member_of_one_says_processor()
 def _public_callables_tatolab_publishes() -> "list[tuple[str, Callable[..., object]]]":
     public_callables: "list[tuple[str, Callable[..., object]]]" = []
     for qualified_name, exported in _public_names_tatolab_publishes():
+        if is_typeddict(exported):
+            continue
         if inspect.isclass(exported):
             public_callables.append((qualified_name, exported))
             for member_name in dir(exported):
@@ -245,6 +247,14 @@ def test_no_parameter_of_a_public_callable_tatolab_publishes_says_processor():
         for parameter_name in inspect.signature(public_callable).parameters
         if "processor" in parameter_name.lower()
     ]
+    parameters_saying_processor.extend(
+        f"{qualified_name}[{key}]"
+        for qualified_name, exported in _public_names_tatolab_publishes()
+        if is_typeddict(exported)
+        for key in getattr(exported, "__required_keys__")
+        | getattr(exported, "__optional_keys__")
+        if "processor" in key.lower()
+    )
 
     assert parameters_saying_processor == []
 

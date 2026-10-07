@@ -237,6 +237,10 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   holding only `tatolab-stream`, `tatolab new`, `tatolab run --test-pattern` twenty seconds,
   sixty frames). Every `<!-- verify: pytest sdk/streamlib-python-wheel/tests/… -->` is re-pointed
   to the suite its test lands in.
+- §Media I/O `:2630-2633` (the audio built-ins) and the codec-blocks entry `:2818-2830`, and
+  `docs/plan/diagrams/system.mmd`'s media node — built-ins reach Python as classes generated
+  into `tatolab/stream/_built_in_nodes.py` from their descriptors (#2587), not as native marker
+  classes, and a built-in's `type` is `tatolab.stream:<Class>` as built.
 - `README.md:86-94` and `docs/architecture/` in the shipping tickets; CLAUDE.md's "Reading the
   Python surface", `placement.md` and the skills that spawn `streamlib` in their own
   operating-model PR, as `flow.md` requires.

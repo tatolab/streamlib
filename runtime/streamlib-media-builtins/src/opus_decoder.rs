@@ -22,7 +22,25 @@ use crate::encoded_packet_to_audio_block_decoder::{
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Decodes Opus encoded-audio-packet bags to audio blocks via libopus",
+    description = "Decodes Opus encoded-audio-packet bags to audio blocks via libopus.\n\n\
+                  `encoded_audio` takes encoded-audio-packet bags in the wire shape \
+                  `OpusEncoder` publishes, and declares no window contract — an encoded link \
+                  carries whole packets, and reframing a compressed bitstream is not a thing the \
+                  stage could do. A bag the decoder cannot read is refused by name: a `codec` \
+                  other than `opus`, a `bitstream` that is not msgpack bin, a `sample_rate` \
+                  other than 48 000, or a `pre_skip` past the 5 760 samples one Opus packet can \
+                  span. `audio` publishes ordinary `AudioBlock` bags — `f32` at 48 000 Hz in the \
+                  packet's own channel count.\n\n\
+                  It enters the stream at any packet, since every Opus packet is a sync point, \
+                  and trims the encoder's `pre_skip` lookahead at entry — so the first block \
+                  after entry is short by exactly that many samples and every block after it \
+                  spans the packet's full `sample_count`. Stamps are derived from the entry \
+                  packet's own stamp plus the samples emitted since, so the first emitted sample \
+                  is the stamped instant rather than one lookahead later.\n\n\
+                  A `sequence_index` step other than one is a gap: the decoder resets, re-enters \
+                  at that packet, and logs how many it did not see. Nothing is invented to \
+                  bridge it — no concealment, no FEC decode — so the gap stays derivable from \
+                  the stamps either side.",
     execution = reactive,
     scheduling = high,
     input(

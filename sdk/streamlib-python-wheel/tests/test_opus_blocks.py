@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The Opus codec pair, marker class to decoded audio block.
+"""The Opus codec pair, built-in class to decoded audio block.
 
 The marker tests are pure Python — constructing a `Runtime` and loading a graph
 into it needs no device, which is why they run in CI. The graph tests start
@@ -67,11 +67,11 @@ PRE_SKIP_SAMPLES_A_CREDIBLE_ENCODER_REPORTS = range(1, SAMPLES_IN_ONE_OPUS_PACKE
 DECODED_BLOCKS_TO_CROSS_CHECK = DECODED_BLOCKS_REPORTED // 2
 
 
-# ---- marker semantics (no GPU) ---------------------------------------------
+# ---- built-in class semantics (no GPU) -------------------------------------
 
 
 @pytest.mark.parametrize("marker_class", TWO_OPUS_MARKERS)
-def test_the_marker_class_cannot_be_instantiated(marker_class):
+def test_the_built_in_class_cannot_be_instantiated(marker_class):
     with pytest.raises(TypeError):
         marker_class()
 

@@ -56,18 +56,20 @@ pub struct HardwareVideoEncoderConfig {
     /// Expected frame height — a guardrail like `width`.
     #[serde(default)]
     pub height: Option<u32>,
-    /// Frame rate used when the incoming frames carry none.
+    /// Frame rate used when the incoming frames carry none. Absent: 60.
     #[serde(default)]
     pub fps: Option<u32>,
     /// Target bitrate in bits per second. Absent: constant-QP encoding at
     /// the session's balanced preset.
     #[serde(default)]
     pub bitrate_bps: Option<u32>,
-    /// Seconds between IDR sync points. Absent: 2.
+    /// Seconds between IDR sync points. Absent: 2. On macOS, 0 is refused by
+    /// name at `setup()`.
     #[serde(default)]
     pub keyframe_interval_seconds: Option<u32>,
     /// Encoder-effort index (the hardware encoder's analysis budget, not a
-    /// codec quality knob). Absent: the codec's default.
+    /// codec quality knob). Absent: the codec's default. VideoToolbox has no
+    /// effort index, so on macOS any value is refused by name at `setup()`.
     #[serde(default)]
     pub effort_level: Option<u32>,
 }

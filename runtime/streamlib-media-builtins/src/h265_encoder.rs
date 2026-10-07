@@ -32,7 +32,17 @@ impl HardwareVideoCodecProcessorIdentity for H265EncoderCodecIdentity {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Encodes published video surfaces to H.265 Annex-B encoded-frame bags via hardware encode",
+    description = "Encodes published video surfaces to H.265 Annex-B encoded-frame bags via \
+                  hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.\n\n\
+                  `video` takes any published `VideoFrame` — buffer-backed (camera, test \
+                  pattern) or texture-backed (a kernel output). `encoded_video` publishes one \
+                  Annex-B access unit per bag, beside the stream metadata keys. A frame the \
+                  encoder cannot consume is logged and dropped while the processor keeps \
+                  running. The session mints from the first frame's dimensions and re-mints when \
+                  the upstream extent changes.\n\n\
+                  On a device without a hardware encoder for the codec the session fails to \
+                  mint: the failure latches and every later frame is discarded with one error \
+                  line; no exception reaches Python.",
     execution = reactive,
     scheduling = high,
     config = crate::published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig,

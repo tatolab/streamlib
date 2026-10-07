@@ -18,7 +18,7 @@ asserting about a single group.
 
 The control plane is hosted so the run can read its own graph back and report
 the `type` the running engine renders for each codec node — the import path the
-marker class resolved to.
+built-in class resolved to.
 """
 
 import json
@@ -83,7 +83,7 @@ def _report_the_codec_nodes_rendered_types(
     marker_class_name_by_node_name: "dict[str, str]",
 ) -> None:
     """Print the `type` `graph` renders for the two codec nodes, keyed by the
-    marker class each was added as."""
+    built-in class each was added as."""
     graph = json.loads(call_tool(this_processes_local_api_socket(), "graph", {}))
     rendered_types = {
         marker_class_name_by_node_name[node["name"]]: node["type"]

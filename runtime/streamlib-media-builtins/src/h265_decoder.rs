@@ -32,7 +32,22 @@ impl HardwareVideoCodecProcessorIdentity for H265DecoderCodecIdentity {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Decodes H.265 Annex-B encoded-frame bags to published video surfaces via hardware decode",
+    description = "Decodes H.265 Annex-B encoded-frame bags to published video surfaces via \
+                  hardware decode — Vulkan Video on Linux, VideoToolbox on macOS.\n\n\
+                  `encoded_video` takes encoded-frame bags in the wire shape `H265Encoder` \
+                  publishes; a bag the decoder cannot read is refused by name, never reshaped. \
+                  `video` publishes an ordinary `VideoFrame` on a pooled RGBA pixel-buffer \
+                  surface at the conformance-windowed extent — never the coded picture — \
+                  carrying the encoded frame's own timestamp and `color_info`, with `fps`, \
+                  `texture_layout` and the HDR sidecars absent, so `DisplayWindow` and a \
+                  `read(port, into=VideoFrame)` consume it unchanged. A decoded frame is \
+                  buffer-backed, so it reaches a Python kernel through a DLPack landing copy, \
+                  never by bare surface id.\n\n\
+                  The decode session is minted at `setup()`. On a device with no hardware \
+                  decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox \
+                  hardware decoder — setup refuses by name: the node never reaches Running, \
+                  and waiting for every node to run raises rather than the graph running \
+                  with an empty channel.",
     execution = reactive,
     scheduling = high,
     config = crate::encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig,

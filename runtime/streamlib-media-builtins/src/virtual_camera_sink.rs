@@ -677,7 +677,31 @@ impl std::fmt::Display for LatchedRefusal {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Presents video frames as a virtual camera any Linux application can select",
+    description = "Presents video frames as a virtual camera any Linux application can select.\n\n\
+                  Each instance is one camera that exists while its processor runs — created at \
+                  setup, removed at teardown, like a USB camera plugged in and pulled out — \
+                  showing whatever the graph writes into it. Add as many instances as the graph \
+                  needs; each is its own camera. Off Linux the runtime refuses a graph naming it \
+                  at load, naming the platform.\n\n\
+                  Under the `auto` door the sink creates a v4l2loopback device when the module's \
+                  control node is writable — the door every application sees — and otherwise \
+                  registers a PipeWire camera node, which needs no module and no root. The door \
+                  is logged at setup; without permission to create a loopback camera the log \
+                  names `streamlib enable-virtual-camera`, the one-time command that grants it \
+                  behind your desktop's password prompt. The `v4l2loopback` door refuses by name \
+                  at `setup()` in that case, and the runtime keeps running. The `pipewire` door \
+                  is taken whatever the control node says, refusing by name only where no \
+                  PipeWire session answers. One instance is never on both doors: a session \
+                  manager mirrors every V4L2 capture device into the portal's camera set, so it \
+                  would list the same camera twice. The engine never loads a module or asks for \
+                  elevation.\n\n\
+                  A loopback device a reader still holds at teardown is left in place and \
+                  reclaimed by name at the next setup; a PipeWire node is gone with its stream. \
+                  Frames are stamped with their monotonic timestamp on both doors, and the \
+                  format follows the first frame's extent — YUYV at an even width on the \
+                  loopback door, RGBA offered as a DMA-BUF the consumer imports with no copy (or \
+                  a shared-memory sibling) on the PipeWire one. An extent change re-negotiates \
+                  it.",
     execution = reactive,
     scheduling = high,
     config = crate::virtual_camera_sink::VirtualCameraSinkConfig,

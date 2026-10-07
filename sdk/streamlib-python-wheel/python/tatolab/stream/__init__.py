@@ -7,12 +7,11 @@ A stream is a `@stream` function that adds, links and exposes nodes on a
 `StreamBuilder`; `compile_stream_to_graph` returns the graph it builds. A node
 declares its execution and ports with `@node` / `@node.input` / `@node.output` and
 receives a capability-typed context in every lifecycle hook. The contexts, the
-GPU classes, the built-in nodes and the bag codec are the engine's own, from
-`tatolab.runtime._engine`.
+GPU classes and the bag codec are the engine's own, from
+`tatolab.runtime._engine`. The built-in nodes are generated from the runtime's
+own declarations, each with a `TypedDict` for its config.
 """
 
-from tatolab.runtime._engine import CameraSource as CameraSource
-from tatolab.runtime._engine import DisplayWindow as DisplayWindow
 from tatolab.runtime._engine import GpuContextFullAccess as GpuContextFullAccess
 from tatolab.runtime._engine import GpuContextLimitedAccess as GpuContextLimitedAccess
 from tatolab.runtime._engine import GpuSurfaceCheckOutLease as GpuSurfaceCheckOutLease
@@ -20,29 +19,18 @@ from tatolab.runtime._engine import (
     GpuSurfaceDeviceTensorScope as GpuSurfaceDeviceTensorScope,
 )
 from tatolab.runtime._engine import GpuSurfaceHandle as GpuSurfaceHandle
-from tatolab.runtime._engine import H264Decoder as H264Decoder
-from tatolab.runtime._engine import H264Encoder as H264Encoder
-from tatolab.runtime._engine import H265Decoder as H265Decoder
-from tatolab.runtime._engine import H265Encoder as H265Encoder
 from tatolab.runtime._engine import IOSurfaceMachPortExport as IOSurfaceMachPortExport
 from tatolab.runtime._engine import LinkInputDataReader as LinkInputDataReader
 from tatolab.runtime._engine import LinkOutputDataWriter as LinkOutputDataWriter
-from tatolab.runtime._engine import MicrophoneSource as MicrophoneSource
 from tatolab.runtime._engine import MonotonicTimer as MonotonicTimer
-from tatolab.runtime._engine import Mp4Sink as Mp4Sink
 from tatolab.runtime._engine import NodeLinkDataAccess as NodeLinkDataAccess
 from tatolab.runtime._engine import NodeOwnedWindow as NodeOwnedWindow
 from tatolab.runtime._engine import NodeOwnedWindowEvents as NodeOwnedWindowEvents
 from tatolab.runtime._engine import OpaqueFdTextureExport as OpaqueFdTextureExport
-from tatolab.runtime._engine import OpusDecoder as OpusDecoder
-from tatolab.runtime._engine import OpusEncoder as OpusEncoder
 from tatolab.runtime._engine import RuntimeContextFullAccess as RuntimeContextFullAccess
 from tatolab.runtime._engine import (
     RuntimeContextLimitedAccess as RuntimeContextLimitedAccess,
 )
-from tatolab.runtime._engine import SpeakerSink as SpeakerSink
-from tatolab.runtime._engine import TestPatternSource as TestPatternSource
-from tatolab.runtime._engine import VirtualCameraSink as VirtualCameraSink
 from tatolab.runtime._engine import (
     decode_msgpack_bytes_to_python_object as decode_msgpack_bytes_to_python_object,
 )
@@ -56,6 +44,32 @@ from tatolab.runtime._engine import monotonic_now_ns as monotonic_now_ns
 
 from . import clock as clock
 from . import log as log
+from ._built_in_nodes import CameraSource as CameraSource
+from ._built_in_nodes import CameraSourceConfig as CameraSourceConfig
+from ._built_in_nodes import DisplayWindow as DisplayWindow
+from ._built_in_nodes import DisplayWindowConfig as DisplayWindowConfig
+from ._built_in_nodes import H264Decoder as H264Decoder
+from ._built_in_nodes import H264DecoderConfig as H264DecoderConfig
+from ._built_in_nodes import H264Encoder as H264Encoder
+from ._built_in_nodes import H264EncoderConfig as H264EncoderConfig
+from ._built_in_nodes import H265Decoder as H265Decoder
+from ._built_in_nodes import H265DecoderConfig as H265DecoderConfig
+from ._built_in_nodes import H265Encoder as H265Encoder
+from ._built_in_nodes import H265EncoderConfig as H265EncoderConfig
+from ._built_in_nodes import MicrophoneSource as MicrophoneSource
+from ._built_in_nodes import MicrophoneSourceConfig as MicrophoneSourceConfig
+from ._built_in_nodes import Mp4Sink as Mp4Sink
+from ._built_in_nodes import Mp4SinkConfig as Mp4SinkConfig
+from ._built_in_nodes import OpusDecoder as OpusDecoder
+from ._built_in_nodes import OpusDecoderConfig as OpusDecoderConfig
+from ._built_in_nodes import OpusEncoder as OpusEncoder
+from ._built_in_nodes import OpusEncoderConfig as OpusEncoderConfig
+from ._built_in_nodes import SpeakerSink as SpeakerSink
+from ._built_in_nodes import SpeakerSinkConfig as SpeakerSinkConfig
+from ._built_in_nodes import TestPatternSource as TestPatternSource
+from ._built_in_nodes import TestPatternSourceConfig as TestPatternSourceConfig
+from ._built_in_nodes import VirtualCameraSink as VirtualCameraSink
+from ._built_in_nodes import VirtualCameraSinkConfig as VirtualCameraSinkConfig
 from ._processor_declaration import AudioWindowContract as AudioWindowContract
 from ._processor_declaration import node as node
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
@@ -98,10 +112,12 @@ __all__ = [
     "AudioBlock",
     "AudioWindowContract",
     "CameraSource",
+    "CameraSourceConfig",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ContentLight",
     "DisplayWindow",
+    "DisplayWindowConfig",
     "EncodedAudioPacket",
     "EncodedVideoFrame",
     "GlslPixelEffect",
@@ -112,14 +128,19 @@ __all__ = [
     "GpuSurfaceDeviceTensorScope",
     "GpuSurfaceHandle",
     "H264Decoder",
+    "H264DecoderConfig",
     "H264Encoder",
+    "H264EncoderConfig",
     "H265Decoder",
+    "H265DecoderConfig",
     "H265Encoder",
+    "H265EncoderConfig",
     "IOSurfaceMachPortExport",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
     "MasteringDisplay",
     "MicrophoneSource",
+    "MicrophoneSourceConfig",
     "ModelInputTensor",
     "ModelInputTensorChannelOrder",
     "ModelInputTensorDtype",
@@ -129,6 +150,7 @@ __all__ = [
     "ModelInputTensorLayout",
     "MonotonicTimer",
     "Mp4Sink",
+    "Mp4SinkConfig",
     "NodeInputPortReference",
     "NodeLinkDataAccess",
     "NodeOutputPortReference",
@@ -138,15 +160,20 @@ __all__ = [
     "NodeReference",
     "OpaqueFdTextureExport",
     "OpusDecoder",
+    "OpusDecoderConfig",
     "OpusEncoder",
+    "OpusEncoderConfig",
     "PixelAccessToOneClaimedSurface",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "SpeakerSink",
+    "SpeakerSinkConfig",
     "StreamBuilder",
     "TestPatternSource",
+    "TestPatternSourceConfig",
     "VideoFrame",
     "VirtualCameraSink",
+    "VirtualCameraSinkConfig",
     "clock",
     "compile_stream_to_graph",
     "decode_msgpack_bytes_to_python_object",

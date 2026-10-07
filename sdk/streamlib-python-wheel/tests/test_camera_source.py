@@ -22,12 +22,12 @@ from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 NAMED_DEVICE_APP = Path(__file__).parent / "camera_source_named_device_app.py"
 
 
-# ---- marker semantics (no GPU) ---------------------------------------------
+# ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_marker_class_cannot_be_instantiated():
+def test_the_built_in_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        tatolab.stream.CameraSource()
+        tatolab.stream.CameraSource()  # pyright: ignore[reportCallIssue]
 
 
 @stream

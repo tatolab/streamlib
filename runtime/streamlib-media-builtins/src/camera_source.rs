@@ -38,7 +38,8 @@ const VIDEO_OUTPUT_PORT: &str = "video";
 pub struct CameraSourceConfig {
     /// The capture backend's name for the device — a V4L2 device path
     /// (`/dev/video0`) on Linux, an AVFoundation camera's unique ID on macOS.
-    /// Absent: the first capture-capable device found.
+    /// Absent: the first capture-capable device found — on macOS the first
+    /// built-in camera, ahead of external cameras and camera extensions.
     #[serde(default)]
     pub device_id: Option<String>,
     /// Resolution cap; the negotiated format is clamped to fit. Default 1920.
@@ -51,7 +52,17 @@ pub struct CameraSourceConfig {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Captures live video from the platform's camera — V4L2 on Linux (zero-copy DMA-BUF when the device exports it, CPU upload otherwise), AVFoundation on macOS (zero-copy IOSurface import, CPU upload otherwise)",
+    description = "Captures live video from the platform's camera — V4L2 on Linux (zero-copy \
+                  DMA-BUF when the device exports it, CPU upload otherwise), AVFoundation on \
+                  macOS (zero-copy IOSurface import, CPU upload otherwise).\n\n\
+                  `video` publishes an ordinary `VideoFrame` whose `timestamp_ns` is the instant \
+                  the device captured it, on the machine's monotonic clock. A named `device_id` \
+                  that cannot be opened is refused at `setup()` by name, as is every camera on a \
+                  platform no capture backend serves.\n\n\
+                  On macOS the first run asks for camera access without waiting: the graph \
+                  starts, and frames begin once the user allows it. macOS asks on behalf of the \
+                  application that launched the process — the terminal, not Python — so a \
+                  refusal names that application and the setting to change.",
     execution = manual,
     scheduling = high,
     config = crate::camera_source::CameraSourceConfig,

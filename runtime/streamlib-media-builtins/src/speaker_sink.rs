@@ -98,7 +98,24 @@ pub struct SpeakerSinkConfig {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Plays timestamped blocks of interleaved samples on the machine's audio backend (discarding where no backend exists)",
+    description = "Plays timestamped blocks of interleaved samples on the machine's audio backend \
+                  (discarding where no backend exists).\n\n\
+                  The backend chain is probed once per process with no configuration dial; where \
+                  no audio backend exists at all the samples are discarded, so a pipeline \
+                  authored on a workstation runs unchanged in a headless container.\n\n\
+                  `audio` takes bags in the `AudioBlock` shape and declares `audio_window = \
+                  match_device`, so the engine resamples every block to the device's rate and \
+                  re-frames it into device-period windows — `graph` renders the resolved values \
+                  on the port. Conversion is not unconditional: `dtype` must be `f32` or `i16`, \
+                  and channels convert N to 1 by averaging and 1 to N by duplicating, so a pair \
+                  with neither side mono (stereo into a five-channel device, say) is refused by \
+                  name rather than mixed. The device is never left waiting on the graph — a \
+                  period the graph had no samples for is silence, and the count of it is \
+                  reported.\n\n\
+                  On macOS the backend is CoreAudio, `device_id` is a CoreAudio device UID, and \
+                  the device period is the device's own buffer size. Without a `device_id` \
+                  playback follows the system default output as it changes — plugging in \
+                  headphones moves it there.",
     execution = manual,
     scheduling = realtime,
     config = crate::speaker_sink::SpeakerSinkConfig,

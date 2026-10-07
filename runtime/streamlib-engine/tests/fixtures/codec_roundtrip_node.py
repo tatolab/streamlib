@@ -5,7 +5,7 @@
 """The Python arm of the codec round trip: camera -> encoder -> decoder -> window.
 
 The twin of the camera arm of `codec_roundtrip_rig.rs` under the engine's
-`examples/`, authored through the wheel's marker classes instead of `App::add`,
+`examples/`, authored through the wheel's built-in classes instead of `App::add`,
 so the vivid drift lock can be measured through a Python-authored graph and
 compared against the baseline the Rust rig captured.
 

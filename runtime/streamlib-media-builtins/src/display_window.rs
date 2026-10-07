@@ -74,10 +74,12 @@ pub struct DisplayWindowConfig {
     /// Window title.
     #[serde(default = "default_title")]
     pub title: String,
-    /// Initial window width, in the desktop's logical pixels.
+    /// Initial window width, in the desktop's logical pixels, so it is the
+    /// same size on a 1x and a 2x display.
     #[serde(default = "default_window_width")]
     pub width: u32,
-    /// Initial window height, in the desktop's logical pixels.
+    /// Initial window height, in the desktop's logical pixels, so it is the
+    /// same size on a 1x and a 2x display.
     #[serde(default = "default_window_height")]
     pub height: u32,
     /// How the frame maps onto the window.
@@ -110,7 +112,11 @@ impl Default for DisplayWindowConfig {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Shows video frames in a window with vsync",
+    description = "Shows video frames in a window with vsync.\n\n\
+                  `video` takes any published `VideoFrame`. Add as many as the graph needs: each \
+                  instance registers its own window with the engine's shared event pump and \
+                  renders on its own thread. An instance that cannot get a window drains its \
+                  input without showing anything, so upstream still sees a live consumer.",
     execution = manual,
     scheduling = high,
     config = crate::display_window::DisplayWindowConfig,
