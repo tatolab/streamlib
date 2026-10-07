@@ -14,7 +14,6 @@ from __future__ import annotations
 import functools
 import importlib
 from collections.abc import Callable
-from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, TypeVar, cast
 
@@ -29,18 +28,8 @@ RuntimeBackedProtocolDeclaration = TypeVar(
 )
 
 
-@dataclass(frozen=True)
-class RuntimeBackedFunctionRegistration:
-    """One runtime-backed function and the native callable its calls forward to."""
-
-    python_function: Callable[..., Any]
-    native_callable_name: str
-
-
-runtime_backed_function_registry: dict[
-    Callable[..., Any], RuntimeBackedFunctionRegistration
-] = {}
-"""Every runtime-backed function, keyed by the forwarding function it is."""
+runtime_backed_function_registry: dict[Callable[..., Any], str] = {}
+"""Every runtime-backed function's forwarder, to the name of the native callable it forwards to."""
 
 runtime_backed_protocol_registry: dict[str, type] = {}
 """Every runtime-backed Protocol, keyed by the name of the native class it declares."""
@@ -108,10 +97,7 @@ def runtime_backed_function(
             )(*arguments, **keyword_arguments)
 
         runtime_backed_function_registry[forward_to_native_callable] = (
-            RuntimeBackedFunctionRegistration(
-                python_function=forward_to_native_callable,
-                native_callable_name=resolved_native_callable_name,
-            )
+            resolved_native_callable_name
         )
         return cast(RuntimeBackedFunctionDeclaration, forward_to_native_callable)
 
@@ -138,9 +124,7 @@ def native_callable_of_runtime_backed_function(
     return cast(
         RuntimeBackedFunctionDeclaration,
         native_callable_lent_by_the_runtime(
-            runtime_backed_function_registry[
-                declared_runtime_backed_function
-            ].native_callable_name,
+            runtime_backed_function_registry[declared_runtime_backed_function],
             called_function_name,
         ),
     )

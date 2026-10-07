@@ -30,19 +30,22 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Generic, Literal, Protocol, TypeVar
 
-from tatolab.stream._runtime_lend import RuntimeBackedFunctionRegistration
-
 ENGINE_MODULE_NAME = "tatolab.runtime._engine"
 
 ENGINE_STUB_PATH = (
     Path(__file__).resolve().parents[1] / "python" / "tatolab" / "runtime" / "_engine.pyi"
 )
 
-# The dunders pyo3 puts in every pyclass's own `__dict__`. `__new__` is the
-# constructor, held through the runtime-backed function that calls it.
+# The dunders pyo3 puts in every pyclass's own `__dict__`.
 PYO3_CLASS_MACHINERY_DUNDER_NAMES = frozenset(
-    {"__dict__", "__doc__", "__module__", "__new__", "__weakref__"}
+    {"__dict__", "__doc__", "__module__", "__weakref__"}
 )
+
+NATIVE_CONSTRUCTOR_NAME = "__new__"
+
+# How a shape spells a default pyo3 publishes but cannot spell: `...` in its
+# `__text_signature__`.
+DEFAULT_PYO3_CANNOT_SPELL = "…"
 
 _ProtocolTypeParameter = TypeVar("_ProtocolTypeParameter", covariant=True)
 
@@ -65,6 +68,8 @@ PROTOCOL_MACHINERY_DUNDER_NAMES = frozenset(vars(_ProtocolDeclaringNothing)) | f
 _PROTOCOL_MACHINERY_BASES: tuple[Any, ...] = (Protocol, Generic, object)
 
 MemberKind = Literal["staticmethod", "classmethod", "property", "method", "attribute"]
+
+ParameterShape = list[tuple[str, inspect._ParameterKind, "str | None"]]
 
 
 @dataclass(frozen=True)
@@ -138,22 +143,48 @@ def contract_members_of_protocol(protocol: type) -> dict[str, Any]:
     return members
 
 
+def _default_spelling(default: Any, spelled_by_pyo3: bool) -> str | None:
+    if default is inspect.Parameter.empty:
+        return None
+    if spelled_by_pyo3 and default is Ellipsis:
+        return DEFAULT_PYO3_CANNOT_SPELL
+    return repr(default)
+
+
 def _parameter_shape(
-    signature: inspect.Signature, drop_receiver: bool
-) -> list[tuple[str, inspect._ParameterKind, bool]]:
+    signature: inspect.Signature, drop_receiver: bool, spelled_by_pyo3: bool
+) -> ParameterShape:
     parameters = list(signature.parameters.values())
     if drop_receiver:
         parameters = parameters[1:]
     return [
-        (parameter.name, parameter.kind, parameter.default is not inspect.Parameter.empty)
+        (parameter.name, parameter.kind, _default_spelling(parameter.default, spelled_by_pyo3))
         for parameter in parameters
     ]
 
 
-def _render_parameter_shape(shape: list[tuple[str, inspect._ParameterKind, bool]]) -> str:
+def _parameter_shapes_agree(native_shape: ParameterShape, declared_shape: ParameterShape) -> bool:
+    if len(native_shape) != len(declared_shape):
+        return False
+    for (native_name, native_kind, native_default), (
+        declared_name,
+        declared_kind,
+        declared_default,
+    ) in zip(native_shape, declared_shape):
+        if native_name != declared_name or native_kind is not declared_kind:
+            return False
+        if native_default == DEFAULT_PYO3_CANNOT_SPELL:
+            if declared_default is None:
+                return False
+        elif native_default != declared_default:
+            return False
+    return True
+
+
+def _render_parameter_shape(shape: ParameterShape) -> str:
     rendered: list[str] = []
     emitted_keyword_only_marker = False
-    for index, (name, kind, has_default) in enumerate(shape):
+    for index, (name, kind, default_spelling) in enumerate(shape):
         if kind is inspect.Parameter.KEYWORD_ONLY and not emitted_keyword_only_marker:
             rendered.append("*")
             emitted_keyword_only_marker = True
@@ -163,7 +194,7 @@ def _render_parameter_shape(shape: list[tuple[str, inspect._ParameterKind, bool]
         elif kind is inspect.Parameter.VAR_KEYWORD:
             rendered.append(f"**{name}")
         else:
-            rendered.append(f"{name}=…" if has_default else name)
+            rendered.append(name if default_spelling is None else f"{name}={default_spelling}")
         next_kind = shape[index + 1][1] if index + 1 < len(shape) else None
         if kind is inspect.Parameter.POSITIONAL_ONLY and (
             next_kind is not inspect.Parameter.POSITIONAL_ONLY
@@ -191,9 +222,9 @@ def _signature_findings(
         return [ConformanceFinding(held_name, f"the native callable {native_signature}")]
     if isinstance(declared_signature, str):
         return [ConformanceFinding(held_name, f"the declaration {declared_signature}")]
-    native_shape = _parameter_shape(native_signature, drop_receiver)
-    declared_shape = _parameter_shape(declared_signature, drop_receiver)
-    if native_shape == declared_shape:
+    native_shape = _parameter_shape(native_signature, drop_receiver, spelled_by_pyo3=True)
+    declared_shape = _parameter_shape(declared_signature, drop_receiver, spelled_by_pyo3=False)
+    if _parameter_shapes_agree(native_shape, declared_shape):
         return []
     return [
         ConformanceFinding(
@@ -206,18 +237,29 @@ def _signature_findings(
 
 
 def conformance_findings_for_protocol(
-    protocol: type, native_class: type, held_name: str | None = None
+    protocol: type,
+    native_class: type,
+    *,
+    native_constructor_is_held_by_a_runtime_backed_function: bool,
 ) -> list[ConformanceFinding]:
-    """Every member `native_class` and `protocol` disagree on."""
-    class_name = held_name or native_class.__name__
+    """Every member `native_class` and `protocol` disagree on.
+
+    A native constructor is a member too, unless a runtime-backed function
+    forwards to it and so holds its signature.
+    """
+    class_name = native_class.__name__
     native_members = _contract_members_of_native_class(native_class)
+    if native_constructor_is_held_by_a_runtime_backed_function:
+        native_members.pop(NATIVE_CONSTRUCTOR_NAME, None)
     protocol_members = contract_members_of_protocol(protocol)
     findings: list[ConformanceFinding] = []
     for member_name in sorted(native_members.keys() - protocol_members.keys()):
         findings.append(
             ConformanceFinding(
                 f"{class_name}.{member_name}",
-                "on the native class and missing from the Protocol",
+                "a native constructor no runtime-backed function forwards to"
+                if member_name == NATIVE_CONSTRUCTOR_NAME
+                else "on the native class and missing from the Protocol",
             )
         )
     for member_name in sorted(protocol_members.keys() - native_members.keys()):
@@ -273,10 +315,12 @@ def conformance_findings_for_protocol(
 
 
 def conformance_findings_for_runtime_backed_function(
-    python_function: Callable[..., Any], native_callable: Any, held_name: str
+    runtime_backed_function: Callable[..., Any], native_callable: Any, held_name: str
 ) -> list[ConformanceFinding]:
     """Whether a runtime-backed function's declared signature is its native callable's."""
-    return _signature_findings(held_name, native_callable, python_function, drop_receiver=False)
+    return _signature_findings(
+        held_name, native_callable, runtime_backed_function, drop_receiver=False
+    )
 
 
 def runtime_backed_protocols_tatolab_stream_declares(
@@ -376,32 +420,44 @@ def holding_findings(
 def all_conformance_findings(
     engine_module: ModuleType,
     stream_package: ModuleType,
-    runtime_backed_function_registrations: Iterable[RuntimeBackedFunctionRegistration],
+    native_callable_name_of_each_runtime_backed_function: Mapping[Callable[..., Any], str],
     stub_source: str,
 ) -> list[ConformanceFinding]:
     """Every finding for the engine against `tatolab.stream` and `_engine.pyi`."""
     protocols_by_name = runtime_backed_protocols_tatolab_stream_declares(stream_package)
-    registrations = list(runtime_backed_function_registrations)
+    native_names_runtime_backed_functions_forward_to = set(
+        native_callable_name_of_each_runtime_backed_function.values()
+    )
     findings: list[ConformanceFinding] = []
     for protocol_name, protocol in sorted(protocols_by_name.items()):
         native_class = getattr(engine_module, protocol_name, None)
         if inspect.isclass(native_class):
-            findings.extend(conformance_findings_for_protocol(protocol, native_class))
-    for registration in registrations:
-        native_callable = getattr(engine_module, registration.native_callable_name, None)
-        held_name = registration.python_function.__name__
+            findings.extend(
+                conformance_findings_for_protocol(
+                    protocol,
+                    native_class,
+                    native_constructor_is_held_by_a_runtime_backed_function=(
+                        protocol_name in native_names_runtime_backed_functions_forward_to
+                    ),
+                )
+            )
+    for (
+        runtime_backed_function,
+        native_callable_name,
+    ) in native_callable_name_of_each_runtime_backed_function.items():
+        native_callable = getattr(engine_module, native_callable_name, None)
         if native_callable is None:
             continue
         findings.extend(
             conformance_findings_for_runtime_backed_function(
-                registration.python_function, native_callable, held_name
+                runtime_backed_function, native_callable, runtime_backed_function.__name__
             )
         )
     findings.extend(
         holding_findings(
             engine_module,
             protocols_by_name,
-            (registration.native_callable_name for registration in registrations),
+            native_names_runtime_backed_functions_forward_to,
             stub_source,
         )
     )
@@ -426,7 +482,7 @@ def stubtest_allowlist_of_names_held_by_tatolab_stream(
     ]
 
 
-def _real_inputs() -> tuple[ModuleType, ModuleType, list[RuntimeBackedFunctionRegistration], str]:
+def _real_inputs() -> tuple[ModuleType, ModuleType, dict[Callable[..., Any], str], str]:
     import tatolab.stream
     from tatolab.stream._runtime_lend import runtime_backed_function_registry
 
@@ -434,7 +490,7 @@ def _real_inputs() -> tuple[ModuleType, ModuleType, list[RuntimeBackedFunctionRe
     return (
         engine_module,
         tatolab.stream,
-        list(runtime_backed_function_registry.values()),
+        dict(runtime_backed_function_registry),
         ENGINE_STUB_PATH.read_text(),
     )
 
@@ -447,16 +503,26 @@ def main(arguments: list[str] | None = None) -> int:
         help="print the mypy.stubtest allowlist of the names tatolab.stream holds",
     )
     parsed = parser.parse_args(arguments)
-    engine_module, stream_package, registrations, stub_source = _real_inputs()
+    (
+        engine_module,
+        stream_package,
+        native_callable_name_of_each_runtime_backed_function,
+        stub_source,
+    ) = _real_inputs()
     if parsed.print_stubtest_allowlist:
         for allowlist_entry in stubtest_allowlist_of_names_held_by_tatolab_stream(
             runtime_backed_protocols_tatolab_stream_declares(stream_package),
-            (registration.native_callable_name for registration in registrations),
+            native_callable_name_of_each_runtime_backed_function.values(),
             stub_source,
         ):
             sys.stdout.write(f"{allowlist_entry}\n")
         return 0
-    findings = all_conformance_findings(engine_module, stream_package, registrations, stub_source)
+    findings = all_conformance_findings(
+        engine_module,
+        stream_package,
+        native_callable_name_of_each_runtime_backed_function,
+        stub_source,
+    )
     for finding in findings:
         sys.stdout.write(f"{finding}\n")
     if findings:

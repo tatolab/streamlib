@@ -113,22 +113,22 @@ def test_only_the_lend_module_names_the_runtime_engine() -> None:
 
 def test_every_runtime_backed_function_is_exercised_below() -> None:
     assert {
-        registration.python_function.__name__
-        for registration in runtime_backed_function_registry.values()
+        forward_to_native_callable.__name__
+        for forward_to_native_callable in runtime_backed_function_registry
     } == set(ARGUMENTS_FOR_EACH_RUNTIME_BACKED_FUNCTION)
 
 
 @pytest.mark.parametrize(
-    "registration",
-    list(runtime_backed_function_registry.values()),
-    ids=lambda registration: registration.python_function.__name__,
+    "runtime_backed_function",
+    list(runtime_backed_function_registry),
+    ids=lambda runtime_backed_function: runtime_backed_function.__name__,
 )
 def test_a_runtime_backed_function_raises_naming_itself_where_nothing_is_lent(
-    registration: Any,
+    runtime_backed_function: "Callable[..., Any]",
 ) -> None:
-    function_name = registration.python_function.__name__
+    function_name = runtime_backed_function.__name__
     with pytest.raises(RuntimeIsNotLentToThisInterpreterError) as refusal:
-        registration.python_function(*ARGUMENTS_FOR_EACH_RUNTIME_BACKED_FUNCTION[function_name])
+        runtime_backed_function(*ARGUMENTS_FOR_EACH_RUNTIME_BACKED_FUNCTION[function_name])
     assert str(refusal.value).startswith(
         f"{function_name}() runs only in the interpreter the runtime starts for a node"
     )

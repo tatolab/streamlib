@@ -53,17 +53,36 @@ def _finding_texts_by_held_name(findings: "list[ConformanceFinding]") -> "dict[s
 
 
 def _real_registry_native_names() -> "list[str]":
-    return [
-        registration.native_callable_name
-        for registration in runtime_backed_function_registry.values()
-    ]
+    return list(runtime_backed_function_registry.values())
+
+
+def _native_class_members_a_copy_can_carry(native_class: type) -> "dict[str, Any]":
+    return {
+        member_name: member
+        for member_name, member in vars(native_class).items()
+        if member_name not in ("__dict__", "__weakref__")
+    }
+
+
+def _monotonic_timer_findings(
+    protocol: type, native_class: "type | None" = None
+) -> "dict[str, str]":
+    """A Protocol's findings against the native timer, whose constructor
+    `start_monotonic_timer` holds."""
+    return _finding_texts_by_held_name(
+        conformance_findings_for_protocol(
+            protocol,
+            native_class or getattr(_engine, "MonotonicTimer"),
+            native_constructor_is_held_by_a_runtime_backed_function=True,
+        )
+    )
 
 
 def test_the_engine_conforms_to_tatolab_stream_and_its_stub():
     findings = all_conformance_findings(
         _engine,
         tatolab.stream,
-        runtime_backed_function_registry.values(),
+        runtime_backed_function_registry,
         ENGINE_STUB_PATH.read_text(),
     )
     assert [str(finding) for finding in findings] == []
@@ -104,12 +123,7 @@ def test_every_runtime_backed_name_the_ticket_lists_is_held_by_tatolab_stream():
 
 def test_an_unbroken_copy_of_a_real_protocol_conforms():
     copy_of_monotonic_timer = _copy_of_protocol(tatolab.stream.MonotonicTimer)
-    assert (
-        conformance_findings_for_protocol(
-            copy_of_monotonic_timer, getattr(_engine, "MonotonicTimer")
-        )
-        == []
-    )
+    assert _monotonic_timer_findings(copy_of_monotonic_timer) == {}
 
 
 def test_a_broken_protocol_reports_a_member_gained_one_lost_and_one_changed_by_name():
@@ -123,11 +137,7 @@ def test_a_broken_protocol_reports_a_member_gained_one_lost_and_one_changed_by_n
         members_added={"wait": wait, "restart": restart},
     )
 
-    findings = _finding_texts_by_held_name(
-        conformance_findings_for_protocol(
-            broken_monotonic_timer, getattr(_engine, "MonotonicTimer")
-        )
-    )
+    findings = _monotonic_timer_findings(broken_monotonic_timer)
 
     assert set(findings) == {
         "MonotonicTimer.close",
@@ -139,7 +149,7 @@ def test_a_broken_protocol_reports_a_member_gained_one_lost_and_one_changed_by_n
         "declared by the Protocol and missing from the native class"
     )
     assert findings["MonotonicTimer.wait"] == (
-        "signature differs: native (timeout_ms=…), declared (timeout_in_milliseconds=…)"
+        "signature differs: native (timeout_ms=100), declared (timeout_in_milliseconds=100)"
     )
 
 
@@ -148,31 +158,65 @@ def test_a_broken_protocol_reports_a_member_gained_one_lost_and_one_changed_by_n
     [
         (
             lambda self, timeout_ms: 0,
-            "signature differs: native (timeout_ms=…), declared (timeout_ms)",
+            "signature differs: native (timeout_ms=100), declared (timeout_ms)",
+        ),
+        (
+            lambda self, timeout_ms=250: 0,
+            "signature differs: native (timeout_ms=100), declared (timeout_ms=250)",
         ),
         (
             lambda self, *, timeout_ms=100: 0,
-            "signature differs: native (timeout_ms=…), declared (*, timeout_ms=…)",
+            "signature differs: native (timeout_ms=100), declared (*, timeout_ms=100)",
         ),
         (
             lambda self, timeout_ms=100, deadline_ns=None: 0,
-            "signature differs: native (timeout_ms=…), declared (timeout_ms=…, deadline_ns=…)",
+            "signature differs: native (timeout_ms=100), "
+            "declared (timeout_ms=100, deadline_ns=None)",
         ),
     ],
-    ids=["default-dropped", "kind-changed", "parameter-added"],
+    ids=["default-dropped", "default-changed", "kind-changed", "parameter-added"],
 )
-def test_a_signature_change_is_reported_for_presence_of_a_default_kind_and_order(
+def test_a_signature_change_is_reported_for_a_default_its_value_kind_and_order(
     replacement_wait, expected_disagreement
 ):
     broken_monotonic_timer = _copy_of_protocol(
         tatolab.stream.MonotonicTimer, members_added={"wait": replacement_wait}
     )
-    findings = _finding_texts_by_held_name(
-        conformance_findings_for_protocol(
-            broken_monotonic_timer, getattr(_engine, "MonotonicTimer")
-        )
+    assert _monotonic_timer_findings(broken_monotonic_timer) == {
+        "MonotonicTimer.wait": expected_disagreement
+    }
+
+
+def test_a_default_pyo3_cannot_spell_is_held_to_presence_only():
+    def native_wait(self, timeout_ms=...): ...
+
+    def declared_wait_with_a_default(self, timeout_ms=250): ...
+
+    def declared_wait_without_a_default(self, timeout_ms): ...
+
+    native_timer_with_an_unspellable_default = type(
+        "MonotonicTimer",
+        (),
+        {
+            **_native_class_members_a_copy_can_carry(getattr(_engine, "MonotonicTimer")),
+            "wait": native_wait,
+        },
     )
-    assert findings == {"MonotonicTimer.wait": expected_disagreement}
+    assert _monotonic_timer_findings(
+        _copy_of_protocol(
+            tatolab.stream.MonotonicTimer, members_added={"wait": declared_wait_with_a_default}
+        ),
+        native_timer_with_an_unspellable_default,
+    ) == {}
+    assert _monotonic_timer_findings(
+        _copy_of_protocol(
+            tatolab.stream.MonotonicTimer,
+            members_added={"wait": declared_wait_without_a_default},
+        ),
+        native_timer_with_an_unspellable_default,
+    ) == {
+        "MonotonicTimer.wait": "signature differs: native (timeout_ms=…), declared (timeout_ms)"
+    }
 
 
 def test_a_dunder_the_native_class_gains_is_reported_whatever_its_name():
@@ -180,25 +224,49 @@ def test_a_dunder_the_native_class_gains_is_reported_whatever_its_name():
         "MonotonicTimer",
         (),
         {
-            **{
-                member_name: member
-                for member_name, member in vars(getattr(_engine, "MonotonicTimer")).items()
-                if member_name not in ("__dict__", "__weakref__")
-            },
+            **_native_class_members_a_copy_can_carry(getattr(_engine, "MonotonicTimer")),
             "__eq__": lambda self, other: self is other,
             "__index__": lambda self: 0,
         },
     )
-    findings = _finding_texts_by_held_name(
-        conformance_findings_for_protocol(
-            tatolab.stream.MonotonicTimer, native_class_with_gained_dunders
-        )
+    findings = _monotonic_timer_findings(
+        tatolab.stream.MonotonicTimer, native_class_with_gained_dunders
     )
     assert findings == {
         "MonotonicTimer.__eq__": "on the native class and missing from the Protocol",
         "MonotonicTimer.__hash__": "on the native class and missing from the Protocol",
         "MonotonicTimer.__index__": "on the native class and missing from the Protocol",
     }
+
+
+def test_a_native_constructor_is_reported_unless_a_runtime_backed_function_holds_it():
+    native_surface_handle = getattr(_engine, "GpuSurfaceHandle")
+    assert "__new__" not in vars(native_surface_handle)
+    native_surface_handle_with_a_constructor = type(
+        "GpuSurfaceHandle",
+        (),
+        {
+            **_native_class_members_a_copy_can_carry(native_surface_handle),
+            "__new__": lambda cls, surface_id: object.__new__(cls),
+        },
+    )
+    assert _finding_texts_by_held_name(
+        conformance_findings_for_protocol(
+            tatolab.stream.GpuSurfaceHandle,
+            native_surface_handle_with_a_constructor,
+            native_constructor_is_held_by_a_runtime_backed_function=False,
+        )
+    ) == {
+        "GpuSurfaceHandle.__new__": "a native constructor no runtime-backed function forwards to"
+    }
+    assert "__new__" in vars(getattr(_engine, "MonotonicTimer"))
+    assert _finding_texts_by_held_name(
+        conformance_findings_for_protocol(
+            tatolab.stream.MonotonicTimer,
+            getattr(_engine, "MonotonicTimer"),
+            native_constructor_is_held_by_a_runtime_backed_function=False,
+        )
+    ) == {"MonotonicTimer.__new__": "a native constructor no runtime-backed function forwards to"}
 
 
 def test_a_member_a_protocol_inherits_from_a_protocol_base_is_part_of_its_contract():
@@ -219,12 +287,7 @@ def test_a_member_a_protocol_inherits_from_a_protocol_base_is_part_of_its_contra
         ),
     )
     assert "wait" not in vars(timer_declaring_wait_on_a_base)
-    assert (
-        conformance_findings_for_protocol(
-            timer_declaring_wait_on_a_base, getattr(_engine, "MonotonicTimer")
-        )
-        == []
-    )
+    assert _monotonic_timer_findings(timer_declaring_wait_on_a_base) == {}
 
 
 def test_a_property_declared_as_a_method_is_reported_as_a_kind_mismatch():
@@ -233,12 +296,7 @@ def test_a_property_declared_as_a_method_is_reported_as_a_kind_mismatch():
     broken_monotonic_timer = _copy_of_protocol(
         tatolab.stream.MonotonicTimer, members_added={"interval_ns": interval_ns}
     )
-    findings = _finding_texts_by_held_name(
-        conformance_findings_for_protocol(
-            broken_monotonic_timer, getattr(_engine, "MonotonicTimer")
-        )
-    )
-    assert findings == {
+    assert _monotonic_timer_findings(broken_monotonic_timer) == {
         "MonotonicTimer.interval_ns": "a property on the native class, a method on the Protocol"
     }
 
