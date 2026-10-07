@@ -272,6 +272,23 @@ def test_defining_the_cuda_array_interface_is_named():
     assert [line for line, _, _ in findings] == [3]
 
 
+def test_a_protocol_declaring_a_single_floor_member_is_not_a_use_of_it():
+    findings = findings_in(
+        """\
+        from typing import Protocol
+
+        class GpuContextFullAccess(Protocol):
+            def export_dma_buf(self, surface: object) -> tuple[int, int]: ...
+
+        class Exporter:
+            def export_dma_buf(self, surface: object) -> tuple[int, int]:
+                return (0, 0)
+        """
+    )
+
+    assert [line for line, _, _ in findings] == [7]
+
+
 def test_importing_a_single_floor_name_is_not_a_use_of_it():
     assert findings_in(
         """\

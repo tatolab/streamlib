@@ -27,14 +27,13 @@ from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
-from tatolab.runtime._engine import (
+from ._gpu_protocols import (
     GpuContextLimitedAccess,
     GpuSurfaceCheckOutLease,
     GpuSurfaceDeviceTensorScope,
     GpuSurfaceHandle,
-    gpu_limited_access_of_the_typed_read_in_progress,
 )
-
+from ._node_context_protocols import gpu_limited_access_of_the_typed_read_in_progress
 from .log import warn
 
 __all__ = ["ClaimedSurfacePixelAccess", "PixelAccessToOneClaimedSurface"]

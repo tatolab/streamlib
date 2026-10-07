@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from tatolab.runtime import _engine
 from tatolab.stream import EncodedAudioPacket, NodeLinkDataAccess
 from tatolab.stream.encoded_audio_packet import _CODECS_ON_THE_WIRE, _REQUIRED_BAG_KEYS
 
@@ -95,7 +96,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     notify_service_name = f"{unique}_dest/notify"
     link_id = f"L-{unique}"
 
-    destination = NodeLinkDataAccess()
+    destination = _engine.NodeLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT,
         channel_service_name,
@@ -108,7 +109,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
         1,
         link_id,
     )
-    source = NodeLinkDataAccess()
+    source = _engine.NodeLinkDataAccess()
     source.wire_output_link(
         OUTPUT_PORT,
         channel_service_name,

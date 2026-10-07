@@ -94,9 +94,9 @@ def test_no_package_nor_the_engine_holds_a_class_name_the_rename_retired():
 
 
 def test_importing_tatolab_runtime_alone_does_not_import_tatolab_stream():
-    """`tatolab.stream` imports `tatolab.runtime._engine`, which runs
-    `tatolab.runtime`'s `__init__` first; an import back from there would be
-    circular."""
+    """`tatolab.stream` reaches `tatolab.runtime._engine` when a runtime-backed
+    function is first called, which runs `tatolab.runtime`'s `__init__`; an
+    import back from there would be circular."""
     imported = subprocess.run(
         [
             sys.executable,
@@ -111,15 +111,25 @@ def test_importing_tatolab_runtime_alone_does_not_import_tatolab_stream():
     assert imported.stdout.strip() == "False", imported.stderr
 
 
+def _native_engine_class(class_name: str) -> type:
+    """A native class `tatolab.stream` declares as a Protocol, which the stub does not."""
+    native_class = getattr(engine, class_name)
+    assert inspect.isclass(native_class), class_name
+    return native_class
+
+
 def test_the_engine_publishes_none_of_the_processor_names_the_rename_retired():
     for class_name in ENGINE_CLASS_NAMES_THE_RENAME_RETIRED:
         assert not hasattr(engine, class_name), class_name
-    for gpu_context_class in (engine.GpuContextLimitedAccess, engine.GpuContextFullAccess):
+    for gpu_context_class in (
+        _native_engine_class("GpuContextLimitedAccess"),
+        _native_engine_class("GpuContextFullAccess"),
+    ):
         for method_name in GPU_CONTEXT_METHOD_NAMES_THE_RENAME_RETIRED:
             assert not hasattr(gpu_context_class, method_name), (gpu_context_class, method_name)
     for runtime_context_class in (
         engine.RuntimeContextFullAccess,
-        engine.RuntimeContextLimitedAccess,
+        _native_engine_class("RuntimeContextLimitedAccess"),
     ):
         assert not hasattr(runtime_context_class, "processor_id"), runtime_context_class
     assert "processor_id" not in inspect.signature(
@@ -129,9 +139,12 @@ def test_the_engine_publishes_none_of_the_processor_names_the_rename_retired():
 
 def test_the_engine_publishes_the_node_names_in_their_place():
     for class_name in ENGINE_CLASS_NAMES_IN_THEIR_PLACE:
-        assert inspect.isclass(getattr(engine, class_name)), class_name
-        assert getattr(tatolab.stream, class_name) is getattr(engine, class_name), class_name
-    for gpu_context_class in (engine.GpuContextLimitedAccess, engine.GpuContextFullAccess):
+        assert _native_engine_class(class_name).__name__ == class_name
+        assert getattr(tatolab.stream, class_name).__name__ == class_name
+    for gpu_context_class in (
+        _native_engine_class("GpuContextLimitedAccess"),
+        _native_engine_class("GpuContextFullAccess"),
+    ):
         for method_name in GPU_CONTEXT_METHOD_NAMES_IN_THEIR_PLACE:
             assert callable(getattr(gpu_context_class, method_name)), (
                 gpu_context_class,
@@ -139,7 +152,7 @@ def test_the_engine_publishes_the_node_names_in_their_place():
             )
     for runtime_context_class in (
         engine.RuntimeContextFullAccess,
-        engine.RuntimeContextLimitedAccess,
+        _native_engine_class("RuntimeContextLimitedAccess"),
     ):
         assert hasattr(runtime_context_class, "node_id"), runtime_context_class
     assert "node_id" in inspect.signature(
@@ -261,8 +274,13 @@ def test_no_parameter_of_a_public_callable_tatolab_publishes_says_processor():
     assert parameters_saying_processor == []
 
 
-def test_every_engine_class_tatolab_stream_publishes_names_tatolab_stream_as_its_module():
-    for exported_name in tatolab.stream.__all__:
-        exported = getattr(tatolab.stream, exported_name)
-        if inspect.isclass(exported) and getattr(engine, exported_name, None) is exported:
-            assert exported.__module__ == "tatolab.stream", exported_name
+def test_every_native_class_a_tatolab_stream_protocol_declares_names_tatolab_stream_as_its_module():
+    protocol_names = [
+        exported_name
+        for exported_name in tatolab.stream.__all__
+        if inspect.isclass(exported := getattr(tatolab.stream, exported_name))
+        and getattr(exported, "_is_protocol", False)
+    ]
+    assert "GpuSurfaceHandle" in protocol_names
+    for protocol_name in protocol_names:
+        assert _native_engine_class(protocol_name).__module__ == "tatolab.stream", protocol_name

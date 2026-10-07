@@ -187,8 +187,14 @@ impl PythonMonotonicTimer {
         python_self
     }
 
-    #[pyo3(signature = (*_exception_details))]
-    fn __exit__(&self, _exception_details: &Bound<'_, PyAny>) -> bool {
+    #[pyo3(signature = (exception_type = None, exception = None, traceback = None))]
+    fn __exit__(
+        &self,
+        exception_type: Option<&Bound<'_, PyAny>>,
+        exception: Option<&Bound<'_, PyAny>>,
+        traceback: Option<&Bound<'_, PyAny>>,
+    ) -> bool {
+        let _ = (exception_type, exception, traceback);
         self.close();
         false
     }

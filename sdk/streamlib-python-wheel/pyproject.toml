@@ -136,7 +136,8 @@ venvPath = "."
 venv = ".venv"
 # The engine module is a compiled artifact, so a checkout has the stub and
 # not the `.so` it describes. That is the intended shape here, not a gap —
-# `mypy.stubtest` is what checks the stub against the real binary.
+# `mypy.stubtest` and `tests/runtime_backed_protocol_conformance.py` are what
+# check the stub and the `tatolab.stream` Protocols against the real binary.
 reportMissingModuleSource = "none"
 
 # The `streamlib new` template tree, checked as the app it becomes: rooted

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from tatolab.runtime import _engine
 from tatolab.stream import NodeLinkDataAccess
 from tatolab.runtime._control_plane_client import LocalApiSocket
 from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
@@ -344,7 +345,7 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
 
 def a_helper_process_data_plane() -> NodeLinkDataAccess:
     """The object a child builds for itself, with its own iceoryx2 node."""
-    return NodeLinkDataAccess()
+    return _engine.NodeLinkDataAccess()
 
 
 def wire_with_window(data_plane: NodeLinkDataAccess, audio_window) -> None:

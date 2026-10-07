@@ -29,17 +29,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-from tatolab.runtime._engine import (
-    ComputeKernel,
-    GpuContextFullAccess,
-    monotonic_now_ns,
-)
-
+from ._gpu_protocols import ComputeKernel, GpuContextFullAccess
 from ._sampled_source_landing import (
     SAMPLED_SOURCE_BINDING_NAME,
     GpuContextWithSurfaceCopy,
     SampledSourceLandingTextureRing,
 )
+from .clock import monotonic_now_ns
 from .node_output_texture_ring import NodeOutputTextureRing
 from .video_frame import VideoFrame
 

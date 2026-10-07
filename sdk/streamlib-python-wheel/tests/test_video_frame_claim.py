@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 
+from tatolab.runtime import _engine
 from tatolab.stream import (
     ClaimedSurfacePixelAccess,
     ColorInfo,
@@ -269,19 +270,19 @@ def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu()
     # The destination subscribes first: iceoryx2 drops a send with no
     # subscriber attached. Both planes live on this thread — its ports are
     # `!Send`.
-    destination = NodeLinkDataAccess()
+    destination = _engine.NodeLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT, channel_service_name, channel_service_name,
         notify_service_name,
         "read_next_in_order", 8, 8, 2, 1, link_id,
     )  # fmt: skip
-    source = NodeLinkDataAccess()
+    source = _engine.NodeLinkDataAccess()
     source.wire_output_link(
         OUTPUT_PORT, channel_service_name, notify_service_name,
         1024, 1 << 20, 8, 2, 1, link_id,
     )  # fmt: skip
 
-    ctx = RuntimeContextFullAccess.open_for_helper_process(
+    ctx = _engine.RuntimeContextFullAccess.open_for_helper_process(
         {}, destination, "runtime-under-test", "processor-under-test"
     )
     bag_from_upstream = {

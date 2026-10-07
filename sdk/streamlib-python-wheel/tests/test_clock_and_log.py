@@ -3,8 +3,8 @@
 
 """The clock and logging surfaces, exercised without an engine.
 
-`monotonic_now_ns` and `MonotonicTimer` are pure kernel-facing calls and
-`log.*` degrades to a no-op sink before an engine boots, so none of this
+`monotonic_now_ns` and `start_monotonic_timer` are pure kernel-facing calls
+and `log.*` degrades to a no-op sink before an engine boots, so none of this
 needs a GPU.
 """
 
@@ -13,7 +13,13 @@ import pytest
 import tatolab.stream
 from engine_media_clock import engine_media_clock_now_ns
 from tatolab.runtime import _engine
-from tatolab.stream import MonotonicTimer, clock, log, monotonic_now_ns
+from tatolab.stream import (
+    MonotonicTimer,
+    clock,
+    log,
+    monotonic_now_ns,
+    start_monotonic_timer,
+)
 
 # Small, so the one wiring test below returns at once.
 TIMER_TEST_INTERVAL_NS = 1_000_000
@@ -56,10 +62,18 @@ def test_monotonic_now_ns_reads_the_engine_media_clock():
     )
 
 
-def test_the_clock_module_re_exports_the_native_surface():
+def test_the_clock_module_and_tatolab_stream_export_the_same_clock():
     """Old-SDK parity: `from tatolab.stream import clock` keeps working."""
     assert clock.monotonic_now_ns is tatolab.stream.monotonic_now_ns
     assert clock.MonotonicTimer is tatolab.stream.MonotonicTimer
+    assert clock.start_monotonic_timer is tatolab.stream.start_monotonic_timer
+
+
+def test_a_timer_is_started_by_a_function_and_never_constructed_from_its_protocol():
+    with start_monotonic_timer(AN_HOUR_NS) as timer:
+        assert type(timer) is getattr(_engine, "MonotonicTimer")
+    with pytest.raises(TypeError, match="Protocols cannot be instantiated"):
+        MonotonicTimer(AN_HOUR_NS)  # pyright: ignore[reportAbstractUsage, reportCallIssue]
 
 
 def test_python_exports_exactly_one_name_for_the_monotonic_clock():
@@ -89,23 +103,23 @@ def test_a_timer_delivers_its_tick_through_the_wait():
     How late a tick lands is the scheduler's business, and the deadline
     arithmetic is pinned without a clock by the wheel's Rust tests.
     """
-    with MonotonicTimer(TIMER_TEST_INTERVAL_NS) as timer:
+    with start_monotonic_timer(TIMER_TEST_INTERVAL_NS) as timer:
         assert timer.wait(timeout_ms=TIMER_TICK_TIMEOUT_MS) >= 1
 
 
 def test_a_poll_before_the_first_deadline_returns_zero():
-    with MonotonicTimer(AN_HOUR_NS) as timer:
+    with start_monotonic_timer(AN_HOUR_NS) as timer:
         assert timer.wait(timeout_ms=0) == 0
 
 
 def test_waiting_on_a_closed_timer_returns_minus_one():
-    timer = MonotonicTimer(AN_HOUR_NS)
+    timer = start_monotonic_timer(AN_HOUR_NS)
     timer.close()
     assert timer.wait(timeout_ms=0) == -1
 
 
 def test_the_context_manager_closes_the_timer():
-    with MonotonicTimer(AN_HOUR_NS) as timer:
+    with start_monotonic_timer(AN_HOUR_NS) as timer:
         assert timer.interval_ns == AN_HOUR_NS
     assert timer.wait(timeout_ms=0) == -1
 
@@ -113,7 +127,7 @@ def test_the_context_manager_closes_the_timer():
 @pytest.mark.parametrize("invalid_interval_ns", [0, -1])
 def test_a_non_positive_interval_is_refused(invalid_interval_ns):
     with pytest.raises(ValueError, match="interval_ns must be > 0"):
-        MonotonicTimer(invalid_interval_ns)
+        start_monotonic_timer(invalid_interval_ns)
 
 
 def test_every_log_level_accepts_structured_attrs():

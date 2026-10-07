@@ -25,7 +25,7 @@ from __future__ import annotations
 import uuid
 from typing import Union
 
-from tatolab.runtime._engine import (
+from ._gpu_protocols import (
     GpuContextFullAccess,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,

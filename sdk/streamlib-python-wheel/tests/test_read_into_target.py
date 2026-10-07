@@ -24,6 +24,7 @@ import pytest
 from typing_extensions import TypedDict as TypedDictFromTypingExtensions
 from typing_extensions import assert_type
 
+from tatolab.runtime import _engine
 from tatolab.stream import NodeLinkDataAccess
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
@@ -88,7 +89,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     notify_service_name = f"{unique}_dest/notify"
     link_id = f"L-{unique}"
 
-    destination = NodeLinkDataAccess()
+    destination = _engine.NodeLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT,
         channel_service_name,
@@ -101,7 +102,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
         1,
         link_id,
     )
-    source = NodeLinkDataAccess()
+    source = _engine.NodeLinkDataAccess()
     source.wire_output_link(
         OUTPUT_PORT,
         channel_service_name,

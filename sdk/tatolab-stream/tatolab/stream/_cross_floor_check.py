@@ -66,7 +66,7 @@ FLOOR_BOUND_MODULES: "dict[str, tuple[str, str]]" = {
     ),
 }
 
-# The stub's single-floor names -> (why, the other floor's peer if one exists).
+# The runtime-backed names that exist on one floor -> (why, the other floor's peer if one exists).
 # Allowed on their floor; the finding exists so the choice is a known one.
 SINGLE_FLOOR_STUB_NAMES: "dict[str, tuple[str, Optional[str]]]" = {
     "VirtualCameraSink": ("Linux only: v4l2loopback and PipeWire", None),
@@ -155,6 +155,17 @@ def _floor_bound_module_matching(module_name: str) -> Optional[str]:
     return None
 
 
+def _derives_from_protocol(class_definition: ast.ClassDef) -> bool:
+    for base in class_definition.bases:
+        if isinstance(base, ast.Subscript):
+            base = base.value
+        if (isinstance(base, ast.Name) and base.id == "Protocol") or (
+            isinstance(base, ast.Attribute) and base.attr == "Protocol"
+        ):
+            return True
+    return False
+
+
 class _FloorBindingSourceVisitor(ast.NodeVisitor):
     def __init__(self, file: Path) -> None:
         self.file = file
@@ -220,6 +231,20 @@ class _FloorBindingSourceVisitor(ast.NodeVisitor):
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Load) and node.id in SINGLE_FLOOR_STUB_NAMES:
             self._record_single_floor_name(node, node.id)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        if not _derives_from_protocol(node):
+            self.generic_visit(node)
+            return
+        for expression in (*node.decorator_list, *node.bases, *node.keywords):
+            self.visit(expression)
+        for statement in node.body:
+            # A Protocol's member is a declaration: naming a single-floor
+            # member there binds nothing until code calls it.
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.generic_visit(statement)
+            else:
+                self.visit(statement)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         if node.name in SINGLE_FLOOR_STUB_NAMES:

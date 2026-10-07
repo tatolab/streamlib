@@ -26,12 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
-from tatolab.runtime._engine import (
-    ComputeKernel,
-    GpuContextFullAccess,
-    GpuSurfaceHandle,
-)
-
+from ._gpu_protocols import ComputeKernel, GpuContextFullAccess, GpuSurfaceHandle
 from ._sampled_source_landing import (
     SAMPLED_SOURCE_BINDING_NAME,
     GpuContextWithSurfaceCopy,

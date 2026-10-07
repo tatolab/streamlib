@@ -33,15 +33,19 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from tatolab.stream import log
+from tatolab.stream import (
+    NodeLinkDataAccess,
+    RuntimeContextFullAccess,
+    log,
+    start_monotonic_timer,
+)
 
 from ._capability_extensions import (
     load_installed_capability_extensions_once_per_process,
 )
+from ._engine import NodeLinkDataAccess as NativeNodeLinkDataAccess
+from ._engine import RuntimeContextFullAccess as NativeRuntimeContextFullAccess
 from ._engine import (
-    MonotonicTimer,
-    NodeLinkDataAccess,
-    RuntimeContextFullAccess,
     capability_extension_host_for_the_helper_process,
     capture_this_helper_processes_engine_log_records,
     drain_the_engine_log_records_this_helper_captured,
@@ -862,7 +866,7 @@ def construct_hosted_processor(
     The bridge's escalate round trip is what the GPU surface crosses to the
     parent on — without it, `ctx.gpu_limited_access` refuses by name.
     """
-    full_access_context = RuntimeContextFullAccess.open_for_helper_process(
+    full_access_context = NativeRuntimeContextFullAccess.open_for_helper_process(
         configuration or {},
         link_data_access,
         runtime_id,
@@ -1073,7 +1077,7 @@ class HelperProcessLifecycle:
             if interval_ms > 0
             else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
         )
-        with MonotonicTimer(interval_ns) as timer:
+        with start_monotonic_timer(interval_ns) as timer:
             # Once at the start and then once per tick, as the native runner
             # paces a continuous processor.
             self._hosted.call_hook("process", self._hosted.limited_access_context)
@@ -1351,7 +1355,7 @@ def main() -> None:
 
     try:
         processor_class = load_processor_class(import_path)
-        link_data_access = NodeLinkDataAccess()
+        link_data_access = NativeNodeLinkDataAccess()
     except Exception as startup_failure:
         engine_log_forwarder.stop_after_forwarding_what_is_left()
         log.error(
