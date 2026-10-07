@@ -861,11 +861,14 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
-      # One `_engine.pyi` for both binaries: a method the macOS build lacks
-      # fails here.
+      # One `_engine.pyi` and one set of `tatolab.stream` Protocols for both
+      # binaries: a method the macOS build lacks fails here, or in the
+      # conformance gate the suite below runs.
       - name: Type stubs match the compiled module
         working-directory: sdk/streamlib-python-wheel
-        run: .venv/bin/python -m mypy.stubtest tatolab.runtime._engine
+        run: |
+          .venv/bin/python tests/runtime_backed_protocol_conformance.py --print-stubtest-allowlist > "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
+          .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
 
       # The suite the Linux wheel job runs. A test absent on macOS carries
       # `linux_only_capability` (the closed list) or `awaiting_macos_parity`
