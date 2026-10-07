@@ -200,13 +200,28 @@ type NodeConfigTakenCheckFn =
 /// Per-type registration entry the factory stores.
 enum RegistrationKind {
     /// `Box<dyn Fn>` closure constructor — the one dispatch shape, used by
-    /// host-compiled Rust types and helper-process host wrappers alike.
+    /// host-compiled Rust types and dynamic host wrappers alike. Never
+    /// replaced, and never described.
     LegacyDyn {
         constructor: DynamicProcessorConstructorFn,
-        /// Present for a typed Rust registration; a Python class's config is
-        /// checked by its own config class, where the node runs.
+        /// Present for a typed Rust registration.
         config_taken_check: Option<NodeConfigTakenCheckFn>,
     },
+    /// A type a processor interpreter described, whose constructor starts the
+    /// processor in one. A later describe of the same type replaces it; its
+    /// config is checked by its own config class, where the node runs.
+    DescribedInAProcessorInterpreter {
+        constructor: DynamicProcessorConstructorFn,
+    },
+}
+
+impl RegistrationKind {
+    fn constructor(&self) -> &DynamicProcessorConstructorFn {
+        match self {
+            Self::LegacyDyn { constructor, .. }
+            | Self::DescribedInAProcessorInterpreter { constructor } => constructor,
+        }
+    }
 }
 
 /// Everything the registry held for one processor type, removed by
@@ -218,14 +233,6 @@ pub(crate) struct UnregisteredProcessorTypeRecord {
     port_info: Option<(Vec<PortInfo>, Vec<PortInfo>)>,
     descriptor: Option<ProcessorDescriptor>,
 }
-
-/// Registers a processor type the registry has never seen, given only its
-/// class import path. The wheel installs one that imports the class in the app
-/// process and registers it, which is how a Python node in a loaded graph or a
-/// control-plane `add_node` reaches the registry. Shared, because it runs
-/// outside the registry's locks: what it imports may itself register.
-pub type UnregisteredProcessorTypeResolverFn =
-    Arc<dyn Fn(&ProcessorClassImportPath) -> Result<()> + Send + Sync>;
 
 /// Factory for compile-time registered Rust processors.
 ///
@@ -239,7 +246,6 @@ pub type UnregisteredProcessorTypeResolverFn =
 /// insert, taking `port_info` and `registrations` inside. Anything that needs
 /// two of these three must take them in that order.
 pub struct ProcessorInstanceFactory {
-    unregistered_type_resolver: RwLock<Option<UnregisteredProcessorTypeResolverFn>>,
     registrations: RwLock<HashMap<ProcessorClassImportPath, RegistrationKind>>,
     port_info: RwLock<HashMap<ProcessorClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
     descriptors: RwLock<HashMap<ProcessorClassImportPath, ProcessorDescriptor>>,
@@ -267,7 +273,6 @@ impl Default for ProcessorInstanceFactory {
 impl ProcessorInstanceFactory {
     pub fn new() -> Self {
         Self {
-            unregistered_type_resolver: RwLock::new(None),
             registrations: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
             descriptors: RwLock::new(HashMap::new()),
@@ -443,32 +448,74 @@ impl ProcessorInstanceFactory {
         Ok(())
     }
 
-    /// Install the resolver consulted when an add names a type nobody registered.
-    pub fn set_unregistered_processor_type_resolver(
+    /// Register a type a processor interpreter described, replacing the
+    /// registration an earlier describe of it left. A type registered any
+    /// other way is never replaced: the registration that arrived first stays.
+    pub fn register_a_type_described_in_a_processor_interpreter(
         &self,
-        resolver: UnregisteredProcessorTypeResolverFn,
-    ) {
-        *self.unregistered_type_resolver.write() = Some(resolver);
+        descriptor: ProcessorDescriptor,
+        constructor: DynamicProcessorConstructorFn,
+    ) -> Result<()> {
+        refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+        let processor_class_import_path = descriptor.processor_class_import_path.clone();
+
+        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
+        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
+
+        // One guard across the check and the claim — see `register_dynamic`.
+        let mut descriptors = self.descriptors.write();
+        if descriptors.contains_key(&processor_class_import_path)
+            && !self.was_described_in_a_processor_interpreter(&processor_class_import_path)
+        {
+            return Err(duplicate_class_import_path(&processor_class_import_path));
+        }
+
+        self.port_info
+            .write()
+            .insert(processor_class_import_path.clone(), (inputs, outputs));
+        self.registrations.write().insert(
+            processor_class_import_path.clone(),
+            RegistrationKind::DescribedInAProcessorInterpreter { constructor },
+        );
+        descriptors.insert(processor_class_import_path.clone(), descriptor);
+        drop(descriptors);
+
+        tracing::info!(
+            processor_class_import_path = processor_class_import_path.as_str(),
+            "[register_a_type_described_in_a_processor_interpreter] processor type registered"
+        );
+
+        PUBSUB.publish(
+            topics::RUNTIME_GLOBAL,
+            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
+                processor_type: processor_class_import_path,
+            }),
+        );
+
+        Ok(())
     }
 
-    /// Register `processor_class_import_path` through the installed resolver when
-    /// it is unknown. With no resolver an unknown type stays unknown, and the add
-    /// fails with [`Error::UnknownProcessorType`]. A built-in's type is never
-    /// handed to the resolver: the runtime has it or it does not.
-    pub fn resolve_processor_type_if_unregistered(
+    /// Whether `processor_type`'s registration came from a processor
+    /// interpreter's describe.
+    pub fn was_described_in_a_processor_interpreter(
         &self,
-        processor_class_import_path: &ProcessorClassImportPath,
-    ) -> Result<()> {
-        if self.is_registered(processor_class_import_path)
-            || processor_class_import_path.names_a_built_in_node()
-        {
-            return Ok(());
-        }
-        let resolver = self.unregistered_type_resolver.read().clone();
-        match resolver {
-            Some(resolve) => resolve(processor_class_import_path),
-            None => Ok(()),
-        }
+        processor_type: &ProcessorClassImportPath,
+    ) -> bool {
+        matches!(
+            self.registrations.read().get(processor_type),
+            Some(RegistrationKind::DescribedInAProcessorInterpreter { .. })
+        )
+    }
+
+    /// Whether `processor_type` is registered other than by a describe — a
+    /// typed Rust registration, a dynamic one, or a descriptor alone — which no
+    /// describe replaces.
+    pub fn is_registered_other_than_by_a_describe(
+        &self,
+        processor_type: &ProcessorClassImportPath,
+    ) -> bool {
+        self.descriptors.read().contains_key(processor_type)
+            && !self.was_described_in_a_processor_interpreter(processor_type)
     }
 
     /// Remove every registry entry for the given processor types across
@@ -604,8 +651,7 @@ impl ProcessorInstanceFactory {
             ))
         })?;
 
-        let RegistrationKind::LegacyDyn { constructor, .. } = registration;
-        let mut instance = ProcessorInstance::new(constructor(node)?);
+        let mut instance = ProcessorInstance::new(registration.constructor()(node)?);
         instance.install_iceoryx2_resources()?;
         Ok(instance)
     }
@@ -937,44 +983,80 @@ mod tests {
         assert!(!factory.can_create(&never_registered));
     }
 
+    fn a_constructor_this_test_never_calls() -> DynamicProcessorConstructorFn {
+        Box::new(|_node| {
+            Err(Error::NotSupported(
+                "this test never constructs the processor".into(),
+            ))
+        })
+    }
+
+    /// A later describe of a type replaces what the earlier one registered —
+    /// the class's ports may have changed since — and the registration stays
+    /// one a describe made.
     #[test]
-    fn an_unknown_type_is_registered_through_the_installed_resolver_and_only_then() {
-        let factory = Arc::new(ProcessorInstanceFactory::new());
-        let path = ProcessorClassImportPath::new("agent_effects.grayscale:GrayscaleEffect")
-            .expect("the fixture path names a class");
+    fn a_later_describe_of_a_type_replaces_the_earlier_ones_registration() {
+        let factory = ProcessorInstanceFactory::new();
+        let path = "my_app.filters:BlurProcessor";
 
         factory
-            .resolve_processor_type_if_unregistered(&path)
-            .expect("no resolver installed means nothing to do, not an error");
-        assert!(!factory.is_registered(&path));
-
-        let resolver_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counted = Arc::clone(&resolver_calls);
-        let registry_the_resolver_fills = Arc::clone(&factory);
-        factory.set_unregistered_processor_type_resolver(Arc::new(move |asked| {
-            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            registry_the_resolver_fills.register_dynamic(
-                descriptor_for(asked.as_str()),
-                Box::new(|_node| {
-                    Err(Error::NotSupported(
-                        "this test never constructs the processor".into(),
-                    ))
-                }),
+            .register_a_type_described_in_a_processor_interpreter(
+                descriptor_for(path).with_input(port_named("video")),
+                a_constructor_this_test_never_calls(),
             )
-        }));
+            .expect("a first describe registers the type");
+        factory
+            .register_a_type_described_in_a_processor_interpreter(
+                descriptor_for(path).with_input(port_named("frames")),
+                a_constructor_this_test_never_calls(),
+            )
+            .expect("a later describe replaces it");
 
+        let (inputs, _) = factory
+            .port_info(&class_import_path(path))
+            .expect("the type is registered");
+        let input_names: Vec<_> = inputs.iter().map(|port| port.name.as_str()).collect();
+        assert_eq!(input_names, ["frames"]);
+        assert!(factory.was_described_in_a_processor_interpreter(&class_import_path(path)));
+        assert!(!factory.is_registered_other_than_by_a_describe(&class_import_path(path)));
+    }
+
+    /// A typed Rust registration, a dynamic one and a descriptor alone are
+    /// never replaced by a describe claiming their path.
+    #[test]
+    fn a_describe_never_replaces_a_registration_made_any_other_way() {
+        use crate::core::test_support::MockSourceTakingOneSetting;
+        let factory = ProcessorInstanceFactory::new();
+        factory.register::<MockSourceTakingOneSetting::Processor>();
+        let typed = MockSourceTakingOneSetting::processor_class_import_path();
+        let dynamic = class_import_path("my_app.filters:RegisteredDynamically");
         factory
-            .resolve_processor_type_if_unregistered(&path)
-            .expect("the resolver registers the type");
-        assert!(factory.is_registered(&path));
+            .register_dynamic(
+                descriptor_for(dynamic.as_str()),
+                a_constructor_this_test_never_calls(),
+            )
+            .unwrap();
+        let descriptor_only = class_import_path("my_app.filters:RegisteredAsADescriptor");
         factory
-            .resolve_processor_type_if_unregistered(&path)
-            .expect("a registered type needs no resolving");
-        assert_eq!(
-            resolver_calls.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "the resolver runs once for the miss and never for a registered type"
-        );
+            .register_descriptor_only(descriptor_for(descriptor_only.as_str()))
+            .unwrap();
+
+        for registered_another_way in [&typed, &dynamic, &descriptor_only] {
+            assert!(factory.is_registered_other_than_by_a_describe(registered_another_way));
+            let refused = factory
+                .register_a_type_described_in_a_processor_interpreter(
+                    descriptor_for(registered_another_way.as_str()),
+                    a_constructor_this_test_never_calls(),
+                )
+                .expect_err("a describe never replaces another registration");
+            assert!(
+                refused
+                    .to_string()
+                    .contains(registered_another_way.as_str()),
+                "{refused}"
+            );
+            assert!(!factory.was_described_in_a_processor_interpreter(registered_another_way));
+        }
     }
 
     fn port_named(name: &str) -> PortDescriptor {
@@ -1067,29 +1149,6 @@ mod tests {
             <MockProcessorWithACamelCaseOutputPort::OutputLink::outOne as OutputPortMarker>::PORT_NAME,
             "outone"
         );
-    }
-
-    /// A built-in's type names one of the runtime's own nodes, so it is never
-    /// imported: a resolver handed one would import `tatolab.stream` in the
-    /// runtime process and refuse with an import error instead of naming it.
-    #[test]
-    fn a_built_in_type_is_never_handed_to_the_unregistered_type_resolver() {
-        let factory = ProcessorInstanceFactory::new();
-        let paths_handed_to_the_resolver = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let recorded = Arc::clone(&paths_handed_to_the_resolver);
-        factory.set_unregistered_processor_type_resolver(Arc::new(move |path| {
-            recorded.lock().push(path.as_str().to_string());
-            Ok(())
-        }));
-
-        factory
-            .resolve_processor_type_if_unregistered(&class_import_path("tatolab.stream:NewThing"))
-            .unwrap();
-        factory
-            .resolve_processor_type_if_unregistered(&class_import_path("my_app.nodes:Blur"))
-            .unwrap();
-
-        assert_eq!(*paths_handed_to_the_resolver.lock(), ["my_app.nodes:Blur"]);
     }
 
     #[test]

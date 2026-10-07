@@ -87,6 +87,14 @@ fn fd_shaped_raw_handle_is_linux_only_error(method_name: &str) -> PyErr {
     ))
 }
 
+/// The engine build id compiled into this extension, which a processor
+/// interpreter compares with the id its parent handed it before it opens
+/// anything.
+#[pyfunction]
+pub(crate) fn engine_build_id_compiled_into_this_extension() -> &'static str {
+    streamlib::sdk::helper_process_transport::ENGINE_BUILD_ID
+}
+
 /// The refusal `export_iosurface` gives on a platform whose surfaces are
 /// file-descriptor allocations, not IOSurfaces.
 #[cfg(not(target_os = "macos"))]
@@ -97,14 +105,6 @@ fn iosurface_raw_handle_is_macos_only_error() -> PyErr {
          `export_dma_buf` for the DMA-BUF flavour or `export_opaque_fd` for OPAQUE_FD",
     )
 }
-
-/// The variable the parent names its surface-share channel to a helper in:
-/// the Unix socket's path on Linux, the Mach service's name on macOS.
-#[cfg(not(target_os = "macos"))]
-pub(crate) const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
-#[cfg(target_os = "macos")]
-pub(crate) const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str =
-    streamlib_surface_client::SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE;
 
 /// The refusal a GPU call gets when this process has neither an engine view
 /// nor a channel to a parent that has one.

@@ -96,6 +96,15 @@ pub enum Error {
     UnknownProcessorType { ident: ProcessorClassImportPath },
 
     #[error(
+        "cannot describe {}: {refusal}",
+        node_types_listed_for_a_refusal(node_types)
+    )]
+    NodeTypesNotDescribed {
+        node_types: Vec<ProcessorClassImportPath>,
+        refusal: String,
+    },
+
+    #[error(
         "`{node_type}` is a built-in node this runtime does not have on {this_floor}: it runs \
          on {floors_it_runs_on} only"
     )]
@@ -341,6 +350,15 @@ impl std::fmt::Display for ChannelTrustTierLabel {
 }
 
 #[cfg(target_os = "linux")]
+/// Node types as a refusal names them: each in backticks, comma-separated.
+fn node_types_listed_for_a_refusal(node_types: &[ProcessorClassImportPath]) -> String {
+    node_types
+        .iter()
+        .map(|node_type| format!("`{node_type}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl From<streamlib_consumer_rhi::ConsumerRhiError> for Error {
     fn from(e: streamlib_consumer_rhi::ConsumerRhiError) -> Self {
         match e {

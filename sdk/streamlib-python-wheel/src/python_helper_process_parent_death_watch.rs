@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use crate::helper_process_shutdown_ladder::{
+use streamlib::sdk::processor_interpreter::{
     CALLBACK_RETURN_BUDGET, CHILD_SELF_EXIT_GRACE, TEARDOWN_BUDGET,
 };
 

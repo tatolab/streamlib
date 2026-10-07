@@ -4,6 +4,10 @@
 mod apply_processor_config_update_op;
 mod open_iceoryx2_service_op;
 mod prepare_processor_op;
+pub(crate) mod processor_interpreter_describe;
+pub(crate) mod processor_interpreter_shutdown_ladder;
+pub(crate) mod processor_interpreter_spawn_host;
+pub(crate) mod python_processor_declaration;
 mod spawn_processor_op;
 pub(crate) mod subprocess_bridge;
 mod subprocess_escalate;

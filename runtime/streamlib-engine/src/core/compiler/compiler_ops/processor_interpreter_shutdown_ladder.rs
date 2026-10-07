@@ -22,16 +22,16 @@
 use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant};
 
-use streamlib::sdk::helper_process_transport::HelperProcessShutdownCommand;
+use super::subprocess_bridge::HelperProcessShutdownCommand;
 
 /// How long a Python callback has to return before the ladder interrupts it.
 ///
 /// Engine-chosen and not authorable: the plan makes every budget here the
 /// engine's, so none is reachable from a processor's configuration.
-pub(crate) const CALLBACK_RETURN_BUDGET: Duration = Duration::from_secs(1);
+pub const CALLBACK_RETURN_BUDGET: Duration = Duration::from_secs(1);
 
 /// How long `teardown()` has once the helper has been asked for it.
-pub(crate) const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
+pub const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 
 /// How long the child has to leave on its own once its hooks have returned.
 ///
@@ -44,7 +44,7 @@ pub(crate) const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 /// 15.3–31.4 ms for one holding a 16 MiB array, over three runs each. The
 /// budget is set well above that rather than at it, because what it covers is
 /// an interpreter finalizing whatever a processor imported.
-pub(crate) const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
+pub const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
 
 /// How long the helper's process group has to leave on `SIGTERM` before it is
 /// killed.
@@ -135,7 +135,7 @@ impl HelperProcessShutdownLadder {
         Self {
             processor_display_name,
             child,
-            is_shutdown_forced: streamlib::sdk::runtime::is_runtime_shutdown_forced,
+            is_shutdown_forced: crate::core::runtime::is_runtime_shutdown_forced,
         }
     }
 
@@ -312,7 +312,7 @@ impl HelperProcessShutdownLadder {
         self.signal_the_whole_process_group(libc::SIGKILL);
         // Out of the registry the third interrupt kills from before the reap
         // frees the group's id for reuse.
-        streamlib::sdk::runtime::deregister_a_helper_process_group(self.child.id() as i32);
+        crate::core::runtime::deregister_a_helper_process_group(self.child.id() as i32);
         self.reap_the_child_within(REAP_BUDGET)
     }
 

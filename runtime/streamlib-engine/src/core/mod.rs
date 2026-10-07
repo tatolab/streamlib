@@ -74,16 +74,29 @@ pub use utils::*;
 // Home / data-dir resolution:
 pub use streamlib_home::{get_streamlib_data_dir, get_streamlib_home, get_uv_cache_dir};
 
-/// The framed-IPC transport a helper process is driven over.
+/// The framed-IPC transport a processor interpreter is driven over.
 ///
-/// Public because the spawn host that owns a Python helper lives in the wheel,
-/// outside this crate; the transport itself is language-agnostic and is shared
-/// with the engine's own subprocess hosts.
+/// Public for the wheel's processor-interpreter side, which checks the engine
+/// build it imported against its parent's, and for the engine's own
+/// integration tests, which drive a bridge across real processes.
 pub mod helper_process_transport {
-    pub use super::compiler::compiler_ops::subprocess_bridge::{
-        ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
-        HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
-        SubprocessBridgeLinkDelivery, refusal_of_a_link_into_a_helper_process_that_failed,
-        spawn_fd_line_reader,
+    pub use super::compiler::compiler_ops::subprocess_bridge::{ENGINE_BUILD_ID, SubprocessBridge};
+}
+
+/// What a processor interpreter's own side shares with the engine that starts
+/// it: the variables it is named by, the shutdown ladder's budgets, and the
+/// reader of a described node type.
+pub mod processor_interpreter {
+    pub use super::compiler::compiler_ops::processor_interpreter_shutdown_ladder::{
+        CALLBACK_RETURN_BUDGET, CHILD_SELF_EXIT_GRACE, TEARDOWN_BUDGET,
+    };
+    pub use super::compiler::compiler_ops::processor_interpreter_spawn_host::{
+        PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY,
+        PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
+        SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
+    };
+    pub use super::compiler::compiler_ops::python_processor_declaration::{
+        AudioWindowFieldRefusal, PythonProcessorDeclaration,
+        read_a_channel_count_or_the_source_spelling,
     };
 }

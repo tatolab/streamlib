@@ -20,6 +20,7 @@ there. `mypy.stubtest` checks the rest of this file, skipping the names the
 conformance gate prints as its allowlist.
 """
 
+import os
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -110,8 +111,25 @@ class Runtime:
         runtimes hold, naming both.
         """
 
-    def load(self, graph: Mapping[str, Any], *, name: str | None = None) -> None:
+    def load(
+        self,
+        graph: Mapping[str, Any],
+        *,
+        project_directory: str | os.PathLike[str],
+        interpreter: str | os.PathLike[str],
+        name: str | None = None,
+    ) -> None:
         """Load a graph into this Runtime before `run()`.
+
+        `project_directory` and `interpreter` are the stream's environment,
+        each made absolute against the working directory: every processor
+        interpreter is an exec of `interpreter`, run in `project_directory`
+        with the runtime's `tatolab.runtime` lent ahead of the project on its
+        `PYTHONPATH`. Every `type` that is not a built-in is described in that
+        interpreter before anything is added; one that will not import, or
+        names a class `@node` did not stamp, raises `RuntimeError` naming it
+        and quoting the interpreter's standard error. A path that is neither a
+        str nor an `os.PathLike[str]` raises `TypeError`.
 
         `graph` is the mapping `compile_stream_to_graph` returns, or a graph
         `streamlib graph` rendered; anything not a mapping raises `TypeError`.
@@ -368,8 +386,8 @@ def capture_this_helper_processes_engine_log_records() -> None:
     iceoryx2's own included, into the ring
     `drain_the_engine_log_records_this_helper_captured` empties.
 
-    Called by `tatolab.runtime._helper` once its channel to the parent is up and
-    before it opens anything, and by nothing else. Raises on a second call and
+    Called by the processor interpreter bootstrap once its channel to the parent
+    is up and before it opens anything, and by nothing else. Raises on a second call and
     on a process that already has a `tracing` subscriber.
     """
 
@@ -398,8 +416,8 @@ if sys.platform == "darwin":
         `PR_SET_PDEATHSIG`. Either signal shuts `parent_channel_fd` down, so
         the helper reads the end of its channel and runs `stop` and
         `teardown()`; whatever is still alive about six and a half seconds
-        later has its process group killed. Called by `tatolab.runtime._helper`
-        before any processor code runs, and by nothing else. Raises on a
+        later has its process group killed. Called by the processor interpreter
+        bootstrap before any processor code runs, and by nothing else. Raises on a
         second call and when the pid watch cannot be armed.
         """
 

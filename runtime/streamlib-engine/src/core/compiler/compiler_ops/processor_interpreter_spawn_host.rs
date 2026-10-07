@@ -1,58 +1,71 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The engine's half of a Python processor: the child it runs in.
+//! The engine's half of a Python processor: the processor interpreter it runs in.
 //!
 //! One of these sits in the graph where the processor does, and owns nothing
-//! but the child. It has no mailboxes and no writer — the helper opens its own
+//! but the child. It has no mailboxes and no writer — the child opens its own
 //! iceoryx2 ports from the wiring this host forwards — and runs Manual on the
 //! engine's side, because the loop that drives the processor is the child's.
 //!
-//! The spawn target is the app's own interpreter, captured when the `Runtime`
-//! was constructed. That is what makes one venv enough: the child is the same
-//! Python the app is, with the same packages, reached by exec and never by
-//! fork — a forked GPU context is not usable in the child.
+//! The child is an exec of the stream's own venv interpreter, never a fork — a
+//! forked GPU context is not usable in the child — running the bootstrap the
+//! lend directory holds, by path. The lend directory leads `PYTHONPATH`, so the
+//! venv borrows `tatolab.runtime` from the runtime rather than installing it.
 
 use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::helper_process_shutdown_ladder::{
+use super::processor_interpreter_shutdown_ladder::{
     HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,
     a_helper_process_has_exited_without_being_reaped,
 };
-use pyo3::prelude::*;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::descriptors::ProcessorDescriptor;
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution};
-use streamlib::sdk::graph::ProcessorNode;
-use streamlib::sdk::helper_process_transport::{
+use super::subprocess_bridge::{
     ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
     HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
     refusal_of_a_link_into_a_helper_process_that_failed, spawn_fd_line_reader,
 };
-use streamlib::sdk::iceoryx2::{
+use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::descriptors::ProcessorDescriptor;
+use crate::core::error::{Error, Result};
+use crate::core::execution::{ExecutionConfig, ProcessExecution};
+use crate::core::graph::ProcessorNode;
+use crate::core::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
+use crate::core::runtime::StreamEnvironment;
+use crate::iceoryx2::{
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, spawn_outside_every_iceoryx2_listener_bind,
 };
-use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
 
-/// The module CPython is launched with in a helper process.
-const HELPER_PROCESS_MODULE: &str = "tatolab.runtime._helper";
+/// The bootstrap a processor interpreter runs, relative to the lend directory.
+pub const PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY: &str =
+    "tatolab/runtime/_processor_interpreter_bootstrap.py";
 
-/// The environment variable carrying the class import path a helper process hosts.
-const HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENTRYPOINT";
+/// The environment variable carrying the class import path a processor
+/// interpreter hosts.
+const PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENTRYPOINT";
 
-/// The environment variable carrying the id of the processor a helper process hosts.
-pub(crate) const HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_PROCESSOR_ID";
+/// The environment variable carrying the id of the processor a processor
+/// interpreter hosts.
+pub const PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_PROCESSOR_ID";
+
+/// The variable the parent names its surface-share channel to a processor
+/// interpreter in: the Unix socket's path on Linux, the Mach service's name on
+/// macOS.
+#[cfg(not(target_os = "macos"))]
+pub const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
+#[cfg(target_os = "macos")]
+pub const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str =
+    streamlib_surface_client::SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE;
 
 /// How long the child has to import the user's class, open its ports, run
 /// `setup` and report ready before this host gives up and kills it.
 ///
-/// Generous because a cold child imports the whole wheel — but bounded, so a
+/// Generous because a cold child imports the whole runtime — but bounded, so a
 /// class that blocks at import time fails the graph instead of hanging it.
 const REGISTRATION_DEADLINE: Duration = Duration::from_secs(60);
 
@@ -67,8 +80,8 @@ const REGISTRATION_SHUTDOWN_OBSERVATION_INTERVAL: Duration = Duration::from_mill
 /// This bounds the engine's own thread, not the child's work: the callbacks
 /// behind these commands are expected to return promptly, and a child that
 /// needs longer has already broken the contract. Shutdown has its own budgets —
-/// see [`crate::helper_process_shutdown_ladder`], where they are the ladder's
-/// rungs rather than one deadline reused.
+/// see [`super::processor_interpreter_shutdown_ladder`], where they are the
+/// ladder's rungs rather than one deadline reused.
 const REPLY_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long the refusal of a helper that died while setting up waits for the
@@ -79,97 +92,56 @@ const REPLY_DEADLINE: Duration = Duration::from_secs(5);
 const STANDARD_ERROR_CLOSE_DEADLINE: Duration = Duration::from_secs(1);
 
 /// How much of a helper's standard error a refusal carries, from the end.
-const STANDARD_ERROR_TAIL_BYTES: usize = 16 * 1024;
+pub(crate) const STANDARD_ERROR_TAIL_BYTES: usize = 16 * 1024;
 
 // =============================================================================
 // Where a child comes from
 // =============================================================================
 
-/// The interpreter a helper process is an exec of, and the directory its
-/// imports resolve against.
+/// The bootstrap a processor interpreter runs, in `lend_directory`.
+pub(crate) fn processor_interpreter_bootstrap_path(lend_directory: &Path) -> PathBuf {
+    lend_directory.join(PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY)
+}
+
+/// `PYTHONPATH` for a processor interpreter: the lend directory, then the
+/// project directory, and nothing inherited.
 ///
-/// Captured once, from the app's own interpreter, rather than resolved per
-/// spawn: the promise is that a processor's child is the same Python the app
-/// is, and re-deriving that later could pick a different one.
-pub(crate) struct HelperProcessLaunchEnvironment {
-    pub(crate) interpreter_path: PathBuf,
-    /// The directory the app was launched from, carried to the child on
-    /// `PYTHONPATH` so a processor module sitting beside the entry file
-    /// imports there too.
-    pub(crate) app_entry_directory: Option<PathBuf>,
+/// The lend directory holds `tatolab/` with only `runtime/` in it and no
+/// `__init__.py`, so PEP 420 merges the lent `tatolab.runtime` with the venv's
+/// own `tatolab.stream`.
+pub(crate) fn processor_interpreter_python_path(
+    lend_directory: &Path,
+    project_directory: &Path,
+) -> OsString {
+    let mut python_path = OsString::from(lend_directory.as_os_str());
+    python_path.push(":");
+    python_path.push(project_directory.as_os_str());
+    python_path
 }
 
-fn captured_launch_environment() -> &'static OnceLock<HelperProcessLaunchEnvironment> {
-    static CAPTURED_LAUNCH_ENVIRONMENT: OnceLock<HelperProcessLaunchEnvironment> = OnceLock::new();
-    &CAPTURED_LAUNCH_ENVIRONMENT
-}
-
-/// Read `sys.executable` and the app's entry directory, once per process.
-pub(crate) fn capture_helper_process_launch_environment(python: Python<'_>) -> PyResult<()> {
-    if captured_launch_environment().get().is_some() {
-        return Ok(());
-    }
-    let sys = python.import("sys")?;
-    let interpreter_path = PathBuf::from(sys.getattr("executable")?.extract::<String>()?);
-    let app_entry_directory = sys
-        .getattr("path")?
-        .get_item(0)
-        .ok()
-        .and_then(|import_root| import_root.extract::<String>().ok())
-        .and_then(|import_root| app_import_root_directory(&import_root));
-    let _ = captured_launch_environment().set(HelperProcessLaunchEnvironment {
-        interpreter_path,
-        app_entry_directory,
-    });
-    Ok(())
-}
-
-/// The entry directory the capture above found, if the interpreter reported
-/// one. Read by `Runtime()`'s constructor so the engine can name an unnamed
-/// runtime after the app rather than after the shell it was launched from.
-pub(crate) fn captured_app_entry_directory() -> Option<PathBuf> {
-    captured_launch_environment()
-        .get()
-        .and_then(|captured| captured.app_entry_directory.clone())
-}
-
-/// The directory a child should import the app's own modules from.
+/// A command running the processor interpreter bootstrap in `stream_environment`.
 ///
-/// `sys.path[0]` rather than `sys.argv[0]`'s parent, because it is the one slot
-/// both launch paths agree on: CPython puts the script's directory there for a
-/// hand-run `python <script>.py`, and `streamlib run` / `dev` inserts the
-/// directory the entry imports from there before executing it. `sys.argv`
-/// cannot answer this — the launcher narrows it to the entry only for the span
-/// of that execution and restores its own argv in a `finally`, and the
-/// `Runtime` is constructed *after* that, once the launcher has compiled the
-/// entry's `@stream` function. A child would get the wheel's own package
-/// directory and fail to import the app's processors at all.
-///
-/// Empty is `python -c`'s value for the slot and means the working directory,
-/// which the child inherits anyway.
-fn app_import_root_directory(import_root: &str) -> Option<PathBuf> {
-    if import_root.is_empty() {
-        return None;
-    }
-    Path::new(import_root).canonicalize().ok()
-}
-
-pub(crate) fn helper_process_launch_environment() -> Result<&'static HelperProcessLaunchEnvironment>
-{
-    captured_launch_environment().get().ok_or_else(|| {
-        Error::Runtime(
-            "no interpreter was captured to spawn helper processes with; a Runtime must exist \
-             before a Python processor can be added to a graph"
-                .to_string(),
+/// `PYTHONHOME` is removed because the interpreter is named by absolute path,
+/// and one inherited from a differently laid-out install would only send it
+/// looking for the wrong standard library.
+pub(crate) fn processor_interpreter_bootstrap_command(
+    stream_environment: &StreamEnvironment,
+    lend_directory: &Path,
+) -> Command {
+    let mut command = Command::new(&stream_environment.interpreter);
+    command
+        .arg(processor_interpreter_bootstrap_path(lend_directory))
+        .current_dir(&stream_environment.project_directory)
+        .env_remove("PYTHONHOME")
+        .env(
+            "PYTHONPATH",
+            processor_interpreter_python_path(
+                lend_directory,
+                &stream_environment.project_directory,
+            ),
         )
-    })
-}
-
-/// The engine build id compiled into this extension, which a helper process
-/// compares with the id its parent handed it before it opens anything.
-#[pyfunction]
-pub(crate) fn engine_build_id_compiled_into_this_extension() -> &'static str {
-    ENGINE_BUILD_ID
+        .env(ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, ENGINE_BUILD_ID);
+    command
 }
 
 // =============================================================================
@@ -183,7 +155,7 @@ pub(crate) struct SurfaceShareChannelNamedToTheHelperProcess<'a> {
     pub(crate) channel_name: &'a std::ffi::OsStr,
 }
 
-pub(crate) struct PythonHelperProcessSpawnHostProcessor {
+pub(crate) struct ProcessorInterpreterSpawnHostProcessor {
     /// `module:qualname` — what the child imports the class back by, and what
     /// it receives as `STREAMLIB_ENTRYPOINT`.
     processor_class_import_path: String,
@@ -191,8 +163,11 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     processor_id: String,
     processor_configuration: Option<serde_json::Value>,
     descriptor: ProcessorDescriptor,
-    interpreter_path: PathBuf,
-    app_entry_directory: Option<PathBuf>,
+    /// The stream's project directory and venv interpreter, recorded at the
+    /// load that registered this processor's type.
+    stream_environment: StreamEnvironment,
+    /// The directory holding the `tatolab/runtime/` the child borrows.
+    processor_interpreter_lend_directory: PathBuf,
     child: Option<Child>,
     /// The engine-owned iceoryx2 domain this processor's nodes live in, kept
     /// from `setup` because the sweep that reclaims a dead helper's nodes runs
@@ -213,10 +188,10 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     /// any process on the machine.
     #[cfg(target_os = "macos")]
     surface_share_admission_of_the_helper_process:
-        Option<streamlib::sdk::engine::apple_surface_share::SurfaceShareHelperProcessAdmission>,
+        Option<crate::apple::surface_share::SurfaceShareHelperProcessAdmission>,
 }
 
-impl PythonHelperProcessSpawnHostProcessor {
+impl ProcessorInterpreterSpawnHostProcessor {
     /// Build the command that becomes the child.
     ///
     /// Separate from the spawn so what a child inherits is assertable without
@@ -227,35 +202,30 @@ impl PythonHelperProcessSpawnHostProcessor {
         iceoryx2_domain_root: &Path,
         surface_share_channel: Option<SurfaceShareChannelNamedToTheHelperProcess<'_>>,
     ) -> Command {
-        let mut command = Command::new(&self.interpreter_path);
+        let mut command = processor_interpreter_bootstrap_command(
+            &self.stream_environment,
+            &self.processor_interpreter_lend_directory,
+        );
         command
-            .arg("-m")
-            .arg(HELPER_PROCESS_MODULE)
             // The child never reads stdin; its fd1/fd2 are captured as
             // intercepted log pipes, and the framed protocol rides its own
             // socket so neither can corrupt it.
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            // The app's interpreter was found by absolute path, so a
-            // PYTHONHOME inherited from a differently-laid-out install would
-            // only send the child looking for the wrong standard library.
-            .env_remove("PYTHONHOME")
-            .env("PYTHONPATH", self.child_python_path())
             .env(
-                HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE,
+                PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE,
                 &self.processor_class_import_path,
             )
             .env(
-                HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
+                PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
                 &self.processor_id,
             )
             .env("STREAMLIB_RUNTIME_ID", runtime_id)
             .env(
                 ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
                 iceoryx2_domain_root,
-            )
-            .env(ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, ENGINE_BUILD_ID);
+            );
         if let Some(surface_share_channel) = surface_share_channel {
             command.env(
                 surface_share_channel.environment_variable,
@@ -269,21 +239,6 @@ impl PythonHelperProcessSpawnHostProcessor {
         // owed is handed back after this sweep has marked everything.
         give_the_child_no_descriptor_beyond_stdio(&mut command);
         command
-    }
-
-    /// `PYTHONPATH` for the child: the app's entry directory ahead of whatever
-    /// this process already carried.
-    fn child_python_path(&self) -> String {
-        let mut entries: Vec<String> = Vec::new();
-        if let Some(app_entry_directory) = self.app_entry_directory.as_ref() {
-            entries.push(app_entry_directory.to_string_lossy().into_owned());
-        }
-        if let Ok(inherited) = std::env::var("PYTHONPATH") {
-            if !inherited.is_empty() {
-                entries.push(inherited);
-            }
-        }
-        entries.join(":")
     }
 
     /// The mode string the child drives its own loop in.
@@ -412,11 +367,10 @@ impl PythonHelperProcessSpawnHostProcessor {
         // already raised when a helper starts belongs to a run that has not
         // taken it yet — and reading that as "shutdown began" would refuse
         // every helper a later graph in this process adds.
-        let shutdown_was_already_requested =
-            streamlib::sdk::runtime::is_runtime_shutdown_requested();
+        let shutdown_was_already_requested = crate::core::runtime::is_runtime_shutdown_requested();
         let reply = loop {
             if !shutdown_was_already_requested
-                && streamlib::sdk::runtime::is_runtime_shutdown_requested()
+                && crate::core::runtime::is_runtime_shutdown_requested()
             {
                 // A helper still importing when shutdown begins must not hold
                 // the app for the rest of a sixty-second budget. It goes on the
@@ -603,7 +557,7 @@ impl PythonHelperProcessSpawnHostProcessor {
         let Some(iceoryx2_domain_root) = self.iceoryx2_domain_root.as_deref() else {
             return;
         };
-        match streamlib::sdk::iceoryx2::reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
+        match crate::iceoryx2::reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
             iceoryx2_domain_root,
         ) {
             Ok(reclaimed_node_count) if reclaimed_node_count > 0 => tracing::info!(
@@ -643,16 +597,14 @@ impl PythonHelperProcessSpawnHostProcessor {
     ) -> Result<()> {
         #[cfg(target_os = "linux")]
         let surface_share_channel = Some(SurfaceShareChannelNamedToTheHelperProcess {
-            environment_variable:
-                crate::python_processor_context::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
+            environment_variable: SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
             channel_name: ctx.surface_socket_path().as_os_str(),
         });
         #[cfg(target_os = "macos")]
         let surface_share_mach_service_rendezvous = ctx.surface_share_mach_service_rendezvous();
         #[cfg(target_os = "macos")]
         let surface_share_channel = Some(SurfaceShareChannelNamedToTheHelperProcess {
-            environment_variable:
-                crate::python_processor_context::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
+            environment_variable: SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
             channel_name: std::ffi::OsStr::new(
                 surface_share_mach_service_rendezvous.service_name(),
             ),
@@ -692,10 +644,11 @@ impl PythonHelperProcessSpawnHostProcessor {
         let spawned_helper_process = spawn_outside_every_iceoryx2_listener_bind(&mut command);
         let mut child = spawned_helper_process.map_err(|spawn_failure| {
             Error::Runtime(format!(
-                "[{}] could not start its helper process with `{} -m {HELPER_PROCESS_MODULE}`: \
-                 {spawn_failure}",
+                "[{}] could not start its processor interpreter `{} {}`: {spawn_failure}",
                 self.processor_display_name,
-                self.interpreter_path.display(),
+                self.stream_environment.interpreter.display(),
+                processor_interpreter_bootstrap_path(&self.processor_interpreter_lend_directory)
+                    .display(),
             ))
         })?;
         // At once: a connect that arrives before its admission waits for it,
@@ -716,7 +669,7 @@ impl PythonHelperProcessSpawnHostProcessor {
             self.processor_class_import_path,
         );
         // `pre_exec` made the child the leader of a group whose id is its pid.
-        if !streamlib::sdk::runtime::register_a_helper_process_group(child.id() as i32) {
+        if !crate::core::runtime::register_a_helper_process_group(child.id() as i32) {
             tracing::warn!(
                 "[{}] its helper process group could not be registered, so a third interrupt \
                  will not kill it; the kernel still kills the helper itself when the app exits",
@@ -955,7 +908,7 @@ fn spawn_standard_error_reader_keeping_its_tail<R: Read + Send + 'static>(
 /// a `SIGKILL`ed parent leaves no orphans — and the `getppid` recheck closes
 /// the window where the parent died between fork and that call, which would
 /// otherwise arm a signal that never fires.
-fn detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(command: &mut Command) {
+pub(super) fn detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(command: &mut Command) {
     use std::os::unix::process::CommandExt;
 
     let spawning_process_id = std::process::id() as libc::pid_t;
@@ -1003,7 +956,7 @@ const DESCRIPTOR_SWEEP_FALLBACK_CEILING: u64 = 65_536;
 /// Marked close-on-exec rather than closed, because std's own machinery is
 /// still using descriptors here: the pipe it reports a failed `exec` on is one
 /// of them, and closing it would make a failure to start read as a success.
-fn give_the_child_no_descriptor_beyond_stdio(command: &mut Command) {
+pub(super) fn give_the_child_no_descriptor_beyond_stdio(command: &mut Command) {
     use std::os::unix::process::CommandExt;
 
     // Read here rather than in the child: `getrlimit` is not on POSIX's
@@ -1100,7 +1053,7 @@ unsafe fn mark_each_descriptor_past_stdio_close_on_exec(highest_descriptor: libc
     }
 }
 
-impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
+impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
     fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.set_up_holding_every_later_link_until_the_setup_command_goes_out(|host| {
             host.start_the_helper_process_and_await_its_registration(ctx)
@@ -1221,21 +1174,21 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
 
     fn set_iceoryx2_resources(
         &mut self,
-        _output_writer: Option<streamlib::sdk::iceoryx2::OutputWriter>,
-        _input_mailboxes: Option<streamlib::sdk::iceoryx2::InputMailboxes>,
+        _output_writer: Option<crate::iceoryx2::OutputWriter>,
+        _input_mailboxes: Option<crate::iceoryx2::InputMailboxes>,
     ) -> Result<()> {
         Ok(())
     }
 
     fn iceoryx2_output_writer_inner(
         &self,
-    ) -> Option<std::sync::Arc<streamlib::sdk::iceoryx2::OutputWriterInner>> {
+    ) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriterInner>> {
         None
     }
 
     fn iceoryx2_input_mailboxes_inner(
         &self,
-    ) -> Option<std::sync::Arc<streamlib::sdk::iceoryx2::InputMailboxesInner>> {
+    ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>> {
         None
     }
 
@@ -1269,7 +1222,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         serde_json::json!({
             "helper_process_pid": self.child.as_ref().map(|child| child.id()),
             "entrypoint": self.processor_class_import_path,
-            "interpreter": self.interpreter_path.to_string_lossy(),
+            "interpreter": self.stream_environment.interpreter.to_string_lossy(),
             "helper_process_is_gone": self.child_is_gone,
         })
     }
@@ -1285,7 +1238,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     }
 }
 
-impl Drop for PythonHelperProcessSpawnHostProcessor {
+impl Drop for ProcessorInterpreterSpawnHostProcessor {
     /// Last resort for the paths teardown never reached — a failed graph
     /// compile, a panic. A child outliving its host would hold this
     /// processor's iceoryx2 ports open against the next run.
@@ -1296,22 +1249,25 @@ impl Drop for PythonHelperProcessSpawnHostProcessor {
     }
 }
 
-/// Build the host for one graph node.
+/// Build the host for one graph node, launching its child in
+/// `stream_environment` with `tatolab.runtime` lent from
+/// `processor_interpreter_lend_directory`.
 pub(crate) fn spawn_host_for_processor_node(
     processor_class_import_path: &str,
     descriptor: &ProcessorDescriptor,
     child_execution_config: ExecutionConfig,
     node: &ProcessorNode,
-) -> Result<PythonHelperProcessSpawnHostProcessor> {
-    let launch_environment = helper_process_launch_environment()?;
-    Ok(PythonHelperProcessSpawnHostProcessor {
+    stream_environment: &StreamEnvironment,
+    processor_interpreter_lend_directory: &Path,
+) -> ProcessorInterpreterSpawnHostProcessor {
+    ProcessorInterpreterSpawnHostProcessor {
         processor_class_import_path: processor_class_import_path.to_string(),
         processor_display_name: node.display_name.clone(),
         processor_id: node.id.to_string(),
         processor_configuration: node.config.clone(),
         descriptor: descriptor.clone(),
-        interpreter_path: launch_environment.interpreter_path.clone(),
-        app_entry_directory: launch_environment.app_entry_directory.clone(),
+        stream_environment: stream_environment.clone(),
+        processor_interpreter_lend_directory: processor_interpreter_lend_directory.to_path_buf(),
         child: None,
         iceoryx2_domain_root: None,
         child_standard_error_tail: None,
@@ -1323,7 +1279,7 @@ pub(crate) fn spawn_host_for_processor_node(
         )),
         #[cfg(target_os = "macos")]
         surface_share_admission_of_the_helper_process: None,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1434,7 +1390,7 @@ if os.fork() == 0:
         if let Some(domain_root) =
             std::env::var_os(DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
         {
-            let _node = streamlib::sdk::iceoryx2::Iceoryx2Node::new(
+            let _node = crate::iceoryx2::Iceoryx2Node::new(
                 Path::new(&domain_root),
                 "streamlib-test/host-sweep-placement",
             )
@@ -1451,20 +1407,20 @@ if os.fork() == 0:
 
         // Named from this test process's own pid rather than through a
         // temp-directory crate, so the one test needing a private domain adds
-        // no dependency to the wheel.
+        // no dependency to the engine.
         // `/tmp` rather than `std::env::temp_dir()`: on macOS that is a
         // `/var/folders/...` path long enough to overrun the budget iceoryx2's
         // socket paths leave a domain root.
         let domain = Path::new("/tmp").join(format!("streamlib-host-sweep-{}", std::process::id()));
         let domain_root = domain.join("iox2");
-        streamlib::sdk::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
             &domain_root,
-            streamlib::sdk::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         )
         .expect("a private domain root");
         let dead_node_owner = Command::new(std::env::current_exe().unwrap())
             .args([
-                "python_helper_process_spawn_host::tests::\
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::\
                  a_helper_exit_reclaims_the_iceoryx2_nodes_it_left_whatever_ended_it",
                 "--exact",
                 "--test-threads=1",
@@ -1486,7 +1442,7 @@ if os.fork() == 0:
         );
 
         // A host whose own helper has already left, closed the ordinary way.
-        let mut host = spawn_host_for_test(None);
+        let mut host = spawn_host_for_test();
         host.iceoryx2_domain_root = Some(domain_root.clone());
         host.child = Some(
             Command::new("true")
@@ -1497,10 +1453,8 @@ if os.fork() == 0:
         host.take_the_helper_process_group_down();
 
         let left_for_somebody_else =
-            streamlib::sdk::iceoryx2::reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
-                &domain_root,
-            )
-            .expect("the domain can be swept");
+            crate::iceoryx2::reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(&domain_root)
+                .expect("the domain can be swept");
         std::fs::remove_dir_all(&domain).ok();
 
         assert_eq!(
@@ -1521,7 +1475,7 @@ if os.fork() == 0:
         // registration path waits out both budgets for replies to commands
         // that were never sent, then warns that a teardown it never asked for
         // did not finish.
-        let mut host = spawn_host_for_test(None);
+        let mut host = spawn_host_for_test();
         assert!(!host.shutdown_was_already_asked_of_this_helper);
 
         // With no bridge the ask short-circuits before its sends, so the flag
@@ -1652,36 +1606,35 @@ sys.exit(0)
             .map(|(_, value)| value.as_str())
     }
 
-    fn spawn_host_for_test(
-        app_entry_directory: Option<PathBuf>,
-    ) -> PythonHelperProcessSpawnHostProcessor {
-        PythonHelperProcessSpawnHostProcessor {
-            processor_class_import_path: "my_app.filters:BlurProcessor".to_string(),
-            processor_display_name: "BlurProcessor".to_string(),
-            processor_id: "Pblur".to_string(),
-            processor_configuration: None,
-            descriptor: ProcessorDescriptor::new(
-                streamlib::sdk::descriptors::ProcessorClassShortName::new("BlurProcessor").unwrap(),
-                streamlib::sdk::descriptors::ProcessorClassImportPath::new(
-                    "my_app.filters:BlurProcessor",
-                )
-                .unwrap(),
+    /// The stream environment every test host launches in.
+    fn stream_environment_for_test() -> StreamEnvironment {
+        StreamEnvironment {
+            project_directory: PathBuf::from("/home/someone/my_app"),
+            interpreter: PathBuf::from("/home/someone/my_app/.venv/bin/python"),
+        }
+    }
+
+    const LEND_DIRECTORY_FOR_TEST: &str = "/opt/tatolab/lib/tatolab/lend";
+
+    fn spawn_host_for_test() -> ProcessorInterpreterSpawnHostProcessor {
+        let import_path =
+            crate::core::descriptors::ProcessorClassImportPath::new("my_app.filters:BlurProcessor")
+                .unwrap();
+        let node = ProcessorNode::new(import_path.clone(), "BlurProcessor", None, vec![], vec![]);
+        let mut host = spawn_host_for_processor_node(
+            "my_app.filters:BlurProcessor",
+            &ProcessorDescriptor::new(
+                crate::core::descriptors::ProcessorClassShortName::new("BlurProcessor").unwrap(),
+                import_path,
                 "a test double",
             ),
-            interpreter_path: PathBuf::from("/venv/bin/python"),
-            app_entry_directory,
-            child: None,
-            iceoryx2_domain_root: None,
-            child_standard_error_tail: None,
-            bridge: None,
-            child_is_gone: false,
-            shutdown_was_already_asked_of_this_helper: false,
-            link_wiring: Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
-                ProcessExecution::Reactive,
-            )),
-            #[cfg(target_os = "macos")]
-            surface_share_admission_of_the_helper_process: None,
-        }
+            ExecutionConfig::new(ProcessExecution::Reactive),
+            &node,
+            &stream_environment_for_test(),
+            Path::new(LEND_DIRECTORY_FOR_TEST),
+        );
+        host.processor_id = "Pblur".to_string();
+        host
     }
 
     /// The child is told to run its loop in the mode the envelope carries, and
@@ -1692,17 +1645,12 @@ sys.exit(0)
     /// `continuous` helper is told to run a reactive loop.
     #[test]
     fn the_wiring_envelope_carries_the_mode_the_child_drives_its_processor_in() {
-        let _ = captured_launch_environment().set(HelperProcessLaunchEnvironment {
-            interpreter_path: PathBuf::from("/venv/bin/python"),
-            app_entry_directory: None,
-        });
-        let import_path = streamlib::sdk::descriptors::ProcessorClassImportPath::new(
+        let import_path = crate::core::descriptors::ProcessorClassImportPath::new(
             "my_app.sinks:PollingSinkProcessor",
         )
         .unwrap();
         let descriptor = ProcessorDescriptor::new(
-            streamlib::sdk::descriptors::ProcessorClassShortName::new("PollingSinkProcessor")
-                .unwrap(),
+            crate::core::descriptors::ProcessorClassShortName::new("PollingSinkProcessor").unwrap(),
             import_path.clone(),
             "a test double",
         );
@@ -1718,8 +1666,9 @@ sys.exit(0)
                 &descriptor,
                 ExecutionConfig::new(child_execution),
                 &node,
-            )
-            .expect("the launch environment is captured");
+                &stream_environment_for_test(),
+                Path::new(LEND_DIRECTORY_FOR_TEST),
+            );
             assert_eq!(
                 host.out_of_process_link_wiring()
                     .expect("a helper host carries an envelope")
@@ -1740,13 +1689,13 @@ sys.exit(0)
     fn a_late_link_into_a_helper_the_host_gave_up_on_is_refused_and_one_before_setup_is_not() {
         let link_wiring = serde_json::json!({"link_id": "L-late", "name": "frames_from_upstream"});
 
-        let mut failed = spawn_host_for_test(None);
+        let mut failed = spawn_host_for_test();
         failed.give_up_on_the_helper_process();
         let refused = failed
             .out_of_process_link_wiring()
             .expect("a helper host carries an envelope")
             .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
-                streamlib::sdk::error::PortDirection::Input,
+                crate::core::error::PortDirection::Input,
                 link_wiring.clone(),
             )
             .expect_err("a dead child can open no port");
@@ -1755,12 +1704,12 @@ sys.exit(0)
             "the refusal names the failure; got {refused}"
         );
 
-        let not_yet_set_up = spawn_host_for_test(None);
+        let not_yet_set_up = spawn_host_for_test();
         let carried = not_yet_set_up
             .out_of_process_link_wiring()
             .expect("a helper host carries an envelope")
             .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
-                streamlib::sdk::error::PortDirection::Input,
+                crate::core::error::PortDirection::Input,
                 link_wiring,
             )
             .expect("before setup the envelope carries the link");
@@ -1778,7 +1727,7 @@ sys.exit(0)
     /// never goes out; drop the give-up and it reads pending for good.
     #[test]
     fn a_link_held_during_a_setup_that_fails_is_refused_rather_than_left_pending() {
-        let mut host = spawn_host_for_test(None);
+        let mut host = spawn_host_for_test();
         let mut held_answer_cell = None;
 
         host.set_up_holding_every_later_link_until_the_setup_command_goes_out(|host| {
@@ -1786,7 +1735,7 @@ sys.exit(0)
                 .out_of_process_link_wiring()
                 .expect("a helper host carries an envelope")
                 .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
-                    streamlib::sdk::error::PortDirection::Input,
+                    crate::core::error::PortDirection::Input,
                     serde_json::json!({"link_id": "L-live", "name": "frames_from_upstream"}),
                 )
                 .expect("a helper still setting up takes the link");
@@ -1799,37 +1748,44 @@ sys.exit(0)
         let held_answer_cell =
             held_answer_cell.expect("a link recorded during setup waits on its own answer");
         match held_answer_cell.the_far_sides_answer() {
-            Some(
-                streamlib::sdk::processors::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
-                    reason,
-                },
-            ) => assert!(reason.contains("has failed"), "{reason}"),
+            Some(crate::core::processors::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                reason,
+            }) => assert!(reason.contains("has failed"), "{reason}"),
             unanswered_or_opened => {
                 panic!("the held link must be refused; got {unanswered_or_opened:?}")
             }
         }
     }
 
-    /// The child is an exec of the app's own interpreter running the helper
-    /// module — never a fork, and never some other Python found on `PATH`.
+    /// The child is an exec of the stream's own venv interpreter running the
+    /// bootstrap the lend directory holds, by path — never `-m`, never `-c`,
+    /// never a fork, and never some other Python found on `PATH`.
     #[test]
-    fn the_child_is_the_apps_own_interpreter_running_the_helper_module() {
-        let command = spawn_host_for_test(None).build_helper_process_command(
+    fn the_child_is_the_streams_interpreter_running_the_lent_bootstrap_by_path() {
+        let command = spawn_host_for_test().build_helper_process_command(
             "Rtest",
             Path::new("/tmp/streamlib-1000/iox2"),
             None,
         );
-        assert_eq!(command.get_program(), OsStr::new("/venv/bin/python"));
+        assert_eq!(
+            command.get_program(),
+            OsStr::new("/home/someone/my_app/.venv/bin/python")
+        );
         let arguments: Vec<_> = command.get_args().collect();
-        assert_eq!(arguments, ["-m", "tatolab.runtime._helper"]);
+        assert_eq!(
+            arguments,
+            [OsStr::new(
+                "/opt/tatolab/lib/tatolab/lend/tatolab/runtime/_processor_interpreter_bootstrap.py"
+            )]
+        );
     }
 
     /// The class the child imports, and the identifiers it reports itself by,
     /// travel in the environment. `STREAMLIB_ENTRYPOINT` *is* the import path
-    /// `stream_builder.add` derived and refused an unimportable class by.
+    /// the type was described under.
     #[test]
     fn the_child_is_told_which_class_to_import_and_who_it_is() {
-        let command = spawn_host_for_test(None).build_helper_process_command(
+        let command = spawn_host_for_test().build_helper_process_command(
             "Rtest",
             Path::new("/tmp/streamlib-1000/iox2"),
             None,
@@ -1853,7 +1809,7 @@ sys.exit(0)
     /// the two always share one domain whatever the child's working directory.
     #[test]
     fn the_child_is_handed_the_parents_iceoryx2_domain_root() {
-        let command = spawn_host_for_test(None).build_helper_process_command(
+        let command = spawn_host_for_test().build_helper_process_command(
             "Rtest",
             Path::new("/tmp/streamlib-1000/iox2"),
             None,
@@ -1869,7 +1825,7 @@ sys.exit(0)
     /// and refuses to start unless the engine it imports carries the same one.
     #[test]
     fn the_child_is_handed_the_engine_build_id_it_must_match() {
-        let command = spawn_host_for_test(None).build_helper_process_command(
+        let command = spawn_host_for_test().build_helper_process_command(
             "Rtest",
             Path::new("/tmp/streamlib-1000/iox2"),
             None,
@@ -1886,7 +1842,7 @@ sys.exit(0)
     /// name on macOS — and a helper started without one is told nothing.
     #[test]
     fn the_child_is_handed_the_surface_share_channel_under_its_variable() {
-        let spawn_host = spawn_host_for_test(None);
+        let spawn_host = spawn_host_for_test();
         let command = spawn_host.build_helper_process_command(
             "Rtest",
             Path::new("/tmp/streamlib-1000/iox2"),
@@ -1933,7 +1889,7 @@ sys.exit(0)
             .stderr(Stdio::piped())
             .spawn()
             .expect("sh starts");
-        let mut host = spawn_host_for_test(None);
+        let mut host = spawn_host_for_test();
         host.child_standard_error_tail = Some(spawn_standard_error_reader_keeping_its_tail(
             child.stderr.take().expect("stderr is piped"),
             "Pblur",
@@ -2018,20 +1974,59 @@ sys.exit(0)
         );
     }
 
-    /// The app's import root leads the child's `PYTHONPATH`, which is the only
-    /// reason a processor module sitting beside the entry file is importable
-    /// in a child launched from somewhere else entirely.
+    /// The lend directory leads the child's `PYTHONPATH` so the venv borrows
+    /// `tatolab.runtime`, and the project directory follows so a processor
+    /// module sitting in the project imports — and nothing else is on it.
     #[test]
-    fn the_apps_import_root_leads_the_childs_python_path() {
-        let app_entry_directory = std::env::temp_dir();
-        let command = spawn_host_for_test(Some(app_entry_directory.clone()))
-            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None);
-        let environment = environment_of(&command);
-        let python_path = value_of(&environment, "PYTHONPATH").expect("PYTHONPATH is set");
+    fn the_childs_python_path_is_the_lend_directory_then_the_project_exactly() {
+        let command = spawn_host_for_test().build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
         assert_eq!(
-            python_path.split(':').next(),
-            Some(app_entry_directory.to_string_lossy().as_ref()),
-            "the app's own modules must resolve before anything inherited"
+            value_of(&environment_of(&command), "PYTHONPATH"),
+            Some("/opt/tatolab/lib/tatolab/lend:/home/someone/my_app")
+        );
+    }
+
+    /// A `PYTHONPATH` the runtime process was started with names the runtime
+    /// process's own imports, which the stream's interpreter must not see.
+    #[test]
+    fn an_inherited_python_path_is_not_passed_to_the_child() {
+        let command = spawn_host_for_test().build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
+        let python_path_entries: Vec<_> = command
+            .get_envs()
+            .filter(|(name, _)| *name == OsStr::new("PYTHONPATH"))
+            .collect();
+        assert_eq!(
+            python_path_entries,
+            [(
+                OsStr::new("PYTHONPATH"),
+                Some(OsStr::new(
+                    "/opt/tatolab/lib/tatolab/lend:/home/someone/my_app"
+                ))
+            )],
+            "the child's PYTHONPATH is set outright, so nothing inherited is appended"
+        );
+    }
+
+    /// The child runs in the project directory, so a relative path a node
+    /// opens resolves where the stream's author put it.
+    #[test]
+    fn the_childs_working_directory_is_the_project() {
+        let command = spawn_host_for_test().build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
+        assert_eq!(
+            command.get_current_dir(),
+            Some(Path::new("/home/someone/my_app"))
         );
     }
 
@@ -2040,7 +2035,7 @@ sys.exit(0)
     /// it would only send the child looking for the wrong standard library.
     #[test]
     fn an_inherited_python_home_is_not_passed_to_the_child() {
-        let command = spawn_host_for_test(None).build_helper_process_command(
+        let command = spawn_host_for_test().build_helper_process_command(
             "Rtest",
             Path::new("/tmp/streamlib-1000/iox2"),
             None,
@@ -2050,19 +2045,5 @@ sys.exit(0)
             .filter(|(name, value)| *name == OsStr::new("PYTHONHOME") && value.is_none())
             .collect();
         assert_eq!(cleared.len(), 1, "PYTHONHOME must be explicitly removed");
-    }
-
-    /// `sys.path[0]`, not `sys.argv[0]`: the launcher restores its own argv
-    /// before the `Runtime` is built, so an argv-derived root is the wheel's
-    /// own package directory and the child cannot import the app at all.
-    #[test]
-    fn an_empty_import_root_is_no_root_rather_than_the_filesystem_root() {
-        assert!(app_import_root_directory("").is_none());
-        assert!(app_import_root_directory("/definitely/not/a/real/path").is_none());
-        let real = std::env::temp_dir();
-        assert_eq!(
-            app_import_root_directory(&real.to_string_lossy()),
-            real.canonicalize().ok()
-        );
     }
 }

@@ -10,6 +10,7 @@ mod helper_process_group_registry;
 mod local_processor_type_registration;
 mod operations;
 mod operations_runtime;
+mod processor_interpreter_launch_record;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
 #[allow(clippy::module_inception)]
 mod runtime;
@@ -18,6 +19,7 @@ mod runtime_shutdown_request;
 mod runtime_unique_id;
 mod stated_configuration_value;
 mod status;
+mod stream_environment;
 mod streamlib_runtime_directory;
 mod surface_image_exchange;
 mod tap;
@@ -53,6 +55,7 @@ pub use runtime_shutdown_request::{
 };
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
+pub use stream_environment::StreamEnvironment;
 pub use streamlib_runtime_directory::StreamlibRuntimeDirectory;
 pub(crate) use streamlib_runtime_directory::current_process_uid;
 pub use surface_image_exchange::ExchangedPublishedSurfaceFramePngImage;

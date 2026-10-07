@@ -1,441 +1,90 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Reading the `@node` grammar off a Python class.
-//!
-//! The `__tatolab_node_*__` attributes the decorator attaches are the
-//! contract between `tatolab/stream/_node_declaration.py` and this module; each
-//! stamp const here is named after its `NODE_DECLARATION_*_STAMP` counterpart
-//! there, and the two move together.
+//! Reading an `audio_window` channel count off a Python value, through the
+//! engine's one parser of the stamp shape.
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyList};
-use streamlib::sdk::descriptors::{
-    AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
-    AudioWindowContractDeclaredValues, PortDescriptor, ProcessorClassImportPath,
-    ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
-};
-use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
+use streamlib::sdk::processor_interpreter::AudioWindowFieldRefusal;
 
-use crate::python_bag_conversion::{
-    python_object_to_json_value, python_type_name_for_error_message,
-};
-use crate::python_processor_import_path::processor_class_import_path;
-
-const NODE_DECLARATION_CONFIG_SCHEMA_STAMP: &str = "__tatolab_node_config_schema__";
-const NODE_DECLARATION_DESCRIPTION_STAMP: &str = "__tatolab_node_description__";
-const NODE_DECLARATION_EXECUTION_STAMP: &str = "__tatolab_node_execution__";
-const NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP: &str = "__tatolab_node_scheduling_priority__";
-const NODE_DECLARATION_INPUT_PORTS_STAMP: &str = "__tatolab_node_input_ports__";
-const NODE_DECLARATION_OUTPUT_PORTS_STAMP: &str = "__tatolab_node_output_ports__";
-
-/// Everything the engine needs to register and instantiate one Python
-/// processor class.
-pub(crate) struct PythonProcessorDeclaration {
-    pub(crate) descriptor: ProcessorDescriptor,
-    pub(crate) execution_config: ExecutionConfig,
-}
-
-impl PythonProcessorDeclaration {
-    /// Read the decorator's metadata off `processor_class`.
-    pub(crate) fn read_from_class(processor_class: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let class_short_name = read_class_short_name(processor_class)?;
-        let execution_config = read_execution_config(processor_class)?;
-
-        // Identity and `entrypoint` are separate contracts, but one
-        // derivation: a second call is a second chance for them to disagree.
-        let class_import_path = processor_class_import_path(processor_class)?;
-
-        let mut descriptor = ProcessorDescriptor::new(
-            class_short_name,
-            ProcessorClassImportPath::new(class_import_path.clone())
-                .map_err(|blank| PyValueError::new_err(blank.to_string()))?,
-            read_string_attribute(processor_class, NODE_DECLARATION_DESCRIPTION_STAMP)?,
-        )
-        .with_runtime(ProcessorRuntime::Python)
-        .with_entrypoint(class_import_path)
-        .with_scheduling(ProcessorScheduling {
-            priority: read_thread_priority(processor_class)?,
-        })
-        .with_config_schema(read_config_schema_document(processor_class)?);
-
-        descriptor.inputs = read_port_descriptors(processor_class, PortDirection::Input)?;
-        descriptor.outputs = read_port_descriptors(processor_class, PortDirection::Output)?;
-
-        Ok(Self {
-            descriptor,
-            execution_config,
-        })
-    }
-}
-
-/// The class's short name — what an instance's display name defaults to.
-///
-/// `__name__` is CPython's own short name for the class (`Inner` for a nested
-/// `Outer.Inner`), so it needs no string surgery. The import path is the
-/// separate `__module__`/`__qualname__` derivation; neither is recovered from
-/// the other.
-fn read_class_short_name(processor_class: &Bound<'_, PyAny>) -> PyResult<ProcessorClassShortName> {
-    let short_name = processor_class.getattr("__name__")?.extract::<String>()?;
-    ProcessorClassShortName::new(short_name)
-        .map_err(|blank| PyValueError::new_err(blank.to_string()))
-}
-
-/// The JSON Schema the decorator derived from the class's config class.
-///
-/// Derived in Python, where the config class is, and carried across as the
-/// document the catalog serves — the engine never re-derives it and never
-/// inspects it.
-fn read_config_schema_document(processor_class: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
-    let stamped = processor_class.getattr(NODE_DECLARATION_CONFIG_SCHEMA_STAMP)?;
-    // Refused here rather than by the converter, whose own messages are
-    // written for a bag on the data plane and would tell a processor author
-    // about GPU frames.
-    let document = stamped.clone().cast_into::<PyDict>().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "{NODE_DECLARATION_CONFIG_SCHEMA_STAMP} must be a JSON object, got a {} — the \
-             decorator derives this document, so a class reaching here was built by hand \
-             rather than by @tatolab.stream.node",
-            python_type_name_for_error_message(&stamped, "value of unknown type")
-        ))
-    })?;
-    python_object_to_json_value(document.as_any())
-}
-
-fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<ExecutionConfig> {
-    let execution = processor_class
-        .getattr(NODE_DECLARATION_EXECUTION_STAMP)?
-        .cast_into::<PyDict>()
-        .map_err(|_| {
-            PyTypeError::new_err(format!("{NODE_DECLARATION_EXECUTION_STAMP} must be a dict"))
-        })?;
-
-    let mode = read_dict_string(&execution, "mode")?;
-    let execution = match mode.as_str() {
-        "reactive" => ProcessExecution::Reactive,
-        "manual" => ProcessExecution::Manual,
-        "continuous" => ProcessExecution::Continuous {
-            interval_ms: execution.get_item("interval_ms")?.map_or(Ok(0), |value| {
-                value.extract::<u32>().map_err(|_| {
-                    PyTypeError::new_err(format!(
-                        "{NODE_DECLARATION_EXECUTION_STAMP}.interval_ms must be an int"
-                    ))
-                })
-            })?,
-        },
-        unknown => {
-            return Err(PyTypeError::new_err(format!(
-                "unknown execution mode {unknown:?} — the decorator validates this, so a class \
-                 reaching here was built by hand rather than by @tatolab.stream.node"
-            )));
-        }
-    };
-    Ok(ExecutionConfig::new(execution))
-}
-
-fn read_thread_priority(processor_class: &Bound<'_, PyAny>) -> PyResult<ThreadPriority> {
-    let priority = processor_class.getattr(NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP)?;
-    if priority.is_none() {
-        return Ok(ThreadPriority::Normal);
-    }
-    match priority.extract::<String>()?.as_str() {
-        "realtime" => Ok(ThreadPriority::RealTime),
-        "high" => Ok(ThreadPriority::High),
-        "normal" => Ok(ThreadPriority::Normal),
-        unknown => Err(PyTypeError::new_err(format!(
-            "unknown scheduling priority {unknown:?}"
-        ))),
-    }
-}
-
-#[derive(Clone, Copy)]
-enum PortDirection {
-    Input,
-    Output,
-}
-
-impl PortDirection {
-    fn node_declaration_ports_stamp(self) -> &'static str {
-        match self {
-            Self::Input => NODE_DECLARATION_INPUT_PORTS_STAMP,
-            Self::Output => NODE_DECLARATION_OUTPUT_PORTS_STAMP,
-        }
-    }
-}
-
-fn read_port_descriptors(
-    processor_class: &Bound<'_, PyAny>,
-    direction: PortDirection,
-) -> PyResult<Vec<PortDescriptor>> {
-    let ports_stamp = direction.node_declaration_ports_stamp();
-    let declared = processor_class
-        .getattr(ports_stamp)?
-        .cast_into::<PyList>()
-        .map_err(|_| PyTypeError::new_err(format!("{ports_stamp} must be a list")))?;
-
-    let mut ports = Vec::with_capacity(declared.len());
-    for declaration in declared.iter() {
-        let declaration = declaration
-            .cast_into::<PyDict>()
-            .map_err(|_| PyTypeError::new_err(format!("{ports_stamp} must hold dicts")))?;
-
-        let mut port = PortDescriptor::new(
-            read_dict_string(&declaration, "name")?,
-            read_dict_string(&declaration, "description")?,
-            true,
-        );
-        if let Some(delivery_profile) = declaration
-            .get_item("delivery_profile")?
-            .filter(|declared| !declared.is_none())
-        {
-            port = port.with_delivery_profile(delivery_profile.extract::<String>()?);
-        }
-        if let Some(audio_window) = declaration
-            .get_item("audio_window")?
-            .filter(|declared| !declared.is_none())
-        {
-            if matches!(direction, PortDirection::Output) {
-                return Err(PyValueError::new_err(format!(
-                    "output port {:?} declares an audio_window — a producer publishes what \
-                     it has, and only a consuming input port states the window it needs",
-                    port.name
-                )));
-            }
-            let contract = read_audio_window_contract(
-                &audio_window,
-                &port.name,
-                port.delivery_profile.as_deref(),
-            )?;
-            port = port.with_audio_window_contract(contract);
-        }
-        ports.push(port);
-    }
-    Ok(ports)
-}
-
-/// Read one `audio_window` declaration off a Python port marker.
-///
-/// The wheel's own decorator validates first, so this is not the only guard —
-/// it is the guard that holds when the marker was built by something other
-/// than the decorator, and it renders its refusals from the same shared
-/// validator the `#[processor]` grammar uses.
-fn read_audio_window_contract(
-    audio_window: &Bound<'_, PyAny>,
-    port_name: &str,
-    delivery_profile: Option<&str>,
-) -> PyResult<AudioWindowContract> {
-    let declaration = audio_window.cast::<PyDict>().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "input port {port_name:?}: audio_window must be a dict"
-        ))
-    })?;
-
-    streamlib::sdk::descriptors::refuse_audio_window_beside_a_skipping_delivery_profile(
-        delivery_profile,
-    )
-    .map_err(|refusal| PyValueError::new_err(format!("input port {port_name:?}: {refusal}")))?;
-
-    let resolved_from = read_audio_window_string_field(declaration, "resolved_from", port_name)?;
-    match resolved_from.as_str() {
-        "match_device" => Ok(AudioWindowContract::MatchDevice {}),
-        "declaration" => {
-            let values = AudioWindowContractDeclaredValues {
-                sample_rate: read_audio_window_numeric_field(
-                    declaration,
-                    "sample_rate",
-                    port_name,
-                )?,
-                channels: read_audio_window_channel_count(declaration, port_name)?,
-                dtype: read_audio_window_string_field(declaration, "dtype", port_name)?,
-                window_size: read_audio_window_numeric_field(
-                    declaration,
-                    "window_size",
-                    port_name,
-                )?,
-                hop: read_audio_window_numeric_field(declaration, "hop", port_name)?,
-            };
-            values.refuse_if_unhonourable().map_err(|refusal| {
-                PyValueError::new_err(format!("input port {port_name:?}: {refusal}"))
-            })?;
-            Ok(AudioWindowContract::Declaration(values))
-        }
-        other => Err(PyValueError::new_err(format!(
-            "input port {port_name:?}: audio_window `resolved_from` is {other:?} — expected \
-             \"declaration\" or \"match_device\""
-        ))),
-    }
-}
-
-/// Read the `audio_window` channel count an author declared, or `None` where
-/// they left it to the source.
-///
-/// The count is the one value a contract may omit, so an absent key is legal
-/// here where every other field's absence is refused by name.
-fn read_audio_window_channel_count(
-    declaration: &Bound<'_, PyDict>,
-    port_name: &str,
-) -> PyResult<Option<u32>> {
-    let Some(value) = declaration.get_item("channels")? else {
-        return Ok(None);
-    };
-    read_a_channel_count_or_the_source_spelling(&value).map_err(|refusal| {
-        refusal.framed_as(format!(
-            "input port {port_name:?}: audio_window field \"channels\""
-        ))
-    })
-}
-
-/// Why an `audio_window` field could not be read: the tail of the sentence,
-/// and which Python exception carries it.
-///
-/// The kind travels with the refusal so the same mistake raises the same
-/// exception whichever field it was made on — `channels=1.5` and
-/// `window_size=1.5` are one error, not two.
-pub(crate) enum AudioWindowFieldRefusal {
-    /// The value is not the kind of thing the field takes at all.
-    WrongKindOfValue(String),
-    /// The right kind, but not one the field may hold.
-    UnusableValue(String),
-}
-
-impl AudioWindowFieldRefusal {
-    /// Raise this refusal behind the caller's own naming of what was being
-    /// read, keeping the kind the value earned.
-    pub(crate) fn framed_as(self, naming: impl std::fmt::Display) -> PyErr {
-        match self {
-            Self::WrongKindOfValue(reason) => PyTypeError::new_err(format!("{naming} {reason}")),
-            Self::UnusableValue(reason) => PyValueError::new_err(format!("{naming} {reason}")),
-        }
-    }
-}
+use crate::python_bag_conversion::python_object_to_json_value;
 
 /// Read a `channels` value written either as a count or as the
-/// source-following spelling.
-///
-/// The one parse both wheel-side readers call — the bridge from an author's
-/// declaration and the helper's reading of what the parent wired. The refusal
-/// comes back bare so each frames it in its own terms, the way the contract's
-/// own validator does: one names a declaration, the other names a wiring.
+/// source-following spelling, raising a refusal behind `naming` — a
+/// `TypeError` for a value of the wrong kind, a `ValueError` for one the field
+/// cannot hold.
 pub(crate) fn read_a_channel_count_or_the_source_spelling(
     value: &Bound<'_, PyAny>,
-) -> Result<Option<u32>, AudioWindowFieldRefusal> {
-    if let Ok(spelling) = value.extract::<String>() {
-        if spelling == AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE {
-            return Ok(None);
-        }
-        return Err(AudioWindowFieldRefusal::UnusableValue(format!(
-            "is {spelling:?} — expected a channel count, or \
-             {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to carry whatever count the \
-             source sends"
-        )));
-    }
-
-    // The sentinel is offered on top of whatever the shared core said, rather
-    // than in place of it: "must be an int" and "must be an int, and a bool is
-    // not one" are different things to tell an author, and only the second one
-    // explains why `True` was rejected.
-    a_strictly_positive_count(value)
-        .map(Some)
+    naming: impl std::fmt::Display,
+) -> PyResult<Option<u32>> {
+    // A value JSON cannot carry is no count and no spelling, which the parser
+    // refuses as the wrong kind of value, as it does `null`.
+    let value = python_object_to_json_value(value).unwrap_or(serde_json::Value::Null);
+    streamlib::sdk::processor_interpreter::read_a_channel_count_or_the_source_spelling(&value)
         .map_err(|refusal| match refusal {
             AudioWindowFieldRefusal::WrongKindOfValue(reason) => {
-                AudioWindowFieldRefusal::WrongKindOfValue(format!(
-                    "{reason} — or {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to carry \
-                     whatever count the source sends"
-                ))
+                PyTypeError::new_err(format!("{naming} {reason}"))
             }
-            unusable => unusable,
+            AudioWindowFieldRefusal::UnusableValue(reason) => {
+                PyValueError::new_err(format!("{naming} {reason}"))
+            }
         })
-}
-
-/// One strictly-positive count off a Python value, telling a value of the
-/// wrong kind apart from a number the field cannot hold.
-///
-/// The shared core of every numeric `audio_window` field, `channels` included,
-/// so one spelling of "strictly positive" serves them all.
-fn a_strictly_positive_count(value: &Bound<'_, PyAny>) -> Result<u32, AudioWindowFieldRefusal> {
-    // `bool` is an `int` subclass, so `True` extracts as 1 and reaches the stage
-    // as a plausible count. The Python constructor refuses one by name; this is
-    // the same rule at the two seams that constructor does not guard — a
-    // hand-built marker, and the envelope a parent wires a child with.
-    if value.is_instance_of::<PyBool>() {
-        return Err(AudioWindowFieldRefusal::WrongKindOfValue(
-            "must be an int, and a bool is not one".to_string(),
-        ));
-    }
-    let declared = value
-        .extract::<i64>()
-        .map_err(|_| AudioWindowFieldRefusal::WrongKindOfValue("must be an int".to_string()))?;
-    u32::try_from(declared).map_err(|_| {
-        AudioWindowFieldRefusal::UnusableValue(format!(
-            "is {declared} — every numeric field is strictly positive"
-        ))
-    })
-}
-
-/// Read one strictly-positive `audio_window` numeric field, refusing a
-/// negative integer by name rather than as an extraction failure.
-fn read_audio_window_numeric_field(
-    declaration: &Bound<'_, PyDict>,
-    key: &str,
-    port_name: &str,
-) -> PyResult<u32> {
-    let value = audio_window_field(declaration, key, port_name)?;
-    a_strictly_positive_count(&value).map_err(|refusal| {
-        refusal.framed_as(format!(
-            "input port {port_name:?}: audio_window field {key:?}"
-        ))
-    })
-}
-
-/// Read one `audio_window` string field, naming the port the way every other
-/// field of the contract does.
-fn read_audio_window_string_field(
-    declaration: &Bound<'_, PyDict>,
-    key: &str,
-    port_name: &str,
-) -> PyResult<String> {
-    audio_window_field(declaration, key, port_name)?
-        .extract::<String>()
-        .map_err(|_| {
-            PyTypeError::new_err(format!(
-                "input port {port_name:?}: audio_window field {key:?} must be a string"
-            ))
-        })
-}
-
-/// One missing-`audio_window`-field refusal, so no field of the contract
-/// falls through to a bare `missing key` with no port and no contract named.
-fn audio_window_field<'py>(
-    declaration: &Bound<'py, PyDict>,
-    key: &str,
-    port_name: &str,
-) -> PyResult<Bound<'py, PyAny>> {
-    declaration.get_item(key)?.ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "input port {port_name:?}: audio_window is missing {key:?} — the contract is \
-             all-or-nothing"
-        ))
-    })
-}
-
-fn read_string_attribute(object: &Bound<'_, PyAny>, attribute: &str) -> PyResult<String> {
-    object.getattr(attribute)?.extract::<String>()
-}
-
-fn read_dict_string(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<String> {
-    dictionary
-        .get_item(key)?
-        .ok_or_else(|| PyTypeError::new_err(format!("missing key {key:?}")))?
-        .extract::<String>()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::python_class_from_source_for_tests::class_from_source;
-    use streamlib::sdk::descriptors::ProcessorConfigJsonSchema;
+    use pyo3::types::{PyDict, PyList};
+    use streamlib::sdk::descriptors::{
+        AudioWindowContract, AudioWindowContractDeclaredValues, PortDescriptor,
+        ProcessorClassImportPath, ProcessorConfigJsonSchema,
+    };
+    use streamlib::sdk::processor_interpreter::PythonProcessorDeclaration;
     use streamlib::sdk::processors::EmptyConfig;
+
+    /// The described node type a processor interpreter prints for
+    /// `declared_class`: its import path, short name, and every stamp the
+    /// decorator left, carried verbatim.
+    fn described_node_type_of(declared_class: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+        let stamp = |name: &str| -> PyResult<serde_json::Value> {
+            python_object_to_json_value(&declared_class.getattr(name)?)
+        };
+        let module = declared_class.getattr("__module__")?.extract::<String>()?;
+        let qualname = declared_class
+            .getattr("__qualname__")?
+            .extract::<String>()?;
+        Ok(serde_json::json!({
+            "import_path": format!("{module}:{qualname}"),
+            "short_name": declared_class.getattr("__name__")?.extract::<String>()?,
+            "description": stamp("__tatolab_node_description__")?,
+            "execution": stamp("__tatolab_node_execution__")?,
+            "scheduling_priority": stamp("__tatolab_node_scheduling_priority__")?,
+            "config_schema": stamp("__tatolab_node_config_schema__")?,
+            "input_ports": stamp("__tatolab_node_input_ports__")?,
+            "output_ports": stamp("__tatolab_node_output_ports__")?,
+        }))
+    }
+
+    /// Read `declared_class` the way the engine reads what a processor
+    /// interpreter described of it.
+    fn read_declaration_off(
+        declared_class: &Bound<'_, PyAny>,
+    ) -> Result<PythonProcessorDeclaration, String> {
+        let described_node_type =
+            described_node_type_of(declared_class).map_err(|refusal| refusal.to_string())?;
+        let requested_import_path = ProcessorClassImportPath::new(
+            described_node_type["import_path"]
+                .as_str()
+                .unwrap_or_default(),
+        )
+        .map_err(|blank| blank.to_string())?;
+        PythonProcessorDeclaration::read_from_described_node_type(
+            &described_node_type,
+            &requested_import_path,
+        )
+    }
 
     /// A class carrying what `@tatolab.stream.node` attaches.
     const DECLARED_CLASS_SOURCE: &str = "\
@@ -459,7 +108,7 @@ class BlurProcessor:
         Python::initialize();
         Python::attach(|python| {
             let declared_class = class_from_source(python, DECLARED_CLASS_SOURCE, "BlurProcessor");
-            let declaration = PythonProcessorDeclaration::read_from_class(&declared_class).unwrap();
+            let declaration = read_declaration_off(&declared_class).unwrap();
 
             assert_eq!(
                 declaration.descriptor.processor_class_import_path.as_str(),
@@ -518,22 +167,27 @@ class BlurProcessor:
     ///
     /// A refusal raised at decoration and one raised at the bridge both land
     /// in the `Err` arm, because to an author they are one refusal.
-    fn read_python_declaration(class_body_source: &str) -> PyResult<PythonProcessorDeclaration> {
+    fn read_python_declaration(
+        class_body_source: &str,
+    ) -> Result<PythonProcessorDeclaration, String> {
         Python::initialize();
         Python::attach(|python| {
             let namespace = declaration_module_namespace(python);
 
             let source = format!("__name__ = 'my_app.audio'\n\n\n{class_body_source}");
-            python.run(
-                &std::ffi::CString::new(source).unwrap(),
-                Some(&namespace),
-                None,
-            )?;
+            python
+                .run(
+                    &std::ffi::CString::new(source).unwrap(),
+                    Some(&namespace),
+                    None,
+                )
+                .map_err(|refusal| refusal.to_string())?;
 
             let declared_class = namespace
-                .get_item("AudioConsumer")?
+                .get_item("AudioConsumer")
+                .map_err(|refusal| refusal.to_string())?
                 .expect("the class bound");
-            PythonProcessorDeclaration::read_from_class(&declared_class)
+            read_declaration_off(&declared_class)
         })
     }
 
@@ -677,7 +331,7 @@ class AudioConsumer:
     fn python_declaration_refusal(class_body_source: &str) -> String {
         match read_python_declaration(class_body_source) {
             Ok(_) => panic!("the declaration was accepted; a refusal was expected"),
-            Err(refusal) => refusal.to_string(),
+            Err(refusal) => refusal,
         }
     }
 
@@ -844,12 +498,14 @@ class AudioConsumer:
 
     /// Read a hand-built marker through the bridge the engine reads a declared
     /// class by.
-    fn read_hand_built_marker(audio_window_fields: &str) -> PyResult<PythonProcessorDeclaration> {
+    fn read_hand_built_marker(
+        audio_window_fields: &str,
+    ) -> Result<PythonProcessorDeclaration, String> {
         Python::initialize();
         Python::attach(|python| {
             let source = hand_built_marker_source(audio_window_fields);
             let declared_class = class_from_source(python, &source, "AudioConsumer");
-            PythonProcessorDeclaration::read_from_class(&declared_class)
+            read_declaration_off(&declared_class)
         })
     }
 
@@ -857,7 +513,7 @@ class AudioConsumer:
     fn hand_built_marker_refusal(audio_window_fields: &str) -> String {
         match read_hand_built_marker(audio_window_fields) {
             Ok(_) => panic!("the marker was accepted; a refusal was expected"),
-            Err(refusal) => refusal.to_string(),
+            Err(refusal) => refusal,
         }
     }
 
@@ -1040,9 +696,9 @@ class AudioConsumer:
 ";
             let declared_class = class_from_source(python, source, "AudioConsumer");
 
-            let refusal = match PythonProcessorDeclaration::read_from_class(&declared_class) {
+            let refusal = match read_declaration_off(&declared_class) {
                 Ok(_) => panic!("an output contract was accepted; a refusal was expected"),
-                Err(refusal) => refusal.to_string(),
+                Err(refusal) => refusal,
             };
             assert!(
                 refusal.contains("output port \"windows\"") && refusal.contains("consuming"),

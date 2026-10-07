@@ -10,6 +10,7 @@
 //! Every teardown runs under the engine's watchdog.
 
 use std::panic::AssertUnwindSafe;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
@@ -22,7 +23,8 @@ use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
-    ProcessorDisplayNameAndId, Runner, request_runtime_shutdown, take_runtime_shutdown_escalation,
+    ProcessorDisplayNameAndId, Runner, StreamEnvironment, request_runtime_shutdown,
+    take_runtime_shutdown_escalation,
 };
 
 use crate::python_bag_conversion::python_object_to_json_value;
@@ -389,31 +391,119 @@ impl PythonRuntimeHandle {
     }
 }
 
-/// Install, once per process, the registry's resolver for a processor type
-/// named only by its import path — every Python node a `Runtime.load` graph or
-/// an `add_processor` over the control plane names, including a class this
-/// interpreter never imported. The resolver imports the class here and registers
-/// it with its constructor; the processor itself runs in its own helper process.
-fn install_unregistered_processor_type_resolver_once() {
-    static INSTALLED: std::sync::Once = std::sync::Once::new();
-    INSTALLED.call_once(|| {
-        streamlib::sdk::processors::PROCESSOR_REGISTRY.set_unregistered_processor_type_resolver(
-            std::sync::Arc::new(|processor_class_import_path| {
-                Python::attach(|python| {
-                    crate::python_processor_registration::register_processor_class_by_import_path(
-                        python,
-                        processor_class_import_path,
-                    )
-                })
-                .map_err(|import_failure| {
-                    streamlib::sdk::error::Error::Runtime(format!(
-                        "could not register `{}` from its import path: {import_failure}",
-                        processor_class_import_path.as_str()
-                    ))
-                })
-            }),
-        );
-    });
+/// Every processor class import path in the calling process's catalog.
+///
+/// What `/api/registry` renders, reachable in a process that serves no control
+/// plane.
+#[pyfunction]
+pub(crate) fn processor_class_import_paths_in_this_processes_catalog() -> Vec<String> {
+    streamlib::sdk::processors::PROCESSOR_REGISTRY
+        .registered_processor_class_import_paths()
+        .into_iter()
+        .map(|import_path| import_path.as_str().to_string())
+        .collect()
+}
+
+/// The directory the app's own modules import from, as a runtime is named
+/// after it.
+///
+/// `sys.path[0]` rather than `sys.argv[0]`'s parent, because it is the one slot
+/// both launch paths agree on: CPython puts the script's directory there for a
+/// hand-run `python <script>.py`, and `streamlib run` / `dev` inserts the
+/// directory the entry imports from there before executing it. `sys.argv`
+/// cannot answer this — the launcher narrows it to the entry only for the span
+/// of that execution and restores its own argv in a `finally`, and the
+/// `Runtime` is constructed *after* that.
+///
+/// Empty is `python -c`'s value for the slot and means the working directory,
+/// which names no app.
+fn app_import_root_directory(import_root: &str) -> Option<PathBuf> {
+    if import_root.is_empty() {
+        return None;
+    }
+    Path::new(import_root).canonicalize().ok()
+}
+
+/// The entry directory `sys.path[0]` names, if the interpreter reports one.
+fn app_entry_directory_of_this_interpreter(python: Python<'_>) -> PyResult<Option<PathBuf>> {
+    Ok(python
+        .import("sys")?
+        .getattr("path")?
+        .get_item(0)
+        .ok()
+        .and_then(|import_root| import_root.extract::<String>().ok())
+        .and_then(|import_root| app_import_root_directory(&import_root)))
+}
+
+/// The lend directory: the directory holding the `tatolab/runtime/` package
+/// this interpreter imported the engine from, which every processor
+/// interpreter borrows `tatolab.runtime` out of.
+fn processor_interpreter_lend_directory_of_this_interpreter(
+    python: Python<'_>,
+) -> PyResult<PathBuf> {
+    let package_init_file = PathBuf::from(
+        python
+            .import("tatolab.runtime")?
+            .getattr("__file__")?
+            .extract::<String>()?,
+    );
+    package_init_file
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "`tatolab.runtime` was imported from `{}`, which is not inside a                  `tatolab/runtime/` package directory, so there is no lend directory to start                  a processor interpreter from",
+                package_init_file.display()
+            ))
+        })
+}
+
+/// The stream environment `Runtime.load` was passed, each path made absolute
+/// against this process's working directory, so a relative one names the same
+/// directory from inside the project a processor interpreter runs in.
+fn the_stream_environment_load_was_passed(
+    project_directory: &Bound<'_, PyAny>,
+    interpreter: &Bound<'_, PyAny>,
+) -> PyResult<StreamEnvironment> {
+    let absolute = |argument_name: &str, path: PathBuf| -> PyResult<PathBuf> {
+        std::path::absolute(&path).map_err(|cannot_be_made_absolute| {
+            PyValueError::new_err(format!(
+                "Runtime.load's `{argument_name}` `{}` cannot be made absolute: \
+                 {cannot_be_made_absolute}",
+                path.display()
+            ))
+        })
+    };
+    Ok(StreamEnvironment {
+        project_directory: absolute(
+            "project_directory",
+            the_path_load_was_passed("project_directory", project_directory)?,
+        )?,
+        interpreter: absolute(
+            "interpreter",
+            the_path_load_was_passed("interpreter", interpreter)?,
+        )?,
+    })
+}
+
+/// A path argument `Runtime.load` was passed, as a path; anything but a `str`
+/// or an `os.PathLike[str]` is refused naming the argument.
+fn the_path_load_was_passed(argument_name: &str, path: &Bound<'_, PyAny>) -> PyResult<PathBuf> {
+    let fspath = path
+        .py()
+        .import("os")?
+        .call_method1("fspath", (path,))
+        .ok()
+        .and_then(|fspath| fspath.cast_into::<PyString>().ok());
+    let Some(fspath) = fspath else {
+        return Err(PyTypeError::new_err(format!(
+            "Runtime.load's `{argument_name}` takes a str or an os.PathLike[str], and was passed              a `{}`",
+            path.get_type().name()?
+        )));
+    };
+    Ok(PathBuf::from(fspath.to_str()?))
 }
 
 /// The mapping `Runtime.load` was passed, as a `dict` — itself when it is one,
@@ -499,6 +589,7 @@ fn load_the_claimed_graph(
     engine: &Arc<Runner>,
     graph_mapping: &Bound<'_, PyDict>,
     stream_name_override: Option<String>,
+    stream_environment: StreamEnvironment,
 ) -> PyResult<Option<String>> {
     let graph_document = python_object_to_json_value(graph_mapping.as_any())
         .map_err(|converter_refusal| graph_is_not_json_data_refusal(python, converter_refusal))?;
@@ -530,10 +621,9 @@ fn load_the_claimed_graph(
     }
 
     // Detached because the load takes the graph lock, which an engine thread
-    // can hold while it needs this interpreter's GIL; the type resolver
-    // re-attaches for a node whose type it has to import.
+    // can hold while it needs this interpreter's GIL.
     python
-        .detach(|| engine.load_graph_snapshot(&graph_snapshot))
+        .detach(|| engine.load_graph_snapshot(&graph_snapshot, Some(stream_environment)))
         .map_err(|load_failure| PyRuntimeError::new_err(load_failure.to_string()))?;
     Ok(graph_snapshot.stream)
 }
@@ -544,25 +634,19 @@ impl PythonRuntimeHandle {
     #[new]
     #[pyo3(signature = (*, runtime_name = None))]
     fn new(python: Python<'_>, runtime_name: Option<String>) -> PyResult<Self> {
-        // Before the engine, so a processor added to its graph always has an
-        // interpreter to be an exec of. This reads the app's own
-        // `sys.executable`, which is the promise: one venv, and a processor's
-        // child is the same Python the app is.
-        crate::python_helper_process_spawn_host::capture_helper_process_launch_environment(python)?;
-        // Hand the engine the entry directory the capture above found, so an
-        // unnamed runtime in a hand-run `python <script>.py` is named after the
-        // script's directory rather than after whatever shell it was launched
-        // from. Only the interpreter knows it; the engine cannot read
+        // So an unnamed runtime in a hand-run `python <script>.py` is named
+        // after the script's directory rather than after whatever shell it was
+        // launched from. Only the interpreter knows it; the engine cannot read
         // `sys.path` for itself.
-        if let Some(entry_directory) =
-            crate::python_helper_process_spawn_host::captured_app_entry_directory()
-        {
+        if let Some(entry_directory) = app_entry_directory_of_this_interpreter(python)? {
             record_the_app_entry_directory_the_language_host_captured(entry_directory);
         }
-        install_unregistered_processor_type_resolver_once();
+        let processor_interpreter_lend_directory =
+            processor_interpreter_lend_directory_of_this_interpreter(python)?;
         let engine = python
             .detach(|| Runner::new_with_runtime_name(runtime_name))
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
+        engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory);
         Ok(Self {
             lifecycle: Mutex::new(PythonRuntimeLifecycleState::EngineConstructedNotYetRun(
                 engine,
@@ -579,19 +663,33 @@ impl PythonRuntimeHandle {
     /// which `run()` refuses anyway — and so is a panic inside the load; `run()`
     /// then refuses, naming the load's own refusal or panic, else the first
     /// refusal recorded.
-    #[pyo3(signature = (graph, *, name = None))]
+    ///
+    /// `project_directory` and `interpreter` are the stream's environment:
+    /// every processor interpreter starts as `interpreter`, in
+    /// `project_directory`, and every node type that is not a built-in is
+    /// described there.
+    #[pyo3(signature = (graph, *, project_directory, interpreter, name = None))]
     fn load(
         &self,
         python: Python<'_>,
         graph: &Bound<'_, PyAny>,
+        project_directory: &Bound<'_, PyAny>,
+        interpreter: &Bound<'_, PyAny>,
         name: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
-        let (graph_mapping, stream_name_override) = the_graph_mapping_load_was_passed(graph)
-            .and_then(|graph_mapping| Ok((graph_mapping, the_stream_name_load_was_passed(name)?)))
-            .inspect_err(|refusal| {
-                self.graph_load_record()
-                    .record_a_refusal_that_claimed_no_load(&refusal.value(python).to_string());
-            })?;
+        let (graph_mapping, stream_name_override, stream_environment) =
+            the_graph_mapping_load_was_passed(graph)
+                .and_then(|graph_mapping| {
+                    Ok((
+                        graph_mapping,
+                        the_stream_name_load_was_passed(name)?,
+                        the_stream_environment_load_was_passed(project_directory, interpreter)?,
+                    ))
+                })
+                .inspect_err(|refusal| {
+                    self.graph_load_record()
+                        .record_a_refusal_that_claimed_no_load(&refusal.value(python).to_string());
+                })?;
         let engine = {
             let lifecycle = self.lifecycle();
             let engine = Self::engine_being_built_in(&lifecycle, "load a graph")?;
@@ -603,7 +701,15 @@ impl PythonRuntimeHandle {
 
         RuntimeGraphLoadRecord::run_the_claimed_load(
             &self.graph_load_record,
-            move || load_the_claimed_graph(python, &engine, &graph_mapping, stream_name_override),
+            move || {
+                load_the_claimed_graph(
+                    python,
+                    &engine,
+                    &graph_mapping,
+                    stream_name_override,
+                    stream_environment,
+                )
+            },
             |load_outcome| match load_outcome {
                 Ok(stream_name) => Ok(stream_name.clone()),
                 Err(refusal) => Err(refusal.value(python).to_string()),
@@ -858,6 +964,20 @@ impl Drop for PythonRuntimeHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `sys.path[0]`, not `sys.argv[0]`: the launcher restores its own argv
+    /// before the `Runtime` is built, so an argv-derived root is the wheel's
+    /// own package directory and names no app.
+    #[test]
+    fn an_empty_import_root_is_no_root_rather_than_the_filesystem_root() {
+        assert!(app_import_root_directory("").is_none());
+        assert!(app_import_root_directory("/definitely/not/a/real/path").is_none());
+        let real = std::env::temp_dir();
+        assert_eq!(
+            app_import_root_directory(&real.to_string_lossy()),
+            real.canonicalize().ok()
+        );
+    }
 
     #[test]
     fn a_runtime_takes_its_one_load_and_runs_after_it_succeeds() {
