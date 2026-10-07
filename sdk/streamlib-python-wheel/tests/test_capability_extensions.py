@@ -189,7 +189,7 @@ def test_the_loop_hands_each_hook_a_host_carrying_its_own_distribution(
 ):
     """One host per entry point — that is what lets a refusal name both wheels.
 
-    This is the seam `_helper.py` runs, driven in process with a fake host: the
+    This is the seam `_processor_interpreter_bootstrap.py` runs, driven in process with a fake host: the
     helper's own call site has no runtime to register into, so the host it is
     handed is the whole of what a hook there can reach.
     """

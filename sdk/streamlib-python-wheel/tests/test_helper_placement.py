@@ -189,7 +189,7 @@ def helper_process_is_still_alive(pid: int) -> bool:
     """
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as command_line:
-            return b"tatolab.runtime._helper" in command_line.read()
+            return b"_processor_interpreter_bootstrap.py" in command_line.read()
     except (FileNotFoundError, ProcessLookupError, PermissionError):
         return False
 
