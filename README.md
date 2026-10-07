@@ -389,6 +389,18 @@ floor: the engine builds natively on `aarch64-apple-darwin` and CI compiles it o
 one Vulkan RHI through MoltenVK — but no Vulkan device comes up yet, no window presents, capture
 is unbuilt and no macOS wheel is published. Windows is unbuilt.
 
+## Build from source
+
+```bash
+cargo xtask build-runtime            # debug; add --release for an optimized build
+```
+
+This builds the runtime unit — the engine and `tatolab.runtime` — as a wheel in
+`target/tatolab-runtime/wheel/`, then lays its contents out at
+`target/tatolab-runtime/lib/tatolab/lend/`: the directory holding `tatolab/runtime/`, which a
+processor interpreter puts first on `PYTHONPATH`. It runs the pinned maturin through `uvx`, so `uv`
+must be on `PATH`. On macOS it first stages the Vulkan loader and MoltenVK beside `_engine`.
+
 ## License
 
 StreamLib is [BUSL-1.1](LICENSE), converting automatically to
