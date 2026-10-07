@@ -126,15 +126,17 @@ down each contract a node is handed, and `_built_in_nodes.py` writes down every 
 config keys and ports — read them before reading Rust. A detour into `runtime/` to learn what a
 built-in publishes on means you skipped it.
 
-- **The docs live in `tatolab.stream`.** A compiled class's runtime `__doc__` is a one-liner
-  and `dir()` on it is empty, so `help()` on a native object under-reports the surface badly.
-  Never conclude from a REPL that something is undocumented.
+- **The types live in `tatolab.stream`.** pyo3 publishes no annotations, so `help()` on a
+  native object shows no parameter or return types. Read the Protocol, not the REPL.
 - **The reference cannot drift.** The conformance gate
-  (`sdk/streamlib-python-wheel/tests/runtime_backed_protocol_conformance.py`) holds every native
-  class to its Protocol member for member, and stubtest holds what is left of
-  `sdk/streamlib-python-wheel/python/tatolab/runtime/_engine.pyi` to the binary. `cargo xtask generate-built-in-node-classes --check` fails when
-  `_built_in_nodes.py` differs from the runtime's built-ins; pyright gates the callers. All run
-  in CI. A new pyclass is not done until its Protocol exists.
+  (`sdk/streamlib-python-wheel/tests/runtime_backed_protocol_conformance.py`) holds every
+  native class and function a node is handed to its `tatolab.stream` Protocol or runtime-backed
+  function, member for member, and every other one to its entry in
+  `sdk/streamlib-python-wheel/python/tatolab/runtime/_engine.pyi`, which stubtest checks
+  against the binary. `cargo xtask generate-built-in-node-classes --check` fails when
+  `_built_in_nodes.py` differs from the runtime's built-ins, and pyright gates the callers. All
+  run in CI. A new pyclass a node is handed is not done until its Protocol exists; one only the
+  bootstrap uses needs its `_engine.pyi` entry.
 - **Typing is load-bearing on the read side and absent on the write side.** `read(port_name,
   into=T)` narrows to `T | None` and catches a wrong attribute; `write(port_name, bag)` takes
   `Mapping[str, Any]` and catches nothing — a typo'd key, a `str` where the wire wants an
