@@ -253,7 +253,7 @@ if [ "$PLATFORM" = Darwin ]; then
         echo "SKIP: refusing to score — the engine probed another audio arm than coreaudio," >&2
         echo "      so this wheel predates the CoreAudio arm and would measure silence:" >&2
         echo "      $PROBE_LINE" >&2
-        echo "      Rebuild it: (cd sdk/streamlib-python-wheel && maturin develop --release)" >&2
+        echo "      Rebuild it: (cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)" >&2
         exit 77
     fi
     echo "probed: $PROBE_LINE" >&2
