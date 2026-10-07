@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The one directory a runtime keeps what means nothing once its processes are
-//! gone: the iceoryx2 domain, the surface-sharing socket, the local API socket, the node
-//! registry and the processor interpreter lends.
+//! gone: the iceoryx2 domain, the surface-sharing socket, the local API socket and the node
+//! registry.
 
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::RuntimeUniqueId;
 use crate::core::directory_at_an_explicit_mode::{
@@ -21,17 +20,6 @@ const STREAMLIB_FOLDER_INSIDE_XDG_RUNTIME_DIR: &str = "streamlib";
 
 /// The shared temporary directory the per-user fallback folder is created in.
 const SHARED_TEMPORARY_DIRECTORY_FOR_THE_FALLBACK: &str = "/tmp";
-
-/// The folder inside the runtime directory each lend holding only a linked
-/// `tatolab/runtime/` is kept in.
-const PROCESSOR_INTERPRETER_LENDS_FOLDER: &str = "processor-interpreter-lends";
-
-/// How many bytes of the package directory's SHA-256 name its lend.
-const PROCESSOR_INTERPRETER_LEND_NAME_DIGEST_BYTES: usize = 8;
-
-/// Numbers each lend this process builds aside, so two built at once never
-/// share a name.
-static LENDS_BUILT_BY_THIS_PROCESS: AtomicU64 = AtomicU64::new(0);
 
 /// Every permission bit a group or other could hold.
 const GROUP_AND_OTHER_PERMISSION_BITS: u32 = 0o077;
@@ -81,109 +69,6 @@ impl StreamlibRuntimeDirectory {
     pub fn local_api_socket_path(&self, runtime_id: &RuntimeUniqueId) -> PathBuf {
         self.path.join(format!("local-api-{runtime_id}.sock"))
     }
-
-    /// A lend directory holding `tatolab/runtime` — a symlink to
-    /// `runtime_package_directory` — and nothing else, made once per package
-    /// directory and reused.
-    ///
-    /// The directory a package was imported from can hold a whole
-    /// site-packages, which on a processor interpreter's `PYTHONPATH` would sit
-    /// ahead of its standard library and its project.
-    pub fn processor_interpreter_lend_directory_holding_only_the_runtime_package(
-        &self,
-        runtime_package_directory: &Path,
-    ) -> Result<PathBuf> {
-        let lend_failure = |what_failed: String| {
-            Error::Runtime(format!(
-                "no processor interpreter lend could be made for the runtime package `{}`: \
-                 {what_failed}",
-                runtime_package_directory.display()
-            ))
-        };
-        let runtime_package_directory = runtime_package_directory
-            .canonicalize()
-            .map_err(|unresolvable| lend_failure(format!("it does not resolve: {unresolvable}")))?;
-        let lends_folder = self.path.join(PROCESSOR_INTERPRETER_LENDS_FOLDER);
-        create_directory_and_its_missing_parents_at_mode(&lends_folder, OWNER_ONLY_DIRECTORY_MODE)
-            .map_err(|uncreatable| {
-                lend_failure(format!(
-                    "`{}` could not be created: {uncreatable}",
-                    lends_folder.display()
-                ))
-            })?;
-        let lend_name = processor_interpreter_lend_name_of(&runtime_package_directory);
-        let lend_directory = lends_folder.join(&lend_name);
-        if a_lend_links_its_runtime_package_to(&lend_directory, &runtime_package_directory) {
-            return Ok(lend_directory);
-        }
-
-        // Built aside and renamed into place, so a concurrent runtime sees
-        // either no lend or a whole one.
-        let lend_being_built = lends_folder.join(format!(
-            "{lend_name}.being-built-{}-{}",
-            std::process::id(),
-            LENDS_BUILT_BY_THIS_PROCESS.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&lend_being_built);
-        let built = std::fs::create_dir_all(lend_being_built.join("tatolab")).and_then(|()| {
-            std::os::unix::fs::symlink(
-                &runtime_package_directory,
-                runtime_package_link_in(&lend_being_built),
-            )
-        });
-        if let Err(unbuildable) = built {
-            let _ = std::fs::remove_dir_all(&lend_being_built);
-            return Err(lend_failure(format!(
-                "`{}` could not be built: {unbuildable}",
-                lend_being_built.display()
-            )));
-        }
-        let renamed = std::fs::rename(&lend_being_built, &lend_directory);
-        let _ = std::fs::remove_dir_all(&lend_being_built);
-        match renamed {
-            Ok(()) => Ok(lend_directory),
-            Err(_)
-                if a_lend_links_its_runtime_package_to(
-                    &lend_directory,
-                    &runtime_package_directory,
-                ) =>
-            {
-                Ok(lend_directory)
-            }
-            Err(unrenamable) => Err(lend_failure(format!(
-                "`{}` could not be put in place, and what stands there links another \
-                 package directory; remove it: {unrenamable}",
-                lend_directory.display()
-            ))),
-        }
-    }
-}
-
-/// The `tatolab/runtime` link inside `lend_directory`.
-fn runtime_package_link_in(lend_directory: &Path) -> PathBuf {
-    lend_directory.join("tatolab").join("runtime")
-}
-
-/// Whether `lend_directory` already links its `tatolab/runtime` to
-/// `runtime_package_directory`.
-fn a_lend_links_its_runtime_package_to(
-    lend_directory: &Path,
-    runtime_package_directory: &Path,
-) -> bool {
-    std::fs::read_link(runtime_package_link_in(lend_directory))
-        .is_ok_and(|linked_package_directory| linked_package_directory == runtime_package_directory)
-}
-
-/// The lend's folder name: a digest of the canonical package directory, so one
-/// install maps to one lend.
-fn processor_interpreter_lend_name_of(runtime_package_directory: &Path) -> String {
-    use sha2::{Digest, Sha256};
-    use std::os::unix::ffi::OsStrExt;
-    Sha256::digest(runtime_package_directory.as_os_str().as_bytes())
-        [..PROCESSOR_INTERPRETER_LEND_NAME_DIGEST_BYTES]
-        .iter()
-        .map(|digest_byte| format!("{digest_byte:02x}"))
-        .collect()
 }
 
 /// The real uid of this process.
@@ -454,135 +339,6 @@ mod tests {
         assert_eq!(
             directory.local_api_socket_path(&RuntimeUniqueId::from("Rabc")),
             PathBuf::from("/tmp/streamlib-1000/local-api-Rabc.sock")
-        );
-    }
-
-    /// A site-packages holding the runtime package beside what else a venv
-    /// installs, and a runtime directory to lend it from.
-    struct SitePackagesHoldingTheRuntimePackage {
-        site_packages: tempfile::TempDir,
-        runtime_directory_root: tempfile::TempDir,
-    }
-
-    impl SitePackagesHoldingTheRuntimePackage {
-        fn installed() -> Self {
-            let site_packages =
-                crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-            let runtime_package_directory = site_packages.path().join("tatolab").join("runtime");
-            std::fs::create_dir_all(&runtime_package_directory).unwrap();
-            std::fs::write(runtime_package_directory.join("__init__.py"), "").unwrap();
-            std::fs::create_dir_all(site_packages.path().join("enum")).unwrap();
-            std::fs::write(site_packages.path().join("utils.py"), "").unwrap();
-            std::fs::create_dir_all(site_packages.path().join("tatolab").join("stream")).unwrap();
-            Self {
-                site_packages,
-                runtime_directory_root:
-                    crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap(),
-            }
-        }
-
-        fn runtime_package_directory(&self) -> PathBuf {
-            self.site_packages.path().join("tatolab").join("runtime")
-        }
-
-        fn runtime_directory(&self) -> StreamlibRuntimeDirectory {
-            StreamlibRuntimeDirectory {
-                path: self.runtime_directory_root.path().to_path_buf(),
-            }
-        }
-    }
-
-    fn names_inside(directory: &Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(directory)
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        names
-    }
-
-    #[test]
-    fn a_lend_holds_only_a_tatolab_runtime_link_to_the_imported_package() {
-        let installed = SitePackagesHoldingTheRuntimePackage::installed();
-
-        let lend_directory = installed
-            .runtime_directory()
-            .processor_interpreter_lend_directory_holding_only_the_runtime_package(
-                &installed.runtime_package_directory(),
-            )
-            .unwrap();
-
-        assert!(lend_directory.starts_with(installed.runtime_directory_root.path()));
-        assert_eq!(names_inside(&lend_directory), ["tatolab"]);
-        assert_eq!(names_inside(&lend_directory.join("tatolab")), ["runtime"]);
-        assert_eq!(
-            std::fs::read_link(lend_directory.join("tatolab").join("runtime")).unwrap(),
-            installed
-                .runtime_package_directory()
-                .canonicalize()
-                .unwrap()
-        );
-        assert!(
-            lend_directory
-                .join("tatolab")
-                .join("runtime")
-                .join("__init__.py")
-                .is_file()
-        );
-    }
-
-    #[test]
-    fn one_package_directory_is_lent_from_one_lend_and_another_from_its_own() {
-        let installed = SitePackagesHoldingTheRuntimePackage::installed();
-        let another_install = SitePackagesHoldingTheRuntimePackage::installed();
-        let runtime_directory = installed.runtime_directory();
-
-        let first_lend = runtime_directory
-            .processor_interpreter_lend_directory_holding_only_the_runtime_package(
-                &installed.runtime_package_directory(),
-            )
-            .unwrap();
-        let second_lend = runtime_directory
-            .processor_interpreter_lend_directory_holding_only_the_runtime_package(
-                &installed.runtime_package_directory(),
-            )
-            .unwrap();
-        let another_installs_lend = runtime_directory
-            .processor_interpreter_lend_directory_holding_only_the_runtime_package(
-                &another_install.runtime_package_directory(),
-            )
-            .unwrap();
-
-        assert_eq!(first_lend, second_lend);
-        assert_ne!(first_lend, another_installs_lend);
-        assert_eq!(
-            names_inside(
-                &runtime_directory
-                    .path()
-                    .join(PROCESSOR_INTERPRETER_LENDS_FOLDER)
-            )
-            .len(),
-            2,
-            "nothing built aside is left behind"
-        );
-    }
-
-    #[test]
-    fn a_runtime_package_directory_that_does_not_exist_is_refused_naming_it() {
-        let installed = SitePackagesHoldingTheRuntimePackage::installed();
-        let missing_package_directory = installed.site_packages.path().join("no-such-package");
-
-        let refusal = installed
-            .runtime_directory()
-            .processor_interpreter_lend_directory_holding_only_the_runtime_package(
-                &missing_package_directory,
-            )
-            .unwrap_err()
-            .to_string();
-
-        assert!(
-            refusal.contains(&missing_package_directory.display().to_string()),
-            "{refusal}"
         );
     }
 }

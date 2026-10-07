@@ -110,9 +110,9 @@ class Runtime:
         one directory both start — and `--node` refuses a name two live
         runtimes hold, naming both.
 
-        Every processor interpreter borrows `tatolab.runtime` from a lend
-        directory holding only a link to the `tatolab/runtime/` package this
-        module was imported from, made in the runtime directory.
+        The directory holding the `tatolab/runtime/` package this module was
+        imported from is the lend directory: every processor interpreter
+        borrows `tatolab.runtime` from it.
         """
 
     def load(

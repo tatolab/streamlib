@@ -1196,22 +1196,6 @@ impl Runner {
             .set_processor_interpreter_lend_directory(lend_directory);
     }
 
-    /// Hand this runtime a lend holding only `runtime_package_directory` — the
-    /// `tatolab/runtime/` package its host imported — made in its runtime
-    /// directory.
-    pub fn lend_only_this_runtime_package_to_processor_interpreters(
-        &self,
-        runtime_package_directory: &std::path::Path,
-    ) -> Result<()> {
-        let lend_directory = self
-            .runtime_directory
-            .processor_interpreter_lend_directory_holding_only_the_runtime_package(
-                runtime_package_directory,
-            )?;
-        self.set_processor_interpreter_lend_directory(lend_directory);
-        Ok(())
-    }
-
     /// Kill any describe this runtime is running and refuse every later one —
     /// its host's user interrupted the load that started it.
     pub fn interrupt_every_processor_interpreter_describe(&self) {
