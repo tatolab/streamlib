@@ -44,7 +44,9 @@ the one wheel.
   > second *CLI/runtime binary* — that rejection stands, and the wheel remains one
   > artifact. False as a general principle: helper-process indirection buys per-processor
   > isolation, the model's optimised axis. Helper processes are not a second binary —
-  > they exec `sys.executable` and import the same wheel.
+  > they exec ~~`sys.executable` and import the same wheel~~ — Superseded 2026-10-02 by
+  > `package-split-and-lend.md`: the stream's own venv interpreter, importing the runtime's
+  > lent `tatolab.runtime`, one build with the runtime by construction.
 - **Binary-only runtime (no library path)** — kills legitimate Rust embedding; the
   library is the substrate, the binary is one consumer of it.
 

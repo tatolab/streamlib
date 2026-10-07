@@ -33,8 +33,10 @@ wheel — so that refusal does not cover it.
    > ~~whether the engine runs a processor in-process or in a helper process spawned from that
    > same interpreter and venv is an under-the-hood engine placement decision~~ — Superseded
    > 2026-08-04 by `helper-process-placement-only.md`. There is no "whether": every Python
-   > processor runs in a helper process spawned by the engine as an exec of `sys.executable`
-   > from the app's venv. In-process hosting of a Python processor is banned outright — not a
+   > processor runs in a helper process spawned by the engine as an exec of ~~`sys.executable`
+   > from the app's venv~~ — Superseded 2026-10-02 by `package-split-and-lend.md`: the stream's
+   > own venv interpreter, borrowing the runtime's lent `tatolab.runtime`. In-process hosting
+   > of a Python processor is banned outright — not a
    > default, not a fallback, not an optimisation. "Never a user-facing runtime definition"
    > stands: there is no placement surface at all.
 3. The plugin ABI is deleted entirely: third-party native code ships as ordinary Python packages

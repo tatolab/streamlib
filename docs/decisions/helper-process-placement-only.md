@@ -20,8 +20,12 @@ asks why every Python processor is a child process.
 
 1. Helper-process placement is the only execution placement StreamLib has: every Python
    processor runs in its own child process, spawned by the Rust engine as an exec of
-   `sys.executable` from the app's own venv — never fork, never `multiprocessing`, never a
+   ~~`sys.executable` from the app's own venv~~ — never fork, never `multiprocessing`, never a
    pool — with its own interpreter and its own GIL.
+   > Superseded 2026-10-02 by `package-split-and-lend.md`: the exec is the stream's own venv
+   > interpreter running the runtime's processor-interpreter bootstrap by path, with the
+   > runtime's lend directory and then the project on `PYTHONPATH`. One child, one interpreter,
+   > one GIL per processor stands.
 2. In-process hosting of a Python processor is banned outright — not a default, not a
    fallback, not an engine policy choice, not a latency optimisation — because the axis
    being optimised is isolation, not latency: no processor may ever block, stall, or degrade
