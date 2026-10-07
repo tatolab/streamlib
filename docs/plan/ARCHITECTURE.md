@@ -532,12 +532,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   dot-directories, `.venv`/`venv` and any directory holding a `pyvenv.cfg` — and the
   anchor's `pyproject.toml`, and flags: an import of `cupy`, `pycuda`, `numba.cuda`,
   `torch.cuda` (also reached as an attribute) or `mlx`; `"cuda"` or `"mps"` passed as a
-  device (`device=`, `.device(…)`, `.to(…)`) and `.cuda()`; a closed-list stub name
+  device (`device=`, `.device(…)`, `.to(…)`) and `.cuda()`; a closed-list name
   (`VirtualCameraSink`, the three ray-tracing constructors, `export_dma_buf`,
   `export_opaque_fd`, `import_dma_buf`, `__cuda_array_interface__`) where it is used,
-  never where it is imported, reported as allowed on its floor with the other floor's
-  peer; and a `cupy*` or `mlx*` dependency with no `sys_platform`/`platform_system`
-  marker. Nothing under a `sys.platform` guard is flagged, in either branch.
+  never where it is imported nor where a `typing.Protocol` class body declares it,
+  reported as allowed on its floor with the other floor's peer; and a `cupy*` or `mlx*`
+  dependency with no `sys_platform`/`platform_system` marker. Nothing under a `sys.platform` guard is flagged, in either branch.
   `launch_app_node` prints the block on stdout between resolving the entry file and
   executing it — nothing when clean, a failure of the check itself reported, a start
   never blocked; on Python 3.10 the dependency rule is skipped and the block says so. CI

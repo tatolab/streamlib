@@ -66,9 +66,9 @@ FLOOR_BOUND_MODULES: "dict[str, tuple[str, str]]" = {
     ),
 }
 
-# The runtime-backed names that exist on one floor -> (why, the other floor's peer if one exists).
+# The runtime-backed and built-in names that exist on one floor -> (why, the other floor's peer if one exists).
 # Allowed on their floor; the finding exists so the choice is a known one.
-SINGLE_FLOOR_STUB_NAMES: "dict[str, tuple[str, Optional[str]]]" = {
+SINGLE_FLOOR_NAMES: "dict[str, tuple[str, Optional[str]]]" = {
     "VirtualCameraSink": ("Linux only: v4l2loopback and PipeWire", None),
     "create_ray_tracing_kernel": ("Linux only: MoltenVK has no ray tracing", None),
     "build_triangles_blas": ("Linux only: MoltenVK has no ray tracing", None),
@@ -191,7 +191,7 @@ class _FloorBindingSourceVisitor(ast.NodeVisitor):
         )
 
     def _record_single_floor_name(self, node: ast.AST, name: str) -> None:
-        why, peer = SINGLE_FLOOR_STUB_NAMES[name]
+        why, peer = SINGLE_FLOOR_NAMES[name]
         self._record(
             node,
             f"uses `{name}`, which is single-floor ({why}); allowed on that floor",
@@ -224,12 +224,12 @@ class _FloorBindingSourceVisitor(ast.NodeVisitor):
             dotted_name = f"{node.value.id}.{node.attr}"
             if dotted_name in FLOOR_BOUND_SUBMODULES:
                 self._record_floor_bound_module(node, dotted_name, how_it_is_reached="uses")
-        if node.attr in SINGLE_FLOOR_STUB_NAMES:
+        if node.attr in SINGLE_FLOOR_NAMES:
             self._record_single_floor_name(node, node.attr)
         self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, ast.Load) and node.id in SINGLE_FLOOR_STUB_NAMES:
+        if isinstance(node.ctx, ast.Load) and node.id in SINGLE_FLOOR_NAMES:
             self._record_single_floor_name(node, node.id)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
@@ -247,12 +247,12 @@ class _FloorBindingSourceVisitor(ast.NodeVisitor):
                 self.visit(statement)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        if node.name in SINGLE_FLOOR_STUB_NAMES:
+        if node.name in SINGLE_FLOOR_NAMES:
             self._record_single_floor_name(node, node.name)
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        if node.name in SINGLE_FLOOR_STUB_NAMES:
+        if node.name in SINGLE_FLOOR_NAMES:
             self._record_single_floor_name(node, node.name)
         self.generic_visit(node)
 
