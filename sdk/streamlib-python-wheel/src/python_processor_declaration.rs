@@ -1062,7 +1062,7 @@ class AudioConsumer:
 
     /// An output port declares no contract — the invariant three carrier docs
     /// state and the `#[processor]` grammar refuses. A hand-built marker is
-    /// the only way to reach it, since `output()` takes no such argument.
+    /// the only way to reach it, since `node.output()` takes no such argument.
     #[test]
     fn a_hand_built_output_marker_declaring_a_contract_is_refused() {
         Python::initialize();
