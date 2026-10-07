@@ -493,20 +493,13 @@ fn the_stream_environment_load_was_passed(
 /// A path argument `Runtime.load` was passed, as a path; anything but a `str`
 /// or an `os.PathLike[str]` is refused naming the argument.
 fn the_path_load_was_passed(argument_name: &str, path: &Bound<'_, PyAny>) -> PyResult<PathBuf> {
-    let fspath = path
-        .py()
-        .import("os")?
-        .call_method1("fspath", (path,))
-        .ok()
-        .and_then(|fspath| fspath.cast_into::<PyString>().ok());
-    let Some(fspath) = fspath else {
-        return Err(PyTypeError::new_err(format!(
+    path.extract::<PathBuf>().or_else(|_| {
+        Err(PyTypeError::new_err(format!(
             "Runtime.load's `{argument_name}` takes a str or an os.PathLike[str], and was passed \
              a `{}`",
             path.get_type().name()?
-        )));
-    };
-    Ok(PathBuf::from(fspath.to_str()?))
+        )))
+    })
 }
 
 /// The mapping `Runtime.load` was passed, as a `dict` — itself when it is one,

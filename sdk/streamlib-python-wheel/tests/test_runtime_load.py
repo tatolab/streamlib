@@ -637,6 +637,23 @@ def test_a_path_argument_that_is_not_a_path_is_refused_naming_the_argument(
     assert not the_runtimes_graph_holds_a_processor(runtime)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="surrogate-escaped paths are POSIX's")
+def test_a_project_directory_whose_name_is_not_utf8_is_accepted(
+    runtime: tatolab.runtime.Runtime, tmp_path: Path
+):
+    """`os.fsdecode` hands a name that is not UTF-8 back as a str carrying lone
+    surrogates, which is still a path the filesystem encoding round-trips."""
+    project_directory_not_utf8 = os.fsdecode(bytes(tmp_path) + b"/caf\xe9")
+
+    runtime.load(
+        pattern_to_window_graph(),
+        project_directory=project_directory_not_utf8,
+        interpreter=sys.executable,
+    )
+
+    assert the_runtimes_graph_holds_a_processor(runtime)
+
+
 def test_a_stream_name_that_cannot_be_encoded_is_refused_naming_it_and_the_fix(
     runtime: tatolab.runtime.Runtime,
 ):
