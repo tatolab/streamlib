@@ -12,7 +12,7 @@ You are the helper-process / IPC specialist. You own the wire between the parent
 ## Charter
 - Escalate ops end-to-end (correlated request/response over the parent↔helper socket, typed by JTD schemas).
 - iceoryx2 shared-memory transport and its sizing/encoding contract.
-- The Python wheel's helper host (`sys.executable -m streamlib._helper`) and the parent-side bridge that serves it.
+- The processor interpreter bootstrap — the stream's own venv interpreter running `tatolab/runtime/_processor_interpreter_bootstrap.py` by path, with the lend directory and then the project directory on `PYTHONPATH` and the project as its working directory — its `--describe` mode, which is how the runtime learns a node's ports, and the parent-side bridge that serves it.
 - Helper-process surface-adapter wiring (the import-side carve-out).
 
 ## Method — how you work

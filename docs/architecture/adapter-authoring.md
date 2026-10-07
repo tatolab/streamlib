@@ -477,8 +477,9 @@ ambient availability) lives in the *Trade-off* section of
 adapter setup is per-runtime and lifetime-controlled, neither of
 which a Cargo feature can express.
 
-Adapters are statically linked into the wheel, and a helper process imports
-that same wheel rather than a separate cdylib.
+Adapters are statically linked into the runtime's `_engine` extension, and a
+processor interpreter imports that same extension, lent to it, rather than a
+separate cdylib.
 
 ## Cross-process producer composition
 
