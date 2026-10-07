@@ -8,7 +8,7 @@
 //! `dlsym` result, the way `vulkan/rhi/drm_modifier_probe.rs` reaches
 //! `libEGL.so.1`. Nothing links an audio or video library, so the wheel's
 //! `DT_NEEDED` set does not grow — the invariant
-//! `sdk/streamlib-python-wheel/tests/test_wheel_portability.py` holds.
+//! `sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py` holds.
 //!
 //! The half `dlopen` cannot reach at all is SPA's `static inline` pod builders
 //! and parsers, which have no shared object behind them. `pipewire_audio_shim.c`

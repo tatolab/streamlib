@@ -131,7 +131,8 @@ jobs:
       # Against the lend a processor interpreter borrows, from a venv holding
       # `tatolab-stream` and pytest and nothing of the runtime: the lend is the
       # only `tatolab.runtime` on the path, and the tests fail if they imported
-      # one from anywhere else.
+      # one from anywhere else. They live outside `tests/` so that a develop
+      # venv's whole-suite run never collects them.
       - name: Portability and driver-search tests against the lend
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
@@ -140,8 +141,7 @@ jobs:
           cd sdk/streamlib-python-wheel
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             "$RUNNER_TEMP/lend-check-venv/bin/python" -m pytest -v \
-            tests/test_wheel_portability.py \
-            tests/test_bundled_vulkan_driver.py
+            tests_against_the_runtime_unit_lend/
 
       # The crate's own unit tests link libpython rather than building as an
       # extension module (the `extension-module` feature is off by default for
@@ -192,15 +192,10 @@ jobs:
       # during and after startup, GIL release while blocking, SIGINT handback,
       # cross-thread shutdown, no surviving process group — is rig-only by
       # owner decision (2026-08-03) rather than a self-hosted GPU runner.
-      #
-      # The portability and driver-search tests read the lend, not this venv's
-      # develop build; the lend step runs them.
       - name: Interpreter-lifecycle contract (GPU-free half)
         working-directory: sdk/streamlib-python-wheel
         run: |
-          .venv/bin/python -m pytest tests/ -v -m "not requires_gpu" \
-            --ignore tests/test_wheel_portability.py \
-            --ignore tests/test_bundled_vulkan_driver.py
+          .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
       # The Rust half of the same lifecycle contract the pytest step above
       # checks from Python: who owns SIGINT while `rt.run()` blocks, and that a

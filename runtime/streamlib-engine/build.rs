@@ -88,7 +88,7 @@ fn stamp_the_engine_build_id() {
 /// behind them, so `dlopen` cannot reach them and they have to be compiled in.
 /// The shims call libpipewire only through pointers Rust filled with `dlsym`,
 /// so this adds no `DT_NEEDED` entry — the invariant
-/// `sdk/streamlib-python-wheel/tests/test_wheel_portability.py` enforces.
+/// `sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py` enforces.
 fn compile_pipewire_shims() {
     const SHIM_SOURCES: &[&str] = &[
         "src/linux/pipewire_entry_points.c",

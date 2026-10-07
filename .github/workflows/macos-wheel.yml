@@ -104,8 +104,7 @@ jobs:
           cd sdk/streamlib-python-wheel
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             /tmp/lend-check/bin/python -m pytest -v \
-            tests/test_wheel_portability.py \
-            tests/test_bundled_vulkan_driver.py
+            tests_against_the_runtime_unit_lend/
 
       - name: Install the wheel into a fresh venv
         run: |
