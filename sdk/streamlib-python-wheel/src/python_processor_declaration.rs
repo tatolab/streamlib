@@ -468,74 +468,36 @@ class BlurProcessor:
 
     // ---- the window contract, declared in both languages ----
 
-    /// The stream package's own `@node` grammar, run in the test interpreter.
-    ///
-    /// Embedded rather than imported: `cargo test` has no installed
-    /// `tatolab-stream` on `sys.path`, and the point is to read a marker the real
-    /// decorator built rather than one this test hand-wrote.
-    const NODE_DECLARATION_MODULE_SOURCE: &str =
-        include_str!("../../tatolab-stream/tatolab/stream/_node_declaration.py");
+    /// The stream distribution's source root, put on `sys.path` because a
+    /// `cargo test` run has no installed `tatolab-stream`.
+    const STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../tatolab-stream");
 
-    /// A namespace with the real decorator module already run in it.
-    ///
-    /// Marked as belonging to a stand-in `tatolab.stream` package, because the
-    /// decorator module imports a sibling relatively and a bare run of its
-    /// source resolves that against nothing.
+    /// A fresh copy of the real `tatolab.stream._node_declaration` module's
+    /// namespace, so a test reads a marker the real decorator built rather than
+    /// one it hand-wrote.
     fn declaration_module_namespace(python: Python<'_>) -> Bound<'_, PyDict> {
-        install_stand_in_tatolab_stream_package(python);
-        let namespace = PyDict::new(python);
-        namespace.set_item("__package__", "tatolab.stream").unwrap();
-        python
-            .run(
-                &std::ffi::CString::new(NODE_DECLARATION_MODULE_SOURCE).unwrap(),
-                Some(&namespace),
-                None,
-            )
-            .expect("the decorator module runs");
-        namespace
-    }
-
-    /// The `tatolab.stream` package directory in the stream distribution, where
-    /// the decorator module's siblings live.
-    const STREAM_DISTRIBUTION_TATOLAB_STREAM_PACKAGE_DIRECTORY: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../tatolab-stream/tatolab/stream"
-    );
-
-    /// Put a `tatolab.stream` package on `sys.modules` whose search path is the
-    /// real source directory, so the decorator module's relative imports
-    /// resolve without an installed `tatolab-stream`.
-    ///
-    /// A package object already on `sys.modules` is never initialised again, so
-    /// `__init__.py`, which reaches the compiled runtime a `cargo test` run does
-    /// not have, is not executed. Only the siblings actually imported are
-    /// loaded, and each is the same file `include_str!` above reads.
-    fn install_stand_in_tatolab_stream_package(python: Python<'_>) {
-        let sys_modules = python
+        let sys_path = python
             .import("sys")
             .unwrap()
-            .getattr("modules")
+            .getattr("path")
             .unwrap()
-            .cast_into::<PyDict>()
+            .cast_into::<PyList>()
             .unwrap();
-        if !sys_modules.contains("tatolab.stream").unwrap() {
-            let package = python
-                .import("types")
-                .unwrap()
-                .call_method1("ModuleType", ("tatolab.stream",))
+        if !sys_path
+            .contains(STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY)
+            .unwrap()
+        {
+            sys_path
+                .insert(0, STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY)
                 .unwrap();
-            package
-                .setattr(
-                    "__path__",
-                    PyList::new(
-                        python,
-                        [STREAM_DISTRIBUTION_TATOLAB_STREAM_PACKAGE_DIRECTORY],
-                    )
-                    .unwrap(),
-                )
-                .unwrap();
-            sys_modules.set_item("tatolab.stream", package).unwrap();
         }
+        python
+            .import("tatolab.stream._node_declaration")
+            .expect("the decorator module imports")
+            .dict()
+            .copy()
+            .unwrap()
     }
 
     /// Run the real decorator module, run `class_body_source` against it, and
