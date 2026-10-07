@@ -28,8 +28,11 @@ license = { text = "BUSL-1.1" }
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
 # The stream package at this wheel's own version, so an installed engine keeps
-# running the streams written against it.
-dependencies = ["tatolab-stream==0.37.1"]
+# running the streams written against it. release-please moves the pin with the
+# version through the annotation on its line.
+dependencies = [
+    "tatolab-stream==0.37.1", # x-release-please-version
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

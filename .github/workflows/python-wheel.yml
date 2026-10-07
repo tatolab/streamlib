@@ -275,13 +275,17 @@ jobs:
           path: streamlib-wheel
 
       # The engine as a binary dependency, exactly as a third party installs
-      # it: from a built wheel, never from this checkout's source.
+      # it: from a built wheel, never from this checkout's source. The engine
+      # wheel depends on `tatolab-stream` at its own version, which no index
+      # carries before release, so that wheel is built from this checkout and
+      # installed beside it.
       - name: Install the engine wheel and build the extension into it
         working-directory: packages/${{ matrix.extension }}
         run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/streamlib-wheel/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$GITHUB_WORKSPACE"/streamlib-wheel/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # The repo-root `cargo fmt --all` does not reach a non-member, so an
@@ -382,12 +386,14 @@ jobs:
           name: streamlib-macos-wheel
           path: streamlib-macos-wheel
 
+      # `tatolab-stream` beside the engine wheel, as the Linux lane installs it.
       - name: Install the engine wheel and build the extension into it
         working-directory: packages/${{ matrix.extension }}
         run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/streamlib-macos-wheel/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$GITHUB_WORKSPACE"/streamlib-macos-wheel/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       - name: Extension crate tests

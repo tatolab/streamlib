@@ -269,7 +269,7 @@ def extension_package_directory_names():
 
 
 class ReleasingEveryProjectThisRepoPublishes(unittest.TestCase):
-    """Four files have to agree about which wheels this repo releases, and each
+    """Several files have to agree about which wheels this repo releases, and each
     disagreement fails somewhere too late to be obvious: a wheel absent from the
     index is built, attached and unreachable; one absent from the release
     configuration is never versioned, tagged or built at all."""
@@ -279,7 +279,7 @@ class ReleasingEveryProjectThisRepoPublishes(unittest.TestCase):
         self.assertTrue(extension_package_directory_names())
 
     def test_the_index_serves_exactly_what_this_repo_releases(self):
-        released = {"streamlib"} | {
+        released = {"streamlib", "tatolab-stream"} | {
             normalize_project_name(distribution_name)
             for _, distribution_name in extension_package_directory_names()
         }
@@ -304,6 +304,53 @@ class ReleasingEveryProjectThisRepoPublishes(unittest.TestCase):
             self.assertEqual(configured[package_path]["component"], distribution_name)
             # release-please refuses a package it has no recorded version for.
             self.assertIn(package_path, seeded, distribution_name)
+
+    def test_tatolab_stream_and_the_engine_wheels_pin_on_it_move_with_the_engine_version(self):
+        """The engine wheel depends on `tatolab-stream` at exactly its own version,
+        so a release that bumps one and not the other ships an engine wheel whose
+        dependency resolves nowhere."""
+        engine_extra_files = json.loads(
+            (REPOSITORY_ROOT / "release-please-config.json").read_text(encoding="utf-8")
+        )["packages"]["."]["extra-files"]
+        seeded_engine_version = json.loads(
+            (REPOSITORY_ROOT / ".release-please-manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )["."]
+        stream_pyproject_relative_path = "sdk/tatolab-stream/pyproject.toml"
+        engine_pyproject_relative_path = "sdk/streamlib-python-wheel/pyproject.toml"
+
+        self.assertIn(
+            {
+                "type": "toml",
+                "path": stream_pyproject_relative_path,
+                "jsonpath": "$.project.version",
+            },
+            engine_extra_files,
+        )
+        self.assertIn(
+            {"type": "generic", "path": engine_pyproject_relative_path},
+            engine_extra_files,
+        )
+
+        stream_project = tomllib.loads(
+            (REPOSITORY_ROOT / stream_pyproject_relative_path).read_text(encoding="utf-8")
+        )["project"]
+        self.assertEqual(stream_project["version"], seeded_engine_version)
+
+        # The generic updater rewrites a version only on a line carrying its
+        # annotation, so the pin must be alone on one that does.
+        pin_lines = [
+            line
+            for line in (REPOSITORY_ROOT / engine_pyproject_relative_path)
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if "tatolab-stream==" in line
+        ]
+        self.assertEqual(
+            pin_lines,
+            [f'    "tatolab-stream=={seeded_engine_version}", # x-release-please-version'],
+        )
 
 
 if __name__ == "__main__":

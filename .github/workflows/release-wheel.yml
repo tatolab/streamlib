@@ -7,9 +7,11 @@ name: Release Wheel
 #
 # Every project this repo publishes comes through here, because one index serves
 # them all and it is regenerated whole on every run. Each is versioned, tagged
-# and built independently — a tag names exactly one wheel to build — but the
-# index rebuild waits for all of them, so a run that releases the engine wheel
-# and an extension together publishes one index describing both.
+# and built independently — the engine's tag builds the engine wheel and the
+# `tatolab-stream` wheel released at its version, an extension's tag builds that
+# extension — but the index rebuild waits for all of them, so a run that
+# releases the engine wheel and an extension together publishes one index
+# describing every one.
 #
 # Called from release-please.yml rather than triggered by `on: release`, for the
 # same reason `trigger-schemas` is: release-please runs on the default
@@ -19,7 +21,7 @@ on:
   workflow_call:
     inputs:
       tag_name:
-        description: "Release tag to attach the engine wheel to (blank = no engine wheel this run)"
+        description: "Release tag to attach the engine and tatolab-stream wheels to (blank = neither this run)"
         type: string
         required: false
         default: ""
@@ -35,7 +37,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag to attach the engine wheel to (blank = rebuild the index only)"
+        description: "Release tag to attach the engine and tatolab-stream wheels to (blank = rebuild the index only)"
         type: string
         required: false
       streamlib_webrtc_tag_name:
@@ -189,18 +191,37 @@ jobs:
             fi
             glslc --version
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # Released with the engine wheel at the same version, every release: the
+      # engine wheel depends on it at exactly that version. Pure Python, so this
+      # one wheel serves every platform the engine ships for.
+      - name: Build the tatolab-stream wheel
+        run: uv build --wheel --out-dir sdk/tatolab-stream/dist sdk/tatolab-stream
+
       # PEP 420: `tatolab` is a namespace package. A regular `tatolab/__init__.py`
-      # in this wheel would shadow every other distribution's `tatolab.*`
-      # portion installed beside it. The listing is required to name both regular
-      # packages' `__init__.py`, so a wheel missing either, or an empty or
-      # unreadable listing, fails rather than passing.
-      - name: The wheel ships tatolab as a namespace package
+      # in either wheel would shadow every other distribution's `tatolab.*`
+      # portion installed beside it. Each listing is required to name its own
+      # regular package's `__init__.py`, so a wheel missing it, or an empty or
+      # unreadable listing, fails rather than passing. Neither wheel carries
+      # the other's package; a copy would overwrite it on install.
+      - name: The wheels ship tatolab as a namespace package
         run: |
           unzip -Z1 sdk/streamlib-python-wheel/dist/*.whl > /tmp/wheel-member-names.txt
-          grep -qx 'tatolab/stream/__init__.py' /tmp/wheel-member-names.txt
           grep -qx 'tatolab/runtime/__init__.py' /tmp/wheel-member-names.txt
-          if grep -qx 'tatolab/__init__.py' /tmp/wheel-member-names.txt; then
-            echo "::error::the wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+          if grep -q '^tatolab/stream/' /tmp/wheel-member-names.txt; then
+            echo "::error::the engine wheel ships tatolab/stream/, which is tatolab-stream's"
+            exit 1
+          fi
+          unzip -Z1 sdk/tatolab-stream/dist/*.whl > /tmp/stream-wheel-member-names.txt
+          grep -qx 'tatolab/stream/__init__.py' /tmp/stream-wheel-member-names.txt
+          if grep -q '^tatolab/runtime/' /tmp/stream-wheel-member-names.txt; then
+            echo "::error::the tatolab-stream wheel ships tatolab/runtime/, which is the engine wheel's"
+            exit 1
+          fi
+          if grep -qx 'tatolab/__init__.py' /tmp/wheel-member-names.txt /tmp/stream-wheel-member-names.txt; then
+            echo "::error::a wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
             exit 1
           fi
 
@@ -210,7 +231,8 @@ jobs:
       - name: The wheel installs, and its scaffold is importable by name
         run: |
           python3 -m venv /tmp/wheel-check
-          /tmp/wheel-check/bin/pip install --no-index sdk/streamlib-python-wheel/dist/*.whl
+          /tmp/wheel-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist \
+            sdk/streamlib-python-wheel/dist/*.whl
           # The scaffolded effect imports numpy, which the scaffold declares as
           # its own dependency — installing it here is what `uv sync` does for a
           # real user, and it makes the import below prove the declared set is
@@ -254,12 +276,12 @@ jobs:
           cd /tmp/scaffold-check && /tmp/wheel-check/bin/python -c \
             'from nodes.inverting_effect import InvertingEffect'
 
-      - name: Attach the wheel to the release
+      - name: Attach the wheels to the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ inputs.tag_name }}" \
-            sdk/streamlib-python-wheel/dist/*.whl --clobber
+            sdk/streamlib-python-wheel/dist/*.whl sdk/tatolab-stream/dist/*.whl --clobber
 
   # The same engine release for Apple Silicon, built on a macOS runner and
   # attached beside the manylinux wheel. The index groups by project name, so a
