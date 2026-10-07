@@ -20,14 +20,16 @@ if TYPE_CHECKING:
 
 _EscalateResult = TypeVar("_EscalateResult")
 
+StorageBufferDtype = Literal["float32", "float16", "uint8", "int32"]
 
-@runtime_backed_protocol
-class GpuContextLimitedAccess(Protocol):
-    """Non-allocating GPU capability, valid for the node's whole life."""
+
+class _GpuContextMembersBothCapabilitiesShare(Protocol):
+    """The GPU methods the limited and the full capability both carry."""
 
     def acquire_pixel_buffer(
         self, width: int, height: int, format: str = "bgra"
     ) -> GpuSurfaceHandle: ...
+
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
     ) -> GpuSurfaceHandle:
@@ -64,7 +66,7 @@ class GpuContextLimitedAccess(Protocol):
     def acquire_storage_buffer(
         self,
         shape: Sequence[int],
-        dtype: Literal["float32", "float16", "uint8", "int32"],
+        dtype: StorageBufferDtype,
     ) -> GpuSurfaceHandle:
         """A tensor storage buffer of `shape` and `dtype`, named by the surface id the engine minted.
 
@@ -86,7 +88,7 @@ class GpuContextLimitedAccess(Protocol):
         pool_key: str,
         rotation_depth: int,
         shape: Sequence[int],
-        dtype: Literal["float32", "float16", "uint8", "int32"],
+        dtype: StorageBufferDtype,
     ) -> GpuSurfaceHandle:
         """The tensor this frame publishes into, from the node output pool `pool_key`.
 
@@ -96,7 +98,31 @@ class GpuContextLimitedAccess(Protocol):
         """
         ...
 
+    def copy_surface_to_surface(
+        self, source_surface_id: str, destination_surface: GpuSurfaceHandle
+    ) -> None:
+        """Copy one surface's pixels into another, same format and extent.
+
+        Any backing pair: the engine picks the copy the two need and converts
+        nothing. A pixel buffer's `rgba` and a texture's `rgba8_unorm` are one
+        format; two textures must match exactly (`rgba8_unorm` is not
+        `rgba8_unorm_srgb`). Returns once the destination's next reader would
+        see the copied pixels. A format or extent mismatch, a retired frame,
+        a destination that cannot take a write-back, and a source and
+        destination that are one allocation each raise naming the reason.
+        The copy reads the source as it is when the copy runs: hold
+        `claim_surface_against_producer_reuse` on a frame whose producer may
+        recycle it, so the pixels copied are the ones its id named.
+        """
+        ...
+
+
+@runtime_backed_protocol
+class GpuContextLimitedAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
+    """Non-allocating GPU capability, valid for the node's whole life."""
+
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
+
     def claim_surface_against_producer_reuse(
         self, surface_id: str
     ) -> GpuSurfaceCheckOutLease:
@@ -123,24 +149,6 @@ class GpuContextLimitedAccess(Protocol):
         """
         ...
 
-    def copy_surface_to_surface(
-        self, source_surface_id: str, destination_surface: GpuSurfaceHandle
-    ) -> None:
-        """Copy one surface's pixels into another, same format and extent.
-
-        Any backing pair: the engine picks the copy the two need and converts
-        nothing. A pixel buffer's `rgba` and a texture's `rgba8_unorm` are one
-        format; two textures must match exactly (`rgba8_unorm` is not
-        `rgba8_unorm_srgb`). Returns once the destination's next reader would
-        see the copied pixels. A format or extent mismatch, a retired frame,
-        a destination that cannot take a write-back, and a source and
-        destination that are one allocation each raise naming the reason.
-        The copy reads the source as it is when the copy runs: hold
-        `claim_surface_against_producer_reuse` on a frame whose producer may
-        recycle it, so the pixels copied are the ones its id named.
-        """
-        ...
-
     def escalate(
         self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]
     ) -> _EscalateResult:
@@ -151,83 +159,12 @@ class GpuContextLimitedAccess(Protocol):
 
 
 @runtime_backed_protocol
-class GpuContextFullAccess(Protocol):
+class GpuContextFullAccess(_GpuContextMembersBothCapabilitiesShare, Protocol):
     """The privileged GPU capability a full-access hook receives.
 
     Each method is its own escalate round trip to the parent, which runs the
     privileged work against the engine and answers with a handle.
     """
-
-    def acquire_pixel_buffer(
-        self, width: int, height: int, format: str = "bgra"
-    ) -> GpuSurfaceHandle: ...
-    def acquire_texture(
-        self, width: int, height: int, format: str, usage: list[str]
-    ) -> GpuSurfaceHandle:
-        """Acquire a pooled device texture through the privileged path.
-
-        The id is the whole handle: a kernel dispatch binds it, and a downstream
-        node resolves it. `copy_src` and `copy_dst` ride every request, so
-        the CPU doors reach the pixels — over the surface's host-visible staging
-        on Linux, through its own IOSurface on macOS — without the caller
-        spelling a transfer usage.
-        """
-        ...
-
-    def acquire_texture_from_node_output_pool(
-        self,
-        pool_key: str,
-        rotation_depth: int,
-        width: int,
-        height: int,
-        format: str,
-        usage: list[str],
-    ) -> GpuSurfaceHandle:
-        """The texture this frame publishes into, from the node output pool `pool_key`.
-
-        Every call names a new frame, `<slot>#<generation>`, in a slot the pool
-        owns; a slot any consumer still holds is skipped, never rewritten. The
-        pool rotates through `rotation_depth` slots, grows while consumers hold
-        frames, and at its cap raises naming the pool — the producer drops its
-        own frame rather than wait. `NodeOutputTextureRing` is the
-        spelling a node reaches for.
-        """
-        ...
-
-    def acquire_storage_buffer(
-        self,
-        shape: Sequence[int],
-        dtype: Literal["float32", "float16", "uint8", "int32"],
-    ) -> GpuSurfaceHandle:
-        """A tensor storage buffer of `shape` and `dtype`, named by the surface id the engine minted.
-
-        Contiguous row-major, every dimension non-zero. The handle states
-        `shape` and `dtype` and no pixel geometry; `torch.from_dlpack` writes it
-        on the GPU in place, over the engine's own memory with no staging and
-        no copy — `kDLCUDA` on Linux, `kDLMetal` on macOS, which torch imports
-        as `mps` and MLX as an array. Closing the handle (or leaving its `with`
-        block) orders torch's writes ahead of every other holder's read, so
-        publish the id after it; an MLX write is ordered by the `mx.eval` it
-        owes inside the block. A one-off is released at close; a tensor
-        published downstream comes from
-        `acquire_storage_buffer_from_node_output_pool`.
-        """
-        ...
-
-    def acquire_storage_buffer_from_node_output_pool(
-        self,
-        pool_key: str,
-        rotation_depth: int,
-        shape: Sequence[int],
-        dtype: Literal["float32", "float16", "uint8", "int32"],
-    ) -> GpuSurfaceHandle:
-        """The tensor this frame publishes into, from the node output pool `pool_key`.
-
-        The pool contract `acquire_texture_from_node_output_pool` states:
-        a new `<slot>#<generation>` per call, a slot a consumer still holds is
-        never rewritten, and at the cap the call raises naming the pool.
-        """
-        ...
 
     def create_window(
         self, title: str, width: int = 1280, height: int = 720
@@ -391,24 +328,6 @@ class GpuContextFullAccess(Protocol):
         """
         ...
 
-    def copy_surface_to_surface(
-        self, source_surface_id: str, destination_surface: GpuSurfaceHandle
-    ) -> None:
-        """Copy one surface's pixels into another, same format and extent.
-
-        Any backing pair: the engine picks the copy the two need and converts
-        nothing. A pixel buffer's `rgba` and a texture's `rgba8_unorm` are one
-        format; two textures must match exactly (`rgba8_unorm` is not
-        `rgba8_unorm_srgb`). Returns once the destination's next reader would
-        see the copied pixels. A format or extent mismatch, a retired frame,
-        a destination that cannot take a write-back, and a source and
-        destination that are one allocation each raise naming the reason.
-        The copy reads the source as it is when the copy runs: hold
-        `claim_surface_against_producer_reuse` on a frame whose producer may
-        recycle it, so the pixels copied are the ones its id named.
-        """
-        ...
-
     def kernel_dispatch_batch(self) -> KernelDispatchBatch:
         """Open a scope that records several dispatches and runs them as one.
 
@@ -517,6 +436,7 @@ class GpuContextFullAccess(Protocol):
         ...
 
     def wait_device_idle(self) -> None: ...
+
     def escalate(
         self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]
     ) -> _EscalateResult:

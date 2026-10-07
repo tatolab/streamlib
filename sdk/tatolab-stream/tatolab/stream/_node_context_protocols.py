@@ -157,13 +157,8 @@ class NodeLinkDataAccess(Protocol):
         ...
 
 
-@runtime_backed_protocol
-class RuntimeContextFullAccess(Protocol):
-    """Privileged runtime context handed to `setup` / `teardown` / `start` / `stop`.
-
-    Built by the runtime in the interpreter it starts for the node; a node never
-    constructs one.
-    """
+class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
+    """The runtime-context members the limited and the full context both carry."""
 
     @property
     def config(self) -> dict[str, Any]:
@@ -191,11 +186,6 @@ class RuntimeContextFullAccess(Protocol):
         ...
 
     @property
-    def gpu_full_access(self) -> GpuContextFullAccess:
-        """The privileged GPU capability."""
-        ...
-
-    @property
     def runtime_id(self) -> str:
         """The id of the runtime running this node."""
         ...
@@ -211,6 +201,20 @@ class RuntimeContextFullAccess(Protocol):
 
     def should_process(self) -> bool:
         """Whether the node should process now."""
+        ...
+
+
+@runtime_backed_protocol
+class RuntimeContextFullAccess(_RuntimeContextMembersBothCapabilitiesShare, Protocol):
+    """Privileged runtime context handed to `setup` / `teardown` / `start` / `stop`.
+
+    Built by the runtime in the interpreter it starts for the node; a node never
+    constructs one.
+    """
+
+    @property
+    def gpu_full_access(self) -> GpuContextFullAccess:
+        """The privileged GPU capability."""
         ...
 
     def limited_access_view_for_helper_process(self) -> RuntimeContextLimitedAccess:
@@ -223,55 +227,12 @@ class RuntimeContextFullAccess(Protocol):
 
 
 @runtime_backed_protocol
-class RuntimeContextLimitedAccess(Protocol):
+class RuntimeContextLimitedAccess(_RuntimeContextMembersBothCapabilitiesShare, Protocol):
     """Restricted runtime context handed to `process` / `on_pause` / `on_resume`.
 
     `gpu_full_access` is deliberately absent — reaching for it raises
     `AttributeError`, mirroring the Rust capability split.
     """
-
-    @property
-    def config(self) -> dict[str, Any]:
-        """The node's configuration."""
-        ...
-
-    @property
-    def time(self) -> int:
-        """The runtime's monotonic time in nanoseconds."""
-        ...
-
-    @property
-    def inputs(self) -> LinkInputDataReader:
-        """The node's input ports."""
-        ...
-
-    @property
-    def outputs(self) -> LinkOutputDataWriter:
-        """The node's output ports."""
-        ...
-
-    @property
-    def gpu_limited_access(self) -> GpuContextLimitedAccess:
-        """The non-allocating GPU capability."""
-        ...
-
-    @property
-    def runtime_id(self) -> str:
-        """The id of the runtime running this node."""
-        ...
-
-    @property
-    def node_id(self) -> str:
-        """This node's id, the one `graph` renders on the node."""
-        ...
-
-    def is_paused(self) -> bool:
-        """Whether the node is paused."""
-        ...
-
-    def should_process(self) -> bool:
-        """Whether the node should process now."""
-        ...
 
 
 @runtime_backed_protocol
