@@ -24,6 +24,7 @@ from ._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
     cast_exposed_name_to_url_safe,
 )
+from ._node_declaration import NODE_DECLARATION_DECLARED_STAMP
 
 __all__ = [
     "NodeInputPortReference",
@@ -41,8 +42,6 @@ _STREAM_IDENTITY_ATTRIBUTE = "__streamlib_stream_identity__"
 _STREAM_NAME_ATTRIBUTE = "__streamlib_stream_name__"
 _STREAM_DESCRIPTION_ATTRIBUTE = "__streamlib_stream_description__"
 
-# The stamp `@node` leaves on a class it declares.
-_NODE_DECLARED_ATTRIBUTE = "__tatolab_node_declared__"
 # The class attribute a built-in node carries the path it is registered under in.
 _BUILT_IN_NODE_TYPE_ATTRIBUTE = "type"
 
@@ -435,7 +434,7 @@ def _not_a_node_refusal(node_class: object) -> str:
 
 
 def _node_type_of(node_class: type) -> str:
-    if hasattr(node_class, _NODE_DECLARED_ATTRIBUTE):
+    if hasattr(node_class, NODE_DECLARATION_DECLARED_STAMP):
         return _node_class_import_path(node_class)
     built_in_node_type = getattr(node_class, _BUILT_IN_NODE_TYPE_ATTRIBUTE, None)
     if isinstance(built_in_node_type, str):

@@ -38,6 +38,17 @@ __all__ = [
     "node",
 ]
 
+# The stamps `@node` writes and the runtime reads. The runtime's Rust reader
+# spells them too, and its tests run this decorator against it.
+NODE_DECLARATION_DECLARED_STAMP = "__tatolab_node_declared__"
+NODE_DECLARATION_CONFIG_CLASS_STAMP = "__tatolab_node_config_class__"
+NODE_DECLARATION_CONFIG_SCHEMA_STAMP = "__tatolab_node_config_schema__"
+NODE_DECLARATION_DESCRIPTION_STAMP = "__tatolab_node_description__"
+NODE_DECLARATION_EXECUTION_STAMP = "__tatolab_node_execution__"
+NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP = "__tatolab_node_scheduling_priority__"
+NODE_DECLARATION_INPUT_PORTS_STAMP = "__tatolab_node_input_ports__"
+NODE_DECLARATION_OUTPUT_PORTS_STAMP = "__tatolab_node_output_ports__"
+
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
 _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
 _DELIVERY_PROFILES = ("newest", "ordered")
@@ -419,24 +430,34 @@ def _declare_node(
     input_ports, output_ports = _collect_declared_ports(node_class)
     config_class = _config_class_named_by_the_init_annotation(node_class)
 
-    node_class.__tatolab_node_declared__ = True  # type: ignore[attr-defined]
-    node_class.__tatolab_node_config_class__ = config_class  # type: ignore[attr-defined]
-    node_class.__tatolab_node_config_schema__ = (  # type: ignore[attr-defined]
+    setattr(node_class, NODE_DECLARATION_DECLARED_STAMP, True)
+    setattr(node_class, NODE_DECLARATION_CONFIG_CLASS_STAMP, config_class)
+    setattr(
+        node_class,
+        NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
         json_schema_for_a_node_declaring_no_config()
         if config_class is None
-        else derive_config_class_json_schema(config_class)
+        else derive_config_class_json_schema(config_class),
     )
-    node_class.__tatolab_node_description__ = (  # type: ignore[attr-defined]
-        description or inspect.getdoc(node_class) or ""
+    setattr(
+        node_class,
+        NODE_DECLARATION_DESCRIPTION_STAMP,
+        description or inspect.getdoc(node_class) or "",
     )
-    node_class.__tatolab_node_execution__ = _resolve_execution(  # type: ignore[attr-defined]
-        execution, interval_ms, node_class, has_input_ports=bool(input_ports)
+    setattr(
+        node_class,
+        NODE_DECLARATION_EXECUTION_STAMP,
+        _resolve_execution(
+            execution, interval_ms, node_class, has_input_ports=bool(input_ports)
+        ),
     )
-    node_class.__tatolab_node_scheduling_priority__ = _validate_scheduling(  # type: ignore[attr-defined]
-        scheduling
+    setattr(
+        node_class,
+        NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP,
+        _validate_scheduling(scheduling),
     )
-    node_class.__tatolab_node_input_ports__ = input_ports  # type: ignore[attr-defined]
-    node_class.__tatolab_node_output_ports__ = output_ports  # type: ignore[attr-defined]
+    setattr(node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, input_ports)
+    setattr(node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, output_ports)
 
     return node_class
 

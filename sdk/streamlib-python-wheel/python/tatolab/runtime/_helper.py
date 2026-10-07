@@ -39,6 +39,10 @@ from tatolab.stream import (
     log,
     start_monotonic_timer,
 )
+from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_INPUT_PORTS_STAMP,
+    NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+)
 
 from ._capability_extensions import (
     load_installed_capability_extensions_once_per_process,
@@ -979,13 +983,13 @@ class HelperProcessLifecycle:
                 [
                     port["name"]
                     for port in getattr(
-                        self._processor_class, "__tatolab_node_input_ports__", []
+                        self._processor_class, NODE_DECLARATION_INPUT_PORTS_STAMP, []
                     )
                 ],
                 [
                     port["name"]
                     for port in getattr(
-                        self._processor_class, "__tatolab_node_output_ports__", []
+                        self._processor_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, []
                     )
                 ],
             )

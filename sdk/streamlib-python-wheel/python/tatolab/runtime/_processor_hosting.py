@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
+
 __all__ = ["apply_configuration", "construct_processor_instance"]
 
 
@@ -29,7 +31,7 @@ def construct_processor_instance(
     argument is unused — ports are reached through `ctx.inputs` / `ctx.outputs`
     — but the host still passes it, so the arity stays.
     """
-    config_class = getattr(processor_class, "__tatolab_node_config_class__", None)
+    config_class = getattr(processor_class, NODE_DECLARATION_CONFIG_CLASS_STAMP, None)
     configuration = _as_configuration_mapping(processor_class, configuration)
     if config_class is None:
         _refuse_a_configuration_with_nowhere_to_go(processor_class, configuration)
@@ -50,7 +52,7 @@ def apply_configuration(processor_instance: Any, configuration: Optional[Any]) -
             f"{processor_class.__name__} cannot be reconfigured while running: "
             f"define `configure(self, config)` on it to take one."
         )
-    config_class = getattr(processor_class, "__tatolab_node_config_class__", None)
+    config_class = getattr(processor_class, NODE_DECLARATION_CONFIG_CLASS_STAMP, None)
     configuration = _as_configuration_mapping(processor_class, configuration)
     if config_class is None:
         _refuse_a_configuration_with_nowhere_to_go(processor_class, configuration)

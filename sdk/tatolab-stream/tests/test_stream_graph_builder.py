@@ -1267,4 +1267,5 @@ def test_the_builder_module_imports_nothing_native() -> None:
             assert (level, module_name) in {
                 (1, "_exposed_name_cast"),
                 (1, "_built_in_node"),
+                (1, "_node_declaration"),
             }, module_name
