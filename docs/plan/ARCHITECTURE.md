@@ -21,7 +21,7 @@ fact about the shipped tree until the change that removes them ships and folds i
 direction, and nothing new is built on it. Off a machine, the direction is §Networking's
 `[moq-on-the-tailnet]` entries.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
+## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting, authoring-names)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
@@ -52,7 +52,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `stream.py` and `-f`; nodes are
   Python classes written in the project or imported from pip-installed packages, and
   `stream.add` takes the class; the builder's API is `add`/`connect`/`expose`.
-  [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567, #2569; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node` — stream-graph builds the authoring clauses]
+  [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567, #2569; amended by authoring-names: the builder is `StreamBuilder`, held as `stream_builder`; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node` — stream-graph builds the authoring clauses]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_stream_graph_builder.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
@@ -171,7 +171,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   defaults to the function's and its docstring is the description an agent reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
   there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one. A
   package declaring its streams under an entry-point group is the packs OPEN's.
-  [one-runtime-per-machine; stream-graph — SHIPPED #2567]
+  [one-runtime-per-machine; stream-graph — SHIPPED #2567; amended by authoring-names:
+  `@stream def camera_rig(stream_builder: StreamBuilder)`]
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
   adds nodes, connects them and returns port references is a reusable fragment. The graph
   stays flat and addresses stay `<machine>/<stream>/<node>/<port>`; no group label and no nested
@@ -179,7 +180,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [runtime-hosting; one-runtime-per-machine]
 
-## Packages & extension model — IN-FLIGHT (→ package-split-and-lend)
+## Packages & extension model — IN-FLIGHT (→ package-split-and-lend, authoring-names)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -564,7 +565,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the runtime loads what it understands and refuses by name anything in a graph it does not —
   a node type it lacks, a setting it does not know — and a newer runtime loads every graph an
   older stream recorded. Compiling happens in the project's interpreter, never in the
-  runtime process. Owner, 2026-10-02. [package-split-and-lend; one-runtime-per-machine]
+  runtime process. Owner, 2026-10-02. [package-split-and-lend; one-runtime-per-machine; amended by
+  authoring-names: `@input_port`, `@output_port`, the `StreamBuilder`]
 - **OPEN** — How an external control client plugs in: an entry point with a role of its own
   beside today's two, or another seam. What it hands the runtime beyond a relay address and a
   credential is the sharing step's to decide (§Networking). Known (2026-10-04): no stream map,
@@ -593,6 +595,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   contexts' `processor_id` → `node_id`, the id `graph` renders on the node. A name an earlier
   change deletes is deleted, never renamed. The engine's Rust identifiers and the wire keep
   "processor" until the rename step. Owner, 2026-10-02. [tatolab-names; package-split-and-lend]
+- **DECIDED** — The authoring names, with no alias. The object a `@stream` function is handed is
+  a `StreamBuilder`, and the scaffold, the docs and every refusal model the parameter as
+  `stream_builder`: `@stream def main(stream_builder: StreamBuilder)`; the decorator keeps
+  `@stream` and a stream stays the decorated function. A node declares its ports with
+  `@input_port` and `@output_port`, and a Rust node's attribute macro takes `input_port(…)` and
+  `output_port(…)`, so both languages spell a port alike. A node reference keeps `input(name)`
+  and `output(name)`. They land in this milestone, ahead of the stand-alone stream package.
+  Rejected: `@incoming` / `@outgoing` for ports — vocabulary no Python dataflow or media
+  framework uses (owner, 2026-10-06). Owner, 2026-10-06. [authoring-names]
 - **OPEN** — Packs, a registry, and loading a stream from a source. Direction (review, not
   decided; the owner wants to distribute what they build and update the app separately): the
   unit of distribution is a pack — one ordinary Python distribution carrying nodes and streams,

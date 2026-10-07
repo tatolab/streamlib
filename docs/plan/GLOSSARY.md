@@ -29,7 +29,8 @@ predates the markers.
 
 **Stream** _(user)_: the unit a person writes and runs — today's app: a function decorated
 `@stream` that builds a graph, in a directory with `pyproject.toml` and one venv that may hold
-several; named by its function; it may expose ports. _Avoid_: "app", "pipeline", "dataflow", "workflow", "graph"
+several; named by its function; it may expose ports. The function builds it through the
+`StreamBuilder` it is handed. _Avoid_: "app", "pipeline", "dataflow", "workflow", "graph"
 for the unit.
 
 **Pack** _(user)_: one ordinary Python distribution carrying nodes and streams for others to
@@ -175,7 +176,7 @@ live in an importable, side-effect-safe module — a class defined in
 and a process id belong to. _Avoid_: "processor" on a user surface, "operator", "element",
 "stage", "step", "instance" alone; the live-runtime sense of "node" is retired.
 
-**Node reference** _(user)_: what `stream.add` hands back — a handle carrying the node's name
+**Node reference** _(user)_: what `stream_builder.add` hands back — a handle carrying the node's name
 and its `output()` / `input()` port references; the node itself exists once the stream runs.
 _Avoid_: "the instance" for the handle.
 

@@ -68,3 +68,27 @@ Consequences:
   "processor" until the rename step; a Python-visible name can differ from the Rust type behind it.
 - Names an earlier change deletes — `@processor`, the added-processor handle, the port
   references — are removed, not renamed.
+
+## Decided 2026-10-06: the builder and the port decorators
+
+`@stream def main(stream: Stream)` gave one word three meanings in two lines — the decorator,
+the parameter and its type — and inside the function the parameter hid the decorator. The object
+is not the stream: the stream is the decorated function (the glossary's word), and the object is
+what that function builds it with, compiled into a graph afterwards — so it is a
+`StreamBuilder`, held as `stream_builder` (the naming rule bars a bare `builder`). `@input` replaced
+Python's builtin `input()` in every module that imported it (ruff A004); `@input_port` and
+`@output_port` keep the input/output vocabulary every dataflow and media framework uses and add the
+glossary's noun. Owner, 2026-10-06.
+
+Rejected:
+- *`@incoming` / `@outgoing`.* Only Java's MicroProfile Reactive Messaging uses it; no Python
+  dataflow or media framework does, so neither a newcomer nor an agent arrives knowing it.
+- *A capitalised `Input` / `Output`, or a namespaced `@node.input`.* Both avoid the builtin; neither
+  says "port", and the namespaced form ties the port grammar to the class decorator's object.
+- *Renaming after `tatolab-stream` ships.* A second break for every author; the namespace move
+  already makes every user re-import everything.
+
+Consequences:
+- A node reference's `input(name)` / `output(name)` keep their spelling: a method on its
+  receiver shadows nothing.
+- The Rust attribute macro's port keys follow, so both languages spell a port alike.
