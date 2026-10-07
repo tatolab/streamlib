@@ -109,6 +109,10 @@ class Runtime:
         Nothing refuses a name another runtime already holds — two runs from
         one directory both start — and `--node` refuses a name two live
         runtimes hold, naming both.
+
+        The directory holding the `tatolab/runtime/` package this module was
+        imported from is the lend directory: every processor interpreter
+        borrows `tatolab.runtime` from it.
         """
 
     def load(

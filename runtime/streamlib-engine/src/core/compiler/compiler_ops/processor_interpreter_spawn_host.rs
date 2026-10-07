@@ -106,9 +106,9 @@ pub(crate) fn processor_interpreter_bootstrap_path(lend_directory: &Path) -> Pat
 /// `PYTHONPATH` for a processor interpreter: the lend directory, then the
 /// project directory, and nothing inherited.
 ///
-/// The lend directory holds `tatolab/` with only `runtime/` in it and no
-/// `__init__.py`, so PEP 420 merges the lent `tatolab.runtime` with the venv's
-/// own `tatolab.stream`.
+/// The lend directory holds `tatolab/runtime/` and no `tatolab/__init__.py`,
+/// so PEP 420 merges the lent `tatolab.runtime` with the venv's own
+/// `tatolab.stream`.
 pub(crate) fn processor_interpreter_python_path(
     lend_directory: &Path,
     project_directory: &Path,
