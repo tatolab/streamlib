@@ -4,8 +4,9 @@
 //! Reading the `@node` grammar off a Python class.
 //!
 //! The `__tatolab_node_*__` attributes the decorator attaches are the
-//! contract between `tatolab/stream/_node_declaration.py` and this module; the
-//! two move together.
+//! contract between `tatolab/stream/_node_declaration.py` and this module; each
+//! stamp const here is named after its `NODE_DECLARATION_*_STAMP` counterpart
+//! there, and the two move together.
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -21,6 +22,13 @@ use crate::python_bag_conversion::{
     python_object_to_json_value, python_type_name_for_error_message,
 };
 use crate::python_processor_import_path::processor_class_import_path;
+
+const NODE_DECLARATION_CONFIG_SCHEMA_STAMP: &str = "__tatolab_node_config_schema__";
+const NODE_DECLARATION_DESCRIPTION_STAMP: &str = "__tatolab_node_description__";
+const NODE_DECLARATION_EXECUTION_STAMP: &str = "__tatolab_node_execution__";
+const NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP: &str = "__tatolab_node_scheduling_priority__";
+const NODE_DECLARATION_INPUT_PORTS_STAMP: &str = "__tatolab_node_input_ports__";
+const NODE_DECLARATION_OUTPUT_PORTS_STAMP: &str = "__tatolab_node_output_ports__";
 
 /// Everything the engine needs to register and instantiate one Python
 /// processor class.
@@ -43,7 +51,7 @@ impl PythonProcessorDeclaration {
             class_short_name,
             ProcessorClassImportPath::new(class_import_path.clone())
                 .map_err(|blank| PyValueError::new_err(blank.to_string()))?,
-            read_string_attribute(processor_class, "__tatolab_node_description__")?,
+            read_string_attribute(processor_class, NODE_DECLARATION_DESCRIPTION_STAMP)?,
         )
         .with_runtime(ProcessorRuntime::Python)
         .with_entrypoint(class_import_path)
@@ -80,13 +88,13 @@ fn read_class_short_name(processor_class: &Bound<'_, PyAny>) -> PyResult<Process
 /// document the catalog serves — the engine never re-derives it and never
 /// inspects it.
 fn read_config_schema_document(processor_class: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
-    let stamped = processor_class.getattr("__tatolab_node_config_schema__")?;
+    let stamped = processor_class.getattr(NODE_DECLARATION_CONFIG_SCHEMA_STAMP)?;
     // Refused here rather than by the converter, whose own messages are
     // written for a bag on the data plane and would tell a processor author
     // about GPU frames.
     let document = stamped.clone().cast_into::<PyDict>().map_err(|_| {
         PyTypeError::new_err(format!(
-            "__tatolab_node_config_schema__ must be a JSON object, got a {} — the \
+            "{NODE_DECLARATION_CONFIG_SCHEMA_STAMP} must be a JSON object, got a {} — the \
              decorator derives this document, so a class reaching here was built by hand \
              rather than by @tatolab.stream.node",
             python_type_name_for_error_message(&stamped, "value of unknown type")
@@ -97,9 +105,11 @@ fn read_config_schema_document(processor_class: &Bound<'_, PyAny>) -> PyResult<s
 
 fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<ExecutionConfig> {
     let execution = processor_class
-        .getattr("__tatolab_node_execution__")?
+        .getattr(NODE_DECLARATION_EXECUTION_STAMP)?
         .cast_into::<PyDict>()
-        .map_err(|_| PyTypeError::new_err("__tatolab_node_execution__ must be a dict"))?;
+        .map_err(|_| {
+            PyTypeError::new_err(format!("{NODE_DECLARATION_EXECUTION_STAMP} must be a dict"))
+        })?;
 
     let mode = read_dict_string(&execution, "mode")?;
     let execution = match mode.as_str() {
@@ -108,7 +118,9 @@ fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<Executi
         "continuous" => ProcessExecution::Continuous {
             interval_ms: execution.get_item("interval_ms")?.map_or(Ok(0), |value| {
                 value.extract::<u32>().map_err(|_| {
-                    PyTypeError::new_err("__tatolab_node_execution__.interval_ms must be an int")
+                    PyTypeError::new_err(format!(
+                        "{NODE_DECLARATION_EXECUTION_STAMP}.interval_ms must be an int"
+                    ))
                 })
             })?,
         },
@@ -123,7 +135,7 @@ fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<Executi
 }
 
 fn read_thread_priority(processor_class: &Bound<'_, PyAny>) -> PyResult<ThreadPriority> {
-    let priority = processor_class.getattr("__tatolab_node_scheduling_priority__")?;
+    let priority = processor_class.getattr(NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP)?;
     if priority.is_none() {
         return Ok(ThreadPriority::Normal);
     }
@@ -144,10 +156,10 @@ enum PortDirection {
 }
 
 impl PortDirection {
-    fn class_attribute(self) -> &'static str {
+    fn node_declaration_ports_stamp(self) -> &'static str {
         match self {
-            Self::Input => "__tatolab_node_input_ports__",
-            Self::Output => "__tatolab_node_output_ports__",
+            Self::Input => NODE_DECLARATION_INPUT_PORTS_STAMP,
+            Self::Output => NODE_DECLARATION_OUTPUT_PORTS_STAMP,
         }
     }
 }
@@ -156,17 +168,17 @@ fn read_port_descriptors(
     processor_class: &Bound<'_, PyAny>,
     direction: PortDirection,
 ) -> PyResult<Vec<PortDescriptor>> {
-    let attribute = direction.class_attribute();
+    let ports_stamp = direction.node_declaration_ports_stamp();
     let declared = processor_class
-        .getattr(attribute)?
+        .getattr(ports_stamp)?
         .cast_into::<PyList>()
-        .map_err(|_| PyTypeError::new_err(format!("{attribute} must be a list")))?;
+        .map_err(|_| PyTypeError::new_err(format!("{ports_stamp} must be a list")))?;
 
     let mut ports = Vec::with_capacity(declared.len());
     for declaration in declared.iter() {
         let declaration = declaration
             .cast_into::<PyDict>()
-            .map_err(|_| PyTypeError::new_err(format!("{attribute} must hold dicts")))?;
+            .map_err(|_| PyTypeError::new_err(format!("{ports_stamp} must hold dicts")))?;
 
         let mut port = PortDescriptor::new(
             read_dict_string(&declaration, "name")?,
