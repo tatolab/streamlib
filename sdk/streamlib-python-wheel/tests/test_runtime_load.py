@@ -619,6 +619,24 @@ def test_a_stream_name_that_is_not_a_str_is_refused_naming_the_fix(runtime: tato
     assert "pass a str, or leave `name` out" in str(refused.value)
 
 
+@pytest.mark.parametrize("path_argument_name", ["project_directory", "interpreter"])
+def test_a_path_argument_that_is_not_a_path_is_refused_naming_the_argument(
+    runtime: tatolab.runtime.Runtime, path_argument_name: str
+):
+    path_arguments: dict[str, object] = {
+        "project_directory": RUNTIME_LOAD_TEST_PROJECT_DIRECTORY,
+        "interpreter": sys.executable,
+    }
+    path_arguments[path_argument_name] = 7
+
+    with pytest.raises(TypeError) as refused:
+        runtime.load(pattern_to_window_graph(), **path_arguments)  # type: ignore[arg-type]
+
+    assert f"Runtime.load's `{path_argument_name}`" in str(refused.value)
+    assert "`int`" in str(refused.value)
+    assert not the_runtimes_graph_holds_a_processor(runtime)
+
+
 def test_a_stream_name_that_cannot_be_encoded_is_refused_naming_it_and_the_fix(
     runtime: tatolab.runtime.Runtime,
 ):

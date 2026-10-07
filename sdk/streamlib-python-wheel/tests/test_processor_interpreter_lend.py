@@ -13,6 +13,7 @@ needs a GPU.
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import shutil
@@ -246,6 +247,46 @@ def test_a_type_that_describes_registers_without_its_module_entering_this_proces
 
     assert described_type in processor_class_import_paths_in_this_processes_catalog()
     assert "lend_described_nodes" not in sys.modules
+
+
+def test_a_relative_project_directory_and_interpreter_name_what_they_name_from_the_callers_directory(
+    runtime: tatolab.runtime.Runtime,
+    fixture_venv_interpreter: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The interpreter starts in the project directory, so a relative path left
+    relative would be read from there rather than from the caller's directory."""
+    callers_directory = tmp_path / "callers-directory"
+    project_directory = callers_directory / "project"
+    project_directory.mkdir(parents=True)
+    write_project_module(
+        project_directory,
+        "relatively_loaded_nodes",
+        """
+        from tatolab.stream import node
+
+
+        @node(execution="continuous", interval_ms=50)
+        class RelativelyLoadedSource:
+            @node.output()
+            def bags_to_downstream(self) -> None: ...
+
+            def process(self, ctx) -> None: ...
+        """,
+    )
+    described_type = "relatively_loaded_nodes:RelativelyLoadedSource"
+    monkeypatch.chdir(callers_directory)
+    relative_interpreter = os.path.relpath(fixture_venv_interpreter, callers_directory)
+    assert not (project_directory / relative_interpreter).exists()
+
+    runtime.load(
+        graph_naming_one_node_of_type(described_type),
+        project_directory="project",
+        interpreter=relative_interpreter,
+    )
+
+    assert described_type in processor_class_import_paths_in_this_processes_catalog()
 
 
 # ---- a running stream --------------------------------------------------------
