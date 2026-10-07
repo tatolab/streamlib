@@ -47,7 +47,8 @@ pub const PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY: &str =
 
 /// The environment variable carrying the class import path a processor
 /// interpreter hosts.
-const PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENTRYPOINT";
+pub(crate) const PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str =
+    "STREAMLIB_ENTRYPOINT";
 
 /// The environment variable carrying the id of the processor a processor
 /// interpreter hosts.

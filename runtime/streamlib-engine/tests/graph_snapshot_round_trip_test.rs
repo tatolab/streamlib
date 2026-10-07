@@ -286,10 +286,16 @@ fn an_exposure_named_twice_is_refused() {
 
     let refusal = Runner::new()
         .unwrap()
-        .load_graph_snapshot(&the_spec_in(serde_json::json!({
-            "nodes": [{"name": "camera", "type": camera.as_str()}],
-            "exposed": [{"node": "camera", "port": "video"}, {"node": "Camera", "port": "Video"}]
-        })), None)
+        .load_graph_snapshot(
+            &the_spec_in(serde_json::json!({
+                "nodes": [{"name": "camera", "type": camera.as_str()}],
+                "exposed": [
+                    {"node": "camera", "port": "video"},
+                    {"node": "Camera", "port": "Video"}
+                ]
+            })),
+            None,
+        )
         .expect_err("one port is exposed once")
         .to_string();
 

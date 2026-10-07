@@ -390,9 +390,9 @@ def capture_this_helper_processes_engine_log_records() -> None:
     iceoryx2's own included, into the ring
     `drain_the_engine_log_records_this_helper_captured` empties.
 
-    Called by the processor interpreter bootstrap once its channel to the parent
-    is up and before it opens anything, and by nothing else. Raises on a second call and
-    on a process that already has a `tracing` subscriber.
+    Called by the processor interpreter bootstrap once its channel to the
+    parent is up and before it opens anything, and by nothing else. Raises on a
+    second call and on a process that already has a `tracing` subscriber.
     """
 
 def drain_the_engine_log_records_this_helper_captured(
@@ -420,9 +420,9 @@ if sys.platform == "darwin":
         `PR_SET_PDEATHSIG`. Either signal shuts `parent_channel_fd` down, so
         the helper reads the end of its channel and runs `stop` and
         `teardown()`; whatever is still alive about six and a half seconds
-        later has its process group killed. Called by the processor interpreter
-        bootstrap before any processor code runs, and by nothing else. Raises on a
-        second call and when the pid watch cannot be armed.
+        later has its process group killed. Called by the processor
+        interpreter bootstrap before any processor code runs, and by nothing
+        else. Raises on a second call and when the pid watch cannot be armed.
         """
 
     def note_this_helper_processes_callbacks_returned_after_its_parent_went_away() -> None:

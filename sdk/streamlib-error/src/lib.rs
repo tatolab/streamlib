@@ -349,7 +349,6 @@ impl std::fmt::Display for ChannelTrustTierLabel {
     }
 }
 
-#[cfg(target_os = "linux")]
 /// Node types as a refusal names them: each in backticks, comma-separated.
 fn node_types_listed_for_a_refusal(node_types: &[ProcessorClassImportPath]) -> String {
     node_types
@@ -359,6 +358,7 @@ fn node_types_listed_for_a_refusal(node_types: &[ProcessorClassImportPath]) -> S
         .join(", ")
 }
 
+#[cfg(target_os = "linux")]
 impl From<streamlib_consumer_rhi::ConsumerRhiError> for Error {
     fn from(e: streamlib_consumer_rhi::ConsumerRhiError) -> Self {
         match e {
@@ -388,6 +388,23 @@ mod tests {
         assert!(
             !msg.contains("streamlib add"),
             "no install fix-it survives the module-system removal: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_describe_refusal_names_every_type_it_refused_and_why() {
+        let msg = Error::NodeTypesNotDescribed {
+            node_types: vec![
+                ProcessorClassImportPath::new("my_app.filters:Blur").unwrap(),
+                ProcessorClassImportPath::new("my_app.filters:Sharpen").unwrap(),
+            ],
+            refusal: "the interpreter printed no describe document".to_string(),
+        }
+        .to_string();
+        assert_eq!(
+            msg,
+            "cannot describe `my_app.filters:Blur`, `my_app.filters:Sharpen`: the interpreter \
+             printed no describe document"
         );
     }
 

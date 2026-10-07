@@ -454,7 +454,9 @@ fn processor_interpreter_lend_directory_of_this_interpreter(
         .map(Path::to_path_buf)
         .ok_or_else(|| {
             PyRuntimeError::new_err(format!(
-                "`tatolab.runtime` was imported from `{}`, which is not inside a                  `tatolab/runtime/` package directory, so there is no lend directory to start                  a processor interpreter from",
+                "`tatolab.runtime` was imported from `{}`, which is not inside a \
+                 `tatolab/runtime/` package directory, so there is no lend directory to start \
+                 a processor interpreter from",
                 package_init_file.display()
             ))
         })
@@ -499,7 +501,8 @@ fn the_path_load_was_passed(argument_name: &str, path: &Bound<'_, PyAny>) -> PyR
         .and_then(|fspath| fspath.cast_into::<PyString>().ok());
     let Some(fspath) = fspath else {
         return Err(PyTypeError::new_err(format!(
-            "Runtime.load's `{argument_name}` takes a str or an os.PathLike[str], and was passed              a `{}`",
+            "Runtime.load's `{argument_name}` takes a str or an os.PathLike[str], and was passed \
+             a `{}`",
             path.get_type().name()?
         )));
     };

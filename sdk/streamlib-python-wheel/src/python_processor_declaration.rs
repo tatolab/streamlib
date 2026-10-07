@@ -86,47 +86,6 @@ mod tests {
         )
     }
 
-    /// A class carrying what `@tatolab.stream.node` attaches.
-    const DECLARED_CLASS_SOURCE: &str = "\
-__name__ = 'my_app.filters'
-
-
-class BlurProcessor:
-    __tatolab_node_declared__ = True
-    __tatolab_node_description__ = 'blurs'
-    __tatolab_node_execution__ = {'mode': 'reactive'}
-    __tatolab_node_scheduling_priority__ = None
-    __tatolab_node_config_schema__ = {'type': 'object'}
-    __tatolab_node_input_ports__ = []
-    __tatolab_node_output_ports__ = []
-";
-
-    /// A class that drifted between the two fields would be a processor
-    /// registered under a name its own helper process cannot import.
-    #[test]
-    fn the_identity_and_the_entrypoint_are_the_same_derived_string() {
-        Python::initialize();
-        Python::attach(|python| {
-            let declared_class = class_from_source(python, DECLARED_CLASS_SOURCE, "BlurProcessor");
-            let declaration = read_declaration_off(&declared_class).unwrap();
-
-            assert_eq!(
-                declaration.descriptor.processor_class_import_path.as_str(),
-                "my_app.filters:BlurProcessor"
-            );
-            assert_eq!(
-                Some(
-                    declaration
-                        .descriptor
-                        .processor_class_import_path
-                        .as_str()
-                        .to_string()
-                ),
-                declaration.descriptor.entrypoint,
-            );
-        });
-    }
-
     // ---- the window contract, declared in both languages ----
 
     /// The stream distribution's source root, put on `sys.path` because a

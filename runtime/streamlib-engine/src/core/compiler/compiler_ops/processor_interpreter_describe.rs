@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use super::processor_interpreter_shutdown_ladder::a_helper_process_has_exited_without_being_reaped;
 use super::processor_interpreter_spawn_host::{
+    PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE,
     PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE, STANDARD_ERROR_TAIL_BYTES,
     SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
@@ -42,7 +43,7 @@ const DESCRIBE_ARGUMENT: &str = "--describe";
 /// The variables that name one processor to the interpreter hosting it, none
 /// of which a describe carries.
 const PER_PROCESSOR_ENVIRONMENT_VARIABLES: [&str; 6] = [
-    "STREAMLIB_ENTRYPOINT",
+    PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE,
     PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
     "STREAMLIB_RUNTIME_ID",
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,

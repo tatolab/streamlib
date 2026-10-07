@@ -75,10 +75,10 @@ pub const ENGINE_BUILD_ID: &str = env!("STREAMLIB_ENGINE_BUILD_ID_FROM_BUILD_SCR
 /// Env var carrying the parent's [`ENGINE_BUILD_ID`] to a helper process, which
 /// refuses to start unless the engine it imported was compiled with the same id.
 ///
-/// Parent and helper import one wheel, so the ids differ only when the helper
-/// imported another build — a stale `streamlib` earlier on its `sys.path`, or
-/// an engine built against another iceoryx2 — which would otherwise surface as
-/// every service open failing on a corrupted service.
+/// The helper borrows its parent's own `tatolab.runtime` through the lend
+/// directory, so the ids match by construction; the check is the backstop for
+/// a helper that imported another build anyway, which would otherwise surface
+/// as every service open failing on a corrupted service.
 pub const ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENGINE_BUILD_ID";
 
 /// Socketpair-backed escalate IPC transport. The parent holds one half
