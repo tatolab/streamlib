@@ -11,9 +11,32 @@
 //! `print_built_in_node_descriptors`, so xtask itself links no engine.
 
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::fmt::Write as _;
 use std::path::Path;
+
+/// One built-in's catalog entry, as the descriptor example prints it. The
+/// config schema stays a JSON value: it is open-ended JSON Schema.
+#[derive(Debug, Deserialize)]
+pub struct BuiltInNodeDescriptor {
+    #[serde(rename = "type")]
+    built_in_node_type: String,
+    description: String,
+    #[serde(default)]
+    config_schema: Option<Value>,
+    inputs: Vec<BuiltInNodePortDescriptor>,
+    outputs: Vec<BuiltInNodePortDescriptor>,
+}
+
+/// One port of a [`BuiltInNodeDescriptor`].
+#[derive(Debug, Deserialize)]
+struct BuiltInNodePortDescriptor {
+    name: String,
+    description: String,
+    #[serde(default)]
+    delivery_profile: Option<String>,
+}
 
 /// The generated module, relative to the workspace root.
 pub const GENERATED_BUILT_IN_NODE_CLASSES_PATH: &str =
@@ -76,7 +99,9 @@ pub fn run(workspace_root: &Path, check_only: bool) -> Result<()> {
     Ok(())
 }
 
-fn built_in_node_descriptors_this_floor_registers(workspace_root: &Path) -> Result<Vec<Value>> {
+fn built_in_node_descriptors_this_floor_registers(
+    workspace_root: &Path,
+) -> Result<Vec<BuiltInNodeDescriptor>> {
     let output = std::process::Command::new("cargo")
         .current_dir(workspace_root)
         .args([
@@ -97,17 +122,19 @@ fn built_in_node_descriptors_this_floor_registers(workspace_root: &Path) -> Resu
             output.status
         );
     }
-    let descriptors: Value = serde_json::from_slice(&output.stdout)
+    let descriptors: Vec<BuiltInNodeDescriptor> = serde_json::from_slice(&output.stdout)
         .context("parsing the built-in descriptors the example printed")?;
-    match descriptors {
-        Value::Array(descriptors) if !descriptors.is_empty() => Ok(descriptors),
-        _ => bail!("the print_built_in_node_descriptors example printed no built-ins"),
+    if descriptors.is_empty() {
+        bail!("the print_built_in_node_descriptors example printed no built-ins");
     }
+    Ok(descriptors)
 }
 
 /// The generated module's text for `descriptors`, each a catalog entry as the
 /// local API serves it.
-pub fn render_built_in_node_classes_module(descriptors: &[Value]) -> Result<String> {
+pub fn render_built_in_node_classes_module(
+    descriptors: &[BuiltInNodeDescriptor],
+) -> Result<String> {
     let mut rendered_classes = Vec::with_capacity(descriptors.len());
     for descriptor in descriptors {
         rendered_classes.push(render_one_built_in_node(descriptor)?);
@@ -147,23 +174,22 @@ fn config_name_of(class_name: &str) -> String {
     format!("{class_name}Config")
 }
 
-fn render_one_built_in_node(descriptor: &Value) -> Result<RenderedBuiltInNode> {
-    let built_in_node_type = string_field(descriptor, "type", "a built-in descriptor")?;
+fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<RenderedBuiltInNode> {
+    let built_in_node_type = descriptor.built_in_node_type.as_str();
     let Some(class_name) = built_in_node_type.strip_prefix(BUILT_IN_NODE_TYPE_PREFIX) else {
         bail!("built-in `{built_in_node_type}` does not start with `{BUILT_IN_NODE_TYPE_PREFIX}`");
     };
     if class_name.is_empty() || !class_name.chars().all(|c| c.is_ascii_alphanumeric()) {
         bail!("built-in `{built_in_node_type}` does not name a Python class");
     }
-    let what = format!("built-in `{class_name}`");
+    let refused_item_label = format!("built-in `{class_name}`");
     let config_name = config_name_of(class_name);
 
     let mut text = String::new();
     text.push_str(&render_config_typed_dict(
-        &config_name,
         class_name,
-        descriptor.get("config_schema"),
-        &what,
+        descriptor.config_schema.as_ref(),
+        &refused_item_label,
     )?);
 
     write!(
@@ -171,16 +197,15 @@ fn render_one_built_in_node(descriptor: &Value) -> Result<RenderedBuiltInNode> {
         "\n\nclass {class_name}(BuiltInNode[{config_name}]):\n"
     )?;
     let mut class_doc_paragraphs = vec![python_prose(
-        &sentence(string_field(descriptor, "description", &what)?),
-        &what,
+        &sentence(&descriptor.description),
+        &refused_item_label,
     )?];
-    for (heading, ports_key) in [("Inputs", "inputs"), ("Outputs", "outputs")] {
-        let ports = descriptor
-            .get(ports_key)
-            .and_then(Value::as_array)
-            .with_context(|| format!("{what} has no `{ports_key}` list"))?;
+    for (heading, ports) in [
+        ("Inputs", &descriptor.inputs),
+        ("Outputs", &descriptor.outputs),
+    ] {
         if !ports.is_empty() {
-            class_doc_paragraphs.push(render_port_paragraph(heading, ports, &what)?);
+            class_doc_paragraphs.push(render_port_paragraph(heading, ports, &refused_item_label)?);
         }
     }
     class_doc_paragraphs.push(format!("Config: `{config_name}`."));
@@ -188,7 +213,7 @@ fn render_one_built_in_node(descriptor: &Value) -> Result<RenderedBuiltInNode> {
     writeln!(
         text,
         "\n    type: ClassVar[str] = {}",
-        python_string_literal(built_in_node_type, &what)?
+        python_string_literal(built_in_node_type, &refused_item_label)?
     )?;
     if class_name.starts_with("Test") {
         text.push_str(
@@ -202,15 +227,19 @@ fn render_one_built_in_node(descriptor: &Value) -> Result<RenderedBuiltInNode> {
     })
 }
 
-fn render_port_paragraph(heading: &str, ports: &[Value], what: &str) -> Result<String> {
+fn render_port_paragraph(
+    heading: &str,
+    ports: &[BuiltInNodePortDescriptor],
+    refused_item_label: &str,
+) -> Result<String> {
     let mut paragraph = format!("{heading}:");
     for port in ports {
-        let port_name = string_field(port, "name", what)?;
-        let delivery_profile = match port.get("delivery_profile") {
-            Some(Value::String(delivery_profile)) => format!(" ({delivery_profile})"),
-            _ => String::new(),
+        let port_name = &port.name;
+        let delivery_profile = match &port.delivery_profile {
+            Some(delivery_profile) => format!(" ({delivery_profile})"),
+            None => String::new(),
         };
-        let description = python_prose(&sentence(string_field(port, "description", what)?), what)?;
+        let description = python_prose(&sentence(&port.description), refused_item_label)?;
         write!(
             paragraph,
             "\n    `{port_name}`{delivery_profile}: {description}"
@@ -220,18 +249,18 @@ fn render_port_paragraph(heading: &str, ports: &[Value], what: &str) -> Result<S
 }
 
 fn render_config_typed_dict(
-    config_name: &str,
     class_name: &str,
     config_schema: Option<&Value>,
-    what: &str,
+    refused_item_label: &str,
 ) -> Result<String> {
+    let config_name = config_name_of(class_name);
     let empty_properties = Map::new();
     let empty_definitions = Map::new();
     let (properties, required_keys, definitions) = match config_schema {
         None | Some(Value::Null) => (&empty_properties, Vec::new(), &empty_definitions),
         Some(config_schema) => {
             if config_schema.get("type").and_then(Value::as_str) != Some("object") {
-                bail!("{what}'s config schema is not an object");
+                bail!("{refused_item_label}'s config schema is not an object");
             }
             let required_keys: Vec<&str> = config_schema
                 .get("required")
@@ -255,8 +284,13 @@ fn render_config_typed_dict(
     let mut required_fields = String::new();
     let mut optional_fields = String::new();
     for (key, property_schema) in properties {
-        let field_what = format!("{what}'s config key `{key}`");
-        let rendered_field = render_config_field(key, property_schema, definitions, &field_what)?;
+        let config_key_refused_item_label = format!("{refused_item_label}'s config key `{key}`");
+        let rendered_field = render_config_field(
+            key,
+            property_schema,
+            definitions,
+            &config_key_refused_item_label,
+        )?;
         if required_keys.contains(&key.as_str()) {
             required_fields.push_str(&rendered_field);
         } else {
@@ -293,19 +327,24 @@ fn render_config_field(
     key: &str,
     property_schema: &Value,
     definitions: &Map<String, Value>,
-    what: &str,
+    refused_item_label: &str,
 ) -> Result<String> {
     if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         || key.starts_with(|c: char| c.is_ascii_digit())
     {
-        bail!("{what} is not a Python identifier");
+        bail!("{refused_item_label} is not a Python identifier");
     }
-    let python_type = python_type_of(property_schema, definitions, what)?;
+    let python_type = python_type_of(property_schema, definitions, refused_item_label)?;
     let mut paragraphs = Vec::new();
-    if let Some(description) = property_schema.get("description").and_then(Value::as_str) {
-        paragraphs.push(python_prose(description, what)?);
+    if let Some(description) = property_schema
+        .get("description")
+        .and_then(Value::as_str)
+        .filter(|description| !description.trim().is_empty())
+    {
+        paragraphs.push(python_prose(description, refused_item_label)?);
     }
-    let enumerated_values = enumerated_string_values(property_schema, definitions, what)?;
+    let enumerated_values =
+        enumerated_string_values(property_schema, definitions, refused_item_label)?;
     if enumerated_values
         .iter()
         .any(|(_, description)| description.is_some())
@@ -314,7 +353,11 @@ fn render_config_field(
         for (value, description) in &enumerated_values {
             write!(values_paragraph, "\n    `{value}`")?;
             if let Some(description) = description {
-                write!(values_paragraph, ": {}", python_prose(description, what)?)?;
+                write!(
+                    values_paragraph,
+                    ": {}",
+                    python_prose(description, refused_item_label)?
+                )?;
             }
         }
         paragraphs.push(values_paragraph);
@@ -323,7 +366,7 @@ fn render_config_field(
         None | Some(Value::Null) => {}
         Some(default) => paragraphs.push(format!(
             "Default: `{}`.",
-            python_scalar_literal(default, what)?
+            python_scalar_literal(default, refused_item_label)?
         )),
     }
 
@@ -337,54 +380,66 @@ fn render_config_field(
 fn resolve_reference<'schema>(
     schema: &'schema Value,
     definitions: &'schema Map<String, Value>,
-    what: &str,
+    refused_item_label: &str,
 ) -> Result<&'schema Value> {
     let Some(reference) = schema.get("$ref").and_then(Value::as_str) else {
         return Ok(schema);
     };
     let Some(definition_name) = reference.strip_prefix("#/$defs/") else {
-        bail!("{what} refers to `{reference}`, outside the schema's `$defs`");
+        bail!("{refused_item_label} refers to `{reference}`, outside the schema's `$defs`");
     };
-    definitions
-        .get(definition_name)
-        .with_context(|| format!("{what} refers to `{reference}`, which `$defs` lacks"))
+    definitions.get(definition_name).with_context(|| {
+        format!("{refused_item_label} refers to `{reference}`, which `$defs` lacks")
+    })
 }
 
-fn single_all_of_member(schema: &Value, what: &str) -> Result<Option<Value>> {
+fn single_all_of_member<'schema>(
+    schema: &'schema Value,
+    refused_item_label: &str,
+) -> Result<Option<&'schema Value>> {
     match schema.get("allOf") {
         None => Ok(None),
-        Some(Value::Array(members)) if members.len() == 1 => Ok(Some(members[0].clone())),
-        Some(_) => bail!("{what} has an `allOf` of more than one schema"),
+        Some(Value::Array(members)) => match members.as_slice() {
+            [only_member] => Ok(Some(only_member)),
+            _ => bail!("{refused_item_label} has an `allOf` of more than one schema"),
+        },
+        Some(_) => bail!("{refused_item_label} has an `allOf` that is not a list"),
     }
 }
 
-fn python_type_of(schema: &Value, definitions: &Map<String, Value>, what: &str) -> Result<String> {
-    let schema = resolve_reference(schema, definitions, what)?;
-    if let Some(member) = single_all_of_member(schema, what)? {
-        return python_type_of(&member, definitions, what);
+fn python_type_of(
+    schema: &Value,
+    definitions: &Map<String, Value>,
+    refused_item_label: &str,
+) -> Result<String> {
+    let schema = resolve_reference(schema, definitions, refused_item_label)?;
+    if let Some(member) = single_all_of_member(schema, refused_item_label)? {
+        return python_type_of(member, definitions, refused_item_label);
     }
     if let Some(Value::Array(members)) = schema.get("anyOf") {
         let mut alternatives = Vec::new();
         for member in members {
             push_unique(
                 &mut alternatives,
-                python_type_of(member, definitions, what)?,
+                python_type_of(member, definitions, refused_item_label)?,
             );
         }
         return Ok(union_of(alternatives));
     }
-    let enumerated_values = enumerated_string_values(schema, definitions, what)?;
+    let enumerated_values = enumerated_string_values(schema, definitions, refused_item_label)?;
     if !enumerated_values.is_empty() {
         let literals: Vec<String> = enumerated_values
             .iter()
-            .map(|(value, _)| python_string_literal(value, what))
+            .map(|(value, _)| python_string_literal(value, refused_item_label))
             .collect::<Result<_>>()?;
         return Ok(format!("Literal[{}]", literals.join(", ")));
     }
     let json_types: Vec<&str> = match schema.get("type") {
         Some(Value::String(json_type)) => vec![json_type.as_str()],
         Some(Value::Array(json_types)) => json_types.iter().filter_map(Value::as_str).collect(),
-        _ => bail!("{what} has a schema with no `type` this generator renders: {schema}"),
+        _ => bail!(
+            "{refused_item_label} has a schema with no `type` this generator renders: {schema}"
+        ),
     };
     let mut alternatives = Vec::new();
     for json_type in json_types {
@@ -395,7 +450,9 @@ fn python_type_of(schema: &Value, definitions: &Map<String, Value>, what: &str) 
             "boolean" => "bool",
             "null" => "None",
             other => {
-                bail!("{what} has the JSON type `{other}`, which this generator does not render")
+                bail!(
+                    "{refused_item_label} has the JSON type `{other}`, which this generator does not render"
+                )
             }
         };
         push_unique(&mut alternatives, python_type.to_owned());
@@ -408,25 +465,31 @@ fn python_type_of(schema: &Value, definitions: &Map<String, Value>, what: &str) 
 fn enumerated_string_values(
     schema: &Value,
     definitions: &Map<String, Value>,
-    what: &str,
+    refused_item_label: &str,
 ) -> Result<Vec<(String, Option<String>)>> {
-    let schema = resolve_reference(schema, definitions, what)?;
-    if let Some(member) = single_all_of_member(schema, what)? {
-        return enumerated_string_values(&member, definitions, what);
+    let schema = resolve_reference(schema, definitions, refused_item_label)?;
+    if let Some(member) = single_all_of_member(schema, refused_item_label)? {
+        return enumerated_string_values(member, definitions, refused_item_label);
     }
     if let Some(Value::Array(members)) = schema.get("anyOf") {
         let mut values = Vec::new();
         for member in members {
-            values.extend(enumerated_string_values(member, definitions, what)?);
+            values.extend(enumerated_string_values(
+                member,
+                definitions,
+                refused_item_label,
+            )?);
         }
         return Ok(values);
     }
     if let Some(Value::Array(members)) = schema.get("oneOf") {
         let mut values = Vec::new();
         for member in members {
-            let member_values = enumerated_string_values(member, definitions, what)?;
+            let member_values = enumerated_string_values(member, definitions, refused_item_label)?;
             if member_values.is_empty() {
-                bail!("{what} has a `oneOf` member that is not a string value: {member}");
+                bail!(
+                    "{refused_item_label} has a `oneOf` member that is not a string value: {member}"
+                );
             }
             let member_description = member
                 .get("description")
@@ -446,10 +509,10 @@ fn enumerated_string_values(
             .iter()
             .map(|value| match value {
                 Value::String(value) => Ok((value.clone(), None)),
-                other => bail!("{what} enumerates the non-string value {other}"),
+                other => bail!("{refused_item_label} enumerates the non-string value {other}"),
             })
             .collect(),
-        Some(other) => bail!("{what} has an `enum` that is not a list: {other}"),
+        Some(other) => bail!("{refused_item_label} has an `enum` that is not a list: {other}"),
     }
 }
 
@@ -471,17 +534,6 @@ fn union_of(mut alternatives: Vec<String>) -> String {
     alternatives.join(" | ")
 }
 
-fn string_field<'descriptor>(
-    descriptor: &'descriptor Value,
-    key: &str,
-    what: &str,
-) -> Result<&'descriptor str> {
-    descriptor
-        .get(key)
-        .and_then(Value::as_str)
-        .with_context(|| format!("{what} has no string `{key}`"))
-}
-
 fn sentence(text: &str) -> String {
     let text = text.trim();
     if text.ends_with(['.', '!', '?']) {
@@ -494,20 +546,20 @@ fn sentence(text: &str) -> String {
 /// `rustdoc` as a Python author reads it: an intra-doc link becomes its
 /// backticked name. A link through a path other than `Self::` names a Rust item
 /// the author never sees, so it is refused rather than rendered.
-fn python_prose(rustdoc: &str, what: &str) -> Result<String> {
+fn python_prose(rustdoc: &str, refused_item_label: &str) -> Result<String> {
     let mut prose = String::with_capacity(rustdoc.len());
     let mut rest = rustdoc;
     while let Some(link_start) = rest.find("[`") {
         prose.push_str(&rest[..link_start]);
         let after_link_start = &rest[link_start + 2..];
         let Some(link_end) = after_link_start.find("`]") else {
-            bail!("{what}'s description opens an intra-doc link it never closes");
+            bail!("{refused_item_label}'s description opens an intra-doc link it never closes");
         };
         let linked = &after_link_start[..link_end];
         let linked = linked.strip_prefix("Self::").unwrap_or(linked);
         if linked.contains("::") {
             bail!(
-                "{what}'s description links `{linked}`, a Rust path a Python author cannot \
+                "{refused_item_label}'s description links `{linked}`, a Rust path a Python author cannot \
                  follow; say what it means in the description instead"
             );
         }
@@ -516,25 +568,25 @@ fn python_prose(rustdoc: &str, what: &str) -> Result<String> {
     }
     prose.push_str(rest);
     if prose.contains("\"\"\"") {
-        bail!("{what}'s description holds `\"\"\"`, which would end its docstring");
+        bail!("{refused_item_label}'s description holds `\"\"\"`, which would end its docstring");
     }
     Ok(prose.replace('\\', "\\\\"))
 }
 
-fn python_string_literal(value: &str, what: &str) -> Result<String> {
+fn python_string_literal(value: &str, refused_item_label: &str) -> Result<String> {
     if value.contains(['"', '\\']) || value.chars().any(char::is_control) {
-        bail!("{what} has the string {value:?}, which this generator does not quote");
+        bail!("{refused_item_label} has the string {value:?}, which this generator does not quote");
     }
     Ok(format!("\"{value}\""))
 }
 
-fn python_scalar_literal(value: &Value, what: &str) -> Result<String> {
+fn python_scalar_literal(value: &Value, refused_item_label: &str) -> Result<String> {
     match value {
         Value::Bool(true) => Ok("True".to_owned()),
         Value::Bool(false) => Ok("False".to_owned()),
         Value::Number(number) => Ok(number.to_string()),
-        Value::String(string) => python_string_literal(string, what),
-        other => bail!("{what} has the default {other}, which is not a scalar"),
+        Value::String(string) => python_string_literal(string, refused_item_label),
+        other => bail!("{refused_item_label} has the default {other}, which is not a scalar"),
     }
 }
 
@@ -549,13 +601,13 @@ fn render_docstring(paragraphs: &[String], indent: usize) -> String {
         if paragraph_index > 0 {
             lines.push(String::new());
         }
-        for (item_indent, text, starts_a_prose_paragraph) in paragraph_blocks(paragraph) {
-            if starts_a_prose_paragraph {
+        for block in docstring_blocks(paragraph) {
+            if block.starts_a_prose_paragraph {
                 lines.push(String::new());
             }
-            let first_prefix = " ".repeat(item_indent);
-            let hanging_prefix = if item_indent > 0 {
-                " ".repeat(item_indent + 4)
+            let first_prefix = " ".repeat(block.list_item_indent);
+            let hanging_prefix = if block.list_item_indent > 0 {
+                " ".repeat(block.list_item_indent + 4)
             } else {
                 String::new()
             };
@@ -563,7 +615,7 @@ fn render_docstring(paragraphs: &[String], indent: usize) -> String {
             // The docstring's first line also carries its opening quotes.
             let first_line_width = if lines.is_empty() { width - 3 } else { width };
             lines.extend(wrap_words(
-                &text,
+                &block.text,
                 first_line_width,
                 width,
                 &first_prefix,
@@ -571,50 +623,64 @@ fn render_docstring(paragraphs: &[String], indent: usize) -> String {
             ));
         }
     }
-    let mut docstring = String::new();
-    if lines.len() == 1 && lines[0].len() + indent + 6 <= DOCSTRING_WRAP_COLUMN {
-        let _ = writeln!(docstring, "{margin}\"\"\"{}\"\"\"", lines[0]);
-        return docstring;
+    let Some((first_line, remaining_lines)) = lines.split_first() else {
+        return String::new();
+    };
+    if remaining_lines.is_empty()
+        && first_line.chars().count() + indent + 6 <= DOCSTRING_WRAP_COLUMN
+    {
+        return format!("{margin}\"\"\"{first_line}\"\"\"\n");
     }
-    let _ = writeln!(docstring, "{margin}\"\"\"{}", lines[0]);
-    for line in &lines[1..] {
+    let mut docstring = format!("{margin}\"\"\"{first_line}\n");
+    for line in remaining_lines {
         if line.is_empty() {
             docstring.push('\n');
         } else {
-            let _ = writeln!(docstring, "{margin}{line}");
+            docstring.push_str(&format!("{margin}{line}\n"));
         }
     }
-    let _ = writeln!(docstring, "{margin}\"\"\"");
+    docstring.push_str(&format!("{margin}\"\"\"\n"));
     docstring
 }
 
-/// The blocks of one paragraph: `(indent, text, starts_a_prose_paragraph)`. A
-/// blank line in the source separates prose paragraphs; an indented line is a
-/// list item; any other line break is a soft wrap.
-fn paragraph_blocks(paragraph: &str) -> Vec<(usize, String, bool)> {
-    let mut blocks: Vec<(usize, String, bool)> = Vec::new();
+/// A run of one paragraph's text that wraps as a unit.
+struct DocstringBlock {
+    /// How far a list item is indented; zero for prose.
+    list_item_indent: usize,
+    text: String,
+    /// Whether a blank line in the source came before this block.
+    starts_a_prose_paragraph: bool,
+}
+
+/// The blocks of one paragraph. A blank line in the source separates prose
+/// paragraphs; an indented line is a list item; any other line break is a soft
+/// wrap.
+fn docstring_blocks(paragraph: &str) -> Vec<DocstringBlock> {
+    let mut blocks: Vec<DocstringBlock> = Vec::new();
     let mut starts_a_prose_paragraph = false;
     for source_line in paragraph.split('\n') {
         if source_line.trim().is_empty() {
             starts_a_prose_paragraph = true;
             continue;
         }
-        let line_indent = source_line.len() - source_line.trim_start().len();
-        let continues_the_previous_block = line_indent == 0
+        let list_item_indent = source_line.len() - source_line.trim_start().len();
+        let continues_the_previous_block = list_item_indent == 0
             && !starts_a_prose_paragraph
-            && blocks.last().is_some_and(|(indent, _, _)| *indent == 0);
+            && blocks
+                .last()
+                .is_some_and(|block| block.list_item_indent == 0);
         if continues_the_previous_block {
-            if let Some((_, text, _)) = blocks.last_mut() {
-                text.push(' ');
-                text.push_str(source_line.trim());
+            if let Some(block) = blocks.last_mut() {
+                block.text.push(' ');
+                block.text.push_str(source_line.trim());
             }
             continue;
         }
-        blocks.push((
-            line_indent,
-            source_line.trim().to_owned(),
+        blocks.push(DocstringBlock {
+            list_item_indent,
+            text: source_line.trim().to_owned(),
             starts_a_prose_paragraph,
-        ));
+        });
         starts_a_prose_paragraph = false;
     }
     blocks
@@ -705,9 +771,15 @@ mod tests {
         })
     }
 
+    fn descriptor_from(descriptor: Value) -> BuiltInNodeDescriptor {
+        serde_json::from_value(descriptor).unwrap()
+    }
+
     #[test]
     fn one_built_in_renders_to_its_golden_class_and_config() {
-        let rendered = render_built_in_node_classes_module(&[display_window_descriptor()]).unwrap();
+        let rendered =
+            render_built_in_node_classes_module(&[descriptor_from(display_window_descriptor())])
+                .unwrap();
         let golden = format!(
             "{GENERATED_MODULE_HEADER}{}",
             r#"
@@ -774,7 +846,7 @@ class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
             "inputs": [],
             "outputs": [{"name": "done", "description": "Done", "required": true, "delivery_profile": null}]
         });
-        let rendered = render_built_in_node_classes_module(&[descriptor]).unwrap();
+        let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
         assert!(
             rendered.contains(
                 "class _TestRecorderConfigRequiredKeys(TypedDict):\n    \"\"\"The keys \
@@ -800,7 +872,7 @@ class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
         let mut descriptor = display_window_descriptor();
         descriptor["config_schema"]["properties"]["title"]["description"] =
             json!("Absent means [`DisplayScaling::Fit`].");
-        let refusal = render_built_in_node_classes_module(&[descriptor])
+        let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
             .unwrap_err()
             .to_string();
         assert!(refusal.contains("`DisplayScaling::Fit`"), "{refusal}");
@@ -808,10 +880,21 @@ class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
     }
 
     #[test]
+    fn a_blank_description_renders_no_docstring_for_its_key() {
+        let mut descriptor = display_window_descriptor();
+        descriptor["config_schema"]["properties"]["device_id"]["description"] = json!("  ");
+        let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
+        assert!(
+            rendered.contains("    device_id: str | None\n\n\nclass DisplayWindow("),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn a_json_type_the_generator_does_not_render_is_refused_by_name() {
         let mut descriptor = display_window_descriptor();
         descriptor["config_schema"]["properties"]["title"] = json!({"type": "array"});
-        let refusal = render_built_in_node_classes_module(&[descriptor])
+        let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
             .unwrap_err()
             .to_string();
         assert!(refusal.contains("`array`"), "{refusal}");
@@ -825,7 +908,7 @@ class DisplayWindow(BuiltInNode[DisplayWindowConfig]):
     fn a_type_outside_the_stream_package_is_refused() {
         let mut descriptor = display_window_descriptor();
         descriptor["type"] = json!("streamlib_media_builtins::DisplayWindow");
-        let refusal = render_built_in_node_classes_module(&[descriptor])
+        let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
             .unwrap_err()
             .to_string();
         assert!(refusal.contains("tatolab.stream:"), "{refusal}");
