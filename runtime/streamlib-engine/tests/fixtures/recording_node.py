@@ -36,7 +36,7 @@ import functools
 import tatolab.runtime
 import tatolab.stream
 from known_audio_signal_source import KnownAudioSignalSource
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 _VIDEO_ENCODER_MARKERS_BY_CODEC: dict[str, type] = {
     "h264": tatolab.stream.H264Encoder,
@@ -75,32 +75,32 @@ def _parse_fixture_arguments() -> argparse.Namespace:
 
 
 @stream
-def camera_and_known_signal_recorded_into_one_file(stream: Stream) -> None:
+def camera_and_known_signal_recorded_into_one_file(stream_builder: StreamBuilder) -> None:
     arguments = _parse_fixture_arguments()
 
-    recorder = stream.add(
+    recorder = stream_builder.add(
         tatolab.stream.Mp4Sink,
         name="recorder",
         config={"path": arguments.path},
     )
 
-    camera = stream.add(
+    camera = stream_builder.add(
         tatolab.stream.CameraSource,
         name="camera",
         config={"device_id": arguments.camera} if arguments.camera else {},
     )
-    video_encoder = stream.add(
+    video_encoder = stream_builder.add(
         _VIDEO_ENCODER_MARKERS_BY_CODEC[arguments.codec],
         name="video_encoder",
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
     )
-    stream.connect(camera.output("video"), video_encoder.input("video"))
-    stream.connect(video_encoder.output("encoded_video"), recorder.input("tracks"))
+    stream_builder.connect(camera.output("video"), video_encoder.input("video"))
+    stream_builder.connect(video_encoder.output("encoded_video"), recorder.input("tracks"))
 
-    signal = stream.add(KnownAudioSignalSource, name="known_signal")
-    audio_encoder = stream.add(tatolab.stream.OpusEncoder, name="audio_encoder")
-    stream.connect(signal.output("audio"), audio_encoder.input("audio"))
-    stream.connect(audio_encoder.output("encoded_audio"), recorder.input("tracks"))
+    signal = stream_builder.add(KnownAudioSignalSource, name="known_signal")
+    audio_encoder = stream_builder.add(tatolab.stream.OpusEncoder, name="audio_encoder")
+    stream_builder.connect(signal.output("audio"), audio_encoder.input("audio"))
+    stream_builder.connect(audio_encoder.output("encoded_audio"), recorder.input("tracks"))
 
 
 def main() -> None:

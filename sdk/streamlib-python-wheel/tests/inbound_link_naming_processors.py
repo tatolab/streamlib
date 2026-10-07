@@ -11,9 +11,7 @@ the test suite.
 from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    input,
     node,
-    output,
 )
 
 
@@ -25,10 +23,10 @@ class ReportsWhichLinkEachBagCameFrom:
     it reads the one port and asks each bag which link it arrived on.
     """
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def tracks(self) -> None: ...
 
-    @output()
+    @node.output()
     def attributions_to_downstream(self) -> None: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:

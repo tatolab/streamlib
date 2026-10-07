@@ -13,7 +13,7 @@ a startup transient from a stream losing a period at a time; a couple of
 seconds of blocks can.
 """
 
-from tatolab.stream import RuntimeContextLimitedAccess, input, log, node
+from tatolab.stream import RuntimeContextLimitedAccess, log, node
 
 RESULT_MARKER = "MARKER:BLOCKS_COUNTED "
 
@@ -32,7 +32,7 @@ class AudioBlockCountingProbe:
     # The plan's profile for audio: order carries meaning, so blocks arrive in
     # the order they were published rather than skipping to the freshest. It
     # promises nothing about how many arrive.
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

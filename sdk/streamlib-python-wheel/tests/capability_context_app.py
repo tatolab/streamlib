@@ -11,7 +11,7 @@ helper process, and the observation reaches this app — and the test driving it
 import sys
 
 import tatolab.runtime
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 import capability_context_probes
 
@@ -23,28 +23,28 @@ SOURCE_AND_REPORTING_SINK_CLASS_NAMES_BY_SCENARIO = {
 
 
 @stream
-def one_capability_context_probe(stream: Stream) -> None:
+def one_capability_context_probe(stream_builder: StreamBuilder) -> None:
     """The probe class `argv[1]` names, with no config."""
-    stream.add(getattr(capability_context_probes, sys.argv[1]))
+    stream_builder.add(getattr(capability_context_probes, sys.argv[1]))
 
 
 @stream
-def one_config_probe_with_gain_and_label(stream: Stream) -> None:
+def one_config_probe_with_gain_and_label(stream_builder: StreamBuilder) -> None:
     """A `ConfigProbe` configured with a gain and a label."""
-    stream.add(
+    stream_builder.add(
         capability_context_probes.ConfigProbe, config={"gain": 2.5, "label": "left"}
     )
 
 
 @stream
-def one_source_into_one_reporting_sink(stream: Stream) -> None:
+def one_source_into_one_reporting_sink(stream_builder: StreamBuilder) -> None:
     """The source `argv[1]` names into the sink that reports what it read."""
     source_class_name, sink_class_name = (
         SOURCE_AND_REPORTING_SINK_CLASS_NAMES_BY_SCENARIO[sys.argv[1]]
     )
-    source = stream.add(getattr(capability_context_probes, source_class_name))
-    sink = stream.add(getattr(capability_context_probes, sink_class_name))
-    stream.connect(
+    source = stream_builder.add(getattr(capability_context_probes, source_class_name))
+    sink = stream_builder.add(getattr(capability_context_probes, sink_class_name))
+    stream_builder.connect(
         source.output("bags_to_downstream"), sink.input("bags_from_upstream")
     )
 

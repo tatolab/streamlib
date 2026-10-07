@@ -17,15 +17,15 @@ import sys
 
 import tatolab.runtime
 from identity_stable_processor import IdentityStableProcessor
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 DIRECT_LAUNCH_ARGUMENT = "load-then-exit"
 
 
 @stream
-def identity_stability(stream: Stream) -> None:
+def identity_stability(stream_builder: StreamBuilder) -> None:
     """The graph `streamlib dev` and the direct arms alike load."""
-    stream.add(IdentityStableProcessor)
+    stream_builder.add(IdentityStableProcessor)
 
 
 def load_then_exit() -> None:

@@ -9,7 +9,7 @@ a working node. `@node` attaches the metadata as
 half, which reads exactly that set and registers the descriptor there and then;
 the set is the contract between this module and the native half, and the two
 move together.
-Ports are declared with the `@input` / `@output` method decorators and accessed
+Ports are declared with the `@node.input` / `@node.output` method decorators and accessed
 at run time through `ctx.inputs` / `ctx.outputs` — the marker methods themselves
 are never called.
 
@@ -38,9 +38,8 @@ from ._processor_config_schema import (
 
 __all__ = [
     "AudioWindowContract",
-    "input",
+    "NodeDeclarationDecorator",
     "node",
-    "output",
 ]
 
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
@@ -66,7 +65,7 @@ class AudioWindowMatchDeviceSentinel:
 
 AUDIO_WINDOW_MATCH_DEVICE = AudioWindowMatchDeviceSentinel()
 """The engine-side spelling for a contract resolved at `setup()` from a device
-stream — reachable here only so [`input`] can recognise and refuse it.
+stream — reachable here only so [`node.input`] can recognise and refuse it.
 
 It is on no public surface: a native built-in like `SpeakerSink` declares it in
 Rust, where a processor opens the device stream that settles it. A Python
@@ -78,7 +77,7 @@ class AudioWindowContract:
     """The rate, dtype, window size and hop an audio input port wants, and the
     channel count only if it needs a particular one.
 
-    Declared beside `delivery_profile` on an `@input`, which must be
+    Declared beside `delivery_profile` on a `@node.input`, which must be
     `"ordered"`. Every argument is keyword-only. `window_size` counts
     per-channel samples — the unit `AudioBlock.sample_count` uses — so one
     window carries `window_size * channels` scalars. `hop` may be omitted and
@@ -251,159 +250,174 @@ ProcessorClass = TypeVar("ProcessorClass", bound=type)
 MethodUnderDecoration = TypeVar("MethodUnderDecoration", bound=Callable[..., Any])
 
 
-def input(
-    name: Optional[str] = None,
-    *,
-    description: str = "",
-    delivery_profile: Optional[str] = None,
-    audio_window: Optional[AudioWindowContract] = None,
-) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
-    """Mark a method as declaring an input port.
+class NodeDeclarationDecorator:
+    """The type of [`node`]: `@node` itself, carrying the port decorators
+    `@node.input` and `@node.output`."""
 
-    The port is named after the method unless `name` overrides it. The port
-    carries no type — the method's return annotation is the declaration, read
-    by humans and type checkers only. `delivery_profile` is required and names
-    a read policy: `"newest"` drains to the most recent bag, `"ordered"`
-    receives them in publication order. Neither promises delivery — both drop
-    under sustained pressure, and no link ever blocks a producer. The
-    decorated method is a declaration only: bags are read with
-    `ctx.inputs.read(port_name)`.
+    __slots__ = ()
 
-    `audio_window` is optional and opt-in: an audio input may declare an
-    [`AudioWindowContract`], stating the rate, dtype, window size and hop it
-    wants, and a channel count only where it needs a particular one — absent,
-    every window carries the source's own count. A port declaring no contract
-    at all is unchanged in every respect.
-    """
-    if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
-        raise ValueError(
-            f"invalid delivery_profile {delivery_profile!r}: must be one of "
-            f"{', '.join(_DELIVERY_PROFILES)}"
-        )
+    def __call__(
+        self,
+        node_class: Optional[type] = None,
+        *,
+        execution: Optional[str] = None,
+        interval_ms: int = 0,
+        scheduling: Optional[str] = None,
+        description: str = "",
+    ) -> Any:
+        """Mark a class as a streamlib node.
 
-    def attach_input_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
-        port_name = name or method.__name__
-        # `delivery_profile` defaults to None rather than being a required
-        # keyword so the omission is caught here, where the port's name is
-        # known — a bare TypeError from the call could not name it.
-        if delivery_profile is None:
+        Usable bare (`@node`) or with keyword arguments; its ports are declared
+        with [`node.input`] and [`node.output`]. It declares execution,
+        interval, scheduling priority and description — never identity: a node is
+        named by the import path of the class it is, derived from `__module__` and
+        `__qualname__`.
+
+        Port names are cast to lowercase URL-safe characters, the way every exposed
+        name is, so a method `Video` declares the port `video` and a lookup of
+        either spelling finds it. Two ports casting alike are refused here.
+
+        `execution` defaults to `"reactive"` for a class that declares at least one
+        input port, and is required for one that declares none — a source has
+        nothing to react to, so defaulting it there would produce a processor that
+        silently never runs.
+
+        Configuration is one class, named by the annotation on the `config`
+        parameter of `__init__` — a TypedDict, a dataclass or a model. A class
+        whose `__init__` takes nothing beyond `self` declares no config and refuses
+        one. Any other signature is refused here, at decoration. The class's JSON
+        Schema is derived from its annotations and defaults and published in the
+        processor catalog, which is how an agent learns the keys before adding the
+        node.
+
+        Decorating registers the class's descriptor — identity, description, ports
+        and config schema — so the class is in that catalog from the moment its
+        module is imported, whether or not anything ever adds it. The constructor
+        arrives when the engine first resolves a node of the class, as
+        `Runtime.load` does. `description` falls back to the class's docstring
+        when it is not given.
+        """
+        if isinstance(node_class, type):
+            return _declare_processor(
+                node_class,
+                execution=execution,
+                interval_ms=interval_ms,
+                scheduling=scheduling,
+                description=description,
+            )
+
+        if node_class is not None:
+            raise TypeError(
+                f"@node() takes no positional argument; got "
+                f"{type(node_class).__name__}. A node is named by the import path "
+                f"of the class it is — `my_app.filters:BlurEffect` — derived from "
+                f"`__module__` and `__qualname__` and never authored. Use `@node` bare, "
+                f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
+                f"`description`)."
+            )
+
+        def apply_to_class(class_under_decoration: ProcessorClass) -> ProcessorClass:
+            return _declare_processor(
+                class_under_decoration,
+                execution=execution,
+                interval_ms=interval_ms,
+                scheduling=scheduling,
+                description=description,
+            )
+
+        return apply_to_class
+
+    @staticmethod
+    def input(
+        name: Optional[str] = None,
+        *,
+        description: str = "",
+        delivery_profile: Optional[str] = None,
+        audio_window: Optional[AudioWindowContract] = None,
+    ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
+        """Mark a method as declaring an input port.
+
+        The port is named after the method unless `name` overrides it. The port
+        carries no type — the method's return annotation is the declaration, read
+        by humans and type checkers only. `delivery_profile` is required and names
+        a read policy: `"newest"` drains to the most recent bag, `"ordered"`
+        receives them in publication order. Neither promises delivery — both drop
+        under sustained pressure, and no link ever blocks a producer. The
+        decorated method is a declaration only: bags are read with
+        `ctx.inputs.read(port_name)`.
+
+        `audio_window` is optional and opt-in: an audio input may declare an
+        [`AudioWindowContract`], stating the rate, dtype, window size and hop it
+        wants, and a channel count only where it needs a particular one — absent,
+        every window carries the source's own count. A port declaring no contract
+        at all is unchanged in every respect.
+        """
+        if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
             raise ValueError(
-                f"input port {port_name!r} must declare a delivery_profile — one of "
-                f"{', '.join(_DELIVERY_PROFILES)}. There is no default: channel policy "
-                f"is declared port-locally at the consuming input port"
+                f"invalid delivery_profile {delivery_profile!r}: must be one of "
+                f"{', '.join(_DELIVERY_PROFILES)}"
             )
-        marker: "dict[str, Any]" = {
-            "name": port_name,
-            "description": description,
-            "delivery_profile": delivery_profile,
-        }
-        # Present only when declared: a contract-less port's marker is what it
-        # always was, which is what makes the contract opt-in in the tree and
-        # not only in the prose.
-        if audio_window is not None:
-            marker["audio_window"] = _audio_window_declaration(
-                audio_window, port_name, delivery_profile
-            )
-        setattr(method, _INPUT_PORT_MARKER_ATTRIBUTE, marker)
-        return method
 
-    return attach_input_port_marker
-
-
-def output(
-    name: Optional[str] = None,
-    *,
-    description: str = "",
-) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
-    """Mark a method as declaring an output port.
-
-    Same shape as [`input`], minus the delivery profile — delivery is the
-    consuming port's policy. Bags are written with
-    `ctx.outputs.write(port_name, bag)`.
-    """
-
-    def attach_output_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
-        setattr(
-            method,
-            _OUTPUT_PORT_MARKER_ATTRIBUTE,
-            {
-                "name": name or method.__name__,
+        def attach_input_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
+            port_name = name or method.__name__
+            # `delivery_profile` defaults to None rather than being a required
+            # keyword so the omission is caught here, where the port's name is
+            # known — a bare TypeError from the call could not name it.
+            if delivery_profile is None:
+                raise ValueError(
+                    f"input port {port_name!r} must declare a delivery_profile — one of "
+                    f"{', '.join(_DELIVERY_PROFILES)}. There is no default: channel policy "
+                    f"is declared port-locally at the consuming input port"
+                )
+            marker: "dict[str, Any]" = {
+                "name": port_name,
                 "description": description,
-            },
-        )
-        return method
+                "delivery_profile": delivery_profile,
+            }
+            # Present only when declared: a contract-less port's marker is what it
+            # always was, which is what makes the contract opt-in in the tree and
+            # not only in the prose.
+            if audio_window is not None:
+                marker["audio_window"] = _audio_window_declaration(
+                    audio_window, port_name, delivery_profile
+                )
+            setattr(method, _INPUT_PORT_MARKER_ATTRIBUTE, marker)
+            return method
 
-    return attach_output_port_marker
+        return attach_input_port_marker
+
+    @staticmethod
+    def output(
+        name: Optional[str] = None,
+        *,
+        description: str = "",
+    ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
+        """Mark a method as declaring an output port.
+
+        Same shape as [`node.input`], minus the delivery profile — delivery is the
+        consuming port's policy. Bags are written with
+        `ctx.outputs.write(port_name, bag)`.
+        """
+
+        def attach_output_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
+            setattr(
+                method,
+                _OUTPUT_PORT_MARKER_ATTRIBUTE,
+                {
+                    "name": name or method.__name__,
+                    "description": description,
+                },
+            )
+            return method
+
+        return attach_output_port_marker
+
+    def __repr__(self) -> str:
+        return "node"
 
 
-def node(
-    node_class: Optional[type] = None,
-    *,
-    execution: Optional[str] = None,
-    interval_ms: int = 0,
-    scheduling: Optional[str] = None,
-    description: str = "",
-) -> Any:
-    """Mark a class as a streamlib node.
-
-    Usable bare (`@node`) or with keyword arguments. It declares execution,
-    interval, scheduling priority and description — never identity: a node is
-    named by the import path of the class it is, derived from `__module__` and
-    `__qualname__`.
-
-    Port names are cast to lowercase URL-safe characters, the way every exposed
-    name is, so a method `Video` declares the port `video` and a lookup of
-    either spelling finds it. Two ports casting alike are refused here.
-
-    `execution` defaults to `"reactive"` for a class that declares at least one
-    input port, and is required for one that declares none — a source has
-    nothing to react to, so defaulting it there would produce a processor that
-    silently never runs.
-
-    Configuration is one class, named by the annotation on the `config`
-    parameter of `__init__` — a TypedDict, a dataclass or a model. A class
-    whose `__init__` takes nothing beyond `self` declares no config and refuses
-    one. Any other signature is refused here, at decoration. The class's JSON
-    Schema is derived from its annotations and defaults and published in the
-    processor catalog, which is how an agent learns the keys before adding the
-    node.
-
-    Decorating registers the class's descriptor — identity, description, ports
-    and config schema — so the class is in that catalog from the moment its
-    module is imported, whether or not anything ever adds it. The constructor
-    arrives when the engine first resolves a node of the class, as
-    `Runtime.load` does. `description` falls back to the class's docstring
-    when it is not given.
-    """
-    if isinstance(node_class, type):
-        return _declare_processor(
-            node_class,
-            execution=execution,
-            interval_ms=interval_ms,
-            scheduling=scheduling,
-            description=description,
-        )
-
-    if node_class is not None:
-        raise TypeError(
-            f"@node() takes no positional argument; got "
-            f"{type(node_class).__name__}. A node is named by the import path "
-            f"of the class it is — `my_app.filters:BlurEffect` — derived from "
-            f"`__module__` and `__qualname__` and never authored. Use `@node` bare, "
-            f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
-            f"`description`)."
-        )
-
-    def apply_to_class(class_under_decoration: ProcessorClass) -> ProcessorClass:
-        return _declare_processor(
-            class_under_decoration,
-            execution=execution,
-            interval_ms=interval_ms,
-            scheduling=scheduling,
-            description=description,
-        )
-
-    return apply_to_class
+node = NodeDeclarationDecorator()
+"""Declares a node class; `node.input` and `node.output` declare its ports."""
 
 
 def _declare_processor(
@@ -468,7 +482,7 @@ def _config_class_named_by_the_init_annotation(
         f"declare one parameter named `config`, annotated with the class its settings "
         f"live on — `def __init__(self, config: {processor_class.__name__}Config) -> "
         f"None` — where that class is a TypedDict, a dataclass or a model. "
-        f"`stream.add(cls, config={{...}})` still passes a dict; the helper constructs the "
+        f"`stream_builder.add(cls, config={{...}})` still passes a dict; the helper constructs the "
         f"class from it and hands the object in."
     )
 
@@ -541,7 +555,7 @@ def _resolved_init_annotations(processor_class: type) -> "dict[str, Any]":
 def _collect_declared_ports(
     processor_class: type,
 ) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
-    """Every `@input` / `@output` declaration, as the dicts the engine reads,
+    """Every `@node.input` / `@node.output` declaration, as the dicts the engine reads,
     each port under its cast name."""
     input_ports: "list[dict[str, Any]]" = []
     output_ports: "list[dict[str, Any]]" = []

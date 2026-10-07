@@ -757,16 +757,16 @@ class AudioConsumer:
     /// The headline: one contract, two authoring languages, one schema.
     ///
     /// Both halves are read from the surfaces an author actually writes — the
-    /// `@input` decorator and the `#[processor]` attribute — so a divergence
+    /// `@node.input` decorator and the `#[processor]` attribute — so a divergence
     /// in either grammar fails here rather than reaching a user.
     #[test]
     fn a_python_declared_contract_and_a_rust_declared_one_are_the_same_schema() {
         let python_ports = python_declared_ports(
             "@node\n\
              class AudioConsumer:\n\
-             \x20   @input('audio', delivery_profile='ordered',\n\
-             \x20          audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
-             \x20                                           dtype='f32', window_size=512, hop=160))\n\
+             \x20   @node.input('audio', delivery_profile='ordered',\n\
+             \x20               audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                                                dtype='f32', window_size=512, hop=160))\n\
              \x20   def audio_from_microphone(self): ...\n",
         );
 
@@ -800,8 +800,8 @@ class AudioConsumer:
         let refusal = python_declaration_refusal(
             "@node(execution='manual')\n\
              class AudioConsumer:\n\
-             \x20   @input('audio', delivery_profile='ordered',\n\
-             \x20          audio_window=AUDIO_WINDOW_MATCH_DEVICE)\n\
+             \x20   @node.input('audio', delivery_profile='ordered',\n\
+             \x20               audio_window=AUDIO_WINDOW_MATCH_DEVICE)\n\
              \x20   def audio_from_device(self): ...\n",
         );
 
@@ -819,7 +819,7 @@ class AudioConsumer:
         let ports = python_declared_ports(
             "@node\n\
              class AudioConsumer:\n\
-             \x20   @input('audio', delivery_profile='newest')\n\
+             \x20   @node.input('audio', delivery_profile='newest')\n\
              \x20   def audio_from_microphone(self): ...\n",
         );
 
@@ -834,9 +834,9 @@ class AudioConsumer:
         let declaration = read_python_declaration(
             "@node\n\
              class AudioConsumer:\n\
-             \x20   @input(delivery_profile='newest')\n\
+             \x20   @node.input(delivery_profile='newest')\n\
              \x20   def Video(self): ...\n\
-             \x20   @output(name='Café Out')\n\
+             \x20   @node.output(name='Café Out')\n\
              \x20   def frames_to_downstream(self): ...\n",
         )
         .expect("the declaration reads");
@@ -850,9 +850,9 @@ class AudioConsumer:
         let refusal = python_declaration_refusal(
             "@node\n\
              class AudioConsumer:\n\
-             \x20   @input('audio', delivery_profile='newest',\n\
-             \x20          audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
-             \x20                                           dtype='f32', window_size=512))\n\
+             \x20   @node.input('audio', delivery_profile='newest',\n\
+             \x20               audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                                                dtype='f32', window_size=512))\n\
              \x20   def audio_from_microphone(self): ...\n",
         );
 

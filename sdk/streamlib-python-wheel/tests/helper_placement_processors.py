@@ -13,7 +13,7 @@ import dataclasses
 import os
 import time
 
-from tatolab.stream import input, log, node, output
+from tatolab.stream import log, node
 from tatolab.runtime._engine import (
     processor_class_import_paths_in_this_processes_catalog,
 )
@@ -32,7 +32,7 @@ class ReportsItsOwnProcessSource:
         self.label = config.label
         self.announced = False
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -49,7 +49,7 @@ class ReportsUpstreamProcessSink:
     def __init__(self) -> None:
         self.bags_seen = 0
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def frames_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -78,7 +78,7 @@ class ReportsItsOwnProcessVideoSink:
     def __init__(self) -> None:
         self.announced = False
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -96,7 +96,7 @@ class DiesAbruptlyProbe:
     def __init__(self) -> None:
         self.frames_before_dying = 3
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -141,7 +141,7 @@ class SleepsThroughItsOwnShutdownProbe:
     `teardown()` still run — which is what the markers below are for.
     """
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -167,7 +167,7 @@ class ForksAWorkerThatOutlivesItProbe:
     def __init__(self) -> None:
         self.worker_pid = None
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -187,7 +187,7 @@ class SleepsThroughItsOwnSetupProbe:
     reaches, and the plan still owes this processor its `teardown()`.
     """
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def setup(self, ctx) -> None:

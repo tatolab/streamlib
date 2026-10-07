@@ -21,10 +21,8 @@ from tatolab.stream import (
     NodeOutputTextureRing,
     VideoFrame,
     clock,
-    input,
     log,
     node,
-    output,
 )
 
 FRAME_WIDTH = 64
@@ -75,7 +73,7 @@ class TextureRingPublishingVideoSourceConfig:
 class TextureRingPublishingVideoSource:
     """Publishes frames from its own output ring, one slot per frame."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def __init__(self, config: TextureRingPublishingVideoSourceConfig) -> None:
@@ -134,7 +132,7 @@ class TextureRingPublishingVideoSource:
 class PublishedFramePixelReadingSink:
     """Resolves each published surface id and reports the pixels behind it."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def frames_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -163,7 +161,7 @@ class PublishedFrameIdRecordingSink:
     """Records each published surface id without resolving it — the link an
     output port needs, for a scenario that reads only the producer's report."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def frames_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -186,7 +184,7 @@ class ClaimedFrameHoldingSink:
     """Claims the first frame with a typed read and holds it, re-reading its
     pixels as every later frame arrives."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def frames_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -219,7 +217,7 @@ class UnclaimedFrameHoldingSink:
     """Keeps only the first frame's id — no claim — and tries it again as every
     later frame arrives: the negative control for the claimed sink."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def frames_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

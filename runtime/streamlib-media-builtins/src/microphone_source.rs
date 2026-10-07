@@ -674,7 +674,7 @@ mod tests {
         );
     }
 
-    /// `stream.add(MicrophoneSource)` records `{}` as the node's config, and
+    /// `stream_builder.add(MicrophoneSource)` records `{}` as the node's config, and
     /// every field of a built-in's config has to deserialize from it — the
     /// spelling the plan blesses for a block that needs no configuration.
     #[test]

@@ -24,7 +24,6 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
     log,
     node,
 )
@@ -221,7 +220,7 @@ class ModelInputTensorMatrixProbe:
     """Applies a kernel per layout x dtype of one fit to the first frame and
     reports each tensor's largest error against torch."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> VideoFrame: ...
 
     def __init__(self, config: ModelInputTensorMatrixProbeConfig) -> None:
@@ -289,7 +288,7 @@ class NonRgbaSourceRefusalProbe:
     """Hands the kernel a `bgra32` pixel buffer and a tensor surface, and
     reports each refusal."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> VideoFrame: ...
 
     def __init__(self) -> None:
@@ -342,7 +341,7 @@ class PadBottomRightExtentChangeProbe:
     RGBA pixel buffer written from numpy, then to the frame again — each
     tensor at its own source's extent, each compared with torch."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> VideoFrame: ...
 
     def __init__(self) -> None:

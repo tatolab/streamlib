@@ -28,26 +28,26 @@ from opus_blocks_probes import (
     EncodedAudioPacketProbe,
     StereoToneSource,
 )
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
 
 @stream
-def stereo_tone_through_the_opus_pair_probed_on_both_links(stream: Stream) -> None:
-    source = stream.add(StereoToneSource)
-    encoder = stream.add(tatolab.stream.OpusEncoder)
-    decoder = stream.add(tatolab.stream.OpusDecoder)
-    encoded_probe = stream.add(EncodedAudioPacketProbe)
-    decoded_probe = stream.add(DecodedAudioBlockProbe)
+def stereo_tone_through_the_opus_pair_probed_on_both_links(stream_builder: StreamBuilder) -> None:
+    source = stream_builder.add(StereoToneSource)
+    encoder = stream_builder.add(tatolab.stream.OpusEncoder)
+    decoder = stream_builder.add(tatolab.stream.OpusDecoder)
+    encoded_probe = stream_builder.add(EncodedAudioPacketProbe)
+    decoded_probe = stream_builder.add(DecodedAudioBlockProbe)
 
-    stream.connect(source.output("audio"), encoder.input("audio"))
-    stream.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
-    stream.connect(
+    stream_builder.connect(source.output("audio"), encoder.input("audio"))
+    stream_builder.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
+    stream_builder.connect(
         encoder.output("encoded_audio"),
         encoded_probe.input("encoded_audio_from_upstream"),
     )
-    stream.connect(
+    stream_builder.connect(
         decoder.output("audio"), decoded_probe.input("audio_from_upstream")
     )
 

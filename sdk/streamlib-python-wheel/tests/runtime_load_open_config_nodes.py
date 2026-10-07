@@ -10,7 +10,7 @@ as null — names this node instead.
 
 from typing import Any
 
-from tatolab.stream import RuntimeContextLimitedAccess, input, node
+from tatolab.stream import RuntimeContextLimitedAccess, node
 
 
 class OpenConfig(dict[str, Any]):
@@ -24,7 +24,7 @@ class OpenConfigSink:
     def __init__(self, config: OpenConfig) -> None:
         self.config = config
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

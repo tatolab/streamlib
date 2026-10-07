@@ -45,7 +45,7 @@ from tatolab.stream import (
     OpusDecoder,
     OpusEncoder,
     SpeakerSink,
-    Stream,
+    StreamBuilder,
     TestPatternSource,
     VirtualCameraSink,
     compile_stream_to_graph,
@@ -179,8 +179,8 @@ def config_nesting_containers_deep(containers_counting_the_config: int) -> dict[
 
 
 @stream
-def open_config_sink_with_the_deepest_config_the_builder_compiles(stream: Stream) -> None:
-    stream.add(
+def open_config_sink_with_the_deepest_config_the_builder_compiles(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(
         OpenConfigSink,
         config=config_nesting_containers_deep(CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF),
     )
@@ -502,7 +502,7 @@ def test_an_empty_graph_is_refused_by_name(runtime: tatolab.runtime.Runtime):
         runtime.load(empty_graph())
 
     assert "the stream `main` holds no node" in str(refused.value)
-    assert "stream.add(" in str(refused.value)
+    assert "stream_builder.add(" in str(refused.value)
 
 
 @pytest.mark.parametrize(
@@ -783,10 +783,10 @@ def test_load_after_shutdown_is_refused():
 
 
 @stream
-def pattern_linked_from_a_port_it_lacks_into_a_window(stream: Stream) -> None:
-    pattern = stream.add(TestPatternSource)
-    window = stream.add(DisplayWindow)
-    stream.connect(pattern.output("no_such_port"), window.input("video"))
+def pattern_linked_from_a_port_it_lacks_into_a_window(stream_builder: StreamBuilder) -> None:
+    pattern = stream_builder.add(TestPatternSource)
+    window = stream_builder.add(DisplayWindow)
+    stream_builder.connect(pattern.output("no_such_port"), window.input("video"))
 
 
 def test_a_link_from_a_port_its_node_lacks_is_refused_by_load_naming_the_port(
@@ -909,16 +909,16 @@ def test_a_held_loads_own_refusal_stands_over_a_load_refused_while_it_was_underw
 
 
 @stream
-def named_pattern_into_a_named_collector(stream: Stream) -> None:
-    pattern = stream.add(
+def named_pattern_into_a_named_collector(stream_builder: StreamBuilder) -> None:
+    pattern = stream_builder.add(
         TestPatternSource, name="Loaded Pattern", config={"width": 320, "height": 180}
     )
-    collector = stream.add(
+    collector = stream_builder.add(
         TestBagCollector,
         name="Loaded Collector",
         config={"channel": SERVED_GRAPH_COLLECTOR_CHANNEL},
     )
-    stream.connect(pattern.output("video"), collector.input("bags_from_upstream"))
+    stream_builder.connect(pattern.output("video"), collector.input("bags_from_upstream"))
 
 
 def local_api_socket_once_the_registry_lists(runtime_name: str) -> LocalApiSocket:

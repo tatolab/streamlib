@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The native built-in blocks: marker classes resolved by `stream.add`, frames
+"""The native built-in blocks: marker classes resolved by `stream_builder.add`, frames
 produced by native code the interpreter never enters.
 
 The graph tests boot a real engine (GPU required); the marker and
@@ -16,7 +16,7 @@ import pytest
 
 import tatolab.runtime
 from tatolab.stream import (
-    Stream,
+    StreamBuilder,
     TestPatternSource,
     VideoFrame,
     compile_stream_to_graph,
@@ -167,8 +167,8 @@ def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
 
 
 @stream
-def a_test_pattern_source_alone(stream: Stream) -> None:
-    stream.add(TestPatternSource)
+def a_test_pattern_source_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(TestPatternSource)
 
 
 def test_node_name_defaults_to_the_type_name():

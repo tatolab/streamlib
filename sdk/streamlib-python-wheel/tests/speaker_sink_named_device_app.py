@@ -14,15 +14,15 @@ import threading
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 UNOPENABLE_DEVICE_ID = "not-a-real-audio-device"
 READINESS_TIMEOUT_SECONDS = 10.0
 
 
 @stream
-def speaker_sink_naming_an_unopenable_device(stream: Stream) -> None:
-    stream.add(tatolab.stream.SpeakerSink, config={"device_id": UNOPENABLE_DEVICE_ID})
+def speaker_sink_naming_an_unopenable_device(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(tatolab.stream.SpeakerSink, config={"device_id": UNOPENABLE_DEVICE_ID})
 
 
 def main() -> None:

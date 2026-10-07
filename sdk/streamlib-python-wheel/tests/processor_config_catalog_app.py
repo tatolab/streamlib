@@ -15,7 +15,7 @@ import sys
 import threading
 
 import tatolab.runtime
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 from tatolab.runtime._control_plane_client import _request_over_the_local_api_socket
 from this_processes_node_registry_entry import this_processes_local_api_socket
 
@@ -26,12 +26,12 @@ GRAPH_READY_TIMEOUT_SECONDS = 90.0
 
 
 @stream
-def four_probes_each_configured_its_own_way(stream: Stream) -> None:
+def four_probes_each_configured_its_own_way(stream_builder: StreamBuilder) -> None:
     """Probes configured by a TypedDict, a dataclass and a model, beside one taking none."""
-    stream.add(probes.TypedDictConfiguredProbe, config={"width": 320})
-    stream.add(probes.DataclassConfiguredProbe, config={"width": 640, "label": "left"})
-    stream.add(probes.ModelConfiguredProbe, config={"width": 1280})
-    stream.add(probes.UnconfiguredProbe)
+    stream_builder.add(probes.TypedDictConfiguredProbe, config={"width": 320})
+    stream_builder.add(probes.DataclassConfiguredProbe, config={"width": 640, "label": "left"})
+    stream_builder.add(probes.ModelConfiguredProbe, config={"width": 1280})
+    stream_builder.add(probes.UnconfiguredProbe)
     # `probes.ImportedButNeverAddedProbe` is deliberately not added: importing
     # the module is what put it in the catalog.
 

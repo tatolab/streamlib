@@ -20,7 +20,7 @@ import os
 import numpy
 
 import known_audio_signal
-from tatolab.stream import AudioBlock, RuntimeContextLimitedAccess, input, log, node
+from tatolab.stream import AudioBlock, RuntimeContextLimitedAccess, log, node
 
 RESULT_MARKER = "MARKER:WAVEFORM_WRITTEN "
 
@@ -48,7 +48,7 @@ class CapturedAudioWaveformRecorder:
     # The plan's profile for audio: order carries meaning, so blocks arrive in
     # the order they were published rather than skipping to the freshest. It
     # promises nothing about how many arrive.
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

@@ -35,7 +35,7 @@ and the data-collection rigs that train them.
 - **Open, and extendable to hardware nobody has heard of.** Any sensor is a stage you write, and a
   proprietary driver ships as an ordinary Python package. Optional capabilities — networking
   first — ship the same way, as extension wheels with Rust inside: pip installs the wheel, the
-  engine discovers its support code, and your stream adds its processors with `stream.add` like
+  engine discovers its support code, and your stream adds its processors with `stream_builder.add` like
   any other.
   No plugin ABI, no framework headers, no vendor allowlist deciding what you're allowed to
   plug in.
@@ -106,25 +106,27 @@ No camera on this machine? `streamlib new my-rig --test-pattern` uses the built-
 working directory, compiles its one `@stream` function to the stream's graph, and loads that graph:
 
 ```python
-from tatolab.stream import CameraSource, DisplayWindow, Stream, stream
+from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream
 
 from nodes.brightness_meter import BrightnessMeter
 from nodes.inverting_effect import InvertingEffect
 
 
 @stream
-def main(stream: Stream) -> None:
+def main(stream_builder: StreamBuilder) -> None:
     """Camera, inverted, in a window; brightness logged once a second."""
-    source = stream.add(CameraSource)
-    effect = stream.add(InvertingEffect)
-    meter = stream.add(BrightnessMeter)
-    window = stream.add(DisplayWindow, config={"title": "StreamLib", "scaling": "fit"})
-    stream.connect(source.output("video"), effect.input("video_from_upstream"))
-    stream.connect(effect.output("video_to_downstream"), window.input("video"))
-    stream.connect(
+    source = stream_builder.add(CameraSource)
+    effect = stream_builder.add(InvertingEffect)
+    meter = stream_builder.add(BrightnessMeter)
+    window = stream_builder.add(
+        DisplayWindow, config={"title": "StreamLib", "scaling": "fit"}
+    )
+    stream_builder.connect(source.output("video"), effect.input("video_from_upstream"))
+    stream_builder.connect(effect.output("video_to_downstream"), window.input("video"))
+    stream_builder.connect(
         effect.output("video_to_downstream"), meter.input("video_from_upstream")
     )
-    stream.expose(effect.output("video_to_downstream"))
+    stream_builder.expose(effect.output("video_to_downstream"))
 ```
 
 One output, two readers: the window shows the frame, the meter measures it. With several streams in
@@ -138,9 +140,7 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
     node,
-    output,
 )
 
 INVERT_GLSL = """
@@ -153,10 +153,10 @@ vec4 effect(vec4 source, ivec2 at) {
 
 @node
 class InvertingEffect:
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
 
-    @output()
+    @node.output()
     def video_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -245,7 +245,7 @@ kicks in under load.
 
 **It costs you** a process boundary on every link crossing into Python, and one authoring rule: a
 stage's class lives in an importable module rather than in your entry file, because the child
-process imports it by name. `stream.add` rejects the mistake with a message naming the fix.
+process imports it by name. `stream_builder.add` rejects the mistake with a message naming the fix.
 
 </details>
 
@@ -265,7 +265,7 @@ ordinary Python package that exposes handles (file descriptors, exportable alloc
 and is wrapped by a stage you write. It never links the engine, and the CPython ABI is the only
 binary boundary. First-party optional capabilities take that same door — an extension wheel is
 an ordinary PyPI package with Rust inside, depending on `streamlib` as a binary. Its processors
-are added with `stream.add` like any other and call the wheel's own Rust directly; its support code
+are added with `stream_builder.add` like any other and call the wheel's own Rust directly; its support code
 is declared by a standard entry point that pip records and the engine runs once at startup, the
 way a driver is loaded. There is no plugin ABI, no StreamLib manifest and no StreamLib
 lockfile — an extension wheel is an ordinary Python project with an ordinary `pyproject.toml`.
@@ -323,8 +323,8 @@ newest frame want opposite things. Each input says which it is, and saying so is
 is no default to inherit by accident:
 
 ```python
-@input(delivery_profile="newest")     # drains to the most recent bag, older ones passed over
-@input(delivery_profile="ordered")    # bags in publication order, may fall behind
+@node.input(delivery_profile="newest")     # drains to the most recent bag, older ones passed over
+@node.input(delivery_profile="ordered")    # bags in publication order, may fall behind
 ```
 
 A profile names a read policy and nothing more. Neither promises delivery: both drop under

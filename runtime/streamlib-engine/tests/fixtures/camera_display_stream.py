@@ -5,19 +5,19 @@
 
 import os
 
-from tatolab.stream import CameraSource, DisplayWindow, Stream, stream
+from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream
 
 
 @stream
-def main(stream: Stream) -> None:
+def main(stream_builder: StreamBuilder) -> None:
     """A camera into a window — `STREAMLIB_CAMERA_DEVICE` names the camera, else the first found."""
     camera_configuration: dict[str, object] = {}
     requested_camera_device = os.environ.get("STREAMLIB_CAMERA_DEVICE")
     if requested_camera_device:
         camera_configuration["device_id"] = requested_camera_device
 
-    camera = stream.add(CameraSource, config=camera_configuration)
-    window = stream.add(
+    camera = stream_builder.add(CameraSource, config=camera_configuration)
+    window = stream_builder.add(
         DisplayWindow,
         config={
             "title": "StreamLib Camera Display",
@@ -26,4 +26,4 @@ def main(stream: Stream) -> None:
             "scaling": "fit",
         },
     )
-    stream.connect(camera.output("video"), window.input("video"))
+    stream_builder.connect(camera.output("video"), window.input("video"))

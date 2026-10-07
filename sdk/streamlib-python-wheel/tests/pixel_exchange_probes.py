@@ -17,7 +17,7 @@ from typing import TypedDict
 
 import numpy
 
-from tatolab.stream import VideoFrame, input, log, node, output
+from tatolab.stream import VideoFrame, log, node
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 32
@@ -250,7 +250,7 @@ class InvertingEffect:
     opens CPU access, and edits the engine's own memory in place.
     """
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -310,10 +310,10 @@ class ReportingInvertingEffect:
     and leaves the pixels alone.
     """
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
-    @output()
+    @node.output()
     def video_to_downstream(self) -> None: ...
 
     def __init__(self, config: ReportingInvertingEffectConfig) -> None:
@@ -353,7 +353,7 @@ class FrameDigestVerifier:
     """Reads the first frame it is handed, in a process of its own, and
     reports a digest of every pixel."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

@@ -47,7 +47,7 @@ streamlib = { path = "../streamlib-sdk", version = "0.36.0" }
 streamlib-api-server = { path = "../../runtime/streamlib-api-server" }
 
 # The native media built-ins the wheel exports as pre-built named blocks
-# (`stream.add(TestPatternSource)`), statically linked so they are current by
+# (`stream_builder.add(TestPatternSource)`), statically linked so they are current by
 # construction.
 streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.36.0" }
 

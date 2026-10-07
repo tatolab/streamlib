@@ -4,8 +4,8 @@
 """What a stream or node module imports.
 
 A stream is a `@stream` function that adds, links and exposes nodes on a
-`Stream`; `compile_stream_to_graph` returns the graph it builds. A node
-declares its identity and ports with `@node` / `@input` / `@output` and
+`StreamBuilder`; `compile_stream_to_graph` returns the graph it builds. A node
+declares its identity and ports with `@node` / `@node.input` / `@node.output` and
 receives a capability-typed context in every lifecycle hook. The contexts, the
 GPU classes, the built-in nodes and the bag codec are the engine's own, from
 `tatolab.runtime._engine`.
@@ -57,15 +57,13 @@ from tatolab.runtime._engine import monotonic_now_ns as monotonic_now_ns
 from . import clock as clock
 from . import log as log
 from ._processor_declaration import AudioWindowContract as AudioWindowContract
-from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import node as node
-from ._processor_declaration import output as output
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
 )
 from ._stream_graph_builder import NodeReference as NodeReference
-from ._stream_graph_builder import Stream as Stream
+from ._stream_graph_builder import StreamBuilder as StreamBuilder
 from ._stream_graph_builder import compile_stream_to_graph as compile_stream_to_graph
 from ._stream_graph_builder import stream as stream
 from .audio_block import AudioBlock as AudioBlock
@@ -96,8 +94,6 @@ from .video_frame import ContentLight as ContentLight
 from .video_frame import MasteringDisplay as MasteringDisplay
 from .video_frame import VideoFrame as VideoFrame
 
-# `input` and `output` shadow the builtins at module scope on purpose — the
-# authoring grammar reads `@input(...)` / `@output(...)`.
 __all__ = [
     "AudioBlock",
     "AudioWindowContract",
@@ -147,7 +143,7 @@ __all__ = [
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "SpeakerSink",
-    "Stream",
+    "StreamBuilder",
     "TestPatternSource",
     "VideoFrame",
     "VirtualCameraSink",
@@ -156,10 +152,8 @@ __all__ = [
     "decode_msgpack_bytes_to_python_object",
     "encode_bag_to_msgpack_bytes",
     "gpu_limited_access_of_the_typed_read_in_progress",
-    "input",
     "log",
     "monotonic_now_ns",
     "node",
-    "output",
     "stream",
 ]

@@ -16,18 +16,18 @@ import os
 import tatolab.runtime
 import tatolab.stream
 from audio_channel_drain import AudioChannelDrain
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 
 @stream
-def microphone_into_an_audio_channel_drain(stream: Stream) -> None:
+def microphone_into_an_audio_channel_drain(stream_builder: StreamBuilder) -> None:
     device_id = os.environ.get("STREAMLIB_AUDIO_DEVICE_ID")
-    microphone = stream.add(
+    microphone = stream_builder.add(
         tatolab.stream.MicrophoneSource,
         config={"device_id": device_id} if device_id else {},
     )
-    drain = stream.add(AudioChannelDrain)
-    stream.connect(microphone.output("audio"), drain.input("audio_from_upstream"))
+    drain = stream_builder.add(AudioChannelDrain)
+    stream_builder.connect(microphone.output("audio"), drain.input("audio_from_upstream"))
 
 
 def main() -> None:

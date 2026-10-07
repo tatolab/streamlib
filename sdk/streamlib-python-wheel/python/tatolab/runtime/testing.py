@@ -10,7 +10,7 @@ links. What it does not need is hardware: the frames come from this module's
 feeder rather than a camera, and the output lands in a queue rather than a
 window.
 
-The graph is a `Stream` built here and loaded with `Runtime.load`. The
+The graph is a `StreamBuilder` built here and loaded with `Runtime.load`. The
 node under test takes its class's default node name, and each port's
 endpoint is named for it: `test-bag-feeder-<port>` on an input,
 `test-bag-collector-<port>` on an output.
@@ -32,7 +32,7 @@ from tatolab.stream._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
-from tatolab.stream._stream_graph_builder import Stream
+from tatolab.stream._stream_graph_builder import StreamBuilder
 
 from . import Runtime
 from ._engine import (
@@ -114,30 +114,30 @@ class SingleNodeTestPipeline:
         return self
 
     def _build_and_start(self) -> None:
-        stream = Stream(SINGLE_NODE_TEST_PIPELINE_STREAM_NAME)
-        node_under_test = stream.add(self._node_class, config=self._config)
+        stream_builder = StreamBuilder(SINGLE_NODE_TEST_PIPELINE_STREAM_NAME)
+        node_under_test = stream_builder.add(self._node_class, config=self._config)
 
         for port in _declared_port_names(self._node_class, "input"):
             channel = _claim_channel()
             self._input_channels[port] = channel
-            feeder = stream.add(
+            feeder = stream_builder.add(
                 TestBagFeeder,
                 name=f"test-bag-feeder-{port}",
                 config={"channel": channel},
             )
-            stream.connect(
+            stream_builder.connect(
                 feeder.output("bags_to_downstream"), node_under_test.input(port)
             )
 
         for port in _declared_port_names(self._node_class, "output"):
             channel = _claim_channel()
             self._output_channels[port] = channel
-            collector = stream.add(
+            collector = stream_builder.add(
                 TestBagCollector,
                 name=f"test-bag-collector-{port}",
                 config={"channel": channel},
             )
-            stream.connect(
+            stream_builder.connect(
                 node_under_test.output(port),
                 collector.input("bags_from_upstream"),
             )
@@ -146,7 +146,7 @@ class SingleNodeTestPipeline:
         self._runtime = runtime
         # The graph is built at run time from the class under test, so there is
         # no module-level `@stream` function for `compile_stream_to_graph` to run.
-        runtime.load(stream._compiled_graph())
+        runtime.load(stream_builder._compiled_graph())
 
         # `run()` blocks, and a test needs to stay in control of the main
         # thread. It is safe here because `__exit__` shuts the engine down and

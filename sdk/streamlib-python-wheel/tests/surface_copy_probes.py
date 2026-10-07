@@ -21,7 +21,6 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
     log,
     node,
 )
@@ -86,7 +85,7 @@ class FrameLandingProbe:
     nothing landed a frame in, and the check must fail.
     """
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     kernel: ComputeKernel
@@ -151,7 +150,7 @@ class FrameLandingProbe:
 class CopyRefusalProbe:
     """Asks for each copy the engine must refuse, and reports what it said."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

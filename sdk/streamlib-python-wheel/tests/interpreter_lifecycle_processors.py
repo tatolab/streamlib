@@ -11,7 +11,7 @@ import os
 import signal
 import time
 
-from tatolab.stream import log, node, output
+from tatolab.stream import log, node
 
 # How long a probe's teardown takes when it is meant to be slow but still inside
 # the ladder's five-second teardown budget.
@@ -22,7 +22,7 @@ SLOW_TEARDOWN_SECONDS = 3.0
 class AsleepInItsCallbackProbe:
     """Parks in `process()` far past the ladder's one-second callback budget."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -43,7 +43,7 @@ TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_TEST_TEARDOWN_RECORD
 class AsleepInItsCallbackRecordingItsTeardownProbe:
     """Parks in `process()`, and records its `teardown()` in a file."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -64,7 +64,7 @@ class AsleepInItsCallbackAndSlowToTearDownProbe:
     seconds each; stopped at once, about one.
     """
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -90,7 +90,7 @@ class WorkerKeepingTeardownGoingProbe:
     def __init__(self) -> None:
         self.worker_pid = None
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -121,5 +121,5 @@ if os.environ.get("STREAMLIB_ENTRYPOINT", "").endswith(":ThirtySecondImportProbe
 class ThirtySecondImportProbe:
     """Its module takes thirty seconds to import in the helper that hosts it."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A stream: a `@stream` function over a `Stream` builder, compiled to its graph.
+"""A stream: a `@stream` function over a `StreamBuilder`, compiled to its graph.
 
 Pure Python — the standard library and the name cast, nothing native — so a
 stream module imports and compiles with no engine in the process. The graph
@@ -27,13 +27,13 @@ __all__ = [
     "NodeInputPortReference",
     "NodeOutputPortReference",
     "NodeReference",
-    "Stream",
+    "StreamBuilder",
     "compile_stream_to_graph",
     "is_stream_function",
     "stream",
 ]
 
-_StreamFunction = TypeVar("_StreamFunction", bound="Callable[[Stream], object]")
+_StreamFunction = TypeVar("_StreamFunction", bound="Callable[[StreamBuilder], object]")
 
 _STREAM_IDENTITY_ATTRIBUTE = "__streamlib_stream_identity__"
 _STREAM_NAME_ATTRIBUTE = "__streamlib_stream_name__"
@@ -63,7 +63,7 @@ _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF = 128 - 3
 
 _STREAM_TAKES_NO_ARGUMENTS = (
     "@stream takes no arguments: the name is the function's, overridden at load "
-    "with `--name`. Write `@stream` bare above `def main(stream: Stream) -> None:`."
+    "with `--name`. Write `@stream` bare above `def main(stream_builder: StreamBuilder) -> None:`."
 )
 
 # A type checker sees the one-argument signature and flags `@stream()` and
@@ -72,13 +72,13 @@ _STREAM_TAKES_NO_ARGUMENTS = (
 if TYPE_CHECKING:
 
     def stream(stream_function: _StreamFunction, /) -> _StreamFunction:
-        """Mark a module-level function taking one `Stream` as a stream, and return it unchanged."""
+        """Mark a module-level function taking one `StreamBuilder` as a stream; return it unchanged."""
         ...
 
 else:
 
     def stream(stream_function=None, /, **misused_keyword_arguments):
-        """Mark a module-level function taking one `Stream` as a stream, and return it unchanged."""
+        """Mark a module-level function taking one `StreamBuilder` as a stream; return it unchanged."""
         if stream_function is None or misused_keyword_arguments:
             raise TypeError(_STREAM_TAKES_NO_ARGUMENTS)
         return _stamp_stream_function(stream_function)
@@ -107,7 +107,7 @@ def _the_function_unless_it_cannot_be_a_stream(candidate: object) -> FunctionTyp
         ):
             descriptor_type_name = _type_name_as_written(candidate)
             raise TypeError(
-                f"@stream decorates a plain module-level function taking one `Stream`, "
+                f"@stream decorates a plain module-level function taking one `StreamBuilder`, "
                 f"and {candidate!r} is of type `{descriptor_type_name}`, which makes a class "
                 f"member of what it wraps. Put `@stream` on a plain module-level `def`, "
                 f"with no `@{descriptor_type_name}` under it."
@@ -119,7 +119,7 @@ def _the_function_unless_it_cannot_be_a_stream(candidate: object) -> FunctionTyp
             "" if callable(candidate) else f" {_STREAM_TAKES_NO_ARGUMENTS}"
         )
         raise TypeError(
-            f"@stream decorates a plain module-level function taking one `Stream`, and "
+            f"@stream decorates a plain module-level function taking one `StreamBuilder`, and "
             f"{candidate!r} is not one.{sentence_naming_the_bare_form_when_called_with_a_value}"
         )
     stream_function = candidate
@@ -153,8 +153,9 @@ def _the_function_unless_it_cannot_be_a_stream(candidate: object) -> FunctionTyp
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
     ):
         raise TypeError(
-            f"a stream function takes exactly one positional parameter, the `Stream` it "
-            f"builds on — `def {stream_function.__name__}(stream: Stream) -> None:`; "
+            f"a stream function takes exactly one positional parameter, the `StreamBuilder` "
+            f"it builds on — `def {stream_function.__name__}(stream_builder: StreamBuilder) "
+            f"-> None:`; "
             f"`{module}:{qualname}` is `{stream_function.__name__}"
             f"{inspect.signature(stream_function)}`"
         )
@@ -175,7 +176,7 @@ def is_stream_function(candidate: object) -> TypeGuard[Callable[..., Any]]:
 
 @dataclass(frozen=True, slots=True)
 class NodeOutputPortReference:
-    """An output port of a node a `Stream` holds — the producing end of a link; names cast."""
+    """An output port of a node a `StreamBuilder` holds — a link's producing end; names cast."""
 
     node_name: str
     port_name: str
@@ -187,7 +188,7 @@ class NodeOutputPortReference:
 
 @dataclass(frozen=True, slots=True)
 class NodeInputPortReference:
-    """An input port of a node a `Stream` holds — the consuming end of a link; names cast."""
+    """An input port of a node a `StreamBuilder` holds — a link's consuming end; names cast."""
 
     node_name: str
     port_name: str
@@ -199,7 +200,7 @@ class NodeInputPortReference:
 
 @dataclass(frozen=True, slots=True)
 class NodeReference:
-    """A node `Stream.add` recorded, under the cast name links and exposures name it by."""
+    """A node `StreamBuilder.add` recorded, under the cast name links and exposures name it by."""
 
     name: str
 
@@ -229,7 +230,7 @@ class _RecordedNode:
         return f"the default name of {self.class_short_name}"
 
 
-class Stream:
+class StreamBuilder:
     """The builder a `@stream` function adds, links and exposes nodes on; it runs nothing."""
 
     def __init__(self, name: str) -> None:
@@ -278,12 +279,12 @@ class Stream:
         if not isinstance(source, NodeOutputPortReference):
             raise TypeError(
                 f"connect's source must name an output port of a node this stream "
-                f"added: `node.output(port_name)`. Got {source!r}."
+                f"added: `stream_builder.add(...).output(port_name)`. Got {source!r}."
             )
         if not isinstance(destination, NodeInputPortReference):
             raise TypeError(
                 f"connect's destination must name an input port of a node this stream "
-                f"added: `node.input(port_name)`. Got {destination!r}."
+                f"added: `stream_builder.add(...).input(port_name)`. Got {destination!r}."
             )
         self._recorded_links.append(
             {
@@ -297,7 +298,7 @@ class Stream:
         if not isinstance(output, NodeOutputPortReference):
             raise TypeError(
                 f"expose takes an output port of a node this stream added — "
-                f"`node.output(port_name)`. Got {output!r}."
+                f"`stream_builder.add(...).output(port_name)`. Got {output!r}."
             )
         self._refuse_a_node_this_stream_does_not_hold(output.node_name)
         exposed_output_port = (output.node_name, output.port_name)
@@ -368,20 +369,20 @@ class Stream:
 
 
 def compile_stream_to_graph(
-    stream_function: Callable[[Stream], object], *, name: str | None = None
+    stream_function: Callable[[StreamBuilder], object], *, name: str | None = None
 ) -> dict[str, Any]:
-    """Run a `@stream` function once over a fresh `Stream` and return the graph it built."""
+    """Run a `@stream` function once over a fresh `StreamBuilder` and return the graph it built."""
     if not is_stream_function(stream_function):
         raise TypeError(
             f"{stream_function!r} is not a stream: decorate it with @stream — a "
-            f"module-level `def` taking one `Stream`"
+            f"module-level `def` taking one `StreamBuilder`"
         )
     stream_name = (
         name if name is not None else getattr(stream_function, _STREAM_NAME_ATTRIBUTE)
     )
-    builder = Stream(stream_name)
-    stream_function(builder)
-    return builder._compiled_graph()
+    stream_builder = StreamBuilder(stream_name)
+    stream_function(stream_builder)
+    return stream_builder._compiled_graph()
 
 
 def _cast_name(name: str, what_the_name_names: str) -> str:
@@ -422,7 +423,7 @@ def _node_class_import_path(node_class: type) -> str:
             f"in its own child process, which reaches the class by importing this "
             f"name.\n\n"
             f"Move the class to module scope. If it was parameterised by the enclosing "
-            f"function's arguments, pass those through `stream.add(..., config={{...}})` "
+            f"function's arguments, pass those through `stream_builder.add(..., config={{...}})` "
             f"instead — config reaches the child, a closure cannot."
         )
     if module == _ENTRY_FILE_MODULE:

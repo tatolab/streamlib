@@ -93,8 +93,8 @@ class CameraSource:
     """Native built-in block: live camera capture (V4L2 on Linux, AVFoundation
     on macOS).
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(CameraSource, config={"device_id": "/dev/video0"})`); it is
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(CameraSource, config={"device_id": "/dev/video0"})`); it is
     never instantiated and its per-frame path never enters the interpreter.
     `device_id` is a V4L2 device path on Linux and an AVFoundation camera's
     unique ID on macOS; absent, the first camera found — the first built-in
@@ -119,8 +119,8 @@ class CameraSource:
 class DisplayWindow:
     """Native built-in block: video frames in a vsync'd window.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
     it is never instantiated and its per-frame path never enters the
     interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`. `width` and
     `height` (1280 and 720 by default) are the window's initial size in the
@@ -141,8 +141,8 @@ class H264Decoder:
     frames via hardware decode — Vulkan Video on Linux, VideoToolbox on
     macOS.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(H264Decoder)`); it is never instantiated and its per-frame path
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(H264Decoder)`); it is never instantiated and its per-frame path
     never enters the interpreter.
 
     Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
@@ -156,7 +156,7 @@ class H264Decoder:
     buffer-backed, so it reaches a Python kernel through a DLPack landing
     copy, never by bare surface id — the camera's own gap, not a new one.
 
-    Config keys, all optional (`stream.add(H264Decoder)` bare is legal):
+    Config keys, all optional (`stream_builder.add(H264Decoder)` bare is legal):
     `max_width` and `max_height` cap the stream's extent together or not at
     all — a half-specified pair warns and auto-detects both from the
     stream's first SPS, as an absent pair does. On Linux they size the
@@ -178,8 +178,8 @@ class H264Encoder:
     """Native built-in block: video frames to H.264 encoded-frame bags via
     hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(H264Encoder, config={"keyframe_interval_seconds": 2})`); it is
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(H264Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
     Input `video` (`ordered`) takes any published `tatolab.stream.VideoFrame` —
@@ -190,7 +190,7 @@ class H264Encoder:
     keeps running.
 
     Config keys, every one an optional non-negative integer
-    (`stream.add(H264Encoder)` bare is legal): `width` and `height` are
+    (`stream_builder.add(H264Encoder)` bare is legal): `width` and `height` are
     guardrails, not a resize — a mismatching frame wins with a warning;
     `fps` is the fallback rate, resolved frame → config → 60; `bitrate_bps`
     absent means constant-quality encoding at the platform's balanced
@@ -214,8 +214,8 @@ class H265Decoder:
     frames via hardware decode — Vulkan Video on Linux, VideoToolbox on
     macOS.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(H265Decoder)`); it is never instantiated and its per-frame path
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(H265Decoder)`); it is never instantiated and its per-frame path
     never enters the interpreter.
 
     Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
@@ -229,7 +229,7 @@ class H265Decoder:
     buffer-backed, so it reaches a Python kernel through a DLPack landing
     copy, never by bare surface id — the camera's own gap, not a new one.
 
-    Config keys, all optional (`stream.add(H265Decoder)` bare is legal):
+    Config keys, all optional (`stream_builder.add(H265Decoder)` bare is legal):
     `max_width` and `max_height` cap the stream's extent together or not at
     all — a half-specified pair warns and auto-detects both from the
     stream's first SPS, as an absent pair does. On Linux they size the
@@ -251,8 +251,8 @@ class H265Encoder:
     """Native built-in block: video frames to H.265 encoded-frame bags via
     hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(H265Encoder, config={"keyframe_interval_seconds": 2})`); it is
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(H265Encoder, config={"keyframe_interval_seconds": 2})`); it is
     never instantiated and its per-frame path never enters the interpreter.
 
     Input `video` (`ordered`) takes any published `tatolab.stream.VideoFrame` —
@@ -263,7 +263,7 @@ class H265Encoder:
     keeps running.
 
     Config keys, every one an optional non-negative integer
-    (`stream.add(H265Encoder)` bare is legal): `width` and `height` are
+    (`stream_builder.add(H265Encoder)` bare is legal): `width` and `height` are
     guardrails, not a resize — a mismatching frame wins with a warning;
     `fps` is the fallback rate, resolved frame → config → 60; `bitrate_bps`
     absent means constant-quality encoding at the platform's balanced
@@ -285,8 +285,8 @@ class H265Encoder:
 class MicrophoneSource:
     """Native built-in block: audio capture as timestamped sample blocks.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(MicrophoneSource, config={"device_id": "..."})`); it is never
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(MicrophoneSource, config={"device_id": "..."})`); it is never
     instantiated and its capture callback never enters the interpreter.
 
     The backend chain is probed once per process with no configuration dial;
@@ -314,8 +314,8 @@ class Mp4Sink:
     """Native built-in block: encoded video and audio bags recorded to one
     fragmented MP4 file.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(Mp4Sink, config={"path": "recording.mp4"})`); it is never
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(Mp4Sink, config={"path": "recording.mp4"})`); it is never
     instantiated and its per-bag path never enters the interpreter.
 
     One input, `tracks` (`ordered`), and no output. Any number of links may
@@ -359,8 +359,8 @@ class OpusDecoder:
     """Native built-in block: Opus encoded-audio-packet bags to decoded audio
     blocks via libopus.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(OpusDecoder)`); it is never instantiated and its per-packet path
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(OpusDecoder)`); it is never instantiated and its per-packet path
     never enters the interpreter. There is no config.
 
     Input `encoded_audio` (`ordered`) takes encoded-audio-packet bags in the
@@ -394,8 +394,8 @@ class OpusEncoder:
     """Native built-in block: 20 ms windows of audio to Opus
     encoded-audio-packet bags via libopus.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(OpusEncoder, config={"bitrate_bps": 96000})`); it is never
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(OpusEncoder, config={"bitrate_bps": 96000})`); it is never
     instantiated and its per-window path never enters the interpreter.
 
     Input `audio` (`ordered`) declares
@@ -415,7 +415,7 @@ class OpusEncoder:
     state, not decodability, and `sequence_index` does not reset across it, so
     a consumer still reads a gap as loss and never as a restart.
 
-    Config keys, both optional (`stream.add(OpusEncoder)` bare is legal):
+    Config keys, both optional (`stream_builder.add(OpusEncoder)` bare is legal):
     `bitrate_bps` absent means libopus picks its own rate from the sample rate
     and channel count; `application` is `"audio"`, `"voip"` or `"lowdelay"`,
     absent meaning `"audio"`. In-band FEC and DTX are off and are not knobs.
@@ -427,8 +427,8 @@ class OpusEncoder:
 class SpeakerSink:
     """Native built-in block: plays timestamped blocks of interleaved samples.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(SpeakerSink, config={"device_id": "..."})`); it is never
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(SpeakerSink, config={"device_id": "..."})`); it is never
     instantiated and its device callback never enters the interpreter.
 
     The backend chain is probed once per process with no configuration dial;
@@ -460,8 +460,8 @@ class SpeakerSink:
 class TestPatternSource:
     """Native built-in block: SMPTE-style color bars, no hardware.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(TestPatternSource, config={"width": 1280, "height": 720})`);
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(TestPatternSource, config={"width": 1280, "height": 720})`);
     it is never instantiated and its per-frame path never enters the
     interpreter.
     """
@@ -478,8 +478,8 @@ class VirtualCameraSink:
     processor runs — created at setup, removed at teardown, like a USB camera
     plugged in and pulled out — showing whatever the graph writes into it.
 
-    A marker type — pass the class itself to `stream.add`
-    (`stream.add(VirtualCameraSink, config={"name": "Desk cam"})`); it is never
+    A marker type — pass the class itself to `stream_builder.add`
+    (`stream_builder.add(VirtualCameraSink, config={"name": "Desk cam"})`); it is never
     instantiated and its per-frame path never enters the interpreter. Off
     Linux the runtime refuses a graph naming it at load, naming the platform.
 
@@ -518,7 +518,7 @@ class TestBagFeeder:
     """`tatolab.runtime.testing`'s feeder endpoint: publishes bags a test queued.
 
     A marker type, like the media built-ins — never instantiated, passed to
-    `stream.add`. Native so that its queue lives in the app process, where the
+    `stream_builder.add`. Native so that its queue lives in the app process, where the
     test reading it does.
     """
 
@@ -2147,7 +2147,7 @@ def register_declared_processor_class(processor_class: type) -> None:
     when the engine first resolves a node of the class, as `Runtime.load`
     does. A class decorated inside a helper process registers nothing — a
     helper hosts no graph — and so does one no interpreter could import,
-    which `stream.add` refuses by name.
+    which `stream_builder.add` refuses by name.
     """
 
 def processor_class_import_paths_in_this_processes_catalog() -> list[str]:

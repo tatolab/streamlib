@@ -9,7 +9,7 @@ from typing import Any
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 import model_input_tensor_kernel_probes
 
@@ -28,8 +28,8 @@ def _probe_class_name_and_config_named_on_the_command_line() -> tuple[
 
 
 @stream
-def a_test_pattern_into_one_model_input_tensor_kernel_probe(stream: Stream) -> None:
-    pattern = stream.add(
+def a_test_pattern_into_one_model_input_tensor_kernel_probe(stream_builder: StreamBuilder) -> None:
+    pattern = stream_builder.add(
         tatolab.stream.TestPatternSource,
         config={
             "width": model_input_tensor_kernel_probes.FRAME_WIDTH,
@@ -39,11 +39,11 @@ def a_test_pattern_into_one_model_input_tensor_kernel_probe(stream: Stream) -> N
     probe_class_name, probe_config = (
         _probe_class_name_and_config_named_on_the_command_line()
     )
-    probe = stream.add(
+    probe = stream_builder.add(
         getattr(model_input_tensor_kernel_probes, probe_class_name),
         config=probe_config,
     )
-    stream.connect(pattern.output("video"), probe.input("video_from_upstream"))
+    stream_builder.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 
 if __name__ == "__main__":

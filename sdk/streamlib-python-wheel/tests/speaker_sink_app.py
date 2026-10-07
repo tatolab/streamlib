@@ -3,7 +3,7 @@
 
 """A microphone wired straight to a speaker, with no Python in the sample path.
 
-`stream.add` with no `config` on either end records `{}`, so this is also the
+`stream_builder.add` with no `config` on either end records `{}`, so this is also the
 added-without-config proof for the playback built-in: every field of a
 built-in's config struct carries a serde default, so `{}` deserializes.
 
@@ -30,7 +30,7 @@ import threading
 import tatolab.runtime
 import tatolab.stream
 from speaker_sink_probes import AudioBlockCountingProbe
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 from tatolab.runtime._control_plane_client import call_tool
 from this_processes_node_registry_entry import this_processes_local_api_socket
 
@@ -59,13 +59,13 @@ def _report_the_speakers_settled_window_contract(speaker_node_name: str) -> None
 
 
 @stream
-def microphone_into_a_speaker_and_a_block_counting_probe(stream: Stream) -> None:
-    microphone = stream.add(tatolab.stream.MicrophoneSource)
-    speaker = stream.add(tatolab.stream.SpeakerSink, name=SPEAKER_NODE_NAME)
-    stream.connect(microphone.output("audio"), speaker.input("audio"))
+def microphone_into_a_speaker_and_a_block_counting_probe(stream_builder: StreamBuilder) -> None:
+    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
+    speaker = stream_builder.add(tatolab.stream.SpeakerSink, name=SPEAKER_NODE_NAME)
+    stream_builder.connect(microphone.output("audio"), speaker.input("audio"))
 
-    probe = stream.add(AudioBlockCountingProbe)
-    stream.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
+    probe = stream_builder.add(AudioBlockCountingProbe)
+    stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 
 
 def main() -> None:

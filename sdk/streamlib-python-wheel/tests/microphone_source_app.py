@@ -3,7 +3,7 @@
 
 """The audio built-in feeding one Python processor in its real placement.
 
-Added by `stream.add` with no `config` at all — the spelling the plan blesses
+Added by `stream_builder.add` with no `config` at all — the spelling the plan blesses
 for a block that needs no configuration, and the one that reaches the backend's
 default device.
 """
@@ -11,14 +11,14 @@ default device.
 import tatolab.runtime
 import tatolab.stream
 from microphone_source_probes import AudioBlockProbe
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 
 @stream
-def microphone_into_an_audio_block_probe(stream: Stream) -> None:
-    microphone = stream.add(tatolab.stream.MicrophoneSource)
-    probe = stream.add(AudioBlockProbe)
-    stream.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
+def microphone_into_an_audio_block_probe(stream_builder: StreamBuilder) -> None:
+    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
+    probe = stream_builder.add(AudioBlockProbe)
+    stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 
 
 def main() -> None:

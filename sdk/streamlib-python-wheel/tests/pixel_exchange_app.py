@@ -12,7 +12,7 @@ import sys
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 import pixel_exchange_probes
 
@@ -21,49 +21,49 @@ def _probe_class_named_on_the_command_line() -> type:
     return getattr(pixel_exchange_probes, sys.argv[1])
 
 
-def _add_the_cross_process_edit(stream: Stream, *, skip_edit: bool) -> None:
-    pattern = stream.add(
+def _add_the_cross_process_edit(stream_builder: StreamBuilder, *, skip_edit: bool) -> None:
+    pattern = stream_builder.add(
         tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
     )
-    effect = stream.add(
+    effect = stream_builder.add(
         pixel_exchange_probes.ReportingInvertingEffect, config={"skip_edit": skip_edit}
     )
-    verifier = stream.add(pixel_exchange_probes.FrameDigestVerifier)
-    stream.connect(pattern.output("video"), effect.input("video_from_upstream"))
-    stream.connect(effect.output("video_to_downstream"), verifier.input("video_from_upstream"))
+    verifier = stream_builder.add(pixel_exchange_probes.FrameDigestVerifier)
+    stream_builder.connect(pattern.output("video"), effect.input("video_from_upstream"))
+    stream_builder.connect(effect.output("video_to_downstream"), verifier.input("video_from_upstream"))
 
 
 @stream
-def one_pixel_exchange_probe(stream: Stream) -> None:
+def one_pixel_exchange_probe(stream_builder: StreamBuilder) -> None:
     """One probe, one graph. The probe reports from `setup`, so the graph has
     nothing to do but exist until the test has read the result and interrupts."""
-    stream.add(_probe_class_named_on_the_command_line())
+    stream_builder.add(_probe_class_named_on_the_command_line())
 
 
 @stream
-def a_test_pattern_into_an_inverting_effect(stream: Stream) -> None:
+def a_test_pattern_into_an_inverting_effect(stream_builder: StreamBuilder) -> None:
     """Native source → Python effect, the user-facing story: the frames a
     native processor produces are edited in place by a child interpreter."""
-    pattern = stream.add(
+    pattern = stream_builder.add(
         tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
     )
-    effect = stream.add(pixel_exchange_probes.InvertingEffect)
-    stream.connect(
+    effect = stream_builder.add(pixel_exchange_probes.InvertingEffect)
+    stream_builder.connect(
         pattern.output("video"), effect.input("video_from_upstream")
     )
 
 
 @stream
-def a_test_pattern_edited_then_digested_in_another_process(stream: Stream) -> None:
+def a_test_pattern_edited_then_digested_in_another_process(stream_builder: StreamBuilder) -> None:
     """Native source → Python effect → a second Python processor: the edit
     one child makes is read back by another, through the engine's memory."""
-    _add_the_cross_process_edit(stream, skip_edit=False)
+    _add_the_cross_process_edit(stream_builder, skip_edit=False)
 
 
 @stream
-def a_test_pattern_left_unedited_then_digested_in_another_process(stream: Stream) -> None:
+def a_test_pattern_left_unedited_then_digested_in_another_process(stream_builder: StreamBuilder) -> None:
     """The cross-process edit's negative control: the effect leaves the pixels alone."""
-    _add_the_cross_process_edit(stream, skip_edit=True)
+    _add_the_cross_process_edit(stream_builder, skip_edit=True)
 
 
 STREAM_BY_SCENARIO = {

@@ -59,7 +59,7 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 
 STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
-from tatolab.stream import Stream, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, TestPatternSource, stream
 
 # Imported and never added: its decorator is what puts it in the catalog.
 from processors.bag_marking_effect import BagMarkingEffect  # noqa: F401
@@ -67,27 +67,27 @@ from processors.marked_bag_sink import MarkedBagSink
 
 
 @stream
-def main(stream: Stream) -> None:
-    source = stream.add(TestPatternSource, name="pattern", config={"width": 320, "height": 180})
-    sink = stream.add(MarkedBagSink, name="sink")
-    stream.connect(source.output("video"), sink.input("bags_from_upstream"))
+def main(stream_builder: StreamBuilder) -> None:
+    source = stream_builder.add(TestPatternSource, name="pattern", config={"width": 320, "height": 180})
+    sink = stream_builder.add(MarkedBagSink, name="sink")
+    stream_builder.connect(source.output("video"), sink.input("bags_from_upstream"))
 '''
 
 # Both `{delivery_profile}` slots are filled per run, so each way the effect's
 # input can relate to the sink's — the same profile, a shallower one, a deeper
 # one — meets a live node.
 BAG_MARKING_EFFECT_SOURCE_TEMPLATE = '''\
-from tatolab.stream import RuntimeContextLimitedAccess, input, node, output
+from tatolab.stream import RuntimeContextLimitedAccess, node
 
 
 @node
 class BagMarkingEffect:
     """Forwards every bag with one key added, so a consumer can tell it passed through."""
 
-    @input(delivery_profile="{delivery_profile}")
+    @node.input(delivery_profile="{delivery_profile}")
     def bags_from_upstream(self) -> None: ...
 
-    @output()
+    @node.output()
     def marked_bags_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -97,7 +97,7 @@ class BagMarkingEffect:
 '''
 
 MARKED_BAG_SINK_SOURCE_TEMPLATE = '''\
-from tatolab.stream import RuntimeContextLimitedAccess, input, log, node
+from tatolab.stream import RuntimeContextLimitedAccess, log, node
 
 
 @node
@@ -107,7 +107,7 @@ class MarkedBagSink:
     def __init__(self) -> None:
         self.announced = False
 
-    @input(delivery_profile="{delivery_profile}")
+    @node.input(delivery_profile="{delivery_profile}")
     def bags_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

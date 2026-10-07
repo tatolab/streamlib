@@ -525,7 +525,7 @@ fn load_the_claimed_graph(
         };
         return Err(PyRuntimeError::new_err(format!(
             "{what_holds_no_node} holds no node — a stream whose function adds nothing compiles \
-             to an empty graph, and there is nothing to run. Add a node with `stream.add(...)`"
+             to an empty graph, and there is nothing to run. Add a node with `stream_builder.add(...)`"
         )));
     }
 

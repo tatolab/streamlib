@@ -4,10 +4,10 @@
 """The one-processor stream `capability_extension_app.py`'s helper scenarios load."""
 
 from capability_extension_processor import ReportsTheExtensionItsHelperLoaded
-from tatolab.stream import Stream, stream
+from tatolab.stream import StreamBuilder, stream
 
 
 @stream
-def one_processor_that_reports_its_helpers_extensions(stream: Stream) -> None:
+def one_processor_that_reports_its_helpers_extensions(stream_builder: StreamBuilder) -> None:
     """A `ReportsTheExtensionItsHelperLoaded`, the reason a helper process exists."""
-    stream.add(ReportsTheExtensionItsHelperLoaded)
+    stream_builder.add(ReportsTheExtensionItsHelperLoaded)

@@ -10,14 +10,14 @@ test process sees nothing once another test booted an engine first.
 """
 
 import tatolab.runtime
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 from zero_argument_process_processor import ZeroArgumentProcess
 
 
 @stream
-def zero_argument_process(stream: Stream) -> None:
+def zero_argument_process(stream_builder: StreamBuilder) -> None:
     """The one processor whose `process` takes no ctx."""
-    stream.add(ZeroArgumentProcess)
+    stream_builder.add(ZeroArgumentProcess)
 
 
 if __name__ == "__main__":

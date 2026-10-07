@@ -6,16 +6,16 @@
 import tatolab.runtime
 import tatolab.stream
 from native_builtin_probes import VideoFrameProbe
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 
 @stream
-def a_test_pattern_into_a_video_frame_probe(stream: Stream) -> None:
-    pattern = stream.add(
+def a_test_pattern_into_a_video_frame_probe(stream_builder: StreamBuilder) -> None:
+    pattern = stream_builder.add(
         tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
     )
-    probe = stream.add(VideoFrameProbe)
-    stream.connect(pattern.output("video"), probe.input("video_from_upstream"))
+    probe = stream_builder.add(VideoFrameProbe)
+    stream_builder.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 
 def main() -> None:

@@ -34,7 +34,7 @@ import tatolab.runtime
 import tatolab.stream
 from captured_audio_waveform_recorder import CapturedAudioWaveformRecorder
 from known_audio_signal_source import KnownAudioSignalSource
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 
 def _this_nodes_output_as_a_capture_device_when_asked(capture_device_id, sink):
@@ -71,20 +71,20 @@ def _sink_and_capture_device_from_the_environment() -> tuple[str | None, str]:
 
 
 @stream
-def known_signal_played_and_captured_back(stream: Stream) -> None:
+def known_signal_played_and_captured_back(stream_builder: StreamBuilder) -> None:
     sink, capture_device_id = _sink_and_capture_device_from_the_environment()
 
-    signal = stream.add(KnownAudioSignalSource)
-    speaker = stream.add(
+    signal = stream_builder.add(KnownAudioSignalSource)
+    speaker = stream_builder.add(
         tatolab.stream.SpeakerSink, config={"device_id": sink} if sink else {}
     )
-    stream.connect(signal.output("audio"), speaker.input("audio"))
+    stream_builder.connect(signal.output("audio"), speaker.input("audio"))
 
-    microphone = stream.add(
+    microphone = stream_builder.add(
         tatolab.stream.MicrophoneSource, config={"device_id": capture_device_id}
     )
-    recorder = stream.add(CapturedAudioWaveformRecorder)
-    stream.connect(microphone.output("audio"), recorder.input("audio_from_upstream"))
+    recorder = stream_builder.add(CapturedAudioWaveformRecorder)
+    stream_builder.connect(microphone.output("audio"), recorder.input("audio_from_upstream"))
 
 
 def main() -> None:

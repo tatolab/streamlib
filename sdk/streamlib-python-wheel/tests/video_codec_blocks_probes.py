@@ -22,7 +22,7 @@ overlap.
 
 import json
 
-from tatolab.stream import EncodedVideoFrame, input, log, node
+from tatolab.stream import EncodedVideoFrame, log, node
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
@@ -53,7 +53,7 @@ class EncodedFrameProbe:
         self.frames_admitted = 0
         self.entered_the_stream = False
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def encoded_video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -99,7 +99,7 @@ class EncodedFrameTimestampProbe:
     whose stamp a decoded frame downstream may carry.
     """
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def encoded_video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -128,7 +128,7 @@ class DecodedVideoFrameProbe:
         self.bags_seen = []
         self.stamps_reported = 0
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:

@@ -23,7 +23,7 @@ import functools
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 _ENCODER_AND_DECODER_MARKERS_BY_CODEC: dict[str, tuple[type, type]] = {
     "h264": (tatolab.stream.H264Encoder, tatolab.stream.H264Decoder),
@@ -56,32 +56,32 @@ def _parse_fixture_arguments() -> argparse.Namespace:
 
 
 @stream
-def camera_through_the_codec_into_a_window(stream: Stream) -> None:
+def camera_through_the_codec_into_a_window(stream_builder: StreamBuilder) -> None:
     arguments = _parse_fixture_arguments()
     encoder_marker, decoder_marker = _ENCODER_AND_DECODER_MARKERS_BY_CODEC[
         arguments.codec
     ]
 
-    camera = stream.add(
+    camera = stream_builder.add(
         tatolab.stream.CameraSource,
         name="camera",
         config={"device_id": arguments.camera} if arguments.camera else {},
     )
-    encoder = stream.add(
+    encoder = stream_builder.add(
         encoder_marker,
         name="encoder",
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
     )
-    decoder = stream.add(decoder_marker, name="decoder")
-    display = stream.add(
+    decoder = stream_builder.add(decoder_marker, name="decoder")
+    display = stream_builder.add(
         tatolab.stream.DisplayWindow,
         name="display",
         config={"title": "streamlib codec round-trip node"},
     )
 
-    stream.connect(camera.output("video"), encoder.input("video"))
-    stream.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
-    stream.connect(decoder.output("video"), display.input("video"))
+    stream_builder.connect(camera.output("video"), encoder.input("video"))
+    stream_builder.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
+    stream_builder.connect(decoder.output("video"), display.input("video"))
 
 
 def main() -> None:

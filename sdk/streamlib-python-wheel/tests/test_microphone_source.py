@@ -27,7 +27,7 @@ import pytest
 import tatolab.runtime
 import tatolab.stream
 from microphone_source_named_device_app import UNOPENABLE_DEVICE_ID
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 MICROPHONE_SOURCE_APP = Path(__file__).parent / "microphone_source_app.py"
 NAMED_DEVICE_APP = Path(__file__).parent / "microphone_source_named_device_app.py"
@@ -50,8 +50,8 @@ def test_the_marker_class_cannot_be_instantiated():
 
 
 @stream
-def one_microphone_source_left_unnamed(stream: Stream) -> None:
-    stream.add(tatolab.stream.MicrophoneSource)
+def one_microphone_source_left_unnamed(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(tatolab.stream.MicrophoneSource)
 
 
 def test_node_name_defaults_to_the_type_name():
@@ -76,7 +76,7 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
     the probed backend capturing in the app process → an `AudioBlock` bag read
     as a numpy view by a Python processor in its own helper process.
 
-    `stream.add` with no `config` records `{}`, so this is also the
+    `stream_builder.add` with no `config` records `{}`, so this is also the
     added-without-config proof: every field of a built-in's config struct
     carries a serde default, so `{}` deserializes.
     """

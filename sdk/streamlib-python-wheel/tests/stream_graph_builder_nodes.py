@@ -8,17 +8,17 @@ path of its class, `stream_graph_builder_nodes:<qualname>` — a name a child
 process can import.
 """
 
-from tatolab.stream import RuntimeContextLimitedAccess, input, node, output
+from tatolab.stream import RuntimeContextLimitedAccess, node
 
 
 @node
 class FrameInverter:
     """Inverts each frame it reads."""
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
-    @output()
+    @node.output()
     def video_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -31,7 +31,7 @@ class FrameInverter:
 class BrightnessReader:
     """Reads each frame it receives and writes nothing."""
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -45,10 +45,10 @@ class FrameFilters:
     class FrameDarkener:
         """Darkens each frame it reads."""
 
-        @input(delivery_profile="newest")
+        @node.input(delivery_profile="newest")
         def video_from_upstream(self) -> None: ...
 
-        @output()
+        @node.output()
         def video_to_downstream(self) -> None: ...
 
         def process(self, ctx: RuntimeContextLimitedAccess) -> None:

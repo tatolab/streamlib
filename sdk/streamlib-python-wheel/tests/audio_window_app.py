@@ -19,27 +19,27 @@ from audio_window_probes import (
     SourceFollowingWindowProbe,
     StereoToneSource,
 )
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 
-def _microphone_into(stream: Stream, probe_class: type) -> None:
-    microphone = stream.add(tatolab.stream.MicrophoneSource)
-    probe = stream.add(probe_class)
-    stream.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
-
-
-@stream
-def microphone_into_an_exact_window_probe(stream: Stream) -> None:
-    _microphone_into(stream, ExactWindowProbe)
+def _microphone_into(stream_builder: StreamBuilder, probe_class: type) -> None:
+    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
+    probe = stream_builder.add(probe_class)
+    stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 
 
 @stream
-def microphone_into_a_rolling_window_probe(stream: Stream) -> None:
-    _microphone_into(stream, RollingWindowProbe)
+def microphone_into_an_exact_window_probe(stream_builder: StreamBuilder) -> None:
+    _microphone_into(stream_builder, ExactWindowProbe)
 
 
 @stream
-def one_stereo_source_into_both_window_probes(stream: Stream) -> None:
+def microphone_into_a_rolling_window_probe(stream_builder: StreamBuilder) -> None:
+    _microphone_into(stream_builder, RollingWindowProbe)
+
+
+@stream
+def one_stereo_source_into_both_window_probes(stream_builder: StreamBuilder) -> None:
     """One stated-format source into two consumers: one that declares no
     channel count and one that declares mono.
 
@@ -47,11 +47,11 @@ def one_stereo_source_into_both_window_probes(stream: Stream) -> None:
     that the count follows *the source* — which needs a source whose count the
     test knows.
     """
-    source = stream.add(StereoToneSource)
-    following = stream.add(SourceFollowingWindowProbe)
-    declared_mono = stream.add(DeclaredMonoWindowProbe)
-    stream.connect(source.output("audio"), following.input("audio_from_upstream"))
-    stream.connect(source.output("audio"), declared_mono.input("audio_from_upstream"))
+    source = stream_builder.add(StereoToneSource)
+    following = stream_builder.add(SourceFollowingWindowProbe)
+    declared_mono = stream_builder.add(DeclaredMonoWindowProbe)
+    stream_builder.connect(source.output("audio"), following.input("audio_from_upstream"))
+    stream_builder.connect(source.output("audio"), declared_mono.input("audio_from_upstream"))
 
 
 STREAM_BY_SCENARIO = {

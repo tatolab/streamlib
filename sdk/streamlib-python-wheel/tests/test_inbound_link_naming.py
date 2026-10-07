@@ -25,7 +25,7 @@ import pytest
 
 import tatolab.runtime
 from inbound_link_naming_processors import ReportsWhichLinkEachBagCameFrom
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 from tatolab.runtime._engine import (
     TestBagCollector,
     TestBagFeeder,
@@ -51,20 +51,20 @@ def inbound_link_naming_feed_channel_of(feeder_name: str) -> str:
 
 
 @stream
-def two_feeders_into_one_port(stream: Stream) -> None:
+def two_feeders_into_one_port(stream_builder: StreamBuilder) -> None:
     """Both feeders linked into the one `tracks` port, a collector on its output."""
-    sink = stream.add(ReportsWhichLinkEachBagCameFrom)
+    sink = stream_builder.add(ReportsWhichLinkEachBagCameFrom)
     for feeder_name in FEEDER_NAMES:
-        feeder = stream.add(
+        feeder = stream_builder.add(
             TestBagFeeder,
             name=feeder_name,
             config={"channel": inbound_link_naming_feed_channel_of(feeder_name)},
         )
-        stream.connect(feeder.output("bags_to_downstream"), sink.input("tracks"))
-    collector = stream.add(
+        stream_builder.connect(feeder.output("bags_to_downstream"), sink.input("tracks"))
+    collector = stream_builder.add(
         TestBagCollector, config={"channel": INBOUND_LINK_NAMING_ATTRIBUTIONS_CHANNEL}
     )
-    stream.connect(
+    stream_builder.connect(
         sink.output("attributions_to_downstream"),
         collector.input("bags_from_upstream"),
     )

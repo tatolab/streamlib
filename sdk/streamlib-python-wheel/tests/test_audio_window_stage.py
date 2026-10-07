@@ -221,14 +221,12 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
 GAPPED_AUDIO_PROCESSORS_SOURCE = '''\
 """A mono source whose every block starts a second after the last one ended."""
 
-from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
+from tatolab.stream import (
     AudioBlock,
     AudioWindowContract,
     RuntimeContextLimitedAccess,
-    input,
     monotonic_now_ns,
     node,
-    output,
 )
 
 SAMPLE_RATE = 16_000
@@ -245,7 +243,7 @@ class GappedMonoSource:
         self.blocks = 0
         self.anchor_ns = monotonic_now_ns()
 
-    @output()
+    @node.output()
     def audio(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -266,7 +264,7 @@ class GappedMonoSource:
 
 @node
 class WindowedMonoConsumer:
-    @input(
+    @node.input(
         delivery_profile="ordered",
         audio_window=AudioWindowContract(
             sample_rate=SAMPLE_RATE, channels=1, dtype="f32", window_size=512
@@ -279,16 +277,16 @@ class WindowedMonoConsumer:
 '''
 
 GAPPED_AUDIO_STREAM_SOURCE = '''\
-from tatolab.stream import Stream, stream
+from tatolab.stream import StreamBuilder, stream
 
 from processors.gapped_audio import GappedMonoSource, WindowedMonoConsumer
 
 
 @stream
-def main(stream: Stream) -> None:
-    source = stream.add(GappedMonoSource, name="gapped-source")
-    consumer = stream.add(WindowedMonoConsumer, name="windowed-consumer")
-    stream.connect(source.output("audio"), consumer.input("audio"))
+def main(stream_builder: StreamBuilder) -> None:
+    source = stream_builder.add(GappedMonoSource, name="gapped-source")
+    consumer = stream_builder.add(WindowedMonoConsumer, name="windowed-consumer")
+    stream_builder.connect(source.output("audio"), consumer.input("audio"))
 '''
 
 

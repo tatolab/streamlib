@@ -29,7 +29,7 @@ import tatolab.stream
 from tatolab.stream import (
     OpusDecoder,
     OpusEncoder,
-    Stream,
+    StreamBuilder,
     compile_stream_to_graph,
     stream,
 )
@@ -77,13 +77,13 @@ def test_the_marker_class_cannot_be_instantiated(marker_class):
 
 
 @stream
-def an_opus_encoder_alone(stream: Stream) -> None:
-    stream.add(OpusEncoder)
+def an_opus_encoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(OpusEncoder)
 
 
 @stream
-def an_opus_decoder_alone(stream: Stream) -> None:
-    stream.add(OpusDecoder)
+def an_opus_decoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(OpusDecoder)
 
 
 ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS = {
@@ -108,20 +108,20 @@ def test_node_name_defaults_to_the_type_name(marker_class):
 
 
 @stream
-def microphone_through_the_opus_round_trip_into_a_speaker(stream: Stream) -> None:
-    microphone = stream.add(tatolab.stream.MicrophoneSource)
-    encoder = stream.add(OpusEncoder)
-    decoder = stream.add(OpusDecoder)
-    speaker = stream.add(tatolab.stream.SpeakerSink)
-    stream.connect(microphone.output("audio"), encoder.input("audio"))
-    stream.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
-    stream.connect(decoder.output("audio"), speaker.input("audio"))
+def microphone_through_the_opus_round_trip_into_a_speaker(stream_builder: StreamBuilder) -> None:
+    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
+    encoder = stream_builder.add(OpusEncoder)
+    decoder = stream_builder.add(OpusDecoder)
+    speaker = stream_builder.add(tatolab.stream.SpeakerSink)
+    stream_builder.connect(microphone.output("audio"), encoder.input("audio"))
+    stream_builder.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
+    stream_builder.connect(decoder.output("audio"), speaker.input("audio"))
 
 
 def test_the_round_trip_wires_without_an_adapter():
     """Source into encoder, encoder into decoder — the port names compose as
-    published, which is what makes three `stream.add` calls and two
-    `stream.connect` calls the whole of an audio codec round trip. No rechunker
+    published, which is what makes three `stream_builder.add` calls and two
+    `stream_builder.connect` calls the whole of an audio codec round trip. No rechunker
     between the source and the encoder: the encoder's own window contract
     frames. The builder checks no port names, so the engine accepting the load
     is the proof."""

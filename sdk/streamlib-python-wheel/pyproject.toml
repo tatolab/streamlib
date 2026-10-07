@@ -111,8 +111,7 @@ macos-deployment-target = "15.0"
 src = ["python/tatolab/runtime/_scaffold_template"]
 
 [tool.ruff.lint]
-# flake8-builtins, so the scaffold's `noqa: A004` on tatolab.stream's `input` port
-# decorator is checked rather than reported unused.
+# flake8-builtins, so a render that shadows a Python builtin fails.
 extend-select = ["A"]
 
 [tool.pyright]

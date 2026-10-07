@@ -33,12 +33,12 @@ WHEEL_PYTHON_PACKAGE_DIRECTORIES = (
 FIXTURE_FILE = Path("processors/effect.py")
 FIXTURE_MANIFEST = Path("pyproject.toml")
 FLOOR_CLEAN_STREAM_SOURCE = (
-    "from tatolab.stream import Stream, TestPatternSource, stream\n"
+    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
     "\n"
     "\n"
     "@stream\n"
-    "def main(stream: Stream) -> None:\n"
-    "    stream.add(TestPatternSource)\n"
+    "def main(stream_builder: StreamBuilder) -> None:\n"
+    "    stream_builder.add(TestPatternSource)\n"
 )
 
 requires_tomllib = pytest.mark.skipif(
@@ -233,8 +233,8 @@ def test_a_cuda_method_call_is_named():
 @pytest.mark.parametrize(
     "use, name, peer",
     [
-        ("stream.add(VirtualCameraSink)", "VirtualCameraSink", None),
-        ("stream.add(tatolab.stream.VirtualCameraSink)", "VirtualCameraSink", None),
+        ("stream_builder.add(VirtualCameraSink)", "VirtualCameraSink", None),
+        ("stream_builder.add(tatolab.stream.VirtualCameraSink)", "VirtualCameraSink", None),
         ("ctx.gpu_full_access.create_ray_tracing_kernel(stages, groups)", "create_ray_tracing_kernel", None),
         ("ctx.gpu_full_access.build_triangles_blas(vertices, indices)", "build_triangles_blas", None),
         ("ctx.gpu_full_access.build_tlas(instances)", "build_tlas", None),

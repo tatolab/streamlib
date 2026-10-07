@@ -34,7 +34,7 @@ import os
 import numpy
 
 import known_audio_signal
-from tatolab.stream import RuntimeContextLimitedAccess, monotonic_now_ns, node, output
+from tatolab.stream import RuntimeContextLimitedAccess, monotonic_now_ns, node
 
 # PipeWire's fixture sink is created with `audio.position=[FL FR]` and its arm
 # asks for `F32_LE`; a Mac's built-in speakers are two channels, and the
@@ -80,7 +80,7 @@ def _interleaved_stereo_f32_bytes(mono_samples):
 class KnownAudioSignalSource:
     """Plays the known signal once, then silence — or over and over."""
 
-    @output()
+    @node.output()
     def audio(self) -> None: ...
 
     def __init__(self) -> None:

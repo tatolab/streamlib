@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 
 import tatolab.runtime
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 from interpreter_lifecycle_processors import (
     AsleepInItsCallbackAndSlowToTearDownProbe,
     AsleepInItsCallbackProbe,
@@ -36,38 +36,38 @@ def marker(text: str) -> None:
 
 
 @stream
-def one_processor_asleep_in_its_callback(stream: Stream) -> None:
+def one_processor_asleep_in_its_callback(stream_builder: StreamBuilder) -> None:
     """One processor that sleeps in `process()`."""
-    stream.add(AsleepInItsCallbackProbe)
+    stream_builder.add(AsleepInItsCallbackProbe)
 
 
 @stream
-def two_processors_asleep_recording_their_teardown(stream: Stream) -> None:
+def two_processors_asleep_recording_their_teardown(stream_builder: StreamBuilder) -> None:
     """Two processors asleep in `process()`, each recording its own teardown."""
     for _ in range(2):
-        stream.add(AsleepInItsCallbackRecordingItsTeardownProbe)
+        stream_builder.add(AsleepInItsCallbackRecordingItsTeardownProbe)
 
 
 @stream
-def three_processors_slow_to_tear_down(stream: Stream) -> None:
+def three_processors_slow_to_tear_down(stream_builder: StreamBuilder) -> None:
     """Three processors asleep in `process()`, each three seconds over its teardown."""
     for _ in range(3):
-        stream.add(AsleepInItsCallbackAndSlowToTearDownProbe)
+        stream_builder.add(AsleepInItsCallbackAndSlowToTearDownProbe)
 
 
 @stream
-def a_teardown_only_a_forced_shutdown_cuts_short(stream: Stream) -> None:
+def a_teardown_only_a_forced_shutdown_cuts_short(stream_builder: StreamBuilder) -> None:
     """One processor with a thirty-second teardown and a forked worker ignoring SIGTERM."""
-    stream.add(WorkerKeepingTeardownGoingProbe)
+    stream_builder.add(WorkerKeepingTeardownGoingProbe)
 
 
 @stream
-def a_helper_still_importing(stream: Stream) -> None:
+def a_helper_still_importing(stream_builder: StreamBuilder) -> None:
     """One processor whose module takes thirty seconds to import in its helper."""
-    stream.add(ThirtySecondImportProbe)
+    stream_builder.add(ThirtySecondImportProbe)
 
 
-def run_stream_until_it_returns(stream_function: Callable[[Stream], None]) -> None:
+def run_stream_until_it_returns(stream_function: Callable[[StreamBuilder], None]) -> None:
     """Load `stream_function`'s graph on a fresh `Runtime`, run it, and say it returned."""
     graph = compile_stream_to_graph(stream_function)
     runtime = tatolab.runtime.Runtime()

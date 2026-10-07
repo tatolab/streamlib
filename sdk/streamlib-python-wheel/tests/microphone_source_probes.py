@@ -13,7 +13,7 @@ import json
 
 import numpy
 
-from tatolab.stream import AudioBlock, input, log, node
+from tatolab.stream import AudioBlock, log, node
 
 RESULT_MARKER = "MARKER:BLOCKS_SEEN "
 
@@ -31,7 +31,7 @@ class AudioBlockProbe:
     # blocks in the order they were published rather than skipping to the
     # freshest. It promises nothing about how many arrive — loss at the device
     # edge is counted there, loss on this link is counted at this port.
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:

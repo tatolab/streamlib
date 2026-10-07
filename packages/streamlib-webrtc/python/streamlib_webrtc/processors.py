@@ -23,10 +23,8 @@ from tatolab.stream import (
     LinkOutputDataWriter,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    input,
     log,
     node,
-    output,
 )
 
 from . import _native
@@ -257,7 +255,7 @@ class WhipPublisher:
         self._kind_by_inbound_link: "dict[str, VideoOrAudio]" = {}
         self._bags_published = 0
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def tracks(self) -> None:
         """Encoded video or audio bags; each inbound link becomes one track."""
 
@@ -404,11 +402,11 @@ class WhepPlayer:
         self._reported_an_oversized_bag = False
         self._bags_written: "dict[str, int]" = {}
 
-    @output()
+    @node.output()
     def encoded_video(self) -> None:
         """H.264 access units, as `EncodedVideoFrame` bags."""
 
-    @output()
+    @node.output()
     def encoded_audio(self) -> None:
         """Opus packets, as `EncodedAudioPacket` bags."""
 

@@ -32,7 +32,7 @@ from tatolab.stream import (
     H264Encoder,
     H265Decoder,
     H265Encoder,
-    Stream,
+    StreamBuilder,
     VideoFrame,
     compile_stream_to_graph,
     stream,
@@ -71,47 +71,47 @@ FOUR_CODEC_MARKERS = [H264Encoder, H264Decoder, H265Encoder, H265Decoder]
 
 
 def _add_a_codec_round_trip_into_a_window(
-    stream: Stream,
+    stream_builder: StreamBuilder,
     encoder_class: "type[H264Encoder] | type[H265Encoder]",
     decoder_class: "type[H264Decoder] | type[H265Decoder]",
 ) -> None:
-    pattern = stream.add(tatolab.stream.TestPatternSource)
-    encoder = stream.add(encoder_class)
-    decoder = stream.add(decoder_class)
-    window = stream.add(tatolab.stream.DisplayWindow)
-    stream.connect(pattern.output("video"), encoder.input("video"))
-    stream.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
-    stream.connect(decoder.output("video"), window.input("video"))
+    pattern = stream_builder.add(tatolab.stream.TestPatternSource)
+    encoder = stream_builder.add(encoder_class)
+    decoder = stream_builder.add(decoder_class)
+    window = stream_builder.add(tatolab.stream.DisplayWindow)
+    stream_builder.connect(pattern.output("video"), encoder.input("video"))
+    stream_builder.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
+    stream_builder.connect(decoder.output("video"), window.input("video"))
 
 
 @stream
-def h264_round_trip_into_a_window(stream: Stream) -> None:
-    _add_a_codec_round_trip_into_a_window(stream, H264Encoder, H264Decoder)
+def h264_round_trip_into_a_window(stream_builder: StreamBuilder) -> None:
+    _add_a_codec_round_trip_into_a_window(stream_builder, H264Encoder, H264Decoder)
 
 
 @stream
-def h265_round_trip_into_a_window(stream: Stream) -> None:
-    _add_a_codec_round_trip_into_a_window(stream, H265Encoder, H265Decoder)
+def h265_round_trip_into_a_window(stream_builder: StreamBuilder) -> None:
+    _add_a_codec_round_trip_into_a_window(stream_builder, H265Encoder, H265Decoder)
 
 
 @stream
-def an_h264_encoder_alone(stream: Stream) -> None:
-    stream.add(H264Encoder)
+def an_h264_encoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(H264Encoder)
 
 
 @stream
-def an_h264_decoder_alone(stream: Stream) -> None:
-    stream.add(H264Decoder)
+def an_h264_decoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(H264Decoder)
 
 
 @stream
-def an_h265_encoder_alone(stream: Stream) -> None:
-    stream.add(H265Encoder)
+def an_h265_encoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(H265Encoder)
 
 
 @stream
-def an_h265_decoder_alone(stream: Stream) -> None:
-    stream.add(H265Decoder)
+def an_h265_decoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(H265Decoder)
 
 
 ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS = {
@@ -166,8 +166,8 @@ def test_node_name_defaults_to_the_type_name(marker_class):
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 def test_the_round_trip_wires_without_an_adapter(codec):
     """Pattern into encoder, encoder into decoder, decoder into window — the
-    port names compose as published, which is what makes four `stream.add`
-    calls and three `stream.connect` calls the whole of a codec round trip.
+    port names compose as published, which is what makes four `stream_builder.add`
+    calls and three `stream_builder.connect` calls the whole of a codec round trip.
     The builder checks no port name, so the proof is the engine's `load`."""
     graph = compile_stream_to_graph(CODEC_ROUND_TRIPS[codec]["stream"])
     runtime = tatolab.runtime.Runtime()

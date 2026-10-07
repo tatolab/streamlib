@@ -17,7 +17,7 @@ import pytest
 import tatolab.runtime
 import tatolab.stream
 from camera_source_named_device_app import UNOPENABLE_DEVICE_ID
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 NAMED_DEVICE_APP = Path(__file__).parent / "camera_source_named_device_app.py"
 
@@ -31,8 +31,8 @@ def test_the_marker_class_cannot_be_instantiated():
 
 
 @stream
-def a_camera_source_alone(stream: Stream) -> None:
-    stream.add(tatolab.stream.CameraSource)
+def a_camera_source_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(tatolab.stream.CameraSource)
 
 
 def test_node_name_defaults_to_the_type_name():
