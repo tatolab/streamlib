@@ -115,6 +115,7 @@ mod tests {
     use crate::core::graph_snapshot::GraphSnapshot;
     use crate::core::processors::ProcessorSpec;
     use crate::core::runtime::Runner;
+    use serial_test::serial;
 
     fn import_path(path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(path).expect("the test path names a class")
@@ -209,6 +210,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn a_load_records_the_stream_environment_it_was_given() {
         let rust_type = a_rust_type_registered_as("RecordedEnvironmentSource");
         let stream_environment = StreamEnvironment {
@@ -296,6 +298,7 @@ mod tests {
     /// class's ports may have changed since — and a live add describes a type
     /// nothing has registered in the environment the load recorded.
     #[test]
+    #[serial]
     fn a_load_redescribes_its_types_and_a_live_add_describes_in_the_recorded_environment() {
         let loaded_type = import_path("my_app.redescribed_at_load:Blur");
         let added_live_type = import_path("my_app.described_at_a_live_add:Blur");

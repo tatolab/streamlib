@@ -51,7 +51,7 @@ pub const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
 const PROCESS_GROUP_TERMINATION_GRACE: Duration = Duration::from_millis(500);
 
 /// How long the reap waits for a killed child to become collectable.
-const REAP_BUDGET: Duration = Duration::from_secs(1);
+pub(crate) const REAP_BUDGET: Duration = Duration::from_secs(1);
 
 /// How often a bounded wait for the child's exit re-checks.
 const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -300,14 +300,18 @@ impl HelperProcessShutdownLadder {
     /// the moment it returns.
     fn end_the_process_group_and_reap(&mut self) -> HelperProcessShutdownOutcome {
         if !(self.is_shutdown_forced)() {
-            self.wait_for_the_child_to_become_collectable(CHILD_SELF_EXIT_GRACE);
+            let _ =
+                wait_for_a_child_to_become_collectable_within(&self.child, CHILD_SELF_EXIT_GRACE);
         }
 
         // The group, never the pid: a fork-based worker or an `os.system`
         // child survives a signal to the helper alone, and it holds the
         // helper's sockets open behind it.
         self.signal_the_whole_process_group(libc::SIGTERM);
-        self.wait_for_the_child_to_become_collectable(PROCESS_GROUP_TERMINATION_GRACE);
+        let _ = wait_for_a_child_to_become_collectable_within(
+            &self.child,
+            PROCESS_GROUP_TERMINATION_GRACE,
+        );
 
         self.signal_the_whole_process_group(libc::SIGKILL);
         // Out of the registry the third interrupt kills from before the reap
@@ -328,46 +332,76 @@ impl HelperProcessShutdownLadder {
         unsafe { libc::killpg(self.child.id() as libc::pid_t, signal) };
     }
 
-    /// Wait up to `budget` for the child to exit, without collecting it.
-    fn wait_for_the_child_to_become_collectable(&self, budget: Duration) {
-        let deadline = Instant::now() + budget;
-        while !a_helper_process_has_exited_without_being_reaped(self.child.id()) {
-            if Instant::now() >= deadline {
-                return;
-            }
-            std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
-        }
-    }
-
     fn reap_the_child_within(&mut self, budget: Duration) -> HelperProcessShutdownOutcome {
-        let deadline = Instant::now() + budget;
-        loop {
-            match self.child.try_wait() {
-                Ok(Some(exit_status)) => return HelperProcessShutdownOutcome::Reaped(exit_status),
-                Ok(None) => {}
-                Err(uncollectable) => {
-                    tracing::error!(
-                        "[{}] its helper process (pid={}) cannot be collected: {uncollectable}",
-                        self.processor_display_name,
-                        self.child.id(),
-                    );
-                    return HelperProcessShutdownOutcome::AbandonedAfterTheLadder;
-                }
+        match reap_a_child_within(&mut self.child, budget) {
+            ChildReapedWithinItsBudget::Reaped(exit_status) => {
+                HelperProcessShutdownOutcome::Reaped(exit_status)
             }
-            if Instant::now() >= deadline {
-                // Uninterruptible sleep inside a driver is the case user space
-                // cannot end. Naming it beats waiting out an app that will
-                // never be allowed to quit.
+            ChildReapedWithinItsBudget::CannotBeCollected(uncollectable) => {
+                tracing::error!(
+                    "[{}] its helper process (pid={}) cannot be collected: {uncollectable}",
+                    self.processor_display_name,
+                    self.child.id(),
+                );
+                HelperProcessShutdownOutcome::AbandonedAfterTheLadder
+            }
+            ChildReapedWithinItsBudget::StillRunningAfterTheBudget => {
                 tracing::error!(
                     "[{}] its helper process (pid={}) outlived the shutdown ladder and is \
                      abandoned unreaped; it is not killable from user space",
                     self.processor_display_name,
                     self.child.id(),
                 );
-                return HelperProcessShutdownOutcome::AbandonedAfterTheLadder;
+                HelperProcessShutdownOutcome::AbandonedAfterTheLadder
             }
-            std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
         }
+    }
+}
+
+/// Wait up to `budget` for `child` to exit, without collecting it, and say
+/// whether it did.
+pub(crate) fn wait_for_a_child_to_become_collectable_within(
+    child: &Child,
+    budget: Duration,
+) -> bool {
+    let deadline = Instant::now() + budget;
+    while !a_helper_process_has_exited_without_being_reaped(child.id()) {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+    }
+    true
+}
+
+/// How a bounded reap of a child ended.
+#[derive(Debug)]
+pub(crate) enum ChildReapedWithinItsBudget {
+    Reaped(ExitStatus),
+    /// Uninterruptible sleep inside a driver is the case user space cannot
+    /// end, so the child is left unreaped rather than waited on for good.
+    StillRunningAfterTheBudget,
+    CannotBeCollected(std::io::Error),
+}
+
+/// Collect `child` once it has exited, waiting no longer than `budget`.
+pub(crate) fn reap_a_child_within(
+    child: &mut Child,
+    budget: Duration,
+) -> ChildReapedWithinItsBudget {
+    let deadline = Instant::now() + budget;
+    loop {
+        match child.try_wait() {
+            Ok(Some(exit_status)) => return ChildReapedWithinItsBudget::Reaped(exit_status),
+            Ok(None) => {}
+            Err(uncollectable) => {
+                return ChildReapedWithinItsBudget::CannotBeCollected(uncollectable);
+            }
+        }
+        if Instant::now() >= deadline {
+            return ChildReapedWithinItsBudget::StillRunningAfterTheBudget;
+        }
+        std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
     }
 }
 

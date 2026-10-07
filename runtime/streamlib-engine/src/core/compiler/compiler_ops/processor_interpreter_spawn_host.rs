@@ -85,15 +85,16 @@ const REGISTRATION_SHUTDOWN_OBSERVATION_INTERVAL: Duration = Duration::from_mill
 /// ladder's rungs rather than one deadline reused.
 const REPLY_DEADLINE: Duration = Duration::from_secs(5);
 
-/// How long the refusal of a helper that died while setting up waits for the
-/// helper's standard error to close, so what it wrote last is in the refusal.
+/// How long a refusal waits, once a helper's process group is down, for the
+/// helper's standard output or standard error to close, so what it wrote last
+/// is in the refusal.
 ///
-/// Bounded because a descendant the helper started can hold the pipe open past
-/// the helper's own exit.
-const STANDARD_ERROR_CLOSE_DEADLINE: Duration = Duration::from_secs(1);
+/// Bounded because a descendant that left the group can hold the pipe open
+/// past the helper's own exit.
+pub(super) const HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE: Duration = Duration::from_secs(1);
 
 /// How much of a helper's standard error a refusal carries, from the end.
-pub(crate) const STANDARD_ERROR_TAIL_BYTES: usize = 16 * 1024;
+const STANDARD_ERROR_TAIL_BYTES: usize = 16 * 1024;
 
 // =============================================================================
 // Where a child comes from
@@ -109,15 +110,23 @@ pub(crate) fn processor_interpreter_bootstrap_path(lend_directory: &Path) -> Pat
 ///
 /// The lend directory holds `tatolab/runtime/` and no `tatolab/__init__.py`,
 /// so PEP 420 merges the lent `tatolab.runtime` with the venv's own
-/// `tatolab.stream`.
+/// `tatolab.stream`. A directory holding the path-list separator is refused by
+/// name: Python would split it into entries naming other directories.
 pub(crate) fn processor_interpreter_python_path(
     lend_directory: &Path,
     project_directory: &Path,
-) -> OsString {
-    let mut python_path = OsString::from(lend_directory.as_os_str());
-    python_path.push(":");
-    python_path.push(project_directory.as_os_str());
-    python_path
+) -> Result<OsString> {
+    std::env::join_paths([lend_directory, project_directory]).map_err(|_| {
+        let directory_holding_the_separator = [lend_directory, project_directory]
+            .into_iter()
+            .find(|directory| std::env::join_paths([directory]).is_err())
+            .unwrap_or(project_directory);
+        Error::Configuration(format!(
+            "`{}` cannot be on a processor interpreter's PYTHONPATH: its path holds the \
+             path-list separator, which would split it into other directories",
+            directory_holding_the_separator.display()
+        ))
+    })
 }
 
 /// A command running the processor interpreter bootstrap in `stream_environment`.
@@ -128,21 +137,17 @@ pub(crate) fn processor_interpreter_python_path(
 pub(crate) fn processor_interpreter_bootstrap_command(
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
-) -> Command {
+) -> Result<Command> {
+    let python_path =
+        processor_interpreter_python_path(lend_directory, &stream_environment.project_directory)?;
     let mut command = Command::new(&stream_environment.interpreter);
     command
         .arg(processor_interpreter_bootstrap_path(lend_directory))
         .current_dir(&stream_environment.project_directory)
         .env_remove("PYTHONHOME")
-        .env(
-            "PYTHONPATH",
-            processor_interpreter_python_path(
-                lend_directory,
-                &stream_environment.project_directory,
-            ),
-        )
+        .env("PYTHONPATH", python_path)
         .env(ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, ENGINE_BUILD_ID);
-    command
+    Ok(command)
 }
 
 // =============================================================================
@@ -202,11 +207,17 @@ impl ProcessorInterpreterSpawnHostProcessor {
         runtime_id: &str,
         iceoryx2_domain_root: &Path,
         surface_share_channel: Option<SurfaceShareChannelNamedToTheHelperProcess<'_>>,
-    ) -> Command {
+    ) -> Result<Command> {
         let mut command = processor_interpreter_bootstrap_command(
             &self.stream_environment,
             &self.processor_interpreter_lend_directory,
-        );
+        )
+        .map_err(|refusal| {
+            Error::Runtime(format!(
+                "[{}] could not start its processor interpreter: {refusal}",
+                self.processor_display_name
+            ))
+        })?;
         command
             // The child never reads stdin; its fd1/fd2 are captured as
             // intercepted log pipes, and the framed protocol rides its own
@@ -239,7 +250,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
         // closures run in registration order, so the one descriptor a helper is
         // owed is handed back after this sweep has marked everything.
         give_the_child_no_descriptor_beyond_stdio(&mut command);
-        command
+        Ok(command)
     }
 
     /// The mode string the child drives its own loop in.
@@ -439,7 +450,9 @@ impl ProcessorInterpreterSpawnHostProcessor {
         let standard_error_tail = self
             .child_standard_error_tail
             .as_ref()
-            .map(|tail| tail.text_once_closed_or_after(STANDARD_ERROR_CLOSE_DEADLINE))
+            .map(|tail| {
+                tail.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
+            })
             .unwrap_or_default();
         refusal_of_a_helper_process_that_died_while_setting_up(
             &self.processor_display_name,
@@ -638,7 +651,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
             &ctx.runtime_id(),
             &iceoryx2_domain_root,
             surface_share_channel,
-        );
+        )?;
         self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
 
@@ -789,16 +802,19 @@ fn refusal_of_a_helper_process_that_died_while_setting_up(
     processor_display_name: &str,
     standard_error_tail: &str,
 ) -> Error {
-    if standard_error_tail.is_empty() {
-        return Error::Runtime(format!(
-            "[{processor_display_name}] its helper process died before it finished setting up, \
-             and wrote nothing to its standard error"
-        ));
-    }
     Error::Runtime(format!(
-        "[{processor_display_name}] its helper process died before it finished setting up. Its \
-         standard error ended with:\n{standard_error_tail}"
+        "[{processor_display_name}] its helper process died before it finished setting up. {}",
+        standard_error_tail_as_a_refusal_quotes_it(standard_error_tail)
     ))
+}
+
+/// The end of a helper's standard error as a refusal quotes it, saying so when
+/// there is none.
+pub(super) fn standard_error_tail_as_a_refusal_quotes_it(standard_error_tail: &str) -> String {
+    if standard_error_tail.is_empty() {
+        return "It wrote nothing to its standard error.".to_string();
+    }
+    format!("Its standard error ended with:\n{standard_error_tail}")
 }
 
 // =============================================================================
@@ -808,7 +824,7 @@ fn refusal_of_a_helper_process_that_died_while_setting_up(
 /// The end of what a helper process wrote to its standard error, and whether
 /// the pipe has closed.
 #[derive(Clone, Default)]
-struct HelperProcessStandardErrorTail {
+pub(super) struct HelperProcessStandardErrorTail {
     recorded_standard_error_and_pipe_closed_signal: Arc<(
         parking_lot::Mutex<RecordedHelperProcessStandardError>,
         parking_lot::Condvar,
@@ -844,7 +860,7 @@ impl HelperProcessStandardErrorTail {
     }
 
     /// What was recorded, once the pipe has closed or `deadline` has passed.
-    fn text_once_closed_or_after(&self, deadline: Duration) -> String {
+    pub(super) fn text_once_closed_or_after(&self, deadline: Duration) -> String {
         let (recorded_standard_error_lock, pipe_closed_signal) =
             &*self.recorded_standard_error_and_pipe_closed_signal;
         let mut recorded_standard_error = recorded_standard_error_lock.lock();
@@ -883,7 +899,7 @@ impl<R> Drop for StandardErrorTailRecordingReader<R> {
 
 /// Log a child's standard error line by line, as every intercepted fd is, while
 /// keeping its tail for a refusal.
-fn spawn_standard_error_reader_keeping_its_tail<R: Read + Send + 'static>(
+pub(super) fn spawn_standard_error_reader_keeping_its_tail<R: Read + Send + 'static>(
     standard_error: R,
     processor_id: &str,
 ) -> HelperProcessStandardErrorTail {
@@ -1763,11 +1779,9 @@ sys.exit(0)
     /// never a fork, and never some other Python found on `PATH`.
     #[test]
     fn the_child_is_the_streams_interpreter_running_the_lent_bootstrap_by_path() {
-        let command = spawn_host_for_test().build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            None,
-        );
+        let command = spawn_host_for_test()
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .expect("the test directories hold no path-list separator");
         assert_eq!(
             command.get_program(),
             OsStr::new("/home/someone/my_app/.venv/bin/python")
@@ -1786,11 +1800,9 @@ sys.exit(0)
     /// the type was described under.
     #[test]
     fn the_child_is_told_which_class_to_import_and_who_it_is() {
-        let command = spawn_host_for_test().build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            None,
-        );
+        let command = spawn_host_for_test()
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .expect("the test directories hold no path-list separator");
         let environment = environment_of(&command);
         assert_eq!(
             value_of(&environment, "STREAMLIB_ENTRYPOINT"),
@@ -1810,11 +1822,9 @@ sys.exit(0)
     /// the two always share one domain whatever the child's working directory.
     #[test]
     fn the_child_is_handed_the_parents_iceoryx2_domain_root() {
-        let command = spawn_host_for_test().build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            None,
-        );
+        let command = spawn_host_for_test()
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .expect("the test directories hold no path-list separator");
         let environment = environment_of(&command);
         assert_eq!(
             value_of(&environment, "STREAMLIB_ICEORYX2_DOMAIN_ROOT"),
@@ -1826,11 +1836,9 @@ sys.exit(0)
     /// and refuses to start unless the engine it imports carries the same one.
     #[test]
     fn the_child_is_handed_the_engine_build_id_it_must_match() {
-        let command = spawn_host_for_test().build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            None,
-        );
+        let command = spawn_host_for_test()
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .expect("the test directories hold no path-list separator");
         let environment = environment_of(&command);
         assert_eq!(
             value_of(&environment, "STREAMLIB_ENGINE_BUILD_ID"),
@@ -1844,24 +1852,24 @@ sys.exit(0)
     #[test]
     fn the_child_is_handed_the_surface_share_channel_under_its_variable() {
         let spawn_host = spawn_host_for_test();
-        let command = spawn_host.build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            Some(SurfaceShareChannelNamedToTheHelperProcess {
-                environment_variable: "STREAMLIB_SURFACE_MACH_SERVICE",
-                channel_name: OsStr::new("com.tatolab.streamlib.surface-share.Rtest"),
-            }),
-        );
+        let command = spawn_host
+            .build_helper_process_command(
+                "Rtest",
+                Path::new("/tmp/streamlib-1000/iox2"),
+                Some(SurfaceShareChannelNamedToTheHelperProcess {
+                    environment_variable: "STREAMLIB_SURFACE_MACH_SERVICE",
+                    channel_name: OsStr::new("com.tatolab.streamlib.surface-share.Rtest"),
+                }),
+            )
+            .expect("the test directories hold no path-list separator");
         assert_eq!(
             value_of(&environment_of(&command), "STREAMLIB_SURFACE_MACH_SERVICE"),
             Some("com.tatolab.streamlib.surface-share.Rtest")
         );
 
-        let without_a_channel = spawn_host.build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            None,
-        );
+        let without_a_channel = spawn_host
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .expect("the test directories hold no path-list separator");
         let environment = environment_of(&without_a_channel);
         assert_eq!(
             value_of(&environment, "STREAMLIB_SURFACE_MACH_SERVICE"),
@@ -1968,8 +1976,8 @@ sys.exit(0)
             refusal_of_a_helper_process_that_died_while_setting_up("BlurProcessor", "").to_string();
         assert!(
             refusal.ends_with(
-                "[BlurProcessor] its helper process died before it finished setting up, and \
-                 wrote nothing to its standard error"
+                "[BlurProcessor] its helper process died before it finished setting up. It wrote \
+                 nothing to its standard error."
             ),
             "{refusal}"
         );
@@ -1980,51 +1988,97 @@ sys.exit(0)
     /// module sitting in the project imports — and nothing else is on it.
     #[test]
     fn the_childs_python_path_is_the_lend_directory_then_the_project_exactly() {
-        let command = spawn_host_for_test().build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            None,
-        );
+        let command = spawn_host_for_test()
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .expect("the test directories hold no path-list separator");
         assert_eq!(
             value_of(&environment_of(&command), "PYTHONPATH"),
             Some("/opt/tatolab/lib/tatolab/lend:/home/someone/my_app")
         );
     }
 
+    /// Set only in the child process the inherited-`PYTHONPATH` test re-runs
+    /// itself in, carrying the `PYTHONPATH` that child was started with.
+    const INHERITED_PYTHON_PATH_CHILD_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_INHERITED_PYTHON_PATH_CHILD";
+
     /// A `PYTHONPATH` the runtime process was started with names the runtime
     /// process's own imports, which the stream's interpreter must not see.
+    ///
+    /// Asserted in a re-run of this test started with a `PYTHONPATH`, because
+    /// the process running the tests carries none to inherit.
     #[test]
     fn an_inherited_python_path_is_not_passed_to_the_child() {
-        let command = spawn_host_for_test().build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            None,
+        if let Some(inherited_python_path) =
+            std::env::var_os(INHERITED_PYTHON_PATH_CHILD_ENVIRONMENT_VARIABLE)
+        {
+            assert_eq!(
+                std::env::var_os("PYTHONPATH"),
+                Some(inherited_python_path),
+                "the re-run was started with the PYTHONPATH it checks against"
+            );
+            let command = spawn_host_for_test()
+                .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+                .expect("the test directories hold no path-list separator");
+            assert_eq!(
+                value_of(&environment_of(&command), "PYTHONPATH"),
+                Some("/opt/tatolab/lib/tatolab/lend:/home/someone/my_app"),
+                "the child's PYTHONPATH is set outright, so nothing inherited is appended"
+            );
+            return;
+        }
+
+        let inherited_python_path = "/inherited/by/the/runtime";
+        let re_run = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::\
+                 an_inherited_python_path_is_not_passed_to_the_child",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env("PYTHONPATH", inherited_python_path)
+            .env(
+                INHERITED_PYTHON_PATH_CHILD_ENVIRONMENT_VARIABLE,
+                inherited_python_path,
+            )
+            .output()
+            .expect("the test binary re-runs this test in a child process");
+        let re_run_output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&re_run.stdout),
+            String::from_utf8_lossy(&re_run.stderr)
         );
-        let python_path_entries: Vec<_> = command
-            .get_envs()
-            .filter(|(name, _)| *name == OsStr::new("PYTHONPATH"))
-            .collect();
-        assert_eq!(
-            python_path_entries,
-            [(
-                OsStr::new("PYTHONPATH"),
-                Some(OsStr::new(
-                    "/opt/tatolab/lib/tatolab/lend:/home/someone/my_app"
-                ))
-            )],
-            "the child's PYTHONPATH is set outright, so nothing inherited is appended"
+        assert!(re_run.status.success(), "{re_run_output}");
+        assert!(
+            re_run_output.contains("1 passed"),
+            "the re-run ran no test, so it asserted nothing: {re_run_output}"
         );
+    }
+
+    /// A directory holding the path-list separator would be split by Python
+    /// into entries naming other directories, so it is refused by name.
+    #[test]
+    fn a_project_directory_holding_the_path_list_separator_is_refused_by_name() {
+        let refusal = processor_interpreter_bootstrap_command(
+            &StreamEnvironment {
+                project_directory: PathBuf::from("/home/someone/my:app"),
+                interpreter: PathBuf::from("/home/someone/my:app/.venv/bin/python"),
+            },
+            Path::new(LEND_DIRECTORY_FOR_TEST),
+        )
+        .expect_err("a directory holding `:` cannot be on PYTHONPATH")
+        .to_string();
+        assert!(refusal.contains("`/home/someone/my:app`"), "{refusal}");
+        assert!(refusal.contains("path-list separator"), "{refusal}");
     }
 
     /// The child runs in the project directory, so a relative path a node
     /// opens resolves where the stream's author put it.
     #[test]
     fn the_childs_working_directory_is_the_project() {
-        let command = spawn_host_for_test().build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            None,
-        );
+        let command = spawn_host_for_test()
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .expect("the test directories hold no path-list separator");
         assert_eq!(
             command.get_current_dir(),
             Some(Path::new("/home/someone/my_app"))
@@ -2036,11 +2090,9 @@ sys.exit(0)
     /// it would only send the child looking for the wrong standard library.
     #[test]
     fn an_inherited_python_home_is_not_passed_to_the_child() {
-        let command = spawn_host_for_test().build_helper_process_command(
-            "Rtest",
-            Path::new("/tmp/streamlib-1000/iox2"),
-            None,
-        );
+        let command = spawn_host_for_test()
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None)
+            .expect("the test directories hold no path-list separator");
         let cleared: Vec<_> = command
             .get_envs()
             .filter(|(name, value)| *name == OsStr::new("PYTHONHOME") && value.is_none())

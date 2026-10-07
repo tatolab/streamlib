@@ -9,19 +9,24 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-use super::processor_interpreter_shutdown_ladder::a_helper_process_has_exited_without_being_reaped;
+use super::processor_interpreter_shutdown_ladder::{
+    ChildReapedWithinItsBudget, REAP_BUDGET, reap_a_child_within,
+    wait_for_a_child_to_become_collectable_within,
+};
 use super::processor_interpreter_spawn_host::{
+    HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE,
     PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE,
-    PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE, STANDARD_ERROR_TAIL_BYTES,
+    PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
     SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio, processor_interpreter_bootstrap_command,
-    spawn_host_for_processor_node,
+    spawn_host_for_processor_node, spawn_standard_error_reader_keeping_its_tail,
+    standard_error_tail_as_a_refusal_quotes_it,
 };
 use super::python_processor_declaration::PythonProcessorDeclaration;
 use super::subprocess_bridge::ESCALATE_FD_ENV;
@@ -51,12 +56,13 @@ const PER_PROCESSOR_ENVIRONMENT_VARIABLES: [&str; 6] = [
     ESCALATE_FD_ENV,
 ];
 
-/// How often the wait for a describe re-checks whether it has exited.
-const DESCRIBE_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+/// How long the wait for a describe parks before it re-reads whether shutdown
+/// has begun.
+const DESCRIBE_SHUTDOWN_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
 
-/// How long the readers of a finished describe's standard streams are waited
-/// for once its process group is down.
-const DESCRIBE_STREAM_CLOSE_DEADLINE: Duration = Duration::from_secs(1);
+/// What a describe's standard-error lines are logged under, in place of the
+/// processor id a processor interpreter's are.
+const DESCRIBE_STANDARD_ERROR_LOG_LABEL: &str = "processor-interpreter-describe";
 
 /// The document a describe prints on its standard output.
 #[derive(serde::Deserialize)]
@@ -92,8 +98,8 @@ pub(crate) fn processor_interpreter_describe_command(
     import_paths: &[ProcessorClassImportPath],
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
-) -> Command {
-    let mut command = processor_interpreter_bootstrap_command(stream_environment, lend_directory);
+) -> Result<Command> {
+    let mut command = processor_interpreter_bootstrap_command(stream_environment, lend_directory)?;
     command
         .arg(DESCRIBE_ARGUMENT)
         .args(import_paths.iter().map(ProcessorClassImportPath::as_str))
@@ -105,7 +111,7 @@ pub(crate) fn processor_interpreter_describe_command(
     }
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
     give_the_child_no_descriptor_beyond_stdio(&mut command);
-    command
+    Ok(command)
 }
 
 /// Describe `import_paths` in one start of the stream's interpreter and
@@ -124,6 +130,7 @@ pub(crate) fn describe_and_register_node_types_in_a_processor_interpreter(
         stream_environment,
         lend_directory,
         PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
+        crate::core::runtime::is_runtime_shutdown_requested,
     )?;
     for declaration in declarations {
         register_the_described_node_type(declaration, stream_environment, lend_directory)?;
@@ -160,12 +167,14 @@ fn register_the_described_node_type(
 }
 
 /// Describe `import_paths` in one start of the stream's interpreter, bounded
-/// by `describe_bound`, returning their declarations in the order asked.
+/// by `describe_bound` and cut short by a shutdown `is_shutdown_requested`
+/// reports during it, returning their declarations in the order asked.
 pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     import_paths: &[ProcessorClassImportPath],
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
     describe_bound: Duration,
+    is_shutdown_requested: fn() -> bool,
 ) -> Result<Vec<PythonProcessorDeclaration>> {
     let refuse_every_requested_type = |refusal: String| Error::NodeTypesNotDescribed {
         node_types: import_paths.to_vec(),
@@ -174,7 +183,8 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     let interpreter = stream_environment.interpreter.display();
 
     let mut command =
-        processor_interpreter_describe_command(import_paths, stream_environment, lend_directory);
+        processor_interpreter_describe_command(import_paths, stream_environment, lend_directory)
+            .map_err(|refusal| refuse_every_requested_type(refusal.to_string()))?;
     let mut child =
         spawn_outside_every_iceoryx2_listener_bind(&mut command).map_err(|spawn_failure| {
             refuse_every_requested_type(format!(
@@ -183,31 +193,52 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
                 stream_environment.project_directory.display()
             ))
         })?;
-    let standard_output = read_on_a_thread(child.stdout.take(), usize::MAX);
-    let standard_error = read_on_a_thread(child.stderr.take(), STANDARD_ERROR_TAIL_BYTES);
+    // `pre_exec` made the describe the leader of a group whose id is its pid.
+    if !crate::core::runtime::register_a_helper_process_group(child.id() as i32) {
+        tracing::warn!(
+            "the describe's process group could not be registered, so a third interrupt will not \
+             kill it; the kernel still kills the describe itself when the app exits"
+        );
+    }
+    let standard_output = read_standard_output_to_its_end_on_a_thread(child.stdout.take());
+    let standard_error_tail = child.stderr.take().map(|standard_error| {
+        spawn_standard_error_reader_keeping_its_tail(
+            standard_error,
+            DESCRIBE_STANDARD_ERROR_LOG_LABEL,
+        )
+    });
 
-    let exited_within_the_bound = wait_for_the_describe_to_exit(&child, describe_bound);
+    let describe_exit =
+        wait_for_the_describe_to_exit(&child, describe_bound, is_shutdown_requested);
     let exit_status = take_the_describe_process_group_down_and_reap(&mut child);
-    let standard_error_tail = String::from_utf8_lossy(
-        &standard_error
-            .recv_timeout(DESCRIBE_STREAM_CLOSE_DEADLINE)
+    let quoted_standard_error = standard_error_tail_as_a_refusal_quotes_it(
+        &standard_error_tail
+            .map(|tail| {
+                tail.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
+            })
             .unwrap_or_default(),
-    )
-    .trim()
-    .to_string();
-    let quoted_standard_error = quote_standard_error(&standard_error_tail);
+    );
 
-    if !exited_within_the_bound {
-        return Err(refuse_every_requested_type(format!(
-            "the stream's interpreter `{interpreter}` did not finish describing them within \
-             {}s and was killed. Work a module does at import time runs here — a module that \
-             blocks at import blocks its describe.{quoted_standard_error}",
-            describe_bound.as_secs_f64()
-        )));
+    match describe_exit {
+        DescribeExitAwaited::Exited => {}
+        DescribeExitAwaited::BoundElapsed => {
+            return Err(refuse_every_requested_type(format!(
+                "the stream's interpreter `{interpreter}` did not finish describing them within \
+                 {}s and was killed. Work a module does at import time runs here — a module that \
+                 blocks at import blocks its describe. {quoted_standard_error}",
+                describe_bound.as_secs_f64()
+            )));
+        }
+        DescribeExitAwaited::ShutdownRequested => {
+            return Err(refuse_every_requested_type(format!(
+                "shutdown began while the stream's interpreter `{interpreter}` was still \
+                 describing them, and it was killed. {quoted_standard_error}"
+            )));
+        }
     }
 
     let standard_output_bytes = standard_output
-        .recv_timeout(DESCRIBE_STREAM_CLOSE_DEADLINE)
+        .recv_timeout(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE)
         .unwrap_or_default();
     let exit_status_rendered = exit_status
         .map(|exit_status| exit_status.to_string())
@@ -217,7 +248,7 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     else {
         return Err(refuse_every_requested_type(format!(
             "the stream's interpreter `{interpreter}` printed no describe document and exited \
-             with {exit_status_rendered}.{quoted_standard_error}"
+             with {exit_status_rendered}. {quoted_standard_error}"
         )));
     };
 
@@ -236,7 +267,7 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
             node_types: refused_import_paths,
             refusal: format!(
                 "the stream's interpreter `{interpreter}` could not import it, or found no \
-                 `@node` class there.{quoted_standard_error}"
+                 `@node` class there. {quoted_standard_error}"
             ),
         });
     }
@@ -258,7 +289,7 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
                 .ok_or_else(|| {
                     refuse_this_type(format!(
                         "the stream's interpreter `{interpreter}` neither described nor \
-                         refused it.{quoted_standard_error}"
+                         refused it. {quoted_standard_error}"
                     ))
                 })?;
             PythonProcessorDeclaration::read_from_described_node_type(
@@ -270,73 +301,97 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
         .collect()
 }
 
-/// Wait up to `describe_bound` for the describe to exit, leaving it unreaped.
-fn wait_for_the_describe_to_exit(child: &Child, describe_bound: Duration) -> bool {
-    let deadline = Instant::now() + describe_bound;
-    while !a_helper_process_has_exited_without_being_reaped(child.id()) {
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(DESCRIBE_EXIT_POLL_INTERVAL);
-    }
-    true
+/// How the wait for a describe to exit ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DescribeExitAwaited {
+    Exited,
+    BoundElapsed,
+    ShutdownRequested,
 }
 
-/// Kill the describe's whole process group and reap its leader.
+/// Wait up to `describe_bound` for the describe to exit, leaving it unreaped.
+///
+/// Only a shutdown requested *during* the wait cuts it short: the escalation is
+/// process-global and taken only when a run ends, so one already raised belongs
+/// to a run that has not taken it yet.
+fn wait_for_the_describe_to_exit(
+    child: &Child,
+    describe_bound: Duration,
+    is_shutdown_requested: fn() -> bool,
+) -> DescribeExitAwaited {
+    let shutdown_was_already_requested = is_shutdown_requested();
+    let deadline = Instant::now() + describe_bound;
+    loop {
+        let observation_slice = deadline
+            .saturating_duration_since(Instant::now())
+            .min(DESCRIBE_SHUTDOWN_OBSERVATION_INTERVAL);
+        if wait_for_a_child_to_become_collectable_within(child, observation_slice) {
+            return DescribeExitAwaited::Exited;
+        }
+        if !shutdown_was_already_requested && is_shutdown_requested() {
+            return DescribeExitAwaited::ShutdownRequested;
+        }
+        if Instant::now() >= deadline {
+            return DescribeExitAwaited::BoundElapsed;
+        }
+    }
+}
+
+/// Kill the describe's whole process group and reap its leader, waiting for
+/// the reap no longer than the shutdown ladder does.
 ///
 /// Killed whether or not the leader already exited: nothing a describe starts
 /// outlives it, and a descendant left holding its standard streams would hold
 /// the readers open. The leader is still unreaped, so the group id is still
 /// its own.
-fn take_the_describe_process_group_down_and_reap(
-    child: &mut Child,
-) -> Option<std::process::ExitStatus> {
+fn take_the_describe_process_group_down_and_reap(child: &mut Child) -> Option<ExitStatus> {
     // SAFETY: the pid is this process's own unreaped child's, which leads its
     // own process group.
     unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
-    child.wait().ok()
+    // Out of the registry the third interrupt kills from before the reap frees
+    // the group's id for reuse.
+    crate::core::runtime::deregister_a_helper_process_group(child.id() as i32);
+    match reap_a_child_within(child, REAP_BUDGET) {
+        ChildReapedWithinItsBudget::Reaped(exit_status) => Some(exit_status),
+        ChildReapedWithinItsBudget::StillRunningAfterTheBudget => {
+            tracing::error!(
+                "the describe (pid={}) outlived its kill and is abandoned unreaped; it is not \
+                 killable from user space",
+                child.id(),
+            );
+            None
+        }
+        ChildReapedWithinItsBudget::CannotBeCollected(uncollectable) => {
+            tracing::error!(
+                "the describe (pid={}) cannot be collected: {uncollectable}",
+                child.id(),
+            );
+            None
+        }
+    }
 }
 
-/// Read `stream` to its end on a thread of its own, keeping at most the last
-/// `kept_byte_count` bytes.
-fn read_on_a_thread<R: Read + Send + 'static>(
-    stream: Option<R>,
-    kept_byte_count: usize,
+/// Read a describe's standard output to its end on a thread of its own.
+fn read_standard_output_to_its_end_on_a_thread(
+    standard_output: Option<ChildStdout>,
 ) -> Receiver<Vec<u8>> {
     let (read_sender, read_receiver) = std::sync::mpsc::channel();
-    let Some(mut stream) = stream else {
+    let Some(mut standard_output) = standard_output else {
         let _ = read_sender.send(Vec::new());
         return read_receiver;
     };
     std::thread::spawn(move || {
-        let mut kept_bytes: Vec<u8> = Vec::new();
-        let mut read_buffer = [0u8; 8192];
-        loop {
-            match stream.read(&mut read_buffer) {
-                Ok(0) | Err(_) => break,
-                Ok(read_byte_count) => {
-                    kept_bytes.extend_from_slice(&read_buffer[..read_byte_count]);
-                    let overflow_byte_count = kept_bytes.len().saturating_sub(kept_byte_count);
-                    kept_bytes.drain(..overflow_byte_count);
-                }
-            }
-        }
-        let _ = read_sender.send(kept_bytes);
+        let mut standard_output_bytes = Vec::new();
+        let _ = standard_output.read_to_end(&mut standard_output_bytes);
+        let _ = read_sender.send(standard_output_bytes);
     });
     read_receiver
-}
-
-/// The tail of a describe's standard error as a refusal quotes it.
-fn quote_standard_error(standard_error_tail: &str) -> String {
-    if standard_error_tail.is_empty() {
-        return " It wrote nothing to its standard error.".to_string();
-    }
-    format!(" Its standard error ended with:\n{standard_error_tail}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::ffi::OsStr;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
@@ -377,12 +432,22 @@ mod tests {
             import_paths: &[&str],
             describe_bound: Duration,
         ) -> Result<Vec<PythonProcessorDeclaration>> {
+            self.describe_reading_a_shutdown_from(import_paths, describe_bound, || false)
+        }
+
+        fn describe_reading_a_shutdown_from(
+            &self,
+            import_paths: &[&str],
+            describe_bound: Duration,
+            is_shutdown_requested: fn() -> bool,
+        ) -> Result<Vec<PythonProcessorDeclaration>> {
             let import_paths: Vec<_> = import_paths.iter().map(|path| import_path(path)).collect();
             describe_node_types_in_a_processor_interpreter_within(
                 &import_paths,
                 &self.stream_environment,
                 Path::new("/opt/tatolab/lib/tatolab/lend"),
                 describe_bound,
+                is_shutdown_requested,
             )
         }
 
@@ -417,6 +482,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn a_type_the_interpreter_describes_is_read_into_its_declaration() {
         let stub =
             StubProcessorInterpreter::running(&print_on_standard_output(&serde_json::json!({
@@ -440,6 +506,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn a_type_whose_module_will_not_import_is_refused_by_name_quoting_the_interpreters_stderr() {
         let stub = StubProcessorInterpreter::running(&format!(
             "{}\nprintf 'cannot describe my_app.missing:Blur: Traceback (most recent call last):\\n\
@@ -460,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn a_class_carrying_no_node_stamp_is_refused_by_name() {
         let stub = StubProcessorInterpreter::running(&format!(
             "{}\nprintf 'cannot describe my_app.nodes:Plain: it carries no @node stamp\\n' >&2\n\
@@ -483,6 +551,7 @@ mod tests {
     /// or crashes prints no document, so every type asked for is refused,
     /// naming the interpreter and quoting what it wrote.
     #[test]
+    #[serial]
     fn an_interpreter_that_printed_no_document_refuses_every_type_naming_the_interpreter() {
         let stub = StubProcessorInterpreter::running(
             "printf '[streamlib] this interpreter cannot load the lent runtime: PyPy 3.9\\n' >&2\n\
@@ -506,6 +575,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn a_describe_past_its_bound_is_killed_with_its_group_and_refuses_every_type_naming_the_bound()
     {
         let stub = StubProcessorInterpreter::running("sleep 30 &\necho $! > worker-pid\nwait");
@@ -546,6 +616,74 @@ mod tests {
         }
     }
 
+    /// How many times the shutdown predicate of the test below has been read.
+    static SHUTDOWN_READS_OF_THE_INTERRUPTED_DESCRIBE: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    /// Reports no shutdown when the describe starts and one at every read after.
+    fn shutdown_requested_once_the_describe_has_started() -> bool {
+        SHUTDOWN_READS_OF_THE_INTERRUPTED_DESCRIBE.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            > 0
+    }
+
+    #[test]
+    #[serial]
+    fn a_shutdown_requested_during_a_describe_kills_it_and_refuses_every_type_saying_so() {
+        let stub = StubProcessorInterpreter::running("sleep 30 &\nwait");
+        let started = Instant::now();
+
+        let refusal = match stub.describe_reading_a_shutdown_from(
+            &[GOOD_TYPE],
+            PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
+            shutdown_requested_once_the_describe_has_started,
+        ) {
+            Err(Error::NodeTypesNotDescribed {
+                node_types,
+                refusal,
+            }) => {
+                assert_eq!(node_types, [import_path(GOOD_TYPE)]);
+                refusal
+            }
+            Err(other) => panic!("expected NodeTypesNotDescribed, got {other:?}"),
+            Ok(_) => panic!("a describe interrupted by shutdown was accepted"),
+        };
+
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the describe held shutdown for its whole bound"
+        );
+        assert!(refusal.contains("shutdown began"), "{refusal}");
+    }
+
+    #[test]
+    fn a_project_directory_holding_the_path_list_separator_refuses_every_type_naming_it() {
+        let refusal = describe_node_types_in_a_processor_interpreter_within(
+            &[import_path(GOOD_TYPE), import_path("my_app.nodes:Sharpen")],
+            &StreamEnvironment {
+                project_directory: PathBuf::from("/home/someone/my:app"),
+                interpreter: PathBuf::from("/home/someone/my:app/.venv/bin/python"),
+            },
+            Path::new("/opt/tatolab/lib/tatolab/lend"),
+            PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
+            || false,
+        );
+
+        match refusal {
+            Err(Error::NodeTypesNotDescribed {
+                node_types,
+                refusal,
+            }) => {
+                assert_eq!(
+                    node_types,
+                    [import_path(GOOD_TYPE), import_path("my_app.nodes:Sharpen")]
+                );
+                assert!(refusal.contains("`/home/someone/my:app`"), "{refusal}");
+            }
+            Err(other) => panic!("expected NodeTypesNotDescribed, got {other:?}"),
+            Ok(_) => panic!("a project directory holding `:` was described from"),
+        }
+    }
+
     #[test]
     fn the_describe_command_carries_the_stream_environment_and_no_processors_variables() {
         let stream_environment = StreamEnvironment {
@@ -556,7 +694,8 @@ mod tests {
             &[import_path(GOOD_TYPE), import_path("my_app.nodes:Sharpen")],
             &stream_environment,
             Path::new("/opt/tatolab/lib/tatolab/lend"),
-        );
+        )
+        .expect("the test directories hold no path-list separator");
 
         assert_eq!(
             command.get_program(),
@@ -607,6 +746,7 @@ mod tests {
 
     /// What the command carries is what the interpreter it starts receives.
     #[test]
+    #[serial]
     fn a_started_describe_receives_its_arguments_working_directory_and_python_path() {
         let stub = StubProcessorInterpreter::running(&format!(
             "printf '%s\\n' \"$@\" > \"$PWD/arguments\"\nprintf '%s' \"$PYTHONPATH\" > \
