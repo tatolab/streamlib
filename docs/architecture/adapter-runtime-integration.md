@@ -154,7 +154,7 @@ request IDs. That's the whole point of the adapter pattern.
 ```
 Customer code (Rust processor / Python processor in its helper process)
   └── adapter.acquire_write(surface)              ← public API, uniform
-      └── tatolab Python surface                  ← type stub (_engine.pyi)
+      └── tatolab.stream Protocols                ← held to _engine by the conformance gate
           └── tatolab.runtime._engine (the wheel) ← statically linked
               └── streamlib-adapter-* (vulkan, opengl,
                                        cpu-readback, cuda)

@@ -233,7 +233,7 @@ contract).
   [`adapter-runtime-integration.md`](adapter-runtime-integration.md);
   the engine ring is for in-process producer→consumer handoffs
   via the texture cache (Path 1). The cross-process sibling is the
-  wheel's `tatolab.stream.NodeOutputTextureRing`
+  stream package's `tatolab.stream.NodeOutputTextureRing`
   (`sdk/tatolab-stream/tatolab/stream/node_output_texture_ring.py`):
   it asks the escalate `AcquireTexture` op for each frame's slot under a
   processor output pool key, and the engine's lease-aware ring
