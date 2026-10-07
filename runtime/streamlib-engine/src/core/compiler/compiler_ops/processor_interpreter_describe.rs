@@ -587,7 +587,8 @@ mod tests {
         let stub = StubProcessorInterpreter::running(&format!(
             "python3 -c 'import os; os.setsid(); \
              open(\"escaped-process-id\", \"w\").write(str(os.getpid())); \
-             os.execvp(\"sleep\", [\"sleep\", \"30\"])' &\n{}\nexit 0",
+             os.execvp(\"sleep\", [\"sleep\", \"30\"])' &\n\
+             while [ ! -s escaped-process-id ]; do sleep 0.01; done\n{}\nexit 0",
             print_on_standard_output(&serde_json::json!({
                 "described_node_types": [a_described_good_type()],
                 "refused_node_types": [],
