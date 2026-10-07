@@ -297,14 +297,17 @@ class NodeDeclarationDecorator:
         `Runtime.load` does. `description` falls back to the class's docstring
         when it is not given.
         """
-        if isinstance(node_class, type):
+        def apply_to_class(class_under_decoration: ProcessorClass) -> ProcessorClass:
             return _declare_processor(
-                node_class,
+                class_under_decoration,
                 execution=execution,
                 interval_ms=interval_ms,
                 scheduling=scheduling,
                 description=description,
             )
+
+        if isinstance(node_class, type):
+            return apply_to_class(node_class)
 
         if node_class is not None:
             raise TypeError(
@@ -314,15 +317,6 @@ class NodeDeclarationDecorator:
                 f"`__module__` and `__qualname__` and never authored. Use `@node` bare, "
                 f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
                 f"`description`)."
-            )
-
-        def apply_to_class(class_under_decoration: ProcessorClass) -> ProcessorClass:
-            return _declare_processor(
-                class_under_decoration,
-                execution=execution,
-                interval_ms=interval_ms,
-                scheduling=scheduling,
-                description=description,
             )
 
         return apply_to_class

@@ -72,13 +72,13 @@ _STREAM_TAKES_NO_ARGUMENTS = (
 if TYPE_CHECKING:
 
     def stream(stream_function: _StreamFunction, /) -> _StreamFunction:
-        """Mark a module-level function taking one `StreamBuilder` as a stream; return it unchanged."""
+        """Mark a module-level function of one `StreamBuilder` as a stream; return it unchanged."""
         ...
 
 else:
 
     def stream(stream_function=None, /, **misused_keyword_arguments):
-        """Mark a module-level function taking one `StreamBuilder` as a stream; return it unchanged."""
+        """Mark a module-level function of one `StreamBuilder` as a stream; return it unchanged."""
         if stream_function is None or misused_keyword_arguments:
             raise TypeError(_STREAM_TAKES_NO_ARGUMENTS)
         return _stamp_stream_function(stream_function)
