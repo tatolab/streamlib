@@ -212,10 +212,11 @@ fn tear_this_helper_down_because_its_parent_went_away(reason: &'static str) {
     tracing::warn!("{reason}; this helper tears itself down");
     let the_parent_went_away_at = Instant::now();
     if let Some(parent_channel_fd) = PARENT_CHANNEL_FD_THE_WATCH_ENDS.get() {
-        // SAFETY: a scalar syscall on the channel `_helper` handed over. Shut
-        // down rather than closed: the bridge's reader still owns the fd, and
-        // shutting it down is what wakes that reader with the end of the
-        // channel even while something else still holds the parent's end.
+        // SAFETY: a scalar syscall on the channel the processor interpreter
+        // bootstrap handed over. Shut down rather than closed: the bridge's
+        // reader still owns the fd, and shutting it down is what wakes that
+        // reader with the end of the channel even while something else still
+        // holds the parent's end.
         unsafe { libc::shutdown(*parent_channel_fd, libc::SHUT_RDWR) };
     }
     let walked = std::thread::Builder::new()
