@@ -1335,20 +1335,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   catalog before its first add; the constructor arrives at first add exactly as today.
   Decoration inside a helper process registers nothing, because a helper hosts no
   graph. A class decorated twice under one import path meets the existing
-  duplicate-path refusal. As built: after stamping, the decorator calls the
-  wheel-internal `register_declared_processor_class`, which reads the class as the
-  unregistered-type resolver does and registers the descriptor alone through
-  `register_descriptor_only`. It passes over two classes — one decorated where
-  `STREAMLIB_ENTRYPOINT` is in the environment, which is how a helper knows itself, and
-  one with no import path (declared inside a function, or in the entry file), whose
-  refusal stays at `stream.add` with the fix named.
-  At first add `ProcessorInstanceFactory::install_constructor_for_registered_descriptor`
-  gives the registered descriptor its constructor, refusing a path that already has one
-  with the two-classes-one-path text and a path nobody registered by name; the
-  unregistered-type resolver keeps its shape, since importing the module runs the
-  decorator before the constructor is installed. A second decoration of one import path
-  is refused at import naming `importlib.reload`, and the first registration stands. A
-  class decorated with no `description=` registers its docstring, or `""`.
+  duplicate-path refusal. As built: no longer — `package-split-and-lend` deleted
+  `register_declared_processor_class` and
+  `ProcessorInstanceFactory::install_constructor_for_registered_descriptor`, `@node` registers
+  nothing, and this entry folds into that change's "`@node` registers nothing" at ship.
   [agent-readable-processor-catalog — SHIPPED #2228; reopened by one-runtime-per-machine: declarations readable without an engine]
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
