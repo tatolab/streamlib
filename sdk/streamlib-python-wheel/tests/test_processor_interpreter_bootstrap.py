@@ -17,6 +17,7 @@ import json
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import textwrap
@@ -141,8 +142,21 @@ def described_document(described: subprocess.CompletedProcess[str]) -> dict[str,
             f"stdout is not one JSON document ({not_one_document}):\n{described.stdout}\n"
             f"stderr:\n{described.stderr}"
         )
-    assert set(document) == {"described_node_types", "refused_import_paths"}, document
+    assert set(document) == {"described_node_types", "refused_node_types"}, document
     return document
+
+
+def refused_import_paths_in(document: dict[str, Any]) -> list[str]:
+    return [refused["import_path"] for refused in document["refused_node_types"]]
+
+
+def refusal_of(document: dict[str, Any], import_path: str) -> str:
+    (refusal,) = [
+        refused["refusal"]
+        for refused in document["refused_node_types"]
+        if refused["import_path"] == import_path
+    ]
+    return refusal
 
 
 # ---- describe ---------------------------------------------------------------
@@ -181,7 +195,7 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                 ],
             }
         ],
-        "refused_import_paths": [],
+        "refused_node_types": [],
     }
 
 
@@ -202,10 +216,12 @@ def test_a_module_that_will_not_import_is_refused_carrying_the_import_error(
     described = describe(project_directory, "no_such_node_module:Anything")
 
     assert described.returncode == 1
-    assert described_document(described) == {
-        "described_node_types": [],
-        "refused_import_paths": ["no_such_node_module:Anything"],
-    }
+    document = described_document(described)
+    assert document["described_node_types"] == []
+    assert refused_import_paths_in(document) == ["no_such_node_module:Anything"]
+    assert "ModuleNotFoundError: No module named 'no_such_node_module'" in refusal_of(
+        document, "no_such_node_module:Anything"
+    )
     assert "cannot describe no_such_node_module:Anything: " in described.stderr
     assert "ModuleNotFoundError: No module named 'no_such_node_module'" in described.stderr
 
@@ -225,7 +241,11 @@ def test_a_module_that_raises_at_import_is_refused_with_its_traceback(project_di
     described = describe(project_directory, "raising_nodes:Anything")
 
     assert described.returncode == 1
-    assert described_document(described)["refused_import_paths"] == ["raising_nodes:Anything"]
+    document = described_document(described)
+    assert refused_import_paths_in(document) == ["raising_nodes:Anything"]
+    assert "RuntimeError: the node module's own failure" in refusal_of(
+        document, "raising_nodes:Anything"
+    )
     assert "cannot describe raising_nodes:Anything: " in described.stderr
     assert "Traceback (most recent call last):" in described.stderr
     assert "in the_module_body" in described.stderr
@@ -236,7 +256,7 @@ def test_an_unstamped_class_is_refused_naming_it(project_directory: Path):
     described = describe(project_directory, "described_nodes:Unstamped")
 
     assert described.returncode == 1
-    assert described_document(described)["refused_import_paths"] == ["described_nodes:Unstamped"]
+    assert refused_import_paths_in(described_document(described)) == ["described_nodes:Unstamped"]
     assert (
         "cannot describe described_nodes:Unstamped: the class `Unstamped` carries no "
         "`@node` declaration"
@@ -249,7 +269,7 @@ def test_a_missing_attribute_and_a_function_are_refused(project_directory: Path)
     )
 
     assert described.returncode == 1
-    assert described_document(described)["refused_import_paths"] == [
+    assert refused_import_paths_in(described_document(described)) == [
         "described_nodes:NoSuchNode",
         "described_nodes:not_a_class",
     ]
@@ -271,7 +291,7 @@ def test_a_class_named_by_a_path_other_than_its_own_is_refused(project_directory
     described = describe(project_directory, "reexporting_nodes:WindowedRelay")
 
     assert described.returncode == 1
-    assert described_document(described)["refused_import_paths"] == [
+    assert refused_import_paths_in(described_document(described)) == [
         "reexporting_nodes:WindowedRelay"
     ]
     assert "identifies as `described_nodes:WindowedRelay`" in described.stderr
@@ -281,7 +301,7 @@ def test_a_path_that_is_not_module_colon_qualname_is_refused(project_directory: 
     described = describe(project_directory, "described_nodes.WindowedRelay")
 
     assert described.returncode == 1
-    assert described_document(described)["refused_import_paths"] == [
+    assert refused_import_paths_in(described_document(described)) == [
         "described_nodes.WindowedRelay"
     ]
     assert "cannot describe described_nodes.WindowedRelay: " in described.stderr
@@ -373,6 +393,91 @@ def test_a_describe_exits_once_its_document_is_out_whatever_a_module_left_runnin
     ] == ["lingering_nodes:Lingering"]
 
 
+def test_a_describe_blocked_at_import_ends_with_its_group_once_its_parent_closes_stdin(
+    project_directory: Path,
+):
+    """The engine holds the describe's stdin pipe open; end-of-file there is the
+    app gone, which on macOS nothing else tells a describe."""
+    write_project_module(
+        project_directory,
+        "import_blocking_nodes",
+        """
+        import time
+
+        time.sleep(30)
+        """,
+    )
+    environment = processor_interpreter_environment(LEND_DIRECTORY, project_directory)
+    describe_process = subprocess.Popen(
+        [
+            sys.executable,
+            str(LEND_DIRECTORY / "tatolab" / "runtime" / BOOTSTRAP_PATH.name),
+            "--describe",
+            "import_blocking_nodes:Anything",
+        ],
+        cwd=project_directory,
+        env=environment,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            describe_process.wait(timeout=2.0)
+        assert describe_process.stdin is not None
+        started = time.monotonic()
+        describe_process.stdin.close()
+
+        exit_status = describe_process.wait(timeout=15.0)
+
+        assert time.monotonic() - started < 10.0
+        assert exit_status == -signal.SIGKILL
+    finally:
+        if describe_process.poll() is None:
+            os.killpg(describe_process.pid, signal.SIGKILL)
+            describe_process.wait()
+
+
+def test_a_class_whose_lookup_raises_past_attribute_error_is_refused_and_the_rest_described(
+    project_directory: Path,
+):
+    """A PEP 562 module `__getattr__` raising `ImportError` for a missing
+    optional dependency; the non-daemon thread would hold a finalizing
+    interpreter past the describe if the error escaped it."""
+    write_project_module(
+        project_directory,
+        "lazily_resolved_nodes",
+        """
+        import threading
+        import time
+
+        threading.Thread(target=time.sleep, args=(30,)).start()
+
+
+        def __getattr__(name):
+            raise ImportError(f"{name} needs an optional dependency that is not installed")
+        """,
+    )
+    started = time.monotonic()
+
+    described = describe(
+        project_directory, "lazily_resolved_nodes:Blur", "described_nodes:Ticker"
+    )
+
+    assert time.monotonic() - started < 15.0, "the describe waited on what its module left"
+    assert described.returncode == 1, described.stderr
+    document = described_document(described)
+    assert refused_import_paths_in(document) == ["lazily_resolved_nodes:Blur"]
+    assert "ImportError: Blur needs an optional dependency that is not installed" in refusal_of(
+        document, "lazily_resolved_nodes:Blur"
+    )
+    assert [
+        described_node_type["import_path"]
+        for described_node_type in document["described_node_types"]
+    ] == ["described_nodes:Ticker"]
+
+
 def test_several_paths_in_one_call_are_described_and_refused_in_order(project_directory: Path):
     described = describe(
         project_directory,
@@ -388,7 +493,7 @@ def test_several_paths_in_one_call_are_described_and_refused_in_order(project_di
         described_node_type["import_path"]
         for described_node_type in document["described_node_types"]
     ] == ["described_nodes:Ticker", "described_nodes:WindowedRelay"]
-    assert document["refused_import_paths"] == [
+    assert refused_import_paths_in(document) == [
         "no_such_node_module:Anything",
         "described_nodes:Unstamped",
     ]
@@ -413,7 +518,7 @@ def test_a_class_stamped_by_hand_without_every_stamp_is_refused_and_the_rest_des
 
     assert described.returncode == 1
     document = described_document(described)
-    assert document["refused_import_paths"] == ["hand_stamped_nodes:HandStamped"]
+    assert refused_import_paths_in(document) == ["hand_stamped_nodes:HandStamped"]
     assert [
         described_node_type["import_path"]
         for described_node_type in document["described_node_types"]

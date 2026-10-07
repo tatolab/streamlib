@@ -9,14 +9,13 @@
 
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use super::processor_interpreter_shutdown_ladder::{
-    ChildReapedWithinItsBudget, REAP_BUDGET, reap_a_child_within,
-    wait_for_a_child_to_become_collectable_within,
+    kill_the_process_group_and_reap_its_leader, wait_for_a_child_to_become_collectable_within,
 };
 use super::processor_interpreter_spawn_host::{
     HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE,
@@ -80,7 +79,14 @@ const DESCRIBE_STANDARD_OUTPUT_QUOTED_BYTES: usize = 512;
 #[derive(serde::Deserialize)]
 struct ProcessorInterpreterDescribeDocument {
     described_node_types: Vec<serde_json::Value>,
-    refused_import_paths: Vec<String>,
+    refused_node_types: Vec<NodeTypeTheDescribeRefused>,
+}
+
+/// One type a describe refused, with the reason the bootstrap gave for it.
+#[derive(serde::Deserialize)]
+struct NodeTypeTheDescribeRefused {
+    import_path: String,
+    refusal: String,
 }
 
 /// Whether `node_type` is one a processor interpreter describes: a
@@ -112,10 +118,13 @@ pub(crate) fn processor_interpreter_describe_command(
     lend_directory: &Path,
 ) -> Result<Command> {
     let mut command = processor_interpreter_bootstrap_command(stream_environment, lend_directory)?;
+    // A pipe this process holds open for the describe's whole life: the
+    // bootstrap reads its end-of-file as the app gone, which is the only
+    // parent-death signal a describe has where `PR_SET_PDEATHSIG` does not exist.
     command
         .arg(DESCRIBE_ARGUMENT)
         .args(import_paths.iter().map(ProcessorClassImportPath::as_str))
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for per_processor_variable in PER_PROCESSOR_ENVIRONMENT_VARIABLES {
@@ -221,7 +230,7 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     if !crate::core::runtime::register_a_helper_process_group(child.id() as i32) {
         tracing::warn!(
             "the describe's process group could not be registered, so a third interrupt will not \
-             kill it; the kernel still kills the describe itself when the app exits"
+             kill it; the describe still ends itself when the app exits"
         );
     }
     let standard_output = read_standard_output_to_its_end_on_a_thread(child.stdout.take());
@@ -238,7 +247,10 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
         is_shutdown_requested,
         is_interrupted_by_the_host,
     );
-    let exit_status = take_the_describe_process_group_down_and_reap(&mut child);
+    // Killed whether or not the leader already exited: nothing a describe
+    // starts outlives it, and a descendant left holding its standard streams
+    // would hold the readers open.
+    let exit_status = kill_the_process_group_and_reap_its_leader(&mut child, "the describe");
     let quoted_standard_error = standard_error_tail_as_a_refusal_quotes_it(
         &standard_error_tail
             .map(|tail| {
@@ -299,23 +311,36 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
         }
     };
 
-    let refused_import_paths: Vec<ProcessorClassImportPath> = import_paths
+    let refused_node_types: Vec<(ProcessorClassImportPath, &str)> = import_paths
         .iter()
-        .filter(|import_path| {
+        .filter_map(|import_path| {
             describe_document
-                .refused_import_paths
+                .refused_node_types
                 .iter()
-                .any(|refused| refused == import_path.as_str())
+                .find(|refused| refused.import_path == import_path.as_str())
+                .map(|refused| (import_path.clone(), refused.refusal.trim_end()))
         })
-        .cloned()
         .collect();
-    if !refused_import_paths.is_empty() {
-        return Err(Error::NodeTypesNotDescribed {
-            node_types: refused_import_paths,
-            refusal: format!(
-                "the stream's interpreter `{interpreter}` could not import it, or found no \
-                 `@node` class there. {quoted_standard_error}"
+    if !refused_node_types.is_empty() {
+        let refusal = match refused_node_types.as_slice() {
+            [(_, the_only_refusal)] => {
+                format!("the stream's interpreter `{interpreter}` refused it: {the_only_refusal}")
+            }
+            several_refused_node_types => format!(
+                "the stream's interpreter `{interpreter}` refused them:\n{}",
+                several_refused_node_types
+                    .iter()
+                    .map(|(import_path, refusal)| format!("`{}`: {refusal}", import_path.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
             ),
+        };
+        return Err(Error::NodeTypesNotDescribed {
+            node_types: refused_node_types
+                .into_iter()
+                .map(|(import_path, _)| import_path)
+                .collect(),
+            refusal,
         });
     }
 
@@ -386,40 +411,6 @@ fn wait_for_the_describe_to_exit(
         }
         if Instant::now() >= deadline {
             return DescribeExitAwaited::BoundElapsed;
-        }
-    }
-}
-
-/// Kill the describe's whole process group and reap its leader, waiting for
-/// the reap no longer than the shutdown ladder does.
-///
-/// Killed whether or not the leader already exited: nothing a describe starts
-/// outlives it, and a descendant left holding its standard streams would hold
-/// the readers open. The leader is still unreaped, so the group id is still
-/// its own.
-fn take_the_describe_process_group_down_and_reap(child: &mut Child) -> Option<ExitStatus> {
-    // SAFETY: the pid is this process's own unreaped child's, which leads its
-    // own process group.
-    unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
-    // Out of the registry the third interrupt kills from before the reap frees
-    // the group's id for reuse.
-    crate::core::runtime::deregister_a_helper_process_group(child.id() as i32);
-    match reap_a_child_within(child, REAP_BUDGET) {
-        ChildReapedWithinItsBudget::Reaped(exit_status) => Some(exit_status),
-        ChildReapedWithinItsBudget::StillRunningAfterTheBudget => {
-            tracing::error!(
-                "the describe (pid={}) outlived its kill and is abandoned unreaped; it is not \
-                 killable from user space",
-                child.id(),
-            );
-            None
-        }
-        ChildReapedWithinItsBudget::CannotBeCollected(uncollectable) => {
-            tracing::error!(
-                "the describe (pid={}) cannot be collected: {uncollectable}",
-                child.id(),
-            );
-            None
         }
     }
 }
@@ -558,7 +549,7 @@ mod tests {
         let stub =
             StubProcessorInterpreter::running(&print_on_standard_output(&serde_json::json!({
                 "described_node_types": [a_described_good_type()],
-                "refused_import_paths": [],
+                "refused_node_types": [],
             })));
 
         let declarations = stub
@@ -578,13 +569,16 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_type_whose_module_will_not_import_is_refused_by_name_quoting_the_interpreters_stderr() {
+    fn a_type_whose_module_will_not_import_is_refused_by_name_quoting_the_reason_it_was_given() {
         let stub = StubProcessorInterpreter::running(&format!(
-            "{}\nprintf 'cannot describe my_app.missing:Blur: Traceback (most recent call last):\\n\
-             ModuleNotFoundError: No module named %s\\n' \"'my_app.missing'\" >&2\nexit 1",
+            "{}\nexit 1",
             print_on_standard_output(&serde_json::json!({
                 "described_node_types": [a_described_good_type()],
-                "refused_import_paths": ["my_app.missing:Blur"],
+                "refused_node_types": [{
+                    "import_path": "my_app.missing:Blur",
+                    "refusal": "its module `my_app.missing` did not import:\n\
+                                ModuleNotFoundError: No module named 'my_app.missing'\n",
+                }],
             }))
         ));
 
@@ -601,11 +595,13 @@ mod tests {
     #[serial]
     fn a_class_carrying_no_node_stamp_is_refused_by_name() {
         let stub = StubProcessorInterpreter::running(&format!(
-            "{}\nprintf 'cannot describe my_app.nodes:Plain: it carries no @node stamp\\n' >&2\n\
-             exit 1",
+            "{}\nexit 1",
             print_on_standard_output(&serde_json::json!({
                 "described_node_types": [],
-                "refused_import_paths": ["my_app.nodes:Plain"],
+                "refused_node_types": [{
+                    "import_path": "my_app.nodes:Plain",
+                    "refusal": "the class `Plain` carries no `@node` declaration, so it is not a node",
+                }],
             }))
         ));
 
@@ -613,7 +609,43 @@ mod tests {
 
         assert_eq!(node_types, [import_path("my_app.nodes:Plain")]);
         assert!(
-            refusal.contains("cannot describe my_app.nodes:Plain: it carries no @node stamp"),
+            refusal.contains("the class `Plain` carries no `@node` declaration"),
+            "{refusal}"
+        );
+    }
+
+    /// The reasons travel in the document, so a module imported after a
+    /// refused one cannot push them out of the standard-error tail.
+    #[test]
+    #[serial]
+    fn each_refused_type_is_quoted_with_its_own_reason_however_much_a_later_import_writes_to_standard_error()
+     {
+        let stub = StubProcessorInterpreter::running(&format!(
+            "head -c 65536 /dev/zero | tr '\\0' x >&2\n{}\nexit 1",
+            print_on_standard_output(&serde_json::json!({
+                "described_node_types": [],
+                "refused_node_types": [
+                    {"import_path": "my_app.broken:Blur", "refusal": "the reason Blur was refused"},
+                    {"import_path": "my_app.nodes:Plain", "refusal": "the reason Plain was refused"},
+                ],
+            }))
+        ));
+
+        let (node_types, refusal) = stub.refusal_of(&["my_app.broken:Blur", "my_app.nodes:Plain"]);
+
+        assert_eq!(
+            node_types,
+            [
+                import_path("my_app.broken:Blur"),
+                import_path("my_app.nodes:Plain")
+            ]
+        );
+        assert!(
+            refusal.contains("`my_app.broken:Blur`: the reason Blur was refused"),
+            "{refusal}"
+        );
+        assert!(
+            refusal.contains("`my_app.nodes:Plain`: the reason Plain was refused"),
             "{refusal}"
         );
     }
@@ -654,7 +686,7 @@ mod tests {
             "echo 'sitecustomize says hello'\n{}",
             print_on_standard_output(&serde_json::json!({
                 "described_node_types": [a_described_good_type()],
-                "refused_import_paths": [],
+                "refused_node_types": [],
             }))
         ));
 
@@ -888,7 +920,7 @@ mod tests {
              \"$PWD/python-path\"\n{}",
             print_on_standard_output(&serde_json::json!({
                 "described_node_types": [a_described_good_type()],
-                "refused_import_paths": [],
+                "refused_node_types": [],
             }))
         ));
 

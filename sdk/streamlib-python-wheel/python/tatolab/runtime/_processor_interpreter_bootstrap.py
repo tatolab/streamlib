@@ -29,7 +29,9 @@ import os
 import platform
 import queue
 import select
+import signal
 import socket
+import stat
 import struct
 import sys
 import sysconfig
@@ -847,6 +849,19 @@ def describe_one_processor_class(import_path: str) -> "dict[str, Any]":
             f"its module `{module_name}` did not import:\n{traceback.format_exc()}"
         ) from None
     try:
+        return _describe_the_processor_class_its_imported_module_defines(import_path)
+    except ProcessorClassNotDescribable:
+        raise
+    except (Exception, SystemExit):
+        raise ProcessorClassNotDescribable(
+            f"reading its declaration raised:\n{traceback.format_exc()}"
+        ) from None
+
+
+def _describe_the_processor_class_its_imported_module_defines(
+    import_path: str,
+) -> "dict[str, Any]":
+    try:
         resolved: Any = load_processor_class(import_path)
     except HelperProcessProtocolError as unresolvable:
         raise ProcessorClassNotDescribable(str(unresolvable)) from None
@@ -907,33 +922,64 @@ def _end_the_describe_without_finalizing_the_interpreter(exit_status: int) -> No
     os._exit(exit_status)
 
 
+def _end_the_describe_once_its_parent_closes_stdin() -> None:
+    """End the describe and its process group when the stdin pipe its parent
+    holds open reaches end-of-file: the parent is gone, and on macOS nothing
+    else ends a describe whose module blocks at import.
+
+    Armed only on a pipe, so a describe run by hand with stdin on a terminal or
+    `/dev/null` is not ended at once. Only a describe leading its own process
+    group, as the engine starts it, takes the group down with it.
+    """
+    try:
+        if not stat.S_ISFIFO(os.fstat(0).st_mode):
+            return
+    except OSError:
+        return
+
+    def wait_for_the_end_of_stdin() -> None:
+        try:
+            while os.read(0, 4096):
+                pass
+        except OSError:
+            return
+        if os.getpgrp() == os.getpid():
+            os.killpg(os.getpgrp(), signal.SIGKILL)
+        os._exit(1)
+
+    threading.Thread(
+        target=wait_for_the_end_of_stdin, name="describe-parent-watch", daemon=True
+    ).start()
+
+
 def describe_processor_classes_onto_stdout(import_paths: "list[str]") -> int:
     """Print one JSON document describing each of `import_paths`; 1 if any was refused.
 
     Wire contract with the engine: stdout carries exactly
-    `{"described_node_types": [...], "refused_import_paths": [...]}`, and every
-    refusal is a block on stderr beginning `cannot describe <import path>: `.
+    `{"described_node_types": [...], "refused_node_types": [{"import_path": ...,
+    "refusal": ...}]}`, and every refusal is also a block on stderr beginning
+    `cannot describe <import path>: `.
     """
     described_document_fd = _reserve_stdout_for_the_described_document()
     described_node_types: "list[dict[str, Any]]" = []
-    refused_import_paths: "list[str]" = []
+    refused_node_types: "list[dict[str, str]]" = []
     for import_path in import_paths:
         try:
             described_node_types.append(describe_one_processor_class(import_path))
         except ProcessorClassNotDescribable as refusal:
-            refused_import_paths.append(import_path)
+            refused_node_types.append({"import_path": import_path, "refusal": str(refusal)})
             sys.stderr.write(f"cannot describe {import_path}: {refusal}\n")
             sys.stderr.flush()
     described_document = json.dumps(
         {
             "described_node_types": described_node_types,
-            "refused_import_paths": refused_import_paths,
+            "refused_node_types": refused_node_types,
         },
         allow_nan=False,
     )
     with os.fdopen(described_document_fd, "w", encoding="utf-8") as described_document_output:
         described_document_output.write(described_document + "\n")
-    return 1 if refused_import_paths else 0
+    return 1 if refused_node_types else 0
 
 
 # =============================================================================
@@ -1547,9 +1593,13 @@ def main(arguments: "list[str]") -> int:
                 f"`{DESCRIBE_ARGUMENT}` takes one or more import paths, `module:qualname`"
             )
             return 1
-        _end_the_describe_without_finalizing_the_interpreter(
-            describe_processor_classes_onto_stdout(arguments[1:])
-        )
+        _end_the_describe_once_its_parent_closes_stdin()
+        try:
+            describe_exit_status = describe_processor_classes_onto_stdout(arguments[1:])
+        except BaseException:
+            traceback.print_exc()
+            describe_exit_status = 1
+        _end_the_describe_without_finalizing_the_interpreter(describe_exit_status)
     if arguments:
         _write_a_bootstrap_fatal_to_raw_stderr(
             f"a processor interpreter takes no arguments, or `{DESCRIBE_ARGUMENT}` and "

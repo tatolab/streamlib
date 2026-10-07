@@ -51,7 +51,7 @@ pub const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
 const PROCESS_GROUP_TERMINATION_GRACE: Duration = Duration::from_millis(500);
 
 /// How long the reap waits for a killed child to become collectable.
-pub(crate) const REAP_BUDGET: Duration = Duration::from_secs(1);
+const REAP_BUDGET: Duration = Duration::from_secs(1);
 
 /// How often a bounded wait for the child's exit re-checks.
 const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -313,11 +313,13 @@ impl HelperProcessShutdownLadder {
             PROCESS_GROUP_TERMINATION_GRACE,
         );
 
-        self.signal_the_whole_process_group(libc::SIGKILL);
-        // Out of the registry the third interrupt kills from before the reap
-        // frees the group's id for reuse.
-        crate::core::runtime::deregister_a_helper_process_group(self.child.id() as i32);
-        self.reap_the_child_within(REAP_BUDGET)
+        match kill_the_process_group_and_reap_its_leader(
+            &mut self.child,
+            format_args!("[{}] its helper process", self.processor_display_name),
+        ) {
+            Some(exit_status) => HelperProcessShutdownOutcome::Reaped(exit_status),
+            None => HelperProcessShutdownOutcome::AbandonedAfterTheLadder,
+        }
     }
 
     fn signal_the_child_itself(&self, signal: libc::c_int) {
@@ -331,29 +333,39 @@ impl HelperProcessShutdownLadder {
         // SAFETY: as above — the pid is still this child's, and its own.
         unsafe { libc::killpg(self.child.id() as libc::pid_t, signal) };
     }
+}
 
-    fn reap_the_child_within(&mut self, budget: Duration) -> HelperProcessShutdownOutcome {
-        match reap_a_child_within(&mut self.child, budget) {
-            ChildReapedWithinItsBudget::Reaped(exit_status) => {
-                HelperProcessShutdownOutcome::Reaped(exit_status)
-            }
-            ChildReapedWithinItsBudget::CannotBeCollected(uncollectable) => {
-                tracing::error!(
-                    "[{}] its helper process (pid={}) cannot be collected: {uncollectable}",
-                    self.processor_display_name,
-                    self.child.id(),
-                );
-                HelperProcessShutdownOutcome::AbandonedAfterTheLadder
-            }
-            ChildReapedWithinItsBudget::StillRunningAfterTheBudget => {
-                tracing::error!(
-                    "[{}] its helper process (pid={}) outlived the shutdown ladder and is \
-                     abandoned unreaped; it is not killable from user space",
-                    self.processor_display_name,
-                    self.child.id(),
-                );
-                HelperProcessShutdownOutcome::AbandonedAfterTheLadder
-            }
+/// Kill `child`'s whole process group and reap its leader within
+/// [`REAP_BUDGET`], logging under `subject` a leader left unreaped.
+///
+/// `child` must lead a group of its own and still be unreaped, so the group id
+/// is still its own.
+pub(crate) fn kill_the_process_group_and_reap_its_leader(
+    child: &mut Child,
+    subject: impl std::fmt::Display,
+) -> Option<ExitStatus> {
+    // SAFETY: the pid is this process's own unreaped child's, which leads its
+    // own process group.
+    unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+    // Out of the registry the third interrupt kills from before the reap frees
+    // the group's id for reuse.
+    crate::core::runtime::deregister_a_helper_process_group(child.id() as i32);
+    match reap_a_child_within(child, REAP_BUDGET) {
+        ChildReapedWithinItsBudget::Reaped(exit_status) => Some(exit_status),
+        ChildReapedWithinItsBudget::StillRunningAfterTheBudget => {
+            tracing::error!(
+                "{subject} (pid={}) outlived its kill and is abandoned unreaped; it is not \
+                 killable from user space",
+                child.id(),
+            );
+            None
+        }
+        ChildReapedWithinItsBudget::CannotBeCollected(uncollectable) => {
+            tracing::error!(
+                "{subject} (pid={}) cannot be collected: {uncollectable}",
+                child.id(),
+            );
+            None
         }
     }
 }
@@ -376,7 +388,7 @@ pub(crate) fn wait_for_a_child_to_become_collectable_within(
 
 /// How a bounded reap of a child ended.
 #[derive(Debug)]
-pub(crate) enum ChildReapedWithinItsBudget {
+enum ChildReapedWithinItsBudget {
     Reaped(ExitStatus),
     /// Uninterruptible sleep inside a driver is the case user space cannot
     /// end, so the child is left unreaped rather than waited on for good.
@@ -385,10 +397,7 @@ pub(crate) enum ChildReapedWithinItsBudget {
 }
 
 /// Collect `child` once it has exited, waiting no longer than `budget`.
-pub(crate) fn reap_a_child_within(
-    child: &mut Child,
-    budget: Duration,
-) -> ChildReapedWithinItsBudget {
+fn reap_a_child_within(child: &mut Child, budget: Duration) -> ChildReapedWithinItsBudget {
     let deadline = Instant::now() + budget;
     loop {
         match child.try_wait() {

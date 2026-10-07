@@ -169,7 +169,7 @@ mod tests {
         let interpreter = project_directory.path().join("stub-python");
         let describe_document = serde_json::json!({
             "described_node_types": described_node_types,
-            "refused_import_paths": [],
+            "refused_node_types": [],
         });
         std::fs::write(
             &interpreter,
