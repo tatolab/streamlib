@@ -435,12 +435,10 @@ fn app_entry_directory_of_this_interpreter(python: Python<'_>) -> PyResult<Optio
         .and_then(|import_root| app_import_root_directory(&import_root)))
 }
 
-/// The lend directory: the directory holding the `tatolab/runtime/` package
-/// this interpreter imported the engine from, which every processor
-/// interpreter borrows `tatolab.runtime` out of.
-fn processor_interpreter_lend_directory_of_this_interpreter(
-    python: Python<'_>,
-) -> PyResult<PathBuf> {
+/// The `tatolab/runtime/` package directory this interpreter imported the
+/// engine from, which every processor interpreter borrows `tatolab.runtime` out
+/// of.
+fn runtime_package_directory_of_this_interpreter(python: Python<'_>) -> PyResult<PathBuf> {
     let package_init_file = PathBuf::from(
         python
             .import("tatolab.runtime")?
@@ -449,14 +447,11 @@ fn processor_interpreter_lend_directory_of_this_interpreter(
     );
     package_init_file
         .parent()
-        .and_then(Path::parent)
-        .and_then(Path::parent)
         .map(Path::to_path_buf)
         .ok_or_else(|| {
             PyRuntimeError::new_err(format!(
-                "`tatolab.runtime` was imported from `{}`, which is not inside a \
-                 `tatolab/runtime/` package directory, so there is no lend directory to start \
-                 a processor interpreter from",
+                "`tatolab.runtime` was imported from `{}`, which names no package directory, \
+                 so there is no runtime package to lend a processor interpreter",
                 package_init_file.display()
             ))
         })
@@ -695,12 +690,13 @@ impl PythonRuntimeHandle {
         if let Some(entry_directory) = app_entry_directory_of_this_interpreter(python)? {
             record_the_app_entry_directory_the_language_host_captured(entry_directory);
         }
-        let processor_interpreter_lend_directory =
-            processor_interpreter_lend_directory_of_this_interpreter(python)?;
+        let runtime_package_directory = runtime_package_directory_of_this_interpreter(python)?;
         let engine = python
             .detach(|| Runner::new_with_runtime_name(runtime_name))
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
-        engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory);
+        engine
+            .lend_only_this_runtime_package_to_processor_interpreters(&runtime_package_directory)
+            .map_err(|lend_failure| PyRuntimeError::new_err(lend_failure.to_string()))?;
         Ok(Self {
             lifecycle: Mutex::new(PythonRuntimeLifecycleState::EngineConstructedNotYetRun(
                 engine,

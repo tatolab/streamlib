@@ -126,7 +126,7 @@ def graph_naming_one_node_of_type(node_type: str) -> dict[str, object]:
 # ---- describe, from the fixture venv's interpreter ---------------------------
 
 
-def test_a_type_whose_module_raises_at_import_is_refused_quoting_the_interpreters_stderr(
+def test_a_type_whose_module_raises_at_import_is_refused_quoting_its_traceback(
     runtime: tatolab.runtime.Runtime, fixture_venv_interpreter: Path, tmp_path: Path
 ):
     write_project_module(
@@ -287,6 +287,88 @@ def test_a_relative_project_directory_and_interpreter_name_what_they_name_from_t
     )
 
     assert described_type in processor_class_import_paths_in_this_processes_catalog()
+
+
+HOST_LOADING_FROM_A_SITE_PACKAGES = """
+import sys
+from pathlib import Path
+
+import tatolab.runtime
+
+site_packages, project_directory, interpreter = sys.argv[1:4]
+assert Path(tatolab.runtime.__file__).parent.parent.parent == Path(site_packages), (
+    tatolab.runtime.__file__
+)
+runtime = tatolab.runtime.Runtime()
+try:
+    runtime.load(
+        {"nodes": [{"name": "nodeundertest", "type": "site_packages_probing_nodes:ProbingSource",
+                    "config": {}}]},
+        project_directory=project_directory,
+        interpreter=interpreter,
+    )
+finally:
+    runtime.shutdown()
+print("MARKER:LOADED", flush=True)
+"""
+
+
+def test_a_runtime_imported_from_a_site_packages_lends_its_package_and_nothing_beside_it(
+    fixture_venv_interpreter: Path, tmp_path: Path
+):
+    """A pip-installed runtime is imported from a whole site-packages; what else
+    is installed there never reaches a processor interpreter's `PYTHONPATH`."""
+    site_packages = tmp_path / "site-packages"
+    (site_packages / "tatolab").mkdir(parents=True)
+    (site_packages / "tatolab" / "runtime").symlink_to(
+        Path(tatolab.runtime.__file__).resolve().parent, target_is_directory=True
+    )
+    (site_packages / "host_only_module.py").write_text("")
+    project_directory = tmp_path / "project"
+    project_directory.mkdir()
+    write_project_module(
+        project_directory,
+        "site_packages_probing_nodes",
+        """
+        import importlib.util
+
+        from tatolab.stream import node
+
+        if importlib.util.find_spec("host_only_module") is not None:
+            raise RuntimeError("the host's site-packages reached the processor interpreter")
+
+
+        @node(execution="continuous", interval_ms=50)
+        class ProbingSource:
+            @node.output()
+            def bags_to_downstream(self) -> None: ...
+
+            def process(self, ctx) -> None: ...
+        """,
+    )
+    host_directory = tmp_path / "host"
+    host_directory.mkdir()
+    host = host_directory / "host_loading_from_a_site_packages.py"
+    host.write_text(HOST_LOADING_FROM_A_SITE_PACKAGES)
+
+    loaded = subprocess.run(
+        [
+            sys.executable,
+            str(host),
+            str(site_packages),
+            str(project_directory),
+            str(fixture_venv_interpreter),
+        ],
+        env={**os.environ, "PYTHONPATH": str(site_packages)},
+        capture_output=True,
+        text=True,
+        timeout=SECONDS_TO_BUILD_THE_FIXTURE_VENV,
+        check=False,
+    )
+
+    assert loaded.returncode == 0 and "MARKER:LOADED" in loaded.stdout, (
+        f"{loaded.stdout}\n{loaded.stderr}"
+    )
 
 
 # ---- a running stream --------------------------------------------------------
