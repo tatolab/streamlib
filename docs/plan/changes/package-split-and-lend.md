@@ -118,7 +118,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
 - **Distribution.** A pure build backend; `requires-python >=3.10`; dependencies are what its own
   modules import, never the runtime. A module belongs here iff a stream or node module imports
   it: the declarations (`@node`, `@input`, `@output`, `@stream`, `Stream`, the references,
-  `compile_stream_to_graph`), `_processor_config_schema`, the data types (`AudioBlock`,
+  `compile_stream_to_graph`), `_node_config_schema`, the data types (`AudioBlock`,
   `EncodedAudioPacket`, `VideoFrame` and its colour types, `EncodedVideoFrame`), the composable
   pieces (`ClaimedSurfacePixelAccess`, `PixelAccessToOneClaimedSurface`, `GlslPixelEffect`, the
   `ModelInputTensor` family, `NodeOutputTextureRing`), `clock`, `log`, and

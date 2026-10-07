@@ -1003,8 +1003,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `*args` or `**kwargs`, a positional-only or unannotated `config`, an annotation that
   is not a class (a parameterised generic, `Any`) or cannot be resolved — is refused at
   decoration naming the class, the parameter and the fix. The class and its schema are
-  stamped as `__streamlib_processor_config_class__` and
-  `__streamlib_processor_config_schema__`. The deriver is stdlib-only and emits 2020-12
+  stamped as `__tatolab_node_config_class__` and
+  `__tatolab_node_config_schema__`. The deriver is stdlib-only and emits 2020-12
   directly, inlining nested classes and never writing a `$ref`: a TypedDict yields its
   annotations, inherited keys included, and `required` from `__required_keys__`; a
   dataclass yields its constructor's inputs — its `init=True` fields and `InitVar`s, a
@@ -1346,8 +1346,6 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   is refused at import naming `importlib.reload`, and the first registration stands. A
   class decorated with no `description=` registers its docstring, or `""`.
   [agent-readable-processor-catalog — SHIPPED #2228; reopened by one-runtime-per-machine: declarations readable without an engine]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_declaration_registers.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_catalog.py::test_a_class_the_app_imported_and_never_added_is_in_the_catalog -->
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
   the class's short name and the engine disambiguates duplicates within one graph. It is
