@@ -28,7 +28,7 @@ class SurfaceHandleStandIn:
 
 
 class GpuContextStandIn:
-    """Records every processor output pool acquire and answers a numbered frame."""
+    """Records every output-pool acquire and answers a numbered frame."""
 
     def __init__(self) -> None:
         self.acquires: "list[tuple[object, ...]]" = []

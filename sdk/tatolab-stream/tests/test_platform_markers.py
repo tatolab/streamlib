@@ -13,8 +13,14 @@ waits on.
 import re
 from pathlib import Path
 
-TESTS_DIRECTORY = Path(__file__).resolve().parent
-ACTIVE_CHANGES_DIRECTORY = TESTS_DIRECTORY.parents[2] / "docs" / "plan" / "changes"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+ACTIVE_CHANGES_DIRECTORY = REPOSITORY_ROOT / "docs" / "plan" / "changes"
+# The suites that run on both floors and so may carry a platform marker. Read
+# as text, so this suite holds the runtime's tests without importing them.
+MARKED_TEST_DIRECTORIES = (
+    REPOSITORY_ROOT / "sdk" / "tatolab-stream" / "tests",
+    REPOSITORY_ROOT / "sdk" / "streamlib-python-wheel" / "tests",
+)
 
 LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
     "MoltenVK has no VK_KHR_ray_tracing_pipeline",
@@ -39,11 +45,15 @@ TICKET_LIST_ENTRY = re.compile(r"^\d+\. #(\d+)\b", re.M)
 
 def _marker_uses() -> "list[tuple[str, str, str]]":
     uses = []
-    for test_file in sorted(TESTS_DIRECTORY.glob("test_*.py")):
-        if test_file.name == Path(__file__).name:
-            continue
-        for marker_name, arguments in MARKER_USE.findall(test_file.read_text(encoding="utf-8")):
-            uses.append((test_file.name, marker_name, arguments.strip()))
+    for marked_test_directory in MARKED_TEST_DIRECTORIES:
+        for test_file in sorted(marked_test_directory.glob("test_*.py")):
+            if test_file.resolve() == Path(__file__).resolve():
+                continue
+            test_file_name = str(test_file.relative_to(REPOSITORY_ROOT))
+            for marker_name, arguments in MARKER_USE.findall(
+                test_file.read_text(encoding="utf-8")
+            ):
+                uses.append((test_file_name, marker_name, arguments.strip()))
     return uses
 
 

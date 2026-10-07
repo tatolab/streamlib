@@ -83,7 +83,7 @@ markers = [
     # The closed list of what macOS does not have, each with its reason:
     # ray-tracing kernels, VirtualCameraSink, the CUDA Array Interface, the
     # fd-shaped raw handles, and a test whose body is a Linux mechanism.
-    # `test_platform_markers.py` pins it. Skipped off Linux.
+    # The stream suite's `test_platform_markers.py` pins it. Skipped off Linux.
     "linux_only_capability(reason): a capability the closed list names as absent off Linux",
     # A capability a named open parity ticket brings to macOS. Strict xfail
     # there, so the ticket's own fix turns it red until the mark comes off.

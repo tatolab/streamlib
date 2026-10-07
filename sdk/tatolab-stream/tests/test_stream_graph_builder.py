@@ -3,9 +3,8 @@
 
 """`@stream`, the `StreamBuilder` and `compile_stream_to_graph`, with no engine.
 
-Nothing here constructs a `Runtime`: a stream compiles to its graph as plain
-data, so every case is a literal expectation about that data or a refusal at
-the line the author wrote.
+A stream compiles to its graph as plain data, so every case is a literal
+expectation about that data or a refusal at the line the author wrote.
 """
 
 import ast

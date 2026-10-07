@@ -222,17 +222,17 @@ def test_a_port_name_casting_to_nothing_is_refused_naming_the_class():
             def frames_to_downstream(self) -> None: ...
 
 
-def test_the_package_exports_node_and_no_processor_alias():
-    assert not hasattr(tatolab.stream, "processor")
-    assert "processor" not in tatolab.stream.__all__
+def test_the_package_exports_node():
+    # That no public name says the retired word is the runtime suite's
+    # `test_tatolab_namespace.py`, which sweeps both packages.
     assert "node" in tatolab.stream.__all__
 
 
 def test_a_source_must_declare_its_execution_mode():
     """Reactive defaults only where reacting is possible.
 
-    A processor with no input port has nothing to react to, so a silent
-    reactive default would hand the author a processor that never runs once —
+    A node with no input port has nothing to react to, so a silent
+    reactive default would hand the author a node that never runs once —
     the failure this refuses to produce.
     """
     with pytest.raises(ValueError, match="declares no input ports"):
@@ -405,7 +405,7 @@ def test_an_audio_input_declares_its_window_contract():
 
 @pytest.mark.parametrize("delivery_profile", ["ordered", "newest"])
 def test_the_device_matching_sentinel_is_refused_at_decoration(delivery_profile: str):
-    """No Python processor can resolve it, so the line that writes it never takes.
+    """No Python node can resolve it, so the line that writes it never takes.
 
     Under either delivery profile: the sentinel is refused for what it is, not
     for the company it keeps, so the profile refusal never gets to speak first
@@ -618,7 +618,7 @@ def test_an_output_port_takes_no_window_contract():
 
 
 def test_a_contract_is_frozen_after_declaration():
-    """A declaration a processor could edit later is not a declaration."""
+    """A declaration a node could edit later is not a declaration."""
     contract = AudioWindowContract(
         sample_rate=16_000, channels=1, dtype="f32", window_size=512
     )

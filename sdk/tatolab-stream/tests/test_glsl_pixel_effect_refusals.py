@@ -1,12 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""`GlslPixelEffect`'s own refusals and packing, with the capabilities stood in for.
+"""`GlslPixelEffect`'s own refusals and packing, with the capabilities and the clock stood in for.
 
-Everything here is decided in the wheel before any engine call: the body's
-signature, the dial declarations, the push-constant layout, and the dials an
-apply supplies. The pixels, the compiler's diagnostic line and the copy
-refusal need a GPU and are proven in `test_glsl_pixel_effect.py`.
+Everything here is decided in `tatolab.stream` before any engine call: the
+body's signature, the dial declarations, the push-constant layout, and the
+dials an apply supplies. The pixels, the compiler's diagnostic line and the
+copy refusal need a GPU and are proven against the runtime.
 """
 
 from __future__ import annotations
@@ -21,9 +21,27 @@ from tatolab.stream import (
     GpuContextFullAccess,
     GpuContextLimitedAccess,
     VideoFrame,
+    glsl_pixel_effect,
 )
 
 INVERT_GLSL = "vec4 effect(vec4 source, ivec2 at) { return vec4(1.0 - source.rgb, source.a); }"
+
+
+class MonotonicClockStandIn:
+    """Stands in for the runtime-backed `monotonic_now_ns` the effect reads."""
+
+    def __init__(self) -> None:
+        self.now_ns = 5_000_000_000
+
+    def monotonic_now_ns(self) -> int:
+        return self.now_ns
+
+
+@pytest.fixture(autouse=True)
+def monotonic_clock(monkeypatch: pytest.MonkeyPatch) -> MonotonicClockStandIn:
+    clock = MonotonicClockStandIn()
+    monkeypatch.setattr(glsl_pixel_effect, "monotonic_now_ns", clock.monotonic_now_ns)
+    return clock
 
 
 class ComputeKernelStandIn:
@@ -181,6 +199,16 @@ def test_the_first_apply_is_at_zero_elapsed_seconds() -> None:
     effect, gpu = compiled()
     apply(effect)
     assert gpu.kernel.dispatches[0]["push_constants"] == struct.pack("<f", 0.0)
+
+
+def test_a_later_apply_carries_the_monotonic_seconds_since_the_first(
+    monotonic_clock: MonotonicClockStandIn,
+) -> None:
+    effect, gpu = compiled()
+    apply(effect)
+    monotonic_clock.now_ns += 1_500_000_000
+    apply(effect)
+    assert gpu.kernel.dispatches[1]["push_constants"] == struct.pack("<f", 1.5)
 
 
 def test_the_body_follows_line_one_so_diagnostics_name_its_own_lines() -> None:

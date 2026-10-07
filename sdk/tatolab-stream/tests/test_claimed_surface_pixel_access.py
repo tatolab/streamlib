@@ -4,39 +4,29 @@
 """The composable that makes a cast object the tensor-protocol producer.
 
 `[cast-object-tensor-protocol]` says the object `read(port, into=T)` hands back
-speaks `__dlpack__` itself, and that the wheel ships the protocol as one public
+speaks `__dlpack__` itself, and that `tatolab.stream` ships the protocol as one public
 piece any cast type composes — `VideoFrame` being built from it is the proof it
 holds no privileged position. So the type under test here is a *user-authored*
 one: if the protocol only worked for the class we ship, these would fail.
 
 The capability is stood in for. The real one needs a running engine and a
-surface-share service, which the wheel's Rust tests and the GPU-marked probes
-in `test_cast_claim.py` cover; what is left for the GPU-free half is the
-composable's own half — that it claims what its declared field names, absorbs
-the resolve/lock ceremony behind the protocol methods, and lets go of both when
-the object drops.
+surface-share service, which the runtime's own tests cover; what is left here
+is the composable's own half — that it claims what its declared field names,
+absorbs the resolve/lock ceremony behind the protocol methods, and lets go of
+both when the object drops.
 """
 
 from __future__ import annotations
 
 import gc
-import os
 import weakref
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 
-from tatolab.runtime import _engine
-from tatolab.stream import (
-    ClaimedSurfacePixelAccess,
-    NodeLinkDataAccess,
-    RuntimeContextFullAccess,
-    VideoFrame,
-)
+from tatolab.stream import ClaimedSurfacePixelAccess, VideoFrame
 from tatolab.stream import claimed_surface_pixel_access as composable_module
-
-pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
 FRAME_BAG = {
     "surface_id": "surface-7",
@@ -45,8 +35,6 @@ FRAME_BAG = {
 }
 
 PER_SURFACE_ACCESS_FIELD = "_pixel_access_by_declared_surface_field"
-OUTPUT_PORT = "frames_to_downstream"
-INPUT_PORT = "frames_from_upstream"
 
 
 def claim_taken_on(
@@ -280,11 +268,23 @@ def offered(monkeypatch: pytest.MonkeyPatch):
     return offer
 
 
+@pytest.fixture(autouse=True)
+def warnings_logged(monkeypatch: pytest.MonkeyPatch) -> "list[str]":
+    """Stands in for the runtime-backed `log.warn` a refused claim reports through."""
+    logged: list[str] = []
+    monkeypatch.setattr(
+        composable_module,
+        "warn",
+        lambda message, **attributes: logged.append(message),
+    )
+    return logged
+
+
 # ---- the claim -------------------------------------------------------------
 
 
 def test_a_user_authored_cast_type_claims_the_field_it_declares(offered):
-    """The no-privilege claim, made concrete: a type the wheel never heard of
+    """The no-privilege claim, made concrete: a type `tatolab.stream` never heard of
     gets exactly what `VideoFrame` gets."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
 
@@ -369,25 +369,21 @@ def test_a_surface_that_cannot_be_claimed_still_constructs(offered, monkeypatch)
     assert frame.surface_id == "surface-7"
 
 
-def test_a_refused_claim_is_reported_once_and_then_stays_quiet(offered, monkeypatch):
+def test_a_refused_claim_is_reported_once_and_then_stays_quiet(
+    offered, monkeypatch, warnings_logged
+):
     """Silence would let the whole lifetime contract be off with no signal;
     per-frame logging would cost more than the claim it reports on."""
     offered(GpuLimitedAccessThatRefuses())
     monkeypatch.setattr(
         composable_module, "_a_refused_claim_has_been_reported", False
     )
-    reported: list[str] = []
-    monkeypatch.setattr(
-        composable_module,
-        "warn",
-        lambda message, **attributes: reported.append(message),
-    )
 
     DepthFrame(**FRAME_BAG)
     DepthFrame(**FRAME_BAG)
 
-    assert len(reported) == 1, "the per-frame path must not flood the log"
-    assert "pool depth" in reported[0]
+    assert len(warnings_logged) == 1, "the per-frame path must not flood the log"
+    assert "pool depth" in warnings_logged[0]
 
 
 def test_the_claim_is_not_part_of_what_the_object_is(offered):
@@ -967,11 +963,11 @@ def test_declaring_no_surface_field_at_all_is_refused():
             width_in_pixels: int
 
 
-# ---- the frame the wheel ships is one of these ------------------------------
+# ---- the frame `tatolab.stream` ships is one of these ---------------------
 
 
 def test_the_shipped_video_frame_is_built_from_this_piece(offered):
-    """The proof of no privilege: the frame the wheel ships takes its claim and
+    """The proof of no privilege: the frame `tatolab.stream` ships takes its claim and
     exports its pixels through exactly the code a user-authored cast type
     composes. A `VideoFrame` that stopped being one of these would be a private
     path back."""
@@ -983,53 +979,3 @@ def test_the_shipped_video_frame_is_built_from_this_piece(offered):
     assert gpu_limited_access.claimed_surface_ids == ["surface-7"]
     assert frame.__dlpack__() == "capsule-over-surface-7"
     assert gpu_limited_access.handed_out_handles[0].locked_read_only is True
-
-
-# ---- the spelling itself, over a real link ---------------------------------
-
-
-def test_a_composing_type_read_over_a_link_arrives_built_from_the_bag():
-    """`ctx.inputs.read(port, into=T)` end to end for a type the wheel never
-    heard of: a bag crosses real iceoryx2 ports and comes back as the composing
-    object with its declared fields set.
-
-    This context is built without an escalate bridge, so its GPU capability
-    reaches nothing and the claim is refused — which leaves an ordinary object
-    rather than an exception at the read, exactly as an unreachable GPU must.
-    """
-    unique = f"composable{os.getpid()}"
-    channel_service_name = f"{unique}/frames"
-    notify_service_name = f"{unique}_dest/notify"
-    link_id = f"L-{unique}"
-
-    # The destination subscribes first: iceoryx2 drops a send with no
-    # subscriber attached. Both planes live on this thread — its ports are
-    # `!Send`.
-    destination = _engine.NodeLinkDataAccess()
-    destination.wire_input_link(
-        INPUT_PORT, channel_service_name, channel_service_name,
-        notify_service_name,
-        "read_next_in_order", 8, 8, 2, 1, link_id,
-    )  # fmt: skip
-    source = _engine.NodeLinkDataAccess()
-    source.wire_output_link(
-        OUTPUT_PORT, channel_service_name, notify_service_name,
-        1024, 1 << 20, 8, 2, 1, link_id,
-    )  # fmt: skip
-
-    ctx = _engine.RuntimeContextFullAccess.open_for_helper_process(
-        {}, destination, "runtime-under-test", "processor-under-test"
-    )
-    source.write_to_output_port(
-        OUTPUT_PORT, {**FRAME_BAG, "a_key_a_future_producer_adds": "ignored"}
-    )
-
-    frame = ctx.inputs.read(INPUT_PORT, into=DepthFrame)
-
-    assert frame is not None, "the wired input received nothing"
-    assert frame == DepthFrame(**FRAME_BAG)
-    assert claim_taken_on(frame) is None, (
-        "a capability that reaches nothing claims nothing"
-    )
-    with pytest.raises(RuntimeError, match="not reachable"):
-        frame.__dlpack__()

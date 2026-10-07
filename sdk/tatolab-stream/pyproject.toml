@@ -30,6 +30,19 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+# PEP 735: what the stream suite and pyright need beside the package, and never
+# the runtime. numpy is here because `audio_block.py` types its arrays with it
+# and pyright reports an unresolved import as an error; pydantic is what proves
+# a model is a legal config class.
+[dependency-groups]
+test = [
+    "pytest>=7.0",
+    "numpy>=2.1",
+    "pydantic>=2.0",
+    # `NotRequired` and `Required` at the 3.10 floor.
+    "typing_extensions>=4.6",
+]
+
 [tool.hatch.build.targets.wheel]
 # `tatolab` is a PEP 420 namespace shared with `tatolab.runtime`, so no
 # distribution ships `tatolab/__init__.py`.
@@ -44,3 +57,5 @@ exclude = ["**/__pycache__"]
 include = ["tatolab", "tests"]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"

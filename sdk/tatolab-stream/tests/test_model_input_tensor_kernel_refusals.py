@@ -4,10 +4,10 @@
 """`ModelInputTensorKernel`'s own refusals, geometry and dispatch, with the
 capabilities stood in for.
 
-Everything here is decided in the wheel before the GPU runs: the parameters,
+Everything here is decided in `tatolab.stream` before the GPU runs: the parameters,
 the fit's geometry, the boxes mapped back, and the tensor and dispatch the
 kernel asks for. The tensor's values against a torch reference need a GPU and
-are proven in `test_model_input_tensor_kernel.py`.
+are proven against the runtime.
 """
 
 from __future__ import annotations
