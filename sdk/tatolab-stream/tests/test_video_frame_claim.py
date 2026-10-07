@@ -219,7 +219,7 @@ def test_both_spellings_ignore_keys_the_cast_does_not_read():
 
 
 def test_already_cast_metadata_survives_construction():
-    """A frame built in Python — a test fixture, a processor forwarding one —
+    """A frame built in Python — a test fixture, a node forwarding one —
     passes real `ColorInfo`, and re-casting must not mangle it."""
     frame = VideoFrame(**FRAME_BAG, color_info=ColorInfo(matrix="bt709"))
     assert frame.color_info == ColorInfo(matrix="bt709")
