@@ -26,11 +26,15 @@ const TATOLAB_NAMESPACE_PACKAGE_INIT_RELATIVE_PATH: &str = "tatolab/__init__.py"
 /// Every `tatolab/__init__.py` this gate found, by scan root.
 #[derive(Debug, Default)]
 pub struct TatolabNamespacePackageInitScanReport {
+    /// Repository-relative paths, from `git ls-files`.
     pub repository_paths_holding_an_init: Vec<String>,
+    /// Paths under the lend, as walked from the workspace root.
     pub lend_paths_holding_an_init: Vec<PathBuf>,
+    /// How many repository files the scan read, so an empty listing fails the gate.
     pub repository_files_scanned: usize,
 }
 
+/// Run the gate over the repository and, when one is built, the lend.
 pub fn run(workspace_root: &Path) -> Result<()> {
     let report = scan(workspace_root)?;
 
@@ -71,6 +75,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Find every `tatolab/__init__.py` in the repository's files and in the lend.
 pub fn scan(workspace_root: &Path) -> Result<TatolabNamespacePackageInitScanReport> {
     let repository_paths = crate::list_repository_files_under(workspace_root, ".")?;
     let repository_paths_holding_an_init = repository_paths

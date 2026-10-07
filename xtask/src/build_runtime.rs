@@ -43,16 +43,20 @@ const TATOLAB_NAMESPACE_PACKAGE_INIT_MEMBER: &str = "tatolab/__init__.py";
 /// Which cargo profile maturin builds the runtime unit with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeUnitBuildProfile {
+    /// Unoptimized, the profile `maturin develop` builds.
     Debug,
+    /// Optimized, as a release wheel is built.
     Release,
 }
 
 impl RuntimeUnitBuildProfile {
+    /// The profile `cargo xtask build-runtime [--release]` asks for.
     pub fn from_release_flag(release: bool) -> Self {
         if release { Self::Release } else { Self::Debug }
     }
 }
 
+/// Build the runtime unit's wheel and replace the lend with its contents.
 pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Result<()> {
     let maturin_project_directory =
         workspace_root.join(RUNTIME_UNIT_MATURIN_PROJECT_RELATIVE_TO_WORKSPACE);
