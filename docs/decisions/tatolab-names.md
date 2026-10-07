@@ -76,19 +76,27 @@ the parameter and its type — and inside the function the parameter hid the dec
 is not the stream: the stream is the decorated function (the glossary's word), and the object is
 what that function builds it with, compiled into a graph afterwards — so it is a
 `StreamBuilder`, held as `stream_builder` (the naming rule bars a bare `builder`). `@input` replaced
-Python's builtin `input()` in every module that imported it (ruff A004); `@input_port` and
-`@output_port` keep the input/output vocabulary every dataflow and media framework uses and add the
-glossary's noun. Owner, 2026-10-06.
+Python's builtin `input()` in every module that imported it (ruff A004).
+> ~~`@input_port` and `@output_port` keep the input/output vocabulary every dataflow and media framework uses and add the glossary's noun.~~ — Superseded 2026-10-06 by the owner's choice of `@node.input` / `@node.output`, below.
+
+The port decorators become attributes of `@node`: `@node.input` / `@node.output`, the namespaced
+form Holoscan (`spec.input`) and Bytewax (`op.input`) use to keep a port word off the builtin. A
+node module already imports `node`, so ports need no import of their own; the declaring side and
+the wiring side (`effect.input("video")`) say the same word; and Rust's macro keys `input(…)` /
+`output(…)` already match, so they stay. Owner, 2026-10-06.
 
 Rejected:
 - *`@incoming` / `@outgoing`.* Only Java's MicroProfile Reactive Messaging uses it; no Python
   dataflow or media framework does, so neither a newcomer nor an agent arrives knowing it.
-- *A capitalised `Input` / `Output`, or a namespaced `@node.input`.* Both avoid the builtin; neither
-  says "port", and the namespaced form ties the port grammar to the class decorator's object.
+- *A capitalised `Input` / `Output`.* Avoids the builtin with a second spelling of a word every
+  other surface writes lower-case.
+- *`@input_port` / `@output_port`.* Avoids the builtin, but the declaring side alone would say
+  "port", and Rust would need a rename to follow.
 - *Renaming after `tatolab-stream` ships.* A second break for every author; the namespace move
   already makes every user re-import everything.
 
 Consequences:
 - A node reference's `input(name)` / `output(name)` keep their spelling: a method on its
   receiver shadows nothing.
-- The Rust attribute macro's port keys follow, so both languages spell a port alike.
+- The Rust attribute macro's port keys `input(…)` / `output(…)` stay; both languages already say the
+  same word.

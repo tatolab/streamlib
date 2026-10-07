@@ -566,7 +566,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   a node type it lacks, a setting it does not know — and a newer runtime loads every graph an
   older stream recorded. Compiling happens in the project's interpreter, never in the
   runtime process. Owner, 2026-10-02. [package-split-and-lend; one-runtime-per-machine; amended by
-  authoring-names: `@input_port`, `@output_port`, the `StreamBuilder`]
+  authoring-names: `@node.input`, `@node.output`, the `StreamBuilder`]
 - **OPEN** — How an external control client plugs in: an entry point with a role of its own
   beside today's two, or another seam. What it hands the runtime beyond a relay address and a
   credential is the sharing step's to decide (§Networking). Known (2026-10-04): no stream map,
@@ -599,11 +599,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   a `StreamBuilder`, and the scaffold, the docs and every refusal model the parameter as
   `stream_builder`: `@stream def main(stream_builder: StreamBuilder)`; the decorator keeps
   `@stream` and a stream stays the decorated function. A node declares its ports with
-  `@input_port` and `@output_port`, and a Rust node's attribute macro takes `input_port(…)` and
-  `output_port(…)`, so both languages spell a port alike. A node reference keeps `input(name)`
-  and `output(name)`. They land in this milestone, ahead of the stand-alone stream package.
-  Rejected: `@incoming` / `@outgoing` for ports — vocabulary no Python dataflow or media
-  framework uses (owner, 2026-10-06). Owner, 2026-10-06. [authoring-names]
+  `@node.input` and `@node.output` — attributes of the `@node` decorator, so a node module
+  imports `node` alone for them and no name it imports shadows Python's builtin `input()`. A
+  Rust node's attribute macro keeps `input(…)` / `output(…)`, already the same word, and a node
+  reference keeps `input(name)` / `output(name)`. They land in this milestone, ahead of the
+  stand-alone stream package. Rejected: `@incoming` / `@outgoing` for ports — vocabulary no
+  Python dataflow or media framework uses; `@input_port` / `@output_port` — a word the
+  declaring side alone would carry (owner, 2026-10-06). Owner, 2026-10-06. [authoring-names]
 - **OPEN** — Packs, a registry, and loading a stream from a source. Direction (review, not
   decided; the owner wants to distribute what they build and update the app separately): the
   unit of distribution is a pack — one ordinary Python distribution carrying nodes and streams,
