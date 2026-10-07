@@ -49,6 +49,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     python_test_harness_endpoints::add_test_harness_marker_classes_to_the_module(module)?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
     module.add_class::<python_processor_context::PythonRuntimeContextFullAccess>()?;
+    module.add_function(wrap_pyfunction!(
+        python_processor_context::open_runtime_context_full_access_for_helper_process,
+        module
+    )?)?;
     module.add_class::<python_processor_context::PythonRuntimeContextLimitedAccess>()?;
     module.add_class::<python_processor_context::PythonGpuContextFullAccess>()?;
     module.add_class::<python_processor_context::PythonGpuContextLimitedAccess>()?;

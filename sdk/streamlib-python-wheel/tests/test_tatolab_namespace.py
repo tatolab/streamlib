@@ -128,12 +128,12 @@ def test_the_engine_publishes_none_of_the_processor_names_the_rename_retired():
         for method_name in GPU_CONTEXT_METHOD_NAMES_THE_RENAME_RETIRED:
             assert not hasattr(gpu_context_class, method_name), (gpu_context_class, method_name)
     for runtime_context_class in (
-        engine.RuntimeContextFullAccess,
+        _native_engine_class("RuntimeContextFullAccess"),
         _native_engine_class("RuntimeContextLimitedAccess"),
     ):
         assert not hasattr(runtime_context_class, "processor_id"), runtime_context_class
     assert "processor_id" not in inspect.signature(
-        engine.RuntimeContextFullAccess.open_for_helper_process
+        engine.open_runtime_context_full_access_for_helper_process
     ).parameters
 
 
@@ -151,12 +151,12 @@ def test_the_engine_publishes_the_node_names_in_their_place():
                 method_name,
             )
     for runtime_context_class in (
-        engine.RuntimeContextFullAccess,
+        _native_engine_class("RuntimeContextFullAccess"),
         _native_engine_class("RuntimeContextLimitedAccess"),
     ):
         assert hasattr(runtime_context_class, "node_id"), runtime_context_class
     assert "node_id" in inspect.signature(
-        engine.RuntimeContextFullAccess.open_for_helper_process
+        engine.open_runtime_context_full_access_for_helper_process
     ).parameters
     assert tatolab.stream.NodeOutputTextureRing.__module__ == (
         "tatolab.stream.node_output_texture_ring"

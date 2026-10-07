@@ -744,7 +744,7 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     )
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
-    context = _engine.RuntimeContextFullAccess.open_for_helper_process(
+    context = _engine.open_runtime_context_full_access_for_helper_process(
         {},
         _engine.NodeLinkDataAccess(),
         "R-helper-test",

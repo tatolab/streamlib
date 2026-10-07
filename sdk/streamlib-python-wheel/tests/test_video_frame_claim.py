@@ -88,7 +88,7 @@ def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu()
         1024, 1 << 20, 8, 2, 1, link_id,
     )  # fmt: skip
 
-    ctx = _engine.RuntimeContextFullAccess.open_for_helper_process(
+    ctx = _engine.open_runtime_context_full_access_for_helper_process(
         {}, destination, "runtime-under-test", "processor-under-test"
     )
     bag_from_upstream = {

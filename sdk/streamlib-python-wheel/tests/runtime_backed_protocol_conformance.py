@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib
 import inspect
+import pkgutil
 import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -273,13 +275,26 @@ def conformance_findings_for_runtime_backed_function(
     return _signature_findings(held_name, native_callable, python_function, drop_receiver=False)
 
 
-def protocols_tatolab_stream_publishes(stream_package: ModuleType) -> dict[str, type]:
-    """Every `typing.Protocol` class `tatolab.stream` lists in `__all__`, by name."""
+def protocols_tatolab_stream_declares(stream_package: ModuleType) -> dict[str, type]:
+    """Every public `typing.Protocol` class a module of `tatolab.stream` defines, by name.
+
+    Read from the modules rather than `__all__`: a Protocol a node is only ever
+    handed, such as a kernel, is runtime-backed without being exported.
+    """
+    stream_modules = [stream_package] + [
+        importlib.import_module(submodule.name)
+        for submodule in pkgutil.iter_modules(
+            stream_package.__path__, f"{stream_package.__name__}."
+        )
+    ]
     return {
-        exported_name: exported
-        for exported_name in getattr(stream_package, "__all__", [])
-        if inspect.isclass(exported := getattr(stream_package, exported_name))
-        and getattr(exported, "_is_protocol", False)
+        class_name: defined_class
+        for stream_module in stream_modules
+        for class_name, defined_class in vars(stream_module).items()
+        if not class_name.startswith("_")
+        and inspect.isclass(defined_class)
+        and defined_class.__module__ == stream_module.__name__
+        and getattr(defined_class, "_is_protocol", False)
     }
 
 
@@ -423,7 +438,7 @@ def all_conformance_findings(
     stub_source: str,
 ) -> list[ConformanceFinding]:
     """Every finding for the engine against `tatolab.stream` and `_engine.pyi`."""
-    protocols_by_name = protocols_tatolab_stream_publishes(stream_package)
+    protocols_by_name = protocols_tatolab_stream_declares(stream_package)
     registrations = list(runtime_backed_function_registry)
     findings: list[ConformanceFinding] = []
     for protocol_name, protocol in sorted(protocols_by_name.items()):
@@ -470,8 +485,6 @@ def stubtest_allowlist_of_names_held_by_tatolab_stream(
 
 
 def _real_inputs() -> tuple[ModuleType, ModuleType, list[Any], str]:
-    import importlib
-
     import tatolab.stream
     from tatolab.stream._runtime_lend import runtime_backed_function_registry
 
@@ -495,7 +508,7 @@ def main(arguments: list[str] | None = None) -> int:
     engine_module, stream_package, registrations, stub_source = _real_inputs()
     if parsed.print_stubtest_allowlist:
         for allowlist_entry in stubtest_allowlist_of_names_held_by_tatolab_stream(
-            protocols_tatolab_stream_publishes(stream_package),
+            protocols_tatolab_stream_declares(stream_package),
             (registration.native_callable_name for registration in registrations),
             stub_source,
         ):

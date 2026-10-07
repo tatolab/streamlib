@@ -9,9 +9,9 @@ engine, the bootstrap's calls, the test harness and the local API client.
 
 What a node is handed while it runs is declared once, in `tatolab.stream`: its
 classes as `typing.Protocol`s and its functions as runtime-backed functions.
-None of it is declared here, save `NodeLinkDataAccess` and
-`RuntimeContextFullAccess`, which the bootstrap constructs and so appear typed
-as the class of their Protocol, declaring no member of their own.
+None of it is declared here, save `NodeLinkDataAccess`, which the bootstrap
+constructs and so appears typed as the class of its Protocol, declaring no
+member of its own.
 
 Two gates keep this honest against the built module in CI.
 `tests/runtime_backed_protocol_conformance.py` holds every native class and
@@ -22,7 +22,7 @@ conformance gate prints as its allowlist.
 """
 
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import TracebackType
 from typing import Any, ClassVar, Literal, final
@@ -39,7 +39,6 @@ __all__ = [
     "NodeLinkDataAccess",
     "CapabilityExtensionHost",
     "Runtime",
-    "RuntimeContextFullAccess",
     "TestBagCollector",
     "TestBagFeeder",
     "await_test_harness_bag",
@@ -51,7 +50,7 @@ __all__ = [
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
     "feed_test_harness_bag",
-    "log_event",
+    "open_runtime_context_full_access_for_helper_process",
     "open_test_harness_channel",
     "processor_class_import_paths_in_this_processes_catalog",
     "runtime_log_directory",
@@ -239,14 +238,27 @@ class CapabilityExtensionHost:
         `streamlib graph`; in a helper it is the process's own record.
         """
 
-# The two native classes the bootstrap constructs itself. Each is typed as the
-# class of its `tatolab.stream` Protocol and declares nothing of its own: a stub
-# class deriving from the Protocol would inherit its bodiless members as
-# abstract, and neither checker lets an abstract class be constructed. The
-# conformance gate holds each native constructor to the no-argument one this
-# declares.
+# The one native class the bootstrap constructs itself. It is typed as the class
+# of its `tatolab.stream` Protocol and declares nothing of its own: a stub class
+# deriving from the Protocol would inherit its bodiless members as abstract, and
+# neither checker lets an abstract class be constructed. The conformance gate
+# holds the native constructor to the no-argument one this declares.
 NodeLinkDataAccess: type[_stream_protocols.NodeLinkDataAccess]
-RuntimeContextFullAccess: type[_stream_protocols.RuntimeContextFullAccess]
+
+def open_runtime_context_full_access_for_helper_process(
+    configuration: Mapping[str, Any],
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+    runtime_id: str,
+    node_id: str,
+    escalate_request_to_parent: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    release_to_parent_without_waiting: Callable[[dict[str, Any]], None] | None = None,
+) -> _stream_protocols.RuntimeContextFullAccess:
+    """The context a helper process hands its own node's privileged hooks.
+
+    With both callables and the surface-share socket the parent's environment
+    names, the GPU surface works here; without any of them, GPU calls refuse by
+    name.
+    """
 
 class LocalApiMcpServerUnreachable(Exception):
     """Nothing answered MCP on the local API socket."""
@@ -340,11 +352,6 @@ def feed_test_harness_bag(channel: str, bag: Any) -> None:
 
 def await_test_harness_bag(channel: str, timeout_seconds: float) -> Any | None:
     """The next bag collected on `channel`, or `None` if the wait ran out."""
-
-def log_event(
-    level: str, message: str, attrs: dict[str, Any] | None = None
-) -> None:
-    """Emit one record on the engine's log pipeline, with structured attrs."""
 
 def capture_this_helper_processes_engine_log_records() -> None:
     """Start capturing this helper process's engine `tracing` records,

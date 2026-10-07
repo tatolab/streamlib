@@ -44,10 +44,10 @@ from ._capability_extensions import (
     load_installed_capability_extensions_once_per_process,
 )
 from ._engine import NodeLinkDataAccess as NativeNodeLinkDataAccess
-from ._engine import RuntimeContextFullAccess as NativeRuntimeContextFullAccess
 from ._engine import (
     capability_extension_host_for_the_helper_process,
     capture_this_helper_processes_engine_log_records,
+    open_runtime_context_full_access_for_helper_process,
     drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
 )
@@ -866,7 +866,7 @@ def construct_hosted_processor(
     The bridge's escalate round trip is what the GPU surface crosses to the
     parent on — without it, `ctx.gpu_limited_access` refuses by name.
     """
-    full_access_context = NativeRuntimeContextFullAccess.open_for_helper_process(
+    full_access_context = open_runtime_context_full_access_for_helper_process(
         configuration or {},
         link_data_access,
         runtime_id,

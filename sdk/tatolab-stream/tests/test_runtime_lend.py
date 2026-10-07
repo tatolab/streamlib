@@ -42,6 +42,7 @@ ARGUMENTS_FOR_EACH_RUNTIME_BACKED_FUNCTION: "dict[str, tuple[Any, ...]]" = {
     "encode_bag_to_msgpack_bytes": ({"width": 4},),
     "decode_msgpack_bytes_to_python_object": (b"\x80",),
     "gpu_limited_access_of_the_typed_read_in_progress": (),
+    "_emit_record_on_the_engine_log_pipeline": ("info", "a record", None),
 }
 
 LOG_FUNCTIONS_BY_NAME: "dict[str, Callable[..., None]]" = {
@@ -49,6 +50,7 @@ LOG_FUNCTIONS_BY_NAME: "dict[str, Callable[..., None]]" = {
     "log.debug": log.debug,
     "log.info": log.info,
     "log.warn": log.warn,
+    "log.warning": log.warning,
     "log.error": log.error,
 }
 

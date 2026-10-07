@@ -211,20 +211,6 @@ class RuntimeContextFullAccess(Protocol):
         """Whether the node should process now."""
         ...
 
-    @staticmethod
-    def open_for_helper_process(
-        configuration: Mapping[str, Any],
-        link_data_access: NodeLinkDataAccess,
-        runtime_id: str,
-        node_id: str,
-        escalate_request_to_parent: Callable[[dict[str, Any]], dict[str, Any]]
-        | None = None,
-        release_to_parent_without_waiting: Callable[[dict[str, Any]], None]
-        | None = None,
-    ) -> RuntimeContextFullAccess:
-        """Open the context the runtime's bootstrap hands a node's hooks."""
-        ...
-
     def limited_access_view_for_helper_process(self) -> RuntimeContextLimitedAccess:
         """The limited-access view of this context, for the bootstrap's `process` calls."""
         ...

@@ -49,5 +49,15 @@ def test_tatolab_stream_exports_exactly_one_name_for_the_monotonic_clock():
         )
 
 
-def test_warn_is_the_primary_name_and_warning_its_alias():
-    assert log.warning is log.warn
+def test_warn_and_warning_each_emit_a_warn_record(monkeypatch: pytest.MonkeyPatch):
+    emitted_records: "list[tuple[str, str, object]]" = []
+
+    def record_what_the_parent_would_receive(
+        level: str, message: str, attrs: "dict[str, object] | None"
+    ) -> None:
+        emitted_records.append((level, message, attrs))
+
+    monkeypatch.setattr(log, "_helper_process_sink", record_what_the_parent_would_receive)
+    log.warn("by warn", frame=1)
+    log.warning("by warning")
+    assert emitted_records == [("warn", "by warn", {"frame": 1}), ("warn", "by warning", None)]

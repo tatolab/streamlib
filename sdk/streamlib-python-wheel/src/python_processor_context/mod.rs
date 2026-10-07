@@ -48,6 +48,7 @@ pub(crate) use kernels::{
 pub(crate) use link_data_access::{PythonLinkInputDataReader, PythonLinkOutputDataWriter};
 pub(crate) use runtime_context::{
     PythonRuntimeContextFullAccess, PythonRuntimeContextLimitedAccess,
+    open_runtime_context_full_access_for_helper_process,
 };
 
 /// The refusal `escalate` gives on either capability.

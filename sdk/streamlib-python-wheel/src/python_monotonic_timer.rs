@@ -67,7 +67,7 @@ impl MonotonicTimerAbsoluteDeadlineGrid {
     }
 }
 
-/// Periodic monotonic timer, used as `with MonotonicTimer(interval_ns) as t:`.
+/// Periodic monotonic timer, used as `with start_monotonic_timer(interval_ns) as timer:`.
 #[pyclass(name = "MonotonicTimer", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonMonotonicTimer {
     timer_interval_ns: i64,

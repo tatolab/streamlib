@@ -83,7 +83,7 @@ def two_links_into_one_port(
         sources[kind] = source
         channel_named[kind] = channel_service_name
 
-    context = _engine.RuntimeContextFullAccess.open_for_helper_process(
+    context = _engine.open_runtime_context_full_access_for_helper_process(
         {}, destination, "runtime-under-test", "processor-under-test"
     )
     yield TwoLinksIntoOnePort(context, sources, channel_named)
@@ -186,7 +186,7 @@ def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
         OUTPUT_PORT, channel_service_name, notify_service_name,
         1024, 1 << 20, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
-    context = _engine.RuntimeContextFullAccess.open_for_helper_process(
+    context = _engine.open_runtime_context_full_access_for_helper_process(
         {}, destination, "runtime-under-test", "processor-under-test"
     )
 

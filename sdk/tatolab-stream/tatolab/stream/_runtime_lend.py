@@ -37,6 +37,8 @@ runtime_backed_function_registry: list[RuntimeBackedFunctionRegistration] = []
 
 _native_callables_resolved_by_name: dict[str, Callable[..., Any]] = {}
 
+_native_callable_name_by_runtime_backed_function: dict[Callable[..., Any], str] = {}
+
 
 class RuntimeIsNotLentToThisInterpreterError(RuntimeError):
     """A runtime-backed call made where no runtime lends `tatolab.runtime`."""
@@ -103,6 +105,29 @@ def runtime_backed_function(
                 native_callable_name=resolved_native_callable_name,
             )
         )
+        _native_callable_name_by_runtime_backed_function[forward_to_native_callable] = (
+            resolved_native_callable_name
+        )
         return cast(RuntimeBackedFunctionDeclaration, forward_to_native_callable)
 
     return forward_calls_to_the_native_callable
+
+
+def native_callable_of_runtime_backed_function(
+    declared_runtime_backed_function: RuntimeBackedFunctionDeclaration,
+    called_function_name: str,
+) -> RuntimeBackedFunctionDeclaration:
+    """The native callable a runtime-backed function forwards to, typed as its declaration.
+
+    For a caller that reaches it on behalf of a function of its own: where
+    nothing is lent, the error names `called_function_name`.
+    """
+    return cast(
+        RuntimeBackedFunctionDeclaration,
+        native_callable_lent_by_the_runtime(
+            _native_callable_name_by_runtime_backed_function[
+                declared_runtime_backed_function
+            ],
+            called_function_name,
+        ),
+    )

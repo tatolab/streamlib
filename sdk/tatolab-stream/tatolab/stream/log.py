@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from ._runtime_lend import native_callable_lent_by_the_runtime
+from ._runtime_lend import (
+    native_callable_of_runtime_backed_function,
+    runtime_backed_function,
+)
 
 __all__ = ["debug", "error", "info", "trace", "warn", "warning"]
 
@@ -37,6 +40,14 @@ def install_helper_process_sink(sink: HelperProcessLogSink) -> None:
     _helper_process_sink = sink
 
 
+@runtime_backed_function("log_event")
+def _emit_record_on_the_engine_log_pipeline(
+    level: str, message: str, attrs: "Optional[dict[str, Any]]" = None
+) -> None:
+    """Emit one record on the engine's log pipeline, with structured attrs."""
+    ...
+
+
 def _emit(
     level: str,
     message: str,
@@ -47,9 +58,9 @@ def _emit(
     if sink is not None:
         sink(level, message, attrs)
         return
-    native_callable_lent_by_the_runtime("log_event", called_function_name)(
-        level, message, attrs
-    )
+    native_callable_of_runtime_backed_function(
+        _emit_record_on_the_engine_log_pipeline, called_function_name
+    )(level, message, attrs)
 
 
 def trace(message: str, **attrs: Any) -> None:
@@ -72,7 +83,9 @@ def warn(message: str, **attrs: Any) -> None:
     _emit("warn", message, attrs or None, "log.warn")
 
 
-warning = warn
+def warning(message: str, **attrs: Any) -> None:
+    """Emit a WARN record, as `warn` does."""
+    _emit("warn", message, attrs or None, "log.warning")
 
 
 def error(message: str, **attrs: Any) -> None:

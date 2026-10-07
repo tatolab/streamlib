@@ -20,7 +20,7 @@ from runtime_backed_protocol_conformance import (
     conformance_findings_for_protocol,
     conformance_findings_for_runtime_backed_function,
     holding_findings,
-    protocols_tatolab_stream_publishes,
+    protocols_tatolab_stream_declares,
     stubtest_allowlist_of_names_held_by_tatolab_stream,
 )
 from tatolab.runtime import _engine
@@ -67,7 +67,7 @@ def test_the_engine_conforms_to_tatolab_stream_and_its_stub():
 
 
 def test_every_runtime_backed_name_the_ticket_lists_is_held_by_tatolab_stream():
-    held_by_tatolab_stream = set(protocols_tatolab_stream_publishes(tatolab.stream)) | set(
+    held_by_tatolab_stream = set(protocols_tatolab_stream_declares(tatolab.stream)) | set(
         _real_registry_native_names()
     )
     assert {
@@ -95,6 +95,7 @@ def test_every_runtime_backed_name_the_ticket_lists_is_held_by_tatolab_stream():
         "decode_msgpack_bytes_to_python_object",
         "monotonic_now_ns",
         "gpu_limited_access_of_the_typed_read_in_progress",
+        "log_event",
     } <= held_by_tatolab_stream
 
 
@@ -216,7 +217,7 @@ def test_a_name_declared_in_the_stub_and_as_a_protocol_is_reported():
     findings = _finding_texts_by_held_name(
         holding_findings(
             _engine,
-            protocols_tatolab_stream_publishes(tatolab.stream),
+            protocols_tatolab_stream_declares(tatolab.stream),
             _real_registry_native_names(),
             stub_source,
         )
@@ -236,7 +237,7 @@ def test_a_class_typed_as_its_protocol_that_constructs_with_arguments_is_reporte
     findings = _finding_texts_by_held_name(
         holding_findings(
             engine_with_a_changed_constructor,
-            protocols_tatolab_stream_publishes(tatolab.stream),
+            protocols_tatolab_stream_declares(tatolab.stream),
             _real_registry_native_names(),
             ENGINE_STUB_PATH.read_text(),
         )
@@ -254,7 +255,7 @@ def test_a_name_the_engine_exports_and_nothing_declares_is_reported():
     findings = _finding_texts_by_held_name(
         holding_findings(
             _engine,
-            protocols_tatolab_stream_publishes(tatolab.stream),
+            protocols_tatolab_stream_declares(tatolab.stream),
             _real_registry_native_names(),
             stub_source,
         )
@@ -266,12 +267,13 @@ def test_a_name_the_engine_exports_and_nothing_declares_is_reported():
 
 def test_the_stubtest_allowlist_names_exactly_what_only_tatolab_stream_declares():
     allowlist = stubtest_allowlist_of_names_held_by_tatolab_stream(
-        protocols_tatolab_stream_publishes(tatolab.stream),
+        protocols_tatolab_stream_declares(tatolab.stream),
         _real_registry_native_names(),
         ENGINE_STUB_PATH.read_text(),
     )
     assert r"tatolab\.runtime\._engine\.__all__" in allowlist
     assert r"tatolab\.runtime\._engine\.GpuSurfaceHandle(\..*)?" in allowlist
     assert r"tatolab\.runtime\._engine\.monotonic_now_ns(\..*)?" in allowlist
+    assert r"tatolab\.runtime\._engine\.RuntimeContextFullAccess(\..*)?" in allowlist
     assert not [entry for entry in allowlist if "NodeLinkDataAccess" in entry]
-    assert not [entry for entry in allowlist if "log_event" in entry]
+    assert r"tatolab\.runtime\._engine\.log_event(\..*)?" in allowlist

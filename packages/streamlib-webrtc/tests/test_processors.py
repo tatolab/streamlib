@@ -246,7 +246,7 @@ class _PublisherUnderTest:
                 f"{unique}_dest/notify",
                 "read_next_in_order", 8, 8, 2, 4, f"L-{unique}-{index}",
             )  # fmt: skip
-        context = _engine.RuntimeContextFullAccess.open_for_helper_process(
+        context = _engine.open_runtime_context_full_access_for_helper_process(
             {}, link_data_access, "runtime-under-test", "processor-under-test"
         )
         # Constructed the way the helper constructs it: the mapping becomes
@@ -353,7 +353,7 @@ def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
         "encoded_audio", channel, notify, 1024, 1 << 20, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
 
-    context = _engine.RuntimeContextFullAccess.open_for_helper_process(
+    context = _engine.open_runtime_context_full_access_for_helper_process(
         {}, destination, "runtime-under-test", "processor-under-test"
     )
     publisher = construct_processor_instance(

@@ -35,82 +35,81 @@ pub(crate) struct PythonRuntimeContextFullAccess {
     pause_state_announced_by_parent: Arc<AtomicBool>,
 }
 
+/// The context a helper process hands its own node's privileged hooks.
+///
+/// `escalate_request_to_parent` is the bridge's blocking round trip and
+/// `release_to_parent_without_waiting` its door for releases a drop owes;
+/// with both and the surface-share socket the parent's env names, the GPU
+/// surface works here — without any of them, GPU calls refuse by name.
+#[pyfunction]
+#[pyo3(signature = (configuration, link_data_access, runtime_id, node_id, escalate_request_to_parent = None, release_to_parent_without_waiting = None))]
+pub(crate) fn open_runtime_context_full_access_for_helper_process(
+    python: Python<'_>,
+    configuration: &Bound<'_, PyAny>,
+    link_data_access: &Bound<'_, PythonProcessorLinkDataAccess>,
+    runtime_id: String,
+    node_id: String,
+    escalate_request_to_parent: Option<&Bound<'_, PyAny>>,
+    release_to_parent_without_waiting: Option<&Bound<'_, PyAny>>,
+) -> PyResult<PythonRuntimeContextFullAccess> {
+    let link_data_access = link_data_access.clone().unbind();
+    let helper_process_exchange_client = match (
+        escalate_request_to_parent,
+        release_to_parent_without_waiting,
+        std::env::var_os(SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE),
+    ) {
+        (Some(requester), Some(releaser), Some(surface_share_channel_name)) => {
+            Some(Arc::new(HelperProcessGpuExchangeClient::new(
+                requester.clone().unbind(),
+                releaser.clone().unbind(),
+                surface_share_channel_name,
+                // Child-scoped, never the node's own runtime id — the
+                // service's crash watchdog sweeps registrations by
+                // runtime id, and this child's crash must sweep only
+                // this child's adoptions.
+                format!("helper:{node_id}"),
+            )))
+        }
+        _ => None,
+    };
+    // Built before the reader, which carries it: a typed read offers this
+    // very capability to whatever it constructs.
+    let gpu_limited_access_context = Py::new(
+        python,
+        PythonGpuContextLimitedAccess::new_for_helper_process(
+            helper_process_exchange_client.clone(),
+        ),
+    )?;
+    Ok(PythonRuntimeContextFullAccess {
+        runtime_id,
+        processor_id: node_id,
+        configuration: python_object_to_json_value(configuration)?,
+        link_input_data_reader: Py::new(
+            python,
+            PythonLinkInputDataReader {
+                link_data_access: link_data_access.clone_ref(python),
+                gpu_limited_access_context: gpu_limited_access_context.clone_ref(python),
+            },
+        )?,
+        link_output_data_writer: Py::new(
+            python,
+            PythonLinkOutputDataWriter {
+                link_data_access: link_data_access.clone_ref(python),
+            },
+        )?,
+        gpu_limited_access_context,
+        gpu_full_access_context: Py::new(
+            python,
+            PythonGpuContextFullAccess {
+                helper_process_exchange_client,
+            },
+        )?,
+        pause_state_announced_by_parent: Arc::new(AtomicBool::new(false)),
+    })
+}
+
 #[pymethods]
 impl PythonRuntimeContextFullAccess {
-    /// The context a helper process hands its own processor's privileged
-    /// hooks.
-    ///
-    /// `escalate_request_to_parent` is the bridge's blocking round trip and
-    /// `release_to_parent_without_waiting` its door for releases a drop owes;
-    /// with both and the surface-share socket the parent's env names, the GPU
-    /// surface works here — without any of them, GPU calls refuse by name.
-    #[staticmethod]
-    #[pyo3(signature = (configuration, link_data_access, runtime_id, node_id, escalate_request_to_parent = None, release_to_parent_without_waiting = None))]
-    fn open_for_helper_process(
-        python: Python<'_>,
-        configuration: &Bound<'_, PyAny>,
-        link_data_access: &Bound<'_, PythonProcessorLinkDataAccess>,
-        runtime_id: String,
-        node_id: String,
-        escalate_request_to_parent: Option<&Bound<'_, PyAny>>,
-        release_to_parent_without_waiting: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<Self> {
-        let link_data_access = link_data_access.clone().unbind();
-        let helper_process_exchange_client = match (
-            escalate_request_to_parent,
-            release_to_parent_without_waiting,
-            std::env::var_os(SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE),
-        ) {
-            (Some(requester), Some(releaser), Some(surface_share_channel_name)) => {
-                Some(Arc::new(HelperProcessGpuExchangeClient::new(
-                    requester.clone().unbind(),
-                    releaser.clone().unbind(),
-                    surface_share_channel_name,
-                    // Child-scoped, never the node's own runtime id — the
-                    // service's crash watchdog sweeps registrations by
-                    // runtime id, and this child's crash must sweep only
-                    // this child's adoptions.
-                    format!("helper:{node_id}"),
-                )))
-            }
-            _ => None,
-        };
-        // Built before the reader, which carries it: a typed read offers this
-        // very capability to whatever it constructs.
-        let gpu_limited_access_context = Py::new(
-            python,
-            PythonGpuContextLimitedAccess::new_for_helper_process(
-                helper_process_exchange_client.clone(),
-            ),
-        )?;
-        Ok(Self {
-            runtime_id,
-            processor_id: node_id,
-            configuration: python_object_to_json_value(configuration)?,
-            link_input_data_reader: Py::new(
-                python,
-                PythonLinkInputDataReader {
-                    link_data_access: link_data_access.clone_ref(python),
-                    gpu_limited_access_context: gpu_limited_access_context.clone_ref(python),
-                },
-            )?,
-            link_output_data_writer: Py::new(
-                python,
-                PythonLinkOutputDataWriter {
-                    link_data_access: link_data_access.clone_ref(python),
-                },
-            )?,
-            gpu_limited_access_context,
-            gpu_full_access_context: Py::new(
-                python,
-                PythonGpuContextFullAccess {
-                    helper_process_exchange_client,
-                },
-            )?,
-            pause_state_announced_by_parent: Arc::new(AtomicBool::new(false)),
-        })
-    }
-
     /// The limited-access view of the same processor — same configuration,
     /// same links, same pause state.
     ///
