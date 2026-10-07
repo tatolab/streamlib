@@ -38,7 +38,6 @@ from ._processor_config_schema import (
 
 __all__ = [
     "AudioWindowContract",
-    "NodeDeclarationDecorator",
     "node",
 ]
 
@@ -297,6 +296,7 @@ class NodeDeclarationDecorator:
         `Runtime.load` does. `description` falls back to the class's docstring
         when it is not given.
         """
+
         def apply_to_class(class_under_decoration: ProcessorClass) -> ProcessorClass:
             return _declare_processor(
                 class_under_decoration,

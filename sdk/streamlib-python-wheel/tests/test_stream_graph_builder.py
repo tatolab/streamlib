@@ -1075,6 +1075,7 @@ def test_stream_called_with_arguments_is_refused_naming_the_bare_form(
         "@stream takes no arguments: the name is the function's, overridden at load "
         "with `--name`"
     )
+    assert "`def main(stream_builder: StreamBuilder) -> None:`" in str(refusal.value)
 
 
 def test_a_nested_function_is_refused_as_not_module_level() -> None:
@@ -1126,8 +1127,9 @@ def test_a_function_not_taking_exactly_one_positional_parameter_is_refused(
     namespace: "dict[str, Any]" = {"__name__": "rig_streams"}
     exec(source, namespace)
 
-    with pytest.raises(TypeError, match="exactly one positional parameter"):
+    with pytest.raises(TypeError, match="exactly one positional parameter") as refusal:
         stream(namespace["main"])
+    assert "(stream_builder: StreamBuilder) -> None:" in str(refusal.value)
 
 
 @pytest.mark.parametrize(
@@ -1209,8 +1211,8 @@ def test_a_lambda_is_refused_naming_def() -> None:
     "source",
     [
         "async def main(stream_builder):\n    pass\n",
-        "def main(stream_builder):\n    yield stream\n",
-        "async def main(stream_builder):\n    yield stream\n",
+        "def main(stream_builder):\n    yield stream_builder\n",
+        "async def main(stream_builder):\n    yield stream_builder\n",
     ],
     ids=["async", "generator", "async-generator"],
 )

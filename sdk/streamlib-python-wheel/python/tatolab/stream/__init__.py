@@ -5,7 +5,7 @@
 
 A stream is a `@stream` function that adds, links and exposes nodes on a
 `StreamBuilder`; `compile_stream_to_graph` returns the graph it builds. A node
-declares its identity and ports with `@node` / `@node.input` / `@node.output` and
+declares its execution and ports with `@node` / `@node.input` / `@node.output` and
 receives a capability-typed context in every lifecycle hook. The contexts, the
 GPU classes, the built-in nodes and the bag codec are the engine's own, from
 `tatolab.runtime._engine`.

@@ -902,6 +902,7 @@ def test_a_named_function_that_is_not_a_stream_is_refused_naming_the_fix(
     refusal = capsys.readouterr().err
     assert "`helper` in" in refusal and "is not a @stream function" in refusal
     assert "decorate it with `@stream`" in refusal
+    assert "(stream_builder: StreamBuilder) -> None:" in refusal
     assert recorded_launch_runtime_calls.calls == []
 
 
@@ -981,6 +982,7 @@ def test_a_package_target_naming_a_value_that_is_not_a_stream_is_refused_naming_
     refusal = capsys.readouterr().err
     assert "`wire_cameras` in" in refusal and "is not a @stream function" in refusal
     assert "decorate it with `@stream`" in refusal
+    assert "(stream_builder: StreamBuilder) -> None:" in refusal
     assert recorded_launch_runtime_calls.calls == []
 
 

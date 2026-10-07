@@ -35,8 +35,8 @@ and the data-collection rigs that train them.
 - **Open, and extendable to hardware nobody has heard of.** Any sensor is a stage you write, and a
   proprietary driver ships as an ordinary Python package. Optional capabilities — networking
   first — ship the same way, as extension wheels with Rust inside: pip installs the wheel, the
-  engine discovers its support code, and your stream adds its processors with `stream_builder.add` like
-  any other.
+  engine discovers its support code, and your stream adds its processors with
+  `stream_builder.add` like any other.
   No plugin ABI, no framework headers, no vendor allowlist deciding what you're allowed to
   plug in.
 - **The execution graph is code, not a config file.** You compose it in Python at startup, so it can
@@ -265,10 +265,11 @@ ordinary Python package that exposes handles (file descriptors, exportable alloc
 and is wrapped by a stage you write. It never links the engine, and the CPython ABI is the only
 binary boundary. First-party optional capabilities take that same door — an extension wheel is
 an ordinary PyPI package with Rust inside, depending on `streamlib` as a binary. Its processors
-are added with `stream_builder.add` like any other and call the wheel's own Rust directly; its support code
-is declared by a standard entry point that pip records and the engine runs once at startup, the
-way a driver is loaded. There is no plugin ABI, no StreamLib manifest and no StreamLib
-lockfile — an extension wheel is an ordinary Python project with an ordinary `pyproject.toml`.
+are added with `stream_builder.add` like any other and call the wheel's own Rust directly; its
+support code is declared by a standard entry point that pip records and the engine runs once at
+startup, the way a driver is loaded. There is no plugin ABI, no StreamLib manifest and no
+StreamLib lockfile — an extension wheel is an ordinary Python project with an ordinary
+`pyproject.toml`.
 
 **It costs you** a small set of built-ins. Camera, display, test pattern, microphone, speaker,
 the H.264 / H.265 / Opus codec pairs and an MP4 sink ship inside the wheel because their

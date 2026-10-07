@@ -47,7 +47,7 @@ def test_a_bare_decorator_needs_no_arguments_at_all():
 def test_the_port_decorators_are_attributes_of_node_and_not_module_exports(
     port_decorator_name: str,
 ):
-    """`tatolab.stream` exports no `input`, so no node module shadows the builtin."""
+    """`tatolab.stream` exports neither `input` nor `output`, so nothing shadows `input()`."""
     assert callable(getattr(node, port_decorator_name))
     assert port_decorator_name not in tatolab.stream.__all__
     with pytest.raises(ImportError, match=f"'{port_decorator_name}'"):
