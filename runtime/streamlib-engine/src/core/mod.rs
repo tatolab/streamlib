@@ -80,7 +80,9 @@ pub use streamlib_home::{get_streamlib_data_dir, get_streamlib_home, get_uv_cach
 /// build it imported against its parent's, and for the engine's own
 /// integration tests, which drive a bridge across real processes.
 pub mod helper_process_transport {
-    pub use super::compiler::compiler_ops::subprocess_bridge::{ENGINE_BUILD_ID, SubprocessBridge};
+    pub use super::compiler::compiler_ops::subprocess_bridge::{
+        ENGINE_BUILD_ID, SubprocessBridge, SubprocessBridgeLinkDelivery,
+    };
 }
 
 /// What a processor interpreter's own side shares with the engine that starts

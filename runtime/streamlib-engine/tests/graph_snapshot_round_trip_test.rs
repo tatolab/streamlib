@@ -298,10 +298,13 @@ fn an_exposure_named_twice_is_refused() {
 
 /// A node whose type never resolved renders under the requested import path
 /// verbatim, and its render cannot be loaded — `validate` resolves every type.
+///
+/// A Rust path, because a Python one is described before it is added and,
+/// with no stream environment to describe it in, is refused without a node.
 #[test]
 #[serial]
 fn an_unresolved_node_renders_under_the_requested_path_and_refuses_to_load() {
-    const UNRESOLVED: &str = "my_app.filters:NeverRegistered";
+    const UNRESOLVED: &str = "my_app::filters::NeverRegistered";
 
     let runtime = Runner::new().unwrap();
     let _ = runtime.add_processor(ProcessorSpec::new(

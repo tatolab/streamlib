@@ -41,8 +41,8 @@ static THE_RING_THIS_HELPERS_ENGINE_LOG_RECORDS_QUEUE_IN: OnceLock<
 /// own included, for [`drain_the_engine_log_records_this_helper_captured`] to
 /// hand the parent.
 ///
-/// Called by `tatolab.runtime._helper` once its channel to the parent is up and
-/// before it opens anything, and by nothing else. Refuses a second call: the
+/// Called by the processor interpreter bootstrap once its channel to the parent
+/// is up and before it opens anything, and by nothing else. Refuses a second call: the
 /// records of a process that already installed a subscriber are already going
 /// somewhere.
 #[pyfunction]

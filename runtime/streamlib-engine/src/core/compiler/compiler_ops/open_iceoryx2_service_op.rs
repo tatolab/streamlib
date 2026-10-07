@@ -1138,15 +1138,14 @@ mod tests {
     };
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-    /// A host whose transport lives out of process and which is neither of the
-    /// engine's own subprocess hosts — the shape the wheel's helper spawn host
-    /// has, from a crate this one cannot name — with its far side already past
-    /// its setup command.
-    struct OutOfCrateHelperSpawnHostStub {
+    /// A host whose transport lives out of process — the shape the processor
+    /// interpreter spawn host has — with its far side already past its setup
+    /// command.
+    struct OutOfProcessSpawnHostStub {
         link_wiring: Arc<OutOfProcessLinkWiringEnvelope>,
     }
 
-    impl OutOfCrateHelperSpawnHostStub {
+    impl OutOfProcessSpawnHostStub {
         /// A stub whose far side drives its processor in
         /// `far_side_process_execution` and records what it is handed in
         /// `far_side`.
@@ -1165,7 +1164,7 @@ mod tests {
     }
 
     /// Reactive, the mode a Python class with inputs takes unless it says otherwise.
-    impl Default for OutOfCrateHelperSpawnHostStub {
+    impl Default for OutOfProcessSpawnHostStub {
         fn default() -> Self {
             Self::with_a_far_side_past_its_setup_command(
                 RecordingOutOfProcessFarSideLinkDelivery::default(),
@@ -1174,7 +1173,7 @@ mod tests {
         }
     }
 
-    impl DynGeneratedProcessor for OutOfCrateHelperSpawnHostStub {
+    impl DynGeneratedProcessor for OutOfProcessSpawnHostStub {
         fn __generated_setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             Ok(())
         }
@@ -1197,7 +1196,7 @@ mod tests {
             Ok(())
         }
         fn name(&self) -> &str {
-            "OutOfCrateHelperSpawnHostStub"
+            "OutOfProcessSpawnHostStub"
         }
         fn descriptor(&self) -> Option<ProcessorDescriptor> {
             None
@@ -1318,12 +1317,12 @@ mod tests {
         let source_instance = attach_processor_instance(
             &mut graph,
             &source_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         let link_id: LinkUniqueId = "L-seam-test".into();
 
@@ -1441,12 +1440,12 @@ mod tests {
         let source_instance = attach_processor_instance(
             &mut graph,
             &source_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         let link_id: LinkUniqueId = "L-helper-placed".into();
         record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
@@ -1525,12 +1524,12 @@ mod tests {
         attach_processor_instance(
             &mut graph,
             &source_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
         record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
@@ -1633,7 +1632,7 @@ mod tests {
             attach_processor_instance(
                 &mut graph,
                 proc_id,
-                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+                ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
             );
         }
         record_wiring_for_both_out_of_process_endpoints(
@@ -1707,7 +1706,7 @@ mod tests {
             &mut graph,
             &source_id,
             ProcessorInstance::new(Box::new(
-                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                     RecordingOutOfProcessFarSideLinkDelivery {
                         reclaimed_links: source_reclaims.clone(),
                         ..Default::default()
@@ -1720,7 +1719,7 @@ mod tests {
             &mut graph,
             &dest_id,
             ProcessorInstance::new(Box::new(
-                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                     RecordingOutOfProcessFarSideLinkDelivery {
                         reclaimed_links: dest_reclaims.clone(),
                         ..Default::default()
@@ -1797,7 +1796,7 @@ mod tests {
             &mut graph,
             &source_id,
             ProcessorInstance::new(Box::new(
-                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                     RecordingOutOfProcessFarSideLinkDelivery {
                         late_wired_links: source_late_wired.clone(),
                         ..Default::default()
@@ -1810,7 +1809,7 @@ mod tests {
             &mut graph,
             &dest_id,
             ProcessorInstance::new(Box::new(
-                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                     RecordingOutOfProcessFarSideLinkDelivery {
                         late_wired_links: dest_late_wired.clone(),
                         ..Default::default()
@@ -1864,7 +1863,7 @@ mod tests {
         attach_processor_instance(
             &mut graph,
             &helper_hosted_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         assert!(out_of_process_link_wiring_of(&graph, &helper_hosted_id.as_str().into()).is_some());
 
@@ -1900,7 +1899,7 @@ mod tests {
             &mut graph,
             &dest_id,
             ProcessorInstance::new(Box::new(
-                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                     RecordingOutOfProcessFarSideLinkDelivery {
                         reclaimed_links: dest_reclaims.clone(),
                         ..Default::default()
@@ -2073,14 +2072,14 @@ mod tests {
         let helper_source = attach_processor_instance(
             &mut graph,
             &helper_source_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         let dest_id = add_mock_input_only(&mut graph);
         let dest = attach_processor_instance(
             &mut graph,
             &dest_id,
             ProcessorInstance::new(Box::new(
-                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                     RecordingOutOfProcessFarSideLinkDelivery::default(),
                     far_side_process_execution,
                 ),
@@ -2641,7 +2640,7 @@ mod tests {
                 &mut graph,
                 helper_id,
                 ProcessorInstance::new(Box::new(
-                    OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                         RecordingOutOfProcessFarSideLinkDelivery {
                             wire_answers_owed: answers_owed.clone(),
                             ..Default::default()
@@ -2959,7 +2958,7 @@ mod tests {
             &mut graph,
             &helper_id,
             ProcessorInstance::new(Box::new(
-                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                     RecordingOutOfProcessFarSideLinkDelivery {
                         wire_answers_owed: answers_owed.clone(),
                         ..Default::default()
@@ -3049,7 +3048,7 @@ mod tests {
                     &mut graph,
                     proc_id,
                     ProcessorInstance::new(Box::new(
-                        OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                        OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                             far_side.clone(),
                             ProcessExecution::Reactive,
                         ),
@@ -3369,7 +3368,7 @@ mod tests {
         attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
 
         let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
@@ -3407,7 +3406,7 @@ mod tests {
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
 
         let settled = crate::iceoryx2::ResolvedAudioWindowContract::from_a_device_stream_format(
@@ -3900,7 +3899,7 @@ mod tests {
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         let Some(declared) =
             audio_windowing_declared_by_input_port_of(&graph, &dest_id.as_str().into(), "audio")
@@ -4146,7 +4145,7 @@ mod tests {
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
         let link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
             .expect("a helper stub's node carries its link wiring");

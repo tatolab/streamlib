@@ -309,9 +309,9 @@ fn catalog_introduction_for(
             catalog_entry_json_block(entry)?
         )),
         None => Ok(format!(
-            "`{node_type}` is not in this node's catalog yet. A Python class enters it when its \
-             module is imported, which `add_node` does; its ports then show in `graph`, and its \
-             config takes the keys its `__init__`'s config class declares."
+            "`{node_type}` is not in this node's catalog yet. A Python class enters it when the \
+             stream's own interpreter describes it, which `add_node` does; its ports then show \
+             in `graph`, and its config takes the keys its `__init__`'s config class declares."
         )),
     }
 }

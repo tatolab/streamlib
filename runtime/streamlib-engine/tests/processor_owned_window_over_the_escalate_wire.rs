@@ -3,7 +3,8 @@
 
 //! The four present-class escalate ops, driven from the helper's own end of
 //! the escalate socket: length-prefixed JSON frames, one correlation id per
-//! request — the same documents `tatolab/runtime/_helper.py` builds. Nothing here
+//! request — the same documents
+//! `tatolab/runtime/_processor_interpreter_bootstrap.py` builds. Nothing here
 //! reaches into the engine's crate-private dispatch, so what passes is the
 //! wire a helper process actually speaks.
 //!

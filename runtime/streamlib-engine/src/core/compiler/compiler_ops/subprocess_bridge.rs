@@ -147,9 +147,9 @@ impl EscalateTransport {
 /// §Media I/O has it "requested in `setup()` … never minted
 /// mid-`process()`".
 ///
-/// Named here because the escalate dispatch reads it and the spawn host that
-/// sends it lives in another crate: a bare literal on each side would let a
-/// rename refuse every window silently.
+/// Named here because the escalate dispatch reads it and the spawn host sends
+/// it: a bare literal on each side would let a rename refuse every window
+/// silently.
 pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 
 /// A shutdown command the parent sends a helper, paired with the reply tag the
@@ -157,7 +157,7 @@ pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 ///
 /// The pairing lives beside [`SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS`] and
 /// the protocol this module's doc enumerates, so the two halves of one exchange
-/// cannot drift apart across the crate boundary the spawn host sits on.
+/// cannot drift apart between the spawn host and the processor interpreter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HelperProcessShutdownCommand {
     /// Leave the execution loop and run the processor's `stop()`.
