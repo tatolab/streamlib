@@ -16,7 +16,9 @@ the test as `MARKER:NOT_EVERY_PROCESSOR_RUNNING` with the sink's own text.
 """
 
 import argparse
+import sys
 import threading
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -61,7 +63,11 @@ def a_test_pattern_into_virtual_cameras(stream_builder: StreamBuilder) -> None:
 def main() -> None:
     graph = compile_stream_to_graph(a_test_pattern_into_virtual_cameras)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
     def watch_readiness() -> None:
         try:

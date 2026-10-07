@@ -14,6 +14,7 @@ real producer, so they run on any GPU rather than only on a rig with a camera.
 """
 
 import sys
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -52,6 +53,10 @@ def one_cast_claim_probe_off_a_real_source(stream_builder: StreamBuilder) -> Non
 if __name__ == "__main__":
     graph = compile_stream_to_graph(one_cast_claim_probe_off_a_real_source)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

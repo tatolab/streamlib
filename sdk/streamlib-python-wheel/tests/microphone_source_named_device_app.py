@@ -9,7 +9,9 @@ different device. Watching from a second thread is what the readiness wait is
 for — `run()` owns the calling thread until teardown.
 """
 
+import sys
 import threading
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -27,7 +29,11 @@ def microphone_source_naming_an_unopenable_device(stream_builder: StreamBuilder)
 def main() -> None:
     graph = compile_stream_to_graph(microphone_source_naming_an_unopenable_device)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
     def watch_readiness() -> None:
         try:

@@ -21,6 +21,7 @@ refusals, the payload's msgpack type — is `test_encoded_video_frame_cast.py`.
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -152,7 +153,11 @@ def test_node_name_defaults_to_the_type_name(marker_class):
     assert codec_node["name"] == marker_class.__name__.lower()
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(graph)
+        runtime.load(
+            graph,
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
     finally:
         runtime.shutdown()
 
@@ -166,7 +171,11 @@ def test_the_round_trip_wires_without_an_adapter(codec):
     graph = compile_stream_to_graph(CODEC_ROUND_TRIPS[codec]["stream"])
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(graph)
+        runtime.load(
+            graph,
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
     finally:
         runtime.shutdown()
 

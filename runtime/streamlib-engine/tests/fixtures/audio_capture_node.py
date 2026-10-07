@@ -12,6 +12,8 @@ pointed at a virtual device.
 """
 
 import os
+import sys
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -33,7 +35,11 @@ def microphone_into_an_audio_channel_drain(stream_builder: StreamBuilder) -> Non
 def main() -> None:
     graph = compile_stream_to_graph(microphone_into_an_audio_channel_drain)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.host_control_plane()
     runtime.run()
 

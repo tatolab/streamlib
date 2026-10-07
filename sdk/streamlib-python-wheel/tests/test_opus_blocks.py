@@ -20,6 +20,7 @@ msgpack type — is `test_encoded_audio_packet_cast.py`.
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -96,7 +97,11 @@ def test_node_name_defaults_to_the_type_name(marker_class):
 
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(graph)
+        runtime.load(
+            graph,
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
     finally:
         runtime.shutdown()
 
@@ -124,7 +129,9 @@ def test_the_round_trip_wires_without_an_adapter():
         runtime.load(
             compile_stream_to_graph(
                 microphone_through_the_opus_round_trip_into_a_speaker
-            )
+            ),
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
         )
     finally:
         runtime.shutdown()

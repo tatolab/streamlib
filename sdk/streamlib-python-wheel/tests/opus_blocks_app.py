@@ -19,7 +19,9 @@ The source publishes 480-sample blocks and the encoder's port declares
 there is no rechunker between them and no configuration that could add one.
 """
 
+import sys
 import threading
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -57,7 +59,11 @@ def main() -> None:
         stereo_tone_through_the_opus_pair_probed_on_both_links
     )
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
     def watch_readiness() -> None:
         try:

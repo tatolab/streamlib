@@ -20,6 +20,8 @@ graph by node name, and it derives it the same way for both arms.
 
 import argparse
 import functools
+import sys
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -88,7 +90,11 @@ def main() -> None:
     _parse_fixture_arguments()
     graph = compile_stream_to_graph(camera_through_the_codec_into_a_window)
     runtime = tatolab.runtime.Runtime(runtime_name="codec-roundtrip-node")
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
     runtime.host_control_plane()
     runtime.run()

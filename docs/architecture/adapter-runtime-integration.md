@@ -26,6 +26,20 @@ with ctx.gpu_limited_access.resolve_surface(surface_id) as surface:
 gets the same host-allocated backing an in-process Rust adapter
 sees — same resource semantics, same scope-bound synchronization.
 
+## The processor interpreter
+
+Each Python processor runs in its own processor interpreter: the
+stream's own venv interpreter running
+`tatolab/runtime/_processor_interpreter_bootstrap.py` by path.
+`PYTHONPATH` is the lend directory — the one holding
+`tatolab/runtime/` — and then the project directory, and the working
+directory is the project. The interpreter borrows `tatolab.runtime`
+and its `_engine` extension from the lend and imports the node from
+the project; the venv itself needs only `tatolab-stream`. The runtime
+learns a node's ports by running the same bootstrap with
+`--describe <import path>` in that interpreter, never by importing
+the node itself.
+
 ## The two IPC seams
 
 Both seams are wired through `GpuContextLimitedAccess` so subprocess
@@ -91,8 +105,8 @@ the `EscalateRequest` enum in `escalate_request.rs` for the canonical list.
 
 Each request carries a UUID `request_id`; responses echo it.
 Adding a new op means updating the hand-written wire types in
-`subprocess_escalate_wire_types/` and the helper-side encoder in the
-wheel's `_helper.py`. The host side
+`subprocess_escalate_wire_types/` and the helper-side encoder in
+`tatolab/runtime/_processor_interpreter_bootstrap.py`. The host side
 holds resources alive on behalf of the subprocess via
 `EscalateHandleRegistry`; subprocess crash drops them.
 

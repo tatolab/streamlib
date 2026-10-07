@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 import tatolab.runtime
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
@@ -71,7 +72,11 @@ def run_stream_until_it_returns(stream_function: Callable[[StreamBuilder], None]
     """Load `stream_function`'s graph on a fresh `Runtime`, run it, and say it returned."""
     graph = compile_stream_to_graph(stream_function)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.run()
     marker("RUN_RETURNED")
 

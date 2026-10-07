@@ -19,6 +19,7 @@ needs a device on both ends of a loop and lives in the engine's own fixture,
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -57,7 +58,11 @@ def test_node_name_defaults_to_the_type_name():
 
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(graph)
+        runtime.load(
+            graph,
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
     finally:
         runtime.shutdown()
 
@@ -76,7 +81,11 @@ def test_the_speaker_declares_the_input_a_microphone_can_be_wired_to():
     checks no port names, so the engine accepting the load is the proof."""
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(compile_stream_to_graph(microphone_wired_straight_into_a_speaker))
+        runtime.load(
+            compile_stream_to_graph(microphone_wired_straight_into_a_speaker),
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
     finally:
         runtime.shutdown()
 

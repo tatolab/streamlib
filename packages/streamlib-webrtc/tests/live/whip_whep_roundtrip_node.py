@@ -26,6 +26,8 @@ carries the stream key as a path segment, and argv is world-readable through
 import argparse
 import functools
 import os
+import sys
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -158,7 +160,11 @@ def main() -> None:
     graph = compile_stream_to_graph(whip_whep_roundtrip)
 
     runtime = tatolab.runtime.Runtime(runtime_name="whip-whep-roundtrip-node")
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
     runtime.host_control_plane()
     runtime.run()

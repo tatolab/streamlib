@@ -31,6 +31,7 @@ import os
 import shutil
 import struct
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -351,7 +352,11 @@ def test_node_name_defaults_to_the_type_name():
     assert [node["name"] for node in graph["nodes"]] == ["virtualcamerasink"]
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(graph)
+        runtime.load(
+            graph,
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
     finally:
         runtime.shutdown()
 

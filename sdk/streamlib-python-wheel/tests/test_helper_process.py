@@ -28,9 +28,9 @@ from typing import Callable, cast
 import pytest
 
 from tatolab.runtime import _engine
-from tatolab.runtime import _helper
+from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
 from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
-from tatolab.runtime._helper import (
+from tatolab.runtime._processor_interpreter_bootstrap import (
     HelperProcessLifecycle,
     HelperProcessProtocolError,
     ParentProcessBridge,
@@ -242,11 +242,11 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     """
     link_id = "L-envelope-test"
     destination = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(
+    processor_interpreter_bootstrap.wire_link_data_access(
         destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
     )
     source = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(
+    processor_interpreter_bootstrap.wire_link_data_access(
         source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
     )
 
@@ -286,11 +286,15 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
         wiring["max_subscribers"] = 3
 
     shallow_destination = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(shallow_destination, {"inputs": [shallow_wiring]})
+    processor_interpreter_bootstrap.wire_link_data_access(
+        shallow_destination, {"inputs": [shallow_wiring]}
+    )
     deep_destination = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(deep_destination, {"inputs": [deep_wiring]})
+    processor_interpreter_bootstrap.wire_link_data_access(
+        deep_destination, {"inputs": [deep_wiring]}
+    )
     source = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(source, {"outputs": [source_wiring]})
+    processor_interpreter_bootstrap.wire_link_data_access(source, {"outputs": [source_wiring]})
 
     for frame_index in range(bags_published_while_neither_reads):
         source.write_to_output_port("frames_to_downstream", {"frame_index": frame_index})
@@ -329,15 +333,15 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     # The destination is wired first both times: a send with no subscriber
     # attached is dropped.
     def connect() -> None:
-        _helper.wire_link_data_access(
+        processor_interpreter_bootstrap.wire_link_data_access(
             destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
         )
-        _helper.wire_link_data_access(
+        processor_interpreter_bootstrap.wire_link_data_access(
             source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
         )
 
     def disconnect() -> None:
-        _helper.unwire_link_data_access(
+        processor_interpreter_bootstrap.unwire_link_data_access(
             source,
             {
                 "direction": "output",
@@ -345,7 +349,7 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
                 "link_id": link_id,
             },
         )
-        _helper.unwire_link_data_access(
+        processor_interpreter_bootstrap.unwire_link_data_access(
             destination, {"direction": "input", "link_id": link_id}
         )
 
@@ -372,15 +376,15 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
     """
     link_id = "L-unknown-direction"
     destination = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(
+    processor_interpreter_bootstrap.wire_link_data_access(
         destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
     )
     source = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(
+    processor_interpreter_bootstrap.wire_link_data_access(
         source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
     )
 
-    _helper.unwire_link_data_access(
+    processor_interpreter_bootstrap.unwire_link_data_access(
         source,
         {
             "direction": "sideways",
@@ -388,7 +392,7 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
             "link_id": link_id,
         },
     )
-    _helper.unwire_link_data_access(
+    processor_interpreter_bootstrap.unwire_link_data_access(
         destination, {"direction": "sideways", "link_id": link_id}
     )
 
@@ -567,7 +571,7 @@ def test_what_an_answer_the_helper_stopped_waiting_on_created_is_released(
     """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
-    with pytest.raises(_helper.EscalateRequestError):
+    with pytest.raises(processor_interpreter_bootstrap.EscalateRequestError):
         bridge.request_from_parent({"op": escalate_op}, timeout_seconds=0.1)
     request = stand_in_parent.receive()
     assert request["op"] == escalate_op
@@ -590,7 +594,7 @@ def test_what_an_answer_the_helper_stopped_waiting_on_created_is_released(
 def test_a_late_refusal_created_nothing_so_nothing_is_released(stand_in_parent):
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
-    with pytest.raises(_helper.EscalateRequestError):
+    with pytest.raises(processor_interpreter_bootstrap.EscalateRequestError):
         bridge.request_from_parent({"op": "acquire_pixel_buffer"}, timeout_seconds=0.1)
     request = stand_in_parent.receive()
 
@@ -613,7 +617,7 @@ def test_an_answer_delivered_before_the_channel_closes_is_still_its_callers(
     channel closes before the caller reads it; otherwise what the answer
     created is neither handed back nor released."""
     bridge = ParentProcessBridge(stand_in_parent.child_end)
-    slot = _helper._PendingEscalateResponse()
+    slot = processor_interpreter_bootstrap._PendingEscalateResponse()
     bridge._pending_escalate_responses["r-delivered"] = slot
     answer = {
         "rpc": "escalate_response",
@@ -724,7 +728,7 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     the parent's next command included — waits out the escalate timeout.
     """
     monkeypatch.setenv("STREAMLIB_SURFACE_SOCKET", "/nonexistent/streamlib-surface.sock")
-    decode_the_frame = _helper._decode_frame_payload
+    decode_the_frame = processor_interpreter_bootstrap._decode_frame_payload
 
     def decode_the_frame_collecting_garbage_on_the_marker(payload: bytes):
         frame = decode_the_frame(payload)
@@ -733,7 +737,9 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
         return frame
 
     monkeypatch.setattr(
-        _helper, "_decode_frame_payload", decode_the_frame_collecting_garbage_on_the_marker
+        processor_interpreter_bootstrap,
+        "_decode_frame_payload",
+        decode_the_frame_collecting_garbage_on_the_marker,
     )
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
@@ -1126,7 +1132,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
         inbound_link_id = "L-high-fd-in"
         outbound_link_id = "L-high-fd-out"
         downstream = _engine.open_node_link_data_access_for_helper_process()
-        _helper.wire_link_data_access(
+        processor_interpreter_bootstrap.wire_link_data_access(
             downstream,
             {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
         )
@@ -1145,7 +1151,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
         stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
         upstream = _engine.open_node_link_data_access_for_helper_process()
-        _helper.wire_link_data_access(
+        processor_interpreter_bootstrap.wire_link_data_access(
             upstream,
             {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
         )
@@ -1423,7 +1429,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     # The far end of the child's output is opened first, so nothing the child
     # publishes is dropped for want of a subscriber.
     downstream = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(
+    processor_interpreter_bootstrap.wire_link_data_access(
         downstream,
         {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
     )
@@ -1442,7 +1448,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
         }
     )
     upstream = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(
+    processor_interpreter_bootstrap.wire_link_data_access(
         upstream,
         {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
     )
@@ -1650,7 +1656,7 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
     inbound_link_id = "L-slow-in"
     outbound_link_id = "L-slow-out"
     downstream = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(
+    processor_interpreter_bootstrap.wire_link_data_access(
         downstream,
         {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
     )
@@ -1675,7 +1681,7 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
     upstream = _engine.open_node_link_data_access_for_helper_process()
-    _helper.wire_link_data_access(
+    processor_interpreter_bootstrap.wire_link_data_access(
         upstream,
         {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
     )
@@ -1805,7 +1811,7 @@ def test_a_continuous_processor_with_no_interval_never_runs_faster_than_the_floo
     ) / 1_000_000_000
     calls_per_second = (process_calls - 1) / measured_span_seconds
     floor_calls_per_second = (
-        1_000_000_000 / _helper.CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
+        1_000_000_000 / processor_interpreter_bootstrap.CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
     )
     assert calls_per_second <= floor_calls_per_second * 1.2, (
         f"a zero interval ran process() {calls_per_second:.0f} times a second; the "
@@ -1873,14 +1879,14 @@ def test_a_configuration_the_processor_does_not_take_is_refused_naming_the_cause
 
 
 def test_a_helper_started_without_its_channel_says_so(monkeypatch):
-    monkeypatch.delenv(_helper.ESCALATE_FD_ENV, raising=False)
+    monkeypatch.delenv(processor_interpreter_bootstrap.ESCALATE_FD_ENV, raising=False)
     with pytest.raises(HelperProcessProtocolError) as refusal:
         ParentProcessBridge.open_from_inherited_fd()
-    assert _helper.ESCALATE_FD_ENV in str(refusal.value)
+    assert processor_interpreter_bootstrap.ESCALATE_FD_ENV in str(refusal.value)
 
 
 def test_a_non_numeric_channel_fd_is_refused_by_value(monkeypatch):
-    monkeypatch.setenv(_helper.ESCALATE_FD_ENV, "not-an-fd")
+    monkeypatch.setenv(processor_interpreter_bootstrap.ESCALATE_FD_ENV, "not-an-fd")
     with pytest.raises(HelperProcessProtocolError) as refusal:
         ParentProcessBridge.open_from_inherited_fd()
     assert "not-an-fd" in str(refusal.value)
@@ -1920,8 +1926,9 @@ def start_a_real_helper_process(
     *,
     rust_log: "str | None" = None,
 ) -> subprocess.Popen:
-    """`python -m tatolab.runtime._helper` as the spawn host starts it — its channel,
-    its class, its domain — handed `parent_engine_build_id`, or no id at all.
+    """`python <lend>/tatolab/runtime/_processor_interpreter_bootstrap.py` as the
+    spawn host starts it — its channel, its class, its domain — handed
+    `parent_engine_build_id`, or no id at all.
 
     Everything a helper needs to reach its own iceoryx2 node is supplied, so a
     helper that let its start through would open one and wait on `parent`.
@@ -1932,17 +1939,17 @@ def start_a_real_helper_process(
     environment = {
         name: value
         for name, value in os.environ.items()
-        if name not in (_helper.ENGINE_BUILD_ID_ENV, "RUST_LOG")
+        if name not in (processor_interpreter_bootstrap.ENGINE_BUILD_ID_ENV, "RUST_LOG")
     }
     if rust_log is not None:
         environment["RUST_LOG"] = rust_log
     if parent_engine_build_id is not None:
-        environment[_helper.ENGINE_BUILD_ID_ENV] = parent_engine_build_id
+        environment[processor_interpreter_bootstrap.ENGINE_BUILD_ID_ENV] = parent_engine_build_id
     environment.update(
         {
-            _helper.ENTRYPOINT_ENV: f"{PROBE_MODULE}:PassThroughProbe",
-            _helper.PROCESSOR_ID_ENV: "Pbuildid",
-            _helper.ESCALATE_FD_ENV: str(parent.child_end.fileno()),
+            processor_interpreter_bootstrap.ENTRYPOINT_ENV: f"{PROBE_MODULE}:PassThroughProbe",
+            processor_interpreter_bootstrap.PROCESSOR_ID_ENV: "Pbuildid",
+            processor_interpreter_bootstrap.ESCALATE_FD_ENV: str(parent.child_end.fileno()),
             "STREAMLIB_ICEORYX2_DOMAIN_ROOT": str(domain_root),
             "PYTHONPATH": os.pathsep.join(
                 entry
@@ -1952,7 +1959,7 @@ def start_a_real_helper_process(
         }
     )
     return subprocess.Popen(
-        [sys.executable, "-m", "tatolab.runtime._helper"],
+        [sys.executable, processor_interpreter_bootstrap.__file__],
         env=environment,
         pass_fds=[parent.child_end.fileno()],
         stdin=subprocess.DEVNULL,
@@ -2016,7 +2023,9 @@ def test_a_helper_handed_no_engine_build_id_refuses_rather_than_passing(
 
     standard_error = standard_error_of_a_helper_that_refused_its_start(helper)
 
-    assert f"{_helper.ENGINE_BUILD_ID_ENV} is not set" in standard_error, standard_error
+    assert (
+        f"{processor_interpreter_bootstrap.ENGINE_BUILD_ID_ENV} is not set" in standard_error
+    ), standard_error
     assert engine_build_id_compiled_into_this_extension() in standard_error
     assert list(empty_iceoryx2_domain_root.iterdir()) == []
 
@@ -2048,11 +2057,10 @@ def test_a_helper_handed_its_own_engine_build_id_starts_and_opens_its_node(
         helper.communicate()
 
 
-def test_the_helper_module_is_runnable_as_a_module():
-    """The parent execs `python -m tatolab.runtime._helper`; a module without a
-    `__main__` guard would exec cleanly and do nothing."""
-    helper_source = os.path.join(os.path.dirname(_helper.__file__), "_helper.py")
-    with open(helper_source, encoding="utf-8") as source:
+def test_the_bootstrap_is_runnable_by_path():
+    """The parent execs `python <lend>/tatolab/runtime/_processor_interpreter_bootstrap.py`;
+    a file without a `__main__` guard would exec cleanly and do nothing."""
+    with open(processor_interpreter_bootstrap.__file__, encoding="utf-8") as source:
         assert '__name__ == "__main__"' in source.read()
 
 

@@ -30,7 +30,8 @@ HelperProcessLogSink = Callable[[str, str, "Optional[dict[str, Any]]"], None]
 
 # A helper process has no engine in it, so its records travel to the parent's
 # pipeline instead of being handed straight to one. Installed by
-# `tatolab.runtime._helper` at startup and never by app code.
+# `tatolab/runtime/_processor_interpreter_bootstrap.py` at startup and never by
+# app code.
 _helper_process_sink: "Optional[HelperProcessLogSink]" = None
 
 

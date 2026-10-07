@@ -729,7 +729,11 @@ def launch_app_node(
         # mistake rather than as a traceback at a user who typed one flag.
         raise AppLaunchError(str(runtime_name_refusal)) from runtime_name_refusal
     try:
-        runtime.load(stream_graph)
+        runtime.load(
+            stream_graph,
+            project_directory=anchor_directory.resolve(),
+            interpreter=sys.executable,
+        )
     except (RuntimeError, TypeError, ValueError) as load_refusal:
         runtime.shutdown()
         raise AppLaunchError(

@@ -29,6 +29,8 @@ contract on it.
 
 import contextlib
 import os
+import sys
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -98,7 +100,11 @@ def main() -> None:
 
         graph = compile_stream_to_graph(known_signal_played_and_captured_back)
         runtime = tatolab.runtime.Runtime()
-        runtime.load(graph)
+        runtime.load(
+            graph,
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
 
         runtime.host_control_plane()
         runtime.run()

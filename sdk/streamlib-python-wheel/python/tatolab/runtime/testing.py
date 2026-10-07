@@ -25,7 +25,9 @@ from __future__ import annotations
 
 import itertools
 import queue
+import sys
 import threading
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
 from tatolab.stream._exposed_name_cast import (
@@ -150,7 +152,11 @@ class SingleNodeTestPipeline:
         self._runtime = runtime
         # The graph is built at run time from the class under test, so there is
         # no module-level `@stream` function for `compile_stream_to_graph` to run.
-        runtime.load(stream_builder._compiled_graph())
+        runtime.load(
+            stream_builder._compiled_graph(),
+            project_directory=_directory_the_node_class_is_imported_from(self._node_class),
+            interpreter=sys.executable,
+        )
 
         # `run()` blocks, and a test needs to stay in control of the main
         # thread. It is safe here because `__exit__` shuts the engine down and
@@ -256,6 +262,22 @@ class SingleNodeTestPipeline:
                 f"{self._node_class.__name__} declares no {direction} port "
                 f"{port_name!r}; it declares {sorted(channels) or 'none'}"
             ) from None
+
+
+def _directory_the_node_class_is_imported_from(node_class: type) -> Path:
+    """The `sys.path` entry the node class's top-level package or module was found
+    under — the project directory its processor interpreter imports it from.
+
+    A class whose module has no file falls back to the working directory.
+    """
+    module = sys.modules.get(node_class.__module__)
+    module_file = getattr(module, "__file__", None)
+    if module is None or module_file is None:
+        return Path.cwd()
+    levels_below_the_import_root = node_class.__module__.count(".")
+    if getattr(module, "__path__", None) is not None:
+        levels_below_the_import_root += 1
+    return Path(module_file).resolve().parents[levels_below_the_import_root]
 
 
 def _declared_port_names(node_class: type, direction: str) -> "list[str]":

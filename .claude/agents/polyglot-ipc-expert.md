@@ -12,7 +12,7 @@ You are the helper-process / IPC specialist. You own the wire between the parent
 ## Charter
 - Escalate ops end-to-end (correlated request/response over the parent↔helper socket, typed by JTD schemas).
 - iceoryx2 shared-memory transport and its sizing/encoding contract.
-- The Python wheel's helper host (`sys.executable -m streamlib._helper`) and the parent-side bridge that serves it.
+- The processor interpreter bootstrap — the stream's own venv interpreter running `tatolab/runtime/_processor_interpreter_bootstrap.py` by path, with the lend directory and then the project directory on `PYTHONPATH` and the project as its working directory — its `--describe` mode, which is how the runtime learns a node's ports, and the parent-side bridge that serves it.
 - Helper-process surface-adapter wiring (the import-side carve-out).
 
 ## Method — how you work
@@ -22,12 +22,12 @@ You are the helper-process / IPC specialist. You own the wire between the parent
 - **A test that waits on a runtime event waits on a timed channel receive, never a bare join.** The event bus is an in-process fan-out with no `init()` — an event published after `subscribe` returns always reaches the listener — so a missed event means the publish never happened, and a timed receive says so where a join hangs silently.
 
 ## Contract invariants — hold these, re-derive the code from the tree
-- **One Python processor, one helper process, one GIL.** Helper-process placement (the parent execs `sys.executable`, never fork) is the only placement; hosting a processor in the app's interpreter is a STOP-WORK violation (`.claude/rules/placement.md`).
+- **One Python processor, one helper process, one GIL.** Helper-process placement (the parent execs the stream's venv interpreter, never fork) is the only placement; hosting a processor in the app's interpreter is a STOP-WORK violation (`.claude/rules/placement.md`).
 - **The capability boundary is the process, plus the exchange client.** A helper's GPU contexts are backed by the parent round trip and the surface-share socket; without either one of them wired the GPU calls refuse by name rather than reaching a privileged primitive locally. Never hand a helper a privileged path that bypasses the bridge.
 - **iceoryx2 has a per-slot fallback budget; the wire footprint depends on the encoding.** A payload's declared bound must be registered with the runtime or the small per-slot fallback applies and a large frame trips a max-loan-size error. A `Vec<u8>` serialized as a msgpack array carries per-byte tag overhead (~1.5×); the `bin` encoding (via serde_bytes) is 1×. Watch the encoding when a frame payload is near a slot budget.
 - **Never `.escalate(...)` inside a FullAccess lifecycle body** (`setup`, `teardown`, Manual-mode `start`/`stop`) — the dispatcher already holds the escalate gate, and a same-thread re-entry panics. Call the FullAccess method directly.
 - **Helper-process Vulkan is the import-side carve-out only** — FD import + bind + map, layout transitions on imported handles, timeline wait/signal. No allocation, no modifier choice, no kernel construction; everything privileged escalates to the parent and returns a `surface_id` the helper imports.
-- **Helper startup order is load-bearing.** The escalate socket comes up before logging has anywhere to go, and the user's module is imported last so anything it raises is already reportable; fatals before the channel exists go to raw stderr, which the parent captures off fd2. Never reorder those steps to simplify a bootstrap.
+- **Helper startup order is load-bearing.** The bootstrap drops its own directory from `sys.path` and imports the lent `tatolab.runtime` first, using only the standard library up to there so an interpreter that cannot load it is refused naming what it is; then the build-id check; then the escalate socket comes up before logging has anywhere to go, and the user's module is imported last so anything it raises is already reportable; fatals before the channel exists go to raw stderr, which the parent captures off fd2. Never reorder those steps to simplify a bootstrap.
 - **Adapters never pin a user's numeric/ML library.** Lazy-import numpy / torch / jax / cv2 at use, never as a hard dependency — customers bring their own versions.
 - **The helper propagates the typed context exactly like Rust** — a processor sees LimitedAccess by default and reaches FullAccess only across the bridge.
 

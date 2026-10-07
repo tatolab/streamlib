@@ -21,6 +21,7 @@ never asked for a window.
 
 import os
 import sys
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -69,7 +70,11 @@ def scenario_beside_a_display_window() -> None:
     display up, and a processor's window beside it."""
     graph = compile_stream_to_graph(a_probe_window_beside_a_display_window)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
 
@@ -87,7 +92,11 @@ def scenario_with_no_display_server() -> None:
     os.environ.pop("WAYLAND_DISPLAY", None)
     graph = compile_stream_to_graph(a_probe_window_with_no_display_server)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
 

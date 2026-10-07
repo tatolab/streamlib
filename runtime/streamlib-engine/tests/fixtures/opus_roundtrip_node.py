@@ -24,6 +24,8 @@ sample-exact match, which no codec would give.
 
 import argparse
 import os
+import sys
+from pathlib import Path
 
 import known_audio_signal
 import known_audio_signal_source
@@ -101,7 +103,11 @@ def main() -> None:
 
     graph = compile_stream_to_graph(known_signal_through_opus_and_back)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
 
     runtime.host_control_plane()
     runtime.run()

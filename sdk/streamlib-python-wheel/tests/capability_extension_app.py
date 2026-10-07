@@ -9,15 +9,18 @@ outcome. The extensions are put on `sys.path` here rather than installed into
 the venv — the raising variant would otherwise fail every other test's
 `Runtime()`.
 
-`sys.path.append`, never `insert`: the helper spawn host reads `sys.path[0]` to
-tell a child where the app's own modules live, and PYTHONPATH carries the
-fixture to that child.
+A processor interpreter's `PYTHONPATH` is the lend directory and then the
+project directory, so a scenario that spawns one loads its stream from a
+project directory holding the fixture distributions beside the processor's
+own module.
 """
 
+import atexit
 import importlib
 import json
-import os
+import shutil
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -36,14 +39,20 @@ def marker(name: str) -> None:
 
 
 def install_fixture_distributions(*variants: str) -> None:
-    """Put `variants` where `importlib.metadata` and a helper child both see them."""
-    directories = [str(FIXTURES / variant) for variant in variants]
-    sys.path.extend(directories)
-    already_on_the_path = os.environ.get("PYTHONPATH", "")
-    os.environ["PYTHONPATH"] = os.pathsep.join(
-        [*directories, already_on_the_path] if already_on_the_path else directories
-    )
+    """Put `variants` where this process's `importlib.metadata` sees them."""
+    sys.path.extend(str(FIXTURES / variant) for variant in variants)
     importlib.invalidate_caches()
+
+
+def project_directory_carrying_fixture_distributions(*variants: str) -> Path:
+    """A project directory holding `variants` beside the processor's own module,
+    where a processor interpreter's `importlib.metadata` and import both see them."""
+    project_directory = Path(tempfile.mkdtemp(prefix="streamlib-extension-project-"))
+    atexit.register(shutil.rmtree, project_directory, ignore_errors=True)
+    for variant in variants:
+        shutil.copytree(FIXTURES / variant, project_directory, dirs_exist_ok=True)
+    shutil.copy2(Path(__file__).with_name("capability_extension_processor.py"), project_directory)
+    return project_directory
 
 
 def scenario_a_hook_runs_and_registers() -> None:
@@ -125,7 +134,11 @@ def scenario_a_helper_runs_the_hook_before_the_processor() -> None:
         one_processor_that_reports_its_helpers_extensions
     )
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=project_directory_carrying_fixture_distributions("registering"),
+        interpreter=sys.executable,
+    )
 
     def stop_once_the_helper_has_reported() -> None:
         runtime.wait_until_every_node_is_running(timeout=60.0)
@@ -155,7 +168,11 @@ def scenario_a_raising_hook_refuses_the_processor() -> None:
         one_processor_that_reports_its_helpers_extensions
     )
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=project_directory_carrying_fixture_distributions("helper_raising"),
+        interpreter=sys.executable,
+    )
 
     def report_whether_the_processor_ever_started() -> None:
         try:
@@ -190,7 +207,11 @@ def scenario_graph_renders_the_registered_capability() -> None:
         one_processor_that_reports_its_helpers_extensions
     )
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=project_directory_carrying_fixture_distributions("registering"),
+        interpreter=sys.executable,
+    )
     runtime.host_control_plane()
 
     def report_the_extensions_the_graph_carries() -> None:
