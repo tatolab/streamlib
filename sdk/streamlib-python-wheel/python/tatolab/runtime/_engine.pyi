@@ -132,8 +132,11 @@ class Runtime:
         `PYTHONPATH`. Every `type` that is not a built-in is described in that
         interpreter before anything is added; one that will not import, or
         names a class `@node` did not stamp, raises `RuntimeError` naming it
-        and quoting the interpreter's standard error. A path that is neither a
-        str nor an `os.PathLike[str]` raises `TypeError`.
+        with the reason that interpreter gave for it. An interpreter that
+        writes no describe document — one that cannot load the lent runtime,
+        imported another engine build, or crashed — refuses every type, and
+        the `RuntimeError` quotes the end of its standard error. A path that is
+        neither a str nor an `os.PathLike[str]` raises `TypeError`.
 
         `graph` is the mapping `compile_stream_to_graph` returns, or a graph
         `streamlib graph` rendered; anything not a mapping raises `TypeError`.
