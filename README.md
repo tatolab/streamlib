@@ -93,12 +93,6 @@ rename, and the artifact is identical either way. The `streamlib` wheel carries 
 CLI, and installs the `tatolab-stream` wheel beside it at the same version: the Python API
 (`tatolab.stream`) your streams import. Nothing is generated, compiled, or downloaded at run time.
 
-Upgrading with pip from a `streamlib` release that still carried `tatolab/stream/` itself removes
-it again: pip installs the new `tatolab-stream` first, then uninstalls the old `streamlib`, whose
-file record names the same files. Restore it once with
-`pip install --force-reinstall --no-deps tatolab-stream --index-url https://tatolab.github.io/streamlib/simple/`,
-or upgrade with `uv pip`, which does not hit this.
-
 ## Quickstart
 
 ```bash
