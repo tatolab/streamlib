@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.1](https://github.com/tatolab/streamlib/compare/v0.37.0...v0.37.1) (2026-10-07)
+
+
+### Features
+
+* **sdk:** built-in nodes are generated Python classes with typed configs ([#2684](https://github.com/tatolab/streamlib/issues/2684)) ([6d39742](https://github.com/tatolab/streamlib/commit/6d39742fcbcc6a1ebd99a3cd3987d98fc6fe863a))
+
 ## [0.37.0](https://github.com/tatolab/streamlib/compare/v0.36.0...v0.37.0) (2026-10-07)
 
 
