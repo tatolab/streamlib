@@ -42,7 +42,7 @@ use crate::iceoryx2::{
 };
 
 /// The bootstrap a processor interpreter runs, relative to the lend directory.
-pub const PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY: &str =
+pub(crate) const PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY: &str =
     "tatolab/runtime/_processor_interpreter_bootstrap.py";
 
 /// The environment variable carrying the class import path a processor

@@ -1197,7 +1197,10 @@ impl Runner {
     }
 
     /// The stream environment the last [`Self::load_graph_snapshot`] recorded.
-    pub fn stream_environment_recorded_at_the_last_load(&self) -> Option<super::StreamEnvironment> {
+    #[cfg(test)]
+    pub(crate) fn stream_environment_recorded_at_the_last_load(
+        &self,
+    ) -> Option<super::StreamEnvironment> {
         self.processor_interpreter_launch_record
             .stream_environment_recorded_at_the_last_load()
     }

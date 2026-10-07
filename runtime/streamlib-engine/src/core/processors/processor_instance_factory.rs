@@ -19,9 +19,7 @@ use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 ///
 /// Every processor — host-compiled Rust types registered through
 /// `register::<P>()` / `add_local::<P>()` and the processor interpreter hosts
-/// registered through
-/// [`ProcessorInstanceFactory::register_a_type_described_in_a_processor_interpreter`]
-/// — dispatches through a boxed [`DynGeneratedProcessor`] trait object.
+/// registered when a processor interpreter describes their type — dispatches through a boxed [`DynGeneratedProcessor`] trait object.
 ///
 /// # Iceoryx2 resource ownership (issue #894)
 ///
@@ -435,7 +433,7 @@ impl ProcessorInstanceFactory {
     /// Register a type a processor interpreter described, replacing the
     /// registration an earlier describe of it left. A type registered any
     /// other way is never replaced: the registration that arrived first stays.
-    pub fn register_a_type_described_in_a_processor_interpreter(
+    pub(crate) fn register_a_type_described_in_a_processor_interpreter(
         &self,
         descriptor: ProcessorDescriptor,
         constructor: DynamicProcessorConstructorFn,
@@ -448,7 +446,7 @@ impl ProcessorInstanceFactory {
 
     /// Whether `processor_type`'s registration came from a processor
     /// interpreter's describe.
-    pub fn was_described_in_a_processor_interpreter(
+    pub(crate) fn was_described_in_a_processor_interpreter(
         &self,
         processor_type: &ProcessorClassImportPath,
     ) -> bool {
@@ -461,7 +459,7 @@ impl ProcessorInstanceFactory {
     /// Whether `processor_type` is registered other than by a describe — a
     /// typed Rust registration or a descriptor alone — which no describe
     /// replaces.
-    pub fn is_registered_other_than_by_a_describe(
+    pub(crate) fn is_registered_other_than_by_a_describe(
         &self,
         processor_type: &ProcessorClassImportPath,
     ) -> bool {
