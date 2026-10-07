@@ -13,12 +13,15 @@ from collections.abc import Callable, Mapping, Sequence
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
+from ._runtime_lend import runtime_backed_protocol
+
 if TYPE_CHECKING:
     from ._node_owned_window_protocols import NodeOwnedWindow
 
 _EscalateResult = TypeVar("_EscalateResult")
 
 
+@runtime_backed_protocol
 class GpuContextLimitedAccess(Protocol):
     """Non-allocating GPU capability, valid for the node's whole life."""
 
@@ -147,6 +150,7 @@ class GpuContextLimitedAccess(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class GpuContextFullAccess(Protocol):
     """The privileged GPU capability a full-access hook receives.
 
@@ -522,6 +526,7 @@ class GpuContextFullAccess(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class GpuSurfaceHandle(Protocol):
     """An owned GPU surface: pixels, or a tensor storage buffer.
 
@@ -655,6 +660,7 @@ class GpuSurfaceHandle(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class GpuSurfaceDeviceTensorScope(Protocol):
     """A scope handing a surface's pixels to a third-party GPU package.
 
@@ -711,6 +717,7 @@ class GpuSurfaceDeviceTensorScope(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class GpuSurfaceCheckOutLease(Protocol):
     """A claim on a published surface, held for as long as this object is.
 
@@ -726,6 +733,7 @@ class GpuSurfaceCheckOutLease(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class OpaqueFdTextureExport(Protocol):
     """A raw OPAQUE_FD texture handle: the allocation's memory fd plus the
     allocation-stable shape a foreign Vulkan or CUDA external-memory import
@@ -819,6 +827,7 @@ class OpaqueFdTextureExport(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class IOSurfaceMachPortExport(Protocol):
     """A raw IOSurface handle: a Mach send right to the allocation's
     IOSurface plus the allocation-stable shape native code needs to address
@@ -902,6 +911,7 @@ class IOSurfaceMachPortExport(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class ComputeKernel(Protocol):
     """A compute kernel the engine built and holds, dispatched by name.
 
@@ -939,6 +949,7 @@ class ComputeKernel(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class GraphicsKernel(Protocol):
     """A graphics kernel the engine built and holds, drawn by name.
 
@@ -980,6 +991,7 @@ class GraphicsKernel(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class RayTracingKernel(Protocol):
     """A ray-tracing kernel the engine built and holds, traced by name.
 
@@ -1011,6 +1023,7 @@ class RayTracingKernel(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class AccelerationStructureHandle(Protocol):
     """An acceleration structure the engine built and holds.
 
@@ -1031,6 +1044,7 @@ class AccelerationStructureHandle(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class KernelDispatchBatch(Protocol):
     """Several dispatches recorded as one: one submission, one fence wait.
 

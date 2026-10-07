@@ -23,6 +23,7 @@ import tatolab.runtime
 import tatolab.runtime._engine as engine
 import tatolab.runtime.testing
 import tatolab.stream
+from tatolab.stream._runtime_lend import runtime_backed_protocol_registry
 
 WHEEL_PYTHON_SOURCE_DIRECTORY = Path(__file__).resolve().parents[1] / "python"
 STREAM_DISTRIBUTION_SOURCE_DIRECTORY = Path(__file__).resolve().parents[2] / "tatolab-stream"
@@ -275,12 +276,7 @@ def test_no_parameter_of_a_public_callable_tatolab_publishes_says_processor():
 
 
 def test_every_native_class_a_tatolab_stream_protocol_declares_names_tatolab_stream_as_its_module():
-    protocol_names = [
-        exported_name
-        for exported_name in tatolab.stream.__all__
-        if inspect.isclass(exported := getattr(tatolab.stream, exported_name))
-        and getattr(exported, "_is_protocol", False)
-    ]
+    protocol_names = sorted(runtime_backed_protocol_registry)
     assert "GpuSurfaceHandle" in protocol_names
     for protocol_name in protocol_names:
         assert _native_engine_class(protocol_name).__module__ == "tatolab.stream", protocol_name

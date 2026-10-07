@@ -24,6 +24,10 @@ RuntimeBackedFunctionDeclaration = TypeVar(
     "RuntimeBackedFunctionDeclaration", bound=Callable[..., Any]
 )
 
+RuntimeBackedProtocolDeclaration = TypeVar(
+    "RuntimeBackedProtocolDeclaration", bound="type[object]"
+)
+
 
 @dataclass(frozen=True)
 class RuntimeBackedFunctionRegistration:
@@ -33,11 +37,15 @@ class RuntimeBackedFunctionRegistration:
     native_callable_name: str
 
 
-runtime_backed_function_registry: list[RuntimeBackedFunctionRegistration] = []
+runtime_backed_function_registry: dict[
+    Callable[..., Any], RuntimeBackedFunctionRegistration
+] = {}
+"""Every runtime-backed function, keyed by the forwarding function it is."""
+
+runtime_backed_protocol_registry: dict[str, type] = {}
+"""Every runtime-backed Protocol, keyed by the name of the native class it declares."""
 
 _native_callables_resolved_by_name: dict[str, Callable[..., Any]] = {}
-
-_native_callable_name_by_runtime_backed_function: dict[Callable[..., Any], str] = {}
 
 
 class RuntimeIsNotLentToThisInterpreterError(RuntimeError):
@@ -99,18 +107,23 @@ def runtime_backed_function(
                 resolved_native_callable_name, called_function_name
             )(*arguments, **keyword_arguments)
 
-        runtime_backed_function_registry.append(
+        runtime_backed_function_registry[forward_to_native_callable] = (
             RuntimeBackedFunctionRegistration(
                 python_function=forward_to_native_callable,
                 native_callable_name=resolved_native_callable_name,
             )
         )
-        _native_callable_name_by_runtime_backed_function[forward_to_native_callable] = (
-            resolved_native_callable_name
-        )
         return cast(RuntimeBackedFunctionDeclaration, forward_to_native_callable)
 
     return forward_calls_to_the_native_callable
+
+
+def runtime_backed_protocol(
+    protocol: RuntimeBackedProtocolDeclaration,
+) -> RuntimeBackedProtocolDeclaration:
+    """Make the decorated Protocol the one declaration of the runtime's class of the same name."""
+    runtime_backed_protocol_registry[protocol.__name__] = protocol
+    return protocol
 
 
 def native_callable_of_runtime_backed_function(
@@ -125,9 +138,9 @@ def native_callable_of_runtime_backed_function(
     return cast(
         RuntimeBackedFunctionDeclaration,
         native_callable_lent_by_the_runtime(
-            _native_callable_name_by_runtime_backed_function[
+            runtime_backed_function_registry[
                 declared_runtime_backed_function
-            ],
+            ].native_callable_name,
             called_function_name,
         ),
     )

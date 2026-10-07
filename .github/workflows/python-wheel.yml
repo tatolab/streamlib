@@ -432,16 +432,21 @@ jobs:
   # structural: this venv holds `tatolab-stream`, its test group and nothing of
   # the runtime, so a stream test that reaches for the runtime fails to import.
   stream-suite:
-    name: Stream suite (${{ matrix.runner }})
+    name: Stream suite (${{ matrix.runner }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     permissions:
       contents: read
 
+    # 3.10 is the floor `requires-python` promises; one runner holds it.
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, macos-15]
+        python: ["3.12"]
+        include:
+          - runner: ubuntu-latest
+            python: "3.10"
 
     steps:
       - uses: actions/checkout@v4
@@ -458,7 +463,7 @@ jobs:
       - name: Install tatolab-stream and its test group, and nothing of the runtime
         working-directory: sdk/tatolab-stream
         run: |
-          uv venv --python 3.12 .venv
+          uv venv --python ${{ matrix.python }} .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
 
       # The console script, not `python -m pytest`, which would put the
@@ -479,7 +484,7 @@ jobs:
         run: |
           cp -R sdk/streamlib-python-wheel/python/tatolab/runtime/_scaffold_template "$RUNNER_TEMP/scaffold"
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
-          uv venv --python 3.12 "$RUNNER_TEMP/scaffold-venv"
+          uv venv --python ${{ matrix.python }} "$RUNNER_TEMP/scaffold-venv"
           VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl 'numpy>=2.1'
           cd "$RUNNER_TEMP/scaffold"
           "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'

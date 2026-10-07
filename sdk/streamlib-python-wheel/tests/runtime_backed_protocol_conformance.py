@@ -28,7 +28,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Generic, Literal, Protocol, TypeVar
+
+from tatolab.stream._runtime_lend import RuntimeBackedFunctionRegistration
 
 ENGINE_MODULE_NAME = "tatolab.runtime._engine"
 
@@ -36,34 +38,34 @@ ENGINE_STUB_PATH = (
     Path(__file__).resolve().parents[1] / "python" / "tatolab" / "runtime" / "_engine.pyi"
 )
 
-# Dunders that are part of a class's contract when it defines them; every
-# other dunder is `object`'s, `Protocol`'s, or pyo3's own machinery.
-CONTRACT_DUNDER_NAMES = frozenset(
-    {
-        "__aenter__",
-        "__aexit__",
-        "__aiter__",
-        "__anext__",
-        "__bool__",
-        "__buffer__",
-        "__call__",
-        "__contains__",
-        "__delitem__",
-        "__dlpack__",
-        "__dlpack_device__",
-        "__enter__",
-        "__exit__",
-        "__getitem__",
-        "__iter__",
-        "__len__",
-        "__next__",
-        "__release_buffer__",
-        "__repr__",
-        "__reversed__",
-        "__setitem__",
-        "__str__",
-    }
+# The dunders pyo3 puts in every pyclass's own `__dict__`. `__new__` is the
+# constructor, held through the runtime-backed function that calls it.
+PYO3_CLASS_MACHINERY_DUNDER_NAMES = frozenset(
+    {"__dict__", "__doc__", "__module__", "__new__", "__weakref__"}
 )
+
+_ProtocolTypeParameter = TypeVar("_ProtocolTypeParameter", covariant=True)
+
+
+class _ProtocolDeclaringNothing(Protocol):
+    pass
+
+
+class _GenericProtocolDeclaringNothing(Protocol[_ProtocolTypeParameter]):
+    pass
+
+
+# The dunders `typing.Protocol` puts in a Protocol's own `__dict__`, read off two
+# that declare nothing rather than listed, because they differ across Python
+# versions.
+PROTOCOL_MACHINERY_DUNDER_NAMES = frozenset(vars(_ProtocolDeclaringNothing)) | frozenset(
+    vars(_GenericProtocolDeclaringNothing)
+)
+
+_PROTOCOL_MACHINERY_BASES: tuple[Any, ...] = (Protocol, Generic, object)
+
+MemberKind = Literal["staticmethod", "classmethod", "property", "method", "attribute"]
+
 
 @dataclass(frozen=True)
 class ConformanceFinding:
@@ -84,11 +86,18 @@ class EngineStubDeclaration:
     annotation_source: str | None = None
 
 
-def _is_contract_member_name(member_name: str) -> bool:
-    return not member_name.startswith("_") or member_name in CONTRACT_DUNDER_NAMES
+def is_contract_member_name(member_name: str, machinery_dunder_names: frozenset[str]) -> bool:
+    """Whether a member is part of a class's contract: public, or a dunder beyond machinery."""
+    if not member_name.startswith("_"):
+        return True
+    return (
+        member_name.startswith("__")
+        and member_name.endswith("__")
+        and member_name not in machinery_dunder_names
+    )
 
 
-def _member_kind_on_native_class(raw_member: Any) -> str:
+def _member_kind_on_native_class(raw_member: Any) -> MemberKind:
     if isinstance(raw_member, staticmethod):
         return "staticmethod"
     if isinstance(raw_member, classmethod) or type(raw_member).__name__ == "classmethod_descriptor":
@@ -102,7 +111,7 @@ def _member_kind_on_native_class(raw_member: Any) -> str:
     return "attribute"
 
 
-def _member_kind_on_protocol(raw_member: Any) -> str:
+def _member_kind_on_protocol(raw_member: Any) -> MemberKind:
     if isinstance(raw_member, staticmethod):
         return "staticmethod"
     if isinstance(raw_member, classmethod):
@@ -118,19 +127,22 @@ def _contract_members_of_native_class(native_class: type) -> dict[str, Any]:
     return {
         member_name: raw_member
         for member_name, raw_member in vars(native_class).items()
-        if _is_contract_member_name(member_name)
+        if is_contract_member_name(member_name, PYO3_CLASS_MACHINERY_DUNDER_NAMES)
     }
 
 
-def _contract_members_of_protocol(protocol: type) -> dict[str, Any]:
-    members = {
-        member_name: raw_member
-        for member_name, raw_member in vars(protocol).items()
-        if _is_contract_member_name(member_name)
-    }
-    for annotated_name in vars(protocol).get("__annotations__", {}):
-        if _is_contract_member_name(annotated_name):
-            members.setdefault(annotated_name, None)
+def contract_members_of_protocol(protocol: type) -> dict[str, Any]:
+    """A Protocol's contract members by name: its own and every Protocol base's."""
+    members: dict[str, Any] = {}
+    for declaring_class in reversed(protocol.__mro__):
+        if declaring_class in _PROTOCOL_MACHINERY_BASES:
+            continue
+        for member_name, raw_member in vars(declaring_class).items():
+            if is_contract_member_name(member_name, PROTOCOL_MACHINERY_DUNDER_NAMES):
+                members[member_name] = raw_member
+        for annotated_name in inspect.get_annotations(declaring_class):
+            if is_contract_member_name(annotated_name, PROTOCOL_MACHINERY_DUNDER_NAMES):
+                members.setdefault(annotated_name, None)
     return members
 
 
@@ -207,7 +219,7 @@ def conformance_findings_for_protocol(
     """Every member `native_class` and `protocol` disagree on."""
     class_name = held_name or native_class.__name__
     native_members = _contract_members_of_native_class(native_class)
-    protocol_members = _contract_members_of_protocol(protocol)
+    protocol_members = contract_members_of_protocol(protocol)
     findings: list[ConformanceFinding] = []
     for member_name in sorted(native_members.keys() - protocol_members.keys()):
         findings.append(
@@ -275,27 +287,18 @@ def conformance_findings_for_runtime_backed_function(
     return _signature_findings(held_name, native_callable, python_function, drop_receiver=False)
 
 
-def protocols_tatolab_stream_declares(stream_package: ModuleType) -> dict[str, type]:
-    """Every public `typing.Protocol` class a module of `tatolab.stream` defines, by name.
+def runtime_backed_protocols_tatolab_stream_declares(
+    stream_package: ModuleType,
+) -> dict[str, type]:
+    """Every Protocol a module of `tatolab.stream` declares `@runtime_backed_protocol`, by name.
 
-    Read from the modules rather than `__all__`: a Protocol a node is only ever
-    handed, such as a kernel, is runtime-backed without being exported.
+    Every module is imported first, so a Protocol no import chain reaches is
+    registered all the same.
     """
-    stream_modules = [stream_package] + [
+    for submodule in pkgutil.iter_modules(stream_package.__path__, f"{stream_package.__name__}."):
         importlib.import_module(submodule.name)
-        for submodule in pkgutil.iter_modules(
-            stream_package.__path__, f"{stream_package.__name__}."
-        )
-    ]
-    return {
-        class_name: defined_class
-        for stream_module in stream_modules
-        for class_name, defined_class in vars(stream_module).items()
-        if not class_name.startswith("_")
-        and inspect.isclass(defined_class)
-        and defined_class.__module__ == stream_module.__name__
-        and getattr(defined_class, "_is_protocol", False)
-    }
+    runtime_lend_module = importlib.import_module(f"{stream_package.__name__}._runtime_lend")
+    return dict(runtime_lend_module.runtime_backed_protocol_registry)
 
 
 def _sys_platform_condition_holds_here(condition: ast.expr) -> bool | None:
@@ -434,12 +437,12 @@ def holding_findings(
 def all_conformance_findings(
     engine_module: ModuleType,
     stream_package: ModuleType,
-    runtime_backed_function_registry: Iterable[Any],
+    runtime_backed_function_registrations: Iterable[RuntimeBackedFunctionRegistration],
     stub_source: str,
 ) -> list[ConformanceFinding]:
     """Every finding for the engine against `tatolab.stream` and `_engine.pyi`."""
-    protocols_by_name = protocols_tatolab_stream_declares(stream_package)
-    registrations = list(runtime_backed_function_registry)
+    protocols_by_name = runtime_backed_protocols_tatolab_stream_declares(stream_package)
+    registrations = list(runtime_backed_function_registrations)
     findings: list[ConformanceFinding] = []
     for protocol_name, protocol in sorted(protocols_by_name.items()):
         native_class = getattr(engine_module, protocol_name, None)
@@ -484,7 +487,7 @@ def stubtest_allowlist_of_names_held_by_tatolab_stream(
     ]
 
 
-def _real_inputs() -> tuple[ModuleType, ModuleType, list[Any], str]:
+def _real_inputs() -> tuple[ModuleType, ModuleType, list[RuntimeBackedFunctionRegistration], str]:
     import tatolab.stream
     from tatolab.stream._runtime_lend import runtime_backed_function_registry
 
@@ -492,7 +495,7 @@ def _real_inputs() -> tuple[ModuleType, ModuleType, list[Any], str]:
     return (
         engine_module,
         tatolab.stream,
-        list(runtime_backed_function_registry),
+        list(runtime_backed_function_registry.values()),
         ENGINE_STUB_PATH.read_text(),
     )
 
@@ -508,7 +511,7 @@ def main(arguments: list[str] | None = None) -> int:
     engine_module, stream_package, registrations, stub_source = _real_inputs()
     if parsed.print_stubtest_allowlist:
         for allowlist_entry in stubtest_allowlist_of_names_held_by_tatolab_stream(
-            protocols_tatolab_stream_declares(stream_package),
+            runtime_backed_protocols_tatolab_stream_declares(stream_package),
             (registration.native_callable_name for registration in registrations),
             stub_source,
         ):

@@ -40,7 +40,7 @@ from __future__ import annotations
 from types import TracebackType
 from typing import Literal, Protocol
 
-from ._runtime_lend import runtime_backed_function
+from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
 
 __all__ = [
     "MonotonicTimer",
@@ -49,6 +49,7 @@ __all__ = [
 ]
 
 
+@runtime_backed_protocol
 class MonotonicTimer(Protocol):
     """Drift-free periodic timer on the clock `monotonic_now_ns` reads.
 

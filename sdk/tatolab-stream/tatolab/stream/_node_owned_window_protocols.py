@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from ._runtime_lend import runtime_backed_protocol
+
 if TYPE_CHECKING:
     from ._gpu_protocols import GpuSurfaceHandle
     from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 
 
+@runtime_backed_protocol
 class NodeOwnedWindow(Protocol):
     """A window this node owns, presented by the engine at vsync.
 
@@ -85,6 +88,7 @@ class NodeOwnedWindow(Protocol):
     def __repr__(self) -> str: ...
 
 
+@runtime_backed_protocol
 class NodeOwnedWindowEvents(Protocol):
     """The coalesced state one `drain_events()` took off a window."""
 

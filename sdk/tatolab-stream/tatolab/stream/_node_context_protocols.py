@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, overload
 
-from ._runtime_lend import runtime_backed_function
+from ._runtime_lend import runtime_backed_function, runtime_backed_protocol
 
 if TYPE_CHECKING:
     from ._gpu_protocols import GpuContextFullAccess, GpuContextLimitedAccess
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 _BagReadTarget = TypeVar("_BagReadTarget")
 
 
+@runtime_backed_protocol
 class NodeLinkDataAccess(Protocol):
     """One node's links. The engine binds it; app code never builds one.
 
@@ -156,6 +157,7 @@ class NodeLinkDataAccess(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class RuntimeContextFullAccess(Protocol):
     """Privileged runtime context handed to `setup` / `teardown` / `start` / `stop`.
 
@@ -220,6 +222,7 @@ class RuntimeContextFullAccess(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class RuntimeContextLimitedAccess(Protocol):
     """Restricted runtime context handed to `process` / `on_pause` / `on_resume`.
 
@@ -271,6 +274,7 @@ class RuntimeContextLimitedAccess(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class LinkInputDataReader(Protocol):
     """A node's input ports, as `ctx.inputs`.
 
@@ -362,6 +366,7 @@ class LinkInputDataReader(Protocol):
         ...
 
 
+@runtime_backed_protocol
 class LinkOutputDataWriter(Protocol):
     """A node's output ports, as `ctx.outputs`.
 

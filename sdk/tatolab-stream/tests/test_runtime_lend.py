@@ -114,13 +114,13 @@ def test_only_the_lend_module_names_the_runtime_engine() -> None:
 def test_every_runtime_backed_function_is_exercised_below() -> None:
     assert {
         registration.python_function.__name__
-        for registration in runtime_backed_function_registry
+        for registration in runtime_backed_function_registry.values()
     } == set(ARGUMENTS_FOR_EACH_RUNTIME_BACKED_FUNCTION)
 
 
 @pytest.mark.parametrize(
     "registration",
-    runtime_backed_function_registry,
+    list(runtime_backed_function_registry.values()),
     ids=lambda registration: registration.python_function.__name__,
 )
 def test_a_runtime_backed_function_raises_naming_itself_where_nothing_is_lent(

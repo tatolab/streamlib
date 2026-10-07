@@ -19,8 +19,9 @@ from runtime_backed_protocol_conformance import (
     all_conformance_findings,
     conformance_findings_for_protocol,
     conformance_findings_for_runtime_backed_function,
+    contract_members_of_protocol,
     holding_findings,
-    protocols_tatolab_stream_declares,
+    runtime_backed_protocols_tatolab_stream_declares,
     stubtest_allowlist_of_names_held_by_tatolab_stream,
 )
 from tatolab.runtime import _engine
@@ -36,9 +37,8 @@ def _copy_of_protocol(
     """A new Protocol with `protocol`'s own members, less some and plus others."""
     copied_members = {
         member_name: member
-        for member_name, member in vars(protocol).items()
+        for member_name, member in contract_members_of_protocol(protocol).items()
         if member_name not in members_dropped
-        and (not member_name.startswith("_") or member_name in ("__enter__", "__exit__"))
     }
     copied_members.update(members_added or {})
     return types.new_class(
@@ -53,21 +53,24 @@ def _finding_texts_by_held_name(findings: "list[ConformanceFinding]") -> "dict[s
 
 
 def _real_registry_native_names() -> "list[str]":
-    return [registration.native_callable_name for registration in runtime_backed_function_registry]
+    return [
+        registration.native_callable_name
+        for registration in runtime_backed_function_registry.values()
+    ]
 
 
 def test_the_engine_conforms_to_tatolab_stream_and_its_stub():
     findings = all_conformance_findings(
         _engine,
         tatolab.stream,
-        runtime_backed_function_registry,
+        runtime_backed_function_registry.values(),
         ENGINE_STUB_PATH.read_text(),
     )
     assert [str(finding) for finding in findings] == []
 
 
 def test_every_runtime_backed_name_the_ticket_lists_is_held_by_tatolab_stream():
-    held_by_tatolab_stream = set(protocols_tatolab_stream_declares(tatolab.stream)) | set(
+    held_by_tatolab_stream = set(runtime_backed_protocols_tatolab_stream_declares(tatolab.stream)) | set(
         _real_registry_native_names()
     )
     assert {
@@ -172,6 +175,58 @@ def test_a_signature_change_is_reported_for_presence_of_a_default_kind_and_order
     assert findings == {"MonotonicTimer.wait": expected_disagreement}
 
 
+def test_a_dunder_the_native_class_gains_is_reported_whatever_its_name():
+    native_class_with_gained_dunders = type(
+        "MonotonicTimer",
+        (),
+        {
+            **{
+                member_name: member
+                for member_name, member in vars(getattr(_engine, "MonotonicTimer")).items()
+                if member_name not in ("__dict__", "__weakref__")
+            },
+            "__eq__": lambda self, other: self is other,
+            "__index__": lambda self: 0,
+        },
+    )
+    findings = _finding_texts_by_held_name(
+        conformance_findings_for_protocol(
+            tatolab.stream.MonotonicTimer, native_class_with_gained_dunders
+        )
+    )
+    assert findings == {
+        "MonotonicTimer.__eq__": "on the native class and missing from the Protocol",
+        "MonotonicTimer.__hash__": "on the native class and missing from the Protocol",
+        "MonotonicTimer.__index__": "on the native class and missing from the Protocol",
+    }
+
+
+def test_a_member_a_protocol_inherits_from_a_protocol_base_is_part_of_its_contract():
+    class _MembersTheTimerShares(Protocol):
+        def wait(self, timeout_ms: int = 100) -> int: ...
+
+    timer_declaring_wait_on_a_base = types.new_class(
+        "MonotonicTimer",
+        (_MembersTheTimerShares, Protocol),
+        exec_body=lambda namespace: namespace.update(
+            {
+                member_name: member
+                for member_name, member in contract_members_of_protocol(
+                    tatolab.stream.MonotonicTimer
+                ).items()
+                if member_name != "wait"
+            }
+        ),
+    )
+    assert "wait" not in vars(timer_declaring_wait_on_a_base)
+    assert (
+        conformance_findings_for_protocol(
+            timer_declaring_wait_on_a_base, getattr(_engine, "MonotonicTimer")
+        )
+        == []
+    )
+
+
 def test_a_property_declared_as_a_method_is_reported_as_a_kind_mismatch():
     def interval_ns(self) -> int: ...
 
@@ -217,7 +272,7 @@ def test_a_name_declared_in_the_stub_and_as_a_protocol_is_reported():
     findings = _finding_texts_by_held_name(
         holding_findings(
             _engine,
-            protocols_tatolab_stream_declares(tatolab.stream),
+            runtime_backed_protocols_tatolab_stream_declares(tatolab.stream),
             _real_registry_native_names(),
             stub_source,
         )
@@ -237,7 +292,7 @@ def test_a_class_typed_as_its_protocol_that_constructs_with_arguments_is_reporte
     findings = _finding_texts_by_held_name(
         holding_findings(
             engine_with_a_changed_constructor,
-            protocols_tatolab_stream_declares(tatolab.stream),
+            runtime_backed_protocols_tatolab_stream_declares(tatolab.stream),
             _real_registry_native_names(),
             ENGINE_STUB_PATH.read_text(),
         )
@@ -255,7 +310,7 @@ def test_a_name_the_engine_exports_and_nothing_declares_is_reported():
     findings = _finding_texts_by_held_name(
         holding_findings(
             _engine,
-            protocols_tatolab_stream_declares(tatolab.stream),
+            runtime_backed_protocols_tatolab_stream_declares(tatolab.stream),
             _real_registry_native_names(),
             stub_source,
         )
@@ -267,7 +322,7 @@ def test_a_name_the_engine_exports_and_nothing_declares_is_reported():
 
 def test_the_stubtest_allowlist_names_exactly_what_only_tatolab_stream_declares():
     allowlist = stubtest_allowlist_of_names_held_by_tatolab_stream(
-        protocols_tatolab_stream_declares(tatolab.stream),
+        runtime_backed_protocols_tatolab_stream_declares(tatolab.stream),
         _real_registry_native_names(),
         ENGINE_STUB_PATH.read_text(),
     )
