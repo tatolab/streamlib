@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 from typing import Any
 
@@ -331,6 +332,45 @@ def test_what_a_module_prints_at_import_reaches_stderr_and_never_the_document(
     ):
         assert noise in described.stderr
         assert noise not in described.stdout
+
+
+def test_a_describe_exits_once_its_document_is_out_whatever_a_module_left_running(
+    project_directory: Path,
+):
+    """A non-daemon thread or a blocking atexit handler a module leaves would
+    hold a finalizing interpreter past the parent's bound."""
+    write_project_module(
+        project_directory,
+        "lingering_nodes",
+        """
+        import atexit
+        import threading
+        import time
+
+        from tatolab.stream import node
+
+        threading.Thread(target=time.sleep, args=(30,)).start()
+        atexit.register(time.sleep, 30)
+
+
+        @node(execution="manual")
+        class Lingering:
+            @node.output()
+            def nothing_to_downstream(self) -> None: ...
+
+            def process(self, ctx) -> None: ...
+        """,
+    )
+    started = time.monotonic()
+
+    described = describe(project_directory, "lingering_nodes:Lingering")
+
+    assert time.monotonic() - started < 15.0, "the describe waited on what its module left"
+    assert described.returncode == 0, described.stderr
+    assert [
+        described_node_type["import_path"]
+        for described_node_type in described_document(described)["described_node_types"]
+    ] == ["lingering_nodes:Lingering"]
 
 
 def test_several_paths_in_one_call_are_described_and_refused_in_order(project_directory: Path):

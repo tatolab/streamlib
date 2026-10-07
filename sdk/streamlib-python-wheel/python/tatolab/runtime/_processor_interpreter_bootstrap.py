@@ -884,6 +884,20 @@ def _reserve_stdout_for_the_described_document() -> int:
     return described_document_fd
 
 
+def _end_the_describe_without_finalizing_the_interpreter(exit_status: int) -> NoReturn:
+    """Exit at once, the document already written.
+
+    Finalizing would join every non-daemon thread and run every atexit handler
+    a described module left, and the parent refuses a describe that has not
+    exited within its bound however complete its document. The parent kills
+    the describe's process group, so nothing the module started outlives it.
+    """
+    for standard_stream in (sys.__stdout__, sys.stderr):
+        if standard_stream is not None:
+            standard_stream.flush()
+    os._exit(exit_status)
+
+
 def describe_processor_classes_onto_stdout(import_paths: "list[str]") -> int:
     """Print one JSON document describing each of `import_paths`; 1 if any was refused.
 
@@ -1524,7 +1538,9 @@ def main(arguments: "list[str]") -> int:
                 f"`{DESCRIBE_ARGUMENT}` takes one or more import paths, `module:qualname`"
             )
             return 1
-        return describe_processor_classes_onto_stdout(arguments[1:])
+        _end_the_describe_without_finalizing_the_interpreter(
+            describe_processor_classes_onto_stdout(arguments[1:])
+        )
     if arguments:
         _write_a_bootstrap_fatal_to_raw_stderr(
             f"a processor interpreter takes no arguments, or `{DESCRIBE_ARGUMENT}` and "
