@@ -38,14 +38,18 @@ runtime_backed_function_registry: list[RuntimeBackedFunctionRegistration] = []
 _native_callables_resolved_by_name: dict[str, Callable[..., Any]] = {}
 
 
+class RuntimeIsNotLentToThisInterpreterError(RuntimeError):
+    """A runtime-backed call made where no runtime lends `tatolab.runtime`."""
+
+
 def runtime_engine_module_lent_to_this_interpreter(
     called_function_name: str,
 ) -> ModuleType:
-    """Import `tatolab.runtime._engine`, or raise `RuntimeError` naming the caller."""
+    """Import `tatolab.runtime._engine`, or raise naming the caller."""
     try:
         return importlib.import_module(RUNTIME_ENGINE_MODULE_NAME)
     except ImportError as engine_import_failure:
-        raise RuntimeError(
+        raise RuntimeIsNotLentToThisInterpreterError(
             f"{called_function_name}() runs only in the interpreter the runtime "
             "starts for a node, where tatolab.runtime is lent; "
             f"{RUNTIME_ENGINE_MODULE_NAME} cannot be imported here "

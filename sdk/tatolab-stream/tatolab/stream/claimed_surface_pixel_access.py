@@ -34,6 +34,7 @@ from ._gpu_protocols import (
     GpuSurfaceHandle,
 )
 from ._node_context_protocols import gpu_limited_access_of_the_typed_read_in_progress
+from ._runtime_lend import RuntimeIsNotLentToThisInterpreterError
 from .log import warn
 
 __all__ = ["ClaimedSurfacePixelAccess", "PixelAccessToOneClaimedSurface"]
@@ -466,7 +467,12 @@ class ClaimedSurfacePixelAccess:
     def _take_the_claims_on(
         self, surface_id_by_declared_field: "dict[str, Any]"
     ) -> None:
-        gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
+        try:
+            gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
+        except RuntimeIsNotLentToThisInterpreterError:
+            # No typed read can be in progress where no runtime is lent, so the
+            # type builds unclaimed, as it does outside a read where one is.
+            gpu_limited_access = None
         cast_type_name = type(self).__name__
         object.__setattr__(
             self,
