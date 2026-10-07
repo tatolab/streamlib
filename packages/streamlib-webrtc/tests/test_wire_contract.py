@@ -22,6 +22,7 @@ from streamlib_webrtc.processors import (
     encoded_audio_packet_bag,
     encoded_video_frame_bag,
 )
+from tatolab.runtime import _engine
 from tatolab.stream import EncodedAudioPacket, EncodedVideoFrame, NodeLinkDataAccess
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
@@ -85,13 +86,13 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     notify_service_name = f"{unique}_dest/notify"
     link_id = f"L-{unique}"
 
-    destination = NodeLinkDataAccess()
+    destination = _engine.NodeLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT, channel_service_name, channel_service_name,
         notify_service_name,
         "read_next_in_order", 8, 8, 2, 1, link_id,
     )  # fmt: skip
-    source = NodeLinkDataAccess()
+    source = _engine.NodeLinkDataAccess()
     source.wire_output_link(
         OUTPUT_PORT, channel_service_name, notify_service_name,
         1024, 1 << 20, 8, 2, 1, link_id,
