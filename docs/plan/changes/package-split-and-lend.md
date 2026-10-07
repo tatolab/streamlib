@@ -240,7 +240,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   sixty frames). Every `<!-- verify: pytest sdk/streamlib-python-wheel/tests/… -->` is re-pointed
   to the suite its test lands in.
 - §Processor model's entry "A Python processor class registers its descriptor … when
-  `@processor` runs" (`:1333-1342`) — `register_declared_processor_class` and
+  `@processor` runs" (`:1338-1341`) — `register_declared_processor_class` and
   `install_constructor_for_registered_descriptor` are deleted; `@node` registers nothing
   (above), and a type is described at load.
 - §Media I/O `:2630-2633` (the audio built-ins) and the codec-blocks entry `:2818-2830`, and

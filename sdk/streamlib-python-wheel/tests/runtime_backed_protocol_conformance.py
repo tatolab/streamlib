@@ -9,7 +9,8 @@ native module implements them. This gate compares the two through the
 signatures pyo3 publishes (`__text_signature__`), member for member, and holds
 every class and callable `tatolab.runtime._engine` exports to exactly one
 declaration — a `tatolab.stream` Protocol or runtime-backed function, or an
-entry in `_engine.pyi` — never both and never neither.
+entry in `_engine.pyi` — never both and never neither. pyo3 publishes no
+annotations, so return and property types are not compared.
 
 Run as a script it prints its findings and exits non-zero on any.
 `--print-stubtest-allowlist` prints instead the `mypy.stubtest` allowlist of the
@@ -383,9 +384,8 @@ def holding_findings(
     """Every engine export held by no declaration or by two, and every declaration of nothing."""
     exported_names = {
         exported_name
-        for exported_name, exported in vars(engine_module).items()
+        for exported_name in vars(engine_module)
         if not exported_name.startswith("_")
-        and callable(exported)
     }
     held_by_tatolab_stream = set(protocols_by_name) | set(
         native_names_runtime_backed_functions_forward_to

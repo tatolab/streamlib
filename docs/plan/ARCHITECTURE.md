@@ -1335,12 +1335,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   changes only when its class's public name does — renaming or moving the runtime's crates
   and modules never changes one — and the first golden graph a runtime is held to already
   carries it. Owner, 2026-10-02. [built-in-node-type; package-split-and-lend]
-- **DECIDED** — A Python processor class registers its descriptor — identity,
-  description, ports, config schema — when `@processor` runs, so it is in the processor
-  catalog before its first add; the constructor arrives at first add exactly as today.
-  Decoration inside a helper process registers nothing, because a helper hosts no
-  graph. A class decorated twice under one import path meets the existing
-  duplicate-path refusal.
+- **DECIDED** — `@node` registers nothing: it writes the class's declaration stamps and
+  returns the class. A Python node class reaches the node catalog when a graph that names
+  it loads, which registers its descriptor and its constructor together.
   [agent-readable-processor-catalog — SHIPPED #2228; reopened by one-runtime-per-machine: declarations readable without an engine; amended by package-split-and-lend: `@node` registers nothing]
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
