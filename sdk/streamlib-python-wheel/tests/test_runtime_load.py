@@ -16,9 +16,11 @@ by node name is read on the rig, off a running stream's own control plane.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -271,7 +273,9 @@ class NodeModuleWhoseDescribeHoldsTheLoad:
 
     def release_the_load(self) -> None:
         if self._describing_interpreter_connection is not None:
-            self._describing_interpreter_connection.sendall(b"r")
+            # A describing interpreter already killed has nothing left to release.
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                self._describing_interpreter_connection.sendall(b"r")
             self._describing_interpreter_connection.close()
             self._describing_interpreter_connection = None
 
@@ -1141,6 +1145,63 @@ def test_a_held_loads_own_refusal_stands_over_a_load_refused_while_it_was_underw
     run_refusal = run_expecting_a_refusal(runtime)
     assert str(held_load_refusal) in str(run_refusal)
     assert "still underway" not in str(run_refusal)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGINT is POSIX's")
+def test_a_ctrl_c_during_a_loads_describe_raises_keyboard_interrupt_at_once(
+    held_node_module: NodeModuleWhoseDescribeHoldsTheLoad,
+):
+    """The describe leads its own process group, so a terminal's Ctrl-C reaches
+    only the app; the load still has to give it up rather than wait the
+    describe's bound out."""
+    loading_app = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(
+                f"""
+                import sys
+                import tatolab.runtime
+
+                runtime = tatolab.runtime.Runtime()
+                try:
+                    runtime.load(
+                        {{"nodes": [{{
+                            "name": "held",
+                            "type": "{held_node_module.name}:LoadedFrameRelay",
+                            "config": {{}},
+                        }}]}},
+                        project_directory={str(held_node_module.project_directory)!r},
+                        interpreter=sys.executable,
+                    )
+                except KeyboardInterrupt:
+                    print("the load raised KeyboardInterrupt", flush=True)
+                    sys.exit(0)
+                print("the load returned", flush=True)
+                sys.exit(1)
+                """
+            ),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert held_node_module.wait_until_the_load_reaches_the_import(), (
+            "the load never reached the describe"
+        )
+        interrupted_at = time.monotonic()
+        loading_app.send_signal(signal.SIGINT)
+        standard_output, standard_error = loading_app.communicate(timeout=15)
+        interrupt_honoured_within_seconds = time.monotonic() - interrupted_at
+    finally:
+        if loading_app.poll() is None:
+            loading_app.kill()
+            loading_app.communicate()
+
+    assert loading_app.returncode == 0, standard_output + standard_error
+    assert "the load raised KeyboardInterrupt" in standard_output
+    assert interrupt_honoured_within_seconds < RUN_REFUSAL_DEADLINE_SECONDS / 2
 
 
 # ---- a loaded stream, run and read back by name -----------------------------

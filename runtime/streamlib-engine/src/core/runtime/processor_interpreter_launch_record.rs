@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 
@@ -15,16 +16,23 @@ use crate::core::processors::PROCESSOR_REGISTRY;
 use super::StreamEnvironment;
 
 /// What a runtime starts its processor interpreters with: the lend directory
-/// its host handed it, and the stream environment recorded at the last load.
+/// its host handed it, the stream environment recorded at the last load, and
+/// whether its host interrupted its describes.
 #[derive(Default)]
 pub(crate) struct ProcessorInterpreterLaunchRecord {
     processor_interpreter_lend_directory: Mutex<Option<PathBuf>>,
     stream_environment_recorded_at_the_last_load: Mutex<Option<StreamEnvironment>>,
+    describes_interrupted_by_the_host: AtomicBool,
 }
 
 impl ProcessorInterpreterLaunchRecord {
     pub(crate) fn set_processor_interpreter_lend_directory(&self, lend_directory: PathBuf) {
         *self.processor_interpreter_lend_directory.lock() = Some(lend_directory);
+    }
+
+    pub(crate) fn interrupt_every_describe(&self) {
+        self.describes_interrupted_by_the_host
+            .store(true, Ordering::SeqCst);
     }
 
     pub(crate) fn record_the_stream_environment_of_a_load(
@@ -101,6 +109,10 @@ impl ProcessorInterpreterLaunchRecord {
             node_types,
             &stream_environment,
             &lend_directory,
+            &|| {
+                self.describes_interrupted_by_the_host
+                    .load(Ordering::SeqCst)
+            },
         )
     }
 }
@@ -260,6 +272,47 @@ mod tests {
             serde_json::json!([]),
             "a refused load adds nothing"
         );
+    }
+
+    /// A host whose user interrupts a load mid-describe — a module that hangs
+    /// at import — gets the load back long before the describe's bound.
+    #[test]
+    #[serial]
+    fn a_load_whose_host_interrupts_its_describe_returns_refusing_the_type() {
+        let python_type = import_path("my_app.hangs_at_import:Blur");
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let interpreter = project_directory.path().join("stub-python");
+        std::fs::write(&interpreter, "#!/bin/sh\nsleep 30 &\nwait\n")
+            .expect("the stub interpreter is written");
+        std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755))
+            .expect("the stub interpreter is executable");
+        let runtime = std::sync::Arc::new(Runner::new().unwrap());
+        runtime.set_processor_interpreter_lend_directory("/opt/tatolab/lib/tatolab/lend".into());
+        let started = std::time::Instant::now();
+
+        let interrupting_runtime = std::sync::Arc::clone(&runtime);
+        let interrupter = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            interrupting_runtime.interrupt_every_processor_interpreter_describe();
+        });
+        let refusal = runtime
+            .load_graph_snapshot(
+                &a_graph_of(&[&python_type]),
+                Some(StreamEnvironment {
+                    project_directory: project_directory.path().to_path_buf(),
+                    interpreter,
+                }),
+            )
+            .expect_err("an interrupted describe registers nothing");
+        interrupter.join().unwrap();
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "the load held its host's interrupt for the describe's whole bound"
+        );
+        let (node_types, refusal) = refused_node_types(refusal);
+        assert_eq!(node_types, [python_type]);
+        assert!(refusal.contains("interrupted"), "{refusal}");
     }
 
     #[test]

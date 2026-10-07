@@ -64,6 +64,10 @@ const DESCRIBE_SHUTDOWN_OBSERVATION_INTERVAL: Duration = Duration::from_millis(5
 /// processor id a processor interpreter's are.
 const DESCRIBE_STANDARD_ERROR_LOG_LABEL: &str = "processor-interpreter-describe";
 
+/// Why every type a describe the host interrupted was asked for is refused.
+const DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL: &str =
+    "the runtime's host interrupted the describe";
+
 /// How much of a describe's standard output is kept; the rest is read and
 /// dropped, so the describe never blocks on a full pipe.
 const DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES: u64 = 16 * 1024 * 1024;
@@ -125,10 +129,14 @@ pub(crate) fn processor_interpreter_describe_command(
 /// Describe `import_paths` in one start of the stream's interpreter and
 /// register each with a constructor that starts its processor interpreter in
 /// `stream_environment`, replacing whatever an earlier describe registered.
+///
+/// `is_interrupted_by_the_host` reporting true at any point refuses them,
+/// killing a describe already started.
 pub(crate) fn describe_and_register_node_types_in_a_processor_interpreter(
     import_paths: &[ProcessorClassImportPath],
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<()> {
     if import_paths.is_empty() {
         return Ok(());
@@ -139,6 +147,7 @@ pub(crate) fn describe_and_register_node_types_in_a_processor_interpreter(
         lend_directory,
         PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
         crate::core::runtime::is_runtime_shutdown_requested,
+        is_interrupted_by_the_host,
     )?;
     for declaration in declarations {
         register_the_described_node_type(declaration, stream_environment, lend_directory)?;
@@ -176,19 +185,26 @@ fn register_the_described_node_type(
 
 /// Describe `import_paths` in one start of the stream's interpreter, bounded
 /// by `describe_bound` and cut short by a shutdown `is_shutdown_requested`
-/// reports during it, returning their declarations in the order asked.
+/// reports during it or by `is_interrupted_by_the_host` reporting true,
+/// returning their declarations in the order asked.
 pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     import_paths: &[ProcessorClassImportPath],
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
     describe_bound: Duration,
     is_shutdown_requested: fn() -> bool,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<Vec<PythonProcessorDeclaration>> {
     let refuse_every_requested_type = |refusal: String| Error::NodeTypesNotDescribed {
         node_types: import_paths.to_vec(),
         refusal,
     };
     let interpreter = stream_environment.interpreter.display();
+    if is_interrupted_by_the_host() {
+        return Err(refuse_every_requested_type(
+            DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL.to_string(),
+        ));
+    }
 
     let mut command =
         processor_interpreter_describe_command(import_paths, stream_environment, lend_directory)
@@ -216,8 +232,12 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
         )
     });
 
-    let describe_exit =
-        wait_for_the_describe_to_exit(&child, describe_bound, is_shutdown_requested);
+    let describe_exit = wait_for_the_describe_to_exit(
+        &child,
+        describe_bound,
+        is_shutdown_requested,
+        is_interrupted_by_the_host,
+    );
     let exit_status = take_the_describe_process_group_down_and_reap(&mut child);
     let quoted_standard_error = standard_error_tail_as_a_refusal_quotes_it(
         &standard_error_tail
@@ -241,6 +261,12 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
             return Err(refuse_every_requested_type(format!(
                 "shutdown began while the stream's interpreter `{interpreter}` was still \
                  describing them, and it was killed. {quoted_standard_error}"
+            )));
+        }
+        DescribeExitAwaited::InterruptedByTheHost => {
+            return Err(refuse_every_requested_type(format!(
+                "{DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL}: the stream's interpreter \
+                 `{interpreter}` was killed. {quoted_standard_error}"
             )));
         }
     }
@@ -328,17 +354,20 @@ enum DescribeExitAwaited {
     Exited,
     BoundElapsed,
     ShutdownRequested,
+    InterruptedByTheHost,
 }
 
 /// Wait up to `describe_bound` for the describe to exit, leaving it unreaped.
 ///
 /// Only a shutdown requested *during* the wait cuts it short: the escalation is
 /// process-global and taken only when a run ends, so one already raised belongs
-/// to a run that has not taken it yet.
+/// to a run that has not taken it yet. A host interrupt cuts it short whenever
+/// it is read.
 fn wait_for_the_describe_to_exit(
     child: &Child,
     describe_bound: Duration,
     is_shutdown_requested: fn() -> bool,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> DescribeExitAwaited {
     let shutdown_was_already_requested = is_shutdown_requested();
     let deadline = Instant::now() + describe_bound;
@@ -351,6 +380,9 @@ fn wait_for_the_describe_to_exit(
         }
         if !shutdown_was_already_requested && is_shutdown_requested() {
             return DescribeExitAwaited::ShutdownRequested;
+        }
+        if is_interrupted_by_the_host() {
+            return DescribeExitAwaited::InterruptedByTheHost;
         }
         if Instant::now() >= deadline {
             return DescribeExitAwaited::BoundElapsed;
@@ -486,6 +518,7 @@ mod tests {
                 Path::new("/opt/tatolab/lib/tatolab/lend"),
                 describe_bound,
                 is_shutdown_requested,
+                &|| false,
             )
         }
 
@@ -721,6 +754,42 @@ mod tests {
     }
 
     #[test]
+    #[serial]
+    fn a_describe_its_host_interrupts_is_killed_and_refuses_every_type_saying_so() {
+        let stub = StubProcessorInterpreter::running("sleep 30 &\nwait");
+        let started = Instant::now();
+        let interrupted_after = Duration::from_millis(200);
+
+        let refusal = match describe_node_types_in_a_processor_interpreter_within(
+            &[import_path(GOOD_TYPE)],
+            &stub.stream_environment,
+            Path::new("/opt/tatolab/lib/tatolab/lend"),
+            PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
+            || false,
+            &|| started.elapsed() >= interrupted_after,
+        ) {
+            Err(Error::NodeTypesNotDescribed {
+                node_types,
+                refusal,
+            }) => {
+                assert_eq!(node_types, [import_path(GOOD_TYPE)]);
+                refusal
+            }
+            Err(other) => panic!("expected NodeTypesNotDescribed, got {other:?}"),
+            Ok(_) => panic!("a describe its host interrupted was accepted"),
+        };
+
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the describe held its host's interrupt for its whole bound"
+        );
+        assert!(
+            refusal.contains(DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL),
+            "{refusal}"
+        );
+    }
+
+    #[test]
     fn a_project_directory_holding_the_path_list_separator_refuses_every_type_naming_it() {
         let refusal = describe_node_types_in_a_processor_interpreter_within(
             &[import_path(GOOD_TYPE), import_path("my_app.nodes:Sharpen")],
@@ -731,6 +800,7 @@ mod tests {
             Path::new("/opt/tatolab/lib/tatolab/lend"),
             PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
             || false,
+            &|| false,
         );
 
         match refusal {

@@ -616,12 +616,70 @@ fn load_the_claimed_graph(
         )));
     }
 
-    // Detached because the load takes the graph lock, which an engine thread
-    // can hold while it needs this interpreter's GIL.
-    python
-        .detach(|| engine.load_graph_snapshot(&graph_snapshot, Some(stream_environment)))
-        .map_err(|load_failure| PyRuntimeError::new_err(load_failure.to_string()))?;
+    load_the_graph_snapshot_observing_this_interpreters_signals(
+        python,
+        engine,
+        &graph_snapshot,
+        stream_environment,
+    )?;
     Ok(graph_snapshot.stream)
+}
+
+/// How often a load re-reads whether this interpreter has a signal pending.
+const LOAD_PENDING_SIGNAL_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Load `graph_snapshot` on a thread of its own, the GIL released, while this
+/// thread runs any pending signal handler. One that raises — a Ctrl-C's
+/// `KeyboardInterrupt` — kills the describe the load is in, and is what this
+/// returns once the load has.
+///
+/// The GIL is released because the load takes the graph lock, which an engine
+/// thread can hold while it needs this interpreter's GIL; nothing else reads
+/// a signal before `run()` owns them.
+fn load_the_graph_snapshot_observing_this_interpreters_signals(
+    python: Python<'_>,
+    engine: &Arc<Runner>,
+    graph_snapshot: &GraphSnapshot,
+    stream_environment: StreamEnvironment,
+) -> PyResult<()> {
+    let (load_outcome_sender, load_outcome_receiver) = std::sync::mpsc::channel();
+    let load_outcome_receiver = Mutex::new(load_outcome_receiver);
+    let receive_the_load_outcome_within = |wait: Option<Duration>| {
+        python.detach(|| {
+            let load_outcome_receiver = load_outcome_receiver
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match wait {
+                Some(wait) => load_outcome_receiver.recv_timeout(wait).ok(),
+                None => load_outcome_receiver.recv().ok(),
+            }
+        })
+    };
+    let load_outcome = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let _ = load_outcome_sender.send(std::panic::catch_unwind(AssertUnwindSafe(|| {
+                engine.load_graph_snapshot(graph_snapshot, Some(stream_environment))
+            })));
+        });
+        loop {
+            if let Some(load_outcome) =
+                receive_the_load_outcome_within(Some(LOAD_PENDING_SIGNAL_OBSERVATION_INTERVAL))
+            {
+                return Ok(load_outcome);
+            }
+            if let Err(raised_by_a_signal_handler) = python.check_signals() {
+                engine.interrupt_every_processor_interpreter_describe();
+                receive_the_load_outcome_within(None);
+                return Err(raised_by_a_signal_handler);
+            }
+        }
+    })?;
+    match load_outcome {
+        Ok(load_outcome) => {
+            load_outcome.map_err(|load_failure| PyRuntimeError::new_err(load_failure.to_string()))
+        }
+        Err(load_panic) => std::panic::resume_unwind(load_panic),
+    }
 }
 
 #[pymethods]

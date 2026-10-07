@@ -1196,6 +1196,13 @@ impl Runner {
             .set_processor_interpreter_lend_directory(lend_directory);
     }
 
+    /// Kill any describe this runtime is running and refuse every later one —
+    /// its host's user interrupted the load that started it.
+    pub fn interrupt_every_processor_interpreter_describe(&self) {
+        self.processor_interpreter_launch_record
+            .interrupt_every_describe();
+    }
+
     /// The stream environment the last [`Self::load_graph_snapshot`] recorded.
     #[cfg(test)]
     pub(crate) fn stream_environment_recorded_at_the_last_load(
