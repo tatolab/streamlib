@@ -27,6 +27,9 @@ license = { text = "BUSL-1.1" }
 # the root file stays the single copy and there is no second one to drift.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+# The stream package at this wheel's own version, so an installed engine keeps
+# running the streams written against it.
+dependencies = ["tatolab-stream==0.37.1"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -118,11 +121,12 @@ extend-select = ["A"]
 # The wheel's Python half, checked at the version floor rather than whatever
 # interpreter the venv happens to be — `requires-python` is the promise.
 include = ["python", "tests"]
-# The package is checked from source, not from an install, so `tests/` needs
-# the package root on the search path. Without it a checkout that has not run
-# `maturin develop` reports every `import tatolab.stream` unresolved — which is
+# The packages are checked from source, not from an install, so `tests/` needs
+# both package roots on the search path: this project's `tatolab.runtime` and
+# the stream distribution's `tatolab.stream`. Without them a checkout that has
+# not run `maturin develop` reports every such import unresolved — which is
 # precisely the state the no-build job runs in.
-extraPaths = ["python"]
+extraPaths = ["python", "../tatolab-stream"]
 pythonVersion = "3.10"
 # Standard rather than strict: strict turns on `reportPrivateUsage`, which
 # fights the `_engine` / `_NativeRuntime` shape this package is built on, and
@@ -140,5 +144,5 @@ reportMissingModuleSource = "none"
 # the Python version the scaffold pins.
 [[tool.pyright.executionEnvironments]]
 root = "python/tatolab/runtime/_scaffold_template"
-extraPaths = ["python"]
+extraPaths = ["python", "../tatolab-stream"]
 pythonVersion = "3.12"

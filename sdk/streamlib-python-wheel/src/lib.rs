@@ -93,10 +93,6 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_processor_registration::register_declared_processor_class,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
         python_processor_registration::processor_class_import_paths_in_this_processes_catalog,
         module
     )?)?;

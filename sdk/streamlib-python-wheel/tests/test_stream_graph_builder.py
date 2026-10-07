@@ -407,7 +407,7 @@ def test_a_node_class_in_the_entry_file_is_refused_naming_stream_py() -> None:
     entry_file_detector = type(
         "EntryFileDetector",
         (),
-        {"__module__": "__main__", "__streamlib_processor_declared__": True},
+        {"__module__": "__main__", "__tatolab_node_declared__": True},
     )
 
     with pytest.raises(ValueError) as refusal:
@@ -441,7 +441,7 @@ def test_a_class_both_function_local_and_in_the_entry_file_gets_the_function_loc
         {
             "__module__": "__main__",
             "__qualname__": "build.<locals>.Local",
-            "__streamlib_processor_declared__": True,
+            "__tatolab_node_declared__": True,
         },
     )
 

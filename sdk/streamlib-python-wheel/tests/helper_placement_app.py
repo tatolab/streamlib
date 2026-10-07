@@ -23,17 +23,13 @@ from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 from helper_placement_processors import (
     DiesAbruptlyProbe,
     ForksAWorkerThatOutlivesItProbe,
-    ReportsItsOwnProcessesProcessorCatalog,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessVideoSink,
     ReportsUpstreamProcessSink,
     SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
 )
-from tatolab.runtime._engine import (
-    engine_build_id_compiled_into_this_extension,
-    processor_class_import_paths_in_this_processes_catalog,
-)
+from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
 
 MARKER_PREFIX = "MARKER:"
 
@@ -103,12 +99,6 @@ def native_test_pattern_into_python_video_sink(stream_builder: StreamBuilder) ->
     )
     sink = stream_builder.add(ReportsItsOwnProcessVideoSink)
     stream_builder.connect(pattern.output("video"), sink.input("video_from_upstream"))
-
-
-@stream
-def one_processor_reporting_its_own_processes_catalog(stream_builder: StreamBuilder) -> None:
-    """A processor that reports the catalog of the helper hosting it."""
-    stream_builder.add(ReportsItsOwnProcessesProcessorCatalog)
 
 
 @stream
@@ -219,24 +209,6 @@ def scenario_a_crashed_helper_leaves_the_pipeline_running() -> None:
     had in flight is lost rather than silently replayed.
     """
     runtime = _runtime_loaded_with(dies_abruptly_beside_a_survivor_pair)
-    marker(f"APP_PID={os.getpid()}")
-    runtime.run()
-    marker("CLEAN_EXIT")
-
-
-def scenario_a_helper_registers_nothing_it_imports() -> None:
-    """The class is in the app's catalog from its import, and in no child's.
-
-    The app side is the decorator's whole point — the class is discoverable
-    without ever being added. The child side is the other half: it imports the
-    same module to host the class and must register nothing, because a helper
-    hosts no graph.
-    """
-    marker(
-        f"APP_CATALOG_HAS_THE_CLASS="
-        f"{'helper_placement_processors:ReportsItsOwnProcessesProcessorCatalog' in processor_class_import_paths_in_this_processes_catalog()}"
-    )
-    runtime = _runtime_loaded_with(one_processor_reporting_its_own_processes_catalog)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")

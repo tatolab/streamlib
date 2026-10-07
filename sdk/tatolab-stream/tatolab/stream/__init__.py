@@ -70,8 +70,8 @@ from ._built_in_nodes import TestPatternSource as TestPatternSource
 from ._built_in_nodes import TestPatternSourceConfig as TestPatternSourceConfig
 from ._built_in_nodes import VirtualCameraSink as VirtualCameraSink
 from ._built_in_nodes import VirtualCameraSinkConfig as VirtualCameraSinkConfig
-from ._processor_declaration import AudioWindowContract as AudioWindowContract
-from ._processor_declaration import node as node
+from ._node_declaration import AudioWindowContract as AudioWindowContract
+from ._node_declaration import node as node
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,

@@ -26,8 +26,9 @@ from tatolab.stream._cross_floor_check import (
 )
 
 WHEEL_PYTHON_SOURCE_DIRECTORY = Path(__file__).resolve().parents[1] / "python"
+STREAM_DISTRIBUTION_SOURCE_DIRECTORY = Path(__file__).resolve().parents[2] / "tatolab-stream"
 WHEEL_PYTHON_PACKAGE_DIRECTORIES = (
-    WHEEL_PYTHON_SOURCE_DIRECTORY / "tatolab" / "stream",
+    STREAM_DISTRIBUTION_SOURCE_DIRECTORY / "tatolab" / "stream",
     WHEEL_PYTHON_SOURCE_DIRECTORY / "tatolab" / "runtime",
 )
 FIXTURE_FILE = Path("processors/effect.py")

@@ -58,7 +58,7 @@ def _report_the_first_refused_claim(surface_id: str, refusal: BaseException) -> 
     _a_refused_claim_has_been_reported = True
     warn(
         "a frame could not claim its surface, so the producer may recycle it while this "
-        "processor is still holding the frame; frames are protected by pool depth alone "
+        "node is still holding the frame; frames are protected by pool depth alone "
         "until this clears. Not reported again in this process.",
         surface_id=surface_id,
         refusal=str(refusal),
@@ -322,7 +322,7 @@ class PixelAccessToOneClaimedSurface:
         Over a pixel buffer the array *is* the surface's own coherent host
         mapping, so publication is per store: a raise mid-edit leaves the
         stores that already landed. Over a texture — a kernel's output, a
-        texture this processor acquired — it is the surface's host-visible
+        texture this node acquired — it is the surface's host-visible
         staging: entering reads the frame in, the writable array publishes at
         the block edge, and a propagating raise discards the edit instead. No
         door names the backing.

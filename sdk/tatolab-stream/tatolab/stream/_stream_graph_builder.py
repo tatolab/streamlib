@@ -42,7 +42,7 @@ _STREAM_NAME_ATTRIBUTE = "__streamlib_stream_name__"
 _STREAM_DESCRIPTION_ATTRIBUTE = "__streamlib_stream_description__"
 
 # The stamp `@node` leaves on a class it declares.
-_NODE_DECLARED_ATTRIBUTE = "__streamlib_processor_declared__"
+_NODE_DECLARED_ATTRIBUTE = "__tatolab_node_declared__"
 # The class attribute a built-in node carries the path it is registered under in.
 _BUILT_IN_NODE_TYPE_ATTRIBUTE = "type"
 

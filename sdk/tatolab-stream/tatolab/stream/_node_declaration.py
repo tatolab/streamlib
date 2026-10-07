@@ -4,17 +4,16 @@
 """The `@node` grammar — execution mode and ports, declared in code.
 
 Nothing is read from disk: there is no manifest, and a bare `.py` module defines
-a working node. `@node` attaches the metadata as
-`__streamlib_processor_*__` class attributes and hands the class to the native
-half, which reads exactly that set and registers the descriptor there and then;
-the set is the contract between this module and the native half, and the two
-move together.
+a working node. `@node` validates the declaration and stamps it on the class as
+`__tatolab_node_*__` attributes; it registers nothing. The runtime reads exactly
+that set when a stream naming the class loads, so the set is the contract between
+this module and the runtime's reader, and the two move together.
 Ports are declared with the `@node.input` / `@node.output` method decorators and accessed
 at run time through `ctx.inputs` / `ctx.outputs` — the marker methods themselves
 are never called.
 
 A node is named by its class's import path, derived from `__module__` and
-`__qualname__` by the native half. Identity is never authored here.
+`__qualname__` by the runtime. Identity is never authored here.
 """
 
 from __future__ import annotations
@@ -24,15 +23,13 @@ import inspect
 import typing
 from typing import Any, Callable, Optional, TypeVar
 
-from tatolab.runtime._engine import register_declared_processor_class
-
 from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
-from ._processor_config_schema import (
+from ._node_config_schema import (
     derive_config_class_json_schema,
-    json_schema_for_a_processor_declaring_no_config,
+    json_schema_for_a_node_declaring_no_config,
 )
 
 
@@ -67,8 +64,8 @@ AUDIO_WINDOW_MATCH_DEVICE = AudioWindowMatchDeviceSentinel()
 stream — reachable here only so [`node.input`] can recognise and refuse it.
 
 It is on no public surface: a native built-in like `SpeakerSink` declares it in
-Rust, where a processor opens the device stream that settles it. A Python
-processor never holds one.
+Rust, where a node opens the device stream that settles it. A Python node
+never holds one.
 """
 
 
@@ -218,9 +215,9 @@ def _audio_window_declaration(
     if isinstance(audio_window, AudioWindowMatchDeviceSentinel):
         raise TypeError(
             f"input port {port_name!r} declares audio_window="
-            f"AUDIO_WINDOW_MATCH_DEVICE, which no Python processor can resolve. The "
-            f"sentinel settles at setup() from the device stream the declaring processor "
-            f"opened, and every Python processor is helper-placed — it opens no device "
+            f"AUDIO_WINDOW_MATCH_DEVICE, which no Python node can resolve. The "
+            f"sentinel settles at setup() from the device stream the declaring node "
+            f"opened, and a Python node runs in its own helper process — it opens no device "
             f"stream, and its window is its model's compile-time knowledge, not a "
             f"machine-varying device format. Declare an AudioWindowContract with the "
             f"values the model wants and the engine converts every block to them"
@@ -245,7 +242,7 @@ def _audio_window_declaration(
 _INPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_input_port"
 _OUTPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_output_port"
 
-ProcessorClass = TypeVar("ProcessorClass", bound=type)
+NodeClassUnderDeclaration = TypeVar("NodeClassUnderDeclaration", bound=type)
 MethodUnderDecoration = TypeVar("MethodUnderDecoration", bound=Callable[..., Any])
 
 
@@ -278,7 +275,7 @@ class NodeDeclarationDecorator:
 
         `execution` defaults to `"reactive"` for a class that declares at least one
         input port, and is required for one that declares none — a source has
-        nothing to react to, so defaulting it there would produce a processor that
+        nothing to react to, so defaulting it there would produce a node that
         silently never runs.
 
         Configuration is one class, named by the annotation on the `config`
@@ -286,19 +283,16 @@ class NodeDeclarationDecorator:
         whose `__init__` takes nothing beyond `self` declares no config and refuses
         one. Any other signature is refused here, at decoration. The class's JSON
         Schema is derived from its annotations and defaults and published in the
-        processor catalog, which is how an agent learns the keys before adding the
+        node catalog, which is how an agent learns the keys before adding the
         node.
 
-        Decorating registers the class's descriptor — identity, description, ports
-        and config schema — so the class is in that catalog from the moment its
-        module is imported, whether or not anything ever adds it. The constructor
-        arrives when the engine first resolves a node of the class, as
-        `Runtime.load` does. `description` falls back to the class's docstring
-        when it is not given.
+        Decorating registers nothing: it stamps the declaration on the class, and
+        the class reaches the node catalog when a stream that uses it loads.
+        `description` falls back to the class's docstring when it is not given.
         """
 
-        def apply_to_class(class_under_decoration: ProcessorClass) -> ProcessorClass:
-            return _declare_processor(
+        def apply_to_class(class_under_decoration: NodeClassUnderDeclaration) -> NodeClassUnderDeclaration:
+            return _declare_node(
                 class_under_decoration,
                 execution=execution,
                 interval_ms=interval_ms,
@@ -414,46 +408,43 @@ node = NodeDeclarationDecorator()
 """Declares a node class; `node.input` and `node.output` declare its ports."""
 
 
-def _declare_processor(
-    processor_class: ProcessorClass,
+def _declare_node(
+    node_class: NodeClassUnderDeclaration,
     *,
     execution: Optional[str],
     interval_ms: int,
     scheduling: Optional[str],
     description: str,
-) -> ProcessorClass:
-    input_ports, output_ports = _collect_declared_ports(processor_class)
-    config_class = _config_class_named_by_the_init_annotation(processor_class)
+) -> NodeClassUnderDeclaration:
+    input_ports, output_ports = _collect_declared_ports(node_class)
+    config_class = _config_class_named_by_the_init_annotation(node_class)
 
-    processor_class.__streamlib_processor_declared__ = True  # type: ignore[attr-defined]
-    processor_class.__streamlib_processor_config_class__ = config_class  # type: ignore[attr-defined]
-    processor_class.__streamlib_processor_config_schema__ = (  # type: ignore[attr-defined]
-        json_schema_for_a_processor_declaring_no_config()
+    node_class.__tatolab_node_declared__ = True  # type: ignore[attr-defined]
+    node_class.__tatolab_node_config_class__ = config_class  # type: ignore[attr-defined]
+    node_class.__tatolab_node_config_schema__ = (  # type: ignore[attr-defined]
+        json_schema_for_a_node_declaring_no_config()
         if config_class is None
         else derive_config_class_json_schema(config_class)
     )
-    processor_class.__streamlib_processor_description__ = (  # type: ignore[attr-defined]
-        description or inspect.getdoc(processor_class) or ""
+    node_class.__tatolab_node_description__ = (  # type: ignore[attr-defined]
+        description or inspect.getdoc(node_class) or ""
     )
-    processor_class.__streamlib_processor_execution__ = _resolve_execution(  # type: ignore[attr-defined]
-        execution, interval_ms, processor_class, has_input_ports=bool(input_ports)
+    node_class.__tatolab_node_execution__ = _resolve_execution(  # type: ignore[attr-defined]
+        execution, interval_ms, node_class, has_input_ports=bool(input_ports)
     )
-    processor_class.__streamlib_processor_scheduling_priority__ = _validate_scheduling(  # type: ignore[attr-defined]
+    node_class.__tatolab_node_scheduling_priority__ = _validate_scheduling(  # type: ignore[attr-defined]
         scheduling
     )
-    processor_class.__streamlib_processor_input_ports__ = input_ports  # type: ignore[attr-defined]
-    processor_class.__streamlib_processor_output_ports__ = output_ports  # type: ignore[attr-defined]
+    node_class.__tatolab_node_input_ports__ = input_ports  # type: ignore[attr-defined]
+    node_class.__tatolab_node_output_ports__ = output_ports  # type: ignore[attr-defined]
 
-    # After the attributes and not before: the native half reads exactly them
-    # to build the descriptor it registers.
-    register_declared_processor_class(processor_class)
-    return processor_class
+    return node_class
 
 
 def _config_class_named_by_the_init_annotation(
-    processor_class: type,
+    node_class: type,
 ) -> "Optional[type]":
-    """The config class `processor_class.__init__` names, or `None` for no config.
+    """The config class `node_class.__init__` names, or `None` for no config.
 
     Every other signature is refused here rather than when a graph holding the
     class loads: the decorator runs at import, which is the last moment an
@@ -461,12 +452,12 @@ def _config_class_named_by_the_init_annotation(
     """
     # A class defining no `__init__` inherits `object`'s, whose signature is
     # `(self, /, *args, **kwargs)` — a shape that would otherwise be refused.
-    if processor_class.__init__ is object.__init__:
+    if node_class.__init__ is object.__init__:
         return None
 
     parameters = [
         parameter
-        for name, parameter in inspect.signature(processor_class.__init__).parameters.items()
+        for name, parameter in inspect.signature(node_class.__init__).parameters.items()
         if name != "self"
     ]
     if not parameters:
@@ -474,7 +465,7 @@ def _config_class_named_by_the_init_annotation(
 
     how_to_declare_a_config_class = (
         f"declare one parameter named `config`, annotated with the class its settings "
-        f"live on — `def __init__(self, config: {processor_class.__name__}Config) -> "
+        f"live on — `def __init__(self, config: {node_class.__name__}Config) -> "
         f"None` — where that class is a TypedDict, a dataclass or a model. "
         f"`stream_builder.add(cls, config={{...}})` still passes a dict; the helper constructs the "
         f"class from it and hands the object in."
@@ -482,45 +473,45 @@ def _config_class_named_by_the_init_annotation(
 
     if len(parameters) > 1:
         raise TypeError(
-            f"{processor_class.__name__}.__init__ takes {len(parameters)} parameters "
+            f"{node_class.__name__}.__init__ takes {len(parameters)} parameters "
             f"besides `self` ({', '.join(parameter.name for parameter in parameters)}); "
-            f"a processor's config is one class, not a parameter list. To fix: {how_to_declare_a_config_class}"
+            f"a node's config is one class, not a parameter list. To fix: {how_to_declare_a_config_class}"
         )
 
     parameter = parameters[0]
     if parameter.kind is inspect.Parameter.VAR_KEYWORD:
         raise TypeError(
-            f"{processor_class.__name__}.__init__ takes `**{parameter.name}`; "
-            f"keyword-argument configuration is not how a processor is configured. "
+            f"{node_class.__name__}.__init__ takes `**{parameter.name}`; "
+            f"keyword-argument configuration is not how a node is configured. "
             f"To fix: {how_to_declare_a_config_class}"
         )
     if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
         raise TypeError(
-            f"{processor_class.__name__}.__init__ takes `*{parameter.name}`; a "
-            f"processor's config is one object, not a variadic. To fix: {how_to_declare_a_config_class}"
+            f"{node_class.__name__}.__init__ takes `*{parameter.name}`; a "
+            f"node's config is one object, not a variadic. To fix: {how_to_declare_a_config_class}"
         )
     if parameter.name != "config":
         raise TypeError(
-            f"{processor_class.__name__}.__init__ takes `{parameter.name}`, but a "
-            f"processor's config parameter must be named `config`. To fix: {how_to_declare_a_config_class}"
+            f"{node_class.__name__}.__init__ takes `{parameter.name}`, but a "
+            f"node's config parameter must be named `config`. To fix: {how_to_declare_a_config_class}"
         )
     if parameter.kind is inspect.Parameter.POSITIONAL_ONLY:
         raise TypeError(
-            f"{processor_class.__name__}.__init__ takes `config` positionally only, but "
-            f"the helper constructs a processor as `cls(config=...)`. To fix: drop the "
+            f"{node_class.__name__}.__init__ takes `config` positionally only, but "
+            f"the helper constructs a node as `cls(config=...)`. To fix: drop the "
             f"`/` so `config` can be passed by name."
         )
 
-    annotation = _resolved_init_annotations(processor_class).get("config")
+    annotation = _resolved_init_annotations(node_class).get("config")
     if annotation is None:
         raise TypeError(
-            f"{processor_class.__name__}.__init__ takes `config` with no annotation, so "
+            f"{node_class.__name__}.__init__ takes `config` with no annotation, so "
             f"nothing names its config class and no schema can be derived. "
             f"To fix: {how_to_declare_a_config_class}"
         )
     if annotation is Any:
         raise TypeError(
-            f"{processor_class.__name__}.__init__ annotates `config` as `Any`, which "
+            f"{node_class.__name__}.__init__ annotates `config` as `Any`, which "
             f"names no class, so the helper has nothing to construct and no schema can "
             f"be derived. To fix: {how_to_declare_a_config_class}"
         )
@@ -528,50 +519,50 @@ def _config_class_named_by_the_init_annotation(
     # Python 3.10, where `isinstance(dict[str, Any], type)` is still True.
     if typing.get_origin(annotation) is not None or not isinstance(annotation, type):
         raise TypeError(
-            f"{processor_class.__name__}.__init__ annotates `config` as {annotation!r}, "
-            f"which is not a class. A processor's config is one class the helper "
+            f"{node_class.__name__}.__init__ annotates `config` as {annotation!r}, "
+            f"which is not a class. A node's config is one class the helper "
             f"constructs. To fix: {how_to_declare_a_config_class}"
         )
     return annotation
 
 
-def _resolved_init_annotations(processor_class: type) -> "dict[str, Any]":
+def _resolved_init_annotations(node_class: type) -> "dict[str, Any]":
     try:
-        return typing.get_type_hints(processor_class.__init__, include_extras=True)
+        return typing.get_type_hints(node_class.__init__, include_extras=True)
     except Exception as unresolvable:
         raise TypeError(
-            f"{processor_class.__name__}.__init__ carries an annotation that cannot be "
+            f"{node_class.__name__}.__init__ carries an annotation that cannot be "
             f"resolved, so its config class cannot be read: {unresolvable}. The config "
             f"class must be importable at run time, not only under `TYPE_CHECKING`."
         ) from unresolvable
 
 
 def _collect_declared_ports(
-    processor_class: type,
+    node_class: type,
 ) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
     """Every `@node.input` / `@node.output` declaration, as the dicts the engine reads,
     each port under its cast name."""
     input_ports: "list[dict[str, Any]]" = []
     output_ports: "list[dict[str, Any]]" = []
     port_spelling_by_cast_name: "dict[str, str]" = {}
-    for marker in _declared_port_markers(processor_class):
+    for marker in _declared_port_markers(node_class):
         port_spelling = marker["name"]
         try:
             port_name = cast_exposed_name_to_url_safe(port_spelling)
         except ExposedNameCastsToNothingError as names_nothing:
             raise ValueError(
-                f"{processor_class.__name__} declares a port {port_spelling!r}: "
+                f"{node_class.__name__} declares a port {port_spelling!r}: "
                 f"{names_nothing}"
             ) from names_nothing
         first_spelling = port_spelling_by_cast_name.get(port_name)
         if first_spelling == port_spelling:
             raise ValueError(
-                f"{processor_class.__name__} declares the port name {port_name!r} more "
+                f"{node_class.__name__} declares the port name {port_name!r} more "
                 f"than once — every port, input or output, needs its own name"
             )
         if first_spelling is not None:
             raise ValueError(
-                f"{processor_class.__name__} declares the ports {first_spelling!r} and "
+                f"{node_class.__name__} declares the ports {first_spelling!r} and "
                 f"{port_spelling!r}, which both cast to {port_name!r} — a port name is "
                 f"lowercased with its accents dropped and anything outside "
                 f"a-z 0-9 - . _ ~ turned into '-', so two ports need names that stay "
@@ -597,14 +588,14 @@ def _collect_declared_ports(
     return input_ports, output_ports
 
 
-def _declared_port_markers(processor_class: type) -> "list[dict[str, Any]]":
+def _declared_port_markers(node_class: type) -> "list[dict[str, Any]]":
     """Every port marker declared on the class or inherited, in declaration order.
 
     Walks the MRO in reverse so a subclass's redeclaration of an inherited
     method wins, and a base class's ports are inherited rather than lost.
     """
     markers_by_attribute: "dict[str, list[dict[str, Any]]]" = {}
-    for ancestor in reversed(processor_class.__mro__):
+    for ancestor in reversed(node_class.__mro__):
         for attribute_name, attribute in vars(ancestor).items():
             attribute_markers = [
                 marker
@@ -625,18 +616,18 @@ def _declared_port_markers(processor_class: type) -> "list[dict[str, Any]]":
 def _resolve_execution(
     execution: Optional[str],
     interval_ms: int,
-    processor_class: type,
+    node_class: type,
     *,
     has_input_ports: bool,
 ) -> "dict[str, Any]":
     if execution is None:
         if not has_input_ports:
             raise ValueError(
-                f"{processor_class.__name__} declares no input ports, so it must declare "
+                f"{node_class.__name__} declares no input ports, so it must declare "
                 f"an execution mode: `@node(execution=\"continuous\", interval_ms=…)` "
                 f"for a source that produces on its own schedule, or "
                 f"`execution=\"manual\"` for one driven by a callback it owns. Only a "
-                f"processor with an input port can default to \"reactive\"."
+                f"node with an input port can default to \"reactive\"."
             )
         execution = "reactive"
 

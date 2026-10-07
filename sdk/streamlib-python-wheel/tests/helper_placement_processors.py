@@ -14,9 +14,6 @@ import os
 import time
 
 from tatolab.stream import log, node
-from tatolab.runtime._engine import (
-    processor_class_import_paths_in_this_processes_catalog,
-)
 
 
 @dataclasses.dataclass
@@ -106,31 +103,6 @@ class DiesAbruptlyProbe:
             # Not an exception: the point is a process that stops existing
             # without unwinding, which is what a segfaulting native call does.
             os._exit(1)
-
-
-@node(execution="manual")
-class ReportsItsOwnProcessesProcessorCatalog:
-    """Announces the processor catalog of the process it was constructed in.
-
-    A helper hosts no graph, so importing this module inside one must leave its
-    registry empty of every class the module declares — the one thing the app
-    process cannot see for itself, because the registry is per process. The
-    count is of this module's classes rather than of the whole catalog: the
-    native built-ins register when the wheel's extension module initialises,
-    wherever that happens, and none of them came from a decorator.
-    """
-
-    def setup(self, ctx) -> None:
-        declared_by_this_module = [
-            path
-            for path in processor_class_import_paths_in_this_processes_catalog()
-            if path.startswith("helper_placement_processors:")
-        ]
-        log.info(
-            f"MARKER:CHILD_CATALOG {os.getpid()} "
-            f"{'helper_placement_processors:ReportsItsOwnProcessesProcessorCatalog' in declared_by_this_module} "
-            f"{len(declared_by_this_module)}"
-        )
 
 
 @node(execution="continuous", interval_ms=10)

@@ -216,7 +216,7 @@ class VideoFrame(ClaimedSurfacePixelAccess):
     holds its surface still: the producer cannot recycle those pixels while
     this object lives, and letting it go releases them. There is nothing to
     call, and holding a frame for longer costs the producer memory and then its
-    own frames — never another processor's cadence.
+    own frames — never another node's cadence.
 
     Such a frame is a DLPack producer in its own right — ``torch.from_dlpack``
     consumes it directly, GPU-resident — and carries the two write doors,

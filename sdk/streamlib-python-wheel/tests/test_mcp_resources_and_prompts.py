@@ -4,12 +4,11 @@
 """A scripted client follows a node's own prompt to a spliced live graph.
 
 The client is the official MCP Python SDK's, driven by a script, not a model. What it brings is the names of the two
-resources and the one prompt it picks from the node's listings, and the short
-class name of the effect it wants inserted. Everything else comes from the
-server: the resource URIs and the prompt's argument names from
-`resources/list` and `prompts/list`, the link from the graph resource, the
-import path from the catalog resource, and the tool order, names and ports
-from the recipe text, whose numbered steps it dispatches as written. The graph it
+resources and the one prompt it picks from the node's listings, and the import
+path of the effect it wants inserted, which no graph has named yet. Everything
+else comes from the server: the resource URIs and the prompt's argument names
+from `resources/list` and `prompts/list`, the link from the graph resource,
+and the tool order, names and ports from the recipe text, whose numbered steps it dispatches as written. The graph it
 leaves is then checked through `graph`, and the frames through the processor it
 inserted.
 
@@ -60,9 +59,6 @@ ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 
 STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
 from tatolab.stream import StreamBuilder, TestPatternSource, stream
-
-# Imported and never added: its decorator is what puts it in the catalog.
-from processors.bag_marking_effect import BagMarkingEffect  # noqa: F401
 from processors.marked_bag_sink import MarkedBagSink
 
 
@@ -286,12 +282,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
 
     catalog = client.read_json_resource(resource_uris_by_name["node-catalog"])
     catalog_paths = [entry["type"] for entry in catalog["nodes"]]
-    inserted_type = next(
-        (path for path in catalog_paths if path.endswith(":BagMarkingEffect")), None
-    )
-    assert inserted_type is not None, (
-        f"a class the app imported and never added must be in the catalog: {catalog_paths}"
-    )
+    inserted_type = "processors.bag_marking_effect:BagMarkingEffect"
 
     graph_before = client.read_json_resource(resource_uris_by_name["graph"])
     assert len(graph_before["links"]) == 1, graph_before["links"]

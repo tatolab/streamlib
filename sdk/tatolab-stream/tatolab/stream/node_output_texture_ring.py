@@ -62,7 +62,7 @@ class NodeOutputTextureRing:
         self._texture_format = texture_format
         self._texture_usage = texture_usage
         self._depth = depth
-        self._processor_output_pool_key = f"processor-output-texture-ring-{uuid.uuid4().hex}"
+        self._node_output_pool_key = f"node-output-texture-ring-{uuid.uuid4().hex}"
 
     @property
     def depth(self) -> int:
@@ -86,7 +86,7 @@ class NodeOutputTextureRing:
         frame is dropped, and the next one asks again.
         """
         return gpu_context.acquire_texture_from_node_output_pool(
-            self._processor_output_pool_key,
+            self._node_output_pool_key,
             self._depth,
             width,
             height,

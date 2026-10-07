@@ -218,8 +218,8 @@ class H264Encoder(BuiltInNode[H264EncoderConfig]):
     `video` takes any published `VideoFrame` — buffer-backed (camera, test pattern) or
     texture-backed (a kernel output). `encoded_video` publishes one Annex-B access unit
     per bag, beside the stream metadata keys. A frame the encoder cannot consume is
-    logged and dropped while the processor keeps running. The session mints from the
-    first frame's dimensions and re-mints when the upstream extent changes.
+    logged and dropped while the node keeps running. The session mints from the first
+    frame's dimensions and re-mints when the upstream extent changes.
 
     On a device without a hardware encoder for the codec the session fails to mint: the
     failure latches and every later frame is discarded with one error line; no exception
@@ -319,8 +319,8 @@ class H265Encoder(BuiltInNode[H265EncoderConfig]):
     `video` takes any published `VideoFrame` — buffer-backed (camera, test pattern) or
     texture-backed (a kernel output). `encoded_video` publishes one Annex-B access unit
     per bag, beside the stream metadata keys. A frame the encoder cannot consume is
-    logged and dropped while the processor keeps running. The session mints from the
-    first frame's dimensions and re-mints when the upstream extent changes.
+    logged and dropped while the node keeps running. The session mints from the first
+    frame's dimensions and re-mints when the upstream extent changes.
 
     On a device without a hardware encoder for the codec the session fails to mint: the
     failure latches and every later frame is discarded with one error line; no exception
@@ -395,7 +395,7 @@ class Mp4Sink(BuiltInNode[Mp4SinkConfig]):
     inbound link.
 
     Any number of links may enter `tracks`, and each inbound link is one track, named by
-    its source channel name — `<lowercased producer processor id>/<output port>`, what
+    its source channel name — `<lowercased producer node id>/<output port>`, what
     `graph` and `tap` already show — so two cameras are two video tracks and three
     microphones three audio tracks with nothing configured between them. A track's kind
     is its bags' `codec`: `h264` and `h265` a video track, `opus` an audio track,
@@ -616,7 +616,7 @@ class VirtualCameraSinkConfig(TypedDict, total=False):
 class VirtualCameraSink(BuiltInNode[VirtualCameraSinkConfig]):
     """Presents video frames as a virtual camera any Linux application can select.
 
-    Each instance is one camera that exists while its processor runs — created at setup,
+    Each instance is one camera that exists while its node runs — created at setup,
     removed at teardown, like a USB camera plugged in and pulled out — showing whatever
     the graph writes into it. Add as many instances as the graph needs; each is its own
     camera. Off Linux the runtime refuses a graph naming it at load, naming the

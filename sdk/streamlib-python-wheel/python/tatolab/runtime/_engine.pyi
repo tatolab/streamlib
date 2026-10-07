@@ -71,7 +71,6 @@ __all__ = [
     "monotonic_now_ns",
     "open_test_harness_channel",
     "processor_class_import_paths_in_this_processes_catalog",
-    "register_declared_processor_class",
     "runtime_log_directory",
 ]
 
@@ -1701,27 +1700,12 @@ def capability_extension_host_for_the_helper_process(
 ) -> CapabilityExtensionHost:
     """Mint the host `distribution`'s hook is handed in a helper process."""
 
-def register_declared_processor_class(processor_class: type) -> None:
-    """Register the descriptor `@node` has just stamped onto a class.
-
-    Called by the decorator and nowhere else, so the class is in the processor
-    catalog from the moment its module is imported; the constructor arrives
-    when the engine first resolves a node of the class, as `Runtime.load`
-    does. A class decorated inside a helper process registers nothing — a
-    helper hosts no graph — and so does one no interpreter could import,
-    which `stream_builder.add` refuses by name.
-    """
-
 def processor_class_import_paths_in_this_processes_catalog() -> list[str]:
     """Every processor class import path in the calling process's catalog.
 
     What `GET /api/registry` renders, readable in a process that serves no
-    control plane — which a helper process is. In the app process a path
-    appears here the moment its `@node` decorator runs, whether or not
-    anything has added it, so a path listed here may be one the engine cannot
-    yet construct. In a helper nothing appears, because decoration registers
-    nothing there — and seeing that from inside one is what the wheel's own
-    suites read this for.
+    control plane. A Python class appears here once a graph naming it loads;
+    decorating it registers nothing.
     """
 
 def engine_build_id_compiled_into_this_extension() -> str:

@@ -973,13 +973,13 @@ class HelperProcessLifecycle:
                 [
                     port["name"]
                     for port in getattr(
-                        self._processor_class, "__streamlib_processor_input_ports__", []
+                        self._processor_class, "__tatolab_node_input_ports__", []
                     )
                 ],
                 [
                     port["name"]
                     for port in getattr(
-                        self._processor_class, "__streamlib_processor_output_ports__", []
+                        self._processor_class, "__tatolab_node_output_ports__", []
                     )
                 ],
             )

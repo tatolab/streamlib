@@ -1,12 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Deriving a processor's config schema from the config class its author wrote.
+"""Deriving a node's config schema from the config class its author wrote.
 
-The document is JSON Schema draft 2020-12 with no `$schema` key — the dialect
-`sdk/streamlib-processor-schema/src/config_schema_document.rs` emits for a Rust
-config type, so a node serves one dialect whichever language declared the
-processor. Nested classes are inlined and `Optional[T]` is an `anyOf` with null,
+The document is JSON Schema draft 2020-12 with no `$schema` key — the dialect the
+Rust schema crate's `config_schema_document.rs` emits for a Rust config type, so a
+node serves one dialect whichever language declared it. Nested classes are inlined and `Optional[T]` is an `anyOf` with null,
 so nothing here emits a `$ref`. One document can still carry `$defs`: a model
 handed in as the config class contributes its own schema, and a pydantic model
 writes its nested types that way. A model nested under a *property* is flattened
@@ -40,7 +39,7 @@ from typing import Any
 
 __all__ = [
     "derive_config_class_json_schema",
-    "json_schema_for_a_processor_declaring_no_config",
+    "json_schema_for_a_node_declaring_no_config",
 ]
 
 _SCALAR_JSON_TYPES = {
@@ -93,15 +92,15 @@ def _is_a_typed_dict(candidate: Any) -> bool:
     )
 
 
-def json_schema_for_a_processor_declaring_no_config() -> "dict[str, Any]":
-    """The document a processor that takes no configuration publishes.
+def json_schema_for_a_node_declaring_no_config() -> "dict[str, Any]":
+    """The document a node that takes no configuration publishes.
 
     Mirrors what `EmptyConfig` publishes on the Rust side, description
     included, so the catalog reads the same for either language.
     """
     return {
         "type": "object",
-        "description": "This processor declares no configuration.",
+        "description": "This node declares no configuration.",
         "additionalProperties": False,
     }
 
@@ -193,7 +192,7 @@ def _document_the_model_carries(
         raise TypeError(
             f"{config_class.__name__}.model_json_schema() returned "
             f"{type(document).__name__} rather than a dict, so it cannot be a "
-            f"processor's config class. A config class is a TypedDict, a dataclass, "
+            f"node's config class. A config class is a TypedDict, a dataclass, "
             f"or a model whose `model_json_schema()` returns a JSON Schema document."
         )
     return {

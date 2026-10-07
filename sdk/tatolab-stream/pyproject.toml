@@ -1,0 +1,46 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tatolab-stream"
+# The one version everything this repository releases carries; release-please
+# bumps it with the rest.
+version = "0.37.1"
+description = "Tatolab streams: declare nodes and compose them into a stream graph"
+requires-python = ">=3.10"
+# What this package's own modules import, never the runtime. numpy is imported
+# lazily, only where a caller hands it an array.
+dependencies = []
+license = "BUSL-1.1"
+# A symlink to the repository's LICENSE, so the one file travels without a copy.
+license-files = ["LICENSE"]
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+[tool.hatch.build.targets.wheel]
+# `tatolab` is a PEP 420 namespace shared with `tatolab.runtime`, so no
+# distribution ships `tatolab/__init__.py`.
+only-include = ["tatolab/stream"]
+exclude = ["**/__pycache__"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["tatolab/stream", "LICENSE", "pyproject.toml"]
+exclude = ["**/__pycache__"]
+
+[tool.pyright]
+include = ["tatolab", "tests"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"

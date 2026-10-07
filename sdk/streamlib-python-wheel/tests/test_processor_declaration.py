@@ -17,8 +17,8 @@ from tatolab.stream import AudioWindowContract, node
 # Not `from tatolab.stream import ...`: the sentinel is on no public surface, so
 # reaching the private module for it is what an author would have to do to
 # reach the refusal below at all.
-from tatolab.stream import _processor_declaration
-from tatolab.stream._processor_declaration import AUDIO_WINDOW_MATCH_DEVICE
+from tatolab.stream import _node_declaration
+from tatolab.stream._node_declaration import AUDIO_WINDOW_MATCH_DEVICE
 
 
 def test_a_bare_decorator_needs_no_arguments_at_all():
@@ -36,8 +36,8 @@ def test_a_bare_decorator_needs_no_arguments_at_all():
         @node.output()
         def frames_to_downstream(self) -> None: ...
 
-    assert BrightnessFilter.__streamlib_processor_declared__ is True
-    assert BrightnessFilter.__streamlib_processor_execution__ == {
+    assert BrightnessFilter.__tatolab_node_declared__ is True
+    assert BrightnessFilter.__tatolab_node_execution__ == {
         "mode": "reactive",
         "interval_ms": 0,
     }
@@ -65,14 +65,14 @@ def test_the_method_name_is_the_port_name():
         @node.output(description="the filtered frames")
         def frames_to_downstream(self) -> None: ...
 
-    assert Passthrough.__streamlib_processor_input_ports__ == [
+    assert Passthrough.__tatolab_node_input_ports__ == [
         {
             "name": "frames_from_upstream",
             "description": "",
             "delivery_profile": "ordered",
         }
     ]
-    assert Passthrough.__streamlib_processor_output_ports__ == [
+    assert Passthrough.__tatolab_node_output_ports__ == [
         {
             "name": "frames_to_downstream",
             "description": "the filtered frames",
@@ -89,10 +89,10 @@ def test_an_explicit_name_overrides_the_method_name():
         @node.output(name="video_out")
         def handle_outgoing_video(self) -> None: ...
 
-    assert [port["name"] for port in Renamed.__streamlib_processor_input_ports__] == [
+    assert [port["name"] for port in Renamed.__tatolab_node_input_ports__] == [
         "video_in"
     ]
-    assert [port["name"] for port in Renamed.__streamlib_processor_output_ports__] == [
+    assert [port["name"] for port in Renamed.__tatolab_node_output_ports__] == [
         "video_out"
     ]
 
@@ -119,8 +119,8 @@ def test_a_declared_port_carries_no_type_key_under_any_spelling():
         def frames_to_downstream(self) -> None: ...
 
     declared = (
-        Untyped.__streamlib_processor_input_ports__
-        + Untyped.__streamlib_processor_output_ports__
+        Untyped.__tatolab_node_input_ports__
+        + Untyped.__tatolab_node_output_ports__
     )
     for port in declared:
         for key in ("schema", "data_type", "type", "schema_ident"):
@@ -160,7 +160,7 @@ def test_an_output_port_needs_no_delivery_profile():
         @node.output()
         def frames_to_downstream(self) -> None: ...
 
-    assert Source.__streamlib_processor_output_ports__ == [
+    assert Source.__tatolab_node_output_ports__ == [
         {"name": "frames_to_downstream", "description": ""}
     ]
 
@@ -189,10 +189,10 @@ def test_a_port_is_declared_under_its_cast_name():
         @node.output(name="Café Out")
         def frames_to_downstream(self) -> None: ...
 
-    assert [port["name"] for port in CastPorts.__streamlib_processor_input_ports__] == [
+    assert [port["name"] for port in CastPorts.__tatolab_node_input_ports__] == [
         "video"
     ]
-    assert [port["name"] for port in CastPorts.__streamlib_processor_output_ports__] == [
+    assert [port["name"] for port in CastPorts.__tatolab_node_output_ports__] == [
         "cafe-out"
     ]
 
@@ -249,7 +249,7 @@ def test_a_source_that_declares_a_mode_is_accepted():
         @node.output()
         def frames_to_downstream(self) -> None: ...
 
-    assert TestPatternSource.__streamlib_processor_execution__ == {
+    assert TestPatternSource.__tatolab_node_execution__ == {
         "mode": "continuous",
         "interval_ms": 33,
     }
@@ -261,8 +261,8 @@ def test_keyword_arguments_are_the_whole_grammar():
         @node.output()
         def frames_to_downstream(self) -> None: ...
 
-    assert Camera.__streamlib_processor_declared__ is True
-    assert Camera.__streamlib_processor_scheduling_priority__ == "realtime"
+    assert Camera.__tatolab_node_declared__ is True
+    assert Camera.__tatolab_node_scheduling_priority__ == "realtime"
 
 
 @pytest.mark.parametrize(
@@ -316,7 +316,7 @@ def test_a_class_name_that_is_not_pascal_case_is_accepted():
         @node.input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
 
-    assert lowercase_name.__streamlib_processor_declared__ is True
+    assert lowercase_name.__tatolab_node_declared__ is True
 
 
 @pytest.mark.parametrize(
@@ -358,7 +358,7 @@ def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
         @node.input(delivery_profile="ordered")
         def frames_from_upstream(self) -> None: ...
 
-    assert AudioFilter.__streamlib_processor_input_ports__ == [
+    assert AudioFilter.__tatolab_node_input_ports__ == [
         {
             "name": "frames_from_upstream",
             "description": "",
@@ -366,7 +366,7 @@ def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
         }
     ]
     # The inherited output survives the subclass's redeclaration of the input.
-    assert [port["name"] for port in AudioFilter.__streamlib_processor_output_ports__] == [
+    assert [port["name"] for port in AudioFilter.__tatolab_node_output_ports__] == [
         "frames_to_downstream"
     ]
 
@@ -386,7 +386,7 @@ def test_an_audio_input_declares_its_window_contract():
         )
         def audio_from_microphone(self) -> None: ...
 
-    assert WakeWordDetector.__streamlib_processor_input_ports__ == [
+    assert WakeWordDetector.__tatolab_node_input_ports__ == [
         {
             "name": "audio",
             "description": "",
@@ -440,7 +440,7 @@ def test_the_device_matching_sentinel_is_on_no_public_surface():
     for name in ("AUDIO_WINDOW_MATCH_DEVICE", "AudioWindowMatchDeviceSentinel"):
         assert name not in tatolab.stream.__all__, name
         assert not hasattr(tatolab.stream, name), name
-        assert name not in _processor_declaration.__all__, name
+        assert name not in _node_declaration.__all__, name
 
 
 def test_a_port_declaring_no_contract_carries_no_audio_window_key():
@@ -455,8 +455,8 @@ def test_a_port_declaring_no_contract_carries_no_audio_window_key():
         def frames_to_downstream(self) -> None: ...
 
     for port in (
-        Passthrough.__streamlib_processor_input_ports__
-        + Passthrough.__streamlib_processor_output_ports__
+        Passthrough.__tatolab_node_input_ports__
+        + Passthrough.__tatolab_node_output_ports__
     ):
         assert "audio_window" not in port
 
@@ -625,3 +625,39 @@ def test_a_contract_is_frozen_after_declaration():
 
     with pytest.raises(dataclasses.FrozenInstanceError):
         contract.window_size = 1024  # type: ignore[misc]
+
+
+def test_a_node_with_no_description_is_described_by_its_docstring():
+    """The text an author already wrote, rather than a second place to write it."""
+
+    @node(execution="manual")
+    class DescribedByItsDocstringAlone:
+        """What a node with no description= keyword falls back to."""
+
+    assert (
+        DescribedByItsDocstringAlone.__tatolab_node_description__
+        == "What a node with no description= keyword falls back to."
+    )
+
+
+def test_an_explicit_description_outranks_the_docstring():
+    """The keyword is the deliberate one; the docstring is the fallback."""
+
+    @node(execution="manual", description="The keyword wins")
+    class DescribedByBothKeywordAndDocstring:
+        """The docstring the keyword outranks."""
+
+    assert (
+        DescribedByBothKeywordAndDocstring.__tatolab_node_description__
+        == "The keyword wins"
+    )
+
+
+def test_a_node_with_neither_is_described_by_the_empty_string():
+    """Never `None`: the descriptor's description is a string."""
+
+    @node(execution="manual")
+    class DescribedByNothingAtAll:
+        pass
+
+    assert DescribedByNothingAtAll.__tatolab_node_description__ == ""

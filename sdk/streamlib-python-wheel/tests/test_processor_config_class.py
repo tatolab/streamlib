@@ -98,7 +98,7 @@ def test_an_annotated_config_parameter_names_the_config_class():
         def __init__(self, config: BlurConfigDataclass) -> None:
             self.config = config
 
-    assert Blur.__streamlib_processor_config_class__ is BlurConfigDataclass
+    assert Blur.__tatolab_node_config_class__ is BlurConfigDataclass
 
 
 def test_an_init_taking_nothing_beyond_self_declares_no_config():
@@ -107,7 +107,7 @@ def test_an_init_taking_nothing_beyond_self_declares_no_config():
         def __init__(self) -> None:
             self.seen = 0
 
-    assert Counter.__streamlib_processor_config_class__ is None
+    assert Counter.__tatolab_node_config_class__ is None
 
 
 def test_a_class_defining_no_init_at_all_declares_no_config():
@@ -122,7 +122,7 @@ def test_a_class_defining_no_init_at_all_declares_no_config():
     class Bare:
         pass
 
-    assert Bare.__streamlib_processor_config_class__ is None
+    assert Bare.__tatolab_node_config_class__ is None
 
 
 def test_a_keyword_parameter_is_refused_with_the_fix_named():
@@ -216,14 +216,14 @@ def schema_of(config_class: "Optional[type]") -> "dict[str, Any]":
             def __init__(self) -> None:
                 self.seen = 0
 
-        return SubjectDeclaringNoConfig.__streamlib_processor_config_schema__
+        return SubjectDeclaringNoConfig.__tatolab_node_config_schema__
 
     @node(execution="manual")
     class SubjectTakingAConfigClass:
         def __init__(self, config: config_class) -> None:  # type: ignore[valid-type]
             self.config = config
 
-    return SubjectTakingAConfigClass.__streamlib_processor_config_schema__
+    return SubjectTakingAConfigClass.__tatolab_node_config_schema__
 
 
 def test_a_typed_dict_yields_its_annotations_and_its_required_keys():
@@ -378,7 +378,7 @@ def test_a_processor_declaring_no_config_publishes_what_rust_publishes():
     """One catalog reads one way whichever language declared the processor."""
     assert schema_of(None) == {
         "type": "object",
-        "description": "This processor declares no configuration.",
+        "description": "This node declares no configuration.",
         "additionalProperties": False,
     }
 
@@ -536,7 +536,7 @@ def test_a_migrated_fixture_declares_the_config_class_beside_it(
     module = __import__(module_name)
     processor_class = getattr(module, processor_name)
 
-    assert processor_class.__streamlib_processor_config_class__ is getattr(
+    assert processor_class.__tatolab_node_config_class__ is getattr(
         module, config_name
     )
 
@@ -551,8 +551,8 @@ def test_the_live_mutation_fixture_written_as_a_source_string_still_declares():
     exec(compile(LIVE_ADDED_EFFECT_SOURCE, "live_added_effect.py", "exec"), namespace)
 
     effect = namespace["LiveAddedEffect"]
-    assert effect.__streamlib_processor_config_class__ is namespace["LiveAddedEffectConfig"]
-    assert effect.__streamlib_processor_config_schema__["properties"]["marker"] == {
+    assert effect.__tatolab_node_config_class__ is namespace["LiveAddedEffectConfig"]
+    assert effect.__tatolab_node_config_schema__["properties"]["marker"] == {
         "type": "string",
         "default": "LIVE_FRAME",
     }
@@ -733,7 +733,7 @@ def test_a_config_class_of_a_kind_the_deriver_cannot_read_is_accepted_and_open()
         def __init__(self, config: PlainlyAnnotatedConfig) -> None:
             self.config = config
 
-    assert PlainlyConfigured.__streamlib_processor_config_schema__ == {"type": "object"}
+    assert PlainlyConfigured.__tatolab_node_config_schema__ == {"type": "object"}
     built = construct_processor_instance(PlainlyConfigured, {"width": 9}, None)
     assert built.config.width == 9, "it constructs; only the description is missing"
 

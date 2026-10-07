@@ -256,7 +256,7 @@ class SingleNodeTestPipeline:
 
 def _declared_port_names(node_class: type, direction: str) -> "list[str]":
     declared = getattr(
-        node_class, f"__streamlib_processor_{direction}_ports__", None
+        node_class, f"__tatolab_node_{direction}_ports__", None
     )
     if declared is None:
         raise TypeError(

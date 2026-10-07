@@ -1,13 +1,13 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Logging from a processor, straight onto the engine's log pipeline.
+"""Logging from a node, straight onto the engine's log pipeline.
 
 Writing to stdout also works, but while the engine is alive the stdio
 interceptor captures it and re-emits it at WARN. These functions carry the
 level the author meant and interleave in order with the engine's own records.
 Keyword arguments become the structured `attrs` columns of the JSONL record —
-`log.info("captured frame", width=1920)` — and processor attribution is
+`log.info("captured frame", width=1920)` — and node attribution is
 automatic inside lifecycle hooks; nothing needs to be threaded through.
 """
 
