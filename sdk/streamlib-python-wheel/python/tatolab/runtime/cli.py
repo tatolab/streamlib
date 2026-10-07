@@ -366,7 +366,7 @@ def locate_stream_entry_module(
 
     `anchor_directory` leads `sys.path` first, as an entry file's directory does,
     and before any `Runtime` exists, since a `Runtime` reads that slot once as the
-    directory its child interpreters import the project's modules from.
+    directory of the app it is named after.
     """
     entry_module_name = resolved_launch_entry.entry_module_name
     stream_function_name = resolved_launch_entry.stream_function_name
@@ -649,6 +649,19 @@ def _refuse_a_stream_name_that_casts_to_nothing(requested_stream_name: str) -> N
         ) from casts_to_nothing
 
 
+def project_directory_the_launch_entry_imports_from(
+    resolved_launch_entry: "ResolvedLaunchEntryFile | ResolvedLaunchEntryModule",
+    anchor_directory: Path,
+) -> Path:
+    """The directory the entry's own imports resolve from, which every processor
+    interpreter of its stream starts in: an entry file's own directory, which
+    `execute_app_entry_file` puts first on `sys.path`, or the anchor a module
+    target was found under."""
+    if isinstance(resolved_launch_entry, ResolvedLaunchEntryFile):
+        return resolved_launch_entry.entry_file.resolve().parent
+    return anchor_directory.resolve()
+
+
 def launch_app_node(
     verb: str,
     *,
@@ -731,7 +744,9 @@ def launch_app_node(
     try:
         runtime.load(
             stream_graph,
-            project_directory=anchor_directory.resolve(),
+            project_directory=project_directory_the_launch_entry_imports_from(
+                resolved_launch_entry, anchor_directory
+            ),
             interpreter=sys.executable,
         )
     except (RuntimeError, TypeError, ValueError) as load_refusal:
