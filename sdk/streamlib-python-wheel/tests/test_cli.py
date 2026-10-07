@@ -30,12 +30,12 @@ from app_under_test import ENGINE_STARTING_LOG_LINE
 from tatolab.runtime import _node_registry, cli
 
 MINIMAL_STREAM_SOURCE = (
-    "from tatolab.stream import Stream, TestPatternSource, stream\n"
+    "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
     "\n"
     "\n"
     "@stream\n"
-    "def main(stream: Stream) -> None:\n"
-    "    stream.add(TestPatternSource)\n"
+    "def main(stream_builder: StreamBuilder) -> None:\n"
+    "    stream_builder.add(TestPatternSource)\n"
 )
 APP_PY_SOURCE_DEFINING_ONLY_A_SETUP_FUNCTION = "def setup(runtime):\n    pass\n"
 
@@ -125,7 +125,7 @@ def test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_
         "`streamlib dev` launches a @stream function from `stream.py`, and reads "
         "`app.py` only when `-f` or a target names it." in message
     )
-    assert "    @stream\n    def main(stream: Stream) -> None:\n" in message, (
+    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in message, (
         "the refusal must show the shape `stream.py` holds"
     )
     assert "-f <file>" in message, "the refusal must offer the `-f` override"
@@ -312,24 +312,24 @@ def test_the_entry_runs_as_main_with_its_own_directory_importable(tmp_path: Path
 ENGINE_CONSTRUCTED_LOG_LINE = "Creating Runner named"
 
 FRONT_STREAM_SOURCE = (
-    "from tatolab.stream import DisplayWindow, Stream, TestPatternSource, stream\n"
+    "from tatolab.stream import DisplayWindow, StreamBuilder, TestPatternSource, stream\n"
     "\n"
     "\n"
     "@stream\n"
-    "def front(stream: Stream) -> None:\n"
+    "def front(stream_builder: StreamBuilder) -> None:\n"
     '    """Front camera, in a window.\n'
     "\n"
     '    The second paragraph is not listed."""\n'
-    "    source = stream.add(TestPatternSource)\n"
-    "    window = stream.add(DisplayWindow)\n"
-    '    stream.connect(source.output("video"), window.input("video"))\n'
+    "    source = stream_builder.add(TestPatternSource)\n"
+    "    window = stream_builder.add(DisplayWindow)\n"
+    '    stream_builder.connect(source.output("video"), window.input("video"))\n'
 )
 TWO_STREAM_SOURCE = FRONT_STREAM_SOURCE + (
     "\n"
     "\n"
     "@stream\n"
-    "def back(stream: Stream) -> None:\n"
-    '    stream.add(TestPatternSource, name="Back Pattern")\n'
+    "def back(stream_builder: StreamBuilder) -> None:\n"
+    '    stream_builder.add(TestPatternSource, name="Back Pattern")\n'
 )
 
 FRONT_STREAM_GRAPH = {
@@ -825,8 +825,8 @@ def test_an_entry_that_defines_no_stream_is_refused_with_a_sample(
     assert exit_code == 1
     refusal = capsys.readouterr().err
     assert "stream.py` defines no @stream function" in refusal
-    assert "    @stream\n    def main(stream: Stream) -> None:\n" in refusal
-    assert "stream.add(CameraSource)" in refusal
+    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in refusal
+    assert "stream_builder.add(CameraSource)" in refusal
     assert "-f <file>" in refusal
     assert "streamlib dev <file>.py:<function>" in refusal
     assert recorded_launch_runtime_calls.calls == []
@@ -861,7 +861,7 @@ def test_an_app_py_named_by_the_file_flag_that_defines_only_setup_defines_no_str
     assert exit_code == 1
     refusal = capsys.readouterr().err
     assert f"`{tmp_path / 'app.py'}` defines no @stream function\n" in refusal
-    assert "    @stream\n    def main(stream: Stream) -> None:\n" in refusal
+    assert "    @stream\n    def main(stream_builder: StreamBuilder) -> None:\n" in refusal
     assert recorded_launch_runtime_calls.calls == [], (
         "a file with no stream costs no engine"
     )
@@ -880,7 +880,7 @@ def test_a_named_function_in_a_file_with_no_stream_is_refused_naming_the_decorat
     refusal = capsys.readouterr().err
     assert "defines no @stream function named `main`, nor any other" in refusal
     assert (
-        "`@stream` above a module-level `def main(stream: Stream) -> None:`" in refusal
+        "`@stream` above a module-level `def main(stream_builder: StreamBuilder) -> None:`" in refusal
     )
     assert recorded_launch_runtime_calls.calls == []
 
@@ -893,7 +893,7 @@ def test_a_named_function_that_is_not_a_stream_is_refused_naming_the_fix(
     write_app(
         tmp_path,
         "stream.py",
-        MINIMAL_STREAM_SOURCE + "\n\ndef helper(stream: Stream) -> None:\n    pass\n",
+        MINIMAL_STREAM_SOURCE + "\n\ndef helper(stream_builder: StreamBuilder) -> None:\n    pass\n",
     )
 
     exit_code = cli.main(["run", "--dir", str(tmp_path), "stream.py:helper"])
@@ -902,6 +902,7 @@ def test_a_named_function_that_is_not_a_stream_is_refused_naming_the_fix(
     refusal = capsys.readouterr().err
     assert "`helper` in" in refusal and "is not a @stream function" in refusal
     assert "decorate it with `@stream`" in refusal
+    assert "(stream_builder: StreamBuilder) -> None:" in refusal
     assert recorded_launch_runtime_calls.calls == []
 
 
@@ -970,7 +971,7 @@ def test_a_package_target_naming_a_value_that_is_not_a_stream_is_refused_naming_
     write_app(
         tmp_path,
         "re_exporting_helper_rover/helpers.py",
-        "def wire_cameras(stream):\n    pass\n",
+        "def wire_cameras(stream_builder):\n    pass\n",
     )
 
     exit_code = cli.main(
@@ -981,6 +982,7 @@ def test_a_package_target_naming_a_value_that_is_not_a_stream_is_refused_naming_
     refusal = capsys.readouterr().err
     assert "`wire_cameras` in" in refusal and "is not a @stream function" in refusal
     assert "decorate it with `@stream`" in refusal
+    assert "(stream_builder: StreamBuilder) -> None:" in refusal
     assert recorded_launch_runtime_calls.calls == []
 
 
@@ -1008,11 +1010,11 @@ def test_a_stream_that_adds_nothing_is_refused_at_load_and_publishes_no_node(
     write_app(
         tmp_path,
         "stream.py",
-        "from tatolab.stream import Stream, stream\n"
+        "from tatolab.stream import StreamBuilder, stream\n"
         "\n"
         "\n"
         "@stream\n"
-        "def main(stream: Stream) -> None:\n"
+        "def main(stream_builder: StreamBuilder) -> None:\n"
         "    pass\n",
     )
     # Short, as the engine's surface-share socket path must fit `sun_path`.
@@ -1045,11 +1047,11 @@ def test_a_raising_stream_function_prints_its_traceback_and_builds_no_engine(
     write_app(
         tmp_path,
         "stream.py",
-        "from tatolab.stream import Stream, stream\n"
+        "from tatolab.stream import StreamBuilder, stream\n"
         "\n"
         "\n"
         "@stream\n"
-        "def main(stream: Stream) -> None:\n"
+        "def main(stream_builder: StreamBuilder) -> None:\n"
         "    raise ValueError('bad wiring')\n",
     )
 
@@ -1071,13 +1073,13 @@ def test_a_typed_duplicate_is_refused_on_the_authors_own_line(tmp_path: Path):
     write_app(
         tmp_path,
         "stream.py",
-        "from tatolab.stream import Stream, TestPatternSource, stream\n"
+        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
         "\n"
         "\n"
         "@stream\n"
-        "def main(stream: Stream) -> None:\n"
-        '    stream.add(TestPatternSource, name="Pattern")\n'
-        '    stream.add(TestPatternSource, name="pattern")\n',
+        "def main(stream_builder: StreamBuilder) -> None:\n"
+        '    stream_builder.add(TestPatternSource, name="Pattern")\n'
+        '    stream_builder.add(TestPatternSource, name="pattern")\n',
     )
 
     finished = run_cli("run", "--dir", str(tmp_path))
@@ -1105,11 +1107,11 @@ def test_a_syntax_error_prints_the_apps_traceback_and_builds_no_engine(tmp_path:
     write_app(
         tmp_path,
         "stream.py",
-        "from tatolab.stream import Stream, stream\n"
+        "from tatolab.stream import StreamBuilder, stream\n"
         "\n"
         "\n"
         "@stream\n"
-        "def main(stream: Stream) -> None\n"
+        "def main(stream_builder: StreamBuilder) -> None\n"
         "    pass\n",
     )
 
@@ -1239,11 +1241,11 @@ def test_a_stream_function_that_exits_on_purpose_keeps_its_own_exit_code(
         "stream.py",
         "import sys\n"
         "\n"
-        "from tatolab.stream import Stream, stream\n"
+        "from tatolab.stream import StreamBuilder, stream\n"
         "\n"
         "\n"
         "@stream\n"
-        "def main(stream: Stream) -> None:\n"
+        "def main(stream_builder: StreamBuilder) -> None:\n"
         "    sys.exit(4)\n",
     )
 
@@ -1412,6 +1414,19 @@ def test_every_scaffolded_python_file_passes_ruff(
         )
 
 
+@pytest.mark.parametrize("use_test_pattern_source", [False, True])
+def test_no_scaffolded_python_file_suppresses_a_lint(use_test_pattern_source: bool):
+    """The app `new` writes is the shape an author copies, so it lints clean as
+    written — no import shadows a builtin under a `noqa`."""
+    rendered_files = cli.render_scaffold_template_files(
+        distribution_name="demo", use_test_pattern_source=use_test_pattern_source
+    )
+
+    for file_name, contents in rendered_files.items():
+        if file_name.endswith(".py"):
+            assert "noqa" not in contents, f"the scaffolded {file_name} suppresses a lint"
+
+
 def test_every_scaffold_template_file_is_one_new_writes():
     """A template file the mapping does not name would ship in the wheel and never
     reach an app."""
@@ -1524,7 +1539,7 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu(tmp_path: Pa
         ast.unparse(call.args[1])
         for call in ast.walk(ast.parse(entry_source))
         if isinstance(call, ast.Call)
-        and ast.unparse(call.func) == "stream.connect"
+        and ast.unparse(call.func) == "stream_builder.connect"
         and ast.unparse(call.args[0]) == "effect.output('video_to_downstream')"
     )
     assert readers_of_the_effect_output == [

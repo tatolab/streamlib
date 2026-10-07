@@ -28,11 +28,9 @@ from tatolab.stream import (
     AudioBlock,
     EncodedAudioPacket,
     RuntimeContextLimitedAccess,
-    input,
     log,
     monotonic_now_ns,
     node,
-    output,
 )
 
 ENCODED_PACKET_MARKER = "MARKER:ENCODED_PACKET "
@@ -79,7 +77,7 @@ class StereoToneSource:
     read as the codec's failure rather than this fixture's.
     """
 
-    @output()
+    @node.output()
     def audio(self) -> None: ...
 
     def __init__(self) -> None:
@@ -135,7 +133,7 @@ class EncodedAudioPacketProbe:
     def __init__(self) -> None:
         self.packets_admitted = 0
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def encoded_audio_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -181,7 +179,7 @@ class DecodedAudioBlockProbe:
     def __init__(self) -> None:
         self.blocks_admitted = 0
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

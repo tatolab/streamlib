@@ -480,7 +480,7 @@ mod tests {
         );
     }
 
-    /// `stream.add(H265Decoder)` with no config at all must deserialize.
+    /// `stream_builder.add(H265Decoder)` with no config at all must deserialize.
     #[test]
     fn an_all_absent_decoder_config_deserializes_to_defaults() {
         let config: HardwareVideoDecoderConfig = serde_json::from_str("{}").expect("empty config");

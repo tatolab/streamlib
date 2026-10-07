@@ -25,25 +25,24 @@ import pytest
 import tatolab.runtime
 from tatolab.stream import (
     RuntimeContextLimitedAccess,
-    Stream,
+    StreamBuilder,
     compile_stream_to_graph,
     node,
-    output,
     stream,
 )
 
 
 @node(execution="continuous", interval_ms=10)
 class NeverStartedSource:
-    @output()
+    @node.output()
     def bags_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None: ...
 
 
 @stream
-def one_never_started_source(stream: Stream) -> None:
-    stream.add(NeverStartedSource)
+def one_never_started_source(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(NeverStartedSource)
 
 
 def test_waiting_on_a_graph_that_was_never_run_times_out_naming_the_state():

@@ -29,7 +29,7 @@ import known_audio_signal
 import known_audio_signal_source
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 # What the source will ever publish, derived rather than named so it cannot
 # drift when the signal changes.
@@ -49,20 +49,20 @@ LONGEST_RECORDABLE_SECONDS = PUBLISHED_SECONDS - 0.02
 
 
 @stream
-def known_signal_through_opus_and_back(stream: Stream) -> None:
+def known_signal_through_opus_and_back(stream_builder: StreamBuilder) -> None:
     # Imported here, after main() has exported the environment: the recorder
     # resolves its window at import.
     from captured_audio_waveform_recorder import CapturedAudioWaveformRecorder
     from known_audio_signal_source import KnownAudioSignalSource
 
-    signal = stream.add(KnownAudioSignalSource)
-    encoder = stream.add(tatolab.stream.OpusEncoder)
-    decoder = stream.add(tatolab.stream.OpusDecoder)
-    recorder = stream.add(CapturedAudioWaveformRecorder)
+    signal = stream_builder.add(KnownAudioSignalSource)
+    encoder = stream_builder.add(tatolab.stream.OpusEncoder)
+    decoder = stream_builder.add(tatolab.stream.OpusDecoder)
+    recorder = stream_builder.add(CapturedAudioWaveformRecorder)
 
-    stream.connect(signal.output("audio"), encoder.input("audio"))
-    stream.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
-    stream.connect(decoder.output("audio"), recorder.input("audio_from_upstream"))
+    stream_builder.connect(signal.output("audio"), encoder.input("audio"))
+    stream_builder.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
+    stream_builder.connect(decoder.output("audio"), recorder.input("audio_from_upstream"))
 
 
 def main() -> None:

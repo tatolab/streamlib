@@ -50,13 +50,11 @@ LOSS_COUNTING_PROCESSORS_SOURCE = f'''\
 import os
 import time
 
-from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
+from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    input,
     log,
     node,
-    output,
 )
 
 BAGS_PER_TICK = 20
@@ -71,10 +69,10 @@ class FastBagSource:
     def __init__(self) -> None:
         self.ticks = 0
 
-    @output()
+    @node.output()
     def bags(self) -> None: ...
 
-    @output()
+    @node.output()
     def oversized_bags(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -91,7 +89,7 @@ class FastBagSource:
 class SlowOrderedSink:
     """Takes every bag in order, far slower than they arrive."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def bags(self) -> None: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -106,7 +104,7 @@ class SlowOrderedSink:
 class NewestSink:
     """Drains whatever reaches it."""
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def bags(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -114,18 +112,18 @@ class NewestSink:
 '''
 
 LOSS_COUNTING_STREAM_SOURCE = f'''\
-from tatolab.stream import Stream, stream
+from tatolab.stream import StreamBuilder, stream
 
 from {LOSS_COUNTING_PROCESSORS_MODULE} import FastBagSource, NewestSink, SlowOrderedSink
 
 
 @stream
-def main(stream: Stream) -> None:
-    source = stream.add(FastBagSource, name="source")
-    slow_sink = stream.add(SlowOrderedSink, name="slow-sink")
-    oversized_sink = stream.add(NewestSink, name="oversized-sink")
-    stream.connect(source.output("bags"), slow_sink.input("bags"))
-    stream.connect(source.output("oversized_bags"), oversized_sink.input("bags"))
+def main(stream_builder: StreamBuilder) -> None:
+    source = stream_builder.add(FastBagSource, name="source")
+    slow_sink = stream_builder.add(SlowOrderedSink, name="slow-sink")
+    oversized_sink = stream_builder.add(NewestSink, name="oversized-sink")
+    stream_builder.connect(source.output("bags"), slow_sink.input("bags"))
+    stream_builder.connect(source.output("oversized_bags"), oversized_sink.input("bags"))
 '''
 
 SLOW_SINK_PID = re.compile(r"MARKER:SLOW_SINK_PID (\d+)")

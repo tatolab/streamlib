@@ -7,7 +7,7 @@
 `tracks` input of one `Mp4Sink`. Nothing configures the second track: the
 sink enumerates its inbound links at `setup()` and each one becomes a track
 named by the channel it subscribed to, so the whole of "record two sources"
-is a second pair of `stream.add` calls and a second `stream.connect`.
+is a second pair of `stream_builder.add` calls and a second `stream_builder.connect`.
 
 Two sources rather than one fanned out, because a fan-out is one channel with
 two subscribers and would be one track. The two links have to come from two
@@ -29,7 +29,7 @@ import threading
 import tatolab.runtime
 import tatolab.stream
 from opus_blocks_probes import StereoToneSource
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 from tatolab.runtime._control_plane_client import call_tool
 from this_processes_node_registry_entry import this_processes_local_api_socket
 
@@ -49,17 +49,17 @@ def _parse_mp4_sink_arguments() -> argparse.Namespace:
 
 
 @stream
-def two_tone_pairs_recorded_into_one_mp4(stream: Stream) -> None:
-    sink = stream.add(
+def two_tone_pairs_recorded_into_one_mp4(stream_builder: StreamBuilder) -> None:
+    sink = stream_builder.add(
         tatolab.stream.Mp4Sink,
         name="recorder",
         config={"path": _parse_mp4_sink_arguments().path},
     )
     for pair_name in RECORDED_PAIR_NAMES:
-        source = stream.add(StereoToneSource, name=f"{pair_name}_tone")
-        encoder = stream.add(tatolab.stream.OpusEncoder, name=f"{pair_name}_encoder")
-        stream.connect(source.output("audio"), encoder.input("audio"))
-        stream.connect(encoder.output("encoded_audio"), sink.input("tracks"))
+        source = stream_builder.add(StereoToneSource, name=f"{pair_name}_tone")
+        encoder = stream_builder.add(tatolab.stream.OpusEncoder, name=f"{pair_name}_encoder")
+        stream_builder.connect(source.output("audio"), encoder.input("audio"))
+        stream_builder.connect(encoder.output("encoded_audio"), sink.input("tracks"))
 
 
 def _recorded_track_names() -> "list[str]":

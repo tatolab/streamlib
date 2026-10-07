@@ -3,7 +3,7 @@
 
 //! First-party media built-ins: native pre-built blocks statically linked
 //! into the wheel and instantiated from Python by configuration
-//! (`stream.add(TestPatternSource)`), whose per-frame paths never enter the
+//! (`stream_builder.add(TestPatternSource)`), whose per-frame paths never enter the
 //! interpreter.
 //!
 //! Written against the SDK's handle-shaped primitives only — pixel-buffer

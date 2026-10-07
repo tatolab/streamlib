@@ -48,12 +48,12 @@ LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 # The node the test launches: one native source and nothing else. Everything
 # downstream of it is added live.
 STREAM_WITH_ONE_PATTERN_SOURCE = '''\
-from tatolab.stream import Stream, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, TestPatternSource, stream
 
 
 @stream
-def main(stream: Stream) -> None:
-    stream.add(TestPatternSource, name="pattern", config={"width": 320, "height": 180})
+def main(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(TestPatternSource, name="pattern", config={"width": 320, "height": 180})
 '''
 
 # Written beside `stream.py` only after the node is up, which is the shape an
@@ -66,15 +66,13 @@ LIVE_ADDED_EFFECT_SOURCE = '''\
 
 import dataclasses
 
-from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
+from tatolab.stream import (
     NodeOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
     log,
     node,
-    output,
 )
 
 
@@ -91,10 +89,10 @@ class LiveAddedEffect:
         self.marker = config.marker
         self.frames = 0
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
-    @output()
+    @node.output()
     def video_to_downstream(self) -> None: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -378,9 +376,8 @@ SLOWLY_IMPORTING_SINK_SOURCE = f'''\
 import os
 import time
 
-from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
+from tatolab.stream import (
     RuntimeContextLimitedAccess,
-    input,
     node,
 )
 
@@ -392,7 +389,7 @@ if "STREAMLIB_ENTRYPOINT" in os.environ:
 class SlowlyImportingSink:
     """Reads and drops every frame."""
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

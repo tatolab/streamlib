@@ -85,7 +85,7 @@ fn register_processor_class(
     // The closure captures the class's import path, never the class object:
     // the object lives in this interpreter, and the processor does not. Every
     // instance the engine constructs is a child that imports the class for
-    // itself, which is the same string `stream.add` already refused an
+    // itself, which is the same string `stream_builder.add` already refused an
     // unimportable class by.
     let processor_class_import_path = declaration
         .descriptor
@@ -127,7 +127,7 @@ fn register_processor_class(
 /// Two classes are passed over rather than registered. One decorated inside a
 /// helper process registers nothing, because a helper hosts no graph. One no
 /// interpreter could import — declared in the entry file or inside a function
-/// — has no identity to be registered under, and `stream.add` is where that is
+/// — has no identity to be registered under, and `stream_builder.add` is where that is
 /// said, with the fix named.
 #[pyfunction]
 pub(crate) fn register_declared_processor_class(

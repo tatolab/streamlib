@@ -7,12 +7,12 @@ Reads and discards: what is under test is what the source published, which the
 tap reads independently of anything downstream doing with it.
 """
 
-from tatolab.stream import RuntimeContextLimitedAccess, input, node
+from tatolab.stream import RuntimeContextLimitedAccess, node
 
 
 @node
 class AudioChannelDrain:
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

@@ -120,15 +120,15 @@ def resolve_app_anchor_directory(requested_anchor_directory: Optional[Path]) -> 
 
 STREAM_FUNCTION_EXPLAINED_WITH_A_SAMPLE = (
     "A stream is a module-level function decorated `@stream` that adds, links and "
-    "exposes its nodes on the `Stream` it is given:\n"
+    "exposes its nodes on the `StreamBuilder` it is given:\n"
     "\n"
-    "    from tatolab.stream import CameraSource, DisplayWindow, Stream, stream\n"
+    "    from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream\n"
     "\n"
     "    @stream\n"
-    "    def main(stream: Stream) -> None:\n"
-    "        source = stream.add(CameraSource)\n"
-    "        window = stream.add(DisplayWindow)\n"
-    '        stream.connect(source.output("video"), window.input("video"))\n'
+    "    def main(stream_builder: StreamBuilder) -> None:\n"
+    "        source = stream_builder.add(CameraSource)\n"
+    "        window = stream_builder.add(DisplayWindow)\n"
+    '        stream_builder.connect(source.output("video"), window.input("video"))\n'
 )
 
 
@@ -612,7 +612,8 @@ def select_stream_function(
         raise AppLaunchError(
             f"`{stream_function_name}` in {entry_described} is not a @stream function: "
             f"decorate it with `@stream` — a module-level `def "
-            f"{stream_function_name}(stream: Stream) -> None:` that adds its nodes."
+            f"{stream_function_name}(stream_builder: StreamBuilder) -> None:` that adds "
+            f"its nodes."
         )
     if stream_functions:
         raise AppLaunchError(
@@ -624,8 +625,8 @@ def select_stream_function(
     raise AppLaunchError(
         f"{entry_described} defines no @stream function named "
         f"`{stream_function_name}`, nor any other. Make `{stream_function_name}` one: "
-        f"`@stream` above a module-level `def {stream_function_name}(stream: Stream) -> "
-        f"None:` that adds its nodes."
+        f"`@stream` above a module-level `def {stream_function_name}(stream_builder: "
+        f"StreamBuilder) -> None:` that adds its nodes."
     )
 
 
@@ -792,17 +793,17 @@ def render_scaffold_template_files(
         else ("CameraSource", "camera")
     )
     tatolab_stream_import_names = ", ".join(
-        sorted([source_class_name, "DisplayWindow", "Stream", "stream"])
+        sorted([source_class_name, "DisplayWindow", "StreamBuilder", "stream"])
     )
     substitutions_for_template_file = {
         "stream.py": {
             "A StreamLib stream: camera →": f"A StreamLib stream: {source_description} →",
             # The whole line, so each variant's names stay in sorted order.
-            "from tatolab.stream import CameraSource, DisplayWindow, Stream, stream": (
+            "from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream": (
                 f"from tatolab.stream import {tatolab_stream_import_names}"
             ),
             '"""Camera, inverted,': f'"""{source_description.capitalize()}, inverted,',
-            "stream.add(CameraSource)": f"stream.add({source_class_name})",
+            "stream_builder.add(CameraSource)": f"stream_builder.add({source_class_name})",
         },
         "pyproject.toml": {'name = "streamlib-app"': f'name = "{distribution_name}"'},
     }

@@ -16,7 +16,7 @@ import sys
 import traceback
 import uuid
 
-from tatolab.stream import clock, input, log, node, output
+from tatolab.stream import clock, log, node
 
 MODEL_INPUT_TENSOR_SHAPE = [1, 3, 640, 640]
 ODD_TENSOR_SHAPE = [3, 7, 11]
@@ -99,7 +99,7 @@ class TensorStorageBufferPublishingSource:
     """Writes each frame's values into a pooled tensor through torch and
     publishes its surface id once the handle's close has ordered the writes."""
 
-    @output()
+    @node.output()
     def tensors_to_downstream(self) -> None: ...
 
     def __init__(self, config: TensorStorageBufferPublishingSourceConfig) -> None:
@@ -250,7 +250,7 @@ class PublishedTensorReadingSink:
     """Resolves each published tensor id and compares its values to the ones
     its producer wrote for that frame."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def tensors_from_upstream(self) -> None: ...
 
     def __init__(self, config: PublishedTensorReadingSinkConfig) -> None:
@@ -292,7 +292,7 @@ class HeldTensorRereadingSink:
     """Resolves the first tensor and holds its handle open, re-reading it
     through torch as every later tensor is published."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def tensors_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

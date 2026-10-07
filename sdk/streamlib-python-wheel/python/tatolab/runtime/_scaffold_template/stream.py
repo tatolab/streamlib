@@ -11,22 +11,24 @@ Nodes live in their own modules, never in this file: each one runs in its
 own child interpreter, which imports the class by name.
 """
 
-from tatolab.stream import CameraSource, DisplayWindow, Stream, stream
+from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream
 
 from nodes.brightness_meter import BrightnessMeter
 from nodes.inverting_effect import InvertingEffect
 
 
 @stream
-def main(stream: Stream) -> None:
+def main(stream_builder: StreamBuilder) -> None:
     """Camera, inverted, in a window; brightness logged once a second."""
-    source = stream.add(CameraSource)
-    effect = stream.add(InvertingEffect)
-    meter = stream.add(BrightnessMeter)
-    window = stream.add(DisplayWindow, config={"title": "StreamLib", "scaling": "fit"})
-    stream.connect(source.output("video"), effect.input("video_from_upstream"))
-    stream.connect(effect.output("video_to_downstream"), window.input("video"))
-    stream.connect(
+    source = stream_builder.add(CameraSource)
+    effect = stream_builder.add(InvertingEffect)
+    meter = stream_builder.add(BrightnessMeter)
+    window = stream_builder.add(
+        DisplayWindow, config={"title": "StreamLib", "scaling": "fit"}
+    )
+    stream_builder.connect(source.output("video"), effect.input("video_from_upstream"))
+    stream_builder.connect(effect.output("video_to_downstream"), window.input("video"))
+    stream_builder.connect(
         effect.output("video_to_downstream"), meter.input("video_from_upstream")
     )
-    stream.expose(effect.output("video_to_downstream"))
+    stream_builder.expose(effect.output("video_to_downstream"))

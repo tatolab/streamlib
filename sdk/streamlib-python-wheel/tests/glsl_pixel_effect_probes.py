@@ -21,7 +21,6 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
     log,
     node,
 )
@@ -132,7 +131,7 @@ class InvertingEffectProbe:
     which the invert check must fail.
     """
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> VideoFrame: ...
 
     def __init__(self, config: InvertingEffectProbeConfig) -> None:
@@ -173,7 +172,7 @@ class PreDeclaredHelpersProbe:
     """Applies one effect per pre-declared helper to the first frame and
     reports each one's mismatch against the same picture made with numpy."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> VideoFrame: ...
 
     def __init__(self) -> None:
@@ -217,7 +216,7 @@ class EveryDialTypeProbe:
     """Applies an effect that paints one colour out of every dial type and
     reports the distinct pixels it wrote."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> VideoFrame: ...
 
     def __init__(self) -> None:
@@ -252,7 +251,7 @@ class CompilerDiagnosticLineProbe:
     """Compiles a body with a mistake on its third line and reports the line
     numbers the compiler's diagnostic names."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -282,7 +281,7 @@ class CopyRefusedFrameProbe:
     """Applies an effect to a `bgra` frame, as a camera may publish, which the
     engine copy refuses to land, and reports what the effect said."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> VideoFrame: ...
 
     def __init__(self) -> None:

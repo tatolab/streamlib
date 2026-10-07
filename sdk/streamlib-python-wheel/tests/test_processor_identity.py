@@ -1,12 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A processor's identity is its class's import path — and `stream.add` refuses one
+"""A processor's identity is its class's import path — and `stream_builder.add` refuses one
 no interpreter could import.
 
 Every Python processor runs in its own child process, which reaches the class by
 importing it. A class the child cannot import has no host anywhere, so the
-refusal belongs at `stream.add` — where the author is naming the class — rather
+refusal belongs at `stream_builder.add` — where the author is naming the class — rather
 than at spawn, where it would surface as a failed child.
 
 The other half is that an accepted name does not move. Identity is what the

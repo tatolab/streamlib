@@ -19,15 +19,13 @@ import math
 import struct
 from typing import Optional
 
-from tatolab.stream import (  # noqa: A004 — `input` is tatolab.stream's port decorator
+from tatolab.stream import (
     AudioBlock,
     AudioWindowContract,
     RuntimeContextLimitedAccess,
-    input,
     log,
     monotonic_now_ns,
     node,
-    output,
 )
 
 CONTIGUOUS_RESULT_MARKER = "MARKER:WINDOWS_SEEN "
@@ -71,7 +69,7 @@ class ExactWindowProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    @input(
+    @node.input(
         delivery_profile="ordered",
         audio_window=AudioWindowContract(
             sample_rate=16_000,
@@ -101,7 +99,7 @@ class RollingWindowProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    @input(
+    @node.input(
         delivery_profile="ordered",
         audio_window=AudioWindowContract(
             sample_rate=16_000,
@@ -132,7 +130,7 @@ class StereoToneSource:
     read as the stage's failure rather than this fixture's.
     """
 
-    @output()
+    @node.output()
     def audio(self) -> None: ...
 
     def __init__(self) -> None:
@@ -184,7 +182,7 @@ class SourceFollowingWindowProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    @input(
+    @node.input(
         delivery_profile="ordered",
         audio_window=AudioWindowContract(
             sample_rate=SOURCE_SAMPLE_RATE,
@@ -211,7 +209,7 @@ class DeclaredMonoWindowProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    @input(
+    @node.input(
         delivery_profile="ordered",
         audio_window=AudioWindowContract(
             sample_rate=SOURCE_SAMPLE_RATE,

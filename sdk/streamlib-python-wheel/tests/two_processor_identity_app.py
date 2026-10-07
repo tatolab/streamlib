@@ -10,14 +10,14 @@ nothing but a GPU context.
 import tatolab.runtime
 from identity_stable_processor import IdentityStableProcessor
 from second_identity_stable_processor import SecondIdentityStableProcessor
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 
 @stream
-def two_identity_stable_processors(stream: Stream) -> None:
+def two_identity_stable_processors(stream_builder: StreamBuilder) -> None:
     """Both processors, in one graph."""
-    stream.add(IdentityStableProcessor)
-    stream.add(SecondIdentityStableProcessor)
+    stream_builder.add(IdentityStableProcessor)
+    stream_builder.add(SecondIdentityStableProcessor)
 
 
 def load_then_exit() -> None:

@@ -32,7 +32,6 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
     log,
     node,
 )
@@ -118,7 +117,7 @@ class _WindowOwningProbeBase:
     gradient_kernel: ComputeKernel
     kernel_output: GpuSurfaceHandle
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -333,7 +332,7 @@ class AProcessThatCanGetNoWindowRefusesAtSetupProbe:
     window optional carries on without one.
     """
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

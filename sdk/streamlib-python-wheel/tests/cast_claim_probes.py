@@ -49,7 +49,6 @@ from tatolab.stream import (
     ClaimedSurfacePixelAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
     log,
     node,
 )
@@ -125,7 +124,7 @@ class _LaggedHolderProbe:
     # ids the camera has already recycled — refused loudly now (#1872), but
     # that refusal on *arrival* is not what these probes measure. Reading the
     # newest bag keeps arrivals current; the held frame still gets lapped.
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -309,7 +308,7 @@ class _BareProtocolProbe:
     # publish, and this probe reads exactly one frame at whatever moment it
     # starts — a queue of stale bags would refuse on arrival for reasons that
     # have nothing to do with the protocol under test.
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

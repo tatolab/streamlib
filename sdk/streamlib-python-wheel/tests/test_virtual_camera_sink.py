@@ -38,7 +38,7 @@ import pytest
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 VIRTUAL_CAMERA_SINK_APP = Path(__file__).parent / "virtual_camera_sink_app.py"
 CONTROL_NODE = Path("/dev/v4l2loopback")
@@ -346,8 +346,8 @@ def test_the_marker_class_cannot_be_instantiated():
 
 
 @stream
-def a_virtual_camera_sink_alone(stream: Stream) -> None:
-    stream.add(tatolab.stream.VirtualCameraSink)
+def a_virtual_camera_sink_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(tatolab.stream.VirtualCameraSink)
 
 
 @pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")

@@ -3,7 +3,7 @@
 
 """The two processors as a graph sees them.
 
-`stream.add` with no adapter and no engine change is the whole claim of the
+`stream_builder.add` with no adapter and no engine change is the whole claim of the
 extension model, so it is what these check — each stream's graph taken by
 `Runtime.load` on a real `Runtime`, which needs no device to load one.
 """
@@ -34,7 +34,7 @@ from tatolab.stream import (
     OpusDecoder,
     OpusEncoder,
     RuntimeContextFullAccess,
-    Stream,
+    StreamBuilder,
     compile_stream_to_graph,
     log,
     stream,
@@ -44,56 +44,56 @@ pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_proc
 
 
 @stream
-def the_whip_publisher_alone(stream: Stream) -> None:
-    stream.add(WhipPublisher, config={"url": "https://example.invalid/x"})
+def the_whip_publisher_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(WhipPublisher, config={"url": "https://example.invalid/x"})
 
 
 @stream
-def the_whep_player_alone(stream: Stream) -> None:
-    stream.add(WhepPlayer, config={"url": "https://example.invalid/x"})
+def the_whep_player_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(WhepPlayer, config={"url": "https://example.invalid/x"})
 
 
 @stream
-def the_publisher_fed_by_both_encoders(stream: Stream) -> None:
-    video_encoder = stream.add(H264Encoder)
-    audio_encoder = stream.add(OpusEncoder)
-    publisher = stream.add(
+def the_publisher_fed_by_both_encoders(stream_builder: StreamBuilder) -> None:
+    video_encoder = stream_builder.add(H264Encoder)
+    audio_encoder = stream_builder.add(OpusEncoder)
+    publisher = stream_builder.add(
         WhipPublisher, config={"url": "https://example.invalid/whip"}
     )
 
-    stream.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
-    stream.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+    stream_builder.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
+    stream_builder.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
 
 
 @stream
-def the_player_feeding_both_decoders(stream: Stream) -> None:
-    player = stream.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
-    video_decoder = stream.add(H264Decoder)
-    audio_decoder = stream.add(OpusDecoder)
+def the_player_feeding_both_decoders(stream_builder: StreamBuilder) -> None:
+    player = stream_builder.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
+    video_decoder = stream_builder.add(H264Decoder)
+    audio_decoder = stream_builder.add(OpusDecoder)
 
-    stream.connect(
+    stream_builder.connect(
         player.output("encoded_video"), video_decoder.input("encoded_video")
     )
-    stream.connect(
+    stream_builder.connect(
         player.output("encoded_audio"), audio_decoder.input("encoded_audio")
     )
 
 
 @stream
-def a_publish_and_play_round_trip(stream: Stream) -> None:
-    encoder = stream.add(H264Encoder)
-    publisher = stream.add(
+def a_publish_and_play_round_trip(stream_builder: StreamBuilder) -> None:
+    encoder = stream_builder.add(H264Encoder)
+    publisher = stream_builder.add(
         WhipPublisher, config={"url": "https://example.invalid/whip"}
     )
-    player = stream.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
-    decoder = stream.add(H264Decoder)
+    player = stream_builder.add(WhepPlayer, config={"url": "https://example.invalid/whep"})
+    decoder = stream_builder.add(H264Decoder)
 
-    stream.connect(encoder.output("encoded_video"), publisher.input("tracks"))
-    stream.connect(player.output("encoded_video"), decoder.input("encoded_video"))
+    stream_builder.connect(encoder.output("encoded_video"), publisher.input("tracks"))
+    stream_builder.connect(player.output("encoded_video"), decoder.input("encoded_video"))
 
 
 def node_names_loaded_into(
-    runtime: tatolab.runtime.Runtime, stream_function: "Callable[[Stream], None]"
+    runtime: tatolab.runtime.Runtime, stream_function: "Callable[[StreamBuilder], None]"
 ) -> "list[str]":
     """Load `stream_function`'s graph into `runtime`, and name the nodes it holds.
 
@@ -296,7 +296,7 @@ def test_a_publisher_added_with_no_endpoint_at_all_is_refused_by_its_config_clas
 
 @pytest.mark.parametrize("processor_class", [WhipPublisher, WhepPlayer])
 def test_config_reaches_a_processor_as_its_own_config_object(processor_class):
-    """The shape `stream.add(cls, config={...})` actually delivers.
+    """The shape `stream_builder.add(cls, config={...})` actually delivers.
 
     The graph records the config and the helper constructs the class's config
     class from it, so a class whose settings are not on that config class

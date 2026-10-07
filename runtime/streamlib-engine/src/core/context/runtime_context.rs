@@ -31,7 +31,7 @@ pub struct RuntimeContext {
     runtime_name: Arc<RuntimeName>,
     /// Unique identifier for this processor (None for shared/global context).
     processor_id: Option<ProcessorUniqueId>,
-    /// The node's name — the one string `stream.add`'s `NodeReference` and the
+    /// The node's name — the one string `stream_builder.add`'s `NodeReference` and the
     /// control plane's `add_node` report, `graph` renders and the log prefix
     /// carries — so a processor that has to name itself to the outside world
     /// names itself the way every other surface does. `None` for the

@@ -6,7 +6,7 @@
 //! `tatolab.stream.TestPatternSource` is a marker class: never instantiated, never
 //! subclassed, carrying no Python behavior. Its `type` class attribute is the
 //! import path a graph names the statically-linked native processor by, which
-//! `stream.add` records on the node — per-frame paths never enter the
+//! `stream_builder.add` records on the node — per-frame paths never enter the
 //! interpreter.
 
 /// Declare marker classes, each standing for one native processor, and the

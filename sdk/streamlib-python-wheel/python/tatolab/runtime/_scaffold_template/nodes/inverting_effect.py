@@ -12,9 +12,7 @@ from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,  # noqa: A004 — tatolab.stream's port decorator
     node,
-    output,
 )
 
 # The whole effect: the output pixel for the source pixel at `at`, with each
@@ -31,10 +29,10 @@ vec4 effect(vec4 source, ivec2 at) {
 class InvertingEffect:
     """Inverts every frame's colors on the GPU and passes it on."""
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
 
-    @output()
+    @node.output()
     def video_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:

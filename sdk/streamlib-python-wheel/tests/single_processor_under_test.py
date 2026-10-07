@@ -13,17 +13,17 @@ import dataclasses
 
 import numpy
 
-from tatolab.stream import AudioBlock, RuntimeContextLimitedAccess, input, node, output
+from tatolab.stream import AudioBlock, RuntimeContextLimitedAccess, node
 
 
 @node
 class DoublingFilter:
     """One input, one output — the shape the harness exists to drive."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def numbers_from_upstream(self) -> None: ...
 
-    @output()
+    @node.output()
     def numbers_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -37,10 +37,10 @@ class DoublingFilter:
 class MixedCasePortDoubler:
     """Ports declared and looked up in spellings other than their cast names."""
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def Numbers(self) -> None: ...
 
-    @output(name="Doubled Numbers")
+    @node.output(name="Doubled Numbers")
     def numbers_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -64,10 +64,10 @@ class ConfiguredScaler:
     def __init__(self, config: ConfiguredScalerConfig) -> None:
         self.factor = config.factor
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def numbers_from_upstream(self) -> None: ...
 
-    @output()
+    @node.output()
     def numbers_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -88,10 +88,10 @@ class AudioBlockInspector:
     a processor that produced nothing.
     """
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
-    @output()
+    @node.output()
     def readings_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

@@ -30,7 +30,7 @@ import pytest
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Mp4Sink, Stream, compile_stream_to_graph, stream
+from tatolab.stream import Mp4Sink, StreamBuilder, compile_stream_to_graph, stream
 
 MP4_SINK_APP = Path(__file__).parent / "mp4_sink_app.py"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -124,8 +124,8 @@ def test_the_marker_class_cannot_be_instantiated():
 
 
 @stream
-def one_mp4_sink_left_unnamed(stream: Stream) -> None:
-    stream.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
+def one_mp4_sink_left_unnamed(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
 
 
 def test_node_name_defaults_to_the_type_name():
@@ -140,13 +140,13 @@ def test_node_name_defaults_to_the_type_name():
 
 
 @stream
-def two_microphone_encoder_pairs_into_one_mp4_sink(stream: Stream) -> None:
-    sink = stream.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
+def two_microphone_encoder_pairs_into_one_mp4_sink(stream_builder: StreamBuilder) -> None:
+    sink = stream_builder.add(Mp4Sink, config={"path": NEVER_OPENED_RECORDING_PATH})
     for _ in range(2):
-        microphone = stream.add(tatolab.stream.MicrophoneSource)
-        encoder = stream.add(tatolab.stream.OpusEncoder)
-        stream.connect(microphone.output("audio"), encoder.input("audio"))
-        stream.connect(encoder.output("encoded_audio"), sink.input("tracks"))
+        microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
+        encoder = stream_builder.add(tatolab.stream.OpusEncoder)
+        stream_builder.connect(microphone.output("audio"), encoder.input("audio"))
+        stream_builder.connect(encoder.output("encoded_audio"), sink.input("tracks"))
 
 
 def test_two_encoders_wire_into_the_one_input_without_an_adapter():
@@ -154,7 +154,7 @@ def test_two_encoders_wire_into_the_one_input_without_an_adapter():
 
     This is the whole authoring surface for a two-track recording: the sink
     declares one input, any number of links may enter it, and each becomes a
-    track. A second `stream.connect` into the same port is the second track.
+    track. A second `stream_builder.connect` into the same port is the second track.
     The builder checks no port names, so the engine accepting the load is the
     proof.
     """

@@ -11,7 +11,7 @@ under test: under pytest the entry module is the test runner, so a class's
 import sys
 
 import tatolab.runtime
-from tatolab.stream import Stream, compile_stream_to_graph, node, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, node, stream
 
 MARKER_PREFIX = "MARKER:"
 
@@ -28,12 +28,12 @@ def marker(name: str) -> None:
 
 
 @stream
-def a_processor_defined_in_the_entry_file(stream: Stream) -> None:
-    stream.add(EntryFileProcessor)
+def a_processor_defined_in_the_entry_file(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(EntryFileProcessor)
 
 
 @stream
-def a_function_local_processor(stream: Stream) -> None:
+def a_function_local_processor(stream_builder: StreamBuilder) -> None:
     def build_processor() -> type:
         @node(execution="continuous", interval_ms=1)
         class FunctionLocalProcessor:
@@ -41,15 +41,15 @@ def a_function_local_processor(stream: Stream) -> None:
 
         return FunctionLocalProcessor
 
-    stream.add(build_processor())
+    stream_builder.add(build_processor())
 
 
 @stream
-def an_importable_processor(stream: Stream) -> None:
+def an_importable_processor(stream_builder: StreamBuilder) -> None:
     """The same stream, one import line different — the fix the refusal names."""
     from zero_argument_process_processor import ZeroArgumentProcess
 
-    stream.add(ZeroArgumentProcess)
+    stream_builder.add(ZeroArgumentProcess)
 
 
 def compile_reporting_its_refusal(stream_function) -> None:

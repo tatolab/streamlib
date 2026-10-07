@@ -11,7 +11,7 @@ this app — and the test driving it — over the child→parent log forwarding.
 import sys
 
 import tatolab.runtime
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 import ray_tracing_kernel_probes
 
@@ -21,10 +21,10 @@ def _probe_class_named_on_the_command_line() -> type:
 
 
 @stream
-def one_ray_tracing_kernel_probe(stream: Stream) -> None:
+def one_ray_tracing_kernel_probe(stream_builder: StreamBuilder) -> None:
     """A kernel probe needs no upstream: it builds its own acceleration
     structures, acquires its own storage image and reports from `setup`."""
-    stream.add(_probe_class_named_on_the_command_line())
+    stream_builder.add(_probe_class_named_on_the_command_line())
 
 
 if __name__ == "__main__":

@@ -12,15 +12,15 @@ import threading
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 UNOPENABLE_DEVICE_ID = "/dev/video-not-a-real-camera"
 READINESS_TIMEOUT_SECONDS = 10.0
 
 
 @stream
-def a_camera_naming_a_device_no_backend_can_open(stream: Stream) -> None:
-    stream.add(tatolab.stream.CameraSource, config={"device_id": UNOPENABLE_DEVICE_ID})
+def a_camera_naming_a_device_no_backend_can_open(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(tatolab.stream.CameraSource, config={"device_id": UNOPENABLE_DEVICE_ID})
 
 
 def main() -> None:

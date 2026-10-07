@@ -56,7 +56,7 @@ pub(crate) fn processor_class_import_path(processor_class: &Bound<'_, PyAny>) ->
              that exists only for the duration of a call. Every Python processor runs in its \
              own child process, which reaches the class by importing this name.\n\n\
              Move the class to module scope. If it was parameterised by the enclosing \
-             function's arguments, pass those through `stream.add(..., config={{...}})` instead \
+             function's arguments, pass those through `stream_builder.add(..., config={{...}})` instead \
              — config reaches the child, a closure cannot."
         )));
     }

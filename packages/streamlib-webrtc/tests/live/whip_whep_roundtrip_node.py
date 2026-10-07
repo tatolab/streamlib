@@ -30,7 +30,7 @@ import os
 import tatolab.runtime
 import tatolab.stream
 from streamlib_webrtc import WhepPlayer, WhipPublisher
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 #: Stated rather than left to the encoder's default, because the baseline this
 #: run locks against was captured with it stated: one baseline scores two paths
@@ -87,18 +87,18 @@ def _parse_fixture_arguments() -> argparse.Namespace:
 
 
 @stream
-def whip_whep_roundtrip(stream: Stream) -> None:
+def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
     """The round trip this process's argv and endpoint URLs describe."""
     arguments = _parse_fixture_arguments()
 
-    publisher = stream.add(
+    publisher = stream_builder.add(
         WhipPublisher,
         config=_session_configuration(
             PUBLISH_URL_VARIABLE, "STREAMLIB_WHIP_BEARER_TOKEN"
         ),
         name="publisher",
     )
-    player = stream.add(
+    player = stream_builder.add(
         WhepPlayer,
         config=_session_configuration(
             PLAYBACK_URL_VARIABLE, "STREAMLIB_WHEP_BEARER_TOKEN"
@@ -106,17 +106,17 @@ def whip_whep_roundtrip(stream: Stream) -> None:
         name="player",
     )
 
-    camera = stream.add(
+    camera = stream_builder.add(
         tatolab.stream.CameraSource,
         config={"device_id": arguments.camera} if arguments.camera else {},
         name="camera",
     )
-    video_encoder = stream.add(
+    video_encoder = stream_builder.add(
         tatolab.stream.H264Encoder,
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
         name="video_encoder",
     )
-    microphone = stream.add(
+    microphone = stream_builder.add(
         tatolab.stream.MicrophoneSource,
         config=(
             {"device_id": arguments.audio_capture_device}
@@ -125,32 +125,32 @@ def whip_whep_roundtrip(stream: Stream) -> None:
         ),
         name="microphone",
     )
-    audio_encoder = stream.add(tatolab.stream.OpusEncoder, name="audio_encoder")
+    audio_encoder = stream_builder.add(tatolab.stream.OpusEncoder, name="audio_encoder")
 
-    video_decoder = stream.add(tatolab.stream.H264Decoder, name="video_decoder")
-    audio_decoder = stream.add(tatolab.stream.OpusDecoder, name="audio_decoder")
+    video_decoder = stream_builder.add(tatolab.stream.H264Decoder, name="video_decoder")
+    audio_decoder = stream_builder.add(tatolab.stream.OpusDecoder, name="audio_decoder")
     # Both sinks are here so each decoder has a subscriber for the whole run,
     # which is the shape the showcase ships and the shape the codec rig scored.
-    window = stream.add(
+    window = stream_builder.add(
         tatolab.stream.DisplayWindow,
         config={"title": "streamlib whip/whep round-trip"},
         name="window",
     )
-    speaker = stream.add(tatolab.stream.SpeakerSink, name="speaker")
+    speaker = stream_builder.add(tatolab.stream.SpeakerSink, name="speaker")
 
-    stream.connect(camera.output("video"), video_encoder.input("video"))
-    stream.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
-    stream.connect(microphone.output("audio"), audio_encoder.input("audio"))
-    stream.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+    stream_builder.connect(camera.output("video"), video_encoder.input("video"))
+    stream_builder.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
+    stream_builder.connect(microphone.output("audio"), audio_encoder.input("audio"))
+    stream_builder.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
 
-    stream.connect(
+    stream_builder.connect(
         player.output("encoded_video"), video_decoder.input("encoded_video")
     )
-    stream.connect(video_decoder.output("video"), window.input("video"))
-    stream.connect(
+    stream_builder.connect(video_decoder.output("video"), window.input("video"))
+    stream_builder.connect(
         player.output("encoded_audio"), audio_decoder.input("encoded_audio")
     )
-    stream.connect(audio_decoder.output("audio"), speaker.input("audio"))
+    stream_builder.connect(audio_decoder.output("audio"), speaker.input("audio"))
 
 
 def main() -> None:

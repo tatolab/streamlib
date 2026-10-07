@@ -5,7 +5,7 @@
 
 `TestPatternSource -> VirtualCameraSink`, and a second sink on the same source
 when `--second-name` is given: two cameras from one graph is a second
-`stream.add` and a second `stream.connect`, nothing more. `--door` is passed
+`stream_builder.add` and a second `stream_builder.connect`, nothing more. `--door` is passed
 straight through, and defaults to `v4l2loopback` so a machine without the
 permission refuses by name rather than quietly taking the other door — which
 is what the loopback tests want to observe. The PipeWire test names its door
@@ -20,7 +20,7 @@ import threading
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
@@ -41,9 +41,9 @@ def _parse_virtual_camera_arguments() -> argparse.Namespace:
 
 
 @stream
-def a_test_pattern_into_virtual_cameras(stream: Stream) -> None:
+def a_test_pattern_into_virtual_cameras(stream_builder: StreamBuilder) -> None:
     arguments = _parse_virtual_camera_arguments()
-    pattern = stream.add(
+    pattern = stream_builder.add(
         tatolab.stream.TestPatternSource,
         config={"width": arguments.width, "height": arguments.height},
     )
@@ -51,11 +51,11 @@ def a_test_pattern_into_virtual_cameras(stream: Stream) -> None:
     if arguments.second_name:
         camera_names.append(arguments.second_name)
     for camera_name in camera_names:
-        sink = stream.add(
+        sink = stream_builder.add(
             tatolab.stream.VirtualCameraSink,
             config={"name": camera_name, "door": arguments.door},
         )
-        stream.connect(pattern.output("video"), sink.input("video"))
+        stream_builder.connect(pattern.output("video"), sink.input("video"))
 
 
 def main() -> None:

@@ -12,7 +12,6 @@ import numpy
 from tatolab.stream import (
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,  # noqa: A004 — tatolab.stream's port decorator
     log,
     node,
 )
@@ -26,7 +25,7 @@ class BrightnessMeter:
 
     next_brightness_report_at_ns: int = 0
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

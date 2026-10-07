@@ -23,10 +23,8 @@ from engine_media_clock import engine_media_clock_now_ns
 from tatolab.stream import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    input,
     log,
     node,
-    output,
 )
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
@@ -136,7 +134,7 @@ class TimeProbe:
 
 @node(execution="continuous", interval_ms=1)
 class ExplicitlyStampedSource:
-    @output()
+    @node.output()
     def bags_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -147,7 +145,7 @@ class ExplicitlyStampedSource:
 
 @node(execution="continuous", interval_ms=1)
 class DefaultStampedSource:
-    @output()
+    @node.output()
     def bags_to_downstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -156,7 +154,7 @@ class DefaultStampedSource:
 
 @node
 class TimestampCollectingSink:
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def bags_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -207,7 +205,7 @@ class WorkerThreadSource:
         self._stop = threading.Event()
         self._worker: "threading.Thread | None" = None
 
-    @output()
+    @node.output()
     def bags_to_downstream(self) -> None: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -229,7 +227,7 @@ class WorkerThreadSource:
 
 @node
 class WorkerThreadBagSink:
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def bags_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

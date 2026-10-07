@@ -1828,7 +1828,7 @@ sys.exit(0)
 
     /// The class the child imports, and the identifiers it reports itself by,
     /// travel in the environment. `STREAMLIB_ENTRYPOINT` *is* the import path
-    /// `stream.add` derived and refused an unimportable class by.
+    /// `stream_builder.add` derived and refused an unimportable class by.
     #[test]
     fn the_child_is_told_which_class_to_import_and_who_it_is() {
         let command = spawn_host_for_test(None).build_helper_process_command(

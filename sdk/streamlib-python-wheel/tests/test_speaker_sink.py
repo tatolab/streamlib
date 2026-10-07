@@ -26,7 +26,7 @@ import pytest
 import tatolab.runtime
 import tatolab.stream
 from speaker_sink_named_device_app import UNOPENABLE_DEVICE_ID
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 SPEAKER_SINK_APP = Path(__file__).parent / "speaker_sink_app.py"
 NAMED_DEVICE_APP = Path(__file__).parent / "speaker_sink_named_device_app.py"
@@ -52,8 +52,8 @@ def test_the_marker_class_cannot_be_instantiated():
 
 
 @stream
-def one_speaker_sink_left_unnamed(stream: Stream) -> None:
-    stream.add(tatolab.stream.SpeakerSink)
+def one_speaker_sink_left_unnamed(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(tatolab.stream.SpeakerSink)
 
 
 def test_node_name_defaults_to_the_type_name():
@@ -68,15 +68,15 @@ def test_node_name_defaults_to_the_type_name():
 
 
 @stream
-def microphone_wired_straight_into_a_speaker(stream: Stream) -> None:
-    microphone = stream.add(tatolab.stream.MicrophoneSource)
-    speaker = stream.add(tatolab.stream.SpeakerSink)
-    stream.connect(microphone.output("audio"), speaker.input("audio"))
+def microphone_wired_straight_into_a_speaker(stream_builder: StreamBuilder) -> None:
+    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
+    speaker = stream_builder.add(tatolab.stream.SpeakerSink)
+    stream_builder.connect(microphone.output("audio"), speaker.input("audio"))
 
 
 def test_the_speaker_declares_the_input_a_microphone_can_be_wired_to():
     """The two audio built-ins have to compose without an adapter between them,
-    which is what makes one `stream.connect(microphone.output("audio"),
+    which is what makes one `stream_builder.connect(microphone.output("audio"),
     speaker.input("audio"))` the whole of wiring audio through. The builder
     checks no port names, so the engine accepting the load is the proof."""
     runtime = tatolab.runtime.Runtime()
@@ -100,7 +100,7 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     probed backend's playback stream, fed over a real link by the capture
     built-in, with no interpreter anywhere in the sample path.
 
-    `stream.add` with no `config` records `{}`, so this is also the
+    `stream_builder.add` with no `config` records `{}`, so this is also the
     added-without-config proof.
 
     On the ALSA arm the default source and default sink disagree on format on

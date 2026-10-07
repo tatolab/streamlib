@@ -12,7 +12,7 @@ suite inside the child.
 import time
 from typing import TypedDict
 
-from tatolab.stream import input, node, output
+from tatolab.stream import node
 
 
 class PassThroughProbeConfig(TypedDict, total=False):
@@ -28,10 +28,10 @@ class PassThroughProbe:
     def __init__(self, config: PassThroughProbeConfig) -> None:
         self.tag = config.get("tag", "untagged")
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def frames_from_upstream(self) -> None: ...
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -45,7 +45,7 @@ class OuterProbe:
 
     @node(execution="manual")
     class InnerProbe:
-        @output()
+        @node.output()
         def frames_to_downstream(self) -> None: ...
 
 
@@ -53,7 +53,7 @@ class OuterProbe:
 class ImportsADmaBufOffLinuxProbe:
     """Adopts a DMA-BUF in `setup`, off Linux, and fails with the refusal."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def setup(self, ctx) -> None:
@@ -64,7 +64,7 @@ class ImportsADmaBufOffLinuxProbe:
 class RefusesSetupProbe:
     """Raises out of `setup`, which the parent must hear about."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def setup(self, ctx) -> None:
@@ -75,10 +75,10 @@ class RefusesSetupProbe:
 class SlowPassThroughProbe:
     """Copies every bag to its output, slower than a burst arrives."""
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def frames_from_upstream(self) -> None: ...
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -99,7 +99,7 @@ class InterruptedInProcessProbe:
     """Takes a `KeyboardInterrupt` inside `process()`, the way the parent's
     shutdown ladder delivers one to a callback that outran its budget."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -124,7 +124,7 @@ class InterruptedInSetupProbe:
     """Takes a `KeyboardInterrupt` inside `setup()`. Unlike a `setup()` that
     raises on its own, this one is still owed its `teardown()`."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def setup(self, ctx) -> None:
@@ -139,7 +139,7 @@ class InterruptedInSetupProbe:
 class RaisesInSetupProbe:
     """A `setup()` that raises on its own, which keeps the no-teardown rule."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def setup(self, ctx) -> None:
@@ -163,7 +163,7 @@ class ContinuousPacingProbe:
     """Records when each `process()` ran, so the interval the loop kept is
     measurable. The interval under test is the one the parent's `run` names."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -178,7 +178,7 @@ class ReconfigurableProbeConfig(TypedDict, total=False):
 class RefusesReconfigurationProbe:
     """Defines `configure` and refuses every configuration handed to it."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def __init__(self, config: ReconfigurableProbeConfig) -> None:
@@ -192,7 +192,7 @@ class RefusesReconfigurationProbe:
 class TakesReconfigurationProbe:
     """Defines `configure` and takes whatever it is handed."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def __init__(self, config: ReconfigurableProbeConfig) -> None:
@@ -207,7 +207,7 @@ class ReleasesAStructureInTeardownProbe:
     """Builds an acceleration structure in `setup` and lets go of it in
     `teardown`, so the structure's release is owed while teardown answers."""
 
-    @output()
+    @node.output()
     def frames_to_downstream(self) -> None: ...
 
     def setup(self, ctx) -> None:

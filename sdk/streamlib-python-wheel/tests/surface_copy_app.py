@@ -9,41 +9,41 @@ from typing import Any
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 import surface_copy_probes
 
 
 def _wire_a_test_pattern_into_probe(
-    stream: Stream, probe_class: type, probe_config: dict[str, Any]
+    stream_builder: StreamBuilder, probe_class: type, probe_config: dict[str, Any]
 ) -> None:
-    pattern = stream.add(
+    pattern = stream_builder.add(
         tatolab.stream.TestPatternSource,
         config={
             "width": surface_copy_probes.FRAME_WIDTH,
             "height": surface_copy_probes.FRAME_HEIGHT,
         },
     )
-    probe = stream.add(probe_class, config=probe_config)
-    stream.connect(pattern.output("video"), probe.input("video_from_upstream"))
+    probe = stream_builder.add(probe_class, config=probe_config)
+    stream_builder.connect(pattern.output("video"), probe.input("video_from_upstream"))
 
 
 @stream
-def a_test_pattern_into_the_frame_landing_probe(stream: Stream) -> None:
-    _wire_a_test_pattern_into_probe(stream, surface_copy_probes.FrameLandingProbe, {})
+def a_test_pattern_into_the_frame_landing_probe(stream_builder: StreamBuilder) -> None:
+    _wire_a_test_pattern_into_probe(stream_builder, surface_copy_probes.FrameLandingProbe, {})
 
 
 @stream
-def a_test_pattern_into_a_frame_landing_probe_skipping_the_copy(stream: Stream) -> None:
+def a_test_pattern_into_a_frame_landing_probe_skipping_the_copy(stream_builder: StreamBuilder) -> None:
     """The landing check's negative control: the kernel reads a texture nothing copied into."""
     _wire_a_test_pattern_into_probe(
-        stream, surface_copy_probes.FrameLandingProbe, {"skip_copy": True}
+        stream_builder, surface_copy_probes.FrameLandingProbe, {"skip_copy": True}
     )
 
 
 @stream
-def a_test_pattern_into_the_copy_refusal_probe(stream: Stream) -> None:
-    _wire_a_test_pattern_into_probe(stream, surface_copy_probes.CopyRefusalProbe, {})
+def a_test_pattern_into_the_copy_refusal_probe(stream_builder: StreamBuilder) -> None:
+    _wire_a_test_pattern_into_probe(stream_builder, surface_copy_probes.CopyRefusalProbe, {})
 
 
 STREAM_BY_SCENARIO = {

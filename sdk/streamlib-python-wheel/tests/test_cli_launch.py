@@ -60,12 +60,12 @@ SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS = SCAFFOLD_OBSERVATION_WINDOW_SE
 MINIMUM_FRAMES_FOR_LIVE_VIDEO = 120
 
 STREAM_WITH_ONE_NATIVE_SOURCE = '''\
-from tatolab.stream import Stream, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, TestPatternSource, stream
 
 
 @stream
-def main(stream: Stream) -> None:
-    stream.add(TestPatternSource, config={"width": 320, "height": 180})
+def main(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(TestPatternSource, config={"width": 320, "height": 180})
 '''
 
 # A fleet rather than a pair, and few enough that the rig pays for it in
@@ -91,15 +91,15 @@ FIRST_FRAME_REPORTER_MODULE = Path(__file__).parent / "first_frame_reporter.py"
 # scaffold suite already covers the packaged one.
 STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE = '''\
 from first_frame_reporter import ReportsItsProcessOnFirstFrame
-from tatolab.stream import Stream, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, TestPatternSource, stream
 
 
 @stream
-def main(stream: Stream) -> None:
-    source = stream.add(TestPatternSource, config={"width": 320, "height": 180})
+def main(stream_builder: StreamBuilder) -> None:
+    source = stream_builder.add(TestPatternSource, config={"width": 320, "height": 180})
     for _ in range(%d):
-        reporter = stream.add(ReportsItsProcessOnFirstFrame)
-        stream.connect(source.output("video"), reporter.input("video_from_upstream"))
+        reporter = stream_builder.add(ReportsItsProcessOnFirstFrame)
+        stream_builder.connect(source.output("video"), reporter.input("video_from_upstream"))
 '''
 
 LIVE_HELPER_MARKER = re.compile(r"MARKER:LIVE (\d+)")
@@ -747,7 +747,7 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
 def test_a_native_block_added_without_config_reaches_a_running_graph(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
-    """`stream.add(TestPatternSource)` with no `config` — the spelling the plan
+    """`stream_builder.add(TestPatternSource)` with no `config` — the spelling the plan
     blesses for a block that needs no configuration.
 
     The config travels to the engine as JSON and every field of a built-in's
@@ -758,12 +758,12 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
     app_directory = tmp_path / "app"
     app_directory.mkdir()
     (app_directory / "stream.py").write_text(
-        "from tatolab.stream import Stream, TestPatternSource, stream\n"
+        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
         "\n"
         "\n"
         "@stream\n"
-        "def main(stream: Stream) -> None:\n"
-        "    stream.add(TestPatternSource)\n"
+        "def main(stream_builder: StreamBuilder) -> None:\n"
+        "    stream_builder.add(TestPatternSource)\n"
     )
 
     node = launch_node("run", app_directory)
@@ -996,12 +996,12 @@ def edit_the_scaffolded_effect(app_directory: Path) -> None:
     edited = effect_module.read_text()
     for anchor, replacement in (
         (
-            "    input,  # noqa: A004 — tatolab.stream's port decorator\n",
-            "    input,  # noqa: A004 — tatolab.stream's port decorator\n    log,\n",
+            "    VideoFrame,\n",
+            "    VideoFrame,\n    log,\n",
         ),
         (
-            '    @input(delivery_profile="newest")',
-            '    announced = False\n\n    @input(delivery_profile="newest")',
+            '    @node.input(delivery_profile="newest")',
+            '    announced = False\n\n    @node.input(delivery_profile="newest")',
         ),
         (
             "        ctx.outputs.write(\n",
@@ -1078,12 +1078,12 @@ def test_a_bad_config_is_reported_without_a_launcher_traceback(
     app_directory = tmp_path / "app"
     app_directory.mkdir()
     (app_directory / "stream.py").write_text(
-        "from tatolab.stream import Stream, TestPatternSource, stream\n"
+        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
         "\n"
         "\n"
         "@stream\n"
-        "def main(stream: Stream) -> None:\n"
-        '    stream.add(TestPatternSource, config={"width": "not a number"})\n'
+        "def main(stream_builder: StreamBuilder) -> None:\n"
+        '    stream_builder.add(TestPatternSource, config={"width": "not a number"})\n'
     )
 
     node = launch_node("run", app_directory, capture_output=True)
@@ -1105,11 +1105,11 @@ def test_a_stream_function_that_raises_publishes_no_node(
     app_directory = tmp_path / "app"
     app_directory.mkdir()
     (app_directory / "stream.py").write_text(
-        "from tatolab.stream import Stream, stream\n"
+        "from tatolab.stream import StreamBuilder, stream\n"
         "\n"
         "\n"
         "@stream\n"
-        "def main(stream: Stream) -> None:\n"
+        "def main(stream_builder: StreamBuilder) -> None:\n"
         "    raise ValueError('bad wiring')\n"
     )
     runtime_directory = isolated_runtime_directory

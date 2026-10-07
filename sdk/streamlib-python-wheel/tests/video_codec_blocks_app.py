@@ -32,7 +32,7 @@ from video_codec_blocks_probes import (
     EncodedFrameProbe,
     EncodedFrameTimestampProbe,
 )
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 from tatolab.runtime._control_plane_client import call_tool
 from this_processes_node_registry_entry import this_processes_local_api_socket
 
@@ -50,31 +50,31 @@ CODEC_BLOCKS = {
 
 
 @stream
-def a_codec_round_trip_with_probes(stream: Stream) -> None:
+def a_codec_round_trip_with_probes(stream_builder: StreamBuilder) -> None:
     """The encoder and decoder pair `argv[1]` names, with the three probes."""
     encoder_class, decoder_class = CODEC_BLOCKS[sys.argv[1]]
-    pattern = stream.add(
+    pattern = stream_builder.add(
         tatolab.stream.TestPatternSource, config={"width": 320, "height": 180}
     )
-    encoder = stream.add(
+    encoder = stream_builder.add(
         encoder_class,
         config={"keyframe_interval_seconds": KEYFRAME_INTERVAL_SECONDS},
     )
-    decoder = stream.add(decoder_class)
-    encoded_frame_probe = stream.add(EncodedFrameProbe)
-    encoded_frame_timestamp_probe = stream.add(EncodedFrameTimestampProbe)
-    decoded_frame_probe = stream.add(DecodedVideoFrameProbe)
-    stream.connect(pattern.output("video"), encoder.input("video"))
-    stream.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
-    stream.connect(
+    decoder = stream_builder.add(decoder_class)
+    encoded_frame_probe = stream_builder.add(EncodedFrameProbe)
+    encoded_frame_timestamp_probe = stream_builder.add(EncodedFrameTimestampProbe)
+    decoded_frame_probe = stream_builder.add(DecodedVideoFrameProbe)
+    stream_builder.connect(pattern.output("video"), encoder.input("video"))
+    stream_builder.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
+    stream_builder.connect(
         encoder.output("encoded_video"),
         encoded_frame_probe.input("encoded_video_from_upstream"),
     )
-    stream.connect(
+    stream_builder.connect(
         encoder.output("encoded_video"),
         encoded_frame_timestamp_probe.input("encoded_video_from_upstream"),
     )
-    stream.connect(
+    stream_builder.connect(
         decoder.output("video"), decoded_frame_probe.input("video_from_upstream")
     )
 

@@ -11,7 +11,7 @@ spawned but never received traffic has not made the pipeline live.
 
 import os
 
-from tatolab.stream import input, log, node  # noqa: A004 — tatolab.stream's port decorator
+from tatolab.stream import log, node
 
 
 @node
@@ -21,7 +21,7 @@ class ReportsItsProcessOnFirstFrame:
     def __init__(self) -> None:
         self.announced = False
 
-    @input(delivery_profile="newest")
+    @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:

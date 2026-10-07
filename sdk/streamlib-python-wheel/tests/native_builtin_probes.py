@@ -10,7 +10,7 @@ production in the app process reaching a Python processor in its own child.
 
 import json
 
-from tatolab.stream import input, log, node
+from tatolab.stream import log, node
 
 RESULT_MARKER = "MARKER:FRAMES_SEEN "
 
@@ -22,7 +22,7 @@ class VideoFrameProbe:
     def __init__(self) -> None:
         self.bags_seen = []
 
-    @input(delivery_profile="ordered")
+    @node.input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:

@@ -24,44 +24,44 @@ import sys
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import NodeReference, Stream, compile_stream_to_graph, stream
+from tatolab.stream import NodeReference, StreamBuilder, compile_stream_to_graph, stream
 
 import processor_owned_window_probes
 
 
-def _add_source(stream: Stream, source_name: str) -> NodeReference:
+def _add_source(stream_builder: StreamBuilder, source_name: str) -> NodeReference:
     if source_name == "camera":
-        return stream.add(
+        return stream_builder.add(
             tatolab.stream.CameraSource,
             config={
                 "device_id": os.environ.get("STREAMLIB_CAMERA_DEVICE", "/dev/video0")
             },
         )
     if source_name == "test_pattern":
-        return stream.add(
+        return stream_builder.add(
             tatolab.stream.TestPatternSource, config={"width": 640, "height": 480}
         )
     raise SystemExit(f"unknown source {source_name!r}: use 'camera' or 'test_pattern'")
 
 
 @stream
-def a_probe_window_beside_a_display_window(stream: Stream) -> None:
+def a_probe_window_beside_a_display_window(stream_builder: StreamBuilder) -> None:
     """The source `argv[3]` names into both the probe `argv[2]` names and a `DisplayWindow`."""
     probe_class_name, source_name = sys.argv[2], sys.argv[3]
-    source = _add_source(stream, source_name)
-    probe = stream.add(getattr(processor_owned_window_probes, probe_class_name))
-    display = stream.add(tatolab.stream.DisplayWindow, config={"title": DISPLAY_TITLE})
-    stream.connect(source.output("video"), probe.input("video_from_upstream"))
-    stream.connect(source.output("video"), display.input("video"))
+    source = _add_source(stream_builder, source_name)
+    probe = stream_builder.add(getattr(processor_owned_window_probes, probe_class_name))
+    display = stream_builder.add(tatolab.stream.DisplayWindow, config={"title": DISPLAY_TITLE})
+    stream_builder.connect(source.output("video"), probe.input("video_from_upstream"))
+    stream_builder.connect(source.output("video"), display.input("video"))
 
 
 @stream
-def a_probe_window_with_no_display_server(stream: Stream) -> None:
+def a_probe_window_with_no_display_server(stream_builder: StreamBuilder) -> None:
     """The source `argv[3]` names into the probe `argv[2]` names, alone."""
     probe_class_name, source_name = sys.argv[2], sys.argv[3]
-    source = _add_source(stream, source_name)
-    probe = stream.add(getattr(processor_owned_window_probes, probe_class_name))
-    stream.connect(source.output("video"), probe.input("video_from_upstream"))
+    source = _add_source(stream_builder, source_name)
+    probe = stream_builder.add(getattr(processor_owned_window_probes, probe_class_name))
+    stream_builder.connect(source.output("video"), probe.input("video_from_upstream"))
 
 
 def scenario_beside_a_display_window() -> None:

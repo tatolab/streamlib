@@ -19,7 +19,7 @@ from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
-from tatolab.stream import Stream, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 from helper_placement_processors import (
     DiesAbruptlyProbe,
     ForksAWorkerThatOutlivesItProbe,
@@ -48,88 +48,88 @@ def marker(name: str) -> None:
 
 
 def _labelled_source_into_sink(
-    stream: Stream, label: str, *, sink_name: "str | None" = None
+    stream_builder: StreamBuilder, label: str, *, sink_name: "str | None" = None
 ) -> None:
-    source = stream.add(ReportsItsOwnProcessSource, config={"label": label})
-    sink = stream.add(ReportsUpstreamProcessSink, name=sink_name)
-    stream.connect(
+    source = stream_builder.add(ReportsItsOwnProcessSource, config={"label": label})
+    sink = stream_builder.add(ReportsUpstreamProcessSink, name=sink_name)
+    stream_builder.connect(
         source.output("frames_to_downstream"), sink.input("frames_from_upstream")
     )
 
 
 @stream
-def first_labelled_source_into_sink(stream: Stream) -> None:
+def first_labelled_source_into_sink(stream_builder: StreamBuilder) -> None:
     """A source labelled `first` into a sink reporting where its bags came from."""
-    _labelled_source_into_sink(stream, "first")
+    _labelled_source_into_sink(stream_builder, "first")
 
 
 @stream
-def only_labelled_source_into_sink(stream: Stream) -> None:
+def only_labelled_source_into_sink(stream_builder: StreamBuilder) -> None:
     """A source labelled `only` into a sink reporting where its bags came from."""
-    _labelled_source_into_sink(stream, "only")
+    _labelled_source_into_sink(stream_builder, "only")
 
 
 @stream
-def reaped_labelled_source_into_sink(stream: Stream) -> None:
+def reaped_labelled_source_into_sink(stream_builder: StreamBuilder) -> None:
     """A source labelled `reaped` into a sink reporting where its bags came from."""
-    _labelled_source_into_sink(stream, "reaped")
+    _labelled_source_into_sink(stream_builder, "reaped")
 
 
 @stream
-def two_labelled_sources_each_into_its_own_sink(stream: Stream) -> None:
+def two_labelled_sources_each_into_its_own_sink(stream_builder: StreamBuilder) -> None:
     """Two instances of one source class, each into a sink named for its label."""
     for label in ("first", "second"):
-        _labelled_source_into_sink(stream, label, sink_name=f"{label}Sink")
+        _labelled_source_into_sink(stream_builder, label, sink_name=f"{label}Sink")
 
 
 @stream
-def dies_abruptly_beside_a_survivor_pair(stream: Stream) -> None:
+def dies_abruptly_beside_a_survivor_pair(stream_builder: StreamBuilder) -> None:
     """A processor that takes its own process down, beside a source-sink pair."""
-    stream.add(DiesAbruptlyProbe)
-    _labelled_source_into_sink(stream, "survivor")
+    stream_builder.add(DiesAbruptlyProbe)
+    _labelled_source_into_sink(stream_builder, "survivor")
 
 
 @stream
-def stale_build_labelled_source(stream: Stream) -> None:
+def stale_build_labelled_source(stream_builder: StreamBuilder) -> None:
     """A lone source labelled `stale`, for a helper made to see another build."""
-    stream.add(ReportsItsOwnProcessSource, config={"label": "stale"})
+    stream_builder.add(ReportsItsOwnProcessSource, config={"label": "stale"})
 
 
 @stream
-def native_test_pattern_into_python_video_sink(stream: Stream) -> None:
+def native_test_pattern_into_python_video_sink(stream_builder: StreamBuilder) -> None:
     """A native 64x32 test pattern into a Python sink reporting its own process."""
-    pattern = stream.add(
+    pattern = stream_builder.add(
         tatolab.stream.TestPatternSource, config={"width": 64, "height": 32}
     )
-    sink = stream.add(ReportsItsOwnProcessVideoSink)
-    stream.connect(pattern.output("video"), sink.input("video_from_upstream"))
+    sink = stream_builder.add(ReportsItsOwnProcessVideoSink)
+    stream_builder.connect(pattern.output("video"), sink.input("video_from_upstream"))
 
 
 @stream
-def one_processor_reporting_its_own_processes_catalog(stream: Stream) -> None:
+def one_processor_reporting_its_own_processes_catalog(stream_builder: StreamBuilder) -> None:
     """A processor that reports the catalog of the helper hosting it."""
-    stream.add(ReportsItsOwnProcessesProcessorCatalog)
+    stream_builder.add(ReportsItsOwnProcessesProcessorCatalog)
 
 
 @stream
-def one_probe_sleeping_through_its_own_shutdown(stream: Stream) -> None:
+def one_probe_sleeping_through_its_own_shutdown(stream_builder: StreamBuilder) -> None:
     """A processor parked in `process()` when shutdown arrives."""
-    stream.add(SleepsThroughItsOwnShutdownProbe)
+    stream_builder.add(SleepsThroughItsOwnShutdownProbe)
 
 
 @stream
-def one_probe_forking_a_worker_that_outlives_it(stream: Stream) -> None:
+def one_probe_forking_a_worker_that_outlives_it(stream_builder: StreamBuilder) -> None:
     """A processor that forks a worker meant to outlive its helper."""
-    stream.add(ForksAWorkerThatOutlivesItProbe)
+    stream_builder.add(ForksAWorkerThatOutlivesItProbe)
 
 
 @stream
-def one_probe_sleeping_through_its_own_setup(stream: Stream) -> None:
+def one_probe_sleeping_through_its_own_setup(stream_builder: StreamBuilder) -> None:
     """A processor still inside `setup()` when shutdown arrives."""
-    stream.add(SleepsThroughItsOwnSetupProbe)
+    stream_builder.add(SleepsThroughItsOwnSetupProbe)
 
 
-def _runtime_loaded_with(stream_function: Callable[[Stream], None]) -> tatolab.runtime.Runtime:
+def _runtime_loaded_with(stream_function: Callable[[StreamBuilder], None]) -> tatolab.runtime.Runtime:
     graph = compile_stream_to_graph(stream_function)
     runtime = tatolab.runtime.Runtime()
     runtime.load(graph)
