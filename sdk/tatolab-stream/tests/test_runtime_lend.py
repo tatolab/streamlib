@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.abc
 import importlib.util
 import pkgutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -24,13 +26,13 @@ import tatolab.stream
 from tatolab.stream import VideoFrame, log
 from tatolab.stream._runtime_lend import (
     RUNTIME_ENGINE_MODULE_NAME,
+    RUNTIME_PACKAGE_NAME,
     RuntimeIsNotLentToThisInterpreterError,
     runtime_backed_function_registry,
+    runtime_engine_module_lent_to_this_interpreter,
 )
 
 STREAM_PACKAGE_DIRECTORY = Path(tatolab.stream.__file__).resolve().parent
-
-RUNTIME_PACKAGE_NAME = "tatolab.runtime"
 
 # The one module allowed to name the runtime, and it names it only as the
 # string `importlib` resolves on first use.
@@ -159,3 +161,101 @@ def test_a_frame_builds_where_nothing_is_lent_and_refuses_its_pixels_by_name() -
     with pytest.raises(RuntimeError, match="was not built by a typed read"):
         with frame.cpu():
             pass
+
+
+class RuntimeThatFailsToImport(importlib.abc.MetaPathFinder):
+    """An installed runtime that cannot load, the way a native module with an
+    unresolved symbol fails."""
+
+    RUNTIME_LOAD_FAILURE = "undefined symbol: a_symbol_the_engine_links_against"
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: "Sequence[str] | None",
+        target: "ModuleType | None" = None,
+    ) -> None:
+        if fullname == RUNTIME_PACKAGE_NAME:
+            raise ImportError(self.RUNTIME_LOAD_FAILURE, name=fullname)
+        return None
+
+
+class RuntimeMissingADependency(importlib.abc.MetaPathFinder):
+    """An installed runtime whose own import of another module fails."""
+
+    MISSING_DEPENDENCY_NAME = "a_module_the_runtime_imports"
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: "Sequence[str] | None",
+        target: "ModuleType | None" = None,
+    ) -> None:
+        if fullname == RUNTIME_PACKAGE_NAME:
+            raise ModuleNotFoundError(
+                f"No module named {self.MISSING_DEPENDENCY_NAME!r}",
+                name=self.MISSING_DEPENDENCY_NAME,
+            )
+        return None
+
+
+def test_a_missing_runtime_package_means_nothing_is_lent() -> None:
+    with pytest.raises(RuntimeIsNotLentToThisInterpreterError) as refusal:
+        runtime_engine_module_lent_to_this_interpreter("a_runtime_backed_call")
+    assert isinstance(refusal.value.__cause__, ModuleNotFoundError)
+    assert refusal.value.__cause__.name == RUNTIME_PACKAGE_NAME
+
+
+def test_a_runtime_package_without_its_engine_means_nothing_is_lent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_package_without_its_engine = ModuleType(RUNTIME_PACKAGE_NAME)
+    runtime_package_without_its_engine.__path__ = []
+    monkeypatch.setitem(
+        sys.modules, RUNTIME_PACKAGE_NAME, runtime_package_without_its_engine
+    )
+    with pytest.raises(RuntimeIsNotLentToThisInterpreterError) as refusal:
+        runtime_engine_module_lent_to_this_interpreter("a_runtime_backed_call")
+    assert isinstance(refusal.value.__cause__, ModuleNotFoundError)
+    assert refusal.value.__cause__.name == RUNTIME_ENGINE_MODULE_NAME
+
+
+def test_an_installed_runtime_that_fails_to_import_raises_its_own_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "meta_path", [RuntimeThatFailsToImport(), *sys.meta_path])
+    with pytest.raises(ImportError) as runtime_load_failure:
+        runtime_engine_module_lent_to_this_interpreter("a_runtime_backed_call")
+    assert not isinstance(
+        runtime_load_failure.value, RuntimeIsNotLentToThisInterpreterError
+    )
+    assert str(runtime_load_failure.value) == (
+        RuntimeThatFailsToImport.RUNTIME_LOAD_FAILURE
+    )
+
+
+def test_an_installed_runtime_missing_a_dependency_raises_naming_the_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "meta_path", [RuntimeMissingADependency(), *sys.meta_path])
+    with pytest.raises(ModuleNotFoundError) as runtime_load_failure:
+        runtime_engine_module_lent_to_this_interpreter("a_runtime_backed_call")
+    assert runtime_load_failure.value.name == (
+        RuntimeMissingADependency.MISSING_DEPENDENCY_NAME
+    )
+
+
+def test_a_frame_built_where_the_runtime_fails_to_import_raises_rather_than_building_unclaimed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "meta_path", [RuntimeThatFailsToImport(), *sys.meta_path])
+    with pytest.raises(
+        ImportError, match=RuntimeThatFailsToImport.RUNTIME_LOAD_FAILURE
+    ):
+        VideoFrame(
+            surface_id="camera#7",
+            width=20,
+            height=12,
+            timestamp_ns=123_456,
+            color_info={"primaries": "bt709", "range": "full"},
+        )

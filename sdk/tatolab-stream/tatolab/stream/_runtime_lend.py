@@ -17,7 +17,15 @@ from collections.abc import Callable
 from types import ModuleType
 from typing import Any, TypeVar, cast
 
+RUNTIME_PACKAGE_NAME = "tatolab.runtime"
 RUNTIME_ENGINE_MODULE_NAME = "tatolab.runtime._engine"
+
+# The `tatolab` namespace always resolves (this package lives in it), so only a
+# missing runtime package or engine module means nothing is lent; any other
+# import failure is an installed runtime that is broken.
+_MODULE_NAMES_WHOSE_ABSENCE_MEANS_NOTHING_IS_LENT = frozenset(
+    {RUNTIME_PACKAGE_NAME, RUNTIME_ENGINE_MODULE_NAME}
+)
 
 RuntimeBackedFunctionDeclaration = TypeVar(
     "RuntimeBackedFunctionDeclaration", bound=Callable[..., Any]
@@ -44,10 +52,18 @@ class RuntimeIsNotLentToThisInterpreterError(RuntimeError):
 def runtime_engine_module_lent_to_this_interpreter(
     called_function_name: str,
 ) -> ModuleType:
-    """Import `tatolab.runtime._engine`, or raise naming the caller."""
+    """Import `tatolab.runtime._engine`, or raise naming the caller where it is absent.
+
+    An engine that is installed but fails to import raises its own error.
+    """
     try:
         return importlib.import_module(RUNTIME_ENGINE_MODULE_NAME)
-    except ImportError as engine_import_failure:
+    except ModuleNotFoundError as engine_import_failure:
+        if (
+            engine_import_failure.name
+            not in _MODULE_NAMES_WHOSE_ABSENCE_MEANS_NOTHING_IS_LENT
+        ):
+            raise
         raise RuntimeIsNotLentToThisInterpreterError(
             f"{called_function_name}() runs only in the interpreter the runtime "
             "starts for a node, where tatolab.runtime is lent; "
