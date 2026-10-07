@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, TypeVar, overload
 
-from ._built_in_node import BuiltInNode, BuiltInNodeConfig
+from ._built_in_node import BuiltInNode, ConfigTypeOfTheBuiltInNode
 from ._exposed_name_cast import (
     EXPOSED_NAME_MAXIMUM_LENGTH,
     cast_exposed_name_to_url_safe,
@@ -271,10 +271,10 @@ class StreamBuilder:
     @overload
     def add(
         self,
-        node_class: type[BuiltInNode[BuiltInNodeConfig]],
+        node_class: type[BuiltInNode[ConfigTypeOfTheBuiltInNode]],
         *,
         name: str | None = None,
-        config: BuiltInNodeConfig | None = None,
+        config: ConfigTypeOfTheBuiltInNode | None = None,
     ) -> NodeReference: ...
 
     def add(

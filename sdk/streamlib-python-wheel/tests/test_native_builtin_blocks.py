@@ -4,7 +4,7 @@
 """The native built-in blocks: built-in classes resolved by `stream_builder.add`, frames
 produced by native code the interpreter never enters.
 
-The graph tests boot a real engine (GPU required); the marker and
+The graph tests boot a real engine (GPU required); the built-in class and
 `VideoFrame` cast tests are pure Python.
 """
 

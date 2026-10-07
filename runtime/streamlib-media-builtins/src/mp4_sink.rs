@@ -34,10 +34,8 @@ const SILENT_LINK_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
 pub struct Mp4SinkConfig {
-    /// The file to write, created or truncated at `setup()`.
-    ///
-    /// Truncating is the call: an app is re-run from the same `stream.py`, and
-    /// wall-clock file naming would be a fourth clock surface the plan bans.
+    /// The file to write, created or truncated at `setup()`: a stream re-run
+    /// with the same `path` overwrites its last recording.
     pub path: PathBuf,
 }
 

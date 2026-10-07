@@ -37,7 +37,8 @@ use crate::audio_window_to_encoded_packet_encoder::{
                   mapping family 1 — and re-mints when the source's count changes, which libopus \
                   offers no other mechanism for. A re-mint costs prediction state, not \
                   decodability, and `sequence_index` does not reset across it, so a consumer \
-                  still reads a gap as loss and never as a restart.",
+                  still reads a gap as loss and never as a restart. \
+                  In-band FEC and DTX are off and are not knobs.",
     execution = reactive,
     scheduling = high,
     config = crate::audio_window_to_encoded_packet_encoder::OpusEncoderConfig,

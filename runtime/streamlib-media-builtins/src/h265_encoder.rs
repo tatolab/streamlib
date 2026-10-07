@@ -42,7 +42,7 @@ impl HardwareVideoCodecProcessorIdentity for H265EncoderCodecIdentity {
                   the upstream extent changes.\n\n\
                   On a device without a hardware encoder for the codec the session fails to \
                   mint: the failure latches and every later frame is discarded with one error \
-                  line.",
+                  line; no exception reaches Python.",
     execution = reactive,
     scheduling = high,
     config = crate::published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig,

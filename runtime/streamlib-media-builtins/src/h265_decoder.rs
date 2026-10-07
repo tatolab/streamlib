@@ -46,7 +46,8 @@ impl HardwareVideoCodecProcessorIdentity for H265DecoderCodecIdentity {
                   The decode session is minted at `setup()`. On a device with no hardware \
                   decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox \
                   hardware decoder — setup refuses by name: the node never reaches Running, \
-                  rather than the graph running with an empty channel.",
+                  and waiting for every node to run raises rather than the graph running \
+                  with an empty channel.",
     execution = reactive,
     scheduling = high,
     config = crate::encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig,

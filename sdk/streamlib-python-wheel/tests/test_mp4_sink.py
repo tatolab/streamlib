@@ -3,7 +3,7 @@
 
 """`Mp4Sink` from Python, built-in class to a file with two tracks in it.
 
-The marker tests are pure Python — constructing a `Runtime` and loading a graph
+The built-in class tests are pure Python — constructing a `Runtime` and loading a graph
 into it needs no device, which is why they run in CI. The recording test starts
 one, so it carries `requires_gpu` like every other graph test here and runs
 nowhere in CI: writing an MP4 needs no device, but a running processor does.

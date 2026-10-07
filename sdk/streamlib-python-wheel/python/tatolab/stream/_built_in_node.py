@@ -8,16 +8,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, NoReturn, TypeVar
 
-__all__ = ["BuiltInNode", "BuiltInNodeConfig"]
+__all__ = ["BuiltInNode", "ConfigTypeOfTheBuiltInNode"]
 
 # Contravariant so that pyright, solving a config's type from the class a call
 # passes, reports a wrong config key against the config rather than the class.
-BuiltInNodeConfig = TypeVar(
-    "BuiltInNodeConfig", bound=Mapping[str, Any], contravariant=True
+ConfigTypeOfTheBuiltInNode = TypeVar(
+    "ConfigTypeOfTheBuiltInNode", bound=Mapping[str, Any], contravariant=True
 )
 
 
-class BuiltInNode(Generic[BuiltInNodeConfig]):
+class BuiltInNode(Generic[ConfigTypeOfTheBuiltInNode]):
     """A node the runtime implements: passed to `stream_builder.add`, never built."""
 
     type: ClassVar[str]

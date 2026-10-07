@@ -251,7 +251,8 @@ def test_no_parameter_of_a_public_callable_tatolab_publishes_says_processor():
         f"{qualified_name}[{key}]"
         for qualified_name, exported in _public_names_tatolab_publishes()
         if is_typeddict(exported)
-        for key in exported.__required_keys__ | exported.__optional_keys__
+        for key in getattr(exported, "__required_keys__")
+        | getattr(exported, "__optional_keys__")
         if "processor" in key.lower()
     )
 

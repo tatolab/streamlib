@@ -165,8 +165,8 @@ class H264Decoder(BuiltInNode[H264DecoderConfig]):
 
     The decode session is minted at `setup()`. On a device with no hardware decoder for
     the codec — no Vulkan Video decode queue, or no VideoToolbox hardware decoder —
-    setup refuses by name: the node never reaches Running, rather than the graph running
-    with an empty channel.
+    setup refuses by name: the node never reaches Running, and waiting for every node to
+    run raises rather than the graph running with an empty channel.
 
     Inputs:
         `encoded_video` (ordered): H.264 encoded-frame bags to decode.
@@ -222,7 +222,8 @@ class H264Encoder(BuiltInNode[H264EncoderConfig]):
     first frame's dimensions and re-mints when the upstream extent changes.
 
     On a device without a hardware encoder for the codec the session fails to mint: the
-    failure latches and every later frame is discarded with one error line.
+    failure latches and every later frame is discarded with one error line; no exception
+    reaches Python.
 
     Inputs:
         `video` (ordered): Video frames to encode.
@@ -265,8 +266,8 @@ class H265Decoder(BuiltInNode[H265DecoderConfig]):
 
     The decode session is minted at `setup()`. On a device with no hardware decoder for
     the codec — no Vulkan Video decode queue, or no VideoToolbox hardware decoder —
-    setup refuses by name: the node never reaches Running, rather than the graph running
-    with an empty channel.
+    setup refuses by name: the node never reaches Running, and waiting for every node to
+    run raises rather than the graph running with an empty channel.
 
     Inputs:
         `encoded_video` (ordered): H.265 encoded-frame bags to decode.
@@ -322,7 +323,8 @@ class H265Encoder(BuiltInNode[H265EncoderConfig]):
     first frame's dimensions and re-mints when the upstream extent changes.
 
     On a device without a hardware encoder for the codec the session fails to mint: the
-    failure latches and every later frame is discarded with one error line.
+    failure latches and every later frame is discarded with one error line; no exception
+    reaches Python.
 
     Inputs:
         `video` (ordered): Video frames to encode.
@@ -379,10 +381,8 @@ class _Mp4SinkConfigRequiredKeys(TypedDict):
     """The keys `Mp4Sink`'s config cannot leave out."""
 
     path: str
-    """The file to write, created or truncated at `setup()`.
-
-    Truncating is the call: an app is re-run from the same `stream.py`, and wall-clock
-    file naming would be a fourth clock surface the plan bans.
+    """The file to write, created or truncated at `setup()`: a stream re-run with the
+    same `path` overwrites its last recording.
     """
 
 
@@ -505,7 +505,7 @@ class OpusEncoder(BuiltInNode[OpusEncoderConfig]):
     family 1 — and re-mints when the source's count changes, which libopus offers no
     other mechanism for. A re-mint costs prediction state, not decodability, and
     `sequence_index` does not reset across it, so a consumer still reads a gap as loss
-    and never as a restart.
+    and never as a restart. In-band FEC and DTX are off and are not knobs.
 
     Inputs:
         `audio` (ordered): Audio to encode, resampled and framed to 20 ms at Opus's own
