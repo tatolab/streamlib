@@ -27,6 +27,7 @@ from typing import Callable, cast
 
 import pytest
 
+from tatolab.runtime import _engine
 from tatolab.runtime import _helper
 from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
 from tatolab.runtime._helper import (
@@ -184,12 +185,10 @@ def test_a_helper_handed_no_iceoryx2_domain_root_refuses_to_start_by_name(
     Fail-without-fix: fall back to any root when the variable is absent and the
     constructor below returns a data plane that silently reaches nobody.
     """
-    from tatolab.stream import NodeLinkDataAccess
-
     monkeypatch.delenv("STREAMLIB_ICEORYX2_DOMAIN_ROOT")
 
     with pytest.raises(RuntimeError, match="STREAMLIB_ICEORYX2_DOMAIN_ROOT is not set"):
-        NodeLinkDataAccess()
+        _engine.open_node_link_data_access_for_helper_process()
 
 
 def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
@@ -201,9 +200,7 @@ def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
     Fail-without-fix: without the declaration the write below raises on every
     frame a live-added effect sees before its output is connected.
     """
-    from tatolab.stream import NodeLinkDataAccess
-
-    link_data_access = NodeLinkDataAccess()
+    link_data_access = _engine.open_node_link_data_access_for_helper_process()
     link_data_access.declare_ports(["frames_from_upstream"], ["frames_to_downstream"])
 
     assert link_data_access.read_from_input_port("frames_from_upstream") is None
@@ -223,9 +220,7 @@ def test_a_port_lookup_casts_its_argument_to_the_declared_name():
     Fail-without-fix: an uncast lookup raises "not one this processor declared"
     for every spelling here but the cast one.
     """
-    from tatolab.stream import NodeLinkDataAccess
-
-    link_data_access = NodeLinkDataAccess()
+    link_data_access = _engine.open_node_link_data_access_for_helper_process()
     link_data_access.declare_ports(["video"], ["frames-out"])
 
     assert link_data_access.read_from_input_port("Video") is None
@@ -245,14 +240,12 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     the destination is wired first because a send with no subscriber attached
     is dropped.
     """
-    from tatolab.stream import NodeLinkDataAccess
-
     link_id = "L-envelope-test"
-    destination = NodeLinkDataAccess()
+    destination = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
         destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
     )
-    source = NodeLinkDataAccess()
+    source = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
         source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
     )
@@ -292,11 +285,11 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     for wiring in (shallow_wiring, deep_wiring, source_wiring):
         wiring["max_subscribers"] = 3
 
-    shallow_destination = NodeLinkDataAccess()
+    shallow_destination = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(shallow_destination, {"inputs": [shallow_wiring]})
-    deep_destination = NodeLinkDataAccess()
+    deep_destination = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(deep_destination, {"inputs": [deep_wiring]})
-    source = NodeLinkDataAccess()
+    source = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(source, {"outputs": [source_wiring]})
 
     for frame_index in range(bags_published_while_neither_reads):
@@ -329,11 +322,9 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     The Python-surface mirror of the engine's
     `disconnect_reconnect_cycle_reclaims_notifier_and_data_service`.
     """
-    from tatolab.stream import NodeLinkDataAccess
-
     link_id = "L-reconnect-cycle"
-    destination = NodeLinkDataAccess()
-    source = NodeLinkDataAccess()
+    destination = _engine.open_node_link_data_access_for_helper_process()
+    source = _engine.open_node_link_data_access_for_helper_process()
 
     # The destination is wired first both times: a send with no subscriber
     # attached is dropped.
@@ -379,14 +370,12 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
     `RuntimeError: Link error: Unknown input port` — the mailbox went with
     the subscriber that was dropped out from under it.
     """
-    from tatolab.stream import NodeLinkDataAccess
-
     link_id = "L-unknown-direction"
-    destination = NodeLinkDataAccess()
+    destination = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
         destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
     )
-    source = NodeLinkDataAccess()
+    source = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
         source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
     )
@@ -734,8 +723,6 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     reader, the one thread that delivers answers, so every frame behind it —
     the parent's next command included — waits out the escalate timeout.
     """
-    from tatolab.stream import NodeLinkDataAccess, RuntimeContextFullAccess
-
     monkeypatch.setenv("STREAMLIB_SURFACE_SOCKET", "/nonexistent/streamlib-surface.sock")
     decode_the_frame = _helper._decode_frame_payload
 
@@ -750,9 +737,9 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     )
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
-    context = RuntimeContextFullAccess.open_for_helper_process(
+    context = _engine.open_runtime_context_full_access_for_helper_process(
         {},
-        NodeLinkDataAccess(),
+        _engine.open_node_link_data_access_for_helper_process(),
         "R-helper-test",
         "P-helper-test",
         bridge.request_from_parent,
@@ -833,15 +820,13 @@ def drive_lifecycle_on_a_thread(bridge, processor_class):
     created and driven on the one thread that owns it — which is exactly how a
     real helper runs.
     """
-    from tatolab.stream import NodeLinkDataAccess
-
     def drive() -> None:
         HelperProcessLifecycle(
             bridge,
             processor_class,
             "R-helper-test",
             "P-helper-test",
-            NodeLinkDataAccess(),
+            _engine.open_node_link_data_access_for_helper_process(),
         ).run_until_the_parent_is_done()
 
     lifecycle_thread = threading.Thread(target=drive, name="helper-lifecycle")
@@ -853,8 +838,6 @@ def drive_lifecycle_on_a_thread_and_hand_it_back(bridge, processor_class):
     """The same, with the lifecycle object once its thread has built it, so a
     test can swap in a counting data plane after `setup` has handed the real
     one to the engine's context."""
-    from tatolab.stream import NodeLinkDataAccess
-
     lifecycle_holder: "list[HelperProcessLifecycle]" = []
     lifecycle_built = threading.Event()
 
@@ -864,7 +847,7 @@ def drive_lifecycle_on_a_thread_and_hand_it_back(bridge, processor_class):
             processor_class,
             "R-helper-test",
             "P-helper-test",
-            NodeLinkDataAccess(),
+            _engine.open_node_link_data_access_for_helper_process(),
         )
         lifecycle_holder.append(lifecycle)
         lifecycle_built.set()
@@ -1116,8 +1099,6 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
     select()`; it escapes the loop, the helper's thread dies, and neither the
     bag nor the `on_pause` below is ever answered.
     """
-    from tatolab.stream import NodeLinkDataAccess
-
     soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
     descriptors_needed = 2048
     if hard_limit != resource.RLIM_INFINITY and hard_limit < descriptors_needed:
@@ -1144,7 +1125,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
 
         inbound_link_id = "L-high-fd-in"
         outbound_link_id = "L-high-fd-out"
-        downstream = NodeLinkDataAccess()
+        downstream = _engine.open_node_link_data_access_for_helper_process()
         _helper.wire_link_data_access(
             downstream,
             {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
@@ -1163,7 +1144,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
         assert stand_in_parent.receive()["rpc"] == "ready"
         stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
-        upstream = NodeLinkDataAccess()
+        upstream = _engine.open_node_link_data_access_for_helper_process()
         _helper.wire_link_data_access(
             upstream,
             {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
@@ -1427,8 +1408,6 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     logs an unknown command, its input never opens, and the bag published
     below never comes back.
     """
-    from tatolab.stream import NodeLinkDataAccess
-
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
@@ -1443,7 +1422,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     outbound_link_id = "L-wired-late-out"
     # The far end of the child's output is opened first, so nothing the child
     # publishes is dropped for want of a subscriber.
-    downstream = NodeLinkDataAccess()
+    downstream = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
         downstream,
         {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
@@ -1462,7 +1441,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
             "link": engine_shaped_link_wiring("input", inbound_link_id),
         }
     )
-    upstream = NodeLinkDataAccess()
+    upstream = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
         upstream,
         {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
@@ -1660,7 +1639,7 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
             load_processor_class(f"{PROBE_MODULE}:SlowPassThroughProbe"),
             "R-helper-test",
             "P-helper-test",
-            NodeLinkDataAccess(),
+            _engine.open_node_link_data_access_for_helper_process(),
         )
         lifecycle_holder.append(lifecycle)
         lifecycle.run_until_the_parent_is_done()
@@ -1670,7 +1649,7 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
 
     inbound_link_id = "L-slow-in"
     outbound_link_id = "L-slow-out"
-    downstream = NodeLinkDataAccess()
+    downstream = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
         downstream,
         {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
@@ -1695,7 +1674,7 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
     lifecycle._link_data_access = cast(NodeLinkDataAccess, counting)
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
-    upstream = NodeLinkDataAccess()
+    upstream = _engine.open_node_link_data_access_for_helper_process()
     _helper.wire_link_data_access(
         upstream,
         {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},

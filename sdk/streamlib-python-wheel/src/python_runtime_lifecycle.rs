@@ -392,8 +392,8 @@ impl PythonRuntimeHandle {
 /// Install, once per process, the registry's resolver for a processor type
 /// named only by its import path — every Python node a `Runtime.load` graph or
 /// an `add_processor` over the control plane names, including a class this
-/// interpreter never imported. The resolver imports the class here and installs
-/// its constructor; the processor itself runs in its own helper process.
+/// interpreter never imported. The resolver imports the class here and registers
+/// it with its constructor; the processor itself runs in its own helper process.
 fn install_unregistered_processor_type_resolver_once() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {

@@ -33,19 +33,29 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from tatolab.stream import log
+from tatolab.stream import (
+    NodeLinkDataAccess,
+    RuntimeContextFullAccess,
+    log,
+    start_monotonic_timer,
+)
+from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_INPUT_PORTS_STAMP,
+    NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+)
 
 from ._capability_extensions import (
     load_installed_capability_extensions_once_per_process,
 )
 from ._engine import (
-    MonotonicTimer,
-    NodeLinkDataAccess,
-    RuntimeContextFullAccess,
     capability_extension_host_for_the_helper_process,
     capture_this_helper_processes_engine_log_records,
     drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
+    limited_access_view_of_runtime_context_for_helper_process,
+    note_pause_state_from_parent_on_runtime_context,
+    open_node_link_data_access_for_helper_process,
+    open_runtime_context_full_access_for_helper_process,
 )
 from ._processor_hosting import apply_configuration, construct_processor_instance
 
@@ -862,7 +872,7 @@ def construct_hosted_processor(
     The bridge's escalate round trip is what the GPU surface crosses to the
     parent on — without it, `ctx.gpu_limited_access` refuses by name.
     """
-    full_access_context = RuntimeContextFullAccess.open_for_helper_process(
+    full_access_context = open_runtime_context_full_access_for_helper_process(
         configuration or {},
         link_data_access,
         runtime_id,
@@ -873,7 +883,7 @@ def construct_hosted_processor(
     return HostedProcessor(
         construct_processor_instance(processor_class, configuration, link_data_access),
         full_access_context,
-        full_access_context.limited_access_view_for_helper_process(),
+        limited_access_view_of_runtime_context_for_helper_process(full_access_context),
     )
 
 
@@ -973,13 +983,13 @@ class HelperProcessLifecycle:
                 [
                     port["name"]
                     for port in getattr(
-                        self._processor_class, "__streamlib_processor_input_ports__", []
+                        self._processor_class, NODE_DECLARATION_INPUT_PORTS_STAMP, []
                     )
                 ],
                 [
                     port["name"]
                     for port in getattr(
-                        self._processor_class, "__streamlib_processor_output_ports__", []
+                        self._processor_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, []
                     )
                 ],
             )
@@ -1073,7 +1083,7 @@ class HelperProcessLifecycle:
             if interval_ms > 0
             else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
         )
-        with MonotonicTimer(interval_ns) as timer:
+        with start_monotonic_timer(interval_ns) as timer:
             # Once at the start and then once per tick, as the native runner
             # paces a continuous processor.
             self._hosted.call_hook("process", self._hosted.limited_access_context)
@@ -1158,8 +1168,8 @@ class HelperProcessLifecycle:
 
     def _note_pause(self, verb: str) -> None:
         if self._hosted is not None:
-            self._hosted.full_access_context.note_pause_state_from_parent(
-                verb == "on_pause"
+            note_pause_state_from_parent_on_runtime_context(
+                self._hosted.full_access_context, verb == "on_pause"
             )
             self._hosted.call_hook(verb, self._hosted.limited_access_context)
         self._bridge.send({"rpc": "ok"})
@@ -1351,7 +1361,7 @@ def main() -> None:
 
     try:
         processor_class = load_processor_class(import_path)
-        link_data_access = NodeLinkDataAccess()
+        link_data_access = open_node_link_data_access_for_helper_process()
     except Exception as startup_failure:
         engine_log_forwarder.stop_after_forwarding_what_is_left()
         log.error(

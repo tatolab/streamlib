@@ -41,7 +41,7 @@ if [ "$(uname -s)" = Darwin ]; then
             fi
             if ! "$PYTHON" -c "import tatolab.runtime" &>/dev/null; then
                 echo "UNAVAILABLE: $PYTHON cannot import tatolab.runtime — build the wheel with" \
-                    "maturin develop --release in sdk/streamlib-python-wheel"
+                    "(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)"
                 exit 1
             fi
             echo "AVAILABLE: Core Audio process taps (macOS $MACOS_MAJOR.${MACOS_MINOR:-0}); the node creates its own"

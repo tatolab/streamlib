@@ -67,7 +67,7 @@ impl MonotonicTimerAbsoluteDeadlineGrid {
     }
 }
 
-/// Periodic monotonic timer, used as `with MonotonicTimer(interval_ns) as t:`.
+/// Periodic monotonic timer, used as `with start_monotonic_timer(interval_ns) as timer:`.
 #[pyclass(name = "MonotonicTimer", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonMonotonicTimer {
     timer_interval_ns: i64,
@@ -187,8 +187,14 @@ impl PythonMonotonicTimer {
         python_self
     }
 
-    #[pyo3(signature = (*_exception_details))]
-    fn __exit__(&self, _exception_details: &Bound<'_, PyAny>) -> bool {
+    #[pyo3(signature = (exception_type = None, exception = None, traceback = None))]
+    fn __exit__(
+        &self,
+        exception_type: Option<&Bound<'_, PyAny>>,
+        exception: Option<&Bound<'_, PyAny>>,
+        traceback: Option<&Bound<'_, PyAny>>,
+    ) -> bool {
+        let _ = (exception_type, exception, traceback);
         self.close();
         false
     }

@@ -75,8 +75,9 @@ On macOS the 77 reasons are different, and each names its fix:
   import `numpy` or `streamlib`. It opens no device and raises no prompt.
 - **An audible mode or the rig-only fixture without `STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1`.**
 - **The wheel predates the CoreAudio arm** — the node's probe chose another arm than `coreaudio`,
-  so the fixture **refuses to score** and names `maturin develop --release` (see Running it). An
-  arm that is in the wheel and failed to open is *not* 77: that is exit 1, a real failure.
+  so the fixture **refuses to score** and names
+  `(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)`
+  (see Running it). An arm that is in the wheel and failed to open is *not* 77: that is exit 1, a real failure.
 - **The tap delivered exact digital zeros and TCC says System Audio Recording is not granted**
   (`not-determined`, `denied` or `unknown`) — a tap without that grant reports no error, it just
   hears nothing. The fix is System Settings › Privacy & Security › Screen & System Audio
@@ -121,8 +122,9 @@ PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
 wrong directory and dies there. It defaults to `python3`, which only works if that interpreter can
 already `import streamlib` — the wheel venv is the reliable answer.
 
-**Build the wheel from the tree first: `maturin develop --release` in
-`sdk/streamlib-python-wheel`.** The node runs whatever `_engine.abi3.so` that venv imports, and one
+**Build the wheel from the tree first:
+`(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)`.**
+The node runs whatever `_engine.abi3.so` that venv imports, and one
 built before the change under test is measured and reported as though it were the change. On
 macOS the fixture enforces the sharpest case of this: it **refuses to score unless `node.log`
 shows the probe line `audio device backend chain probed` with `audio_backend=coreaudio`**, because
@@ -307,7 +309,8 @@ without its label invites it to be read as though it were.
 - **Owner heard it**: n/a — silent path | yes — <what they heard: the tone, six beeps> | no — <why>
 - **Injected fault**: none | `silence` | `drop` | `gain`
 - **Backend probed** (macOS): `<the probe line, audio_backend=coreaudio>` · wheel rebuilt with
-  `maturin develop --release` at `<commit>`
+  `(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)`
+  at `<commit>`
 - **Command**:
     ```
     <exact command with env vars>

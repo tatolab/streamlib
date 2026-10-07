@@ -124,7 +124,7 @@ def private_iceoryx2_domain_for_this_test_process() -> "Iterator[Path]":
     iceoryx2 domain of their own, handed over the way a parent hands a helper
     its root.
 
-    A test that builds `NodeLinkDataAccess()` directly has no parent to
+    A test that opens `open_node_link_data_access_for_helper_process()` directly has no parent to
     hand it one, and a helper handed none refuses to start. Every node this
     process opens then shares the one domain, which is what lets a source and a
     destination built side by side reach each other, and no other process's

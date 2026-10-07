@@ -51,10 +51,10 @@ const fn python_logging_lint_target(name: &'static str, root_relative: &'static 
     }
 }
 
-pub const TARGETS: &[LintTarget] = &[python_logging_lint_target(
-    "python",
-    "sdk/streamlib-python-wheel/python",
-)];
+pub const TARGETS: &[LintTarget] = &[
+    python_logging_lint_target("python", "sdk/streamlib-python-wheel/python"),
+    python_logging_lint_target("python-stream-package", "sdk/tatolab-stream"),
+];
 
 #[derive(Debug)]
 pub struct Violation {

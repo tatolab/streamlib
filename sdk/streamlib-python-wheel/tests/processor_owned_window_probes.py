@@ -26,16 +26,17 @@ from dataclasses import dataclass
 from tatolab.stream import (
     ClaimedSurfacePixelAccess,
     ColorInfo,
+    ComputeKernel,
     ContentLight,
     GpuSurfaceHandle,
     MasteringDisplay,
+    NodeOwnedWindow,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
     log,
     node,
 )
-from tatolab.runtime._engine import ComputeKernel, NodeOwnedWindow
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 # A second line, and only for the gesture: the result line is reported once

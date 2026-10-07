@@ -27,6 +27,12 @@ license = { text = "BUSL-1.1" }
 # the root file stays the single copy and there is no second one to drift.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+# The stream package at this wheel's own version, so an installed engine keeps
+# running the streams written against it. release-please moves the pin with the
+# version through the annotation on its line.
+dependencies = [
+    "tatolab-stream==0.37.1", # x-release-please-version
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -77,7 +83,7 @@ markers = [
     # The closed list of what macOS does not have, each with its reason:
     # ray-tracing kernels, VirtualCameraSink, the CUDA Array Interface, the
     # fd-shaped raw handles, and a test whose body is a Linux mechanism.
-    # `test_platform_markers.py` pins it. Skipped off Linux.
+    # The stream suite's `test_platform_markers.py` pins it. Skipped off Linux.
     "linux_only_capability(reason): a capability the closed list names as absent off Linux",
     # A capability a named open parity ticket brings to macOS. Strict xfail
     # there, so the ticket's own fix turns it red until the mark comes off.
@@ -118,11 +124,12 @@ extend-select = ["A"]
 # The wheel's Python half, checked at the version floor rather than whatever
 # interpreter the venv happens to be — `requires-python` is the promise.
 include = ["python", "tests"]
-# The package is checked from source, not from an install, so `tests/` needs
-# the package root on the search path. Without it a checkout that has not run
-# `maturin develop` reports every `import tatolab.stream` unresolved — which is
+# The packages are checked from source, not from an install, so `tests/` needs
+# both package roots on the search path: this project's `tatolab.runtime` and
+# the stream distribution's `tatolab.stream`. Without them a checkout that has
+# not run `maturin develop` reports every such import unresolved — which is
 # precisely the state the no-build job runs in.
-extraPaths = ["python"]
+extraPaths = ["python", "../tatolab-stream"]
 pythonVersion = "3.10"
 # Standard rather than strict: strict turns on `reportPrivateUsage`, which
 # fights the `_engine` / `_NativeRuntime` shape this package is built on, and
@@ -132,7 +139,8 @@ venvPath = "."
 venv = ".venv"
 # The engine module is a compiled artifact, so a checkout has the stub and
 # not the `.so` it describes. That is the intended shape here, not a gap —
-# `mypy.stubtest` is what checks the stub against the real binary.
+# `mypy.stubtest` and `tests/runtime_backed_protocol_conformance.py` are what
+# check the stub and the `tatolab.stream` Protocols against the real binary.
 reportMissingModuleSource = "none"
 
 # The `streamlib new` template tree, checked as the app it becomes: rooted
@@ -140,5 +148,5 @@ reportMissingModuleSource = "none"
 # the Python version the scaffold pins.
 [[tool.pyright.executionEnvironments]]
 root = "python/tatolab/runtime/_scaffold_template"
-extraPaths = ["python"]
+extraPaths = ["python", "../tatolab-stream"]
 pythonVersion = "3.12"

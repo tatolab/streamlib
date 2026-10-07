@@ -17,6 +17,7 @@ from typing import TypedDict
 import numpy
 
 from tatolab.stream import (
+    ComputeKernel,
     GpuSurfaceHandle,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -24,7 +25,6 @@ from tatolab.stream import (
     log,
     node,
 )
-from tatolab.runtime._engine import ComputeKernel
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 

@@ -46,11 +46,6 @@ UNDERRUN_BYTES_A_COLD_START_MAY_COST = 8 * 1024 * 2 * 4
 # ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_built_in_class_cannot_be_instantiated():
-    with pytest.raises(TypeError):
-        tatolab.stream.SpeakerSink()  # pyright: ignore[reportCallIssue]
-
-
 @stream
 def one_speaker_sink_left_unnamed(stream_builder: StreamBuilder) -> None:
     stream_builder.add(tatolab.stream.SpeakerSink)

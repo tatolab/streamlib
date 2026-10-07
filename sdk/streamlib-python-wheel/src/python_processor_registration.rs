@@ -3,13 +3,11 @@
 
 //! Making a Python class a processor type the engine can instantiate.
 //!
-//! Registration arrives in two halves. `@node` registers the descriptor
-//! when it runs, so the class is in the catalog an agent reads before anything
-//! adds it; the first graph node naming the class installs the constructor onto
-//! that descriptor. Registration is per process and idempotent per identity: a
-//! stream that adds `Blur` twice installs `Blur`'s constructor once and runs two
-//! processors, each with its own configuration and its own instance of the
-//! class.
+//! `@node` registers nothing: the first graph node naming a class registers its
+//! descriptor and its constructor together, read off the stamps the decorator
+//! left. Registration is per process and idempotent per identity: a stream that
+//! adds `Blur` twice registers `Blur` once and runs two processors, each with
+//! its own configuration and its own instance of the class.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -19,17 +17,14 @@ use pyo3::prelude::*;
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 
-use crate::python_helper_process_spawn_host::{
-    HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE, spawn_host_for_processor_node,
-};
+use crate::python_helper_process_spawn_host::spawn_host_for_processor_node;
 use crate::python_processor_declaration::PythonProcessorDeclaration;
-use crate::python_processor_import_path::processor_class_import_path;
 
-/// Which Python class each import path had its constructor installed from.
+/// Which Python class each import path was registered from.
 ///
 /// A cache of *which class*, never the authority on *whether* a type can be
 /// constructed — that stays the engine's registry, consulted below, so this can
-/// never report an install the engine does not actually hold.
+/// never report a registration the engine does not actually hold.
 fn registered_processor_classes() -> &'static Mutex<HashMap<ProcessorClassImportPath, Py<PyAny>>> {
     static REGISTERED_PROCESSOR_CLASSES: OnceLock<
         Mutex<HashMap<ProcessorClassImportPath, Py<PyAny>>>,
@@ -37,8 +32,8 @@ fn registered_processor_classes() -> &'static Mutex<HashMap<ProcessorClassImport
     REGISTERED_PROCESSOR_CLASSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Give the descriptor `processor_class` registered at decoration the
-/// constructor that spawns its helper process, unless it already has one.
+/// Register `processor_class`'s descriptor with the constructor that spawns its
+/// helper process, unless this process already registered it.
 ///
 /// Returns the class import path a graph names the processor by.
 fn register_processor_class(
@@ -96,8 +91,8 @@ fn register_processor_class(
     let descriptor_for_constructor = declaration.descriptor.clone();
 
     PROCESSOR_REGISTRY
-        .install_constructor_for_registered_descriptor(
-            &identity,
+        .register_dynamic(
+            declaration.descriptor,
             Box::new(move |node| {
                 spawn_host_for_processor_node(
                     &processor_class_import_path,
@@ -111,59 +106,16 @@ fn register_processor_class(
                 })
             }),
         )
-        .map_err(|install_failure| PyValueError::new_err(install_failure.to_string()))?;
+        .map_err(|registration_failure| PyValueError::new_err(registration_failure.to_string()))?;
 
     registered.insert(identity.clone(), held_processor_class);
     Ok(identity)
 }
 
-/// Register the descriptor `@node` has just stamped onto
-/// `processor_class`, so the class is in the catalog before anything adds it.
-///
-/// The decorator's one call into the native half. Registers the descriptor
-/// alone: the constructor arrives through [`register_processor_class`] when a
-/// graph node first names the class.
-///
-/// Two classes are passed over rather than registered. One decorated inside a
-/// helper process registers nothing, because a helper hosts no graph. One no
-/// interpreter could import — declared in the entry file or inside a function
-/// — has no identity to be registered under, and `stream_builder.add` is where that is
-/// said, with the fix named.
-#[pyfunction]
-pub(crate) fn register_declared_processor_class(
-    processor_class: &Bound<'_, PyAny>,
-) -> PyResult<()> {
-    if std::env::var_os(HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE).is_some() {
-        tracing::debug!(
-            "[register_declared_processor_class] a decoration inside a helper process registers \
-             nothing"
-        );
-        return Ok(());
-    }
-    // Only an unresolvable identity is passed over, and deliberately narrowly:
-    // every other refusal `read_from_class` raises — a malformed port, an
-    // unreadable config schema — is the author's to see at decoration, so this
-    // guard asks the one question rather than swallowing the whole read.
-    if let Err(no_import_path) = processor_class_import_path(processor_class) {
-        tracing::debug!(
-            %no_import_path,
-            "[register_declared_processor_class] a class with no import path registers nothing"
-        );
-        return Ok(());
-    }
-    let declaration = PythonProcessorDeclaration::read_from_class(processor_class)?;
-    PROCESSOR_REGISTRY
-        .register_descriptor_only(declaration.descriptor)
-        .map_err(|registration_failure| PyValueError::new_err(registration_failure.to_string()))
-}
-
 /// Every processor class import path in the calling process's catalog.
 ///
 /// What `/api/registry` renders, reachable in a process that serves no control
-/// plane — which a helper is, and is the only way to see from inside one that
-/// decoration registered nothing there. Named for the catalog rather than for
-/// registration: a path listed here may be one the engine's `is_registered`
-/// calls false, because that asks whether a constructor has arrived.
+/// plane.
 #[pyfunction]
 pub(crate) fn processor_class_import_paths_in_this_processes_catalog() -> Vec<String> {
     PROCESSOR_REGISTRY

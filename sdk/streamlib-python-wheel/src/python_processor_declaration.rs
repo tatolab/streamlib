@@ -3,9 +3,10 @@
 
 //! Reading the `@node` grammar off a Python class.
 //!
-//! The `__streamlib_processor_*__` attributes the decorator attaches are the
-//! contract between `_processor_declaration.py` and this module; the two move
-//! together.
+//! The `__tatolab_node_*__` attributes the decorator attaches are the
+//! contract between `tatolab/stream/_node_declaration.py` and this module; each
+//! stamp const here is named after its `NODE_DECLARATION_*_STAMP` counterpart
+//! there, and the two move together.
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -21,6 +22,13 @@ use crate::python_bag_conversion::{
     python_object_to_json_value, python_type_name_for_error_message,
 };
 use crate::python_processor_import_path::processor_class_import_path;
+
+const NODE_DECLARATION_CONFIG_SCHEMA_STAMP: &str = "__tatolab_node_config_schema__";
+const NODE_DECLARATION_DESCRIPTION_STAMP: &str = "__tatolab_node_description__";
+const NODE_DECLARATION_EXECUTION_STAMP: &str = "__tatolab_node_execution__";
+const NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP: &str = "__tatolab_node_scheduling_priority__";
+const NODE_DECLARATION_INPUT_PORTS_STAMP: &str = "__tatolab_node_input_ports__";
+const NODE_DECLARATION_OUTPUT_PORTS_STAMP: &str = "__tatolab_node_output_ports__";
 
 /// Everything the engine needs to register and instantiate one Python
 /// processor class.
@@ -43,7 +51,7 @@ impl PythonProcessorDeclaration {
             class_short_name,
             ProcessorClassImportPath::new(class_import_path.clone())
                 .map_err(|blank| PyValueError::new_err(blank.to_string()))?,
-            read_string_attribute(processor_class, "__streamlib_processor_description__")?,
+            read_string_attribute(processor_class, NODE_DECLARATION_DESCRIPTION_STAMP)?,
         )
         .with_runtime(ProcessorRuntime::Python)
         .with_entrypoint(class_import_path)
@@ -80,13 +88,13 @@ fn read_class_short_name(processor_class: &Bound<'_, PyAny>) -> PyResult<Process
 /// document the catalog serves — the engine never re-derives it and never
 /// inspects it.
 fn read_config_schema_document(processor_class: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
-    let stamped = processor_class.getattr("__streamlib_processor_config_schema__")?;
+    let stamped = processor_class.getattr(NODE_DECLARATION_CONFIG_SCHEMA_STAMP)?;
     // Refused here rather than by the converter, whose own messages are
     // written for a bag on the data plane and would tell a processor author
     // about GPU frames.
     let document = stamped.clone().cast_into::<PyDict>().map_err(|_| {
         PyTypeError::new_err(format!(
-            "__streamlib_processor_config_schema__ must be a JSON object, got a {} — the \
+            "{NODE_DECLARATION_CONFIG_SCHEMA_STAMP} must be a JSON object, got a {} — the \
              decorator derives this document, so a class reaching here was built by hand \
              rather than by @tatolab.stream.node",
             python_type_name_for_error_message(&stamped, "value of unknown type")
@@ -97,9 +105,11 @@ fn read_config_schema_document(processor_class: &Bound<'_, PyAny>) -> PyResult<s
 
 fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<ExecutionConfig> {
     let execution = processor_class
-        .getattr("__streamlib_processor_execution__")?
+        .getattr(NODE_DECLARATION_EXECUTION_STAMP)?
         .cast_into::<PyDict>()
-        .map_err(|_| PyTypeError::new_err("__streamlib_processor_execution__ must be a dict"))?;
+        .map_err(|_| {
+            PyTypeError::new_err(format!("{NODE_DECLARATION_EXECUTION_STAMP} must be a dict"))
+        })?;
 
     let mode = read_dict_string(&execution, "mode")?;
     let execution = match mode.as_str() {
@@ -108,9 +118,9 @@ fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<Executi
         "continuous" => ProcessExecution::Continuous {
             interval_ms: execution.get_item("interval_ms")?.map_or(Ok(0), |value| {
                 value.extract::<u32>().map_err(|_| {
-                    PyTypeError::new_err(
-                        "__streamlib_processor_execution__.interval_ms must be an int",
-                    )
+                    PyTypeError::new_err(format!(
+                        "{NODE_DECLARATION_EXECUTION_STAMP}.interval_ms must be an int"
+                    ))
                 })
             })?,
         },
@@ -125,7 +135,7 @@ fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<Executi
 }
 
 fn read_thread_priority(processor_class: &Bound<'_, PyAny>) -> PyResult<ThreadPriority> {
-    let priority = processor_class.getattr("__streamlib_processor_scheduling_priority__")?;
+    let priority = processor_class.getattr(NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP)?;
     if priority.is_none() {
         return Ok(ThreadPriority::Normal);
     }
@@ -146,10 +156,10 @@ enum PortDirection {
 }
 
 impl PortDirection {
-    fn class_attribute(self) -> &'static str {
+    fn node_declaration_ports_stamp(self) -> &'static str {
         match self {
-            Self::Input => "__streamlib_processor_input_ports__",
-            Self::Output => "__streamlib_processor_output_ports__",
+            Self::Input => NODE_DECLARATION_INPUT_PORTS_STAMP,
+            Self::Output => NODE_DECLARATION_OUTPUT_PORTS_STAMP,
         }
     }
 }
@@ -158,17 +168,17 @@ fn read_port_descriptors(
     processor_class: &Bound<'_, PyAny>,
     direction: PortDirection,
 ) -> PyResult<Vec<PortDescriptor>> {
-    let attribute = direction.class_attribute();
+    let ports_stamp = direction.node_declaration_ports_stamp();
     let declared = processor_class
-        .getattr(attribute)?
+        .getattr(ports_stamp)?
         .cast_into::<PyList>()
-        .map_err(|_| PyTypeError::new_err(format!("{attribute} must be a list")))?;
+        .map_err(|_| PyTypeError::new_err(format!("{ports_stamp} must be a list")))?;
 
     let mut ports = Vec::with_capacity(declared.len());
     for declaration in declared.iter() {
         let declaration = declaration
             .cast_into::<PyDict>()
-            .map_err(|_| PyTypeError::new_err(format!("{attribute} must hold dicts")))?;
+            .map_err(|_| PyTypeError::new_err(format!("{ports_stamp} must hold dicts")))?;
 
         let mut port = PortDescriptor::new(
             read_dict_string(&declaration, "name")?,
@@ -433,13 +443,13 @@ __name__ = 'my_app.filters'
 
 
 class BlurProcessor:
-    __streamlib_processor_declared__ = True
-    __streamlib_processor_description__ = 'blurs'
-    __streamlib_processor_execution__ = {'mode': 'reactive'}
-    __streamlib_processor_scheduling_priority__ = None
-    __streamlib_processor_config_schema__ = {'type': 'object'}
-    __streamlib_processor_input_ports__ = []
-    __streamlib_processor_output_ports__ = []
+    __tatolab_node_declared__ = True
+    __tatolab_node_description__ = 'blurs'
+    __tatolab_node_execution__ = {'mode': 'reactive'}
+    __tatolab_node_scheduling_priority__ = None
+    __tatolab_node_config_schema__ = {'type': 'object'}
+    __tatolab_node_input_ports__ = []
+    __tatolab_node_output_ports__ = []
 ";
 
     /// A class that drifted between the two fields would be a processor
@@ -470,92 +480,36 @@ class BlurProcessor:
 
     // ---- the window contract, declared in both languages ----
 
-    /// The wheel's own `@node` grammar, run in the test interpreter.
-    ///
-    /// Embedded rather than imported: `cargo test` has no installed wheel on
-    /// `sys.path`, and the point is to read a marker the real decorator built
-    /// rather than one this test hand-wrote.
-    const PROCESSOR_DECLARATION_MODULE_SOURCE: &str =
-        include_str!("../python/tatolab/stream/_processor_declaration.py");
+    /// The stream distribution's source root, put on `sys.path` because a
+    /// `cargo test` run has no installed `tatolab-stream`.
+    const STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../tatolab-stream");
 
-    /// A namespace with the real decorator module already run in it.
-    ///
-    /// Marked as belonging to a stand-in `tatolab.stream` package, because the
-    /// decorator module imports a sibling relatively and a bare run of its
-    /// source resolves that against nothing.
+    /// A fresh copy of the real `tatolab.stream._node_declaration` module's
+    /// namespace, so a test reads a marker the real decorator built rather than
+    /// one it hand-wrote.
     fn declaration_module_namespace(python: Python<'_>) -> Bound<'_, PyDict> {
-        install_stand_in_tatolab_stream_package(python);
-        let namespace = PyDict::new(python);
-        namespace.set_item("__package__", "tatolab.stream").unwrap();
-        python
-            .run(
-                &std::ffi::CString::new(PROCESSOR_DECLARATION_MODULE_SOURCE).unwrap(),
-                Some(&namespace),
-                None,
-            )
-            .expect("the decorator module runs");
-        namespace
-    }
-
-    /// The `tatolab.stream` package directory, where the decorator module's
-    /// siblings live.
-    const WHEEL_PYTHON_TATOLAB_STREAM_PACKAGE_DIRECTORY: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/python/tatolab/stream");
-
-    /// Put a `tatolab.stream` package on `sys.modules` whose search path is the
-    /// real source directory, so the decorator module's relative imports
-    /// resolve without an installed wheel.
-    ///
-    /// A package object already on `sys.modules` is never initialised again, so
-    /// `__init__.py` — which imports the compiled `_engine` a `cargo test` run
-    /// does not have — is not executed. Only the siblings actually imported are
-    /// loaded, and each is the same file `include_str!` above reads.
-    ///
-    /// `tatolab.runtime._engine` is the one module that cannot be: it is the
-    /// compiled artifact this binary *is* a copy of, and a `maturin develop`
-    /// leaves one in the source directory that a search path would otherwise
-    /// load — a second engine, with its own process-global registry, deciding
-    /// whether these tests pass. A stand-in stands in for it, so a decoration
-    /// here reads the grammar and registers nothing.
-    fn install_stand_in_tatolab_stream_package(python: Python<'_>) {
-        let sys_modules = python
+        let sys_path = python
             .import("sys")
             .unwrap()
-            .getattr("modules")
+            .getattr("path")
             .unwrap()
-            .cast_into::<PyDict>()
+            .cast_into::<PyList>()
             .unwrap();
-        // Each module is claimed on its own: a `tatolab.stream` already on
-        // `sys.modules` without `tatolab.runtime._engine` would otherwise skip the
-        // stand-in and leave the import to find the compiled artifact this binary
-        // is a copy of.
-        if !sys_modules.contains("tatolab.stream").unwrap() {
-            let package = python
-                .import("types")
-                .unwrap()
-                .call_method1("ModuleType", ("tatolab.stream",))
-                .unwrap();
-            package
-                .setattr(
-                    "__path__",
-                    PyList::new(python, [WHEEL_PYTHON_TATOLAB_STREAM_PACKAGE_DIRECTORY]).unwrap(),
-                )
-                .unwrap();
-            sys_modules.set_item("tatolab.stream", package).unwrap();
-        }
-
-        if !sys_modules.contains("tatolab.runtime._engine").unwrap() {
-            let stand_in_engine = PyModule::from_code(
-                python,
-                c"def register_declared_processor_class(processor_class): pass",
-                c"tatolab/runtime/_engine.py",
-                c"tatolab.runtime._engine",
-            )
-            .unwrap();
-            sys_modules
-                .set_item("tatolab.runtime._engine", stand_in_engine)
+        if !sys_path
+            .contains(STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY)
+            .unwrap()
+        {
+            sys_path
+                .insert(0, STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY)
                 .unwrap();
         }
+        python
+            .import("tatolab.stream._node_declaration")
+            .expect("the decorator module imports")
+            .dict()
+            .copy()
+            .unwrap()
     }
 
     /// Run the real decorator module, run `class_body_source` against it, and
@@ -872,18 +826,18 @@ class AudioConsumer:
 
 
 class AudioConsumer:
-    __streamlib_processor_declared__ = True
-    __streamlib_processor_description__ = ''
-    __streamlib_processor_execution__ = {{'mode': 'reactive'}}
-    __streamlib_processor_scheduling_priority__ = None
-    __streamlib_processor_config_schema__ = {{'type': 'object'}}
-    __streamlib_processor_input_ports__ = [{{
+    __tatolab_node_declared__ = True
+    __tatolab_node_description__ = ''
+    __tatolab_node_execution__ = {{'mode': 'reactive'}}
+    __tatolab_node_scheduling_priority__ = None
+    __tatolab_node_config_schema__ = {{'type': 'object'}}
+    __tatolab_node_input_ports__ = [{{
         'name': 'audio',
         'description': '',
         'delivery_profile': 'ordered',
         'audio_window': {{{audio_window_fields}}},
     }}]
-    __streamlib_processor_output_ports__ = []
+    __tatolab_node_output_ports__ = []
 "
         )
     }
@@ -1072,13 +1026,13 @@ __name__ = 'my_app.audio'
 
 
 class AudioConsumer:
-    __streamlib_processor_declared__ = True
-    __streamlib_processor_description__ = ''
-    __streamlib_processor_execution__ = {'mode': 'manual'}
-    __streamlib_processor_scheduling_priority__ = None
-    __streamlib_processor_config_schema__ = {'type': 'object'}
-    __streamlib_processor_input_ports__ = []
-    __streamlib_processor_output_ports__ = [{
+    __tatolab_node_declared__ = True
+    __tatolab_node_description__ = ''
+    __tatolab_node_execution__ = {'mode': 'manual'}
+    __tatolab_node_scheduling_priority__ = None
+    __tatolab_node_config_schema__ = {'type': 'object'}
+    __tatolab_node_input_ports__ = []
+    __tatolab_node_output_ports__ = [{
         'name': 'windows',
         'description': '',
         'audio_window': {'resolved_from': 'match_device'},

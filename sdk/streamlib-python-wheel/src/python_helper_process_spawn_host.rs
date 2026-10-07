@@ -43,10 +43,8 @@ use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEn
 /// The module CPython is launched with in a helper process.
 const HELPER_PROCESS_MODULE: &str = "tatolab.runtime._helper";
 
-/// The environment variable carrying the class import path a helper process
-/// hosts — set here and nowhere else, so its presence is what tells code
-/// running inside a child that it is one.
-pub(crate) const HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENTRYPOINT";
+/// The environment variable carrying the class import path a helper process hosts.
+const HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENTRYPOINT";
 
 /// The environment variable carrying the id of the processor a helper process hosts.
 pub(crate) const HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_PROCESSOR_ID";

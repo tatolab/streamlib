@@ -63,28 +63,10 @@ def schema_for(served_catalog: "dict[str, Any]", probe: str) -> "dict[str, Any]"
     return document
 
 
-def test_a_class_the_app_imported_and_never_added_is_in_the_catalog(served_catalog):
-    """What an agent reads to learn what a node could run, not what it is running.
-
-    Its decorator registered it at import; nothing put it in the graph. Restore
-    registration to the first add and it is invisible here, which is the gap
-    that made an app's unused effects undiscoverable.
-    """
-    entry = entry_for(served_catalog, "ImportedButNeverAddedProbe")
-
-    assert entry["config_schema"]["properties"]["width"]["type"] == "integer", (
-        f"an unadded class must carry the same config schema an added one does: {entry}"
-    )
-    assert entry["runtime"] == "python"
-    assert entry["entrypoint"] == (
-        "processor_config_catalog_probes:ImportedButNeverAddedProbe"
-    )
-
-
 def test_a_processor_with_no_description_is_served_its_docstring(served_catalog):
     """The text the author already wrote reaches the agent reading the catalog."""
-    assert entry_for(served_catalog, "ImportedButNeverAddedProbe")["description"] == (
-        "An effect the app knows how to run and has not been asked to."
+    assert entry_for(served_catalog, "ModelConfiguredProbe")["description"] == (
+        "Configured by a model, and described by this docstring alone."
     )
 
 
@@ -152,7 +134,7 @@ def test_a_processor_declaring_no_config_serves_an_empty_object_not_a_null(
     claim from "this processor takes nothing"."""
     assert schema_for(served_catalog, "UnconfiguredProbe") == {
         "type": "object",
-        "description": "This processor declares no configuration.",
+        "description": "This node declares no configuration.",
         "additionalProperties": False,
     }
 

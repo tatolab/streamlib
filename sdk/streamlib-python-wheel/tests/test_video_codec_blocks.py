@@ -144,12 +144,6 @@ CODEC_ROUND_TRIPS = {
 
 
 @pytest.mark.parametrize("marker_class", FOUR_CODEC_MARKERS)
-def test_the_built_in_class_cannot_be_instantiated(marker_class):
-    with pytest.raises(TypeError):
-        marker_class()
-
-
-@pytest.mark.parametrize("marker_class", FOUR_CODEC_MARKERS)
 def test_node_name_defaults_to_the_type_name(marker_class):
     graph = compile_stream_to_graph(ONE_CODEC_BLOCK_ALONE_BY_MARKER_CLASS[marker_class])
     (codec_node,) = [

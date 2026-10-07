@@ -68,7 +68,7 @@ impl schemars::JsonSchema for EmptyConfig {
         schemars::schema::SchemaObject {
             instance_type: Some(schemars::schema::InstanceType::Object.into()),
             metadata: Some(Box::new(schemars::schema::Metadata {
-                description: Some("This processor declares no configuration.".to_string()),
+                description: Some("This node declares no configuration.".to_string()),
                 ..Default::default()
             })),
             object: Some(Box::new(schemars::schema::ObjectValidation {

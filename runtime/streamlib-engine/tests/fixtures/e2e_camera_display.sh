@@ -61,7 +61,7 @@ if ! command -v "$STREAMLIB" >/dev/null 2>&1; then
     STREAMLIB="$REPO_ROOT/sdk/streamlib-python-wheel/.venv/bin/streamlib"
     if [ ! -x "$STREAMLIB" ]; then
         echo "[e2e] SKIP: no streamlib CLI on PATH and no wheel venv in the checkout"
-        echo "[e2e]       build one with: maturin develop --manifest-path sdk/streamlib-python-wheel/Cargo.toml"
+        echo "[e2e]       build one with: (cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop)"
         exit 77
     fi
 fi

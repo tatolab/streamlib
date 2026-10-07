@@ -87,6 +87,12 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: uvx maturin@1.9.6 build --release --out dist
 
+      # The engine wheel's one dependency, at its own version, which no index
+      # carries before release. Pure Python, so the release attaches the
+      # manylinux job's copy and this one only installs.
+      - name: Build the tatolab-stream wheel the engine wheel depends on
+        run: uv build --wheel --out-dir sdk/tatolab-stream/dist sdk/tatolab-stream
+
       # The signature is file content, so the zip round-trip and pip should
       # both preserve it — but a binary whose signature did not survive fails
       # on every user's machine and never on this one, so it is checked on the
@@ -105,15 +111,18 @@ jobs:
           done
           # PEP 420: `tatolab` is a namespace package. A regular
           # `tatolab/__init__.py` would shadow every other distribution's
-          # `tatolab.*` portion installed beside this wheel.
-          for regular_package in stream runtime; do
-            if [ ! -f "/tmp/unzipped-wheel/tatolab/$regular_package/__init__.py" ]; then
-              echo "::error::the wheel does not carry tatolab/$regular_package/__init__.py"
-              exit 1
-            fi
-          done
+          # `tatolab.*` portion installed beside this wheel. `tatolab/stream/`
+          # is `tatolab-stream`'s alone; a copy here would overwrite it on install.
+          if [ ! -f /tmp/unzipped-wheel/tatolab/runtime/__init__.py ]; then
+            echo "::error::the wheel does not carry tatolab/runtime/__init__.py"
+            exit 1
+          fi
           if [ -e /tmp/unzipped-wheel/tatolab/__init__.py ]; then
             echo "::error::the wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+          if [ -e /tmp/unzipped-wheel/tatolab/stream ]; then
+            echo "::error::the engine wheel ships tatolab/stream/, which is tatolab-stream's"
             exit 1
           fi
           # `-exec … +`, not a `while read` loop: find's status is non-zero if
@@ -124,7 +133,8 @@ jobs:
       - name: Install the wheel into a fresh venv
         run: |
           python3 -m venv /tmp/wheel-check
-          /tmp/wheel-check/bin/pip install --no-index sdk/streamlib-python-wheel/dist/*.whl
+          /tmp/wheel-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist \
+            sdk/streamlib-python-wheel/dist/*.whl
           # The scaffolded effect's own declared dependency, and the tests'.
           /tmp/wheel-check/bin/pip install 'numpy>=2.1' pytest
           # Compared against the venv's own site-packages, resolved on both

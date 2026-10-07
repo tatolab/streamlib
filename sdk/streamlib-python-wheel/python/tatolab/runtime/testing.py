@@ -32,6 +32,10 @@ from tatolab.stream._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
+from tatolab.stream._node_declaration import (
+    NODE_DECLARATION_INPUT_PORTS_STAMP,
+    NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+)
 from tatolab.stream._stream_graph_builder import StreamBuilder
 
 from . import Runtime
@@ -256,7 +260,11 @@ class SingleNodeTestPipeline:
 
 def _declared_port_names(node_class: type, direction: str) -> "list[str]":
     declared = getattr(
-        node_class, f"__streamlib_processor_{direction}_ports__", None
+        node_class,
+        NODE_DECLARATION_INPUT_PORTS_STAMP
+        if direction == "input"
+        else NODE_DECLARATION_OUTPUT_PORTS_STAMP,
+        None,
     )
     if declared is None:
         raise TypeError(

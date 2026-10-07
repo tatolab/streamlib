@@ -40,7 +40,7 @@ struct BuiltInNodePortDescriptor {
 
 /// The generated module, relative to the workspace root.
 pub const GENERATED_BUILT_IN_NODE_CLASSES_PATH: &str =
-    "sdk/streamlib-python-wheel/python/tatolab/stream/_built_in_nodes.py";
+    "sdk/tatolab-stream/tatolab/stream/_built_in_nodes.py";
 
 /// What every built-in's `type` starts with; the rest is its class name.
 const BUILT_IN_NODE_TYPE_PREFIX: &str = "tatolab.stream:";

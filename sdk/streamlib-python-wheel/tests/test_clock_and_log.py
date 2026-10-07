@@ -1,19 +1,19 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The clock and logging surfaces, exercised without an engine.
+"""The clock and logging surfaces against the runtime that backs them, without an engine.
 
-`monotonic_now_ns` and `MonotonicTimer` are pure kernel-facing calls and
-`log.*` degrades to a no-op sink before an engine boots, so none of this
-needs a GPU.
+`monotonic_now_ns` and `start_monotonic_timer` are pure kernel-facing calls
+and `log.*` degrades to a no-op sink before an engine boots, so none of this
+needs a GPU. What `tatolab.stream` declares about them is the stream suite's
+(`sdk/tatolab-stream/tests/test_clock_and_log.py`).
 """
 
 import pytest
 
-import tatolab.stream
 from engine_media_clock import engine_media_clock_now_ns
 from tatolab.runtime import _engine
-from tatolab.stream import MonotonicTimer, clock, log, monotonic_now_ns
+from tatolab.stream import log, monotonic_now_ns, start_monotonic_timer
 
 # Small, so the one wiring test below returns at once.
 TIMER_TEST_INTERVAL_NS = 1_000_000
@@ -56,31 +56,23 @@ def test_monotonic_now_ns_reads_the_engine_media_clock():
     )
 
 
-def test_the_clock_module_re_exports_the_native_surface():
-    """Old-SDK parity: `from tatolab.stream import clock` keeps working."""
-    assert clock.monotonic_now_ns is tatolab.stream.monotonic_now_ns
-    assert clock.MonotonicTimer is tatolab.stream.MonotonicTimer
+def test_a_timer_is_started_by_a_function_that_builds_the_native_timer():
+    with start_monotonic_timer(AN_HOUR_NS) as timer:
+        assert type(timer) is getattr(_engine, "MonotonicTimer")
 
 
-def test_python_exports_exactly_one_name_for_the_monotonic_clock():
-    """Every language exports one clock name; Python's is `monotonic_now_ns`.
-
-    A second name for the same number reads as a second epoch, which is the
-    confusion the one-clock rule exists to kill. Checked on the native module
-    and on both re-export surfaces above it, because a re-export is not the
-    only way a second name can reappear.
+def test_the_runtime_exports_exactly_one_name_for_the_monotonic_clock():
+    """The native module's half of the one-clock rule the stream suite holds
+    `tatolab.stream` to.
 
     Matched by suffix rather than named outright: `ship-change-removed-gate.sh`
     content-greps `sdk/` for each `REMOVED:` pattern a change file declares, so
     spelling the deleted export here would hold `one-monotonic-clock` red for
     good.
     """
-    for exporting_module in (_engine, tatolab.stream, clock):
-        assert {
-            name for name in dir(exporting_module) if name.endswith("_now_ns")
-        } == {"monotonic_now_ns"}, (
-            f"{exporting_module.__name__} exports more than one monotonic-clock name"
-        )
+    assert {name for name in dir(_engine) if name.endswith("_now_ns")} == {
+        "monotonic_now_ns"
+    }
 
 
 def test_a_timer_delivers_its_tick_through_the_wait():
@@ -89,23 +81,23 @@ def test_a_timer_delivers_its_tick_through_the_wait():
     How late a tick lands is the scheduler's business, and the deadline
     arithmetic is pinned without a clock by the wheel's Rust tests.
     """
-    with MonotonicTimer(TIMER_TEST_INTERVAL_NS) as timer:
+    with start_monotonic_timer(TIMER_TEST_INTERVAL_NS) as timer:
         assert timer.wait(timeout_ms=TIMER_TICK_TIMEOUT_MS) >= 1
 
 
 def test_a_poll_before_the_first_deadline_returns_zero():
-    with MonotonicTimer(AN_HOUR_NS) as timer:
+    with start_monotonic_timer(AN_HOUR_NS) as timer:
         assert timer.wait(timeout_ms=0) == 0
 
 
 def test_waiting_on_a_closed_timer_returns_minus_one():
-    timer = MonotonicTimer(AN_HOUR_NS)
+    timer = start_monotonic_timer(AN_HOUR_NS)
     timer.close()
     assert timer.wait(timeout_ms=0) == -1
 
 
 def test_the_context_manager_closes_the_timer():
-    with MonotonicTimer(AN_HOUR_NS) as timer:
+    with start_monotonic_timer(AN_HOUR_NS) as timer:
         assert timer.interval_ns == AN_HOUR_NS
     assert timer.wait(timeout_ms=0) == -1
 
@@ -113,7 +105,7 @@ def test_the_context_manager_closes_the_timer():
 @pytest.mark.parametrize("invalid_interval_ns", [0, -1])
 def test_a_non_positive_interval_is_refused(invalid_interval_ns):
     with pytest.raises(ValueError, match="interval_ns must be > 0"):
-        MonotonicTimer(invalid_interval_ns)
+        start_monotonic_timer(invalid_interval_ns)
 
 
 def test_every_log_level_accepts_structured_attrs():
@@ -123,10 +115,6 @@ def test_every_log_level_accepts_structured_attrs():
     log.info("info record", width=1920, height=1080)
     log.warn("warn record", dropped=3)
     log.error("error record", error="synthetic")
-
-
-def test_warn_is_the_primary_name_and_warning_its_alias():
-    assert log.warning is log.warn
 
 
 def test_log_functions_accept_a_bare_message():

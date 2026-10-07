@@ -678,7 +678,7 @@ impl std::fmt::Display for LatchedRefusal {
 #[streamlib::sdk::processor(
     built_in_node,
     description = "Presents video frames as a virtual camera any Linux application can select.\n\n\
-                  Each instance is one camera that exists while its processor runs — created at \
+                  Each instance is one camera that exists while its node runs — created at \
                   setup, removed at teardown, like a USB camera plugged in and pulled out — \
                   showing whatever the graph writes into it. Add as many instances as the graph \
                   needs; each is its own camera. Off Linux the runtime refuses a graph naming it \

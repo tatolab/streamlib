@@ -18,6 +18,15 @@
           "type": "toml",
           "path": "sdk/streamlib-python-wheel/pyproject.toml",
           "jsonpath": "$.project.version"
+        },
+        {
+          "type": "generic",
+          "path": "sdk/streamlib-python-wheel/pyproject.toml"
+        },
+        {
+          "type": "toml",
+          "path": "sdk/tatolab-stream/pyproject.toml",
+          "jsonpath": "$.project.version"
         }
       ]
     },

@@ -18,15 +18,16 @@ import os
 import traceback
 
 from tatolab.stream import (
+    ComputeKernel,
     GpuContextFullAccess,
     GpuContextLimitedAccess,
     GpuSurfaceHandle,
+    KernelDispatchBatch,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
     node,
 )
-from tatolab.runtime._engine import ComputeKernel, KernelDispatchBatch
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 64

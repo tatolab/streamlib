@@ -50,7 +50,9 @@
 #                         so a python-arm mismatch is a finding, and the arm is
 #                         refused BASELINE_CAPTURE outright. It scores whatever
 #                         `_engine.abi3.so` the venv holds — rebuild the wheel
-#                         (`maturin develop`) before running it.
+#                         before running it: in sdk/streamlib-python-wheel,
+#                         `uv pip install -e ../tatolab-stream` then
+#                         `maturin develop`.
 #   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 = "100% Red";
 #                         8=Green, 9=Blue work the same shape if a future
 #                         regression-classifier wants per-primary sensitivity)
@@ -178,7 +180,8 @@ for role in ("Encoder", "Decoder"):
     getattr(tatolab.stream, codec + role)
 ' "$CODEC" 2>&1)"; then
         echo "[vivid-color] SKIP: $FIXTURE_NODE_PYTHON cannot import tatolab.stream's" >&2
-        echo "[vivid-color] $CODEC blocks. Rebuild the wheel with \`maturin develop\` before" >&2
+        echo "[vivid-color] $CODEC blocks. Rebuild the wheel with" >&2
+        echo "[vivid-color] \`(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop)\` before" >&2
         echo "[vivid-color] running the python arm — it measures the extension, not the tree." >&2
         echo "$MARKER_IMPORT_FAILURE" >&2
         exit 77

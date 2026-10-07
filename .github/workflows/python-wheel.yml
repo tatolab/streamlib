@@ -102,7 +102,10 @@ jobs:
           # deselects every test that would use it. pydantic is what proves a
           # model is a legal `read(port, into=T)` target; the wheel never
           # imports it. ruff lints each `streamlib new` render in test_cli.py.
+          # The stream package goes in from source first: it is the engine
+          # wheel's one dependency, at a version no index carries before release.
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions ruff==0.16.9 mcp==2.3.0
+          VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # An extension wheel depends on `streamlib` as a binary, so its lane
@@ -116,17 +119,21 @@ jobs:
 
       # PEP 420: `tatolab` is a namespace package. A regular `tatolab/__init__.py`
       # in this wheel would shadow every other distribution's `tatolab.*`
-      # portion installed beside it. The listing is required to name both regular
-      # packages' `__init__.py`, so a wheel missing either, or an empty or
-      # unreadable listing, fails rather than passing.
+      # portion installed beside it. The listing is required to name
+      # `tatolab/runtime/__init__.py`, so a wheel missing it, or an empty or
+      # unreadable listing, fails rather than passing. `tatolab/stream/` is
+      # `tatolab-stream`'s alone; a copy here would overwrite it on install.
       - name: The wheel ships tatolab as a namespace package
         working-directory: sdk/streamlib-python-wheel
         run: |
           unzip -Z1 dist/*.whl > /tmp/wheel-member-names.txt
-          grep -qx 'tatolab/stream/__init__.py' /tmp/wheel-member-names.txt
           grep -qx 'tatolab/runtime/__init__.py' /tmp/wheel-member-names.txt
           if grep -qx 'tatolab/__init__.py' /tmp/wheel-member-names.txt; then
             echo "::error::the wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+            exit 1
+          fi
+          if grep -q '^tatolab/stream/' /tmp/wheel-member-names.txt; then
+            echo "::error::the engine wheel ships tatolab/stream/, which is tatolab-stream's"
             exit 1
           fi
 
@@ -162,15 +169,19 @@ jobs:
           "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python"
           -m unittest test_tap_audio_channel
 
-      # The only check that compares the stub to the binary. It imports the
-      # built module, introspects it, and fails on a name or signature the
-      # hand-written `_engine.pyi` no longer describes — which is what makes a
-      # hand-maintained stub safe. `pyright --verifytypes` cannot substitute:
-      # it scores annotation completeness, so a stub describing a method the
-      # binary dropped still reads as 100% complete.
+      # What a node is handed is declared once, in `tatolab.stream`, and the
+      # conformance gate (`tests/test_runtime_backed_protocol_conformance.py`,
+      # in the suite below) holds the binary to it member for member. stubtest
+      # compares the rest of the hand-written `_engine.pyi` to the binary,
+      # skipping the names the gate prints as held by `tatolab.stream`.
+      # `pyright --verifytypes` cannot substitute: it scores annotation
+      # completeness, so a stub describing a method the binary dropped still
+      # reads as 100% complete.
       - name: Type stubs match the compiled module
         working-directory: sdk/streamlib-python-wheel
-        run: .venv/bin/python -m mypy.stubtest tatolab.runtime._engine
+        run: |
+          .venv/bin/python tests/runtime_backed_protocol_conformance.py --print-stubtest-allowlist > "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
+          .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
 
       # The runner has no GPU. `Runner::start()` initializes a GPU context whose
       # DMA-BUF pool pre-warm needs a driver that can allocate exportable device
@@ -264,13 +275,17 @@ jobs:
           path: streamlib-wheel
 
       # The engine as a binary dependency, exactly as a third party installs
-      # it: from a built wheel, never from this checkout's source.
+      # it: from a built wheel, never from this checkout's source. The engine
+      # wheel depends on `tatolab-stream` at its own version, which no index
+      # carries before release, so that wheel is built from this checkout and
+      # installed beside it.
       - name: Install the engine wheel and build the extension into it
         working-directory: packages/${{ matrix.extension }}
         run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/streamlib-wheel/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$GITHUB_WORKSPACE"/streamlib-wheel/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # The repo-root `cargo fmt --all` does not reach a non-member, so an
@@ -371,12 +386,14 @@ jobs:
           name: streamlib-macos-wheel
           path: streamlib-macos-wheel
 
+      # `tatolab-stream` beside the engine wheel, as the Linux lane installs it.
       - name: Install the engine wheel and build the extension into it
         working-directory: packages/${{ matrix.extension }}
         run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/streamlib-macos-wheel/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$GITHUB_WORKSPACE"/streamlib-macos-wheel/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       - name: Extension crate tests
@@ -411,6 +428,81 @@ jobs:
       contents: read
     uses: ./.github/workflows/macos-wheel.yml
 
+  # The stream suite, on both floors. The division from the runtime's tests is
+  # structural: this venv holds `tatolab-stream`, its test group and nothing of
+  # the runtime, so a stream test that reaches for the runtime fails to import.
+  stream-suite:
+    name: Stream suite (${{ matrix.runner }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    # 3.10 is the floor `requires-python` promises; one runner holds it.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-15]
+        python: ["3.12"]
+        include:
+          - runner: ubuntu-latest
+            python: "3.10"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Runs PR-authored code; a persisted checkout token would be readable
+          # by it.
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # Built and installed, not editable, so the suite imports what the
+      # wheel ships rather than the checkout beside it.
+      - name: Install tatolab-stream and its test group, and nothing of the runtime
+        working-directory: sdk/tatolab-stream
+        run: |
+          uv venv --python ${{ matrix.python }} .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install . --group test
+
+      # The console script, not `python -m pytest`, which would put the
+      # checkout's `tatolab/` ahead of the installed one on the path.
+      - name: The stream suite
+        working-directory: sdk/tatolab-stream
+        run: .venv/bin/pytest tests -v
+
+      - name: Type-check the stream package and its suite
+        working-directory: sdk/tatolab-stream
+        run: uvx pyright@1.1.411
+
+      # A stream is written, type-checked and compiled with no runtime in its
+      # venv: the scaffold's stream module, beside only `tatolab-stream` and
+      # the numpy the scaffold declares, imports, passes pyright and compiles
+      # to its graph.
+      - name: The scaffold compiles and type-checks with no runtime installed
+        run: |
+          cp -R sdk/streamlib-python-wheel/python/tatolab/runtime/_scaffold_template "$RUNNER_TEMP/scaffold"
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
+          uv venv --python ${{ matrix.python }} "$RUNNER_TEMP/scaffold-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl 'numpy>=2.1'
+          cd "$RUNNER_TEMP/scaffold"
+          "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
+          import importlib.util
+          import json
+          import sys
+
+          import stream
+          from tatolab.stream import compile_stream_to_graph
+
+          assert importlib.util.find_spec("tatolab.runtime") is None, "a runtime is installed"
+          graph = compile_stream_to_graph(stream.main)
+          runtime_modules_loaded = [name for name in sys.modules if name.startswith("tatolab.runtime")]
+          assert runtime_modules_loaded == [], runtime_modules_loaded
+          print(json.dumps([node["type"] for node in graph["nodes"]]))
+          EOF
+          uvx pyright@1.1.411 --pythonpath "$RUNNER_TEMP/scaffold-venv/bin/python" .
+
   python-types:
     name: Pyright (no build)
     runs-on: ubuntu-latest
@@ -433,7 +525,8 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       # pytest only, so its `py.typed` annotations resolve in `tests/`. The
-      # package under test is read from source; nothing is installed.
+      # packages under test, `tatolab.runtime` and `tatolab.stream`, are read
+      # from source through `extraPaths`; neither is installed.
       - name: Prepare the environment pyright resolves against
         working-directory: sdk/streamlib-python-wheel
         run: |

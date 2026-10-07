@@ -118,7 +118,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
 - **Distribution.** A pure build backend; `requires-python >=3.10`; dependencies are what its own
   modules import, never the runtime. A module belongs here iff a stream or node module imports
   it: the declarations (`@node`, `@input`, `@output`, `@stream`, `Stream`, the references,
-  `compile_stream_to_graph`), `_processor_config_schema`, the data types (`AudioBlock`,
+  `compile_stream_to_graph`), `_node_config_schema`, the data types (`AudioBlock`,
   `EncodedAudioPacket`, `VideoFrame` and its colour types, `EncodedVideoFrame`), the composable
   pieces (`ClaimedSurfacePixelAccess`, `PixelAccessToOneClaimedSurface`, `GlslPixelEffect`, the
   `ModelInputTensor` family, `NodeOutputTextureRing`), `clock`, `log`, and
@@ -138,7 +138,9 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
 - **Runtime-backed names are declared once, here**: the contexts, `LinkInputDataReader`,
   `LinkOutputDataWriter`, `NodeLinkDataAccess`, `GpuContext*`, `GpuSurfaceHandle`, the
   kernels, `MonotonicTimer`, the texture exports, `NodeOwnedWindow*`, the bag codec pair, `monotonic_now_ns`,
-  `this_machines_stamp_clock_identity`. A class is a `typing.Protocol` carrying today's stub
+  `gpu_limited_access_of_the_typed_read_in_progress`, and `start_monotonic_timer(interval_ns)`,
+  the one way a node starts a timer — `MonotonicTimer(n)` is gone, with no alias (owner,
+  2026-10-07). A class is a `typing.Protocol` carrying today's stub
   signatures; a function resolves the runtime's on first call and, with nothing lent, raises
   `RuntimeError` naming itself and saying it runs in a processor interpreter. `_engine.pyi`
   shrinks to the bootstrap's private surface; a conformance gate holds every pyclass to its
@@ -237,6 +239,10 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   holding only `tatolab-stream`, `tatolab new`, `tatolab run --test-pattern` twenty seconds,
   sixty frames). Every `<!-- verify: pytest sdk/streamlib-python-wheel/tests/… -->` is re-pointed
   to the suite its test lands in.
+- §Processor model's entry "A Python processor class registers its descriptor … when
+  `@processor` runs" (`:1338-1341`) — `register_declared_processor_class` and
+  `install_constructor_for_registered_descriptor` are deleted; `@node` registers nothing
+  (above), and a type is described at load.
 - §Media I/O `:2630-2633` (the audio built-ins) and the codec-blocks entry `:2818-2830`, and
   `docs/plan/diagrams/system.mmd`'s media node — built-ins reach Python as classes generated
   into `tatolab/stream/_built_in_nodes.py` from their descriptors (#2587), not as native marker

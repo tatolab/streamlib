@@ -37,7 +37,7 @@ impl HardwareVideoCodecProcessorIdentity for H264EncoderCodecIdentity {
                   `video` takes any published `VideoFrame` — buffer-backed (camera, test \
                   pattern) or texture-backed (a kernel output). `encoded_video` publishes one \
                   Annex-B access unit per bag, beside the stream metadata keys. A frame the \
-                  encoder cannot consume is logged and dropped while the processor keeps \
+                  encoder cannot consume is logged and dropped while the node keeps \
                   running. The session mints from the first frame's dimensions and re-mints when \
                   the upstream extent changes.\n\n\
                   On a device without a hardware encoder for the codec the session fails to \

@@ -44,7 +44,7 @@ pub struct Mp4SinkConfig {
     description = "Records encoded video and audio bags to one fragmented MP4 file, one track per \
                   inbound link.\n\n\
                   Any number of links may enter `tracks`, and each inbound link is one track, \
-                  named by its source channel name — `<lowercased producer processor id>/<output \
+                  named by its source channel name — `<lowercased producer node id>/<output \
                   port>`, what `graph` and `tap` already show — so two cameras are two video \
                   tracks and three microphones three audio tracks with nothing configured \
                   between them. A track's kind is its bags' `codec`: `h264` and `h265` a video \

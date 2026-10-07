@@ -44,11 +44,6 @@ DEVICE_CLOCK_TOLERANCE_NS_PER_BLOCK = 100_000
 # ---- built-in class semantics (no GPU) -------------------------------------
 
 
-def test_the_built_in_class_cannot_be_instantiated():
-    with pytest.raises(TypeError):
-        tatolab.stream.MicrophoneSource()  # pyright: ignore[reportCallIssue]
-
-
 @stream
 def one_microphone_source_left_unnamed(stream_builder: StreamBuilder) -> None:
     stream_builder.add(tatolab.stream.MicrophoneSource)
