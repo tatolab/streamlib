@@ -506,6 +506,37 @@ def test_a_module_target_loads_the_stream_its_module_defines(
     assert recorded_launch_runtime_calls.loaded_graph() == FRONT_STREAM_GRAPH
 
 
+def test_an_entry_file_outside_the_anchor_loads_with_its_own_directory_as_the_project(
+    tmp_path: Path,
+    recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The nodes an entry file imports sit beside it, so its processor
+    interpreters start there rather than in `--dir` or the working directory."""
+    anchor_directory = tmp_path / "anchor"
+    anchor_directory.mkdir()
+    working_directory = tmp_path / "shell"
+    working_directory.mkdir()
+    monkeypatch.chdir(working_directory)
+    entry_file = write_app(tmp_path / "elsewhere" / "rigs", "stream.py", FRONT_STREAM_SOURCE)
+
+    assert cli.main(["dev", "--dir", str(anchor_directory), "-f", str(entry_file)]) == 0
+
+    (load_call,) = [call for call in recorded_launch_runtime_calls.calls if call[0] == "load"]
+    assert load_call[2]["project_directory"] == entry_file.parent.resolve()
+
+
+def test_a_file_target_in_a_subdirectory_loads_with_that_subdirectory_as_the_project(
+    tmp_path: Path, recorded_launch_runtime_calls: RecordedLaunchRuntimeCalls
+):
+    write_app(tmp_path, "rigs/desk.py", TWO_STREAM_SOURCE)
+
+    assert cli.main(["run", "--dir", str(tmp_path), "rigs/desk.py:back"]) == 0
+
+    (load_call,) = [call for call in recorded_launch_runtime_calls.calls if call[0] == "load"]
+    assert load_call[2]["project_directory"] == (tmp_path / "rigs").resolve()
+
+
 @pytest.mark.parametrize(
     "missing_module_name", ["no_such_rig_module", "no_such_rig_package.desk"]
 )
