@@ -16,8 +16,10 @@ import pydantic
 import pytest
 
 # The 3.10 floor spells per-key requiredness from here, and it is what the
-# stream suite's test group installs; `typing.Required` arrives only at 3.11.
+# stream suite's test group installs; `typing.Required` arrives only at 3.11,
+# and until then only this `TypedDict` reads it into the required keys.
 from typing_extensions import NotRequired, Required
+from typing_extensions import TypedDict as TypedDictReadingRequiredness
 
 from tatolab.stream import node
 
@@ -421,7 +423,7 @@ def test_a_requiredness_qualifier_does_not_hide_the_type_it_wraps():
     """`get_type_hints` keeps `Required` / `NotRequired`, and unrecognised they
     swallow the key's type — the one thing the catalog exists to publish."""
 
-    class QualifiedConfig(TypedDict, total=False):
+    class QualifiedConfig(TypedDictReadingRequiredness, total=False):
         width: Required[Annotated[int, "How wide."]]
         label: NotRequired[str]
 
