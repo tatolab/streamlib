@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
+pub mod build_runtime;
 pub mod check_boundaries;
 pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
@@ -17,6 +18,7 @@ pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inheritable_descriptor;
 pub mod check_no_inventory_submit;
+pub mod check_no_tatolab_namespace_package_init;
 pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
@@ -173,7 +175,7 @@ pub fn tracked_files_under_scan_roots(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all fourteen in well under a second, and why CI runs them as
+/// lets one process run all fifteen in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
@@ -210,6 +212,10 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     (
         "check-workspace-version-pins",
         check_workspace_version_pins::run,
+    ),
+    (
+        "check-no-tatolab-namespace-package-init",
+        check_no_tatolab_namespace_package_init::run,
     ),
 ];
 
@@ -1157,6 +1163,14 @@ enum Commands {
         fix: bool,
     },
 
+    /// CI gate keeping `tatolab` a PEP 420 namespace package. Fails on any
+    /// repository file ending in `tatolab/__init__.py`, and on any under the
+    /// runtime unit's lend (`target/tatolab-runtime/lib/tatolab/lend`) when one
+    /// is built. A processor interpreter merges the lent `tatolab.runtime` with
+    /// its venv's `tatolab.stream` only while no portion of the namespace is a
+    /// regular package.
+    CheckNoTatolabNamespacePackageInit,
+
     /// Run every source-walking gate in one process and report all failures.
     /// This is what CI's `source-gates` job runs; the per-gate subcommands stay
     /// for narrowing down a failure locally.
@@ -1165,6 +1179,26 @@ enum Commands {
     /// Run the gates CI runs, so a green run here predicts a green PR. Builds
     /// the workspace, so it is slower than `check-all-source-gates` alone.
     RunLocalCiGates,
+
+    /// Build the runtime unit and lay out its lend at
+    /// `target/tatolab-runtime/lib/tatolab/lend` — the directory holding
+    /// `tatolab/runtime/`, which a processor interpreter puts first on
+    /// `PYTHONPATH`. Builds `sdk/streamlib-python-wheel` as a wheel with the
+    /// pinned maturin into `target/tatolab-runtime/wheel/`, then replaces the
+    /// lend with that wheel's contents. On macOS it first stages the bundled
+    /// Vulkan driver, so `_vulkan_driver/` lands beside `_engine`. The one build
+    /// of the runtime unit for developers, CI and the installer; it installs
+    /// and publishes nothing.
+    ///
+    /// Debug by default: the profile `maturin develop` builds, so on a
+    /// developer machine or a CI job that already ran it this is an
+    /// incremental link rather than a second engine build. `--release` builds
+    /// what a release ships.
+    BuildRuntime {
+        /// Build with optimizations, as a release wheel is built.
+        #[arg(long)]
+        release: bool,
+    },
 
     /// The codec proof's scorer: PSNR of a decoded frame set against the
     /// references that produced it, and the vivid rig's channel-mean drift
@@ -1256,8 +1290,15 @@ fn main() -> Result<()> {
                 check_workspace_version_pins::run(&workspace_root)?;
             }
         }
+        Commands::CheckNoTatolabNamespacePackageInit => {
+            check_no_tatolab_namespace_package_init::run(&workspace_root()?)?
+        }
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
+        Commands::BuildRuntime { release } => build_runtime::run(
+            &workspace_root()?,
+            build_runtime::RuntimeUnitBuildProfile::from_release_flag(release),
+        )?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::Mp4Inspect(inspect_command) => mp4_inspect::run(inspect_command)?,
         Commands::GenerateBuiltInNodeClasses { check } => {

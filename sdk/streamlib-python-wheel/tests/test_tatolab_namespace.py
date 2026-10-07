@@ -25,9 +25,6 @@ import tatolab.runtime.testing
 import tatolab.stream
 from tatolab.stream._runtime_lend import runtime_backed_protocol_registry
 
-WHEEL_PYTHON_SOURCE_DIRECTORY = Path(__file__).resolve().parents[1] / "python"
-STREAM_DISTRIBUTION_SOURCE_DIRECTORY = Path(__file__).resolve().parents[2] / "tatolab-stream"
-
 ENGINE_CLASS_NAMES_THE_RENAME_RETIRED = (
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
@@ -65,10 +62,7 @@ def test_tatolab_stream_and_tatolab_runtime_are_regular_packages():
         assert Path(package.__file__).name == "__init__.py", package.__name__
 
 
-def test_no_tatolab_init_exists_in_the_source_tree_or_on_the_namespace_path():
-    for source_directory in (WHEEL_PYTHON_SOURCE_DIRECTORY, STREAM_DISTRIBUTION_SOURCE_DIRECTORY):
-        assert (source_directory / "tatolab").is_dir(), source_directory
-        assert not (source_directory / "tatolab" / "__init__.py").exists(), source_directory
+def test_no_portion_on_the_namespace_path_holds_a_tatolab_init():
     for namespace_directory in tatolab.__path__:
         assert not (Path(namespace_directory) / "__init__.py").exists(), namespace_directory
 
