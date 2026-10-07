@@ -569,6 +569,21 @@ mod tests {
 
     #[test]
     #[serial]
+    fn the_describe_holds_a_pipe_on_the_interpreters_standard_input() {
+        let stub = StubProcessorInterpreter::running(&format!(
+            "if [ -p /dev/stdin ]; then\n{}\nelse\necho 'standard input is not a pipe' >&2\nexit 1\nfi",
+            print_on_standard_output(&serde_json::json!({
+                "described_node_types": [a_described_good_type()],
+                "refused_node_types": [],
+            }))
+        ));
+
+        stub.describe(&[GOOD_TYPE], PROCESSOR_INTERPRETER_DESCRIBE_BOUND)
+            .unwrap_or_else(|refusal| panic!("the describe's standard input is a pipe: {refusal}"));
+    }
+
+    #[test]
+    #[serial]
     fn a_type_whose_module_will_not_import_is_refused_by_name_quoting_the_reason_it_was_given() {
         let stub = StubProcessorInterpreter::running(&format!(
             "{}\nexit 1",

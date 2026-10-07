@@ -863,6 +863,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_shutdown_forced_while_teardown_is_awaited_ends_the_wait_at_once",
                 "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::the_whole_ladder_is_bounded_well_inside_the_apps_own_watchdog",
                 "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_type_the_interpreter_describes_is_read_into_its_declaration",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::the_describe_holds_a_pipe_on_the_interpreters_standard_input",
                 "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_type_whose_module_will_not_import_is_refused_by_name_quoting_the_reason_it_was_given",
                 "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_class_carrying_no_node_stamp_is_refused_by_name",
                 "core::compiler::compiler_ops::processor_interpreter_describe::tests::each_refused_type_is_quoted_with_its_own_reason_however_much_a_later_import_writes_to_standard_error",

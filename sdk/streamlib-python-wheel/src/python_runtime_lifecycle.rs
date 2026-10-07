@@ -441,12 +441,10 @@ fn app_entry_directory_of_this_interpreter(python: Python<'_>) -> PyResult<Optio
 fn processor_interpreter_lend_directory_of_this_interpreter(
     python: Python<'_>,
 ) -> PyResult<PathBuf> {
-    let package_init_file = PathBuf::from(
-        python
-            .import("tatolab.runtime")?
-            .getattr("__file__")?
-            .extract::<String>()?,
-    );
+    let package_init_file: PathBuf = python
+        .import("tatolab.runtime")?
+        .getattr("__file__")?
+        .extract()?;
     package_init_file
         .parent()
         .and_then(Path::parent)
