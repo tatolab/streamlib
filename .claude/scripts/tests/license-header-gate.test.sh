@@ -97,7 +97,7 @@ echo "scripts/check-license-headers.sh"
 
 new_repo
 busl_rust | plant runtime/streamlib-engine/src/lib.rs
-busl_python | plant sdk/streamlib-python-wheel/python/streamlib/__init__.py
+busl_python | plant sdk/tatolab-stream/tatolab/stream/__init__.py
 expect_pass "first-party Rust and Python carrying the BUSL header pass"
 
 new_repo

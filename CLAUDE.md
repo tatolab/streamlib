@@ -120,18 +120,25 @@ from code at need — do not create summary docs of what code already shows.
 
 ## Reading the Python surface
 
-`sdk/streamlib-python-wheel/python/streamlib/_engine.pyi` is the reference for everything the
-wheel exports. The hand-written stub is where a built-in's config shape, its port names, and
-each context method's contract are actually written down — read it before reading Rust. A
-detour into `runtime/` to learn what a built-in publishes on means you skipped it.
+`sdk/tatolab-stream/tatolab/stream/` is the reference for the Python surface. Its Protocols
+(`_node_context_protocols.py`, `_gpu_protocols.py`, `_node_owned_window_protocols.py`,
+`clock.py`) write down each contract a node is handed, and `_built_in_nodes.py` writes down
+every built-in's config keys and ports — read them before reading Rust. A detour into `runtime/` to learn what a
+built-in publishes on means you skipped it.
 
-- **The docs are stub-only.** A compiled class's runtime `__doc__` is a one-liner and `dir()`
-  on it is empty, so `help()` under-reports the surface badly. Never conclude from a REPL that
-  something is undocumented.
-- **The stub cannot drift.** `stubtest` gates it against the real binary and pyright gates the
-  callers, both in CI. A new pyclass is not done until its stub entry exists.
-- **Typing is load-bearing on the read side and absent on the write side.** `read(port,
-  into=T)` narrows to `T | None` and catches a wrong attribute; `write(port, bag)` takes
+- **The types live in `tatolab.stream`.** pyo3 publishes no annotations, so `help()` on a
+  native object shows no parameter or return types. Read the Protocol, not the REPL.
+- **The reference cannot drift.** The conformance gate
+  (`sdk/streamlib-python-wheel/tests/runtime_backed_protocol_conformance.py`) holds every
+  native class and function a node is handed to its `tatolab.stream` Protocol or runtime-backed
+  function, member for member, and every other one to its entry in
+  `sdk/streamlib-python-wheel/python/tatolab/runtime/_engine.pyi`, which stubtest checks
+  against the binary. `cargo xtask generate-built-in-node-classes --check` fails when
+  `_built_in_nodes.py` differs from the runtime's built-ins, and pyright gates the callers. All
+  run in CI. A new pyclass a node is handed is not done until its Protocol exists; one only the
+  bootstrap uses needs its `_engine.pyi` entry.
+- **Typing is load-bearing on the read side and absent on the write side.** `read(port_name,
+  into=T)` narrows to `T | None` and catches a wrong attribute; `write(port_name, bag)` takes
   `Mapping[str, Any]` and catches nothing — a typo'd key, a `str` where the wire wants an
   `int`, and a missing required key all reach the runtime silently. Spell a bag literal
   against the wire contract in `docs/plan/ARCHITECTURE.md`, never from memory.
