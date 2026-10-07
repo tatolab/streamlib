@@ -75,9 +75,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   tier), `VirtualCameraSink` (refused at load), the CUDA Array Interface, and the
   fd-shaped raw handles (`export_dma_buf`, `export_opaque_fd`, `import_dma_buf` exist on
   macOS and refuse pointing at `export_iosurface`). The scaffold and the examples use
-  only the portable surface. The guarantee is mechanical, never prose: one
-  `_engine.pyi`, gated by `stubtest` against both binaries in CI, so no class or method
-  exists on one floor and not the other; one Python suite runs on both floors — its
+  only the portable surface. The guarantee is mechanical, never prose: what a node is
+  handed is declared once in `tatolab.stream`, as Protocols and runtime-backed functions
+  a conformance gate holds both binaries to member for member in CI, and the rest of the
+  native module once in `_engine.pyi`, gated by `stubtest` against both binaries, so no
+  class or method exists on one floor and not the other; one Python suite runs on both floors — its
   GPU-free half on both CI lanes, its `requires_gpu` half on each floor's rig; and a
   test skipped off Linux carries `linux_only_capability(reason=…)`, whose reason
   `test_platform_markers.py` holds to the closed list plus one named group — a test
@@ -87,6 +89,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [macos-capability-parity — SHIPPED #2400, #2403, #2405]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
   <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py::test_the_engine_conforms_to_tatolab_stream_and_its_stub -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_an_fd_shaped_raw_handle_refuses_by_name_off_linux -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
@@ -537,7 +540,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `export_opaque_fd`, `import_dma_buf`, `__cuda_array_interface__`) where it is used,
   never where it is imported nor where a `typing.Protocol` class body declares it,
   reported as allowed on its floor with the other floor's peer; and a `cupy*` or `mlx*`
-  dependency with no `sys_platform`/`platform_system` marker. Nothing under a `sys.platform` guard is flagged, in either branch.
+  dependency with no `sys_platform`/`platform_system` marker. Nothing under a
+  `sys.platform` guard is flagged, in either branch.
   `launch_app_node` prints the block on stdout between resolving the entry file and
   executing it — nothing when clean, a failure of the check itself reported, a start
   never blocked; on Python 3.10 the dependency rule is skipped and the block says so. CI
@@ -1335,11 +1339,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   catalog before its first add; the constructor arrives at first add exactly as today.
   Decoration inside a helper process registers nothing, because a helper hosts no
   graph. A class decorated twice under one import path meets the existing
-  duplicate-path refusal. As built: no longer — `package-split-and-lend` deleted
-  `register_declared_processor_class` and
-  `ProcessorInstanceFactory::install_constructor_for_registered_descriptor`, `@node` registers
-  nothing, and this entry folds into that change's "`@node` registers nothing" at ship.
-  [agent-readable-processor-catalog — SHIPPED #2228; reopened by one-runtime-per-machine: declarations readable without an engine]
+  duplicate-path refusal.
+  [agent-readable-processor-catalog — SHIPPED #2228; reopened by one-runtime-per-machine: declarations readable without an engine; amended by package-split-and-lend: `@node` registers nothing]
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
   the class's short name and the engine disambiguates duplicates within one graph. It is
