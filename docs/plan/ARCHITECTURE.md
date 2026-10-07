@@ -907,9 +907,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `graph`** and read lock-free under the graph lock, so `graph` never waits on the child.
   And **the flush count rides the same slot**, because a windowed port on a helper is where
   both losses happen together.
-  The wheel's stub carries `NodeLinkDataAccess.open_loss_count_board` and one optional
-  keyword on each of its two link-opening methods, which the helper passes and no processor
-  author ever names. The engine half of the
+  `tatolab.stream`'s `NodeLinkDataAccess` Protocol carries `open_loss_count_board` and one
+  optional keyword on each of its two link-opening methods, which the helper passes and no
+  processor author ever names. The engine half of the
   proof is CI-run; the end-to-end wheel arm — an overrun helper, a ceiling refusal and a
   SIGKILL'd helper's last counts, all read off a running node's `graph` — is
   `requires_gpu` and therefore rig-only.
