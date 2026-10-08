@@ -33,9 +33,7 @@ use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::virtual_camera_loopback_permission_grant::{
-    VirtualCameraGrantDelivery, VirtualCameraGrantTargetMachine,
-};
+use crate::virtual_camera_loopback_permission_grant::VirtualCameraGrantTargetMachine;
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
 #[derive(Debug)]
@@ -233,27 +231,22 @@ fn main() -> ExitCode {
             ),
         ),
         TatolabVerb::EnableVirtualCamera {
-            print_grant_without_installing,
-        } => {
-            let virtual_camera_grant_delivery = if print_grant_without_installing {
-                VirtualCameraGrantDelivery::PrintForHandInstall
-            } else {
-                VirtualCameraGrantDelivery::InstallThroughPrivilegeEscalationHelper
-            };
-            VirtualCameraGrantTargetMachine::this_machine()
-                .map_err(|kernel_identification_failure| {
-                    TatolabCommandFailure::refused(format!(
-                        "cannot read this machine's kernel name and release: \
-                         {kernel_identification_failure}"
-                    ))
-                })
-                .and_then(|mut grant_target_machine| {
-                    virtual_camera_loopback_permission_grant::enable_virtual_camera(
-                        virtual_camera_grant_delivery,
-                        &mut grant_target_machine,
-                    )
-                })
-        }
+            print_grant_without_installing: true,
+        } => virtual_camera_loopback_permission_grant::print_virtual_camera_grant_for_hand_install(),
+        TatolabVerb::EnableVirtualCamera {
+            print_grant_without_installing: false,
+        } => VirtualCameraGrantTargetMachine::this_machine()
+            .map_err(|kernel_identification_failure| {
+                TatolabCommandFailure::refused(format!(
+                    "cannot read this machine's kernel name and release: \
+                     {kernel_identification_failure}"
+                ))
+            })
+            .and_then(|mut grant_target_machine| {
+                virtual_camera_loopback_permission_grant::install_virtual_camera_grant_through_privilege_escalation_helper(
+                    &mut grant_target_machine,
+                )
+            }),
     };
     match command_outcome {
         Ok(exit_code) => ExitCode::from(exit_code),

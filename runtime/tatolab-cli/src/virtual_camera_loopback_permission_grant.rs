@@ -31,6 +31,9 @@ const KERNEL_MODULES_ROOT_DIRECTORY: &str = "/lib/modules";
 /// The `uname -s` of the one operating system the loopback module exists on.
 const LINUX_OPERATING_SYSTEM_NAME: &str = "Linux";
 
+/// The directories searched for the privilege helper when `PATH` is unset.
+const DEFAULT_EXECUTABLE_SEARCH_PATH: &str = "/bin:/usr/bin";
+
 /// Variables a desktop session sets; only a session has the polkit agent `pkexec` prompts through.
 const DESKTOP_SESSION_ENVIRONMENT_VARIABLES: [&str; 2] = ["DISPLAY", "WAYLAND_DISPLAY"];
 
@@ -86,15 +89,6 @@ const VIRTUAL_CAMERA_GRANT_FILES: [VirtualCameraGrantFile; 3] = [
                    KERNEL==\"v4l2loopback\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\"\n",
     },
 ];
-
-/// How `enable-virtual-camera` delivers the grant.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum VirtualCameraGrantDelivery {
-    /// `--print`: write the files and the root commands to stdout and change nothing.
-    PrintForHandInstall,
-    /// Install it in one privileged step, then check the control node opens read-write.
-    InstallThroughPrivilegeEscalationHelper,
-}
 
 /// The program that runs the grant's one privileged step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,8 +181,27 @@ fn utsname_field_text(utsname_field: &[libc::c_char]) -> String {
 }
 
 fn find_executable_on_this_processes_path(executable_name: &str) -> Option<PathBuf> {
-    let path_variable = std::env::var_os("PATH")?;
-    std::env::split_paths(&path_variable)
+    find_executable_on_search_path(
+        executable_name,
+        &executable_search_path_from(std::env::var_os("PATH")),
+    )
+}
+
+/// `PATH`, or [`DEFAULT_EXECUTABLE_SEARCH_PATH`] when it is unset.
+fn executable_search_path_from(path_variable: Option<OsString>) -> OsString {
+    path_variable.unwrap_or_else(|| OsString::from(DEFAULT_EXECUTABLE_SEARCH_PATH))
+}
+
+/// The first executable file named `executable_name` in `search_path`'s directories; an empty
+/// search path holds none, rather than naming the working directory.
+fn find_executable_on_search_path(
+    executable_name: &str,
+    search_path: &std::ffi::OsStr,
+) -> Option<PathBuf> {
+    if search_path.is_empty() {
+        return None;
+    }
+    std::env::split_paths(search_path)
         .map(|path_directory| path_directory.join(executable_name))
         .find(|candidate_executable| {
             fs::metadata(candidate_executable).is_ok_and(|candidate_metadata| {
@@ -328,16 +341,18 @@ fn describe_privilege_escalation_helper_ending(helper_exit_status: ExitStatus) -
     }
 }
 
-/// `tatolab enable-virtual-camera`: install the loopback grant once, or print it for a hand
-/// install.
-pub(crate) fn enable_virtual_camera(
-    virtual_camera_grant_delivery: VirtualCameraGrantDelivery,
+/// `tatolab enable-virtual-camera --print`: write the grant files and the root commands to stdout
+/// for a hand install, reading nothing of the machine and changing nothing.
+pub(crate) fn print_virtual_camera_grant_for_hand_install() -> Result<u8, TatolabCommandFailure> {
+    print!("{}", render_virtual_camera_grant_for_hand_install());
+    Ok(0)
+}
+
+/// `tatolab enable-virtual-camera`: install the loopback grant in one privileged step, then check
+/// the control node opens read-write.
+pub(crate) fn install_virtual_camera_grant_through_privilege_escalation_helper(
     grant_target_machine: &mut VirtualCameraGrantTargetMachine<'_>,
 ) -> Result<u8, TatolabCommandFailure> {
-    if virtual_camera_grant_delivery == VirtualCameraGrantDelivery::PrintForHandInstall {
-        print!("{}", render_virtual_camera_grant_for_hand_install());
-        return Ok(0);
-    }
     if grant_target_machine.operating_system_name != LINUX_OPERATING_SYSTEM_NAME {
         return Err(TatolabCommandFailure::refused(format!(
             "`{ENABLE_VIRTUAL_CAMERA_VERB}` is Linux-only: the virtual camera is a \
@@ -494,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn print_writes_the_three_files_and_the_root_commands_on_any_os_and_runs_nothing() {
+    fn print_writes_the_three_files_and_the_root_commands_and_reads_no_machine_fact() {
         let rendered_grant = render_virtual_camera_grant_for_hand_install();
         for destination_path in [
             "/etc/modules-load.d/streamlib-virtual-camera.conf",
@@ -530,19 +545,49 @@ mod tests {
              udevadm trigger --subsystem-match=misc --sysname-match=v4l2loopback\n"
         ));
 
+        assert_eq!(print_virtual_camera_grant_for_hand_install().unwrap(), 0);
+    }
+
+    #[test]
+    fn the_helper_search_path_is_path_or_the_default_when_path_is_unset() {
+        assert_eq!(
+            executable_search_path_from(None),
+            OsString::from("/bin:/usr/bin")
+        );
+        assert_eq!(
+            executable_search_path_from(Some(OsString::from("/opt/helpers"))),
+            OsString::from("/opt/helpers")
+        );
+        assert_eq!(
+            executable_search_path_from(Some(OsString::new())),
+            OsString::new(),
+            "an empty PATH is set, and searches nothing"
+        );
+    }
+
+    #[test]
+    fn the_helper_is_found_as_an_executable_file_on_the_search_path_and_never_in_an_empty_one() {
         let scratch_directory = tempfile::tempdir().unwrap();
-        for operating_system_name in [LINUX_OPERATING_SYSTEM_NAME, "Darwin"] {
-            let mut grant_target_machine = scripted_linux_machine(scratch_directory.path());
-            grant_target_machine.operating_system_name = operating_system_name.to_owned();
-            assert_eq!(
-                enable_virtual_camera(
-                    VirtualCameraGrantDelivery::PrintForHandInstall,
-                    &mut grant_target_machine
-                )
-                .unwrap(),
-                0
-            );
-        }
+        let first_directory = scratch_directory.path().join("first");
+        let second_directory = scratch_directory.path().join("second");
+        fs::create_dir_all(&first_directory).unwrap();
+        fs::create_dir_all(&second_directory).unwrap();
+        fs::write(first_directory.join("sudo"), b"not executable").unwrap();
+        fs::create_dir(first_directory.join("pkexec")).unwrap();
+        let executable_sudo = second_directory.join("sudo");
+        fs::write(&executable_sudo, b"#!/bin/sh\n").unwrap();
+        fs::set_permissions(&executable_sudo, fs::Permissions::from_mode(0o755)).unwrap();
+        let search_path = std::env::join_paths([&first_directory, &second_directory]).unwrap();
+
+        assert_eq!(
+            find_executable_on_search_path("sudo", &search_path),
+            Some(executable_sudo)
+        );
+        assert_eq!(find_executable_on_search_path("pkexec", &search_path), None);
+        assert_eq!(
+            find_executable_on_search_path("sudo", std::ffi::OsStr::new("")),
+            None
+        );
     }
 
     #[test]
@@ -585,10 +630,11 @@ mod tests {
         );
         grant_target_machine.read_environment_variable = environment_of(&[("DISPLAY", ":1")]);
 
-        let refusal = refusal_message(enable_virtual_camera(
-            VirtualCameraGrantDelivery::InstallThroughPrivilegeEscalationHelper,
-            &mut grant_target_machine,
-        ));
+        let refusal = refusal_message(
+            install_virtual_camera_grant_through_privilege_escalation_helper(
+                &mut grant_target_machine,
+            ),
+        );
         assert!(
             refusal.contains("`pkexec`") && refusal.contains("`sudo`"),
             "{refusal}"
@@ -605,10 +651,11 @@ mod tests {
         let mut grant_target_machine = scripted_linux_machine(scratch_directory.path());
         grant_target_machine.operating_system_name = "Darwin".to_owned();
 
-        let refusal = refusal_message(enable_virtual_camera(
-            VirtualCameraGrantDelivery::InstallThroughPrivilegeEscalationHelper,
-            &mut grant_target_machine,
-        ));
+        let refusal = refusal_message(
+            install_virtual_camera_grant_through_privilege_escalation_helper(
+                &mut grant_target_machine,
+            ),
+        );
         assert_eq!(
             refusal,
             "`tatolab enable-virtual-camera` is Linux-only: the virtual camera is a v4l2loopback \
@@ -627,10 +674,11 @@ mod tests {
         );
         grant_target_machine.find_executable_on_path = executables_on_path(&["pkexec", "sudo"]);
 
-        let refusal = refusal_message(enable_virtual_camera(
-            VirtualCameraGrantDelivery::InstallThroughPrivilegeEscalationHelper,
-            &mut grant_target_machine,
-        ));
+        let refusal = refusal_message(
+            install_virtual_camera_grant_through_privilege_escalation_helper(
+                &mut grant_target_machine,
+            ),
+        );
         assert!(refusal.contains("v4l2loopback-dkms"), "{refusal}");
         assert!(refusal.contains("linux-modules-9.9.9-test"), "{refusal}");
     }
@@ -734,8 +782,7 @@ mod tests {
             });
 
         assert_eq!(
-            enable_virtual_camera(
-                VirtualCameraGrantDelivery::InstallThroughPrivilegeEscalationHelper,
+            install_virtual_camera_grant_through_privilege_escalation_helper(
                 &mut grant_target_machine
             )
             .unwrap(),
@@ -764,10 +811,11 @@ mod tests {
         grant_target_machine.run_privileged_script_through_helper =
             Box::new(|_helper, _script| Ok(ExitStatus::from_raw(126 << 8)));
 
-        let refusal = refusal_message(enable_virtual_camera(
-            VirtualCameraGrantDelivery::InstallThroughPrivilegeEscalationHelper,
-            &mut grant_target_machine,
-        ));
+        let refusal = refusal_message(
+            install_virtual_camera_grant_through_privilege_escalation_helper(
+                &mut grant_target_machine,
+            ),
+        );
         assert!(
             refusal.starts_with("sudo did not complete the privileged step (exit 126)."),
             "{refusal}"
@@ -788,10 +836,11 @@ mod tests {
         grant_target_machine.run_privileged_script_through_helper =
             Box::new(|_helper, _script| Ok(ExitStatus::from_raw(0)));
 
-        let refusal = refusal_message(enable_virtual_camera(
-            VirtualCameraGrantDelivery::InstallThroughPrivilegeEscalationHelper,
-            &mut grant_target_machine,
-        ));
+        let refusal = refusal_message(
+            install_virtual_camera_grant_through_privilege_escalation_helper(
+                &mut grant_target_machine,
+            ),
+        );
         assert!(
             refusal.contains("absent-control-node did not appear after loading the module"),
             "{refusal}"
@@ -814,10 +863,11 @@ mod tests {
         grant_target_machine.run_privileged_script_through_helper =
             Box::new(|_helper, _script| Ok(ExitStatus::from_raw(0)));
 
-        let refusal = refusal_message(enable_virtual_camera(
-            VirtualCameraGrantDelivery::InstallThroughPrivilegeEscalationHelper,
-            &mut grant_target_machine,
-        ));
+        let refusal = refusal_message(
+            install_virtual_camera_grant_through_privilege_escalation_helper(
+                &mut grant_target_machine,
+            ),
+        );
         assert!(
             refusal.contains("exists but this user still cannot open it read-write"),
             "{refusal}"

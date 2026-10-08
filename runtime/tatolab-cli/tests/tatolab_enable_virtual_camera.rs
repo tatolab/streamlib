@@ -150,6 +150,13 @@ fn refuses_by_name_off_linux_and_runs_nothing() {
 #[test]
 #[allow(clippy::disallowed_macros)]
 fn enable_virtual_camera_makes_the_control_node_writable() {
+    use std::time::{Duration, Instant};
+
+    /// Bounds the privileged verb, password prompt included, so a prompt nobody answers fails the
+    /// test rather than hanging it.
+    const PRIVILEGED_VERB_TIMEOUT: Duration = Duration::from_secs(180);
+    const PRIVILEGED_VERB_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
     if std::env::var_os("TATOLAB_RUN_PRIVILEGED_VERB").is_none_or(|opt_in| opt_in != "1") {
         eprintln!(
             "skipped: runs the privileged verb (a password prompt); set \
@@ -158,10 +165,24 @@ fn enable_virtual_camera_makes_the_control_node_writable() {
         return;
     }
 
-    let enable_status = Command::new(env!("CARGO_BIN_EXE_tatolab"))
+    let mut enabling_tatolab = Command::new(env!("CARGO_BIN_EXE_tatolab"))
         .arg("enable-virtual-camera")
-        .status()
+        .spawn()
         .unwrap();
+    let started_waiting = Instant::now();
+    let enable_status = loop {
+        if let Some(enable_status) = enabling_tatolab.try_wait().unwrap() {
+            break enable_status;
+        }
+        if started_waiting.elapsed() >= PRIVILEGED_VERB_TIMEOUT {
+            let _ = enabling_tatolab.kill();
+            let _ = enabling_tatolab.wait();
+            panic!(
+                "`tatolab enable-virtual-camera` did not finish within {PRIVILEGED_VERB_TIMEOUT:?}"
+            );
+        }
+        std::thread::sleep(PRIVILEGED_VERB_POLL_INTERVAL);
+    };
 
     assert!(enable_status.success());
     assert!(
