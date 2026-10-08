@@ -704,7 +704,11 @@ def test_the_bootstrap_drops_its_own_directory_from_the_import_path(project_dire
 
         from tatolab.stream import node
 
-        BESIDE_THE_BOOTSTRAP = ("_processor_hosting", "_node_registry", "_bundled_vulkan_driver")
+        BESIDE_THE_BOOTSTRAP = (
+            "_processor_hosting",
+            "_processor_interpreter_bootstrap",
+            "_bundled_vulkan_driver",
+        )
 
 
         @node(

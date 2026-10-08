@@ -4724,7 +4724,6 @@ dependencies = [
  "objc2-metal 0.3.2",
  "parking_lot",
  "pyo3",
- "rmcp",
  "rmp-serde",
  "rmpv",
  "serde",
@@ -4735,7 +4734,6 @@ dependencies = [
  "streamlib-media-builtins",
  "streamlib-runtime-on-disk-contract",
  "streamlib-surface-client",
- "tokio",
  "tracing",
 ]
 

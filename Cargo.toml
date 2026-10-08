@@ -17,7 +17,7 @@ members = [
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux and macOS)
     "adapters/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux; absent on macOS, its dlpack module on both)
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux and macOS; GL arm Linux)
-    "sdk/streamlib-python-wheel", # `tatolab.runtime` — the processor-interpreter bindings (`_engine`) and bootstrap a runtime unit lends, plus the observation-verb CLI until the native one; hosts no engine
+    "sdk/streamlib-python-wheel", # `tatolab.runtime` — the processor-interpreter bindings (`_engine`) and bootstrap a runtime unit lends; hosts no engine
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     "runtime/streamlib-runtime-on-disk-contract", # engine-free: what a running runtime leaves on disk for its clients — STREAMLIB_HOME, the runtime directory, the node registry, the JSONL runtime log
     "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into `tatolabd`
