@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.42.0](https://github.com/tatolab/streamlib/compare/v0.41.0...v0.42.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** `streamlib::sdk::directory_at_an_explicit_mode`, `streamlib::sdk::runtime::StreamlibRuntimeDirectory`, the JSONL items in `streamlib::sdk::logging` (`log_dir`, `runtime_log_path`, `RuntimeLogEvent`, `LogLevel`, `Source`, `SCHEMA_VERSION`), the engine's `core::get_streamlib_*` and `core::get_uv_cache_dir`, and `streamlib_api_server::node_registry` are gone; each lives in `streamlib_runtime_on_disk_contract`.
+
+### Features
+
+* **cli:** the rest of tatolab is native, the Python CLI is gone, and pip ships no engine ([#2697](https://github.com/tatolab/streamlib/issues/2697)) ([2a07b76](https://github.com/tatolab/streamlib/commit/2a07b76550157df1567194c14f597b44f72b7306))
+
 ## [0.41.0](https://github.com/tatolab/streamlib/compare/v0.40.0...v0.41.0) (2026-10-08)
 
 
