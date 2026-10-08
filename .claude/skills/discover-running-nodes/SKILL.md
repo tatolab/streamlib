@@ -17,7 +17,7 @@ This scans the registry, liveness-checks every entry (an MCP handshake over its 
 
 ```
 RUNTIME_NAME      RUNTIME_ID  LOCAL_API_SOCKET                                 PID  ALIVE?  HINT
-desk-my-app-8kq3  Rabc123     /run/user/1000/streamlib/local-api-Rabc123.sock  12345  yes     python (/path/to/app)
+desk-my-app-8kq3  Rabc123     /run/user/1000/streamlib/local-api-Rabc123.sock  12345  yes     tatolabd (/path/to/project)
 ```
 
 - `RUNTIME_NAME` — the runtime's name, the first chunk of its tap channels: `--runtime-name` on
