@@ -23,7 +23,11 @@ dependencies = [
 # What only the GPU tests import, installed on the rig with
 # `uv sync --group rig`. PyPI's Linux torch wheels are CUDA builds.
 rig = [
+    # 2.10 is the Metal capsule's floor on macOS: 2.9 maps kDLMetal, 2.10
+    # fixes a sliced import.
     "torch>=2.10",
+    # The second consumer of the Metal capsule; Apple silicon only.
+    "mlx>=0.32; sys_platform == 'darwin'",
 ]
 
 [tool.uv]
