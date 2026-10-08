@@ -3561,7 +3561,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   one-runtime-per-machine: two distributions, a stream package and a runtime package; amended
   by tatolab-names: the crate is `tatolab-stream`; amended by package-split-and-lend: one
   version for everything (the entry below)]
-  <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_sources_tatolab_stream_from_its_own_index -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index -->
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
   ships — `tatolabd`, the `tatolab` CLI, the desktop app and `tatolab.runtime` — and the
@@ -3634,7 +3634,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [macos-platform-floor — SHIPPED #2362]
   <!-- verify: grep -n 'macos-deployment-target = "15.0"' sdk/streamlib-python-wheel/pyproject.toml -->
   <!-- verify: grep -n "runs-on: macos-15" .github/workflows/macos-wheel.yml -->
-  <!-- verify: grep -n "build-macos-wheel" .github/workflows/release-wheel.yml -->
+  <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/release-wheel.yml -->
 - **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
   it. `Rust Build (macOS)` compiles the whole workspace with the wheel in it (clippy on
   default targets, `check --all-targets`) and runs the wheel crate's unit tests; it then

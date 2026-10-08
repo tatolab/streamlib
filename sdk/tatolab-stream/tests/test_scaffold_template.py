@@ -202,16 +202,10 @@ def test_the_scaffold_depends_on_tatolab_stream_and_numpy_only():
     ), "the pixel effect needs no GPU package of the user's own, and no runtime enters"
 
 
-def test_the_scaffold_sources_tatolab_stream_from_its_own_index():
-    manifest = template_text("pyproject.toml")
-
-    assert (
-        '[[tool.uv.index]]\nname = "tatolab"\n'
-        'url = "https://tatolab.github.io/streamlib/simple/"\nexplicit = true\n'
-    ) in manifest
-    assert manifest.endswith('[tool.uv.sources]\ntatolab-stream = { index = "tatolab" }\n'), (
-        "uv reads an explicit index only for a dependency sourced from it"
-    )
+def test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index():
+    """A uv index or source here would resolve `tatolab-stream` from somewhere other
+    than PyPI, where the release publishes it."""
+    assert "tool.uv" not in template_text("pyproject.toml")
 
 
 def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):

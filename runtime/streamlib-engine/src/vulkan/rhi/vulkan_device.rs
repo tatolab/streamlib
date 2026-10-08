@@ -4849,11 +4849,11 @@ mod tests {
         );
     }
 
-    /// The install story is `pip install streamlib` and nothing else, so nothing a
-    /// user can read may send them to a third-party package manager. The wheel
-    /// carries the loader and MoltenVK (#2362); a contributor who happens to have
-    /// them from Homebrew or the LunarG SDK is served by the search list, which is
-    /// not text anybody reads. Owner, 2026-09-20.
+    /// The runtime unit's lend carries the loader and MoltenVK (#2362), so nothing
+    /// a user can read may send them to a third-party package manager; a
+    /// contributor who happens to have them from Homebrew or the LunarG SDK is
+    /// served by the search list, which is not text anybody reads. Owner,
+    /// 2026-09-20.
     #[test]
     fn the_guidance_a_user_reads_never_names_a_third_party_package_manager() {
         const THIRD_PARTY_PACKAGE_MANAGERS: &[&str] = &["brew", "homebrew", "port ", "macports"];
@@ -4866,8 +4866,8 @@ mod tests {
             for package_manager in THIRD_PARTY_PACKAGE_MANAGERS {
                 assert!(
                     !lowercased.contains(package_manager),
-                    "the {label} guidance sends a user to `{package_manager}`; the install is \
-                     `pip install streamlib` and the wheel carries the driver: {guidance}"
+                    "the {label} guidance sends a user to `{package_manager}`; the runtime \
+                     unit's lend carries the driver: {guidance}"
                 );
             }
         }

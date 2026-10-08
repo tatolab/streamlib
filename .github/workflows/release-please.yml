@@ -172,20 +172,20 @@ jobs:
   # consumes the `@tatolab/streamlib-client` package it publishes. Restoring it
   # to the release path is a decision for whenever a consumer exists.
 
-  # Build the wheels onto the releases just cut and republish the simple index.
-  # Called in-run for the same reason trigger-schemas is: the release was
+  # Publish the release just cut to PyPI. Called in-run because the release was
   # created by GITHUB_TOKEN, so `on: release` would never fire.
   #
-  # Every project this repository publishes releases on the one tag, so one
-  # call builds them all and republishes the index.
-  trigger-wheel-release:
+  # Every distribution this repository publishes releases on the one tag, so
+  # one call builds and uploads them all. This call alone passes
+  # `dry_run: false`; any other run of release-wheel.yml is a dry run unless
+  # dispatched with `dry_run` unticked.
+  publish-release-to-pypi:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created }}
     permissions:
-      contents: write
-      pages: write
-      id-token: write
+      contents: read
     uses: ./.github/workflows/release-wheel.yml
     with:
       tag_name: ${{ needs.release-please.outputs.tag_name }}
+      dry_run: false
     secrets: inherit
