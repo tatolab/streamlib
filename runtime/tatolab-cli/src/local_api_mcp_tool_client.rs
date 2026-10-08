@@ -218,7 +218,7 @@ impl LocalApiMcpToolClient {
         let Some(connected_mcp_client) = self.connected_mcp_client.take() else {
             return;
         };
-        // A close that fails or stalls leaves nothing to undo: the connection is per request.
+        // A close that fails or stalls leaves nothing to undo: the local API keeps no session.
         let _close_outcome = self.client_tokio_runtime.block_on(async {
             tokio::time::timeout(self.request_timeout, connected_mcp_client.cancel()).await
         });
@@ -326,14 +326,25 @@ pub(crate) fn call_one_local_api_tool(
             connected_client.close();
             answered
         })
-        .map_err(|call_failure| match call_failure {
-            LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-                failure_description,
-            } => LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-                failure_description: format!("{tool_name} failed: {failure_description}"),
-            },
-            unreachable_or_tool_failure => unreachable_or_tool_failure,
+        .map_err(|call_failure| {
+            tool_call_failure_worded_as_an_observation_verb_reports_it(tool_name, call_failure)
         })
+}
+
+/// `call_failure` of a connect or call for `tool_name`, worded as an observation verb reports it:
+/// a refusal gains the `{tool_name} failed: ` a tool's own failure already carries.
+pub(crate) fn tool_call_failure_worded_as_an_observation_verb_reports_it(
+    tool_name: &str,
+    call_failure: LocalApiMcpToolClientFailure,
+) -> LocalApiMcpToolClientFailure {
+    match call_failure {
+        LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
+            failure_description,
+        } => LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
+            failure_description: format!("{tool_name} failed: {failure_description}"),
+        },
+        unreachable_or_tool_failure => unreachable_or_tool_failure,
+    }
 }
 
 #[cfg(test)]
