@@ -1,4 +1,134 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-fn main() {}
+//! `tatolab`: `new` writes a stream project; `run` and `dev` compile a stream in its project's
+//! venv and start `tatolabd` attached.
+
+// stdout and stderr are this binary's user interface, not a log.
+#![allow(clippy::disallowed_macros)]
+
+mod attached_tatolabd_supervisor;
+mod forwarded_signal_listener;
+mod project_source_change_watcher;
+mod scaffold_new_stream_project;
+
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::{Args, Parser, Subcommand};
+
+/// A command that ends `tatolab` with a message on stderr and an exit code.
+#[derive(Debug)]
+pub struct TatolabCommandFailure {
+    /// What went wrong, printed after `error: `; `None` when the failing step already said why.
+    pub message_for_the_user: Option<String>,
+    /// The code `tatolab` exits with.
+    pub exit_code: u8,
+}
+
+impl TatolabCommandFailure {
+    /// A refusal: `error: <message>`, exit 1.
+    pub fn refused(message_for_the_user: String) -> Self {
+        Self {
+            message_for_the_user: Some(message_for_the_user),
+            exit_code: 1,
+        }
+    }
+
+    /// An exit whose reason a child process already reported.
+    pub fn already_reported(exit_code: u8) -> Self {
+        Self {
+            message_for_the_user: None,
+            exit_code,
+        }
+    }
+}
+
+#[derive(Parser)]
+#[command(
+    name = "tatolab",
+    version,
+    about = "StreamLib — write a stream project, then run it on tatolabd.",
+    disable_help_subcommand = true
+)]
+struct TatolabCommandLine {
+    #[command(subcommand)]
+    verb: TatolabVerb,
+}
+
+#[derive(Subcommand)]
+enum TatolabVerb {
+    /// Scaffold a new stream project.
+    #[command(
+        long_about = "Write stream.py, nodes/, pyproject.toml, .python-version and .gitignore into \
+                      DIRECTORY — one @stream wiring a working camera → effect → window pipeline, \
+                      with a meter on a fan-out."
+    )]
+    New {
+        /// Directory to scaffold the project into.
+        directory: PathBuf,
+        /// Wire the built-in test pattern instead of the camera, so the stream runs on a machine
+        /// with no capture device.
+        #[arg(long)]
+        test_pattern: bool,
+    },
+    /// Compile this stream in the project's venv and run it on tatolabd.
+    Run(StreamLaunchArguments),
+    /// Run this stream on tatolabd and restart it on every saved edit.
+    Dev(StreamLaunchArguments),
+}
+
+/// The flags `run` and `dev` share; all but `--runtime-name` go to the compile entry verbatim.
+#[derive(Args)]
+pub struct StreamLaunchArguments {
+    /// The stream to load: `<file>.py[:<function>]` or `<module>:<function>` (default: the sole
+    /// @stream in stream.py).
+    #[arg(value_name = "TARGET")]
+    pub requested_stream_target: Option<OsString>,
+    /// Entry file to launch, overriding the stream.py convention; not with TARGET.
+    #[arg(short = 'f', long = "file", value_name = "FILE")]
+    pub requested_entry_file: Option<OsString>,
+    /// Project root to resolve the entry file or TARGET against (default: CWD, no walk-up).
+    #[arg(long = "dir", value_name = "DIR")]
+    pub requested_anchor_directory: Option<OsString>,
+    /// Load the stream under this name instead of its function's.
+    #[arg(long = "name", value_name = "NAME")]
+    pub requested_stream_name: Option<OsString>,
+    /// Name this runtime's tap channels begin with (else STREAMLIB_RUNTIME_NAME, else the
+    /// engine's default).
+    #[arg(long = "runtime-name", value_name = "NAME")]
+    pub requested_runtime_name: Option<OsString>,
+}
+
+fn main() -> ExitCode {
+    let command_line = TatolabCommandLine::parse();
+    let command_outcome = match command_line.verb {
+        TatolabVerb::New {
+            directory,
+            test_pattern,
+        } => scaffold_new_stream_project::scaffold_new_stream_project(&directory, test_pattern)
+            .map(|()| 0),
+        TatolabVerb::Run(stream_launch_arguments) => {
+            attached_tatolabd_supervisor::launch_stream_on_attached_tatolabd(
+                attached_tatolabd_supervisor::StreamLaunchVerb::Run,
+                &stream_launch_arguments,
+            )
+        }
+        TatolabVerb::Dev(stream_launch_arguments) => {
+            attached_tatolabd_supervisor::launch_stream_on_attached_tatolabd(
+                attached_tatolabd_supervisor::StreamLaunchVerb::Dev,
+                &stream_launch_arguments,
+            )
+        }
+    };
+    match command_outcome {
+        Ok(exit_code) => ExitCode::from(exit_code),
+        Err(command_failure) => {
+            if let Some(message_for_the_user) = command_failure.message_for_the_user {
+                eprintln!("error: {message_for_the_user}");
+            }
+            ExitCode::from(command_failure.exit_code)
+        }
+    }
+}
