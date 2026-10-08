@@ -10,14 +10,17 @@
 #![allow(dead_code)]
 
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::IntoFuture;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use axum::extract::connect_info::{ConnectInfo, Connected};
 use axum::extract::{Path as RoutePathSegment, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
+use axum::serve::IncomingStream;
 use hyper_util::rt::TokioIo;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
@@ -46,6 +49,19 @@ const STUB_SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion:
 /// A directory socket paths fit under: a socket path is capped near 104 bytes, and a
 /// per-user temporary directory can eat most of that.
 const SHORT_SOCKET_DIRECTORY_PARENT: &str = "/tmp";
+
+/// The ordinal the next connection any stub in this process accepts is given.
+static NEXT_STUB_ACCEPTED_CONNECTION_ORDINAL: AtomicU64 = AtomicU64::new(0);
+
+/// Which accepted connection a request came over, unique across every stub in this process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct StubAcceptedConnectionOrdinal(u64);
+
+impl Connected<IncomingStream<'_, tokio::net::UnixListener>> for StubAcceptedConnectionOrdinal {
+    fn connect_info(_accepted_stream: IncomingStream<'_, tokio::net::UnixListener>) -> Self {
+        Self(NEXT_STUB_ACCEPTED_CONNECTION_ORDINAL.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 /// How the stub answers one `tools/call`: the tool's text, and whether the tool ran and failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +199,7 @@ struct StubLocalApiState {
     refuse_every_tool_call_with: Option<String>,
     surface_image_answers: HashMap<String, StubSurfaceImageAnswer>,
     recorded_tool_calls: Mutex<Vec<RecordedToolCall>>,
-    recorded_image_request_paths: Mutex<Vec<String>>,
+    recorded_image_requests: Mutex<Vec<(String, StubAcceptedConnectionOrdinal)>>,
     listed_tool_names: Vec<String>,
     mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
     recorded_mcp_stdio_request_heads: Mutex<Vec<RecordedHttpRequestHead>>,
@@ -266,14 +282,15 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
 
 async fn answer_surface_image_request(
     State(stub_state): State<Arc<StubLocalApiState>>,
+    ConnectInfo(accepted_connection_ordinal): ConnectInfo<StubAcceptedConnectionOrdinal>,
     RoutePathSegment(surface_id): RoutePathSegment<String>,
     request_uri: Uri,
 ) -> Response {
     stub_state
-        .recorded_image_request_paths
+        .recorded_image_requests
         .lock()
         .unwrap()
-        .push(request_uri.path().to_owned());
+        .push((request_uri.path().to_owned(), accepted_connection_ordinal));
     let answer = stub_state
         .surface_image_answers
         .get(&surface_id)
@@ -478,7 +495,7 @@ impl StubLocalApiServer {
             refuse_every_tool_call_with: stub_local_api_script.refuse_every_tool_call_with,
             surface_image_answers: stub_local_api_script.surface_image_answers,
             recorded_tool_calls: Mutex::new(Vec::new()),
-            recorded_image_request_paths: Mutex::new(Vec::new()),
+            recorded_image_requests: Mutex::new(Vec::new()),
             listed_tool_names: stub_local_api_script.listed_tool_names,
             mcp_stdio_upgrade_answer: stub_local_api_script.mcp_stdio_upgrade_answer,
             recorded_mcp_stdio_request_heads: Mutex::new(Vec::new()),
@@ -495,8 +512,12 @@ impl StubLocalApiServer {
                 let local_api_listener =
                     tokio::net::UnixListener::from_std(bound_listener).unwrap();
                 tokio::spawn(
-                    axum::serve(local_api_listener, stub_local_api_router(served_stub_state))
-                        .into_future(),
+                    axum::serve(
+                        local_api_listener,
+                        stub_local_api_router(served_stub_state)
+                            .into_make_service_with_connect_info::<StubAcceptedConnectionOrdinal>(),
+                    )
+                    .into_future(),
                 );
                 // Dropping the runtime on return ends every connection still open.
                 let _stopped_or_abandoned = serving_stopped.await;
@@ -569,10 +590,24 @@ impl StubLocalApiServer {
     /// The path of every surface-image request received so far, percent-encoded as sent.
     pub fn recorded_image_request_paths(&self) -> Vec<String> {
         self.stub_state
-            .recorded_image_request_paths
+            .recorded_image_requests
             .lock()
             .unwrap()
-            .clone()
+            .iter()
+            .map(|(image_request_path, _)| image_request_path.clone())
+            .collect()
+    }
+
+    /// How many distinct connections the surface-image requests so far came over.
+    pub fn image_request_connection_count(&self) -> usize {
+        self.stub_state
+            .recorded_image_requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, accepted_connection_ordinal)| *accepted_connection_ordinal)
+            .collect::<HashSet<StubAcceptedConnectionOrdinal>>()
+            .len()
     }
 
     /// The head of every `/mcp/stdio` request received so far, in arrival order.

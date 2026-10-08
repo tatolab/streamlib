@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
+use hyper::client::conn::http1::SendRequest;
 use hyper::header::{CONNECTION, UPGRADE};
 use hyper::{HeaderMap, Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -46,9 +47,6 @@ pub(crate) enum LocalApiTransportFailure {
     /// No whole answer came within the bound.
     #[error("no answer within {0:?}")]
     NoAnswerWithin(Duration),
-    /// The runtime driving the request could not be started.
-    #[error("could not start the request's runtime: {0}")]
-    RequestRuntimeNotStarted(#[source] std::io::Error),
 }
 
 /// Why a request over the local API socket got no answer.
@@ -93,8 +91,7 @@ fn local_api_unreachable(
     }
 }
 
-/// A request to `origin_form_request_target` with `Host` filled, ready for
-/// [`send_request_over_the_local_api_socket`].
+/// A request to `origin_form_request_target` with `Host` filled.
 pub(crate) fn local_api_request_builder(
     method: Method,
     origin_form_request_target: &str,
@@ -105,14 +102,12 @@ pub(crate) fn local_api_request_builder(
         .header(hyper::header::HOST, LOCAL_API_HOST_HEADER_VALUE)
 }
 
-/// Open one HTTP/1.1 connection to the local API socket and send `request` on it, answering the
-/// response head with its body still streaming. The connection is served with upgrades enabled,
-/// so a `101` answer can be taken over with `hyper::upgrade::on`. Must run inside a tokio
-/// runtime, which drives the connection.
-pub(crate) async fn send_request_over_the_local_api_socket(
+/// Connect to the local API socket and hand the connection to hyper as HTTP/1.1, served with
+/// upgrades enabled so a `101` answer can be taken over with `hyper::upgrade::on`. Must run inside
+/// a tokio runtime, which drives the connection.
+async fn open_local_api_http1_connection(
     local_api_socket_path: &Path,
-    request: Request<LocalApiHttpRequestBody>,
-) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
+) -> Result<SendRequest<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
     let local_api_stream = tokio::net::UnixStream::connect(local_api_socket_path)
         .await
         .map_err(|connect_failure| {
@@ -121,7 +116,7 @@ pub(crate) async fn send_request_over_the_local_api_socket(
                 LocalApiTransportFailure::SocketConnectFailed(connect_failure),
             )
         })?;
-    let (mut request_sender, local_api_connection) =
+    let (request_sender, local_api_connection) =
         hyper::client::conn::http1::handshake(TokioIo::new(local_api_stream))
             .await
             .map_err(|handshake_failure| {
@@ -130,8 +125,19 @@ pub(crate) async fn send_request_over_the_local_api_socket(
                     LocalApiTransportFailure::HttpExchangeFailed(handshake_failure),
                 )
             })?;
-    // Served until the exchange completes, or until a `101` hands the stream to its upgrade.
+    // Served until the runtime or the sender closes it, or until a `101` hands the stream to its
+    // upgrade.
     tokio::spawn(local_api_connection.with_upgrades());
+    Ok(request_sender)
+}
+
+/// Send `request` on the connection `request_sender` holds, answering the response head with its
+/// body still streaming.
+async fn send_request_on_the_local_api_connection(
+    local_api_socket_path: &Path,
+    request_sender: &mut SendRequest<LocalApiHttpRequestBody>,
+    request: Request<LocalApiHttpRequestBody>,
+) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
     request_sender
         .send_request(request)
         .await
@@ -148,6 +154,119 @@ pub(crate) async fn send_request_over_the_local_api_socket(
                 )
             }
         })
+}
+
+/// Open one HTTP/1.1 connection to the local API socket and send `request` on it, answering the
+/// response head with its body still streaming. Must run inside a tokio runtime, which drives the
+/// connection.
+pub(crate) async fn send_request_over_the_local_api_socket(
+    local_api_socket_path: &Path,
+    request: Request<LocalApiHttpRequestBody>,
+) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
+    let mut request_sender = open_local_api_http1_connection(local_api_socket_path).await?;
+    send_request_on_the_local_api_connection(local_api_socket_path, &mut request_sender, request)
+        .await
+}
+
+/// One HTTP/1.1 connection to a runtime's local API, for the routes reached without MCP: opened
+/// on the first request, kept open for the next, and opened again once the runtime has closed it.
+pub(crate) struct LocalApiHttpConnection {
+    local_api_socket_path: PathBuf,
+    kept_request_sender: Option<SendRequest<LocalApiHttpRequestBody>>,
+}
+
+impl LocalApiHttpConnection {
+    /// A connection to the local API at `local_api_socket_path`, opened by its first request.
+    pub(crate) fn to_local_api_socket(local_api_socket_path: &Path) -> Self {
+        Self {
+            local_api_socket_path: local_api_socket_path.to_path_buf(),
+            kept_request_sender: None,
+        }
+    }
+
+    /// `GET origin_form_request_target`, answering the status, headers and whole body, whatever
+    /// the status. Only a transport failure or `timeout` elapsing is an error, and either drops
+    /// the connection, so the next request opens a fresh one. Must run inside a tokio runtime,
+    /// which drives the connection.
+    pub(crate) async fn get_whole_response(
+        &mut self,
+        origin_form_request_target: &str,
+        timeout: Duration,
+    ) -> Result<LocalApiHttpResponse, LocalApiHttpRequestFailure> {
+        let get_request = local_api_request_builder(Method::GET, origin_form_request_target)
+            .body(LocalApiHttpRequestBody::new(Bytes::new()))
+            .map_err(
+                |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
+                    request_target: origin_form_request_target.to_owned(),
+                    uri_failure,
+                },
+            )?;
+        let local_api_socket_path = self.local_api_socket_path.as_path();
+        let kept_request_sender = self.kept_request_sender.take();
+        let answered = tokio::time::timeout(timeout, async {
+            let mut request_sender =
+                ready_request_sender(local_api_socket_path, kept_request_sender).await?;
+            let (response_head, response_body) = send_request_on_the_local_api_connection(
+                local_api_socket_path,
+                &mut request_sender,
+                get_request,
+            )
+            .await?
+            .into_parts();
+            let whole_body = response_body
+                .collect()
+                .await
+                .map_err(|body_failure| {
+                    local_api_unreachable(
+                        local_api_socket_path,
+                        LocalApiTransportFailure::HttpExchangeFailed(body_failure),
+                    )
+                })?
+                .to_bytes();
+            Ok((
+                request_sender,
+                LocalApiHttpResponse {
+                    status: response_head.status,
+                    headers: response_head.headers,
+                    body: whole_body,
+                },
+            ))
+        })
+        .await
+        .map_err(|_elapsed| {
+            local_api_unreachable(
+                local_api_socket_path,
+                LocalApiTransportFailure::NoAnswerWithin(timeout),
+            )
+        })?;
+        let (request_sender, whole_response) = answered?;
+        self.kept_request_sender = Some(request_sender);
+        Ok(whole_response)
+    }
+}
+
+/// `kept_request_sender` once its connection can take a request, or a freshly opened one when
+/// there is none or the runtime closed it.
+async fn ready_request_sender(
+    local_api_socket_path: &Path,
+    kept_request_sender: Option<SendRequest<LocalApiHttpRequestBody>>,
+) -> Result<SendRequest<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
+    if let Some(mut kept_request_sender) = kept_request_sender
+        && kept_request_sender.ready().await.is_ok()
+    {
+        return Ok(kept_request_sender);
+    }
+    let mut opened_request_sender = open_local_api_http1_connection(local_api_socket_path).await?;
+    opened_request_sender
+        .ready()
+        .await
+        .map_err(|readiness_failure| {
+            local_api_unreachable(
+                local_api_socket_path,
+                LocalApiTransportFailure::HttpExchangeFailed(readiness_failure),
+            )
+        })?;
+    Ok(opened_request_sender)
 }
 
 /// A runtime's MCP stream once its `101` is in: the local API socket itself, and the bytes the
@@ -242,61 +361,6 @@ pub(crate) async fn upgrade_local_api_connection_to_mcp_stdio(
     })
 }
 
-/// `GET origin_form_request_target` over the local API socket, answering the status, headers and
-/// whole body, whatever the status. Only a transport failure or `timeout` elapsing is an error.
-pub(crate) fn get_whole_response_over_the_local_api_socket(
-    local_api_socket_path: &Path,
-    origin_form_request_target: &str,
-    timeout: Duration,
-) -> Result<LocalApiHttpResponse, LocalApiHttpRequestFailure> {
-    let get_request = local_api_request_builder(Method::GET, origin_form_request_target)
-        .body(LocalApiHttpRequestBody::new(Bytes::new()))
-        .map_err(
-            |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
-                request_target: origin_form_request_target.to_owned(),
-                uri_failure,
-            },
-        )?;
-    let request_tokio_runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|runtime_start_failure| {
-            local_api_unreachable(
-                local_api_socket_path,
-                LocalApiTransportFailure::RequestRuntimeNotStarted(runtime_start_failure),
-            )
-        })?;
-    request_tokio_runtime.block_on(async {
-        tokio::time::timeout(timeout, async {
-            let answered =
-                send_request_over_the_local_api_socket(local_api_socket_path, get_request).await?;
-            let (response_head, response_body) = answered.into_parts();
-            let whole_body = response_body
-                .collect()
-                .await
-                .map_err(|body_failure| {
-                    local_api_unreachable(
-                        local_api_socket_path,
-                        LocalApiTransportFailure::HttpExchangeFailed(body_failure),
-                    )
-                })?
-                .to_bytes();
-            Ok(LocalApiHttpResponse {
-                status: response_head.status,
-                headers: response_head.headers,
-                body: whole_body,
-            })
-        })
-        .await
-        .map_err(|_elapsed| {
-            local_api_unreachable(
-                local_api_socket_path,
-                LocalApiTransportFailure::NoAnswerWithin(timeout),
-            )
-        })?
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,6 +372,68 @@ mod tests {
 
     const EXCHANGE_TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
+    fn a_tokio_runtime_for_the_test() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    /// One GET over a connection of its own, on a tokio runtime of its own.
+    fn get_whole_response_over_one_fresh_connection(
+        local_api_socket_path: &Path,
+        origin_form_request_target: &str,
+        timeout: Duration,
+    ) -> Result<LocalApiHttpResponse, LocalApiHttpRequestFailure> {
+        a_tokio_runtime_for_the_test().block_on(
+            LocalApiHttpConnection::to_local_api_socket(local_api_socket_path)
+                .get_whole_response(origin_form_request_target, timeout),
+        )
+    }
+
+    #[test]
+    fn one_connection_carries_every_get_in_turn() {
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([
+            (
+                "slot#1",
+                StubSurfaceImageAnswer::png_image(b"one", None, None),
+            ),
+            (
+                "slot#2",
+                StubSurfaceImageAnswer::png_image(b"two", None, None),
+            ),
+        ]);
+        let mut local_api_http_connection = LocalApiHttpConnection::to_local_api_socket(
+            &stub_local_api_server.local_api_socket_path,
+        );
+
+        let answered_bodies: Vec<Bytes> = a_tokio_runtime_for_the_test().block_on(async {
+            let mut answered_bodies = Vec::new();
+            for request_target in [
+                "/api/surfaces/slot%231/image",
+                "/api/surfaces/never-published/image",
+                "/api/surfaces/slot%232/image",
+            ] {
+                answered_bodies.push(
+                    local_api_http_connection
+                        .get_whole_response(request_target, EXCHANGE_TEST_TIMEOUT)
+                        .await
+                        .unwrap()
+                        .body,
+                );
+            }
+            answered_bodies
+        });
+
+        assert_eq!(answered_bodies[0].as_ref(), b"one");
+        assert_eq!(answered_bodies[2].as_ref(), b"two");
+        assert_eq!(
+            stub_local_api_server.recorded_image_request_paths().len(),
+            3
+        );
+        assert_eq!(stub_local_api_server.image_request_connection_count(), 1);
+    }
+
     #[test]
     fn a_get_answers_the_status_headers_and_whole_body_of_an_image() {
         let png_image_bytes = b"\x89PNG\r\n\x1a\nnot-really-a-png".as_slice();
@@ -316,7 +442,7 @@ mod tests {
             StubSurfaceImageAnswer::png_image(png_image_bytes, Some(1920), Some(1080)),
         )]);
 
-        let answered = get_whole_response_over_the_local_api_socket(
+        let answered = get_whole_response_over_one_fresh_connection(
             &stub_local_api_server.local_api_socket_path,
             "/api/surfaces/slot%237/image",
             EXCHANGE_TEST_TIMEOUT,
@@ -353,7 +479,7 @@ mod tests {
                 "no such surface",
             ),
         ] {
-            let answered = get_whole_response_over_the_local_api_socket(
+            let answered = get_whole_response_over_one_fresh_connection(
                 &stub_local_api_server.local_api_socket_path,
                 request_target,
                 EXCHANGE_TEST_TIMEOUT,
@@ -373,7 +499,7 @@ mod tests {
             StubSurfaceImageAnswer::png_image(b"png", None, None),
         )]);
 
-        let answered = get_whole_response_over_the_local_api_socket(
+        let answered = get_whole_response_over_one_fresh_connection(
             &stub_local_api_server.local_api_socket_path,
             "/api/surfaces/slot%239/image",
             EXCHANGE_TEST_TIMEOUT,
@@ -394,7 +520,7 @@ mod tests {
 
     #[test]
     fn a_socket_nothing_listens_on_is_named_as_unreachable() {
-        let unreachable = get_whole_response_over_the_local_api_socket(
+        let unreachable = get_whole_response_over_one_fresh_connection(
             Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH),
             "/api/surfaces/slot%237/image",
             EXCHANGE_TEST_TIMEOUT,
@@ -419,7 +545,7 @@ mod tests {
         let _never_accepting_listener =
             std::os::unix::net::UnixListener::bind(&silent_socket_path).unwrap();
 
-        let timed_out = get_whole_response_over_the_local_api_socket(
+        let timed_out = get_whole_response_over_one_fresh_connection(
             &silent_socket_path,
             "/api/surfaces/slot%237/image",
             Duration::from_millis(200),
@@ -437,7 +563,7 @@ mod tests {
 
     #[test]
     fn a_request_target_that_is_not_a_uri_is_refused_before_anything_is_sent() {
-        let refusal = get_whole_response_over_the_local_api_socket(
+        let refusal = get_whole_response_over_one_fresh_connection(
             Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH),
             "/api/surfaces/not percent encoded/image",
             EXCHANGE_TEST_TIMEOUT,

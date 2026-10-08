@@ -31,8 +31,8 @@ thiserror = { workspace = true }
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.41.0" }
 # The MCP client of a runtime's local API: the official SDK's, over the local API socket.
 rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket"] }
-# One current-thread runtime per client or request, driving it to completion; `mcp` copies its
-# stdio to and from the local API socket on one.
+# One current-thread runtime per local API connection, driving its MCP client and its HTTP
+# connection; `mcp` copies its stdio to and from the local API socket on one.
 tokio = { version = "1.48.0", features = ["rt", "time", "net", "io-std", "io-util", "macros"] }
 # Plain HTTP/1.1 over the local API socket, for the routes reached without MCP.
 hyper = { workspace = true, features = ["client", "http1"] }

@@ -11,6 +11,7 @@
 #![allow(clippy::disallowed_macros)]
 
 mod attached_tatolabd_supervisor;
+mod local_api_connection;
 mod local_api_mcp_stdio_pipe;
 mod local_api_mcp_tool_client;
 mod local_api_runtime_selection;

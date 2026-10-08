@@ -5,14 +5,13 @@
 //! exchange. The channel form taps a channel, reads a surface id out of each sampled bag here, and
 //! exchanges it; the runtime is never asked to read a bag.
 //!
-//! The channel form keeps one MCP client across its tap rounds, so a sampled frame is exchanged
-//! while its pool slot still holds it rather than after a connect per frame. A frame whose slot
-//! was recycled first is retried against a newer bag and reported, so a short sample never reads
-//! as a full one.
+//! Either form runs on one local API connection: the channel form's tap rounds and exchanges share
+//! its MCP client and its HTTP/1.1 connection, so a sampled frame is exchanged while its pool slot
+//! still holds it rather than after a connect per frame. A frame whose slot was recycled first is
+//! retried against a newer bag and reported, so a short sample never reads as a full one.
 
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
 
 use clap::Args;
 use hyper::body::Bytes;
@@ -24,14 +23,13 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     surface_image_exchange_route_path_for_surface_id,
 };
 
+use crate::local_api_connection::LocalApiConnection;
 use crate::local_api_mcp_tool_client::{
-    LocalApiMcpToolClient, LocalApiMcpToolClientFailure, OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+    LocalApiMcpToolClientFailure, OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
     tool_call_failure_worded_as_an_observation_verb_reports_it,
 };
 use crate::local_api_runtime_selection::select_live_runtime_on_this_machine;
-use crate::local_api_unix_socket_http_client::{
-    LocalApiHttpRequestFailure, get_whole_response_over_the_local_api_socket,
-};
+use crate::local_api_unix_socket_http_client::LocalApiHttpRequestFailure;
 use crate::runtime_observation_verbs::{TAP_TOOL_NAME, tap_tool_arguments};
 use crate::{RuntimeTargetArguments, TatolabCommandFailure};
 
@@ -42,9 +40,6 @@ pub(crate) const DEFAULT_SURFACE_ID_BAG_FIELD_NAME: &str = "surface_id";
 /// Tap rounds one channel-form run spends before giving up, so a channel whose frames always
 /// recycle before their exchange cannot retry forever.
 pub(crate) const MAX_TAP_ROUNDS_PER_SAMPLE_RUN: u32 = 8;
-
-/// Bounds one exchange request as an observation verb's tool call is bounded.
-const SURFACE_IMAGE_EXCHANGE_REQUEST_TIMEOUT: Duration = OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
 
 /// The file-name stem of an empty surface id.
 const FILE_NAME_STEM_OF_AN_EMPTY_SURFACE_ID: &str = "surface";
@@ -215,12 +210,22 @@ pub(crate) fn run_surface_image_exchange_verb(
             .requested_runtime_name_or_id
             .as_deref(),
     )?;
+    let mut local_api_connection = LocalApiConnection::open(
+        &selected_runtime.local_api_socket_path,
+        OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+    )
+    .map_err(|runtime_start_failure| {
+        TatolabCommandFailure::refused(format!(
+            "cannot start the runtime that drives the local API connection: \
+             {runtime_start_failure}"
+        ))
+    })?;
     match exchange_form {
         SurfaceImageExchangeForm::OnePublishedSurfaceId {
             published_surface_id,
         } => {
             let written_image_path = exchange_one_published_surface_id_into_directory(
-                &selected_runtime.local_api_socket_path,
+                &mut local_api_connection,
                 &published_surface_id,
                 &output_directory,
             )?;
@@ -232,7 +237,7 @@ pub(crate) fn run_surface_image_exchange_verb(
             sampled_channel_exchange_bounds,
         } => {
             let sampled_channel_exchange_report = sample_channel_into_exchanged_surface_images(
-                &selected_runtime.local_api_socket_path,
+                &mut local_api_connection,
                 &channel,
                 &output_directory,
                 &sampled_channel_exchange_bounds,
@@ -368,12 +373,12 @@ fn output_directory_without_current_directory_components(output_directory: &Path
 /// Exchange `published_surface_id` for its frame's exact pixels and write them into
 /// `output_directory` as `<sanitized id>.png`, answering the written path.
 pub(crate) fn exchange_one_published_surface_id_into_directory(
-    local_api_socket_path: &Path,
+    local_api_connection: &mut LocalApiConnection,
     published_surface_id: &str,
     output_directory: &Path,
 ) -> Result<PathBuf, SurfaceImageExchangeFailure> {
     let exchanged_surface_image =
-        fetch_surface_image_png_bytes(local_api_socket_path, published_surface_id)?;
+        fetch_surface_image_png_bytes(local_api_connection, published_surface_id)?;
     write_exchanged_surface_image(
         output_directory,
         &format!(
@@ -387,13 +392,11 @@ pub(crate) fn exchange_one_published_surface_id_into_directory(
 /// Exchange one published surface id for its frame's exact PNG bytes over the local API's REST
 /// route. Any status outside `2xx` is a refusal carrying the status and the reason given.
 pub(crate) fn fetch_surface_image_png_bytes(
-    local_api_socket_path: &Path,
+    local_api_connection: &mut LocalApiConnection,
     published_surface_id: &str,
 ) -> Result<ExchangedSurfaceImage, SurfaceImageExchangeFailure> {
-    let answered = get_whole_response_over_the_local_api_socket(
-        local_api_socket_path,
+    let answered = local_api_connection.get_whole_response(
         &surface_image_exchange_route_path_for_surface_id(published_surface_id),
-        SURFACE_IMAGE_EXCHANGE_REQUEST_TIMEOUT,
     )?;
     if !answered.status.is_success() {
         return Err(SurfaceImageExchangeFailure::RefusedByTheRuntime {
@@ -487,20 +490,21 @@ fn write_exchanged_surface_image(
     Ok(written_image_path)
 }
 
-/// Tap `channel` on the runtime at `local_api_socket_path`, exchange the surface ids its sampled
-/// bags carry, and write the PNGs into `output_directory` as `<0000>-<sanitized id>.png`.
+/// Tap `channel` through `local_api_connection`, exchange the surface ids its sampled bags carry
+/// over the same connection, and write the PNGs into `output_directory` as
+/// `<0000>-<sanitized id>.png`.
 ///
 /// The stride counts the bags this client received, continuing across tap rounds rather than
 /// restarting per round. Each round is a fresh attach, so it is not a stride over the channel.
 pub(crate) fn sample_channel_into_exchanged_surface_images(
-    local_api_socket_path: &Path,
+    local_api_connection: &mut LocalApiConnection,
     channel: &str,
     output_directory: &Path,
     sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
 ) -> SampledChannelExchangeReport {
     let mut sampled_channel_exchange_report = SampledChannelExchangeReport::default();
     if let Err(stop_reason) = exchange_sampled_bags_across_tap_rounds(
-        local_api_socket_path,
+        local_api_connection,
         channel,
         output_directory,
         sampled_channel_exchange_bounds,
@@ -514,7 +518,7 @@ pub(crate) fn sample_channel_into_exchanged_surface_images(
 /// The channel form's tap rounds, accumulating into `sampled_channel_exchange_report`; the error
 /// is why the run stopped early, and the report keeps everything gathered before it.
 fn exchange_sampled_bags_across_tap_rounds(
-    local_api_socket_path: &Path,
+    local_api_connection: &mut LocalApiConnection,
     channel: &str,
     output_directory: &Path,
     sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
@@ -525,16 +529,14 @@ fn exchange_sampled_bags_across_tap_rounds(
         every_nth_bag,
         surface_id_bag_field_name,
     } = sampled_channel_exchange_bounds;
-    let mut tap_rounds_local_api_mcp_tool_client = None;
     while sampled_channel_exchange_report.written_image_paths.len() < *wanted_image_count
         && sampled_channel_exchange_report.tap_rounds < MAX_TAP_ROUNDS_PER_SAMPLE_RUN
     {
         sampled_channel_exchange_report.tap_rounds += 1;
         let still_wanted_image_count =
             wanted_image_count - sampled_channel_exchange_report.written_image_paths.len();
-        let tap_tool_result_text = call_tap_on_the_kept_local_api_mcp_tool_client(
-            &mut tap_rounds_local_api_mcp_tool_client,
-            local_api_socket_path,
+        let tap_tool_result_text = call_tap_on_the_local_api_connection(
+            local_api_connection,
             channel,
             still_wanted_image_count.saturating_mul(*every_nth_bag),
         )
@@ -563,7 +565,7 @@ fn exchange_sampled_bags_across_tap_rounds(
                 continue;
             };
             let exchanged_surface_image =
-                match fetch_surface_image_png_bytes(local_api_socket_path, &published_surface_id) {
+                match fetch_surface_image_png_bytes(local_api_connection, &published_surface_id) {
                     Ok(exchanged_surface_image) => exchanged_surface_image,
                     Err(exchange_failure) if exchange_failure.names_a_recycled_frame() => {
                         sampled_channel_exchange_report
@@ -594,30 +596,14 @@ fn exchange_sampled_bags_across_tap_rounds(
     Ok(())
 }
 
-/// Call `tap` for `requested_bag_count` bags on `channel` through the client kept across the
-/// run's rounds, connecting it on the first.
-fn call_tap_on_the_kept_local_api_mcp_tool_client(
-    kept_local_api_mcp_tool_client: &mut Option<LocalApiMcpToolClient>,
-    local_api_socket_path: &Path,
+/// Call `tap` for `requested_bag_count` bags on `channel` through the MCP client
+/// `local_api_connection` keeps across the run's rounds.
+fn call_tap_on_the_local_api_connection(
+    local_api_connection: &mut LocalApiConnection,
     channel: &str,
     requested_bag_count: usize,
 ) -> Result<String, LocalApiMcpToolClientFailure> {
-    let local_api_mcp_tool_client = match kept_local_api_mcp_tool_client {
-        Some(local_api_mcp_tool_client) => local_api_mcp_tool_client,
-        None => kept_local_api_mcp_tool_client.insert(
-            LocalApiMcpToolClient::connect(
-                local_api_socket_path,
-                OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
-            )
-            .map_err(|connect_failure| {
-                tool_call_failure_worded_as_an_observation_verb_reports_it(
-                    TAP_TOOL_NAME,
-                    connect_failure,
-                )
-            })?,
-        ),
-    };
-    local_api_mcp_tool_client
+    local_api_connection
         .call_tool(
             TAP_TOOL_NAME,
             tap_tool_arguments(
@@ -785,6 +771,10 @@ mod tests {
         StubSurfaceImageAnswer::refusal(410, RECYCLED_FRAME_ERROR_MESSAGE)
     }
 
+    fn local_api_connection_to(local_api_socket_path: &Path) -> LocalApiConnection {
+        LocalApiConnection::open(local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT).unwrap()
+    }
+
     fn sampling_bounds(
         wanted_image_count: usize,
         every_nth_bag: usize,
@@ -802,7 +792,7 @@ mod tests {
         sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
     ) -> SampledChannelExchangeReport {
         sample_channel_into_exchanged_surface_images(
-            local_api_socket_path,
+            &mut local_api_connection_to(local_api_socket_path),
             FIXTURE_CHANNEL,
             output_directory,
             sampled_channel_exchange_bounds,
@@ -851,7 +841,7 @@ mod tests {
         )]);
 
         let exchanged = fetch_surface_image_png_bytes(
-            &stub_local_api_server.local_api_socket_path,
+            &mut local_api_connection_to(&stub_local_api_server.local_api_socket_path),
             "cam/frame#7",
         )
         .unwrap();
@@ -870,9 +860,11 @@ mod tests {
             labelled_png_image_answer("one"),
         )]);
 
-        let exchanged =
-            fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
-                .unwrap();
+        let exchanged = fetch_surface_image_png_bytes(
+            &mut local_api_connection_to(&stub_local_api_server.local_api_socket_path),
+            "s#1",
+        )
+        .unwrap();
 
         assert_eq!(exchanged.source_surface_pixel_width, Some(1920));
         assert_eq!(exchanged.source_surface_pixel_height, Some(1080));
@@ -885,9 +877,11 @@ mod tests {
             StubSurfaceImageAnswer::png_image(b"png", None, Some(1080)),
         )]);
 
-        let exchanged =
-            fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
-                .unwrap();
+        let exchanged = fetch_surface_image_png_bytes(
+            &mut local_api_connection_to(&stub_local_api_server.local_api_socket_path),
+            "s#1",
+        )
+        .unwrap();
 
         assert_eq!(exchanged.source_surface_pixel_width, None);
         assert_eq!(exchanged.source_surface_pixel_height, Some(1080));
@@ -904,9 +898,11 @@ mod tests {
         let stub_local_api_server =
             StubLocalApiServer::serve_answering_surface_images([("s#1", recycled_frame_answer())]);
 
-        let refused =
-            fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
-                .unwrap_err();
+        let refused = fetch_surface_image_png_bytes(
+            &mut local_api_connection_to(&stub_local_api_server.local_api_socket_path),
+            "s#1",
+        )
+        .unwrap_err();
 
         assert!(refused.names_a_recycled_frame());
         assert_eq!(
@@ -925,9 +921,11 @@ mod tests {
                 StubSurfaceImageAnswer::refusal(refused_status, "no"),
             )]);
 
-            let refused =
-                fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
-                    .unwrap_err();
+            let refused = fetch_surface_image_png_bytes(
+                &mut local_api_connection_to(&stub_local_api_server.local_api_socket_path),
+                "s#1",
+            )
+            .unwrap_err();
 
             assert!(!refused.names_a_recycled_frame(), "{refused_status}");
             assert!(
@@ -969,9 +967,11 @@ mod tests {
 
     #[test]
     fn an_exchange_nothing_answers_is_named_as_unreachable() {
-        let unreachable =
-            fetch_surface_image_png_bytes(Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH), "s#1")
-                .unwrap_err();
+        let unreachable = fetch_surface_image_png_bytes(
+            &mut local_api_connection_to(Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH)),
+            "s#1",
+        )
+        .unwrap_err();
 
         assert!(!unreachable.names_a_recycled_frame());
         assert!(
@@ -994,7 +994,7 @@ mod tests {
         let output_directory = scratch_directory.path().join("nested").join("frames");
 
         let written_image_path = exchange_one_published_surface_id_into_directory(
-            &stub_local_api_server.local_api_socket_path,
+            &mut local_api_connection_to(&stub_local_api_server.local_api_socket_path),
             "cam/frame#7",
             &output_directory,
         )
@@ -1034,7 +1034,7 @@ mod tests {
         )
         .unwrap();
         let written_image_path = exchange_one_published_surface_id_into_directory(
-            &selected_runtime.local_api_socket_path,
+            &mut local_api_connection_to(&selected_runtime.local_api_socket_path),
             "cam/frame#7",
             output_directory.path(),
         )
@@ -1065,7 +1065,7 @@ mod tests {
         let output_directory = tempfile::tempdir().unwrap();
 
         let refused = exchange_one_published_surface_id_into_directory(
-            &stub_local_api_server.local_api_socket_path,
+            &mut local_api_connection_to(&stub_local_api_server.local_api_socket_path),
             "gone#1",
             output_directory.path(),
         )
@@ -1090,7 +1090,7 @@ mod tests {
         std::fs::write(&already_a_file, "not a directory").unwrap();
 
         let refused = exchange_one_published_surface_id_into_directory(
-            &stub_local_api_server.local_api_socket_path,
+            &mut local_api_connection_to(&stub_local_api_server.local_api_socket_path),
             "s#1",
             &already_a_file,
         )
@@ -1706,6 +1706,44 @@ mod tests {
                 .collect::<Vec<_>>(),
             [json!(6), json!(3)]
         );
+    }
+
+    /// The exchanges of every round, a recycled frame's among them, ride the one connection the
+    /// run opened, never a connect per frame.
+    #[test]
+    fn every_exchange_of_a_run_rides_one_local_api_connection() {
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
+            &[
+                tap_result_text(&[
+                    bag_publishing_surface_id("s#1"),
+                    bag_publishing_surface_id("stale#2"),
+                ]),
+                tap_result_text(&[bag_publishing_surface_id("s#3")]),
+            ],
+            [
+                ("s#1", labelled_png_image_answer("one")),
+                ("stale#2", recycled_frame_answer()),
+                ("s#3", labelled_png_image_answer("three")),
+            ],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(2, 1),
+        );
+
+        assert_eq!(
+            written_image_contents(&report),
+            [png_bytes_for("one"), png_bytes_for("three")]
+        );
+        assert_eq!(report.tap_rounds, 2);
+        assert_eq!(
+            stub_local_api_server.recorded_image_request_paths().len(),
+            3
+        );
+        assert_eq!(stub_local_api_server.image_request_connection_count(), 1);
     }
 
     /// The one frame that landed is still named, and the run says it fell short.

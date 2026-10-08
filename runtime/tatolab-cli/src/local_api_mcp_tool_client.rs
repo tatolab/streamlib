@@ -17,6 +17,7 @@ use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
 use streamlib_runtime_client_contract::local_api_wire_contract::MCP_STREAMABLE_HTTP_ROUTE_PATH;
 
 use crate::TatolabCommandFailure;
+use crate::local_api_connection::LocalApiConnection;
 
 /// The authority of the URI the client addresses; it fills `Host`, and the socket path is the
 /// address.
@@ -89,10 +90,10 @@ impl From<LocalApiMcpToolClientFailure> for TatolabCommandFailure {
     }
 }
 
-/// A connected MCP client of one runtime's local API; closes its connection when dropped.
+/// A connected MCP client of one runtime's local API, driven by the tokio runtime it was connected
+/// on.
 pub(crate) struct LocalApiMcpToolClient {
-    connected_mcp_client: Option<RunningService<RoleClient, ()>>,
-    client_tokio_runtime: tokio::runtime::Runtime,
+    connected_mcp_client: RunningService<RoleClient, ()>,
     local_api_socket_path: PathBuf,
     request_timeout: Duration,
 }
@@ -100,45 +101,35 @@ pub(crate) struct LocalApiMcpToolClient {
 impl LocalApiMcpToolClient {
     /// Connect to the local API at `local_api_socket_path` through `server/discover`, bounding
     /// the connect and every later request by `request_timeout`.
-    pub(crate) fn connect(
+    pub(crate) async fn connect(
         local_api_socket_path: &Path,
         request_timeout: Duration,
     ) -> Result<Self, LocalApiMcpToolClientFailure> {
         let local_api_socket_path_text = local_api_socket_path.display().to_string();
         let socket_path_to_dial = socket_path_to_dial(local_api_socket_path).ok_or_else(|| {
             LocalApiMcpToolClientFailure::local_api_unreachable(format!(
-                "no runtime answers MCP at {local_api_socket_path_text} (not a socket path \
-                     this client can dial)"
+                "no runtime answers MCP at {local_api_socket_path_text} (not a socket path this \
+                 client can dial)"
             ))
         })?;
-        let client_tokio_runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|runtime_start_failure| {
-                LocalApiMcpToolClientFailure::local_api_unreachable(format!(
-                    "could not start the MCP client's runtime: {runtime_start_failure}"
-                ))
-            })?;
         let local_api_mcp_uri =
             format!("http://{LOCAL_API_MCP_URI_AUTHORITY}{MCP_STREAMABLE_HTTP_ROUTE_PATH}");
-        let connected = client_tokio_runtime.block_on(async {
-            // The transport spawns its worker as it is built, so it is built inside the runtime
-            // that drives it.
-            let transport = StreamableHttpClientTransport::with_client(
-                UnixSocketHttpClient::new(&socket_path_to_dial, &local_api_mcp_uri),
-                StreamableHttpClientTransportConfig::with_uri(local_api_mcp_uri.as_str()),
-            );
-            tokio::time::timeout(
-                request_timeout,
-                ().serve_with_lifecycle(
-                    transport,
-                    ClientLifecycleMode::Discover {
-                        preferred_versions: vec![ProtocolVersion::LATEST],
-                    },
-                ),
-            )
-            .await
-        });
+        // The transport spawns its worker as it is built, so it is built inside the runtime that
+        // drives it.
+        let transport = StreamableHttpClientTransport::with_client(
+            UnixSocketHttpClient::new(&socket_path_to_dial, &local_api_mcp_uri),
+            StreamableHttpClientTransportConfig::with_uri(local_api_mcp_uri.as_str()),
+        );
+        let connected = tokio::time::timeout(
+            request_timeout,
+            ().serve_with_lifecycle(
+                transport,
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::LATEST],
+                },
+            ),
+        )
+        .await;
         let connected_mcp_client = match connected {
             Ok(Ok(connected_mcp_client)) => connected_mcp_client,
             Ok(Err(ClientInitializeError::JsonRpcError(refusal))) => {
@@ -179,34 +170,26 @@ impl LocalApiMcpToolClient {
             }
         };
         Ok(Self {
-            connected_mcp_client: Some(connected_mcp_client),
-            client_tokio_runtime,
+            connected_mcp_client,
             local_api_socket_path: local_api_socket_path.to_path_buf(),
             request_timeout,
         })
     }
 
     /// Call `tool_name` with `tool_arguments`, answering the first text block of its result.
-    pub(crate) fn call_tool(
+    pub(crate) async fn call_tool(
         &self,
         tool_name: &str,
         tool_arguments: serde_json::Map<String, serde_json::Value>,
     ) -> Result<String, LocalApiMcpToolClientFailure> {
-        let Some(connected_mcp_client) = self.connected_mcp_client.as_ref() else {
-            return Err(LocalApiMcpToolClientFailure::local_api_unreachable(
-                "this MCP client is closed".to_owned(),
-            ));
-        };
         let request =
             CallToolRequestParams::new(tool_name.to_owned()).with_arguments(tool_arguments);
-        let answered = self.client_tokio_runtime.block_on(async {
-            tokio::time::timeout(
-                self.request_timeout,
-                connected_mcp_client.call_tool(request),
-            )
-            .await
-        });
-        match answered {
+        match tokio::time::timeout(
+            self.request_timeout,
+            self.connected_mcp_client.call_tool(request),
+        )
+        .await
+        {
             Ok(Ok(tool_result)) => first_text_block_of_tool_result(tool_name, tool_result),
             Ok(Err(service_failure)) => {
                 Err(self.failure_for_a_tool_call_without_a_result(tool_name, service_failure))
@@ -221,19 +204,11 @@ impl LocalApiMcpToolClient {
         }
     }
 
-    /// End the client's connection.
-    pub(crate) fn close(mut self) {
-        self.close_the_connection();
-    }
-
-    fn close_the_connection(&mut self) {
-        let Some(connected_mcp_client) = self.connected_mcp_client.take() else {
-            return;
-        };
+    /// End the client's connection, waiting at most the request bound.
+    pub(crate) async fn close(self) {
         // A close that fails or stalls leaves nothing to undo: the local API keeps no session.
-        let _close_outcome = self.client_tokio_runtime.block_on(async {
-            tokio::time::timeout(self.request_timeout, connected_mcp_client.cancel()).await
-        });
+        let _closed_or_abandoned =
+            tokio::time::timeout(self.request_timeout, self.connected_mcp_client.cancel()).await;
     }
 
     /// The failure for a `tools/call` that did not come back as a result: a refusal when the
@@ -253,7 +228,7 @@ impl LocalApiMcpToolClient {
             ServiceError::UnexpectedResponse => {
                 LocalApiMcpToolClientFailure::request_refused_by_the_runtime(format!(
                     "the runtime at {} answered `{tool_name}` with something other than its \
-                         result",
+                     result",
                     self.local_api_socket_path.display()
                 ))
             }
@@ -262,12 +237,6 @@ impl LocalApiMcpToolClient {
                 self.local_api_socket_path.display()
             )),
         }
-    }
-}
-
-impl Drop for LocalApiMcpToolClient {
-    fn drop(&mut self) {
-        self.close_the_connection();
     }
 }
 
@@ -308,14 +277,13 @@ fn first_text_block_of_tool_result(
 /// Whether a runtime on `local_api_socket_path` answers MCP at all: answering `server/discover`,
 /// or refusing it in the protocol's own words, is alive.
 pub(crate) fn local_api_answers_mcp(local_api_socket_path: &Path) -> bool {
-    match LocalApiMcpToolClient::connect(
-        local_api_socket_path,
-        LOCAL_API_LIVENESS_ROUND_TRIP_TIMEOUT,
-    ) {
-        Ok(connected_client) => {
-            connected_client.close();
-            true
-        }
+    let Ok(mut local_api_connection) =
+        LocalApiConnection::open(local_api_socket_path, LOCAL_API_LIVENESS_ROUND_TRIP_TIMEOUT)
+    else {
+        return false;
+    };
+    match local_api_connection.connect_mcp_client() {
+        Ok(()) => true,
         Err(connect_failure) => connect_failure.the_runtime_answered(),
     }
 }
@@ -327,12 +295,15 @@ pub(crate) fn call_one_local_api_tool(
     tool_name: &str,
     tool_arguments: serde_json::Map<String, serde_json::Value>,
 ) -> Result<String, LocalApiMcpToolClientFailure> {
-    LocalApiMcpToolClient::connect(local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)
-        .and_then(|connected_client| {
-            let answered = connected_client.call_tool(tool_name, tool_arguments);
-            connected_client.close();
-            answered
-        })
+    let mut local_api_connection =
+        LocalApiConnection::open(local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)
+            .map_err(|runtime_start_failure| {
+                LocalApiMcpToolClientFailure::local_api_unreachable(format!(
+                    "could not start the MCP client's runtime: {runtime_start_failure}"
+                ))
+            })?;
+    local_api_connection
+        .call_tool(tool_name, tool_arguments)
         .map_err(|call_failure| {
             tool_call_failure_worded_as_an_observation_verb_reports_it(tool_name, call_failure)
         })
@@ -459,7 +430,7 @@ mod tests {
             ],
             ..StubLocalApiScript::default()
         });
-        let connected_client = LocalApiMcpToolClient::connect(
+        let mut local_api_connection = LocalApiConnection::open(
             &stub_local_api_server.local_api_socket_path,
             OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         )
@@ -467,12 +438,12 @@ mod tests {
 
         let answers: Vec<String> = (0..3)
             .map(|_| {
-                connected_client
+                local_api_connection
                     .call_tool("graph", serde_json::Map::new())
                     .unwrap()
             })
             .collect();
-        connected_client.close();
+        drop(local_api_connection);
 
         assert_eq!(answers, ["first", "second", "fixed"]);
         assert_eq!(stub_local_api_server.recorded_tool_calls().len(), 3);
