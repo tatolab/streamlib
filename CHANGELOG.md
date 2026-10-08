@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.39.0](https://github.com/tatolab/streamlib/compare/v0.38.0...v0.39.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** processor interpreters start from the stream's own venv and borrow the runtime through the lend ([#2689](https://github.com/tatolab/streamlib/issues/2689))
+
+### Features
+
+* **engine:** processor interpreters start from the stream's own venv and borrow the runtime through the lend ([#2689](https://github.com/tatolab/streamlib/issues/2689)) ([3cfe910](https://github.com/tatolab/streamlib/commit/3cfe910887411a7483540eb84eb7174c1cd1b4cd))
+
 ## [0.38.0](https://github.com/tatolab/streamlib/compare/v0.37.1...v0.38.0) (2026-10-07)
 
 
