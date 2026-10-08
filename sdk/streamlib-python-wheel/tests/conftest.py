@@ -91,7 +91,7 @@ def _remove_iceoryx2_domain_roots_whose_test_process_is_gone() -> None:
 HelperProcessLogRecord = Tuple[str, str, Optional[Dict[str, Any]]]
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def log_records_this_process_sends_its_stand_in_parent() -> "Iterator[List[HelperProcessLogRecord]]":
     """Stands in for the parent's end of a helper's log route.
 
@@ -112,9 +112,7 @@ def log_records_this_process_sends_its_stand_in_parent() -> "Iterator[List[Helpe
 
 
 @pytest.fixture(scope="session")
-def private_iceoryx2_domain_for_this_test_process(
-    log_records_this_process_sends_its_stand_in_parent: "List[HelperProcessLogRecord]",
-) -> "Iterator[Path]":
+def private_iceoryx2_domain_for_this_test_process() -> "Iterator[Path]":
     """Stands in for the parent runtime: gives this process's helper nodes an
     iceoryx2 domain of their own, handed over the way a parent hands a helper
     its root.

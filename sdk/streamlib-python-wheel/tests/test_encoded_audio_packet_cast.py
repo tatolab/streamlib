@@ -26,7 +26,10 @@ from tatolab.runtime import _engine
 from tatolab.stream import EncodedAudioPacket, NodeLinkDataAccess
 from tatolab.stream.encoded_audio_packet import _CODECS_ON_THE_WIRE
 
-pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+pytestmark = pytest.mark.usefixtures(
+    "private_iceoryx2_domain_for_this_test_process",
+    "log_records_this_process_sends_its_stand_in_parent",
+)
 
 OUTPUT_PORT = "encoded_audio_to_downstream"
 INPUT_PORT = "encoded_audio_from_upstream"

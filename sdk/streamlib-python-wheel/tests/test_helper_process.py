@@ -38,7 +38,10 @@ from tatolab.runtime._processor_interpreter_bootstrap import (
     load_processor_class,
 )
 
-pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+pytestmark = pytest.mark.usefixtures(
+    "private_iceoryx2_domain_for_this_test_process",
+    "log_records_this_process_sends_its_stand_in_parent",
+)
 
 FRAME_LENGTH_PREFIX = struct.Struct(">I")
 
