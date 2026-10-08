@@ -47,12 +47,12 @@ SCAFFOLD_TEMPLATE_PYTHON_FILE_NAMES = sorted(
 # The text `new` replaces in each template; a template that loses one renders wrong.
 RENDER_PLACEHOLDERS_BY_TEMPLATE_FILE = {
     "stream.py": [
-        "A StreamLib stream: camera →",
+        "A Tatolab stream: camera →",
         "from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream",
         '\"\"\"Camera, inverted,',
         "stream_builder.add(CameraSource)",
     ],
-    "pyproject.toml": ['name = "streamlib-app"'],
+    "pyproject.toml": ['name = "tatolab-stream-project"'],
 }
 COMPILE_ENTRY_TIMEOUT_SECONDS = 60.0
 
@@ -245,7 +245,7 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                 {
                     "name": "displaywindow",
                     "type": "tatolab.stream:DisplayWindow",
-                    "config": {"title": "StreamLib", "scaling": "fit"},
+                    "config": {"title": "Tatolab", "scaling": "fit"},
                 },
             ],
             "links": [

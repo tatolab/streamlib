@@ -111,6 +111,10 @@ fn new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header() {
             !scaffolded_text.contains("SPDX-License-Identifier"),
             "{scaffolded_file} kept the licence header"
         );
+        assert!(
+            !scaffolded_text.contains("StreamLib") && !scaffolded_text.contains("streamlib"),
+            "{scaffolded_file} names the product's old name:\n{scaffolded_text}"
+        );
     }
 
     let stream_py = fs::read_to_string(project_directory.join("stream.py")).unwrap();
@@ -146,8 +150,10 @@ fn new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header() {
     assert!(pyproject_toml.contains("name = \"my-probe-app\""));
     assert_eq!(
         pyproject_toml,
-        scaffold_template_text("pyproject.toml")
-            .replace("name = \"streamlib-app\"", "name = \"my-probe-app\"")
+        scaffold_template_text("pyproject.toml").replace(
+            "name = \"tatolab-stream-project\"",
+            "name = \"my-probe-app\""
+        )
     );
     assert_eq!(
         fs::read_to_string(project_directory.join(".python-version")).unwrap(),
@@ -159,6 +165,10 @@ fn new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header() {
     );
 
     let next_steps = String::from_utf8(new_output.stdout).unwrap();
+    assert!(
+        next_steps.starts_with("Created a Tatolab stream project in `My Probe App`.\n"),
+        "{next_steps}"
+    );
     assert!(next_steps.contains("    cd My Probe App\n"), "{next_steps}");
     assert!(next_steps.contains("    uv sync\n"), "{next_steps}");
     assert!(next_steps.contains("    tatolab dev\n"), "{next_steps}");
@@ -187,7 +197,7 @@ fn new_with_test_pattern_wires_the_test_pattern_and_names_no_camera() {
         "{stream_py}"
     );
     assert!(stream_py.contains("stream_builder.add(TestPatternSource)"));
-    assert!(stream_py.contains("A StreamLib stream: test pattern →"));
+    assert!(stream_py.contains("A Tatolab stream: test pattern →"));
     assert!(stream_py.contains("\"\"\"Test pattern, inverted,"));
     assert!(!stream_py.contains("CameraSource"));
     assert!(!stream_py.to_lowercase().contains("camera"), "{stream_py}");

@@ -1,5 +1,5 @@
 [project]
-name = "streamlib-app"
+name = "tatolab-stream-project"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = ["tatolab-stream", "numpy>=2.1"]
