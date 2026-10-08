@@ -1,123 +1,129 @@
 <div align="center">
 
-<img src="docs/assets/streamlib-logo.svg" alt="StreamLib" width="520">
+# Tatolab
 
-**One perception and control runtime that runs on the hardware itself** — an embedded board, a drone,<br>
-a robot already running ROS, or the laptop you develop on. Write each stage in Python; a Rust engine runs it on the device.
+**Live streams as pipes, written in Python.** Wire a camera, a GPU effect, your model and a window<br>
+in a few lines; a native runtime runs it on your machine, and you and your agents can look inside while it runs.
 
-For teams shipping physical AI: humanoids, autonomous vehicles, self-piloting drones,<br>
-and the data-collection rigs that train them.
-
-[![release](https://img.shields.io/github/v/release/tatolab/streamlib?color=0ea5e9&label=release)](https://github.com/tatolab/streamlib/releases)
 [![website](https://img.shields.io/badge/tatolab.com-0ea5e9?label=website)](https://tatolab.com)
 [![license](https://img.shields.io/badge/license-BUSL--1.1-0ea5e9)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-0ea5e9)](#install)
-[![platform](https://img.shields.io/badge/platform-linux%20x86__64-64748b)](#what-ships-today)
+[![platform](https://img.shields.io/badge/platform-linux%20x86__64%20%7C%20macOS%20apple%20silicon-64748b)](#what-ships-today)
 [![gpu](https://img.shields.io/badge/GPU-Vulkan-64748b)](#gpu-without-the-vendor-lock)
-[![tests](https://github.com/tatolab/streamlib/actions/workflows/test.yml/badge.svg)](https://github.com/tatolab/streamlib/actions/workflows/test.yml)
 
-[Install](#install) · [Quickstart](#quickstart) · [Inspect a live device](#inspect-a-device-thats-already-running) · [How it works](#how-it-works) · [What ships today](#what-ships-today) · [License](#license) · [tatolab.com](https://tatolab.com)
+[Install](#install) · [Quickstart](#quickstart) · [Writing a stream](#writing-a-stream) · [The `tatolab` CLI](#the-tatolab-cli) · [Inspect a running stream](#inspect-a-running-stream) · [How it works](#how-it-works) · [What ships today](#what-ships-today) · [Troubleshooting](#troubleshooting) · [License](#license)
 
 </div>
 
 <!-- Demo GIF slot. Generate on the rig with `vhs docs/assets/demo.tape`, commit the
      result, then replace this comment with:
-     <div align="center"><img src="docs/assets/demo.gif" alt="Inspecting a running node" width="900"></div> -->
+     <div align="center"><img src="docs/assets/demo.gif" alt="Inspecting a running stream" width="900"></div> -->
 
 ---
 
-- **Real-time processing on commodity hardware.** Deadline-driven stages on dedicated OS threads at
-  a priority you declare — an off-the-shelf GPU and a Linux box, not a proprietary accelerator or a
-  vendor runtime you have to buy into.
-- **GPU acceleration for video, built in.** Capture lands in device memory and stays there — imported
-  zero-copy where the device exports it, transparently uploaded where it doesn't, with no
-  configuration dial in between. Your model gets the frame where it already sits.
-- **Open, and extendable to hardware nobody has heard of.** Any sensor is a stage you write, and a
-  proprietary driver ships as an ordinary Python package. Optional capabilities — networking
-  first — ship the same way, as extension wheels with Rust inside: pip installs the wheel, the
-  engine discovers its support code, and your stream adds its processors with
-  `stream_builder.add` like any other.
-  No plugin ABI, no framework headers, no vendor allowlist deciding what you're allowed to
-  plug in.
-- **The execution graph is code, not a config file.** You compose it in Python at startup, so it can
-  branch on the sensors actually present, the mission profile, or the tier of hardware it booted on
-  — the same source deployed across a heterogeneous fleet.
-- **AI-first, not AI-bolted-on.** A control policy is a stage like any other: a VLA or world model
-  receives frames as device memory and emits actions on the same clock as the sensors that fed it.
-  The control plane speaks MCP, so an agent can inspect a running machine on its own.
-- **Built to survive the field.** A stage that wedges takes down one stage and names itself; every
-  sensor shares one clock; and a deployed device stays inspectable from your laptop without a
-  redeploy.
+- **A stream is a Python function.** `@stream` wires nodes together, and a node is a `@node` class
+  in a module of its own. There is no manifest, no registration file, and no build step between an
+  edit and a run.
+- **Every Python node runs in its own process**, with its own interpreter started from your stream's
+  venv. A node that hangs or crashes is one node, named in the log; it cannot stall the others.
+- **Frames stay on the GPU.** Capture lands in device memory and reaches torch through DLPack with no
+  CPU copy, and a pixel effect is one GLSL function. Reading pixels on the CPU is an explicit
+  `frame.cpu()`.
+- **Native built-ins for the parts with deadlines**: camera, window, test pattern, microphone,
+  speaker, H.264 / H.265 / Opus codecs, MP4 recording, and a virtual camera on Linux — native code
+  inside the runtime, configured from Python.
+- **Agents work on a running stream.** The runtime serves MCP, so an agent can read the live graph,
+  sample what a link carries, look at a frame, read the logs, and add, connect or remove nodes while
+  the stream runs — the same operations the `tatolab` CLI uses.
+- **A fast edit loop.** `tatolab dev` restarts the stream on every saved edit, and keeps the running
+  one when an edit fails to compile.
 
-> **Alpha.** APIs will change. There is no fleet orchestration, device-to-device transport, OTA
-> deployment, ROS integration, or aarch64/Jetson wheel — see [what ships today](#what-ships-today).
+> **Alpha.** APIs will change. The runtime has no installer yet — you build it from a checkout of
+> this repository — and one runtime runs one stream. See [what ships today](#what-ships-today).
 
 ## Built for
 
-- **Humanoid and manipulation teams** collecting demonstration data for VLA training, where the
-  value of an episode depends entirely on camera, proprioception, and action sharing one timeline.
-- **Drone and autonomous-vehicle stacks** running a deadline-bound perception loop on the vehicle,
-  across cameras, lidar, radar, and IMU that all arrive at different rates.
-- **On-device policy inference** — a VLA or world model, Cosmos- or GR00T-class, that needs the
-  frame as device memory rather than as a numpy array that already cost you two copies.
-- **Data-collection rigs** where time-aligned multi-sensor capture *is* the product, not a
-  supporting detail.
-- **Eval on the machine that will run it** — proving a checkpoint against what the robot actually
-  sees, instead of a replay pipeline that has quietly drifted from the online one.
+Tatolab is a simple SDK for defining live streams as pipes and sharing them with people and agents.
+Today the pipes run on one machine, and you and your agents work on them there.
+
+- **Live video and audio with a model in the loop** — a camera into torch on the GPU, the result in a
+  window, in an MP4, or on a virtual camera that other applications can pick.
+- **Agents that watch and change a running stream** — over MCP, on the machine itself, or from
+  another machine over ssh.
+- **Tailscale users, first.** Reaching a stream on another machine of your tailnet is
+  `ssh <machine> tatolab mcp`; Tatolab builds nothing Tailscale already does.
 
 ## What it doesn't replace
 
-StreamLib is the substrate for the loop on the device. It is deliberately narrow, and it composes
-with what you already run rather than asking you to move.
-
-| You keep | StreamLib's part |
+| You keep | Tatolab's part |
 |---|---|
-| **Your model runtime** — torch, TensorRT, ONNX Runtime | Hands it device memory and gets out of the way. No inference stack ships, and none is planned. |
-| **Your middleware** — ROS 2 and its ecosystem | Runs on the same box. StreamLib is the compute inside a node with a deadline and a GPU, not a bus or a package ecosystem. |
-| **Your accelerated pipelines** — Holoscan, DeepStream, vendor SDKs | Nothing stops them coexisting on the machine; StreamLib does not want the whole box. |
-| **Your training and cloud stack** | StreamLib is the on-device half — it produces the aligned data your training consumes. |
-| **Your sensors and drivers** | Anything with a Python binding, a file descriptor, or an exportable allocation composes as a stage you write. |
+| **Your model runtime** — torch, ONNX Runtime, TensorRT, MLX | Hands it the frame as device memory and gets out of the way. No inference stack ships, and none is planned. |
+| **Your Python packages** | A node imports whatever your stream's venv holds; `uv add` is how a dependency arrives. |
+| **Your network** — Tailscale, ssh | Control is reachable only on the machine the runtime runs on. Reaching another machine is ssh's job, across your tailnet or not. |
+| **Your robotics stack** — ROS, Zenoh | Out of scope. Tatolab never replaces it. |
 
-**Honest limit on all of that:** composing today means *on the same machine, through Python*. There
-are no bridges shipping — no ROS node, no Holoscan operator, no device-to-device transport. Where
-you need one, it is a stage you write against the driver or binding you already have.
+**The honest limit:** composing today means *on the same machine, through Python*. No bridges ship;
+where you need one, it is a node you write against the library or binding you already have.
 
 ## Install
 
-There are two halves, and they install separately. The **runtime** — `tatolabd`, the native
-program that hosts a stream, and `tatolab`, the CLI that starts it — has no installer yet; build it
-from a checkout of this repo:
+There are two halves, and they install separately.
+
+**The runtime** — `tatolabd`, the native program that hosts a stream, and `tatolab`, the CLI that
+starts and inspects it — has no installer yet. Build it from a checkout of this repository:
 
 ```bash
-cargo xtask build-runtime                       # add --release for an optimized build
+cargo xtask build-runtime --release              # omit --release for a debug build
 export PATH="$PWD/target/tatolab-runtime/bin:$PATH"
 ```
 
 That lays out `target/tatolab-runtime/` as an install prefix: `bin/tatolabd`, `bin/tatolab`, and
-`lib/tatolab/lend/`, the engine's Python half a node's interpreter borrows. Keep the three
-together; `tatolabd` finds the lend relative to its own executable.
+`lib/tatolab/lend/`, the runtime's own Python half (`tatolab.runtime`) that each Python node's
+interpreter borrows. Keep the three together: `tatolab` starts the `tatolabd` beside it, and
+`tatolabd` finds `lib/tatolab/lend/` relative to its own executable.
 
-**Your stream** is an ordinary Python project whose venv holds `tatolab-stream` — the Python API
-(`tatolab.stream`) your streams import — and the stream's own dependencies, and no engine.
-`tatolab new` writes a `pyproject.toml` that takes `tatolab-stream` from this repo's static PEP 503
-index, `https://tatolab.github.io/streamlib/simple/` (PyPI publication is pending a project rename),
-so `uv sync` installs it. Nothing is generated, compiled, or downloaded at run time.
+The build needs a Rust toolchain and [uv](https://docs.astral.sh/uv/) on `PATH` (it runs the
+pinned maturin through `uvx`), plus a native toolchain. On Debian or Ubuntu that is:
+
+```bash
+sudo apt install pkg-config protobuf-compiler libclang-dev libvulkan-dev glslc python3-dev cmake ninja-build
+```
+
+On macOS it is `glslc` (from shaderc), CMake and Ninja, and the build first stages a Vulkan loader
+and MoltenVK into the lend, so the Mac that runs the result needs no Vulkan SDK.
+
+**Your stream** is an ordinary Python project. Its venv holds `tatolab-stream` — the Python API,
+`import tatolab.stream` — and whatever your nodes import, and never the runtime. `tatolab-stream` is
+on PyPI:
+
+```bash
+uv add tatolab-stream
+```
+
+`tatolab new` writes a `pyproject.toml` that depends on `tatolab-stream` and `numpy>=2.1`, so
+`uv sync` is the whole setup. Nothing is generated, compiled or downloaded at run time.
 
 ## Quickstart
 
 ```bash
-tatolab new my-rig          # camera → GPU effect → window, plus a CPU meter, wired and working
-cd my-rig
+tatolab new my-stream       # camera → GPU effect → window, plus a CPU meter, wired and working
+cd my-stream
 uv sync                     # the stream's venv: tatolab-stream and numpy
 tatolab dev                 # your camera, live and inverted, in a window
 ```
 
-No camera on this machine? `tatolab new my-rig --test-pattern` uses the built-in test source.
+No camera on this machine? `tatolab new my-stream --test-pattern` wires the built-in test pattern
+instead.
 
-`stream.py` is wiring and nothing else — no manifest, no registration file. `dev` reads it from the
-working directory, compiles its one `@stream` function to the stream's graph in the project's
-`.venv`, and starts `tatolabd` on that graph in the foreground; Ctrl-C stops it. `tatolab run` does
-the same once, without watching for edits:
+`dev` reads `stream.py` from the working directory, compiles its one `@stream` function to the
+stream's graph in the project's `.venv`, and starts `tatolabd` on that graph in the foreground;
+Ctrl-C stops it. Save an edit and `dev` recompiles and restarts the stream; an edit that fails to
+compile leaves the running stream in place. `tatolab run` does the same once, without watching for
+edits.
+
+## Writing a stream
+
+`stream.py` is wiring and nothing else:
 
 ```python
 from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream
@@ -133,7 +139,7 @@ def main(stream_builder: StreamBuilder) -> None:
     effect = stream_builder.add(InvertingEffect)
     meter = stream_builder.add(BrightnessMeter)
     window = stream_builder.add(
-        DisplayWindow, config={"title": "StreamLib", "scaling": "fit"}
+        DisplayWindow, config={"title": "Tatolab", "scaling": "fit"}
     )
     stream_builder.connect(source.output("video"), effect.input("video_from_upstream"))
     stream_builder.connect(effect.output("video_to_downstream"), window.input("video"))
@@ -143,8 +149,11 @@ def main(stream_builder: StreamBuilder) -> None:
     stream_builder.expose(effect.output("video_to_downstream"))
 ```
 
-One output, two readers: the window shows the frame, the meter measures it. With several streams in
-a file, `tatolab dev stream.py:<function>` picks one.
+One output, two readers: the window shows the frame, the meter measures it. `add` names each node
+after its class, lowercased (`invertingeffect`), unless you pass `name=`. A built-in's `config` is
+a `TypedDict` — `CameraSourceConfig`, `DisplayWindowConfig` — so a type checker catches a
+misspelled key. `expose` records an output port the stream offers beyond this machine; serving it
+there is not built yet.
 
 Pixels stay on the GPU. `nodes/inverting_effect.py` is one shader function:
 
@@ -167,6 +176,8 @@ vec4 effect(vec4 source, ivec2 at) {
 
 @node
 class InvertingEffect:
+    """Inverts every frame's colors on the GPU and passes it on."""
+
     @node.input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
 
@@ -190,114 +201,208 @@ class InvertingEffect:
 
 Logic runs on the CPU. `nodes/brightness_meter.py` reads each frame back through an explicit
 `frame.cpu()` view and logs its mean brightness once a second. It sits on a fan-out in its own
-process, so it never slows the picture — it is the stage you replace with your model call.
+process, so it never slows the picture — it is the node you replace with your model call.
 
-Edit a stage and save: `dev` recompiles the stream and restarts `tatolabd` on it, and keeps the
-running stream when the edit fails to compile. Each stage runs `reactive` (the default once it has
-an input), `manual`, or `continuous` at an interval you set.
+What a node declares:
 
-## Inspect a device that's already running
+- **Ports**, with `@node.input` and `@node.output` on marker methods. The return annotation is for
+  you and your type checker; the runtime never compares types. Every input names its
+  [delivery profile](#how-it-works), `newest` or `ordered`.
+- **When it runs**, with `@node(execution=…)`: `reactive` (the default once it has an input),
+  `manual` (driven by a callback it owns), or `continuous` with `interval_ms`. A source has nothing
+  to react to, so it must name one. `scheduling` asks for `realtime`, `high` or `normal` priority.
+- **Its configuration**, as the annotation on `__init__`'s `config` parameter — a `TypedDict`, a
+  dataclass or a pydantic model — passed as `stream_builder.add(MyNode, config={...})`.
 
-The observation verbs — `nodes`, `graph`, `tap`, `logs`, `exchange` and `mcp` — and the
-machine-setup verb `enable-virtual-camera` are still the Python `streamlib` CLI, until the native
-`tatolab` carries them. Install the engine wheel that ships it into a venv of its own, never the
-stream's (`pip install streamlib --index-url https://tatolab.github.io/streamlib/simple/`), or run
-it from a checkout's runtime unit with any interpreter that has `tatolab-stream`:
-`PYTHONPATH=target/tatolab-runtime/lib/tatolab/lend python -m tatolab.runtime.cli <verb>`.
+A node class lives in a module of its own, never in `stream.py`: its process imports the class by
+name, and `stream.py` is not importable under that name. `add` refuses such a class with a message
+naming the fix.
 
-Run these on the machine the node runs on. `--node <runtime name>` picks a node by the
-`RUNTIME_NAME` column `streamlib nodes` prints, and reaches it through its local API socket — a
-Unix socket only your user can open, so control is reachable only on the node's own machine.
+A file may define several streams. With more than one, name the one to run:
+`tatolab dev stream.py:<function>`, or `tatolab run <module>:<function>` for a stream in an
+installed package.
+`-f FILE` runs another entry file in place of `stream.py`, `--dir DIR` resolves against another
+project directory, and `--name NAME` loads the stream under a name other than its function's.
 
-```console
-$ streamlib nodes
-RUNTIME_NAME      RUNTIME_ID                 LOCAL_API_SOCKET                                                       PID  ALIVE?  HINT
-desk-my-rig-8kq3  Rq1w8xk3m2v0pz7ny4tbd6hsf  /run/user/1000/streamlib/local-api-Rq1w8xk3m2v0pz7ny4tbd6hsf.sock    48212  yes     tatolabd (/home/you/my-rig)
+## The `tatolab` CLI
 
-$ streamlib tap desk-my-rig-8kq3/camerasource/video --count 3
-{"channel": "desk-my-rig-8kq3/camerasource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
- "bags": [{"byte_len": 214, "hex_preview": "84aa73...", "hex_truncated": false}, ...]}
+```text
+tatolab new DIRECTORY [--test-pattern]
+tatolab run [TARGET] [-f FILE] [--dir DIR] [--name NAME] [--runtime-name NAME]
+tatolab dev [TARGET] [-f FILE] [--dir DIR] [--name NAME] [--runtime-name NAME]
+
+tatolab nodes
+tatolab graph [--node RUNTIME]
+tatolab tap CHANNEL [--count N] [--max-bag-bytes BYTES] [--node RUNTIME]
+tatolab logs RUNTIME_ID [-f | --follow] [--processor ID] [--pipeline ID] [--rhi]
+             [--level trace|debug|info|warn|error] [--source rust|python] [--intercepted-only]
+tatolab logs --list
+tatolab logs --node RUNTIME [--count N]
+tatolab exchange SURFACE_ID --out DIR [--node RUNTIME]
+tatolab exchange --channel CHANNEL [--count N] [--every N] [--field NAME] --out DIR [--node RUNTIME]
+tatolab mcp [--node RUNTIME]
+
+tatolab enable-virtual-camera [--print]
 ```
 
-`graph` dumps stages, links, states and metrics as JSON; `logs` streams structured records
-filtered by stage and severity. `tap` returns what the link really carried, bounded and
-non-blocking — a quiet link gives a partial sample instead of hanging. That's the deployed build,
-unmodified, and it's also how an eval or training set comes off the machine that produced it
-rather than off an offline pipeline that has already drifted from it.
+- **`new`** writes `stream.py`, `nodes/`, `pyproject.toml`, `.python-version` (3.12) and
+  `.gitignore` into `DIRECTORY`, and refuses rather than overwrite a file already there.
+- **`run`** compiles the stream in the project's `.venv` and runs it on a `tatolabd` it starts,
+  attached: the runtime's logs in your terminal, Ctrl-C to stop. `TARGET` is
+  `<file>.py[:<function>]` or `<module>:<function>`. `--runtime-name` names the runtime — the first
+  part of every channel `tap` reads; the default is `<host>-<project directory>-<id>`, stable across
+  runs of one checkout.
+- **`dev`** is `run`, restarted on every saved edit to a `.py` file or `pyproject.toml` in the
+  project.
+- **`nodes`** lists the runtimes running on this machine: their name, id, local socket, pid, whether
+  they answer, and the program and directory they run in.
+- **`graph`** prints the running stream's nodes, ports, links and exposed ports as JSON, with each
+  node's and link's state and counters, and the runtime's name as `runtime_name`.
+- **`tap`** samples the raw bags one output port carries. The channel is
+  `<runtime_name>/<node>/<port>`, spelled as `graph` names them. The sample is bounded and never
+  blocks the producer: a quiet port returns a partial sample rather than hanging, and
+  `--max-bag-bytes` raises the per-bag cap when a bag comes back flagged as truncated.
+- **`logs`** reads a runtime's JSONL log, rendered the way the runtime prints it. Run it in the
+  stream's project directory, where the runtime writes its logs: `--list` shows the runtimes that
+  have a log there, `RUNTIME_ID` renders one (`--follow` keeps reading as records land, and the
+  other flags filter what it shows), and `--node` takes a bounded sample of a running runtime's live
+  event stream instead.
+- **`exchange`** turns a published surface id (`<slot>#<generation>`, as a bag carries it) into that
+  frame's exact, full-resolution PNG in `--out`, and prints each written path on stdout. With
+  `--channel` it taps the port, reads the id from each sampled bag (the `surface_id` field unless
+  `--field` names another) and exchanges `--count` frames, every `--every`th bag — no window in the
+  graph and no display server in the path.
+- **`mcp`** connects an MCP host to a running runtime over its own stdin and stdout; see below.
+- **`enable-virtual-camera`** installs, once, the permission a `VirtualCameraSink` needs for its
+  loopback camera: the `v4l2loopback` module loaded with no devices, and its control node handed to
+  the logged-in user through udev. It is one privileged step behind your desktop's password prompt
+  (`sudo` in a headless shell), Linux only; `--print` writes the files and commands for a hand
+  install and changes nothing.
+
+Every verb that talks to a runtime takes `--node` with a runtime's name or id from `tatolab nodes`.
+Without it the verb takes the one runtime running, and refuses by name when there is none or more
+than one.
+
+## Inspect a running stream
+
+Run these on the machine the stream runs on. They reach the runtime through its local socket — a
+Unix socket only your user can open — so control is reachable only on that machine.
+
+```console
+$ tatolab graph | jq -r .runtime_name
+desk-my-stream-8kq3
+
+$ tatolab tap desk-my-stream-8kq3/invertingeffect/video_to_downstream --count 3
+{
+  "channel": "desk-my-stream-8kq3/invertingeffect/video_to_downstream",
+  "requested": 3,
+  "received": 3,
+  "window_ms": 500,
+  "dropped_bags": 0,
+  ...
+  "bags": [
+    { "byte_len": 214, "hex_preview": "84aa73...", "hex_truncated": false },
+    ...
+  ]
+}
+```
+
+`tap` returns what the link really carried.
+`tatolab exchange --channel <that channel> --count 2 --out frames/` writes two of those frames as
+PNGs and prints their paths, so you see the pixels of a mid-graph port without adding a window to
+the graph. `logs` reads what every node logged, Rust and Python alike.
 
 <details>
-<summary><b>The same surface speaks MCP, so an agent can do this itself</b></summary>
+<summary><b>The same operations speak MCP, so an agent can do this itself</b></summary>
 
 <br>
 
 ```console
-$ claude mcp add streamlib -- streamlib mcp
+$ claude mcp add tatolab -- tatolab mcp
 ```
 
-The host launches `streamlib mcp`, which carries its stdin and stdout to the running node's MCP
-server over the node's local API socket and reads none of it. To reach a node on another machine,
-launch it over ssh instead: `claude mcp add streamlib -- ssh <machine> streamlib mcp`. `--node`
-picks one when a machine runs more than one. The server is mounted with the node and shares its
-lifecycle. The tools are
-`graph`, `tap`, `logs`, `exchange` and `shutdown` to observe, and `add_node`, `connect`,
-`disconnect` and `remove_node` to change the running graph: an agent writes a processor
-class into a module beside `stream.py` — or `pip install`s one — names it to the node by its
-`module:ClassName` path, and splices it into the live pipeline. The class runs in its own
-helper process like every other. The CLI is a pure client of exactly this surface.
+The host launches `tatolab mcp`, which sends one upgrade request on the runtime's local socket and
+then copies bytes between its own stdin and stdout and the runtime's MCP server, reading none of
+them. To reach a runtime on another machine, launch it over ssh instead, with `tatolab` on that
+machine's `PATH`: `claude mcp add tatolab -- ssh <machine> tatolab mcp`. `--node` picks one when a
+machine runs more than one. The server belongs to the runtime and comes and goes with it.
 
-**Control is reachable only on its machine.** A node opens no network port for it. The graph can
-be rewired by whoever can open the node's local API socket, which is only processes running as
-your user.
+The tools are `graph`, `tap`, `logs`, `exchange` and `shutdown` to observe, and `add_node`,
+`connect`, `disconnect` and `remove_node` to change the running graph. Beside them the runtime serves
+the node catalog — every node type it can add, with its description, config schema and ports — and
+the live graph as resources, and four prompts whose every step is a tool call. An agent can write a
+node class into a module beside `stream.py`, or `uv add` a package that ships one, then add it by
+its `module:ClassName` path and connect it into the running stream. The runtime never imports it:
+the class runs in its own process, started from the stream's venv, like every other Python node.
+
+**Control is reachable only on its machine.** A runtime opens no network port for it. Whoever can
+open its local socket — only processes running as your user — can observe and rewire it.
 
 </details>
 
 ## How it works
 
 <details>
-<summary><b>Stage isolation</b> — why a wedged model can't take the machine down</summary>
+<summary><b><code>tatolab</code>, <code>tatolabd</code> and your venv</b> — what runs where</summary>
 
 <br>
 
-Every processor runs in its own OS process with its own interpreter, on its own dedicated thread
-at a priority you declare. A model that deadlocks on a malformed frame, a C extension that
-segfaults, a vendor driver that leaks — each takes down one stage and becomes a named, restartable
-event instead of a whole-system slowdown with no address. The boundary is enforced by the kernel,
-not by convention. There is no in-process mode: not a default, not a fallback, not something that
-kicks in under load.
+`tatolab run` does three things. It runs `tatolab.stream`'s compile entry in your project's `.venv`
+interpreter, which imports `stream.py`, calls the `@stream` function and hands back the graph it
+built. It starts `tatolabd` with that graph, the project directory and the venv's interpreter. And
+it forwards Ctrl-C to it.
 
-**It costs you** a process boundary on every link crossing into Python, and one authoring rule: a
-stage's class lives in an importable module rather than in your entry file, because the child
-process imports it by name. `stream_builder.add` rejects the mistake with a message naming the fix.
+`tatolabd` is native: the engine, the built-in nodes, and the local socket the CLI and MCP hosts
+talk to. No Python runs in its process, and it never imports your code — it learns a Python node's
+ports by asking your venv's interpreter to describe the class. Each Python node runs in an
+interpreter started from your venv, with the runtime's own Python half, `tatolab.runtime` in
+`lib/tatolab/lend/`, put first on its `PYTHONPATH`; it checks that what it borrowed is the exact
+build that started it. So nothing of the runtime enters your venv or your `pyproject.toml`, and
+nothing in a stream names a runtime version.
 
 </details>
 
 <details>
-<summary><b>Any sensor, not just cameras</b> — the extension model</summary>
+<summary><b>Node isolation</b> — why a wedged model can't stall the stream</summary>
 
 <br>
 
-Nothing in the engine is specific to video. A source is a stage that produces without consuming —
-running `continuous` at an interval, or `manual` when driven by a callback it owns. Lidar, radar,
-thermal, encoders, a CAN bus, a proprietary SDK with a Python binding: if you can read it, it's a
-source you write, and it gets the same isolation, the same clock, and the same observability as
-everything that ships.
+Every Python node runs in its own OS process with its own interpreter, at a scheduling priority you
+declare. A model that deadlocks on a malformed frame, a C extension that segfaults, a vendor library
+that leaks — each takes down one node and is reported under that node's name, instead of a
+whole-stream slowdown with no address. The boundary is enforced by the kernel, not by convention.
+No mode runs a Python node inside the runtime's process: not a default, not a fallback, not
+something that kicks in under load.
+
+**It costs you** a process boundary on every link crossing into Python, and one authoring rule: a
+node's class lives in an importable module rather than in `stream.py`.
+
+</details>
+
+<details>
+<summary><b>Any source, not just cameras</b> — the extension model</summary>
+
+<br>
+
+Nothing in the runtime is specific to video. A source is a node that produces without consuming —
+running `continuous` at an interval, or `manual` when driven by a callback it owns. A sensor, a
+socket, a file, an SDK with a Python binding: if you can read it from Python, it is a source you
+write, with the same isolation, the same clock and the same observability as everything that ships.
 
 Native code comes in the same door. A third-party driver — closed-source included — ships as an
 ordinary Python package that exposes handles (file descriptors, exportable allocations, buffers)
-and is wrapped by a stage you write. It never links the engine, and the CPython ABI is the only
-binary boundary. First-party optional capabilities take that same door — an extension wheel is
-an ordinary PyPI package with Rust inside, depending on `streamlib` as a binary. Its processors
-are added with `stream_builder.add` like any other and call the wheel's own Rust directly; its
-support code is declared by a standard entry point that pip records and the engine runs once at
-startup, the way a driver is loaded. There is no plugin ABI, no StreamLib manifest and no
-StreamLib lockfile — an extension wheel is an ordinary Python project with an ordinary
-`pyproject.toml`.
+and is wrapped by a node you write. It never links the runtime, and the CPython ABI is the only
+binary boundary. First-party optional capabilities take that same door: `tatolab-webrtc`
+(`uv add tatolab-webrtc`) is an ordinary package with Rust inside and two nodes for WHIP publish and
+WHEP play, `WhipPublisher` and `WhepPlayer`, whose native code runs in those nodes' own processes.
+No package extends the runtime — there is no plugin ABI, no manifest and no lockfile of ours, only
+an ordinary `pyproject.toml`.
 
-**It costs you** a small set of built-ins. Camera, display, test pattern, microphone, speaker,
-the H.264 / H.265 / Opus codec pairs and an MP4 sink ship inside the wheel because their
-per-frame paths have deadlines a helper process cannot meet or sit on engine-only primitives,
-and each had a consumer that asked for it; everything else is an extension wheel or a stage
-you write.
+**It costs you** a small set of built-ins. Camera, window, test pattern, microphone, speaker, the
+H.264 / H.265 / Opus codec pairs, an MP4 sink and the virtual camera ship inside the runtime because
+their per-frame paths have deadlines a separate process cannot meet, need primitives only the
+runtime has, or present a device to other applications; everything else is a package or a node you
+write.
 
 </details>
 
@@ -307,32 +412,33 @@ you write.
 <br>
 
 ```python
-with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
-    surface.lock(read_only=False)
-    tensor = torch.from_dlpack(surface)          # H×W×4 uint8, on the CUDA device
-    tensor[:, :, :3] = 255 - tensor[:, :, :3]    # runs on the GPU
-    torch.cuda.synchronize()
-    surface.unlock()                             # publishes the device-side write
+frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+if frame is not None:
+    pixels = torch.from_dlpack(frame)   # H×W×4 uint8, on the device the frame already lives on
 ```
 
-Other doors on the same handle: `surface.as_numpy()` for a mapped host view, and
-`numpy.from_dlpack(surface, device="cpu")` for that memory as a capsule. CUDA Array Interface is
-available through the cuda adapter, and lifetimes are engine-owned — a tensor pins its frame.
+On Linux, with a CUDA runtime present, that is a CUDA tensor; on macOS it is a Metal tensor over the
+frame's own IOSurface, which torch 2.10 or newer imports as `mps` and MLX 0.32 or newer as an array.
+Without a device side it is the host mapping.
+The tensor is valid while the frame object lives, and the runtime keeps the frame's memory from being
+reused until then. `frame.writable()` is the GPU write door — a scope whose DLPack view a GPU package
+edits in place, ordered ahead of the runtime's next read — and `frame.cpu()` the host door, a numpy
+array whose name is the warning.
 
-For the handle itself, `ctx.gpu_full_access.export_dma_buf(surface)` hands native code a DMA-BUF
-fd, and `ctx.gpu_full_access.export_opaque_fd(surface)` the OPAQUE_FD flavour (HDR kernel
-outputs) with the metadata a foreign Vulkan/CUDA import needs — both on Linux. On macOS
+For the allocation itself, `ctx.gpu_full_access.export_dma_buf(surface)` hands native code a
+DMA-BUF fd and `ctx.gpu_full_access.export_opaque_fd(surface)` the OPAQUE_FD flavour, with the
+metadata a foreign Vulkan or CUDA import needs — both on Linux. On macOS
 `ctx.gpu_full_access.export_iosurface(surface)` hands over a Mach send right to the surface's
-IOSurface instead, and each flavour refuses by name on the other platform. A raw handle names the allocation,
-never the frame: take it once at setup on a surface you own — per-frame reach stays with surface
-ids and the tensor doors above.
+IOSurface instead, and each flavour refuses by name on the other platform. A raw handle names the
+allocation, never the frame: take it once at setup on a surface you own, and keep per-frame reach on
+frames and the tensor doors above.
 
-Stated honestly, this is zero-**CPU**-copy, not copy-free: a tiled engine texture reaches a linear
+Stated honestly, this is zero-**CPU**-copy, not copy-free: on Linux a tiled texture reaches a linear
 tensor through one GPU blit into an exportable staging buffer, because DLPack expresses strided
 linear memory only.
 
-No inference stack ships and none is planned. torch, ONNX Runtime, TensorRT — whatever you already
-use is an ordinary pip dependency in your venv, upgraded on your schedule.
+No inference stack ships and none is planned. torch, ONNX Runtime, TensorRT, MLX — whatever you
+already use is an ordinary dependency in your stream's venv, upgraded on your schedule.
 
 </details>
 
@@ -351,18 +457,17 @@ is no default to inherit by accident:
 ```
 
 A profile names a read policy and nothing more. Neither promises delivery: both drop under
-sustained pressure, and no link ever blocks a producer. One output port carries one policy — every
-consumer wired to it declares the same profile, and consumers that want different ones are fanned
-out through distinct output ports.
+sustained pressure, no link ever blocks a producer, and a dropped bag is counted on its link in
+`graph`. One output can feed a `newest` and an `ordered` reader at once.
 
 What crosses a link is a self-describing named map. No schema registry, no negotiation, no
-versions, no code-generation step, and nothing in the engine ever compares one stage's types
-against another's. Strictness is a dial you turn at your own read: `ctx.inputs.read(port)` hands
-you a mapping, and `read(port, into=T)` constructs and validates — a `TypedDict` casts for free, a
+versions, no code-generation step, and the runtime never compares one node's types against
+another's. Strictness is a dial you turn at your own read: `ctx.inputs.read(port)` hands you a
+mapping, and `read(port, into=T)` constructs and validates — a `TypedDict` casts for free, a
 dataclass or pydantic model raises on a payload that doesn't fit.
 
-**It costs you** compile-time safety. A mismatch surfaces as a decode failure at the consumer
-while running, not when you wire the graph.
+**It costs you** compile-time safety. A mismatch surfaces as a decode failure at the consumer while
+running, not when you wire the graph.
 
 </details>
 
@@ -371,77 +476,102 @@ while running, not when you wire the graph.
 
 <br>
 
-Every GPU operation in the engine goes through Vulkan. CUDA appears only as an interop adapter —
-the thing that hands a tensor to torch. `libcuda`, the Vulkan loader, and the window system are
-dlopen'd at run time, never linked, so the wheel stays portable across systems that have them.
+Every GPU operation in the runtime goes through Vulkan. CUDA appears only at the edge, as the tensor
+a frame hands to torch. On Linux, `libcuda`, the Vulkan loader and the window system are opened at
+run time, never linked, so one build runs on any system that has them. On macOS the runtime carries
+its own Vulkan loader and MoltenVK and links only the system. It also carries its own GLSL compiler,
+so writing a pixel effect or a kernel needs no shader toolchain.
 
-**It costs you** any CUDA-specific fast path inside the engine, permanently — a vendor trick that
+**It costs you** any CUDA-specific fast path inside the runtime, permanently — a vendor trick that
 would help is expressed through Vulkan interop or not at all. And portability in the design is not
-portability in practice: NVIDIA on Linux x86_64 is what CI tests. Other vendors are untested
-rather than validated.
-
-Rust authoring is first-class: a plain cargo project depending on the `streamlib` crate, released
-at the wheel's version. PyPI and cargo are the package systems — a Rust app compiles an extension
-from source, a Python app pip-installs its wheel.
+portability in practice: NVIDIA on Linux x86_64 and Apple Silicon are what the project tests on.
+Other vendors are untested rather than validated.
 
 </details>
 
 ## What ships today
 
-The on-device loop — sensors in, GPU work, your model, actuation or display out — plus remote
-observation of that device. `CameraSource` (V4L2), `DisplayWindow`, and `TestPatternSource` are
-native Rust stages compiled into the wheel, configured from Python, whose per-frame paths never
-enter an interpreter.
+A stream on one machine — sources in, GPU work, your model, display or recording out — plus
+observation and live changes from the CLI or an agent. The built-in nodes are native code inside the
+runtime, configured from Python, and their per-frame paths never enter an interpreter:
 
-These do not exist yet:
-
-| | |
+| Built-in | |
 |---|---|
-| **Fleet & networking** | No device-to-device transport, no orchestration, no OTA. Undesigned. The one decision made: cross-machine interop happens on the wire, never in-graph. |
-| **ROS** | No integration of any kind. |
-| **Jetson / aarch64** | No wheel published. x86_64 only today. |
-| **GPU kernels from Python** | Compute, graphics, ray tracing, and acceleration structures exist Rust-side. The Python kernel API is in flight, not shipped. |
-| **DMA-BUF import** | Export from Python works; importing a foreign fd into a graph does not yet. |
+| `CameraSource` | V4L2 on Linux (zero-copy DMA-BUF when the device exports it), AVFoundation on macOS (zero-copy IOSurface import). |
+| `DisplayWindow` | A vsync'd window; add as many as the stream needs. |
+| `TestPatternSource` | Color bars, for a machine with no camera. |
+| `MicrophoneSource`, `SpeakerSink` | The machine's audio backend, as timestamped sample blocks. |
+| `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` | Hardware codecs: Vulkan Video on Linux, VideoToolbox on macOS. |
+| `OpusEncoder`, `OpusDecoder` | libopus. |
+| `Mp4Sink` | Encoded video and audio to one fragmented MP4, one track per inbound link. |
+| `VirtualCameraSink` | Linux only: a camera any other application can select, through v4l2loopback or PipeWire. |
 
-**Platform floor.** Linux + NVIDIA, which is what the wheel ships for: abi3 wheel, CPython 3.10+,
-GIL-enabled builds, manylinux_2_28, x86_64, V4L2 the only capture backend. The wheel carries its
-own GLSL compiler, so there is no system toolchain to install. Apple Silicon is becoming a second
-floor: the engine builds natively on `aarch64-apple-darwin` and CI compiles it on every PR, on the
-one Vulkan RHI through MoltenVK — but no Vulkan device comes up yet, no window presents, capture
-is unbuilt and no macOS wheel is published. Windows is unbuilt.
+From Python you also get `GlslPixelEffect`, compute, graphics and ray-tracing kernels, a
+model-input tensor kernel, node-owned windows, and the monotonic clock every node shares.
 
-## Build from source
+**Platforms.** Two floors, the same API on both:
 
-```bash
-cargo xtask build-runtime            # debug; add --release for an optimized build
-```
+- **Linux x86_64** with a Vulkan GPU and driver; NVIDIA is what the project tests on.
+- **Apple Silicon, macOS 15 or newer**, on the Vulkan driver the runtime carries; CI runs a
+  scaffolded stream there. Ray-tracing kernels, `VirtualCameraSink` and the fd-shaped raw handles
+  refuse by name on macOS.
 
-This builds the runtime unit. The engine's Python half, `tatolab.runtime`, is built as a wheel in
-`target/tatolab-runtime/wheel/` and laid out at `target/tatolab-runtime/lib/tatolab/lend/`: the
-directory holding `tatolab/runtime/`, which a processor interpreter puts first on `PYTHONPATH`.
-Then `tatolabd` and `tatolab` are built into `target/tatolab-runtime/bin/`. It runs the pinned
-maturin through `uvx`, so `uv` must be on `PATH`. On macOS it first stages the Vulkan loader and
-MoltenVK beside `_engine`.
+A stream's venv runs CPython 3.10 to 3.13, GIL-enabled builds; the scaffold pins 3.12.
+
+Not built yet: an installer, several streams in one runtime, serving an exposed port off the
+machine, and Windows.
+
+## Troubleshooting
+
+- **`error: no tatolabd beside …`** — `tatolab` starts the `tatolabd` in its own directory. Run the
+  `tatolab` in `target/tatolab-runtime/bin/`, not a copy of it alone.
+- **`error: no virtual environment at …/.venv`** — `run` and `dev` use the `.venv` in the project
+  directory: the working directory, or `--dir`. Create it with `uv sync`.
+- **`error: the virtual environment at … cannot import tatolab.stream`** — the project does not
+  depend on `tatolab-stream` yet: `uv add tatolab-stream`.
+- **A node defined in `stream.py` is refused** — move the class into a module beside `stream.py` and
+  import it from there.
+- **`tatolab dev: kept the running stream — fix the error and save again`** — the last edit failed
+  to compile; its traceback is printed just above.
+- **`No usable Vulkan driver (ICD) was found` or `No Vulkan loader library could be opened`**
+  (Linux) — install your GPU vendor's Vulkan driver (the proprietary NVIDIA driver, or
+  `mesa-vulkan-drivers` for AMD and Intel) and the loader (`libvulkan1`), then check that
+  `vulkaninfo` runs.
+- **No camera, or the wrong one** — `tatolab new … --test-pattern` wires `TestPatternSource`
+  instead. `CameraSource` takes the first capture device unless its `device_id` config names one (a
+  V4L2 path such as `/dev/video2` on Linux, a camera's unique ID on macOS); a named device that
+  cannot be opened is refused by name.
+- **No picture on macOS** — the first run asks for camera access without waiting: the stream starts,
+  and frames begin once you allow it. macOS asks on behalf of the application that started the
+  runtime — your terminal — so a refusal names that application and the Camera setting to change.
+- **A verb finds no runtime, or several** — start one with `tatolab dev`, or pick one with
+  `--node`, using a name or id from `tatolab nodes`.
+- **`tatolab logs --list` shows nothing** — the runtime writes its logs under the directory it was
+  started in, the stream's project; run `tatolab logs` there.
+- **A `VirtualCameraSink` cannot create its loopback camera** — run `tatolab enable-virtual-camera`
+  once. It needs the `v4l2loopback` module for your kernel (`v4l2loopback-dkms` on Debian and
+  Ubuntu). Until then the sink's default door registers a PipeWire camera instead.
 
 ## License
 
-StreamLib is [BUSL-1.1](LICENSE), converting automatically to
-[Apache 2.0](LICENSES/Apache-2.0.txt) on **January 1, 2029**.
+Licensed under [BUSL-1.1](LICENSE), converting automatically to
+[Apache 2.0](LICENSES/Apache-2.0.txt) on **January 1, 2029**. [LICENSE](LICENSE) states the
+parameters — the Licensor, the Licensed Work and the Additional Use Grant.
 
 **What you build is yours; reselling the runtime itself needs a license.**
 
-Free, no permission needed: building stages, applications, robots, and products on StreamLib —
-commercial, private, or open source; selling stages you wrote with their source closed; personal,
-educational, and research use.
+Free, no permission needed: building nodes, applications, robots, and products on it — commercial,
+private, or open source; selling nodes you wrote with their source closed; personal, educational,
+and research use.
 
 A commercial license is required to sell, host as a managed service, white-label, or sublicense
 **the runtime itself** — the engine, graph compiler, scheduler, processor execution, GPU context,
 and link infrastructure — as your product.
 
-StreamLib also distributes third-party code. Each dependency's copyright notice and licence
+Tatolab also distributes third-party code. Each dependency's copyright notice and licence
 text, as of that file's last regeneration, is reproduced in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), which the wheel ships in its
-`.dist-info/licenses/`.
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), which the runtime carries beside
+`tatolab.runtime` in its lend's `.dist-info/licenses/`.
 
 [Commercial licensing](docs/license/COMMERCIAL-LICENSING.md) ·
 [Partner licensing](docs/license/PARTNER-LICENSING.md) · [CLA](docs/license/CLA.md)
@@ -449,8 +579,6 @@ text, as of that file's last regeneration, is reproduced in
 ---
 
 <div align="center">
-
-Built by [Tatolab](https://tatolab.com) — sensory infrastructure for AI.
 
 [tatolab.com](https://tatolab.com) · [hello@tatolab.com](mailto:hello@tatolab.com)
 

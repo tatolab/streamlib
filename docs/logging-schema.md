@@ -3,9 +3,10 @@
 This is the **durable interface contract** for logs emitted by the
 StreamLib runtime. Every line of every segment under
 `<STREAMLIB_HOME>/.streamlib/logs/` (see [Files and rotation](#files-and-rotation))
-is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — the wheel's
-`streamlib logs` (`sdk/streamlib-python-wheel/python/tatolab/runtime/_runtime_log_reader.py`)
-and any tool that reads a runtime's segments — depend on this shape.
+is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — `tatolab logs`,
+which renders each record with the runtime's own `format_event_pretty` from the
+`streamlib-runtime-on-disk-contract` crate, and any tool that reads a runtime's
+segments — depend on this shape.
 
 > ~~polyglot SDKs, the future orchestrator~~ — Superseded 2026-09-14: the Python
 > wheel is the only polyglot SDK and the orchestrator is retired.
@@ -65,7 +66,7 @@ active segment. A reader following the active segment detects a rotation when
 the active name points at a *different* file than the one it holds open — a
 missing name is not yet a rotation. It then finishes the held file, finds which
 `seq` that file became by matching its inode, reads the segments rotated after
-it, and reopens the active name. `streamlib logs --follow` does this.
+it, and reopens the active name. `tatolab logs --follow` does this.
 
 ## Fields
 

@@ -104,9 +104,10 @@ doesn't include `--tests`.
 
 Files that legitimately bypass the unified pathway because they *install*
 it — e.g. the processor interpreter bootstrap
-(`_processor_interpreter_bootstrap.py`) and log plumbing
-(`_runtime_log_reader.py`) — carry a file-level pragma near their
-copyright header:
+(`_processor_interpreter_bootstrap.py`) — or because their stdout is a
+protocol rather than log output — e.g. the compile entry `tatolab run`
+runs in a project's venv (`_project_stream_compile_entry.py`) — carry a
+file-level pragma near their copyright header:
 
 ```python
 # streamlib:lint-logging:allow-file — installs the unified pathway; must touch sys.stdout/sys.stderr directly
