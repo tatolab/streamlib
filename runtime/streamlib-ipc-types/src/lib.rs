@@ -532,25 +532,24 @@ impl FrameHeader {
             .unwrap_or("")
     }
 
-    /// Read the payload a frame stamps, without trusting either length.
-    ///
-    /// `None` for a slice too short to hold a header at all, and for one whose
-    /// stamped length runs past what actually followed it. The second is the
-    /// dangerous case: the leading bytes of a truncated frame are a
-    /// well-formed shorter message in every self-describing wire format, so a
-    /// reader that sliced to the end of the buffer would hand back a payload
-    /// the sender never wrote, silently.
-    ///
-    /// The stamped length bounds the read rather than being trusted by it: it
-    /// is a `u32` off the wire. `buf` may be longer than the frame, because a
-    /// caller hands over whatever buffer it received the frame in — the
-    /// transport itself sends a slice of exactly the stamped size.
+    /// [`Self::payload_bounded_by_its_header`], `None` for either refusal.
     pub fn read_payload_from_slice(buf: &[u8]) -> Option<&[u8]> {
         Self::payload_bounded_by_its_header(buf).ok()
     }
 
-    /// The payload `frame_bytes` stamps, bounded by its stamped length as
-    /// [`Self::read_payload_from_slice`] bounds it, or why the bytes hold none.
+    /// The payload a frame stamps, read without trusting either length, or why the bytes hold
+    /// none.
+    ///
+    /// Refused for a slice too short to hold a header at all, and for one whose stamped length
+    /// runs past what actually followed it. The second is the dangerous case: the leading bytes
+    /// of a truncated frame are a well-formed shorter message in every self-describing wire
+    /// format, so a reader that sliced to the end of the buffer would hand back a payload the
+    /// sender never wrote, silently.
+    ///
+    /// The stamped length bounds the read rather than being trusted by it: it is a `u32` off the
+    /// wire. `frame_bytes` may be longer than the frame, because a caller hands over whatever
+    /// buffer it received the frame in — the transport itself sends a slice of exactly the
+    /// stamped size.
     pub fn payload_bounded_by_its_header(frame_bytes: &[u8]) -> Result<&[u8], FramePayloadRefusal> {
         let Some(followed_payload_bytes) = frame_bytes.get(FRAME_HEADER_SIZE..) else {
             return Err(FramePayloadRefusal::ShorterThanTheFrameHeader {
