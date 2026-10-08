@@ -7,7 +7,7 @@ The load test needs no device and runs in CI: `tatolabd` loads the graph and is
 then refused at the GPU. The camera tests start a graph on `tatolabd`, so they
 carry `requires_gpu` like every other graph test here — and they need
 the one-time permission the sink itself never takes: the v4l2loopback module
-loaded with its control node writable, which `streamlib enable-virtual-camera`
+loaded with its control node writable, which `tatolab enable-virtual-camera`
 installs. Without it they skip naming the verb, since the refusal path is what
 the engine's own unit tests already prove and a skipped test says why.
 
@@ -219,7 +219,7 @@ needs_the_loopback_permission = pytest.mark.skipif(
     not control_node_is_writable(),
     reason=(
         f"{CONTROL_NODE} is {'not writable by this user' if CONTROL_NODE.exists() else 'absent'}; "
-        "run `streamlib enable-virtual-camera` once on this machine"
+        "run `tatolab enable-virtual-camera` once on this machine"
     ),
 )
 
@@ -455,7 +455,7 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
     assert "VirtualCameraSink" in refusal
     assert "no permission to create a v4l2loopback camera" in refusal, refusal
     assert "/dev/v4l2loopback is absent" in refusal or "not writable by this user" in refusal, refusal
-    assert "streamlib enable-virtual-camera" in refusal, "the refusal names the one-time verb"
+    assert "tatolab enable-virtual-camera" in refusal, "the refusal names the one-time verb"
 
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
