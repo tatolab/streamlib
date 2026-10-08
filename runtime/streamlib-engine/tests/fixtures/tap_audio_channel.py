@@ -258,7 +258,7 @@ def report_for(tapped, tap_result=None, expect_frame_not_restamped=False):
 
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tapped_bags_json", help="what `streamlib tap` returned")
+    parser.add_argument("tapped_bags_json", help="what `tatolab tap` returned")
     parser.add_argument("--waveform", help="write the published samples here as WAV")
     parser.add_argument(
         "--expect-frame-not-restamped",

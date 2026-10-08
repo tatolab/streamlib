@@ -1,0 +1,31 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-runtime-client-contract"
+description = "The contract a running StreamLib runtime offers the clients on its machine: the files it leaves on disk and the names its local API speaks"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_runtime_client_contract"
+path = "src/lib.rs"
+
+[dependencies]
+libc.workspace = true
+# The surface-image exchange route's surface-id segment.
+percent-encoding = "2.3"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serial_test = "3.2"
+tempfile.workspace = true
+
+[lints]
+workspace = true

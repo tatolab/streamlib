@@ -3,25 +3,30 @@
 
 //! On-disk discovery registry for ApiServer-hosting runtimes.
 //!
-//! A runtime that hosts an [`crate::ApiServerProcessor`] writes one JSON entry
+//! A runtime that hosts the api-server's `ApiServerProcessor` writes one JSON entry
 //! per runtime into `<runtime directory>/nodes/<runtime_id>.json` once its
 //! local API socket binds, and removes it on clean teardown. The runtime directory
-//! is the one the engine resolved and checked as the runtime started. A CLI discovers
-//! live control planes by scanning that directory. Entry existence is tied to
-//! the control endpoint existing: a runtime without an ApiServer never appears.
+//! is the one the engine resolved and checked as the runtime started
+//! ([`crate::streamlib_runtime_directory::StreamlibRuntimeDirectory::node_registry_directory`]).
+//! A CLI discovers live control planes by scanning that directory. Entry existence
+//! is tied to the control endpoint existing: a runtime without an ApiServer never appears.
 //!
 //! The file body is the wire contract between the writing runtime and any
-//! reader (today the `streamlib nodes` command, in-process via this crate);
+//! reader — the native `tatolab nodes` reads it through this module;
 //! [`NODE_REGISTRY_SCHEMA_VERSION`] stamps it so a reader rejects an entry it
 //! does not understand.
 
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::directory_at_an_explicit_mode::{
+
+use crate::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
-use streamlib::sdk::runtime::RuntimeName;
+
+/// What every entry file's name ends with.
+const ENTRY_FILE_NAME_SUFFIX: &str = ".json";
 
 /// Schema version stamped into every [`NodeRegistryEntry`]. A reader skips an
 /// entry whose `schema_version` it does not recognize.
@@ -41,7 +46,9 @@ pub struct NodeRegistryEntry {
     pub local_api_socket_path: PathBuf,
     /// OS process id hosting the control plane.
     pub pid: u32,
-    /// Human hint for disambiguating nodes in a listing (process arg0 + cwd).
+    /// Human hint for disambiguating nodes in a listing (process arg0 + cwd);
+    /// an entry that carries none reads as empty.
+    #[serde(default)]
     pub hint: String,
 }
 
@@ -51,18 +58,27 @@ impl NodeRegistryEntry {
     /// derived from this process's arg0 and cwd.
     pub fn for_current_process(
         runtime_id: String,
-        runtime_name: &RuntimeName,
+        runtime_name: &str,
         local_api_socket_path: PathBuf,
     ) -> Self {
         Self {
             schema_version: NODE_REGISTRY_SCHEMA_VERSION,
             runtime_id,
-            runtime_name: runtime_name.as_str().to_string(),
+            runtime_name: runtime_name.to_string(),
             local_api_socket_path,
             pid: std::process::id(),
             hint: current_process_hint(),
         }
     }
+}
+
+/// One entry [`scan_entries`] read, with the file it was read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScannedNodeRegistryEntry {
+    /// The entry file the scan read.
+    pub entry_file_path: PathBuf,
+    /// The entry that file holds.
+    pub node_registry_entry: NodeRegistryEntry,
 }
 
 /// A named failure of a node-registry filesystem operation. No `()`-errors: each
@@ -87,7 +103,7 @@ pub enum NodeRegistryError {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// Reading the registry directory or an entry file failed.
+    /// Reading the registry directory failed.
     #[error("failed to read node registry path {path}: {source}")]
     EntryRead {
         path: PathBuf,
@@ -106,8 +122,7 @@ pub enum NodeRegistryError {
         source: serde_json::Error,
     },
     /// An entry decoded but carries a `schema_version` this reader does not
-    /// understand. Only `read_entry`'s strict single-entry lookup raises this;
-    /// `scan_entries` skips such an entry instead.
+    /// understand; `scan_entries` skips such an entry rather than failing.
     #[error(
         "node registry entry {path} has unrecognized schema_version {found} \
          (this reader understands {expected})"
@@ -148,34 +163,17 @@ pub fn write_entry(
 /// missing entry is not an error (idempotent teardown).
 #[tracing::instrument]
 pub fn remove_entry(registry_directory: &Path, runtime_id: &str) -> Result<(), NodeRegistryError> {
-    let path = registry_directory.join(entry_file_name(runtime_id));
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(NodeRegistryError::EntryRemove { path, source }),
-    }
-}
-
-/// Read the single discovery entry for `runtime_id`, or `None` if no entry
-/// exists. A present-but-corrupt or version-mismatched entry is an error — this
-/// is the strict single-entry lookup a `--node <runtime_id>` resolve uses.
-#[tracing::instrument]
-pub fn read_entry(
-    registry_directory: &Path,
-    runtime_id: &str,
-) -> Result<Option<NodeRegistryEntry>, NodeRegistryError> {
-    let path = registry_directory.join(entry_file_name(runtime_id));
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => return Err(NodeRegistryError::EntryRead { path, source }),
-    };
-    decode_entry_at_this_schema_version(&path, &bytes).map(Some)
+    remove_scanned_entry_file(&registry_directory.join(entry_file_name(runtime_id)))
 }
 
 /// Decode an entry file's bytes, checking `schema_version` before the rest so an
 /// entry of another version is refused by its version rather than by whichever
 /// field it lacks.
+///
+/// Every field must be the exact JSON type the writing runtime emits — a JSON
+/// object at the top, a whole number in `u32` for `schema_version` and `pid`,
+/// a string for the rest — so a `null` name is refused rather than coerced into
+/// one a listing would show and `--node` would resolve.
 fn decode_entry_at_this_schema_version(
     path: &Path,
     bytes: &[u8],
@@ -189,7 +187,12 @@ fn decode_entry_at_this_schema_version(
         path: path.to_path_buf(),
         source,
     };
-    let found = serde_json::from_slice::<EntrySchemaVersionOnly>(bytes)
+    // Through a map, because serde also reads a struct from a JSON array.
+    let entry_object = serde_json::Value::Object(
+        serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(bytes)
+            .map_err(decode_failure)?,
+    );
+    let found = EntrySchemaVersionOnly::deserialize(&entry_object)
         .map_err(decode_failure)?
         .schema_version;
     if found != NODE_REGISTRY_SCHEMA_VERSION {
@@ -199,17 +202,18 @@ fn decode_entry_at_this_schema_version(
             expected: NODE_REGISTRY_SCHEMA_VERSION,
         });
     }
-    serde_json::from_slice(bytes).map_err(decode_failure)
+    NodeRegistryEntry::deserialize(entry_object).map_err(decode_failure)
 }
 
-/// Scan every discovery entry, skipping (with a warning) any unreadable,
-/// undecodable, or version-mismatched file so one corrupt entry never breaks a
-/// listing. A missing registry directory yields an empty list. Only a failure
-/// to read the directory itself is a hard error.
+/// Scan every discovery entry — every `*.json` file in `registry_directory`, in
+/// file-name order — skipping (with a warning) any unreadable, undecodable, or
+/// version-mismatched file so one corrupt entry never breaks a listing. A
+/// missing registry directory yields an empty list. Only a failure to read the
+/// directory itself is a hard error.
 #[tracing::instrument]
 pub fn scan_entries(
     registry_directory: &Path,
-) -> Result<Vec<NodeRegistryEntry>, NodeRegistryError> {
+) -> Result<Vec<ScannedNodeRegistryEntry>, NodeRegistryError> {
     let read_dir = match std::fs::read_dir(registry_directory) {
         Ok(read_dir) => read_dir,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -221,38 +225,63 @@ pub fn scan_entries(
         }
     };
 
-    let mut entries = Vec::new();
+    let mut entry_file_paths = Vec::new();
     for dir_entry in read_dir {
         let dir_entry = dir_entry.map_err(|source| NodeRegistryError::EntryRead {
             path: registry_directory.to_path_buf(),
             source,
         })?;
-        let path = dir_entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
+        if dir_entry
+            .file_name()
+            .as_bytes()
+            .ends_with(ENTRY_FILE_NAME_SUFFIX.as_bytes())
+        {
+            entry_file_paths.push(dir_entry.path());
         }
-        let bytes = match std::fs::read(&path) {
+    }
+    entry_file_paths.sort();
+
+    let mut entries = Vec::new();
+    for entry_file_path in entry_file_paths {
+        let bytes = match std::fs::read(&entry_file_path) {
             Ok(bytes) => bytes,
             Err(error) => {
-                tracing::warn!(path = %path.display(), %error, "skipping unreadable node registry entry");
+                tracing::warn!(path = %entry_file_path.display(), %error, "skipping unreadable node registry entry");
                 continue;
             }
         };
-        match decode_entry_at_this_schema_version(&path, &bytes) {
-            Ok(entry) => entries.push(entry),
+        match decode_entry_at_this_schema_version(&entry_file_path, &bytes) {
+            Ok(node_registry_entry) => entries.push(ScannedNodeRegistryEntry {
+                entry_file_path,
+                node_registry_entry,
+            }),
             Err(NodeRegistryError::EntrySchemaVersionMismatch { found, .. }) => {
                 tracing::warn!(
-                    path = %path.display(),
+                    path = %entry_file_path.display(),
                     schema_version = found,
                     "skipping node registry entry with unrecognized schema_version"
                 );
             }
             Err(error) => {
-                tracing::warn!(path = %path.display(), %error, "skipping undecodable node registry entry");
+                tracing::warn!(path = %entry_file_path.display(), %error, "skipping undecodable node registry entry");
             }
         }
     }
     Ok(entries)
+}
+
+/// Remove an entry file a scan read, for a reader pruning an entry whose runtime
+/// is gone. A file already gone is not an error: another reader pruned it first.
+#[tracing::instrument]
+pub fn remove_scanned_entry_file(entry_file_path: &Path) -> Result<(), NodeRegistryError> {
+    match std::fs::remove_file(entry_file_path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(NodeRegistryError::EntryRemove {
+            path: entry_file_path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 /// The on-disk filename for `runtime_id`: `<runtime_id>.json` with any character
@@ -271,7 +300,7 @@ fn entry_file_name(runtime_id: &str) -> String {
             }
         })
         .collect();
-    format!("{sanitized}.json")
+    format!("{sanitized}{ENTRY_FILE_NAME_SUFFIX}")
 }
 
 /// A one-line hint for disambiguating nodes: the process's arg0 basename and
@@ -301,7 +330,7 @@ fn current_process_hint() -> String {
 
 #[cfg(test)]
 mod tests {
-    //! Registry write / scan / read / remove / prune-shape and the
+    //! Registry write / scan / remove / prune-shape and the
     //! `schema_version` round-trip, each against its own tempdir registry.
 
     use super::*;
@@ -310,6 +339,14 @@ mod tests {
     fn with_isolated_registry_directory<F: FnOnce(&std::path::Path) -> R, R>(f: F) -> R {
         let runtime_directory = tempfile::tempdir().expect("tempdir");
         f(&runtime_directory.path().join("nodes"))
+    }
+
+    fn scanned_entries(registry_directory: &Path) -> Vec<NodeRegistryEntry> {
+        scan_entries(registry_directory)
+            .expect("scan")
+            .into_iter()
+            .map(|scanned| scanned.node_registry_entry)
+            .collect()
     }
 
     fn sample_entry(runtime_id: &str) -> NodeRegistryEntry {
@@ -338,7 +375,13 @@ mod tests {
             );
 
             let scanned = scan_entries(registry_directory).expect("scan");
-            assert_eq!(scanned, vec![entry]);
+            assert_eq!(
+                scanned,
+                vec![ScannedNodeRegistryEntry {
+                    entry_file_path: path,
+                    node_registry_entry: entry
+                }]
+            );
         });
     }
 
@@ -375,23 +418,6 @@ mod tests {
     }
 
     #[test]
-    fn read_entry_returns_none_for_a_missing_runtime_and_the_entry_when_present() {
-        with_isolated_registry_directory(|registry_directory| {
-            assert!(
-                read_entry(registry_directory, "Rnobody")
-                    .expect("read missing")
-                    .is_none()
-            );
-            let entry = sample_entry("Rnode-delta");
-            write_entry(registry_directory, &entry).expect("write");
-            assert_eq!(
-                read_entry(registry_directory, &entry.runtime_id).expect("read"),
-                Some(entry)
-            );
-        });
-    }
-
-    #[test]
     fn scan_skips_a_corrupt_entry_and_still_returns_the_valid_ones() {
         with_isolated_registry_directory(|registry_directory| {
             let good = sample_entry("Rgood");
@@ -399,8 +425,7 @@ mod tests {
             let corrupt_path = registry_directory.join("Rcorrupt.json");
             std::fs::write(&corrupt_path, b"not json").expect("write corrupt");
 
-            let scanned = scan_entries(registry_directory).expect("scan tolerates corruption");
-            assert_eq!(scanned, vec![good]);
+            assert_eq!(scanned_entries(registry_directory), vec![good]);
         });
     }
 
@@ -413,21 +438,6 @@ mod tests {
             assert!(
                 scan_entries(registry_directory).expect("scan").is_empty(),
                 "an unrecognized schema_version must be skipped"
-            );
-        });
-    }
-
-    #[test]
-    fn read_entry_rejects_an_entry_with_an_unrecognized_schema_version() {
-        with_isolated_registry_directory(|registry_directory| {
-            let mut future = sample_entry("Rfuture-read");
-            future.schema_version = NODE_REGISTRY_SCHEMA_VERSION + 1;
-            write_entry(registry_directory, &future).expect("write future");
-            let error = read_entry(registry_directory, &future.runtime_id)
-                .expect_err("a version-mismatched entry must be a hard error, not Ok(Some(_))");
-            assert!(
-                matches!(error, NodeRegistryError::EntrySchemaVersionMismatch { .. }),
-                "expected a schema-version-mismatch error; got: {error}"
             );
         });
     }
@@ -445,14 +455,15 @@ mod tests {
                 "pid": 4242,
                 "hint": "streamlib (/tmp/example)",
             });
-            std::fs::write(
-                registry_directory.join("Rschema-two.json"),
-                serde_json::to_vec(&schema_two_entry).unwrap(),
-            )
-            .unwrap();
+            let schema_two_entry_path = registry_directory.join("Rschema-two.json");
+            let schema_two_entry_bytes = serde_json::to_vec(&schema_two_entry).unwrap();
+            std::fs::write(&schema_two_entry_path, &schema_two_entry_bytes).unwrap();
 
-            let error = read_entry(registry_directory, "Rschema-two")
-                .expect_err("a schema-2 entry must be refused");
+            let error = decode_entry_at_this_schema_version(
+                &schema_two_entry_path,
+                &schema_two_entry_bytes,
+            )
+            .expect_err("a schema-2 entry must be refused");
             assert!(
                 matches!(
                     error,
@@ -515,5 +526,173 @@ mod tests {
         assert_eq!(entry_file_name("Rplain"), "Rplain.json");
         assert_eq!(entry_file_name("../escape"), ".._escape.json");
         assert_eq!(entry_file_name("a/b"), "a_b.json");
+    }
+
+    /// The fields of an entry as the runtime writes it, for a test to bend one of.
+    fn sample_entry_json(runtime_id: &str) -> serde_json::Value {
+        serde_json::to_value(sample_entry(runtime_id)).unwrap()
+    }
+
+    fn write_entry_file(registry_directory: &Path, file_name: &str, contents: &[u8]) -> PathBuf {
+        std::fs::create_dir_all(registry_directory).unwrap();
+        let entry_file_path = registry_directory.join(file_name);
+        std::fs::write(&entry_file_path, contents).unwrap();
+        entry_file_path
+    }
+
+    #[test]
+    fn scan_skips_an_entry_whose_fields_are_the_wrong_json_type() {
+        let wrong_shapes = [
+            ("null-name", "runtime_name", serde_json::json!(null)),
+            (
+                "array-name",
+                "runtime_name",
+                serde_json::json!(["desk", "rig"]),
+            ),
+            (
+                "object-id",
+                "runtime_id",
+                serde_json::json!({"nested": "object"}),
+            ),
+            (
+                "fractional-version",
+                "schema_version",
+                serde_json::json!(2.9),
+            ),
+            ("float-version", "schema_version", serde_json::json!(3.0)),
+            ("boolean-version", "schema_version", serde_json::json!(true)),
+            ("boolean-pid", "pid", serde_json::json!(true)),
+            ("string-pid", "pid", serde_json::json!("4242")),
+            ("negative-pid", "pid", serde_json::json!(-1)),
+            (
+                "pid-beyond-u32",
+                "pid",
+                serde_json::json!(u64::from(u32::MAX) + 1),
+            ),
+            (
+                "null-socket-path",
+                "local_api_socket_path",
+                serde_json::json!(null),
+            ),
+            ("null-hint", "hint", serde_json::json!(null)),
+        ];
+        for (wrong_shape, field_name, wrong_value) in wrong_shapes {
+            with_isolated_registry_directory(|registry_directory| {
+                let mut entry_json = sample_entry_json("Rmalformed");
+                entry_json[field_name] = wrong_value;
+                write_entry_file(
+                    registry_directory,
+                    "Rmalformed.json",
+                    &serde_json::to_vec(&entry_json).unwrap(),
+                );
+
+                assert_eq!(scanned_entries(registry_directory), [], "{wrong_shape}");
+            });
+        }
+    }
+
+    #[test]
+    fn scan_skips_an_entry_whose_top_level_is_a_json_array() {
+        with_isolated_registry_directory(|registry_directory| {
+            let entry = sample_entry("Rarray");
+            let fields_in_declaration_order = serde_json::json!([
+                entry.schema_version,
+                entry.runtime_id,
+                entry.runtime_name,
+                entry.local_api_socket_path,
+                entry.pid,
+                entry.hint,
+            ]);
+            write_entry_file(
+                registry_directory,
+                "Rarray.json",
+                &serde_json::to_vec(&fields_in_declaration_order).unwrap(),
+            );
+
+            assert_eq!(scanned_entries(registry_directory), []);
+        });
+    }
+
+    #[test]
+    fn an_entry_that_carries_no_hint_is_read_with_an_empty_one() {
+        with_isolated_registry_directory(|registry_directory| {
+            let mut entry_json = sample_entry_json("Rhintless");
+            entry_json.as_object_mut().unwrap().remove("hint");
+            write_entry_file(
+                registry_directory,
+                "Rhintless.json",
+                &serde_json::to_vec(&entry_json).unwrap(),
+            );
+
+            let read = scanned_entries(registry_directory);
+            assert_eq!(read.len(), 1);
+            assert_eq!(read[0].hint, "");
+        });
+    }
+
+    /// A released engine can write a key this reader has no field for, and an
+    /// app pinned to that engine still runs.
+    #[test]
+    fn an_entry_carrying_a_key_this_reader_does_not_read_is_still_read() {
+        with_isolated_registry_directory(|registry_directory| {
+            let entry = sample_entry("Rcarries-an-unread-key");
+            let mut entry_json = serde_json::to_value(&entry).unwrap();
+            entry_json["a_key_this_reader_does_not_read"] = "any value".into();
+            write_entry_file(
+                registry_directory,
+                "Rcarries-an-unread-key.json",
+                &serde_json::to_vec(&entry_json).unwrap(),
+            );
+
+            assert_eq!(scanned_entries(registry_directory), [entry]);
+        });
+    }
+
+    #[test]
+    fn scan_reads_every_json_file_in_file_name_order_and_names_the_file_each_came_from() {
+        with_isolated_registry_directory(|registry_directory| {
+            for runtime_id in ["Rc", "Ra", "Rb"] {
+                write_entry(registry_directory, &sample_entry(runtime_id)).unwrap();
+            }
+            let hidden_entry_file_path = write_entry_file(
+                registry_directory,
+                ".json",
+                &serde_json::to_vec(&sample_entry("Rhidden")).unwrap(),
+            );
+            write_entry_file(
+                registry_directory,
+                "Rnot-an-entry.json.partial",
+                &serde_json::to_vec(&sample_entry("Rpartial")).unwrap(),
+            );
+
+            let scanned = scan_entries(registry_directory).unwrap();
+
+            assert_eq!(
+                scanned
+                    .iter()
+                    .map(|scanned| scanned.node_registry_entry.runtime_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["Rhidden", "Ra", "Rb", "Rc"]
+            );
+            assert_eq!(scanned[0].entry_file_path, hidden_entry_file_path);
+            assert_eq!(
+                scanned[1].entry_file_path,
+                registry_directory.join("Ra.json")
+            );
+        });
+    }
+
+    #[test]
+    fn removing_a_scanned_entry_file_deletes_it_and_a_file_already_gone_is_not_an_error() {
+        with_isolated_registry_directory(|registry_directory| {
+            let entry_file_path =
+                write_entry(registry_directory, &sample_entry("Rpruned")).unwrap();
+
+            remove_scanned_entry_file(&entry_file_path).expect("remove");
+            assert!(!entry_file_path.exists());
+
+            remove_scanned_entry_file(&entry_file_path)
+                .expect("a file another reader already pruned is not an error");
+        });
     }
 }

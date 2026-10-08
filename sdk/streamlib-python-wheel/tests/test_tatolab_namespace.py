@@ -183,7 +183,6 @@ def test_every_public_tatolab_module_is_swept_for_processor():
     assert {
         "tatolab.stream",
         "tatolab.runtime",
-        "tatolab.runtime.cli",
         "tatolab.stream.node_output_texture_ring",
     } <= swept_module_names
 

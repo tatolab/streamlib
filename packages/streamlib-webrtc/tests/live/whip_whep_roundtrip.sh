@@ -28,12 +28,12 @@
 # `tatolab run`, compiled in this package's own `.venv` — `tatolab-stream` and a
 # current `maturin develop` of this wheel, and no engine. The runtime unit is
 # `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else the checkout's `target/tatolab-runtime`
-# (`cargo xtask build-runtime`); the observation verbs come from its lend.
+# (`cargo xtask build-runtime`); the observation verbs are its `bin/tatolab`.
 #
 # CREDENTIALS. Cloudflare Stream carries the stream key as a path segment, so
 # each URL is itself a credential. Both are read from the environment, passed to
 # the stream through the environment (never argv, which `/proc` publishes), and
-# never printed, logged, or written into the output directory. `streamlib graph`
+# never printed, logged, or written into the output directory. `tatolab graph`
 # renders every processor's config, so this script reads the graph in a pipe and
 # never persists it.
 #
@@ -104,10 +104,9 @@ VENV_PYTHON="$PACKAGE_DIR/.venv/bin/python"
 [ -x "$VENV_PYTHON" ] || cannot_run \
     "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and \`maturin develop\` this wheel into it"
 
-# The verbs of the Python `streamlib` CLI, from the lend, until the native CLI
-# carries them.
-streamlib_observation_verb() {
-    PYTHONPATH="$RUNTIME_UNIT_LEND_DIRECTORY" "$VENV_PYTHON" -m tatolab.runtime.cli "$@"
+# The runtime unit's `tatolab` observation verbs.
+tatolab_observation_verb() {
+    "$TATOLAB_EXECUTABLE" "$@"
 }
 
 # This arm scores whatever `_native.so` that venv holds, so a stale extension
@@ -269,25 +268,25 @@ NODE_ANSWERED=0
 for _ in $(seq 1 120); do
     kill -0 "$NODE_PID" 2>/dev/null || break
     if [ -z "$RUNTIME_ID" ]; then
-        RUNTIME_ID="$(PYTHONPATH="$RUNTIME_UNIT_LEND_DIRECTORY" "$VENV_PYTHON" \
-            "$ENGINE_FIXTURES/runtime_id_of_launched_node.py" "$NODE_PID" 2>/dev/null)" \
+        RUNTIME_ID="$(python3 "$ENGINE_FIXTURES/runtime_id_of_launched_node.py" \
+            "$TATOLAB_EXECUTABLE" "$NODE_PID" 2>/dev/null)" \
             || RUNTIME_ID=""
     fi
-    if [ -n "$RUNTIME_ID" ] && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+    if [ -n "$RUNTIME_ID" ] && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
         NODE_ANSWERED=1
         break
     fi
     sleep 0.5
 done
 [ "$NODE_ANSWERED" = 1 ] \
-    || { tail -40 "$LOG_FILE" >&2; fail "the node never published a registry entry that answered \`streamlib graph\`"; }
+    || { tail -40 "$LOG_FILE" >&2; fail "the node never published a registry entry that answered \`tatolab graph\`"; }
 say "Runtime id:        $RUNTIME_ID"
 
 # A channel is the port's address, `<runtime_name>/<node>/<port>`. Derived from
 # the live graph, in a pipe: the graph renders every node's config, and this
 # graph's config holds both endpoint URLs.
 channel_of() {
-    streamlib_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+    tatolab_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 wanted_node_name, wanted_port = sys.argv[1], sys.argv[2]
@@ -319,7 +318,7 @@ say "Waiting for the first decoded frame (deadline ${MEDIA_DEADLINE_SECONDS}s)..
 # reports a channel that has produced nothing as ready, and the run then spends
 # the exchange budget before the far side has connected.
 tapped_bag_count() {
-    streamlib_observation_verb tap "$1" --count 1 --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+    tatolab_observation_verb tap "$1" --count 1 --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 try:
     print(json.load(sys.stdin).get("received", 0))
@@ -342,7 +341,7 @@ if [ "$FIRST_FRAME_SEEN" -ne 1 ]; then
 fi
 
 # ── The video arm: the decode-back ───────────────────────────────────
-if ! streamlib_observation_verb exchange \
+if ! tatolab_observation_verb exchange \
         --channel "$DECODED_VIDEO_CHANNEL" \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \

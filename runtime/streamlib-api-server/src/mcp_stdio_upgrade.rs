@@ -10,7 +10,7 @@
 //! `rmcp`'s alone: concurrency, `notifications/cancelled`, the in-flight
 //! answers a closing stream still owes, and `subscriptions/listen`.
 //!
-//! `streamlib mcp` is the client: it sends the upgrade, then copies bytes.
+//! `tatolab mcp` is the client: it sends the upgrade, then copies bytes.
 
 use axum::extract::Request;
 use axum::http::header::{CONNECTION, UPGRADE};
@@ -19,13 +19,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get};
 use hyper_util::rt::TokioIo;
 use rmcp::ServiceExt;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    MCP_STDIO_UPGRADE_PROTOCOL_TOKEN, MCP_STDIO_UPGRADE_REQUEST_TARGET,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::mcp::LocalApiMcpServerHandler;
-
-/// The `Upgrade` protocol token `/mcp/stdio` switches to; `streamlib mcp`
-/// sends it verbatim.
-const MCP_STDIO_UPGRADE_PROTOCOL: &str = "mcp-stdio";
 
 /// `/mcp/stdio`'s route: each upgraded connection is served until it closes
 /// or `local_api_stopping_token` is cancelled.
@@ -50,7 +49,10 @@ async fn answer_the_mcp_stdio_upgrade(
         return (
             StatusCode::UPGRADE_REQUIRED,
             mcp_stdio_upgrade_response_headers(),
-            "`/mcp/stdio` serves MCP only after `Connection: upgrade` and `Upgrade: mcp-stdio`",
+            format!(
+                "`{MCP_STDIO_UPGRADE_REQUEST_TARGET}` serves MCP only after `Connection: upgrade` \
+                 and `Upgrade: {MCP_STDIO_UPGRADE_PROTOCOL_TOKEN}`"
+            ),
         )
             .into_response();
     }
@@ -86,14 +88,14 @@ fn mcp_stdio_upgrade_response_headers() -> [(HeaderName, HeaderValue); 2] {
         (CONNECTION, HeaderValue::from_static("upgrade")),
         (
             UPGRADE,
-            HeaderValue::from_static(MCP_STDIO_UPGRADE_PROTOCOL),
+            HeaderValue::from_static(MCP_STDIO_UPGRADE_PROTOCOL_TOKEN),
         ),
     ]
 }
 
 fn requests_the_mcp_stdio_upgrade(request_headers: &HeaderMap) -> bool {
     header_lists_token(request_headers, CONNECTION, "upgrade")
-        && header_lists_token(request_headers, UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL)
+        && header_lists_token(request_headers, UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN)
 }
 
 /// Whether any `header_name` value, read as HTTP's comma-separated list, holds
@@ -374,7 +376,7 @@ mod tests {
         );
     }
 
-    /// `streamlib mcp` half-closes on its stdin's end; what the node already
+    /// `tatolab mcp` half-closes on its stdin's end; what the node already
     /// accepted is still answered before the node closes its side.
     #[tokio::test]
     async fn half_closing_the_stream_answers_the_requests_in_flight_then_closes() {

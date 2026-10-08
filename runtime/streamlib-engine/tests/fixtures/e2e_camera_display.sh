@@ -144,7 +144,7 @@ fi
 echo "[e2e] Node registered: $RUNTIME_ID"
 
 # ── Graph assertions ─────────────────────────────────────────────────
-streamlib_observation_verb graph --node "$RUNTIME_ID" >"$GRAPH_FILE" 2>/dev/null || true
+tatolab_observation_verb graph --node "$RUNTIME_ID" >"$GRAPH_FILE" 2>/dev/null || true
 
 GRAPH_VERDICT="$(python3 - "$GRAPH_FILE" <<'PYEOF'
 import json

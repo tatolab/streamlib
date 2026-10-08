@@ -60,20 +60,36 @@ pub fn run(project_root: &Path) -> Result<()> {
             v.line_text.trim_end(),
         );
     }
+    let dependency_graph = NormalBuildDepGraph::from_metadata(
+        &crate::run_cargo_metadata_resolve_document(project_root)?,
+    )?;
     // Check 12 — transitive trunk-set -> engine walk (cargo metadata based;
     // layered on the direct manifest check 11 inside scan_all).
-    let engine_chains = run_trunk_transitive_check(project_root)?;
+    let engine_chains = find_trunk_engine_chains(&dependency_graph);
     for chain in &engine_chains {
         eprintln!(
             "[{}] trunk crate `{}` transitively depends on `{}`: {}\n    {}",
             CHECK_TRUNK_NO_ENGINE_DEP,
-            chain.trunk,
+            chain.root_crate,
             TRUNK_ENGINE_CRATE_NAME,
             chain.display_chain(),
             TRUNK_NO_ENGINE_DEP_RATIONALE,
         );
     }
-    let total_violations = report.violations.len() + engine_chains.len();
+    // Check 13 — the engine-free clients' closure holds no engine-carrying crate.
+    let client_engine_chains = find_engine_free_client_engine_chains(&dependency_graph)?;
+    for chain in &client_engine_chains {
+        tracing::error!(
+            "[{}] `{}` links `{}`: {}\n    {}",
+            CHECK_CLIENT_LINKS_NO_ENGINE,
+            chain.root_crate,
+            chain.chain.last().map(String::as_str).unwrap_or_default(),
+            chain.display_chain(),
+            CLIENT_LINKS_NO_ENGINE_RATIONALE,
+        );
+    }
+    let total_violations =
+        report.violations.len() + engine_chains.len() + client_engine_chains.len();
     if total_violations == 0 {
         println!(
             "check-boundaries: {} file(s) scanned, no violations",
@@ -82,10 +98,11 @@ pub fn run(project_root: &Path) -> Result<()> {
         Ok(())
     } else {
         Err(anyhow::anyhow!(
-            "check-boundaries: {} violation(s) ({} grep + {} transitive trunk->engine chain(s)) across {} file(s) scanned — see docs/architecture/subprocess-rhi-parity.md",
+            "check-boundaries: {} violation(s) ({} grep + {} transitive trunk->engine chain(s) + {} engine-free client->engine chain(s)) across {} file(s) scanned — see docs/architecture/subprocess-rhi-parity.md",
             total_violations,
             report.violations.len(),
             engine_chains.len(),
+            client_engine_chains.len(),
             report.files_scanned,
         ))
     }
@@ -1259,19 +1276,19 @@ fn check_trunk_set_no_engine_dep(
 /// of the boundary contract (packages dep it directly).
 const TRUNK_CRATE_NAMES: &[&str] = &["streamlib-macros", "streamlib-consumer-rhi"];
 
-/// A discovered trunk-crate → `streamlib-engine` dependency chain, as package
-/// names from the trunk crate to the engine inclusive.
+/// A root crate's normal + build dependency chain to a crate its closure must
+/// never hold, as package names from the root to that crate inclusive.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrunkEngineChain {
-    /// The trunk crate the chain starts at.
-    pub trunk: String,
-    /// Package names from the trunk crate to `streamlib-engine`, inclusive and
+pub struct DependencyChainToAForbiddenCrate {
+    /// The crate the chain starts at.
+    pub root_crate: String,
+    /// Package names from the root crate to the forbidden crate, inclusive and
     /// in traversal order.
     pub chain: Vec<String>,
 }
 
-impl TrunkEngineChain {
-    /// Render the chain as `<trunk> -> … -> streamlib-engine`.
+impl DependencyChainToAForbiddenCrate {
+    /// Render the chain as `<root> -> … -> <forbidden crate>`.
     pub fn display_chain(&self) -> String {
         self.chain.join(" -> ")
     }
@@ -1281,18 +1298,33 @@ impl TrunkEngineChain {
 /// WORKSPACE MEMBERS ONLY and return every chain that reaches
 /// `streamlib-engine`. Pure over the parsed graph so it unit-tests against a
 /// synthetic `cargo metadata` fixture without the live tree.
-pub fn find_trunk_engine_chains(graph: &NormalBuildDepGraph) -> Vec<TrunkEngineChain> {
+pub fn find_trunk_engine_chains(
+    graph: &NormalBuildDepGraph,
+) -> Vec<DependencyChainToAForbiddenCrate> {
+    find_dependency_chains_to_forbidden_crates(graph, TRUNK_CRATE_NAMES, &[TRUNK_ENGINE_CRATE_NAME])
+}
+
+/// For each workspace crate named in `root_crate_names`, the shortest chain over
+/// workspace-member normal + build edges to any crate named in
+/// `forbidden_crate_names`, when one exists.
+fn find_dependency_chains_to_forbidden_crates(
+    graph: &NormalBuildDepGraph,
+    root_crate_names: &[&str],
+    forbidden_crate_names: &[&str],
+) -> Vec<DependencyChainToAForbiddenCrate> {
     let mut chains = Vec::new();
-    for &trunk_name in TRUNK_CRATE_NAMES {
-        for root_id in graph.ids_named(trunk_name) {
-            // A trunk crate resolves to a workspace member; skip any same-named
-            // external package (cannot reach the in-tree engine anyway).
+    for &root_crate_name in root_crate_names {
+        for root_id in graph.ids_named(root_crate_name) {
+            // A root resolves to a workspace member; skip any same-named
+            // external package (cannot reach an in-tree crate anyway).
             if !graph.is_workspace_member(root_id) {
                 continue;
             }
-            if let Some(chain_ids) = shortest_member_chain_to_engine(graph, root_id) {
-                chains.push(TrunkEngineChain {
-                    trunk: trunk_name.to_string(),
+            if let Some(chain_ids) =
+                shortest_member_chain_to_a_forbidden_crate(graph, root_id, forbidden_crate_names)
+            {
+                chains.push(DependencyChainToAForbiddenCrate {
+                    root_crate: root_crate_name.to_string(),
                     chain: chain_ids
                         .iter()
                         .map(|id| graph.name_of(id).unwrap_or(id).to_string())
@@ -1305,11 +1337,12 @@ pub fn find_trunk_engine_chains(graph: &NormalBuildDepGraph) -> Vec<TrunkEngineC
 }
 
 /// Breadth-first search from `root_id` over workspace-member normal + build
-/// edges, returning the shortest id path (root..=engine) that reaches
-/// `streamlib-engine`, or `None` if the engine is unreachable.
-fn shortest_member_chain_to_engine<'graph>(
+/// edges, returning the shortest id path (root..=forbidden crate) that reaches
+/// a crate named in `forbidden_crate_names`, or `None` if none is reachable.
+fn shortest_member_chain_to_a_forbidden_crate<'graph>(
     graph: &'graph NormalBuildDepGraph,
     root_id: &'graph str,
+    forbidden_crate_names: &[&str],
 ) -> Option<Vec<&'graph str>> {
     use std::collections::{HashMap, HashSet, VecDeque};
     let mut predecessor: HashMap<&str, &str> = HashMap::new();
@@ -1318,7 +1351,11 @@ fn shortest_member_chain_to_engine<'graph>(
     visited.insert(root_id);
     queue.push_back(root_id);
     while let Some(id) = queue.pop_front() {
-        if id != root_id && graph.name_of(id) == Some(TRUNK_ENGINE_CRATE_NAME) {
+        if id != root_id
+            && graph
+                .name_of(id)
+                .is_some_and(|name| forbidden_crate_names.contains(&name))
+        {
             // Reconstruct the path root..=id via the predecessor map.
             let mut path = vec![id];
             let mut cursor = id;
@@ -1332,8 +1369,8 @@ fn shortest_member_chain_to_engine<'graph>(
         for dep in graph.normal_build_deps(id) {
             let dep = dep.as_str();
             // Traverse INTO workspace members only — an external crate cannot
-            // depend on the in-tree engine, so it cannot lie on the chain. The
-            // engine is a member, so this never prunes the target.
+            // depend on an in-tree crate, so it cannot lie on the chain. Every
+            // forbidden crate is a member, so this never prunes the target.
             if !graph.is_workspace_member(dep) {
                 continue;
             }
@@ -1346,14 +1383,58 @@ fn shortest_member_chain_to_engine<'graph>(
     None
 }
 
-/// Run `cargo metadata` at `project_root` and return every trunk-set → engine
-/// transitive chain. Layered on the direct manifest [`check_trunk_set_no_engine_dep`]:
-/// that check catches a direct engine dep with precise file:line; this catches
-/// an engine reached through an intermediate workspace crate.
-fn run_trunk_transitive_check(project_root: &Path) -> Result<Vec<TrunkEngineChain>> {
-    let metadata = crate::run_cargo_metadata_resolve_document(project_root)?;
-    let graph = NormalBuildDepGraph::from_metadata(&metadata)?;
-    Ok(find_trunk_engine_chains(&graph))
+// ---------------------------------------------------------------------------
+// Check 13 — `tatolab` and the runtime client contract link no engine
+// ---------------------------------------------------------------------------
+//
+// `tatolab` reaches a running runtime only through the files it leaves on disk
+// and its local API socket, both spelled by the runtime client contract, so
+// neither crate's normal + build closure may hold a crate that carries the
+// engine. Same walk as check 12, over the same `cargo metadata` graph.
+
+const CHECK_CLIENT_LINKS_NO_ENGINE: &str = "client-crates-link-no-engine";
+
+const CLIENT_LINKS_NO_ENGINE_RATIONALE: &str = "`tatolab` and streamlib-runtime-client-contract reach a running runtime only through its files and its local API socket, so their normal + build closure must never hold streamlib-engine, the `streamlib` facade, streamlib-api-server or streamlib-python-wheel. Move what the client needs into streamlib-runtime-client-contract (or another engine-free crate) rather than depending on one of those. [dev-dependencies] are exempt";
+
+/// The crates whose normal + build closure must never hold a crate named in
+/// [`ENGINE_CARRYING_CRATE_NAMES`].
+const ENGINE_FREE_CLIENT_CRATE_NAMES: &[&str] =
+    &["tatolab-cli", "streamlib-runtime-client-contract"];
+
+/// The engine, and the workspace crates that carry it into whatever links them.
+const ENGINE_CARRYING_CRATE_NAMES: &[&str] = &[
+    "streamlib-engine",
+    "streamlib",
+    "streamlib-api-server",
+    "streamlib-python-wheel",
+];
+
+/// Every engine-free client crate → engine-carrying crate chain in `graph`.
+///
+/// Refuses a graph missing any crate either list names: a renamed crate would
+/// otherwise make the walk pass without reading what it guards.
+pub fn find_engine_free_client_engine_chains(
+    graph: &NormalBuildDepGraph,
+) -> Result<Vec<DependencyChainToAForbiddenCrate>> {
+    for &named_crate in ENGINE_FREE_CLIENT_CRATE_NAMES
+        .iter()
+        .chain(ENGINE_CARRYING_CRATE_NAMES)
+    {
+        anyhow::ensure!(
+            graph
+                .ids_named(named_crate)
+                .into_iter()
+                .any(|id| graph.is_workspace_member(id)),
+            "[{CHECK_CLIENT_LINKS_NO_ENGINE}] no workspace crate is named `{named_crate}` — \
+             the crate was renamed or removed, so update the gate's lists in \
+             xtask/src/check_boundaries.rs rather than let it pass without reading it"
+        );
+    }
+    Ok(find_dependency_chains_to_forbidden_crates(
+        graph,
+        ENGINE_FREE_CLIENT_CRATE_NAMES,
+        ENGINE_CARRYING_CRATE_NAMES,
+    ))
 }
 
 /// True iff `rel` (a workspace-relative path) begins with `prefix`
@@ -2781,7 +2862,7 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
         let graph = NormalBuildDepGraph::from_metadata(&md).unwrap();
         let chains = find_trunk_engine_chains(&graph);
         assert_eq!(chains.len(), 1, "expected one chain, got {:?}", chains);
-        assert_eq!(chains[0].trunk, "streamlib-macros");
+        assert_eq!(chains[0].root_crate, "streamlib-macros");
         assert_eq!(
             chains[0].display_chain(),
             "streamlib-macros -> streamlib-intermediate -> streamlib-engine",
@@ -2826,7 +2907,7 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
         let graph = NormalBuildDepGraph::from_metadata(&md).unwrap();
         let chains = find_trunk_engine_chains(&graph);
         assert_eq!(chains.len(), 1, "expected one chain, got {:?}", chains);
-        assert_eq!(chains[0].trunk, "streamlib-consumer-rhi");
+        assert_eq!(chains[0].root_crate, "streamlib-consumer-rhi");
         assert_eq!(
             chains[0].display_chain(),
             "streamlib-consumer-rhi -> streamlib-intermediate -> streamlib-engine",
@@ -2852,5 +2933,145 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
             "clean graph must yield no chain: {:?}",
             chains
         );
+    }
+
+    // ----- Check 13: the engine-free clients link no engine (synthetic metadata) -----
+
+    /// Every workspace crate check 13 names, plus the transport crate `tatolab`
+    /// really links, as `(id, name)` pairs.
+    const ENGINE_FREE_CLIENT_FIXTURE_PACKAGES: &[(&str, &str)] = &[
+        ("cli", "tatolab-cli"),
+        ("contract", "streamlib-runtime-client-contract"),
+        ("ipc", "streamlib-ipc-types"),
+        ("eng", "streamlib-engine"),
+        ("facade", "streamlib"),
+        ("api", "streamlib-api-server"),
+        ("wheel", "streamlib-python-wheel"),
+    ];
+
+    /// A workspace of `packages`, every one a member, joined by `edges`.
+    fn workspace_graph_of(
+        packages: &[(&str, &str)],
+        edges: &[(&str, &str, &str)],
+    ) -> NormalBuildDepGraph {
+        let members: Vec<&str> = packages.iter().map(|(id, _)| *id).collect();
+        NormalBuildDepGraph::from_metadata(&synthetic_metadata(&members, packages, edges)).unwrap()
+    }
+
+    fn displayed_engine_free_client_chains(graph: &NormalBuildDepGraph) -> Vec<String> {
+        find_engine_free_client_engine_chains(graph)
+            .unwrap()
+            .iter()
+            .map(DependencyChainToAForbiddenCrate::display_chain)
+            .collect()
+    }
+
+    /// The tree's own shape: the engine and the api-server link the contract,
+    /// and nothing the clients link reaches back.
+    #[test]
+    fn clients_that_link_only_the_contract_and_the_transport_pass() {
+        let graph = workspace_graph_of(
+            ENGINE_FREE_CLIENT_FIXTURE_PACKAGES,
+            &[
+                ("cli", "contract", "normal"),
+                ("cli", "ipc", "normal"),
+                ("api", "contract", "normal"),
+                ("api", "facade", "normal"),
+                ("facade", "eng", "normal"),
+                ("eng", "contract", "normal"),
+                ("eng", "ipc", "normal"),
+                ("wheel", "facade", "normal"),
+            ],
+        );
+
+        assert_eq!(
+            displayed_engine_free_client_chains(&graph),
+            Vec::<String>::new()
+        );
+    }
+
+    /// The failure names each client and the whole path to what it links, so the
+    /// edge to cut is on the line.
+    #[test]
+    fn a_client_reaching_an_engine_crate_through_another_crate_fails_naming_the_path() {
+        let graph = workspace_graph_of(
+            ENGINE_FREE_CLIENT_FIXTURE_PACKAGES,
+            &[
+                ("cli", "contract", "normal"),
+                ("contract", "ipc", "normal"),
+                ("ipc", "api", "build"),
+                ("api", "facade", "normal"),
+                ("facade", "eng", "normal"),
+            ],
+        );
+
+        assert_eq!(
+            displayed_engine_free_client_chains(&graph),
+            [
+                "tatolab-cli -> streamlib-runtime-client-contract -> streamlib-ipc-types -> \
+                 streamlib-api-server",
+                "streamlib-runtime-client-contract -> streamlib-ipc-types -> streamlib-api-server",
+            ]
+        );
+    }
+
+    #[test]
+    fn each_engine_carrying_crate_is_refused_on_its_own() {
+        for (engine_carrying_id, engine_carrying_name) in [
+            ("eng", "streamlib-engine"),
+            ("facade", "streamlib"),
+            ("api", "streamlib-api-server"),
+            ("wheel", "streamlib-python-wheel"),
+        ] {
+            let graph = workspace_graph_of(
+                ENGINE_FREE_CLIENT_FIXTURE_PACKAGES,
+                &[("contract", engine_carrying_id, "normal")],
+            );
+
+            assert_eq!(
+                displayed_engine_free_client_chains(&graph),
+                [format!(
+                    "streamlib-runtime-client-contract -> {engine_carrying_name}"
+                )],
+            );
+        }
+    }
+
+    /// A test may drive the real runtime; only what links into the binary counts.
+    #[test]
+    fn an_engine_crate_reached_only_through_a_dev_edge_passes() {
+        let graph = workspace_graph_of(
+            ENGINE_FREE_CLIENT_FIXTURE_PACKAGES,
+            &[("cli", "api", "dev"), ("contract", "eng", "dev")],
+        );
+
+        assert_eq!(
+            displayed_engine_free_client_chains(&graph),
+            Vec::<String>::new()
+        );
+    }
+
+    /// A renamed crate would leave the walk nothing to start from, or nothing to
+    /// find, and read as a pass.
+    #[test]
+    fn a_graph_missing_a_crate_the_gate_names_is_refused_rather_than_passed() {
+        for (missing_id, missing_name) in [("cli", "tatolab-cli"), ("api", "streamlib-api-server")]
+        {
+            let packages: Vec<(&str, &str)> = ENGINE_FREE_CLIENT_FIXTURE_PACKAGES
+                .iter()
+                .copied()
+                .filter(|(id, _)| *id != missing_id)
+                .collect();
+            let graph = workspace_graph_of(&packages, &[]);
+
+            let refusal = find_engine_free_client_engine_chains(&graph)
+                .unwrap_err()
+                .to_string();
+
+            assert!(
+                refusal.contains(&format!("no workspace crate is named `{missing_name}`")),
+                "{refusal}"
+            );
+        }
     }
 }

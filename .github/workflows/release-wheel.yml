@@ -1,263 +1,152 @@
-name: Release Wheel
+name: Release to PyPI
 
-# The release channel: release-please cuts a GitHub release, this builds the
-# wheel onto it and rebuilds the PEP 503 simple index that serves it, so
-# `pip install streamlib --index-url <pages-url>` is one stable incantation.
-# PyPI publication waits for the project rename; the artifact is identical.
+# The release channel: release-please cuts a GitHub release, and this publishes
+# `tatolab-stream` and every first-party extension to PyPI at that release's
+# version. A stream's venv takes them from PyPI like any other dependency. The
+# engine wheel is not published: a processor interpreter borrows the runtime
+# from the runtime unit's lend, so no stream's venv installs it.
 #
-# Every project this repo publishes comes through here, because one index serves
-# them all and it is regenerated whole on every run. They carry the repository's
-# one version and release on its one tag — the engine wheel, `tatolab-stream`
-# and every extension — and the index rebuild waits for all of them, so a
-# release publishes one index describing every one.
+# Every distribution carries the repository's one version and releases on its
+# one tag, and the upload waits for every one of them and for the macOS proof of
+# the runtime unit, so a release publishes all of them or none.
 #
-# Called from release-please.yml rather than triggered by `on: release`, for the
-# same reason `trigger-schemas` is: release-please runs on the default
-# GITHUB_TOKEN, and GitHub does not start workflow runs from events that token
-# raises. An `on: release` trigger here would simply never fire.
+# Called from release-please.yml rather than triggered by `on: release`:
+# release-please runs on the default GITHUB_TOKEN, and GitHub does not start
+# workflow runs from events that token raises. An `on: release` trigger here
+# would simply never fire.
+#
+# Only a run whose `dry_run` is false uploads. release-please's call passes
+# false; every other run is a dry run unless dispatched with `dry_run` unticked,
+# which is how a release whose distributions were never built or uploaded is
+# published by hand. A partially failed upload is recovered by re-running the
+# original run's failed publish-to-pypi job instead: a new dispatch rebuilds the
+# tatolab-webrtc wheels, whose compiled `_native` differs byte for byte from the
+# files PyPI already holds, so their upload fails on a hash mismatch. A dry run
+# builds and checks every distribution and stops short of PyPI.
 on:
   workflow_call:
     inputs:
       tag_name:
-        description: "Release tag to attach every wheel to (blank = none this run)"
+        description: "Release tag to build and publish"
         type: string
         required: false
         default: ""
-  # Rebuilding the index alone is the common manual case — a release edited or
-  # deleted by hand leaves the index describing files that are not there. A
-  # blank tag is exactly that: no wheel is built and the index is regenerated
-  # from the release history.
+      dry_run:
+        description: "Build and check every distribution without uploading"
+        type: boolean
+        required: false
+        default: true
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag to attach every wheel to (blank = rebuild the index only)"
+        description: "Release tag to build (blank = the ref this run was dispatched on; an upload needs one)"
         type: string
         required: false
+      dry_run:
+        description: "Build and check every distribution without uploading"
+        type: boolean
+        required: false
+        default: true
 
 env:
-  # The shaderc release `glslc` is built from, and the glslc cache key. One
-  # place, so a bump cannot move the binary without moving the key.
-  GLSLC_SHADERC_TAG: v2026.3
+  # The uv that builds, locks and uploads every distribution.
+  PINNED_UV_VERSION: "0.12.23"
 
 jobs:
-  build-wheel:
-    name: manylinux wheel
-    if: inputs.tag_name != ''
+  build-tatolab-stream-distribution:
+    name: tatolab-stream wheel and sdist
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag_name }}
-
-      # abi3-py310: one wheel covers CPython 3.10 and every later GIL-enabled
-      # release, so this is a single build rather than a matrix. The container
-      # is manylinux_2_28 because the plan's portability model is the
-      # wgpu/opencv-python shape — the Vulkan loader, the window system and
-      # libcuda are dlopen'd at runtime, never linked, so the only glibc floor
-      # that matters is the one our own code compiles against.
-      # Keyed on the shaderc tag alone: the same tag always yields the same
-      # binary, so this is a build-once-per-tag-bump cache, not a
-      # rebuild-per-release one.
-      - name: Cache the glslc binary
-        uses: actions/cache@v4
-        with:
-          path: .glslc-cache
-          key: glslc-${{ env.GLSLC_SHADERC_TAG }}-manylinux_2_28
-
-      - name: Build the wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: sdk/streamlib-python-wheel
-          target: x86_64
-          docker-options: -e GLSLC_SHADERC_TAG -e GITHUB_WORKSPACE
-          manylinux: 2_28
-          args: --release --out dist
-          # No `sccache`, and the reason is measured rather than assumed.
-          # maturin-action offers it and enabling it is the common move, so it
-          # was tried here and rejected on its own numbers: two runs of this
-          # job against the same tag, one cold and one warm.
-          #
-          #   cold cache   0.55 % hits    cargo phase 12.9 min
-          #   warm cache  99.45 % hits    cargo phase 11.7 min
-          #   no sccache        —         cargo phase  7.3 min
-          #
-          # A 99.45 % hit rate still lost to simply recompiling. The backend is
-          # the Actions cache over the network: 359 objects at ~0.3 s each is
-          # ~1.8 min of download before anything compiles, and sccache turns
-          # incremental compilation off to do it. Fetching a cached Rust crate
-          # costs more here than rebuilding it. Re-measure before re-enabling.
-          # The engine's build.rs invokes `glslc`. AlmaLinux 8 — the
-          # manylinux_2_28 base — packages none in base or EPEL, and Google's
-          # prebuilt link 404s, so it is built from the pinned shaderc tag.
-          # That costs ~4 min, and unlike the `shaderc` crate's own C++ build
-          # (which cargo overlaps with everything else) it sits strictly before
-          # cargo starts, so every second of it is on the critical path.
-          #
-          # Hence the cache above: the binary depends only on GLSLC_SHADERC_TAG,
-          # so it is built once per tag bump instead of once per release. The
-          # workspace is mounted into the container at the same path it has on
-          # the host, so $GITHUB_WORKSPACE resolves on both sides. If it is
-          # somehow unset the script still builds from source — slower, never
-          # wrong.
-          before-script-linux: |
-            set -euo pipefail
-            # No python3-devel: it replaces the image's /usr/bin/python3
-            # (3.12) with AlmaLinux's 3.6, which maturin refuses — and an
-            # extension-module wheel links no libpython, so the headers it
-            # brings are not needed here. The Ubuntu test workflow does need
-            # them; that job builds the crate's unit tests, which link it.
-            # Bounded, mirror-escaping install. An unbounded `dnf install`
-            # here is the last unbounded network fetch on the release path:
-            # `check-bounded-apt-install` covers the apt family under
-            # .github/ and states this one is out of its reach, "a real
-            # unbounded fetch all the same".
-            #
-            # The mode that costs is a *slow* mirror, not a stalled one — a
-            # measured apt run fetched 35.6 MB at 48 kB/s over 12m17s while
-            # every request made forward progress, so retry-on-error and
-            # inactivity timeouts both sit idle through it. Only a wall-clock
-            # bound detects that, which is what `timeout` is for.
-            #
-            # Unlike apt, retrying is a real escape here: AlmaLinux resolves a
-            # `mirrorlist=` per invocation, so a fresh attempt can land on a
-            # different host. `dnf clean all` between attempts is what forces
-            # that re-resolution rather than reusing the cached choice. (The
-            # apt script switches mirrors explicitly precisely because apt has
-            # only the one configured.)
-            #
-            # 420s per attempt is deliberately generous: the slowest setup
-            # phase on record is 282s, so a merely-mediocre mirror still
-            # finishes on the first attempt rather than being killed and
-            # retried. Three attempts bounds the pathological case at ~21 min
-            # against the job's 90-minute ceiling, where today it could run
-            # most of that ceiling down on its own.
-            dnf_attempt_timeout_seconds=420
-            dnf_attempt_limit=3
-            install_build_dependencies_with_bounded_retry() {
-              for attempt in $(seq 1 "$dnf_attempt_limit"); do
-                if timeout --kill-after=10s "${dnf_attempt_timeout_seconds}s" \
-                  dnf install -y --setopt=retries=3 --setopt=timeout=30 "$@"; then
-                  return 0
-                fi
-                echo "::warning::dnf attempt ${attempt} failed or blew the ${dnf_attempt_timeout_seconds}s bound; clearing the cache so the next attempt re-resolves the mirrorlist"
-                dnf clean all >/dev/null 2>&1 || true
-              done
-              echo "::error::dnf install did not complete in ${dnf_attempt_limit} bounded attempts of ${dnf_attempt_timeout_seconds}s"
-              return 1
-            }
-            install_build_dependencies_with_bounded_retry \
-              pkgconfig protobuf-compiler clang-devel \
-              vulkan-headers vulkan-loader-devel \
-              cmake ninja-build git
-            GLSLC_CACHE_DIR="${GITHUB_WORKSPACE:-}/.glslc-cache"
-            if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -x "$GLSLC_CACHE_DIR/glslc" ]; then
-              echo "reusing the cached glslc"
-              install -m 0755 "$GLSLC_CACHE_DIR/glslc" /usr/local/bin/glslc
-            else
-              echo "building glslc from shaderc ${GLSLC_SHADERC_TAG}"
-              git clone --depth 1 --branch "${GLSLC_SHADERC_TAG}" \
-                https://github.com/google/shaderc /tmp/shaderc
-              # In a subshell: maturin runs in the shell this script leaves
-              # behind, so a bare `cd` here builds the wheel from the shaderc
-              # checkout and fails with "Can't find /tmp/shaderc/Cargo.toml".
-              (
-                cd /tmp/shaderc
-                ./utils/git-sync-deps
-                cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
-                  -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON \
-                  -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
-                ninja -C build glslc_exe
-                install -m 0755 build/glslc/glslc /usr/local/bin/glslc
-              )
-              if [ -n "${GITHUB_WORKSPACE:-}" ]; then
-                mkdir -p "$GLSLC_CACHE_DIR"
-                install -m 0755 /usr/local/bin/glslc "$GLSLC_CACHE_DIR/glslc"
-              fi
-            fi
-            glslc --version
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.PINNED_UV_VERSION }}
 
-      # Released with the engine wheel at the same version, every release: the
-      # engine wheel depends on it at exactly that version. Pure Python, so this
-      # one wheel serves every platform the engine ships for.
-      - name: Build the tatolab-stream wheel
-        run: uv build --wheel --out-dir sdk/tatolab-stream/dist sdk/tatolab-stream
+      # Pure Python, so this one wheel serves every platform a stream runs on.
+      # uv builds the sdist first and the wheel from it, so a file the sdist
+      # drops is missing from the wheel too.
+      - name: Build the tatolab-stream wheel and sdist
+        run: uv build --out-dir sdk/tatolab-stream/dist sdk/tatolab-stream
 
       # PEP 420: `tatolab` is a namespace package. A regular `tatolab/__init__.py`
-      # in either wheel would shadow every other distribution's `tatolab.*`
-      # portion installed beside it. Each listing is required to name its own
-      # regular package's `__init__.py`, so a wheel missing it, or an empty or
-      # unreadable listing, fails rather than passing. Neither wheel carries
-      # the other's package; a copy would overwrite it on install.
-      - name: The wheels ship tatolab as a namespace package
+      # would shadow every other distribution's `tatolab.*` portion installed
+      # beside it, and `tatolab/runtime/` is the lend's, never a stream venv's.
+      # Each listing is required to name the stream package's `__init__.py`, so
+      # a distribution missing it, or an empty or unreadable listing, fails
+      # rather than passing.
+      - name: The wheel and the sdist ship tatolab as a namespace package
         run: |
-          unzip -Z1 sdk/streamlib-python-wheel/dist/*.whl > /tmp/wheel-member-names.txt
-          grep -qx 'tatolab/runtime/__init__.py' /tmp/wheel-member-names.txt
-          if grep -q '^tatolab/stream/' /tmp/wheel-member-names.txt; then
-            echo "::error::the engine wheel ships tatolab/stream/, which is tatolab-stream's"
-            exit 1
-          fi
+          set -euo pipefail
           unzip -Z1 sdk/tatolab-stream/dist/*.whl > /tmp/stream-wheel-member-names.txt
-          grep -qx 'tatolab/stream/__init__.py' /tmp/stream-wheel-member-names.txt
-          if grep -q '^tatolab/runtime/' /tmp/stream-wheel-member-names.txt; then
-            echo "::error::the tatolab-stream wheel ships tatolab/runtime/, which is the engine wheel's"
-            exit 1
-          fi
-          if grep -qx 'tatolab/__init__.py' /tmp/wheel-member-names.txt /tmp/stream-wheel-member-names.txt; then
-            echo "::error::a wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
-            exit 1
-          fi
+          # An sdist's members sit under its `<name>-<version>/` directory.
+          tar -tzf sdk/tatolab-stream/dist/*.tar.gz | sed 's|^[^/]*/||' \
+            > /tmp/stream-sdist-member-names.txt
+          for member_names in /tmp/stream-wheel-member-names.txt /tmp/stream-sdist-member-names.txt; do
+            if ! grep -qx 'tatolab/stream/__init__.py' "$member_names"; then
+              echo "::error::$member_names does not list tatolab/stream/__init__.py"
+              exit 1
+            fi
+            if grep -q '^tatolab/runtime/' "$member_names"; then
+              echo "::error::$member_names lists tatolab/runtime/, which is the lend's and never a stream venv's"
+              exit 1
+            fi
+            if grep -qx 'tatolab/__init__.py' "$member_names"; then
+              echo "::error::$member_names lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
+              exit 1
+            fi
+          done
 
-      # `tatolab new` writes the scaffold; it is the native CLI, which links no
-      # engine, so it builds here in a minute rather than with the engine. In
-      # its own step so the wheel check below stays about the wheel.
+      # `tatolab new` writes the scaffold.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # The native CLI links no engine, so no Vulkan or shader compiler, but it
+      # reads a tapped bag's frame through streamlib-ipc-types, which builds
+      # iceoryx2, and iceoryx2's bindgen needs libclang. `timeout-minutes` is the
+      # native backstop the composite action cannot declare for itself;
+      # `check-bounded-apt-install` fails the build if it goes missing.
+      - name: Install libclang for iceoryx2's bindgen
+        timeout-minutes: 12
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: >-
+            libclang1-18
+            libclang-common-18-dev
 
       - name: Build the native tatolab CLI
         run: cargo build --locked --release -p tatolab-cli
 
-      # A wheel that cannot be installed and cannot answer `--help` is not a
-      # release artifact. This is the first moment the console script exists as
-      # a real entry point rather than a table in pyproject.toml.
-      - name: The wheel installs, and the scaffold is importable by name
+      # What a user's `uv sync` gives a scaffolded stream: this run's
+      # `tatolab-stream` and the numpy the scaffold declares, and nothing of
+      # the runtime. Importing a node runs its decorator and boots no engine, so
+      # this needs no GPU.
+      - name: A scaffolded stream's nodes import beside this run's tatolab-stream
         run: |
-          python3 -m venv /tmp/wheel-check
-          /tmp/wheel-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist \
-            sdk/streamlib-python-wheel/dist/*.whl
-          # The scaffolded effect imports numpy, which the scaffold declares as
-          # its own dependency — installing it here is what `uv sync` does for a
-          # real user, and it makes the import below prove the declared set is
-          # actually sufficient.
-          /tmp/wheel-check/bin/pip install 'numpy>=2.1'
-          # The notices only discharge anything if they reach the artifact a
-          # user installs, and this job builds the only one that does. Worth
-          # asserting here rather than trusting the test suite: that runs
-          # against `maturin develop`, while this is `maturin-action` with no
-          # maturin version pinned, inside a manylinux container, resolving PEP
-          # 639 globs that are symlinks out of the project root. Read through
-          # importlib.metadata, so a file present in the repo and absent from
-          # the wheel fails rather than passes.
-          /tmp/wheel-check/bin/python -c "
+          python3 -m venv /tmp/scaffold-venv
+          /tmp/scaffold-venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
+          /tmp/scaffold-venv/bin/pip install 'numpy>=2.1'
+          # BUSL-1.1's parameters are in its text, not its SPDX id, so the text
+          # has to reach what a user installs. Read through importlib.metadata,
+          # so a licence present in the checkout and absent from the wheel fails.
+          /tmp/scaffold-venv/bin/python -c "
           from importlib.metadata import distribution
-          shipped = distribution('streamlib')
-          for name in ('LICENSE', 'THIRD-PARTY-NOTICES.md'):
-              text = shipped.read_text('licenses/' + name) or ''
-              assert text.strip(), name + ' is absent from .dist-info/licenses/'
-          notices = shipped.read_text('licenses/THIRD-PARTY-NOTICES.md')
-          assert 'VulkanMemoryAllocator' in notices, 'the vendored C++ appendix did not ship'
+          license_text = distribution('tatolab-stream').read_text('licenses/LICENSE') or ''
+          assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
           "
 
-          /tmp/wheel-check/bin/streamlib --help
           target/release/tatolab new /tmp/scaffold-check --test-pattern
           test -f /tmp/scaffold-check/stream.py
           test -f /tmp/scaffold-check/nodes/inverting_effect.py
+          test -f /tmp/scaffold-check/nodes/brightness_meter.py
           # A node class in the entry file identifies as `__main__:<Type>`
           # and is a wiring error: the entry runs as `__main__`, and the child
           # interpreter that runs the node imports the class by name.
@@ -268,50 +157,21 @@ jobs:
             echo "::error::the scaffold put a node class in stream.py — it would identify as __main__:<Type>"
             exit 1
           fi
-          # The name the engine will spawn the child with must actually resolve.
-          # Importing the module runs the decorator; it boots no engine, so this
-          # needs no GPU.
-          cd /tmp/scaffold-check && /tmp/wheel-check/bin/python -c \
-            'from nodes.inverting_effect import InvertingEffect'
+          cd /tmp/scaffold-check && /tmp/scaffold-venv/bin/python -c '
+          from nodes.brightness_meter import BrightnessMeter
+          from nodes.inverting_effect import InvertingEffect
+          '
 
-      # The install above is offline; a user's `uv sync` resolves against the
-      # published index, where every earlier `tatolab-stream` is a candidate and
-      # PyPI holds a placeholder under the same name. The scaffold sources
-      # `tatolab-stream` from the explicit index, so one that stopped doing so
-      # would quietly lock the placeholder or an older release. This run's
-      # wheels join a local copy of the index built from every published
-      # release, and the scaffold must lock the `tatolab-stream` just built.
-      - name: A scaffolded stream locks the tatolab-stream wheel this run built
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # A user's `uv sync` resolves `tatolab-stream` from PyPI, where every
+      # earlier release is a candidate. This run's distributions are not there
+      # yet, so they join PyPI as find-links, and the scaffold must lock the
+      # `tatolab-stream` just built — one that capped the version or named
+      # another index would lock something else.
+      - name: A scaffolded stream locks the tatolab-stream this run built
         run: |
-          gh api "repos/${{ github.repository }}/releases" --paginate --slurp \
-            > /tmp/releases.json
-          python3 - <<'PYTHON'
-          import json
-          from pathlib import Path
-
-          pages = json.loads(Path("/tmp/releases.json").read_text())
-          releases = [release for page in pages for release in page]
-          wheels_this_run_built = sorted(
-              Path("sdk/streamlib-python-wheel/dist").glob("*.whl")
-          ) + sorted(Path("sdk/tatolab-stream/dist").glob("*.whl"))
-          releases.insert(0, {
-              "draft": False,
-              "assets": [
-                  {"name": wheel.name, "browser_download_url": wheel.resolve().as_uri()}
-                  for wheel in wheels_this_run_built
-              ],
-          })
-          Path("/tmp/releases-with-this-run.json").write_text(json.dumps(releases))
-          PYTHON
-          python3 scripts/build_simple_index.py \
-            --releases-json /tmp/releases-with-this-run.json \
-            --output-dir /tmp/index-with-this-run
-          sed -i 's|https://tatolab.github.io/streamlib/simple/|file:///tmp/index-with-this-run/simple/|' \
-            /tmp/scaffold-check/pyproject.toml
-          (cd /tmp/scaffold-check && uv lock)
-          built_stream_package_version="$(/tmp/wheel-check/bin/python -c \
+          set -euo pipefail
+          (cd /tmp/scaffold-check && UV_FIND_LINKS="$GITHUB_WORKSPACE/sdk/tatolab-stream/dist" uv lock)
+          built_stream_package_version="$(/tmp/scaffold-venv/bin/python -c \
             "from importlib.metadata import version; print(version('tatolab-stream'))")"
           locked_stream_package_version="$(python3 -c "
           import tomllib
@@ -319,104 +179,110 @@ jobs:
           print(next(package['version'] for package in lock['package'] if package['name'] == 'tatolab-stream'))
           ")"
           if [ "$locked_stream_package_version" != "$built_stream_package_version" ]; then
-            echo "::error::a scaffolded stream locks tatolab-stream $locked_stream_package_version against the published index, not the $built_stream_package_version this run built"
+            echo "::error::a scaffolded stream locks tatolab-stream $locked_stream_package_version, not the $built_stream_package_version this run built"
             exit 1
           fi
 
-      - name: Attach the wheels to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ inputs.tag_name }}" \
-            sdk/streamlib-python-wheel/dist/*.whl sdk/tatolab-stream/dist/*.whl --clobber
+      # Every `pypi-distribution-*` artifact of this run is what publish-to-pypi
+      # uploads.
+      - name: Keep the distributions for the upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-distribution-tatolab-stream
+          path: |
+            sdk/tatolab-stream/dist/*.whl
+            sdk/tatolab-stream/dist/*.tar.gz
+          if-no-files-found: error
 
-  # The same engine release for Apple Silicon, built on a macOS runner and
-  # attached beside the manylinux wheel. The index groups by project name, so a
-  # second platform tag needs nothing from it.
-  build-macos-wheel:
-    if: inputs.tag_name != ''
+  # An extension is a standalone project built from the same ref. A named block
+  # rather than a matrix over a JSON array: an empty `include` is a matrix
+  # expansion failure, and a second extension is one more block like this one.
+  # Its install check resolves `tatolab-stream` from this run's distribution,
+  # which is why it waits for it.
+  build-tatolab-webrtc-distribution:
+    needs: build-tatolab-stream-distribution
     permissions:
-      contents: write
-    uses: ./.github/workflows/macos-wheel.yml
-    with:
-      ref: ${{ inputs.tag_name }}
-      release_tag_name: ${{ inputs.tag_name }}
-
-  # An extension wheel is a standalone project built onto the same release. A
-  # named block rather than a matrix over a JSON array: an empty `include` is a
-  # matrix expansion failure, and a second extension is six lines here.
-  build-tatolab-webrtc-wheel:
-    if: inputs.tag_name != ''
-    permissions:
-      contents: write
+      contents: read
     uses: ./.github/workflows/release-extension-wheel.yml
     with:
       extension_package_directory: packages/streamlib-webrtc
       extension_distribution_name: tatolab-webrtc
       extension_import_package_name: tatolab.webrtc
-      tag_name: ${{ inputs.tag_name }}
+      ref: ${{ inputs.tag_name }}
+      tatolab_stream_distribution_artifact_name: pypi-distribution-tatolab-stream
 
-  publish-simple-index:
-    name: PEP 503 simple index
-    # Every wheel job is a dependency so that one published index describes
-    # every wheel this run attached. `always()` plus the explicit result check:
-    # an index-only rebuild skips every wheel job, and a skipped dependency must
-    # not skip this too.
-    #
-    # The failure check names the two engine wheels alone, deliberately — macOS
-    # is a supported floor, so its wheel failing withholds the index exactly as
-    # the manylinux one does. The generator
-    # rebuilds from the whole release history rather than appending, so a failed
-    # extension build attaches no asset and leaves that project's page exactly
-    # where it was — nothing is corrupted and nothing is omitted that was there
-    # before. Withholding the rebuild would instead keep the engine wheel that
-    # *did* build out of the index, which is a blast radius the engine wheel's
-    # publish path never had. The failed job is red on its own, and the
-    # index-only `workflow_dispatch` above is the repair.
-    needs:
-      - build-wheel
-      - build-macos-wheel
-      - build-tatolab-webrtc-wheel
-    if: always() && needs.build-wheel.result != 'failure' && needs.build-macos-wheel.result != 'failure'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    # GitHub Pages, sourced from Actions rather than a gh-pages branch — no
-    # committed build output, and the index is regenerated from the release
-    # history on every run.
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+  # macOS is a supported floor, so a macOS-only regression in the runtime unit
+  # blocks the release exactly as a Linux one does, though nothing it builds is
+  # uploaded.
+  prove-the-runtime-unit-on-macos:
     permissions:
       contents: read
-      pages: write
-      id-token: write
+    uses: ./.github/workflows/macos-wheel.yml
+    with:
+      ref: ${{ inputs.tag_name }}
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs:
+      - build-tatolab-stream-distribution
+      - build-tatolab-webrtc-distribution
+      - prove-the-runtime-unit-on-macos
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {}
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: The index generator's own tests
-        working-directory: scripts
-        run: python3 -m unittest test_build_simple_index
-
-      # Rebuilt from the whole release history rather than appended to, so a
-      # re-run repairs a bad index and a deleted release drops out on its own.
-      # The listing is the generator's only input, which is what lets one run
-      # publish every project: every wheel is an asset on the one release, and
-      # the grouping is by the wheel's own name.
-      - name: Generate the index from every published release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api "repos/${{ github.repository }}/releases" --paginate --slurp \
-            > /tmp/releases.json
-          python3 scripts/build_simple_index.py \
-            --releases-json /tmp/releases.json \
-            --output-dir /tmp/pages
-
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          path: /tmp/pages
-      - id: deploy
-        uses: actions/deploy-pages@v4
+          version: ${{ env.PINNED_UV_VERSION }}
+          # No checkout and nothing to resolve, so nothing to cache.
+          enable-cache: false
+
+      - name: Collect every distribution this run built
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pypi-distribution-*
+          path: dist
+          merge-multiple: true
+
+      # PyPI never takes a file name twice, so a distribution uploaded at the
+      # wrong version cannot be replaced by the right one.
+      - name: Every distribution carries the release's version
+        if: inputs.tag_name != ''
+        env:
+          RELEASE_TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          set -euo pipefail
+          release_version="${RELEASE_TAG_NAME#v}"
+          for distribution_path in dist/*; do
+            distribution_file_name="$(basename "$distribution_path")"
+            # The version is the second `-`-separated field of a wheel's or an
+            # sdist's file name; the name before it is normalized to underscores.
+            distribution_version="$(echo "${distribution_file_name%.tar.gz}" | cut -d- -f2)"
+            if [ "$distribution_version" != "$release_version" ]; then
+              echo "::error::$distribution_file_name is version $distribution_version, not the $release_version $RELEASE_TAG_NAME releases"
+              exit 1
+            fi
+          done
+          ls -l dist
+
+      - name: An upload names the release it publishes
+        if: ${{ !inputs.dry_run && inputs.tag_name == '' }}
+        run: |
+          echo "::error::an upload to PyPI publishes a release — name its tag in tag_name"
+          exit 1
+
+      # Reads every file's metadata as the upload would, and uploads nothing.
+      - name: Check every distribution without uploading
+        if: inputs.dry_run
+        run: uv publish --dry-run --trusted-publishing never dist/*
+
+      # `--check-url` skips a file PyPI already holds byte for byte, so re-running
+      # this job in the original run after a partial upload sends only the rest;
+      # a rebuilt distribution differs and fails on a hash mismatch.
+      - name: Upload every distribution to PyPI
+        if: ${{ !inputs.dry_run }}
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish --trusted-publishing never --check-url https://pypi.org/simple/ dist/*

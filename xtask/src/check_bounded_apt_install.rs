@@ -23,10 +23,11 @@
 //! indentation, so a `with:` input of that name does not satisfy the gate. A
 //! step spelled across a YAML anchor or an `!!merge` key is not recognised as a
 //! step at all. The front-end list is the apt family only, so
-//! `release-wheel.yml`'s `dnf install` inside its manylinux container passes —
-//! that job is release-time, runs in a container this action cannot serve, and
-//! is deliberately out of scope; it is a real unbounded fetch all the same. Two
-//! more live on [`line_fetches_packages`], which owns the shell heuristic.
+//! `release-extension-wheel.yml`'s `dnf install` inside its manylinux container
+//! passes — that job is release-time, runs in a container this action cannot
+//! serve, and is deliberately out of scope; it carries its own wall-clock-bounded
+//! retry instead. Two more live on [`line_fetches_packages`], which owns the
+//! shell heuristic.
 //!
 //! The scan root is `.github/` alone, so a workflow step that shells out to a
 //! script elsewhere in the repo is uncovered — `repo-gates.yml` already runs

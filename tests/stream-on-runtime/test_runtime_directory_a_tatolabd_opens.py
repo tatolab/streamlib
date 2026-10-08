@@ -1,19 +1,18 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Where a running `tatolabd` keeps its live files, and the reader that finds them agreeing.
+"""Where a running `tatolabd` keeps its live files, and `tatolab nodes` reading them agreeing.
 
-`nodes` finds what a runtime wrote only if the lend's reader resolves the
-runtime directory exactly as the engine does. `tatolabd` opens its iceoryx2
-node and its surface socket as it builds the engine, before the load, so the
-agreement is checked against a real `tatolabd` held mid-load, with no device.
+`tatolab nodes` finds what a runtime wrote only if it resolves the runtime
+directory exactly as the engine does. `tatolabd` opens its iceoryx2 node and
+its surface socket as it builds the engine, before the load, so the agreement
+is checked against a real `tatolabd` held mid-load, with no device.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -23,31 +22,22 @@ import pytest
 from conftest import PrivateRuntimeDirectories, environment_overlaid_with, environment_reaching_no_vulkan_driver
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
 from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT, RuntimeProcessUnderTest
-from runtime_unit_under_test import SUITE_VENV_INTERPRETER, RuntimeUnitUnderTest
+from runtime_unit_under_test import (
+    RuntimeUnitUnderTest,
+    run_tatolab_observation_verb_in_environment,
+    runtime_directory_tatolab_nodes_read,
+)
 
 PER_USER_FALLBACK = Path("/tmp") / f"streamlib-{os.getuid()}"
 
-READER_REPORTING_THE_RESOLVED_RUNTIME_DIRECTORY = (
-    "from tatolab.runtime._node_registry import runtime_directory\nprint(runtime_directory())\n"
-)
 
-READER_TIMEOUT_SECONDS = 60.0
-
-
-def runtime_directory_the_lends_reader_resolves(
+def runtime_directory_tatolab_nodes_resolves(
     runtime_unit: RuntimeUnitUnderTest, environment: "dict[str, str]"
 ) -> Path:
-    """The runtime directory the lent `tatolab.runtime` resolves in `environment`."""
-    finished = subprocess.run(
-        [str(SUITE_VENV_INTERPRETER), "-c", READER_REPORTING_THE_RESOLVED_RUNTIME_DIRECTORY],
-        env={**environment, "PYTHONPATH": str(runtime_unit.lend_directory)},
-        capture_output=True,
-        text=True,
-        timeout=READER_TIMEOUT_SECONDS,
-        check=False,
-    )
-    assert finished.returncode == 0, finished.stderr
-    return Path(finished.stdout.strip().splitlines()[-1])
+    """The runtime directory the runtime unit's `tatolab nodes` reads in `environment`."""
+    listed = run_tatolab_observation_verb_in_environment(runtime_unit, environment, "nodes")
+    assert listed.returncode == 0, listed.stdout + listed.stderr
+    return runtime_directory_tatolab_nodes_read(listed.stdout)
 
 
 def iceoryx2_node_details_in(runtime_directory: Path) -> "set[Path]":
@@ -59,7 +49,7 @@ def surface_sockets_in(runtime_directory: Path) -> "set[Path]":
 
 
 @pytest.mark.parametrize("xdg_runtime_dir_arm", ["set", "empty", "unset"])
-def test_the_reader_resolves_the_directory_a_runtime_opened_its_domain_in(
+def test_tatolab_nodes_resolves_the_directory_a_runtime_opened_its_domain_in(
     start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
     held_node_module: NodeModuleWhoseDescribeHoldsTheLoad,
     private_runtime_directories: PrivateRuntimeDirectories,
@@ -68,14 +58,14 @@ def test_the_reader_resolves_the_directory_a_runtime_opened_its_domain_in(
     xdg_runtime_dir_arm: str,
 ):
     """The engine's half of the agreement is what `tatolabd` actually created:
-    its iceoryx2 domain and, on Linux, its surface socket. The reader must name
-    the directory holding both."""
+    its iceoryx2 domain and, on Linux, its surface socket. `tatolab nodes` must
+    name the directory holding both."""
     xdg_runtime_directory_override: "dict[str, str | None]" = {
         "set": {},
         "empty": {"XDG_RUNTIME_DIR": ""},
         "unset": {"XDG_RUNTIME_DIR": None},
     }[xdg_runtime_dir_arm]
-    resolved = runtime_directory_the_lends_reader_resolves(
+    resolved = runtime_directory_tatolab_nodes_resolves(
         runtime_unit,
         environment_overlaid_with(private_runtime_directories.environment, xdg_runtime_directory_override),
     )
@@ -99,7 +89,7 @@ def test_the_reader_resolves_the_directory_a_runtime_opened_its_domain_in(
     assert STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT in tatolabd.stderr_text, tatolabd.recent_stderr()
     report = json.dumps(
         {
-            "resolved_by_the_reader": str(resolved),
+            "resolved_by_tatolab_nodes": str(resolved),
             "new_node_details": [str(details) for details in new_node_details],
             "new_sockets": [str(socket) for socket in new_sockets],
         }

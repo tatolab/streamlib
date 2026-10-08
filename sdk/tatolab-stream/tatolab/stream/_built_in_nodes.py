@@ -625,7 +625,7 @@ class VirtualCameraSink(BuiltInNode[VirtualCameraSinkConfig]):
     Under the `auto` door the sink creates a v4l2loopback device when the module's
     control node is writable — the door every application sees — and otherwise registers
     a PipeWire camera node, which needs no module and no root. The door is logged at
-    setup; without permission to create a loopback camera the log names `streamlib
+    setup; without permission to create a loopback camera the log names `tatolab
     enable-virtual-camera`, the one-time command that grants it behind your desktop's
     password prompt. The `v4l2loopback` door refuses by name at `setup()` in that case,
     and the runtime keeps running. The `pipewire` door is taken whatever the control

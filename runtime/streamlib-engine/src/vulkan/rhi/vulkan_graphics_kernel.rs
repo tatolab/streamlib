@@ -58,10 +58,10 @@ use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 use super::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
-use crate::core::directory_at_an_explicit_mode::{
+use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
+use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
-use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
 /// Env var that overrides the default pipeline-cache directory. Shared with
 /// [`super::vulkan_compute_kernel`] so cached pipelines for both kernel
@@ -2241,9 +2241,10 @@ fn pipeline_cache_dir() -> Option<PathBuf> {
     }
     // Co-located under the streamlib home (`<STREAMLIB_HOME>/.streamlib/cache/`),
     // NOT the XDG cache dir — every built/cached artifact lives under the
-    // streamlib working tree per the home contract. See [`core::streamlib_home`].
+    // streamlib working tree per the home contract. See
+    // `streamlib_runtime_client_contract::streamlib_home`.
     Some(
-        crate::core::streamlib_home::get_streamlib_data_dir()
+        streamlib_runtime_client_contract::streamlib_home::get_streamlib_data_dir()
             .join("cache")
             .join("pipeline-cache"),
     )

@@ -3,12 +3,10 @@
 This is the **durable interface contract** for logs emitted by the
 StreamLib runtime. Every line of every segment under
 `<STREAMLIB_HOME>/.streamlib/logs/` (see [Files and rotation](#files-and-rotation))
-is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — the wheel's
-`streamlib logs` (`sdk/streamlib-python-wheel/python/tatolab/runtime/_runtime_log_reader.py`)
-and any tool that reads a runtime's segments — depend on this shape.
-
-> ~~polyglot SDKs, the future orchestrator~~ — Superseded 2026-09-14: the Python
-> wheel is the only polyglot SDK and the orchestrator is retired.
+is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — `tatolab logs`,
+which renders each record with the runtime's own `format_event_pretty` from the
+`streamlib-runtime-client-contract` crate, and any tool that reads a runtime's
+segments — depend on this shape.
 
 **Schema changes are expensive.** Adding a new optional field is fine;
 renaming or removing an existing field, or changing its type, requires
@@ -65,7 +63,7 @@ active segment. A reader following the active segment detects a rotation when
 the active name points at a *different* file than the one it holds open — a
 missing name is not yet a rotation. It then finishes the held file, finds which
 `seq` that file became by matching its inode, reads the segments rotated after
-it, and reopens the active name. `streamlib logs --follow` does this.
+it, and reopens the active name. `tatolab logs --follow` does this.
 
 ## Fields
 
@@ -74,10 +72,10 @@ it, and reopens the active name. `streamlib logs --follow` does this.
 | `schema_version` | integer | no | Bumped on breaking schema changes. |
 | `host_ts` | integer | no | Host wall-clock timestamp (nanoseconds since UNIX epoch). Stamped on the emitting thread for a Rust record, and at receipt for a record a helper process sends. Not monotonic — see [Ordering](#ordering). |
 | `runtime_id` | string | no | The owning runtime's id ([`RuntimeUniqueId`][rs_id]). |
-| `source` | enum | no | `"rust"` \| `"python"`. Rust events come from the `tracing` pipeline — the runtime process's own, or a helper process's, captured there and relayed over the `{op:"log"}` escalate IPC; python events come from `tatolab.stream.log.*` in a helper process via that same IPC, or from a helper process's captured stdout / stderr. |
+| `source` | enum | no | `"rust"` \| `"python"`, the [`Source`][rs] enum. Rust events come from the `tracing` pipeline — the runtime process's own, or a helper process's, captured there and relayed over the `{op:"log"}` escalate IPC; python events come from `tatolab.stream.log.*` in a helper process via that same IPC, or from a helper process's captured stdout / stderr. |
 | `level` | enum | no | `"trace"` \| `"debug"` \| `"info"` \| `"warn"` \| `"error"`. |
 | `message` | string | no | Primary human-readable message. May be empty for events that carry only structured fields. |
-| `target` | string | no | Tracing target (module path, typically) for Rust, a record relayed from a helper process included — a call site keeps its own target wherever it ran; subprocess-declared target for polyglot. |
+| `target` | string | no | Tracing target (module path, typically) for Rust, a record relayed from a helper process included — a call site keeps its own target wherever it ran; for a Python event, the target its helper process declared. |
 | `pipeline_id` | string | yes | Pipeline identifier. `null` for runtime-level events. |
 | `processor_id` | string | yes | Processor identifier. `null` for events outside a processor. |
 | `rhi_op` | string | yes | RHI operation name (`"acquire_texture"`, `"acquire_pixel_buffer"`, `"queue_submit"`, …). Set only inside RHI call sites. |
@@ -85,13 +83,7 @@ it, and reopens the active name. `streamlib logs --follow` does this.
 | `source_seq` | integer | yes | Helper-process sequence number: starts at `1` and increments per record the helper sends via the `{op:"log"}` escalate IPC, its captured engine records included — one sequence per helper, not one per source. One helper hosts one processor, so the sequence is per `(runtime_id, processor_id)`, and a new helper process for that processor starts again at `1`. `null` on every other record. |
 | `intercepted` | bool | no (default `false`) | `true` when the record came from fd-level capture of stdout / stderr (a raw fd write, a Python `print()`, a third-party library's output) rather than a direct `tracing` / `tatolab.stream.log.*` call. |
 | `channel` | string | yes | `"fd1"` (stdout) or `"fd2"` (stderr) when `intercepted: true`. `null` otherwise. |
-| `attrs` | object<string, any> | yes (default `{}`) | User-supplied structured fields captured from the emitting call site. For Rust, anything passed to `tracing::info!(foo = 123, bar = "abc", "msg")` other than the well-known fields above; for polyglot, the `**attrs` / `attrs` object passed to `tatolab.stream.log.*`. |
-
-> ~~`"deno"` as a `source` value, `host_ts` as a host monotonic timestamp and the
-> authoritative sort key across the merged stream, `console.log` / `"logging"` /
-> `"stdout"` / `"stderr"` channels~~ — Superseded 2026-09-14: `Source` is `Rust` \|
-> `Python` (`runtime/streamlib-engine/src/core/logging/event.rs`), `host_ts` is
-> `SystemTime::now()`, and both capture paths tag only `fd1` / `fd2`.
+| `attrs` | object<string, any> | yes (default `{}`) | User-supplied structured fields captured from the emitting call site. For Rust, anything passed to `tracing::info!(foo = 123, bar = "abc", "msg")` other than the well-known fields above; for a Python event, the `**attrs` / `attrs` object passed to `tatolab.stream.log.*`. |
 
 ## Ordering
 
@@ -114,14 +106,6 @@ it, and reopens the active name. `streamlib logs --follow` does this.
   in the runtime merges them. `host_ts` is the only field comparable
   across runtimes, and only as far as their hosts' clocks agree.
 
-> ~~Cross-source: `host_ts` is the authoritative sort key … Within a
-> source: FIFO is preserved by the channel — records from the same source
-> arrive on the host in the order the source emitted them.~~ — Superseded
-> 2026-09-14: `host_ts` is stamped before the record enters the drain
-> queue — on the emitting thread for an in-process record, on the receiving
-> thread at host receipt for a helper process's record — so neither the file
-> nor one source is ordered by it.
-
 ## Interceptors
 
 Records tagged `intercepted: true` come from a capture layer rather than
@@ -139,12 +123,6 @@ layers are:
    process's stdout / stderr. Every captured line routes through the
    unified pathway tagged `intercepted: true` at `warn` level, with
    `channel` `fd1` or `fd2`.
-
-> ~~TypeScript / `console.*` / `Deno.std*` lint patterns; Python `sys.std*` +
-> root `logging` interceptors; Deno `globalThis.console` interceptors~~ —
-> Superseded 2026-09-14: the Deno SDK is gone, `xtask/src/lint_logging.rs`
-> scans Rust and Python only, and Python output is captured at the fd by the
-> host, never inside the interpreter.
 
 All three layers are intentional — clippy and the xtask lint keep
 first-party code honest at compile/CI time; the runtime interceptors
@@ -190,14 +168,14 @@ type.
 ## Example
 
 ```json
-{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","source":"rust","level":"info","message":"processor started","target":"streamlib::linux::processors::camera","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}
+{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}
 ```
 
 Parses cleanly via:
 
 ```rust
 let line = r#"{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","source":"rust","level":"info","message":"hi","target":"test","intercepted":false}"#;
-let event: streamlib::logging::RuntimeLogEvent = serde_json::from_str(line).unwrap();
+let event: streamlib_runtime_client_contract::runtime_log_event::RuntimeLogEvent = serde_json::from_str(line).unwrap();
 assert_eq!(event.runtime_id, "Rabc123");
 ```
 
@@ -218,6 +196,6 @@ See parent issue #430's "AI Agent Notes" for the framing around why
 this schema is deliberately minimal (no OTLP spans, no SQLite, no
 nested tracing context).
 
-[rs]: ../runtime/streamlib-engine/src/core/logging/event.rs
+[rs]: ../runtime/streamlib-runtime-client-contract/src/runtime_log_event.rs
 [rs_id]: ../runtime/streamlib-engine/src/core/runtime/runtime_unique_id.rs
 [rs_config]: ../runtime/streamlib-engine/src/core/logging/config.rs

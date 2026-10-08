@@ -8,7 +8,7 @@
 //! `channel-means` is the vivid colorimetry rig's drift lock.
 //!
 //! Frames reach this tool as PNGs on disk, written by
-//! `streamlib exchange --channel`. Nothing here touches a GPU.
+//! `tatolab exchange --channel`. Nothing here touches a GPU.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

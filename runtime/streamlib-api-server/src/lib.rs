@@ -11,7 +11,6 @@ mod mcp;
 mod mcp_prompts;
 mod mcp_resources;
 mod mcp_stdio_upgrade;
-pub mod node_registry;
 mod state;
 
 // `processors/` is the one processor-discovery root for every language and
@@ -26,7 +25,3 @@ pub use api_server::ApiServerProcessor;
 pub use api_server_config::ApiServerConfig;
 pub use handlers::control_plane_openapi_spec;
 pub use mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH;
-pub use node_registry::{
-    NODE_REGISTRY_SCHEMA_VERSION, NodeRegistryEntry, NodeRegistryError, read_entry, remove_entry,
-    scan_entries, write_entry,
-};

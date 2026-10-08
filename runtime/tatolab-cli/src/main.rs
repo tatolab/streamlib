@@ -2,21 +2,53 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolab`: `new` writes a stream project; `run` and `dev` compile a stream in its project's
-//! venv and start `tatolabd` attached.
+//! venv and start `tatolabd` attached; `nodes` lists the runtimes running on this machine, and
+//! `graph`, `tap`, `exchange`, `logs` and `mcp` reach one through its local API socket — `logs`
+//! also reads a runtime's JSONL log files; `enable-virtual-camera` grants this machine's users the
+//! virtual camera's loopback device, once.
 
 // stdout and stderr are this binary's output channel to the user, as they are xtask's.
 #![allow(clippy::disallowed_macros)]
 
 mod attached_tatolabd_supervisor;
-mod forwarded_signal_listener;
+mod local_api_connection;
+mod local_api_mcp_stdio_pipe;
+mod local_api_mcp_tool_client;
+mod local_api_runtime_selection;
+mod local_api_unix_socket_http_client;
+mod process_signal_handling;
 mod project_source_change_watcher;
+mod runtime_log_files_reader;
+mod runtime_logs_verb;
+mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
+mod surface_image_exchange;
+mod verb_standard_output;
+mod virtual_camera_loopback_permission_grant;
+
+#[cfg(test)]
+#[path = "../tests/common/stub_local_api_server.rs"]
+mod stub_local_api_server;
+
+#[cfg(test)]
+#[path = "../tests/common/isolated_node_registry.rs"]
+mod isolated_node_registry;
+
+#[cfg(test)]
+#[path = "../tests/common/tapped_channel_bag_fixtures.rs"]
+mod tapped_channel_bag_fixtures;
+
+#[cfg(test)]
+#[path = "../tests/common/runtime_log_line_fixtures.rs"]
+mod runtime_log_line_fixtures;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
+
+use crate::virtual_camera_loopback_permission_grant::VirtualCameraGrantTargetMachine;
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
 #[derive(Debug)]
@@ -45,11 +77,26 @@ impl TatolabCommandFailure {
     }
 }
 
+#[cfg(test)]
+impl TatolabCommandFailure {
+    /// The message of the refusal `command_outcome` failed with, asserting it exits 1.
+    pub(crate) fn refusal_message_of<CommandSuccess: std::fmt::Debug>(
+        command_outcome: Result<CommandSuccess, TatolabCommandFailure>,
+    ) -> String {
+        let command_failure = command_outcome.expect_err("the command must refuse");
+        assert_eq!(command_failure.exit_code, 1, "a refusal exits 1");
+        command_failure
+            .message_for_the_user
+            .expect("a refusal names its reason")
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "tatolab",
     version,
-    about = "StreamLib — write a stream project, then run it on tatolabd.",
+    about = "Tatolab — write a stream project, run it on tatolabd, and observe the runtimes \
+             running on this machine.",
     disable_help_subcommand = true
 )]
 struct TatolabCommandLine {
@@ -77,6 +124,84 @@ enum TatolabVerb {
     Run(StreamLaunchArguments),
     /// Run this stream on tatolabd and restart it on every saved edit.
     Dev(StreamLaunchArguments),
+    /// List the runtimes running on this machine.
+    #[command(
+        long_about = "Scans the node registry, liveness-checks every entry, prunes the ones that \
+                      are gone, and prints runtime_name, runtime_id, local_api_socket, pid, alive? \
+                      and hint. Only runtimes hosting a control plane register."
+    )]
+    Nodes,
+    /// Export a running runtime's live graph as JSON.
+    #[command(
+        long_about = "Nodes, ports, links, channel names, states and metrics, as the runtime \
+                      reports them right now."
+    )]
+    Graph(RuntimeTargetArguments),
+    /// Collect a bounded sample of raw bags from one channel.
+    #[command(
+        long_about = "Attaches a read-only tap to CHANNEL and collects a bounded sample. The tap \
+                      forwards bags verbatim and never blocks the producer, so a quiet channel \
+                      returns a partial sample rather than hanging."
+    )]
+    Tap {
+        /// The channel tapped, addressed as its output port.
+        #[arg(
+            help = "The output port's address, <runtime_name>/<node>/<port>, as graph names them: \
+                    its top-level runtime_name and a node's name"
+        )]
+        channel: String,
+        /// Bags to collect before returning (default: a small sample).
+        #[arg(long = "count", value_name = "N", allow_negative_numbers = true)]
+        requested_bag_count: Option<i64>,
+        /// Per-bag ceiling on the bytes returned. A bag over the cap comes back flagged and cannot
+        /// be decoded, so raise this rather than accept one (default: high enough to carry any
+        /// audio block whole).
+        #[arg(
+            long = "max-bag-bytes",
+            value_name = "BYTES",
+            allow_negative_numbers = true
+        )]
+        requested_max_bag_bytes: Option<i64>,
+        #[command(flatten)]
+        runtime_target: RuntimeTargetArguments,
+    },
+    /// Exchange published surface ids for PNG files on disk.
+    #[command(
+        long_about = "With SURFACE_ID, exchanges that one id. With --channel, taps the channel, \
+                      reads a surface id out of each sampled bag, and exchanges it — one warm \
+                      process, no window in the graph and no display server in the path. Writes \
+                      exact full-resolution PNGs into --out and prints their paths on stdout, one \
+                      per line — those paths are this run's frames, and --out is not cleared, so \
+                      read them rather than listing the directory."
+    )]
+    Exchange(surface_image_exchange::SurfaceImageExchangeArguments),
+    /// Connect an MCP host to a running runtime over this command's stdin and stdout.
+    #[command(
+        long_about = "For an MCP host to launch: `claude mcp add tatolab -- tatolab mcp`, or `ssh \
+                      <machine> tatolab mcp` for a runtime on another machine. Copies bytes \
+                      between stdio and the runtime's MCP server, through its local API socket, \
+                      without reading them."
+    )]
+    Mcp(RuntimeTargetArguments),
+    /// Read a runtime's JSONL log file, or a running runtime's event stream.
+    #[command(
+        long_about = "With RUNTIME_ID, renders that runtime's on-disk JSONL log exactly as the \
+                      runtime mirrored it. With --node, collects a bounded sample of a running \
+                      runtime's live event stream instead."
+    )]
+    Logs(runtime_logs_verb::RuntimeLogsVerbArguments),
+    /// Grant this machine's users the permission a VirtualCameraSink needs, once.
+    #[command(
+        long_about = "Install the standard grant behind the virtual camera's loopback door: load \
+                      v4l2loopback with no devices (persisted in modules-load.d and modprobe.d) \
+                      and tag its control node `uaccess` for the logged-in user. One privileged \
+                      step through pkexec (sudo in a headless shell); the engine never runs it."
+    )]
+    EnableVirtualCamera {
+        /// Write the three files' contents and the commands to stdout and change nothing.
+        #[arg(long = "print")]
+        print_grant_without_installing: bool,
+    },
 }
 
 /// The flags `run` and `dev` share; all but `--runtime-name` go to the compile entry verbatim.
@@ -99,6 +224,15 @@ pub(crate) struct StreamLaunchArguments {
     /// engine's default).
     #[arg(long = "runtime-name", value_name = "NAME")]
     pub(crate) requested_runtime_name: Option<OsString>,
+}
+
+/// `--node`, which pins the runtime a verb drives; without it the verb takes the sole live one.
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct RuntimeTargetArguments {
+    /// Registered runtime name or runtime_id to target, reached through its local API socket
+    /// (resolved via the node registry).
+    #[arg(long = "node", value_name = "RUNTIME_NAME_OR_ID")]
+    pub(crate) requested_runtime_name_or_id: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -131,6 +265,56 @@ fn main() -> ExitCode {
                 &stream_launch_arguments,
             )
         }
+        TatolabVerb::Nodes => runtime_observation_verbs::print_node_registry_listing(),
+        TatolabVerb::Graph(runtime_target) => {
+            runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime(
+                runtime_target.requested_runtime_name_or_id.as_deref(),
+                runtime_observation_verbs::GRAPH_TOOL_NAME,
+                serde_json::Map::new(),
+            )
+        }
+        TatolabVerb::Tap {
+            channel,
+            requested_bag_count,
+            requested_max_bag_bytes,
+            runtime_target,
+        } => runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime(
+            runtime_target.requested_runtime_name_or_id.as_deref(),
+            runtime_observation_verbs::TAP_TOOL_NAME,
+            runtime_observation_verbs::tap_tool_arguments(
+                &channel,
+                requested_bag_count,
+                requested_max_bag_bytes,
+            ),
+        ),
+        TatolabVerb::Exchange(surface_image_exchange_arguments) => {
+            surface_image_exchange::run_surface_image_exchange_verb(
+                &surface_image_exchange_arguments,
+            )
+        }
+        TatolabVerb::Mcp(runtime_target) => {
+            local_api_mcp_stdio_pipe::pipe_stdio_to_the_selected_runtimes_mcp_server(
+                runtime_target.requested_runtime_name_or_id.as_deref(),
+            )
+        }
+        TatolabVerb::Logs(logs_arguments) => runtime_logs_verb::run_runtime_logs_verb(logs_arguments),
+        TatolabVerb::EnableVirtualCamera {
+            print_grant_without_installing: true,
+        } => virtual_camera_loopback_permission_grant::print_virtual_camera_grant_for_hand_install(),
+        TatolabVerb::EnableVirtualCamera {
+            print_grant_without_installing: false,
+        } => VirtualCameraGrantTargetMachine::this_machine()
+            .map_err(|kernel_identification_failure| {
+                TatolabCommandFailure::refused(format!(
+                    "cannot read this machine's kernel name and release: \
+                     {kernel_identification_failure}"
+                ))
+            })
+            .and_then(|mut grant_target_machine| {
+                virtual_camera_loopback_permission_grant::install_virtual_camera_grant_through_privilege_escalation_helper(
+                    &mut grant_target_machine,
+                )
+            }),
     };
     match command_outcome {
         Ok(exit_code) => ExitCode::from(exit_code),

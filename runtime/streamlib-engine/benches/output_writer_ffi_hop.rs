@@ -51,12 +51,12 @@ use std::sync::Arc;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
-use streamlib_engine::core::runtime::StreamlibRuntimeDirectory;
 use streamlib_engine::iceoryx2::{
     ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelEgressConfig,
     ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner, OutputWriter,
     OutputWriterInner, ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
 };
+use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
 /// Per-bench-run unique service-name suffix so parallel benches
 /// don't collide on iceoryx2's machine-global `/dev/shm` namespace.

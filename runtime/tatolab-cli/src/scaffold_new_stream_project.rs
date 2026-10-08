@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use crate::TatolabCommandFailure;
+use crate::verb_standard_output::write_verb_standard_output;
 
 /// The licence header each `.py` template opens with; the project `new` writes is the user's own.
 const SCAFFOLD_TEMPLATE_LICENSE_HEADER: &str =
@@ -25,15 +26,15 @@ const PYTHON_VERSION_TEMPLATE: &str =
 const GITIGNORE_TEMPLATE: &str =
     include_str!("../../../sdk/tatolab-stream/scaffold_template/gitignore");
 
-const STREAM_PY_DOCSTRING_OPENER_PLACEHOLDER: &str = "A StreamLib stream: camera →";
+const STREAM_PY_DOCSTRING_OPENER_PLACEHOLDER: &str = "A Tatolab stream: camera →";
 const STREAM_PY_IMPORT_LINE_PLACEHOLDER: &str =
     "from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream";
 const STREAM_PY_FUNCTION_DOCSTRING_PLACEHOLDER: &str = "\"\"\"Camera, inverted,";
 const STREAM_PY_SOURCE_ADD_PLACEHOLDER: &str = "stream_builder.add(CameraSource)";
-const PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER: &str = "name = \"streamlib-app\"";
+const PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER: &str = "name = \"tatolab-stream-project\"";
 
 /// The distribution name a directory whose name casts to nothing is given.
-const FALLBACK_DISTRIBUTION_NAME: &str = "streamlib-app";
+const FALLBACK_DISTRIBUTION_NAME: &str = "tatolab-stream-project";
 
 /// The source the scaffolded stream's pipeline starts from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,7 +101,7 @@ pub(crate) fn render_scaffold_template_files(
     let rendered_stream_py = without_license_header(STREAM_PY_TEMPLATE)
         .replace(
             STREAM_PY_DOCSTRING_OPENER_PLACEHOLDER,
-            &format!("A StreamLib stream: {source_description} →"),
+            &format!("A Tatolab stream: {source_description} →"),
         )
         .replace(
             STREAM_PY_IMPORT_LINE_PLACEHOLDER,
@@ -250,14 +251,11 @@ pub(crate) fn scaffold_new_stream_project(
         )?;
     }
 
-    println!(
-        "Created a StreamLib app in `{}`.\n",
-        target_directory.display()
-    );
-    println!("Next:");
-    println!("    cd {}", target_directory.display());
-    println!("    uv sync");
-    println!("    tatolab dev");
+    write_verb_standard_output(&format!(
+        "Created a Tatolab stream project in `{target_directory}`.\n\nNext:\n    cd \
+         {target_directory}\n    uv sync\n    tatolab dev\n",
+        target_directory = target_directory.display()
+    ))?;
     Ok(())
 }
 

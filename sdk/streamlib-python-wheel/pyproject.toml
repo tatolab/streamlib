@@ -7,10 +7,8 @@ build-backend = "maturin"
 
 [project]
 name = "streamlib"
-# Tracks [workspace.package].version in the root Cargo.toml — the plan's "two
-# artifacts, one version, released together". release-please bumps this file
-# through its `extra-files` list, so the wheel and the crate never drift.
-version = "0.41.0"
+# maturin reads it from the crate, which takes [workspace.package].version.
+dynamic = ["version"]
 description = "StreamLib — a realtime streaming engine with Python authoring"
 # abi3-py310 in Cargo.toml is the binding half of this floor; the two move
 # together or the wheel claims interpreters its ABI tag does not cover.
@@ -27,12 +25,6 @@ license = { text = "BUSL-1.1" }
 # the root file stays the single copy and there is no second one to drift.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
-# The stream package at this wheel's own version, so an installed engine keeps
-# running the streams written against it. release-please moves the pin with the
-# version through the annotation on its line.
-dependencies = [
-    "tatolab-stream==0.41.0", # x-release-please-version
-]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -42,11 +34,6 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-
-# pip owns PATH: installing the wheel is what puts `streamlib` on it. There is
-# no second artifact to install and no shell setup step.
-[project.scripts]
-streamlib = "tatolab.runtime.cli:main"
 
 [project.optional-dependencies]
 # numpy, torch and mlx are test-and-types dependencies, not runtime ones — the
@@ -65,10 +52,6 @@ dev = [
     "pydantic>=2.0",
     # `assert_type` at the 3.10 floor.
     "typing_extensions>=4.6",
-    # The official MCP Python SDK: the observation-verb tests stand a node's
-    # control plane in with its server. Tests only; the wheel's own client is
-    # rmcp.
-    "mcp==2.3.0",
 ]
 
 [tool.pytest.ini_options]

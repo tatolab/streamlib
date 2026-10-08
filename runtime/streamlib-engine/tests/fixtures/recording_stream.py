@@ -28,7 +28,7 @@ startup; `STREAMLIB_FIXTURE_VIDEO_CODEC` picks the codec (`h264` by default);
 `STREAMLIB_CAMERA_DEVICE` names the V4L2 node, else the first the engine finds.
 
 The node names are for reading a run: they are what this stream's own log
-lines and `streamlib graph` show. Nothing downstream keys on them — a track is
+lines and `tatolab graph` show. Nothing downstream keys on them — a track is
 named by the channel its link subscribed to, which carries the engine-minted
 processor id, so `e2e_fixture_recording.sh` checks the recorded track names by
 their `/encoded_video` and `/encoded_audio` suffixes instead.

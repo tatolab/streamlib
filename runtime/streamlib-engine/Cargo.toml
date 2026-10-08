@@ -66,6 +66,11 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.41.0" }
 # Shared iceoryx2 payload types (for cross-process IPC)
 streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.41.0" }
 
+# What a running runtime leaves on disk for its clients — STREAMLIB_HOME, the
+# runtime directory, the node registry and the JSONL runtime log — defined once
+# for the engine that writes it and the engine-free CLI that reads it.
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.41.0" }
+
 # Consumer-side carve-out — owns the format primitives
 # (TextureFormat / TextureUsages / PixelFormat), the trait machinery
 # (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the
@@ -196,7 +201,7 @@ streamlib = { path = "../../sdk/streamlib-sdk" }
 # the SDK, which re-exports this crate.
 streamlib-media-builtins = { path = "../streamlib-media-builtins" }
 # The control plane the `codec_roundtrip_rig` example hosts, so a rig run is
-# reachable by `streamlib graph` / `tap` / `exchange` — the observation
+# reachable by `tatolab graph` / `tap` / `exchange` — the observation
 # surface the codec proof is scored on. Same permitted dev-dep cycle.
 streamlib-api-server = { path = "../streamlib-api-server" }
 tokio = { workspace = true, features = ["full"] }

@@ -3,7 +3,7 @@
 
 //! The boot recipe a host follows to stand this crate's control plane up inside
 //! its own runtime — `tatolabd`, and any Rust app that wants a node
-//! `streamlib nodes` can find.
+//! `tatolab nodes` can find.
 
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
@@ -16,7 +16,7 @@ pub struct ApiServerControlPlaneHostConfig {}
 
 /// Register the `ApiServer` processor type in-process and add one instance to
 /// `runtime`, so that starting the runtime binds its local API socket and
-/// publishes the node-registry entry `streamlib nodes` discovers, under the
+/// publishes the node-registry entry `tatolab nodes` discovers, under the
 /// runtime's own name.
 pub fn register_api_server_control_plane_processor_on_runtime(
     runtime: &Runner,

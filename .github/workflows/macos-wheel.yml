@@ -1,10 +1,10 @@
 name: macOS Wheel
 
-# The aarch64-apple-darwin wheel, built the way a release builds it and then
-# installed on a runner that has never seen a Vulkan SDK. Called by
+# The aarch64-apple-darwin runtime unit, built the way a release builds it and
+# then proven on a runner that has never seen a Vulkan SDK. Called by
 # python-wheel.yml on every PR — the portability proof must fail on the PR that
-# breaks it, not on release day — and by release-wheel.yml, which attaches the
-# wheel to the release beside the manylinux one.
+# breaks it, not on release day — and by release-wheel.yml, where a failure
+# here withholds the release's upload to PyPI.
 #
 # A stock Mac has no Vulkan driver, so the wheel — and the runtime unit's lend,
 # which is that wheel unpacked — carries the loader and MoltenVK
@@ -17,11 +17,6 @@ on:
     inputs:
       ref:
         description: "What to check out and build (blank = the calling run's own ref)"
-        type: string
-        required: false
-        default: ""
-      release_tag_name:
-        description: "Release tag to attach the wheel to (blank = attach nothing)"
         type: string
         required: false
         default: ""
@@ -44,7 +39,7 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           # Builds and runs PR-authored code; a persisted token would be
-          # readable by it. The release upload below takes its own.
+          # readable by it.
           persist-credentials: false
 
       # `glslc` stages the engine's SPIR-V for `include_bytes!`; cmake and ninja
@@ -77,10 +72,9 @@ jobs:
       - name: Build the runtime unit
         run: cargo xtask build-runtime --release
 
-      # The engine wheel's one dependency, at its own version, which no index
-      # carries before release. Pure Python, so the release attaches the
-      # manylinux job's copy and this one only installs.
-      - name: Build the tatolab-stream wheel the engine wheel depends on
+      # The stream package every venv below holds, at a version no index
+      # carries before release.
+      - name: Build the tatolab-stream wheel the venvs below install
         run: uv build --wheel --out-dir sdk/tatolab-stream/dist sdk/tatolab-stream
 
       # The signature is file content, so the zip round-trip and pip should
@@ -118,8 +112,10 @@ jobs:
       - name: Install the wheel into a fresh venv
         run: |
           python3 -m venv /tmp/wheel-check
+          # The engine wheel declares no dependency; the notices tests' conftest
+          # imports `tatolab.stream`.
           /tmp/wheel-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist \
-            target/tatolab-runtime/wheel/*.whl
+            tatolab-stream target/tatolab-runtime/wheel/*.whl
           # The scaffolded effect's own declared dependency, and the tests'.
           /tmp/wheel-check/bin/pip install 'numpy>=2.1' pytest
           # Compared against the venv's own site-packages, resolved on both
@@ -230,11 +226,3 @@ jobs:
           name: streamlib-macos-wheel
           path: target/tatolab-runtime/wheel/*.whl
           retention-days: 14
-
-      - name: Attach the wheel to the release
-        if: inputs.release_tag_name != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ inputs.release_tag_name }}" \
-            target/tatolab-runtime/wheel/*.whl --clobber --repo "${{ github.repository }}"

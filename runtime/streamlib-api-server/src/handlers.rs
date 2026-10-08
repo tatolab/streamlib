@@ -29,6 +29,12 @@ use tracing::Level;
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    MCP_STDIO_UPGRADE_REQUEST_TARGET, MCP_STREAMABLE_HTTP_ROUTE_PATH,
+    RECYCLED_FRAME_HTTP_STATUS_CODE, SURFACE_PIXEL_HEIGHT_HEADER_NAME,
+    SURFACE_PIXEL_WIDTH_HEADER_NAME,
+};
+
 use crate::state::{
     ApiDoc, AppState, ErrorResponse, RuntimeShutdownAcceptedResponse, RuntimeShutdownRequest,
 };
@@ -99,9 +105,9 @@ pub(crate) fn build_router(
         .route("/ws/events", get(websocket_handler))
         .route("/api/openapi.json", get(get_openapi_spec))
         .route("/ws/tap/{channel}", get(tap_websocket_handler))
-        .route_service("/mcp", local_api_mcp_service)
+        .route_service(MCP_STREAMABLE_HTTP_ROUTE_PATH, local_api_mcp_service)
         .route(
-            "/mcp/stdio",
+            MCP_STDIO_UPGRADE_REQUEST_TARGET,
             crate::mcp_stdio_upgrade::local_api_mcp_stdio_upgrade_route(
                 local_api_mcp_server_handler,
                 local_api_stopping_token,
@@ -186,53 +192,19 @@ pub(crate) async fn request_runtime_shutdown(
     }
 }
 
-/// Header carrying the width the surface's own backing holds, so a caller
-/// that asked for a downscaled image still learns the true resolution —
-/// the PNG's own header states only what was encoded.
-///
-/// Parsed once rather than per response: `HeaderName::from_static` panics on
-/// a malformed name, and once at first use beats once per 200.
+/// [`SURFACE_PIXEL_WIDTH_HEADER_NAME`], parsed once rather than per response:
+/// `HeaderName::from_static` panics on a malformed name, and once at first use
+/// beats once per 200.
 static SURFACE_PIXEL_WIDTH_HEADER: std::sync::LazyLock<axum::http::HeaderName> =
     std::sync::LazyLock::new(|| {
-        axum::http::HeaderName::from_static("x-streamlib-surface-pixel-width")
+        axum::http::HeaderName::from_static(SURFACE_PIXEL_WIDTH_HEADER_NAME)
     });
 
 /// Height counterpart of [`SURFACE_PIXEL_WIDTH_HEADER`].
 static SURFACE_PIXEL_HEIGHT_HEADER: std::sync::LazyLock<axum::http::HeaderName> =
     std::sync::LazyLock::new(|| {
-        axum::http::HeaderName::from_static("x-streamlib-surface-pixel-height")
+        axum::http::HeaderName::from_static(SURFACE_PIXEL_HEIGHT_HEADER_NAME)
     });
-
-/// The REST spelling of the exchange, as an OpenAPI path template.
-///
-/// The MCP tool names this route in its result so a caller that needs the
-/// exact bytes has one call to make; a test asserts the served spec
-/// carries exactly this path, so the two spellings cannot drift.
-pub(crate) const SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE: &str =
-    "/api/surfaces/{surface_id}/image";
-
-/// RFC 3986's unreserved set: everything outside it is percent-encoded into
-/// the route's `{surface_id}` segment. A pooled frame id is
-/// `<slot>#<generation>`, and a bare `#` would make the generation a URL
-/// fragment.
-const SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET: &percent_encoding::AsciiSet =
-    &percent_encoding::NON_ALPHANUMERIC
-        .remove(b'-')
-        .remove(b'.')
-        .remove(b'_')
-        .remove(b'~');
-
-/// This route's path for one surface id, ready to put on the wire.
-pub(crate) fn surface_image_exchange_route_path_for_surface_id(
-    published_surface_id: &str,
-) -> String {
-    let path_segment = percent_encoding::utf8_percent_encode(
-        published_surface_id,
-        SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET,
-    )
-    .to_string();
-    SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace("{surface_id}", &path_segment)
-}
 
 /// Query parameters for the surface exchange.
 #[derive(Deserialize)]
@@ -300,6 +272,13 @@ pub(crate) async fn exchange_published_surface_id_for_png_image(
     }
 }
 
+/// [`RECYCLED_FRAME_HTTP_STATUS_CODE`] as the status a refused exchange answers.
+const RECYCLED_FRAME_HTTP_STATUS: StatusCode =
+    match StatusCode::from_u16(RECYCLED_FRAME_HTTP_STATUS_CODE) {
+        Ok(recycled_frame_http_status) => recycled_frame_http_status,
+        Err(_) => panic!("the recycled-frame status code is outside HTTP's status range"),
+    };
+
 /// Status for a refused exchange.
 ///
 /// A recycled frame is its own answer: the id was well-formed and the
@@ -307,7 +286,7 @@ pub(crate) async fn exchange_published_surface_id_for_png_image(
 /// surface never existed.
 fn surface_exchange_failure_response(failure: &Error) -> Response {
     let status = match failure {
-        Error::SurfaceFrameRecycled { .. } => StatusCode::GONE,
+        Error::SurfaceFrameRecycled { .. } => RECYCLED_FRAME_HTTP_STATUS,
         Error::NotFound(_) => StatusCode::NOT_FOUND,
         Error::NotSupported(_) => StatusCode::NOT_IMPLEMENTED,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -587,6 +566,7 @@ pub(crate) mod router_surface_tests {
         ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
     };
     use streamlib::sdk::runtime::BoxFuture;
+    use streamlib_runtime_client_contract::local_api_wire_contract::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE;
     use tower::ServiceExt;
 
     /// Stub runtime backing the router tests: it answers the observation ops

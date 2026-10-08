@@ -67,8 +67,8 @@ pub mod sdk {
     // ---- Engine `core::*` sub-modules that are SDK-public ----
     //
     // Engine internals (`compiler`, `config`,
-    // `logging`, `observability`, `runtime_hooks`, `signals`,
-    // `streamlib_home`) are `pub(crate)` in the engine crate (see
+    // `logging`, `observability`, `runtime_hooks`, `signals`)
+    // are `pub(crate)` in the engine crate (see
     // `core/mod.rs`) — those module paths are not reachable here OR
     // via `engine_internal::*` (Tier 3) by construction. Items inside
     // that ARE customer-facing are re-exported by the engine at its
@@ -80,7 +80,6 @@ pub mod sdk {
     pub use streamlib_engine::core::color;
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;
-    pub use streamlib_engine::core::directory_at_an_explicit_mode;
     pub use streamlib_engine::core::display_info;
     pub use streamlib_engine::core::error;
     pub use streamlib_engine::core::execution;
@@ -264,7 +263,7 @@ pub mod sdk {
 ///
 /// Items inside engine-internal modules that genuinely need
 /// cross-crate access are explicitly re-exported item-by-item at
-/// `streamlib_engine::core::*` (e.g. `get_streamlib_home`) or at the
+/// `streamlib_engine::core::*` (e.g. `helper_process_transport::ENGINE_BUILD_ID`) or at the
 /// engine crate root. The set of those re-exports IS the engine's
 /// external surface.
 ///

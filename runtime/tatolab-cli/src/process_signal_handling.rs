@@ -1,10 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+//! Every process signal `tatolab` handles: the signals `run` and `dev` forward to their attached
+//! `tatolabd`, and the interrupt that ends a `logs` read.
+
 use std::io;
 use std::mem::MaybeUninit;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The signals `tatolab` forwards to its attached `tatolabd`, one for one, less a SIGHUP it
 /// inherited as ignored.
@@ -17,6 +21,25 @@ pub(crate) const FORWARDED_SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGT
 /// inherited ignored SIGHUP is kept: it is how `nohup` reaches `tatolabd`.
 const FORWARDED_SIGNALS_RESET_TO_DEFAULT_DISPOSITION: [libc::c_int; 2] =
     [libc::SIGINT, libc::SIGTERM];
+
+/// Set by SIGINT while `logs` reads the disk, so Ctrl-C ends the read — a `--follow` above all —
+/// with exit 0 rather than killing the process mid-line.
+static INTERRUPT_DELIVERED_DURING_THE_READ: AtomicBool = AtomicBool::new(false);
+
+/// Whether this process inherited `signal` with its disposition set to ignore; asked before
+/// `tatolab` changes the disposition, so the answer is the one its parent left.
+pub(crate) fn signal_was_inherited_as_ignored(signal: libc::c_int) -> io::Result<bool> {
+    // SAFETY: a null `act` is POSIX's read-only query; `inherited_disposition` is a zeroed
+    // `sigaction` this frame owns for the kernel to write into.
+    let inherited_disposition = unsafe {
+        let mut inherited_disposition: libc::sigaction = std::mem::zeroed();
+        if libc::sigaction(signal, std::ptr::null(), &mut inherited_disposition) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        inherited_disposition
+    };
+    Ok(inherited_disposition.sa_sigaction == libc::SIG_IGN)
+}
 
 /// Block [`FORWARDED_SIGNALS`] in every thread and hand each delivery to `on_signal_delivered`
 /// from a dedicated `sigwait` thread, leaving a SIGHUP inherited as ignored unblocked and ignored.
@@ -32,7 +55,9 @@ pub(crate) fn block_forwarded_signals_and_listen(
 ) -> io::Result<()> {
     let mut forwarded_signals_to_listen_for = Vec::with_capacity(FORWARDED_SIGNALS.len());
     for forwarded_signal in FORWARDED_SIGNALS {
-        if !is_a_hangup_the_process_was_told_to_ignore(forwarded_signal)? {
+        let hangup_inherited_as_ignored =
+            forwarded_signal == libc::SIGHUP && signal_was_inherited_as_ignored(libc::SIGHUP)?;
+        if !hangup_inherited_as_ignored {
             forwarded_signals_to_listen_for.push(forwarded_signal);
         }
     }
@@ -71,23 +96,6 @@ pub(crate) fn block_forwarded_signals_and_listen(
     Ok(())
 }
 
-/// Whether `signal` is a SIGHUP this process inherited with its disposition set to ignore.
-fn is_a_hangup_the_process_was_told_to_ignore(signal: libc::c_int) -> io::Result<bool> {
-    if signal != libc::SIGHUP {
-        return Ok(false);
-    }
-    // SAFETY: a null `act` is POSIX's read-only query; `previous` is a zeroed `sigaction` this
-    // frame owns for the kernel to write into.
-    let previous_hangup_disposition = unsafe {
-        let mut previous: libc::sigaction = std::mem::zeroed();
-        if libc::sigaction(signal, std::ptr::null(), &mut previous) != 0 {
-            return Err(io::Error::last_os_error());
-        }
-        previous
-    };
-    Ok(previous_hangup_disposition.sa_sigaction == libc::SIG_IGN)
-}
-
 fn signal_set_of(signals: &[libc::c_int]) -> libc::sigset_t {
     // SAFETY: `sigemptyset` initialises the set before `sigaddset` and `assume_init` read it.
     unsafe {
@@ -120,4 +128,34 @@ pub(crate) fn unblock_forwarded_signals_in_the_child(child_command: &mut Command
             Ok(())
         });
     }
+}
+
+extern "C" fn record_interrupt_delivered_during_the_read(_delivered_signal: libc::c_int) {
+    INTERRUPT_DELIVERED_DURING_THE_READ.store(true, Ordering::SeqCst);
+}
+
+/// Route SIGINT to the flag [`an_interrupt_was_delivered_during_the_read`] reads. A SIGINT
+/// inherited as ignored stays ignored.
+pub(crate) fn end_the_read_on_interrupt() -> io::Result<()> {
+    if signal_was_inherited_as_ignored(libc::SIGINT)? {
+        return Ok(());
+    }
+    // SAFETY: the handler only stores to an atomic, which is async-signal-safe; the action is
+    // fully initialised before it is installed, and a null old-action pointer is allowed.
+    unsafe {
+        let mut interrupt_action: libc::sigaction = std::mem::zeroed();
+        interrupt_action.sa_sigaction =
+            record_interrupt_delivered_during_the_read as extern "C" fn(libc::c_int) as usize;
+        libc::sigemptyset(&mut interrupt_action.sa_mask);
+        interrupt_action.sa_flags = libc::SA_RESTART;
+        if libc::sigaction(libc::SIGINT, &interrupt_action, std::ptr::null_mut()) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// Whether a SIGINT has arrived since [`end_the_read_on_interrupt`] routed it.
+pub(crate) fn an_interrupt_was_delivered_during_the_read() -> bool {
+    INTERRUPT_DELIVERED_DURING_THE_READ.load(Ordering::SeqCst)
 }

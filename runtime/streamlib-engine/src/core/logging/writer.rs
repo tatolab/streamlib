@@ -9,12 +9,12 @@ use std::io::{self, Write};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
-use crate::core::directory_at_an_explicit_mode::{
+use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
-use crate::core::logging::paths::{
+use streamlib_runtime_client_contract::runtime_log_file_paths::{
     replacement_runtime_log_segment_path, rotated_runtime_log_segment_path,
-    rotated_runtime_log_segment_sequence,
+    rotated_runtime_log_segment_sequences_on_disk,
 };
 
 /// When the active JSONL segment rolls over, and how many segments survive it.
@@ -58,7 +58,7 @@ impl JsonlBatchedWriter {
         }
         let active_segment_file = open_segment_for_append(path)?;
         let active_segment_bytes = active_segment_file.metadata()?.len();
-        let highest_rotated_sequence = rotated_segment_sequences_on_disk(path)?
+        let highest_rotated_sequence = rotated_runtime_log_segment_sequences_on_disk(path)?
             .into_iter()
             .max()
             .unwrap_or(0);
@@ -183,9 +183,10 @@ impl JsonlBatchedWriter {
             return Ok(());
         };
         let mut first_removal_failure = None;
-        for expired_sequence in rotated_segment_sequences_on_disk(&self.active_segment_path)?
-            .into_iter()
-            .filter(|&sequence| sequence <= newest_expired_sequence)
+        for expired_sequence in
+            rotated_runtime_log_segment_sequences_on_disk(&self.active_segment_path)?
+                .into_iter()
+                .filter(|&sequence| sequence <= newest_expired_sequence)
         {
             let expired_path =
                 rotated_runtime_log_segment_path(&self.active_segment_path, expired_sequence);
@@ -202,25 +203,6 @@ impl JsonlBatchedWriter {
 
 fn open_segment_for_append(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
-}
-
-/// The `<seq>` of every rotated segment of `active_segment_path` on disk, in no order.
-fn rotated_segment_sequences_on_disk(active_segment_path: &Path) -> io::Result<Vec<u64>> {
-    let directory = match active_segment_path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    };
-    let mut rotated_sequences = Vec::new();
-    for entry in std::fs::read_dir(directory)? {
-        let file_name = entry?.file_name();
-        if let Some(rotated_sequence) = file_name
-            .to_str()
-            .and_then(|name| rotated_runtime_log_segment_sequence(active_segment_path, name))
-        {
-            rotated_sequences.push(rotated_sequence);
-        }
-    }
-    Ok(rotated_sequences)
 }
 
 #[cfg(test)]

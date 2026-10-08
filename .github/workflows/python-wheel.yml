@@ -90,8 +90,8 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Build and install the wheel
-        # The local build. Release packaging — repo release artifacts and the
-        # PEP 503 simple index — is `release-wheel.yml`.
+        # The local build. The release publishes `tatolab-stream` and the
+        # extensions to PyPI from `release-wheel.yml`; this wheel is not one of them.
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
@@ -99,11 +99,9 @@ jobs:
           # module scope — collection needs it even when `requires_gpu`
           # deselects every test that would use it. pydantic is what proves a
           # model is a legal `read(port, into=T)` target; the wheel never
-          # imports it. The MCP SDK stands a node's control plane in for the
-          # observation-verb tests. The stream package goes in from source
-          # first: it is the engine wheel's one dependency, at a version no
-          # index carries before release.
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions mcp==2.3.0
+          # imports it. The stream package goes in from source, at a version
+          # no index carries before release.
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
@@ -192,11 +190,10 @@ jobs:
       # memory, and a software rasterizer (lavapipe) cannot — verified in a
       # GPU-less container. So this runs the half of the wheel's own suite that
       # needs no device: the casts and the bag codec, a processor interpreter's
-      # bootstrap and helper process, the observation verbs against a scripted
-      # control plane, and the conformance gate. Streams running on `tatolabd`
-      # are the integration suite's, in its own job below. The `requires_gpu`
-      # half is rig-only by owner decision (2026-08-03) rather than a
-      # self-hosted GPU runner.
+      # bootstrap and helper process, and the conformance gate. Streams running
+      # on `tatolabd` are the integration suite's, in its own job below. The
+      # `requires_gpu` half is rig-only by owner decision (2026-08-03) rather
+      # than a self-hosted GPU runner.
       - name: Wheel suite (GPU-free half)
         working-directory: sdk/streamlib-python-wheel
         run: |
@@ -485,11 +482,11 @@ jobs:
           PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
             .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
-  # The aarch64-apple-darwin wheel exactly as a release builds it, installed on
-  # a runner with no Vulkan SDK and run there.
+  # The aarch64-apple-darwin runtime unit exactly as the release proves it, on
+  # a runner with no Vulkan SDK.
   macos-wheel:
-    # Compiles and runs PR-authored code, and attaches nothing to a release
-    # here, so its token reads and does nothing else.
+    # Compiles and runs PR-authored code, so its token reads and does nothing
+    # else.
     permissions:
       contents: read
     uses: ./.github/workflows/macos-wheel.yml
@@ -597,7 +594,7 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy pydantic typing_extensions mcp==2.3.0
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy pydantic typing_extensions
           # CPU torch: the exchange tests type-check against torch's API, and
           # pyright reports a missing import as an error. The cpu wheel keeps
           # the download tractable for a no-build job.
@@ -607,12 +604,12 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: uvx pyright@1.1.411
 
-      # The release channel's index generator. Stdlib-only, so it rides the
-      # no-build job rather than waiting on a wheel it has nothing to do with —
-      # and a broken index is only otherwise visible at release time.
-      - name: Simple-index generator tests
+      # What release-please bumps and the release publishes. Stdlib-only, so it
+      # rides the no-build job — and a disagreement is otherwise visible only at
+      # release time.
+      - name: Release configuration tests
         working-directory: scripts
-        run: python3 -m unittest test_build_simple_index
+        run: python3 -m unittest test_release_configuration
 
       # The audio loopback fixture's analysis half. numpy-only, so it rides
       # this job for the same reason — it needs neither the wheel nor a built

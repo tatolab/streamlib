@@ -17,7 +17,6 @@ pub(crate) mod logging;
 pub(crate) mod observability;
 pub(crate) mod runtime_hooks;
 pub(crate) mod signals;
-pub(crate) mod streamlib_home;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -30,7 +29,6 @@ pub mod app_directory;
 pub mod color;
 pub mod context;
 pub mod descriptors;
-pub mod directory_at_an_explicit_mode;
 pub mod display_info;
 pub mod error;
 pub mod execution;
@@ -72,9 +70,6 @@ pub use utils::*;
 // Narrow re-exports of engine-internal items that have sanctioned
 // external consumers. Each line below is a deliberate boundary
 // crossing — items not listed here stay engine-internal.
-//
-// Home / data-dir resolution:
-pub use streamlib_home::{get_streamlib_data_dir, get_streamlib_home, get_uv_cache_dir};
 
 /// The framed-IPC transport a processor interpreter is driven over.
 ///

@@ -9,10 +9,12 @@ mod tests;
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
+
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
 };
-use crate::core::logging::{LogLevel, LogRecord, Source};
+use crate::core::logging::LogRecord;
 
 /// Convert a wire-format [`EscalateRequestLog`] into a host-side
 /// [`LogRecord`]. Stamps `host_ts` at the moment of receipt — the

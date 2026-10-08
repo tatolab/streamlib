@@ -106,6 +106,11 @@ sdk/streamlib-python-wheel/         PyO3 crate → tatolab/runtime/: processor-i
                                       and bootstrap only (crate name is step 10's)
 runtime/tatolabd/                   bin tatolabd — the runtime process
 runtime/tatolab-cli/                bin tatolab — the CLI
+runtime/streamlib-runtime-client-contract/
+                                    engine-free: what the runtime and tatolab share — the runtime
+                                      directory, node registry and JSONL log files (owner, 2026-10-08),
+                                      and the local API's wire names, the tap tool's result shape
+                                      and the exchange route's encoder
 runtime/streamlib-engine/src/core/compiler/compiler_ops/
                                     processor-interpreter spawn and describe, beside subprocess_bridge.rs
 tests/stream-on-runtime/            the integration suite
@@ -193,7 +198,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   with the project as import root (graph JSON on stdout, cross-floor warnings on stderr, a failed
   compile's traceback as the error), start `tatolabd` attached, forward Ctrl-C; `dev` restarts it
   on an edit. `graph`, `tap`, `logs`, `nodes`, `exchange`, `mcp` speak the local API. `new` writes
-  the embedded templates with `dependencies = ["tatolab-stream", "numpy>=2.1"]`.
+  the embedded templates with `dependencies = ["tatolab-stream>=0.41", "numpy>=2.1"]`.
 
 ## ADDED: §Processor model — the runtime refuses by name what it does not understand
 
@@ -247,6 +252,44 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   `docs/plan/diagrams/system.mmd`'s media node — built-ins reach Python as classes generated
   into `tatolab/stream/_built_in_nodes.py` from their descriptors (#2587), not as native marker
   classes, and a built-in's `type` is `tatolab.stream:<Class>` as built.
+- §Packages' built-in criterion (`:248-260`) — a built-in's native half ships in `tatolabd`,
+  never in a pip distribution (its generated class rides in `tatolab-stream`), so its "ships
+  inside the wheel" and "`pip install streamlib` alone" name the runtime instead.
+- §Packages' extension-wheel entry, "published through the same simple index the wheel uses,
+  which becomes multi-project to carry it" (`:323-324`), and §Consumers' "publish through the
+  same GitHub-hosted PEP 503 index the wheel uses (PyPI after the rename)" (`:654-655`) — the
+  release publishes to PyPI and the simple index is deleted (owner, 2026-10-08).
+- §Packages' cross-floor-check entry, "It runs inside `streamlib dev` and `streamlib run`"
+  (`:530`), and §Consumers' "start from the `streamlib new` scaffold" (`:659`) and "the
+  `streamlib new` scaffold is the hello" (`:702`) — `tatolab dev`, `tatolab run` and
+  `tatolab new`.
+- §Media I/O's virtual-camera entry, "`streamlib enable-virtual-camera` refuses by name"
+  (`:1893-1894`) — `tatolab enable-virtual-camera`, which refuses off Linux by name.
+- §Networking's extension-wheels CI entry, "the release workflow builds and attaches each wheel
+  on its own tag; `build_simple_index.py` is multi-project — …" (`:3240-3242`) — the release
+  builds `tatolab-webrtc` for manylinux and Apple Silicon and uploads it to PyPI beside
+  `tatolab-stream`, attaching nothing; `build_simple_index.py` and its tests are deleted.
+- §Distribution & versioning's first entry, "a static PEP 503 simple index (`pip install
+  streamlib --index-url …` — one stable incantation) — PyPI publication waits for the project
+  rename" (`:3555-3557`) — the release publishes `tatolab-stream` and `tatolab-webrtc` to PyPI,
+  where a stream's venv takes them like any other dependency (owner, 2026-10-08).
+- §Distribution & versioning's macOS-artifact entry, "On release it attaches the wheel, and a
+  failed macOS wheel withholds the simple index exactly as the manylinux one does"
+  (`:3632-3633`) — the release publishes no engine wheel and attaches nothing; a failed macOS
+  proof of the runtime unit withholds the PyPI upload, as a failed build of any distribution
+  does.
+- §Control plane's `graph`-key entry, "`streamlib nodes` prints the registry table alone"
+  (`:3767`), and the MCP entry's refusal "naming `streamlib nodes`" (`:3940`) — `tatolab nodes`.
+- §Control plane's api-server entry, "Its new host is the wheel" (`:3774-3777`) — `tatolabd`
+  hosts it, and no wheel does.
+- §Control plane's CLI entry (`:3778-3799`) — the CLI is the native `tatolab`, linking no
+  engine: `new`, `run` and `dev` (starting `tatolabd` attached), `nodes`, `graph`, `tap`,
+  `logs`, `exchange`, `mcp` and `enable-virtual-camera`. "A thin runner over the same engine
+  the wheel exposes" and "Python embeds the engine in-process via the wheel" go with the
+  Python-hosted engine.
+- §Control plane's runtime-directory entry, "the wheel's Python registry reader resolves
+  identically" (`:3813`) — `tatolab` resolves it through `streamlib-runtime-client-contract`,
+  the code the runtime resolves it with.
 - `README.md:86-94` and `docs/architecture/` in the shipping tickets; CLAUDE.md's "Reading the
   Python surface", `placement.md` and the skills that spawn `streamlib` in their own
   operating-model PR, as `flow.md` requires.
@@ -267,7 +310,7 @@ its PR. Paths under `sdk/streamlib-python-wheel/` unless rooted. One file per ro
 | `src/python_runtime_mesh_observation.rs`, `cli.py`, `_control_plane_client.py`, `_node_registry.py`, `_runtime_log_reader.py`, `_surface_image_exchange.py` | rewritten in `tatolab`, then deleted | S5 |
 | `runtime/streamlib-engine/src/core/signals.rs:9-12` (names CPython), the hand-back bookkeeping | the doc and the dead arm deleted; the ladder is reused as-is through `start_and_wait_for_shutdown` | S4 |
 | `_engine.pyi` beyond the bootstrap's surface | replaced by the Protocols and the conformance gate | S2 |
-| CI: one venv with `maturin develop` (`python-wheel.yml:101-188`, `:255-305`, `:375-401`, `:436-465`; `test.yml:772`, `:856-883`); `macos-wheel.yml:112-151`; `release-wheel.yml:206-247`; `build_simple_index.py:31`; release-please's wheel `pyproject.toml` bump | three suite jobs and the runtime-unit build | S2–S5 |
+| CI: one venv with `maturin develop` (`python-wheel.yml:101-188`, `:255-305`, `:375-401`, `:436-465`; `test.yml:772`, `:856-883`); `macos-wheel.yml:112-151`; `release-wheel.yml:206-247`; `build_simple_index.py:31`; release-please's wheel `pyproject.toml` bump | three suite jobs and the runtime-unit build; the simple index deleted, the release uploading `tatolab-stream` and `tatolab-webrtc` to PyPI (owner, 2026-10-08) | S2–S5 |
 | xtask paths (`check_no_in_process_placement.rs:52`, `:114`; `check_clock_usage.rs:107`, `:628`, `:775`; `lint_logging.rs:50-56`; `check_boundaries.rs:521`, `:988`, `:2223-2268`; `generate_third_party_notices.rs:852`, `:1204`, `:1277-1312`; `main.rs:142`, `:383`) | re-pointed | S1 |
 | ≈20 engine fixtures calling `streamlib` or `Runtime` (`runtime/streamlib-engine/tests/fixtures/*.sh`, `*_node.py`) | rewritten to `tatolab` and `tatolabd` | S4, S5 |
 | `.claude/` skills (eight live-ops and verify skills), `agents/evidence-verifier.md`, `hooks/rig-brake.sh:107` and its test | corrected in one operating-model PR | after S5 |
@@ -299,7 +342,6 @@ its subject; no test runs against a path its slice deleted.
 | `run` loading into the running `tatolabd` instead of starting its own; several streams per `tatolabd`; the state directory; `run -d`; the `<machine>/` segment | step 4 (`:107-129`) | runtime hosting |
 | Installing and managing the runtime | owner: the app, long term | step 4's align and the app |
 | The engine's Rust crate names, `STREAMLIB_*` | step 10 | the app |
-| Publishing `tatolab-stream` to PyPI | outward-facing; names unregistered | the owner's call |
 | Needs, packs, the control client, engine-grade extension capabilities | OPEN | their steps |
 | The thirteen examples | converted consumers | backlog filed at ship |
 | Testing a user's stream without a runtime | separate work (`:127-129`) | its own change |

@@ -1,15 +1,13 @@
 # tatolab-webrtc
 
-WHIP publish and WHEP play for [StreamLib](https://github.com/tato123/streamlib), as an
-extension wheel: Rust inside, two ordinary `@node` classes as the binding.
+WHIP publish and WHEP play for Tatolab streams, as an extension wheel: Rust inside, two
+ordinary `@node` classes as the binding.
 
 ```bash
-pip install tatolab-webrtc --index-url https://tatolab.github.io/streamlib/simple/
+pip install tatolab-webrtc
 ```
 
-The same index serves the `tatolab-stream` package this depends on, so one `--index-url`
-installs both. PyPI publication waits for the project rename; the artifact is
-identical either way.
+It installs from PyPI with the `tatolab-stream` package it depends on.
 
 ```python
 from tatolab.webrtc import WhepPlayer, WhipPublisher

@@ -8,12 +8,12 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Serialize;
+use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
 use super::RuntimeName;
 use super::RuntimeOperations;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
-use super::StreamlibRuntimeDirectory;
 use super::graph_change_listener::GraphChangeListener;
 use crate::core::compiler::{Compiler, PendingOperation};
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -273,14 +273,16 @@ impl Runner {
         );
         tracing::info!("Creating Runner named {runtime_name} with ID: {runtime_id}");
 
-        let runtime_directory = StreamlibRuntimeDirectory::resolve()?;
+        let runtime_directory = StreamlibRuntimeDirectory::resolve()
+            .map_err(|refusal| Error::Runtime(refusal.to_string()))?;
         tracing::info!(
             "StreamLib runtime directory: {}",
             runtime_directory.path().display()
         );
 
         // Get STREAMLIB_HOME and run init hooks (once per process)
-        let streamlib_home = crate::core::streamlib_home::get_streamlib_home();
+        let streamlib_home =
+            streamlib_runtime_client_contract::streamlib_home::get_streamlib_home();
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
         crate::core::runtime_hooks::run_init_hooks(&streamlib_home)?;
 
@@ -1931,7 +1933,8 @@ mod tests {
             let runtime = result.expect("a runtime starts with XDG_RUNTIME_DIR unset");
             let fallback = std::path::PathBuf::from(format!(
                 "/tmp/streamlib-{}",
-                crate::core::runtime::current_process_uid()
+                streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid(
+                )
             ));
             assert!(
                 runtime.surface_socket_path().starts_with(&fallback),
@@ -2073,7 +2076,7 @@ mod tests {
                 StreamlibRuntimeDirectory::resolve,
             )
             .expect("the runtime directory under the padded XDG_RUNTIME_DIR")
-            .surface_share_socket_path(&RuntimeUniqueId::from(pinned_id.as_str()));
+            .surface_share_socket_path(&pinned_id);
             let live_runtimes_socket =
                 std::os::unix::net::UnixListener::bind(&live_runtimes_socket_path)
                     .expect("bind the live runtime's socket");
@@ -2161,9 +2164,9 @@ mod tests {
                     std::env::set_var("STREAMLIB_RUNTIME_ID", &pinned_id);
                 }
 
-                crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+                streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
                     &xdg.join("streamlib"),
-                    crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+                    streamlib_runtime_client_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
                 )
                 .expect("create runtime directory");
                 let stale_path = xdg

@@ -47,12 +47,12 @@ SCAFFOLD_TEMPLATE_PYTHON_FILE_NAMES = sorted(
 # The text `new` replaces in each template; a template that loses one renders wrong.
 RENDER_PLACEHOLDERS_BY_TEMPLATE_FILE = {
     "stream.py": [
-        "A StreamLib stream: camera →",
+        "A Tatolab stream: camera →",
         "from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream",
         '\"\"\"Camera, inverted,',
         "stream_builder.add(CameraSource)",
     ],
-    "pyproject.toml": ['name = "streamlib-app"'],
+    "pyproject.toml": ['name = "tatolab-stream-project"'],
 }
 COMPILE_ENTRY_TIMEOUT_SECONDS = 60.0
 
@@ -197,21 +197,18 @@ def test_the_scaffold_pins_the_python_version_the_plan_names():
 
 
 def test_the_scaffold_depends_on_tatolab_stream_and_numpy_only():
-    assert 'dependencies = ["tatolab-stream", "numpy>=2.1"]\n' in template_text(
+    assert 'dependencies = ["tatolab-stream>=0.41", "numpy>=2.1"]\n' in template_text(
         "pyproject.toml"
-    ), "the pixel effect needs no GPU package of the user's own, and no runtime enters"
-
-
-def test_the_scaffold_sources_tatolab_stream_from_its_own_index():
-    manifest = template_text("pyproject.toml")
-
-    assert (
-        '[[tool.uv.index]]\nname = "tatolab"\n'
-        'url = "https://tatolab.github.io/streamlib/simple/"\nexplicit = true\n'
-    ) in manifest
-    assert manifest.endswith('[tool.uv.sources]\ntatolab-stream = { index = "tatolab" }\n'), (
-        "uv reads an explicit index only for a dependency sourced from it"
+    ), (
+        "the pixel effect needs no GPU package of the user's own, no runtime enters, and "
+        "the floor keeps PyPI's 0.0.0 tatolab-stream placeholder out of the resolve"
     )
+
+
+def test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index():
+    """A uv index or source here would resolve `tatolab-stream` from somewhere other
+    than PyPI, where the release publishes it."""
+    assert "tool.uv" not in template_text("pyproject.toml")
 
 
 def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
@@ -251,7 +248,7 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                 {
                     "name": "displaywindow",
                     "type": "tatolab.stream:DisplayWindow",
-                    "config": {"title": "StreamLib", "scaling": "fit"},
+                    "config": {"title": "Tatolab", "scaling": "fit"},
                 },
             ],
             "links": [

@@ -20,7 +20,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::logging::{
     self as engine_logging, EngineLogRecordForTheParentProcess, HelperProcessEngineLogRecordRing,
-    log_dir,
 };
 use streamlib::sdk::media_clock::MediaClock;
 
@@ -119,15 +118,6 @@ fn engine_log_record_as_python_mapping<'py>(
 #[pyfunction]
 pub(crate) fn monotonic_now_ns() -> u64 {
     monotonic_clock_now_ns()
-}
-
-/// The directory the engine writes its per-runtime JSONL logs into.
-//
-// `PathBuf`, not `String`: pyo3 encodes it with surrogateescape, so a path that
-// is not valid UTF-8 round-trips back through `open()`.
-#[pyfunction]
-pub(crate) fn runtime_log_directory() -> std::path::PathBuf {
-    log_dir()
 }
 
 /// [`MediaClock::now`] in nanoseconds, shared by the clock binding, the
