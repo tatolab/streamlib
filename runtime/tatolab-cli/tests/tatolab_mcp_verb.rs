@@ -69,8 +69,9 @@ mod against_an_isolated_registry {
     /// Longer than any run here takes; a `tatolab mcp` still running past it never exited.
     const TATOLAB_MCP_RUN_DEADLINE: Duration = Duration::from_secs(20);
 
-    /// How long `rmcp`'s child-process transport waits for the child to exit once it closes the
-    /// child's stdin, before killing it.
+    /// Mirrors `rmcp`'s `transport::child_process::MAX_WAIT_ON_DROP_SECS`: how long its
+    /// child-process transport waits for the child to exit once it closes the child's stdin,
+    /// before killing it. The transport reaps the child itself and hands back no exit status.
     const RMCP_CHILD_PROCESS_KILL_DEADLINE: Duration = Duration::from_secs(3);
 
     /// What the MCP host hands the verb as its stdin.
@@ -414,12 +415,12 @@ mod against_an_isolated_registry {
         );
         assert!(
             closing_took < RMCP_CHILD_PROCESS_KILL_DEADLINE,
-            "the verb exits by itself once the host closes stdin, rather than being killed \
-             ({closing_took:?})"
+            "the host's close returned within {RMCP_CHILD_PROCESS_KILL_DEADLINE:?} of closing the \
+             verb's stdin, so the verb ended before rmcp would have killed it ({closing_took:?})"
         );
         assert_eq!(
             verb_stderr, "",
-            "a verb that exits by itself without a word exited 0"
+            "the verb wrote nothing to stderr — no refusal and no panic — on its way out"
         );
     }
 }
