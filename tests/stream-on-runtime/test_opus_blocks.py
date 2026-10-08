@@ -1,0 +1,364 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+"""The Opus codec pair, built-in class to decoded audio block.
+
+The load tests need no device: `tatolabd` loads the graph and is then refused
+at the GPU, which is why they run in CI. The graph tests start the engine, so
+they carry `requires_gpu` like every other graph test here and run nowhere in
+CI: libopus needs no device, but a running processor does.
+
+No microphone: a Python source publishes a stereo tone at a stated rate, so
+the channel count the encoder follows and the rate the decoder reconstructs at
+are the test's own facts rather than the machine's.
+
+The encoded-channel test is where the cast meets the engine: what
+`EncodedAudioPacket` says an encoded bag is, asserted against bags libopus
+actually wrote. Its GPU-free half — the wire keys, the refusals, the payload's
+msgpack type — is `test_encoded_audio_packet_cast.py`.
+"""
+
+from collections.abc import Callable
+
+import pytest
+
+import tatolab.stream
+from conftest import StreamGraphLoadOutcome
+from runtime_process_under_test import RuntimeProcessUnderTest
+from tatolab.stream import (
+    OpusDecoder,
+    OpusEncoder,
+    StreamBuilder,
+    compile_stream_to_graph,
+    stream,
+)
+from opus_blocks_probes import (
+    DECODED_BLOCKS_REPORTED,
+    ENCODED_PACKETS_REPORTED,
+    SOURCE_CHANNELS,
+    DecodedAudioBlockProbe,
+    EncodedAudioPacketProbe,
+    StereoToneSource,
+)
+
+TWO_OPUS_MARKERS = [OpusEncoder, OpusDecoder]
+
+# The framing the encoder's own window contract fixes: 20 ms at Opus's 48 kHz
+# clock. Every packet spans exactly this many per-channel samples.
+SAMPLES_IN_ONE_OPUS_PACKET = 960
+NANOSECONDS_PER_OPUS_PACKET = SAMPLES_IN_ONE_OPUS_PACKET * 1_000_000_000 // 48_000
+
+# libopus's lookahead at 48 kHz is `Fs/400 + Fs/250` = 312 samples, and 120 at
+# `lowdelay`. The assertions read `pre_skip` off the bag rather than naming
+# either — what is under test is that the decoder trims exactly what the
+# encoder reported, not what this file believes libopus reports. The pairing
+# below does assume the reported lookahead divides evenly into nanoseconds at
+# 48 kHz, which both of those do; a lookahead that did not would need the
+# comparison to carry the rounding rather than be exact.
+PRE_SKIP_SAMPLES_A_CREDIBLE_ENCODER_REPORTS = range(1, SAMPLES_IN_ONE_OPUS_PACKET)
+
+# How much of the decoded report has to pair with the encoded one for the trim
+# assertion to be about the stream rather than one block. The two probes are
+# separate helper processes attaching at their own pace, so this is the floor
+# under the overlap, not the expectation.
+DECODED_BLOCKS_TO_CROSS_CHECK = DECODED_BLOCKS_REPORTED // 2
+
+READINESS_TIMEOUT_SECONDS = 20.0
+
+
+# ---- built-in class semantics (no GPU) -------------------------------------
+
+
+@stream
+def an_opus_encoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(OpusEncoder)
+
+
+@stream
+def an_opus_decoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(OpusDecoder)
+
+
+ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS = {
+    OpusEncoder: an_opus_encoder_alone,
+    OpusDecoder: an_opus_decoder_alone,
+}
+
+
+@pytest.mark.parametrize("marker_class", TWO_OPUS_MARKERS)
+def test_node_name_defaults_to_the_type_name(
+    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]", marker_class
+):
+    graph = compile_stream_to_graph(ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS[marker_class])
+    [marker_node] = [
+        node for node in graph["nodes"] if node["type"] == marker_class.type
+    ]
+    assert marker_node["name"] == marker_class.__name__.lower()
+
+    outcome = load_stream_graph_on_tatolabd(graph)
+    assert outcome.loaded and outcome.loaded_node_count == 1, outcome.stderr_text
+
+
+@stream
+def microphone_through_the_opus_round_trip_into_a_speaker(stream_builder: StreamBuilder) -> None:
+    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
+    encoder = stream_builder.add(OpusEncoder)
+    decoder = stream_builder.add(OpusDecoder)
+    speaker = stream_builder.add(tatolab.stream.SpeakerSink)
+    stream_builder.connect(microphone.output("audio"), encoder.input("audio"))
+    stream_builder.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
+    stream_builder.connect(decoder.output("audio"), speaker.input("audio"))
+
+
+def test_the_round_trip_wires_without_an_adapter(
+    load_stream_graph_on_tatolabd: "Callable[..., StreamGraphLoadOutcome]",
+):
+    """Source into encoder, encoder into decoder — the port names compose as
+    published, which is what makes three `stream_builder.add` calls and two
+    `stream_builder.connect` calls the whole of an audio codec round trip. No rechunker
+    between the source and the encoder: the encoder's own window contract
+    frames. The builder checks no port names, so the engine accepting the load
+    is the proof."""
+    outcome = load_stream_graph_on_tatolabd(microphone_through_the_opus_round_trip_into_a_speaker)
+    assert outcome.loaded and outcome.loaded_node_count == 4, outcome.stderr_text
+
+
+# ---- the round trip in a real graph (GPU) ----------------------------------
+
+
+@stream
+def stereo_tone_through_the_opus_pair_probed_on_both_links(stream_builder: StreamBuilder) -> None:
+    """A stereo tone encoded and decoded back, with no Python in the codec path.
+
+    `StereoToneSource → OpusEncoder → OpusDecoder`, a probe fanned off each of
+    the two links. The source states 48 kHz stereo `f32`, which is what the
+    encoder's window contract asks the stage to resample to — so nothing
+    between the source and the measurement is a resampler, and the channel
+    count the encoder follows is this stream's own fact.
+
+    Two probes off one run rather than two runs is what makes the trim
+    assertion possible: a decoded block's stamp is paired against the stamp of
+    the encoded packet a lookahead later, and two runs would have two anchors
+    and nothing to pair across.
+
+    The source publishes 480-sample blocks and the encoder's port declares
+    960/960, so the window stage frames two source blocks into each Opus
+    packet — there is no rechunker between them and no configuration that
+    could add one.
+    """
+    source = stream_builder.add(StereoToneSource)
+    encoder = stream_builder.add(OpusEncoder)
+    decoder = stream_builder.add(OpusDecoder)
+    encoded_probe = stream_builder.add(EncodedAudioPacketProbe)
+    decoded_probe = stream_builder.add(DecodedAudioBlockProbe)
+
+    stream_builder.connect(source.output("audio"), encoder.input("audio"))
+    stream_builder.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
+    stream_builder.connect(
+        encoder.output("encoded_audio"),
+        encoded_probe.input("encoded_audio_from_upstream"),
+    )
+    stream_builder.connect(decoder.output("audio"), decoded_probe.input("audio_from_upstream"))
+
+
+def start_the_opus_round_trip(
+    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+) -> RuntimeProcessUnderTest:
+    """The round trip started on `tatolabd`, once every node is Running."""
+    tatolabd = start_tatolabd(stereo_tone_through_the_opus_pair_probed_on_both_links)
+    tatolabd.local_api_client().await_every_node_running(timeout=READINESS_TIMEOUT_SECONDS)
+    return tatolabd
+
+
+def _reported(tatolabd: RuntimeProcessUnderTest, marker_name: str) -> "list[dict]":
+    """Every report the probe admitted, in the order it admitted them."""
+    return tatolabd.marker_payloads(marker_name)
+
+
+@pytest.mark.requires_gpu
+def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
+    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+):
+    """The encoded-domain link, read from Python: every bag libopus produced
+    casts to an `EncodedAudioPacket`, and what the cast then reports is the
+    wire contract the plan fixed.
+
+    Every Opus packet is a sync point, so unlike the video probe this one
+    enters at the first bag it sees and the ordering assertion is the whole
+    of the doctrine: a `sequence_index` step other than exactly one is loss,
+    and each packet is its own group.
+    """
+    tatolabd = start_the_opus_round_trip(start_tatolabd)
+    tatolabd.await_marker("ENCODED_PACKETS_COMPLETE")
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    packets = _reported(tatolabd, "ENCODED_PACKET")
+    assert len(packets) == ENCODED_PACKETS_REPORTED, (
+        f"the probe reported {len(packets)} packets, not "
+        f"{ENCODED_PACKETS_REPORTED}; standard error:\n{tatolabd.recent_stderr()}"
+    )
+
+    for packet in packets:
+        assert packet["codec"] == "opus", (
+            "the bag names the elementary stream its bitstream actually is"
+        )
+        assert packet["is_sync_point"] is True, (
+            "a decoder enters an Opus stream at any packet, so the flag is a "
+            "constant of the convention"
+        )
+        assert packet["sample_rate"] == 48_000, (
+            "Opus codes at its own clock whatever the source was resampled from"
+        )
+        assert packet["channels"] == SOURCE_CHANNELS, (
+            "the encoder declares no channel count, so the packet carries the "
+            "source's own"
+        )
+        assert packet["sample_count"] == SAMPLES_IN_ONE_OPUS_PACKET, (
+            "the input port's window contract frames at 20 ms, so every packet "
+            "spans 960 per-channel samples"
+        )
+        assert packet["pre_skip"] in PRE_SKIP_SAMPLES_A_CREDIBLE_ENCODER_REPORTS, (
+            "`pre_skip` is the minted encoder's reported lookahead — a zero "
+            f"would mean it was never asked, and {packet['pre_skip']} past a "
+            "packet is not a lookahead"
+        )
+        assert packet["byte_count"] > 0, "a packet with no bytes decodes to nothing"
+
+    for earlier, later in zip(packets, packets[1:]):
+        assert later["sequence_index"] == earlier["sequence_index"] + 1, (
+            "`sequence_index` is monotonic in publication order and never "
+            f"resets, so the step {earlier['sequence_index']} → "
+            f"{later['sequence_index']} is loss on the link"
+        )
+        assert later["group_index"] == earlier["group_index"] + 1, (
+            "every packet is a sync point, so every packet is its own group"
+        )
+
+
+@pytest.mark.requires_gpu
+def test_the_decoded_blocks_are_one_per_packet_and_stamped_a_lookahead_earlier(
+    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+):
+    """The far side of the pair: what libopus reconstructed, read back as
+    ordinary audio blocks.
+
+    One block per packet and no re-framing — 960 samples every time, 20 ms
+    apart, nothing held back — and each block stamped exactly `pre_skip`
+    samples *earlier* than the packet whose audio it carries. That offset is
+    the trim, observable from anywhere in the stream: a decoder that did not
+    trim would emit each block at its packet's own stamp and so run a
+    lookahead late against the audio it holds, which on a recording is the
+    audio drifting against the video.
+
+    The *entry* block — short by exactly `pre_skip`, stamped at the anchoring
+    packet's instant — is not assertable here and is not this test's job. Both
+    probes are helper processes that attach at their own pace, well after the
+    decoder entered the stream, so the entry block is already gone by the time
+    either exists. The engine test owns it, driving the decode body with no
+    `Runtime` at all:
+    `encoded_packet_to_audio_block_decoder.rs::a_later_blocks_derived_stamp_lands_on_the_stamp_of_the_packet_whose_input_it_carries`.
+    """
+    tatolabd = start_the_opus_round_trip(start_tatolabd)
+    tatolabd.await_every_marker("ENCODED_PACKETS_COMPLETE", "DECODED_BLOCKS_COMPLETE")
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    reported = _reported(tatolabd, "DECODED_BLOCK")
+    assert len(reported) == DECODED_BLOCKS_REPORTED, (
+        f"the probe reported {len(reported)} blocks, not "
+        f"{DECODED_BLOCKS_REPORTED}; standard error:\n{tatolabd.recent_stderr()}"
+    )
+    packets = _reported(tatolabd, "ENCODED_PACKET")
+    assert packets, (
+        f"the encoded link reported nothing to compare against:\n{tatolabd.recent_stderr()}"
+    )
+
+    # The entry block is short by `pre_skip` and stamped at its packet's own
+    # instant, so it fails both steady-state assertions below by construction.
+    # In practice the probe attaches long after the decoder entered and never
+    # sees it — but "in practice" is helper-process start latency, not a
+    # guarantee, so it is dropped by shape rather than left to timing. It can
+    # only ever be the first block of the report.
+    blocks = reported
+    entry_blocks = [
+        block
+        for block in reported[:1]
+        if block["sample_count"] != SAMPLES_IN_ONE_OPUS_PACKET
+    ]
+    if entry_blocks:
+        blocks = reported[1:]
+        lookahead = {packet["pre_skip"] for packet in packets}
+        assert entry_blocks[0]["sample_count"] in {
+            SAMPLES_IN_ONE_OPUS_PACKET - pre_skip for pre_skip in lookahead
+        }, (
+            "the probe caught the decoder's entry block, and a short block "
+            "there is the trimmed priming — it must be short by exactly the "
+            f"encoder's lookahead, not by {entry_blocks[0]['sample_count']}"
+        )
+    assert all(
+        block["sample_count"] == SAMPLES_IN_ONE_OPUS_PACKET for block in reported[1:]
+    ), "only the entry block can ever be short; the decoder re-frames nothing"
+
+    for block in blocks:
+        assert block["sample_rate"] == 48_000, (
+            "a decoder reconstructs at Opus's own clock whatever the source "
+            "was resampled from"
+        )
+        assert block["channels"] == SOURCE_CHANNELS, (
+            "the decoded block carries the packet's own channel count, which "
+            "followed the source's"
+        )
+        assert block["dtype"] == "f32", "libopus reconstructs float samples"
+        assert block["sample_count"] == SAMPLES_IN_ONE_OPUS_PACKET, (
+            "one block per packet and no re-framing — a decoder that re-framed "
+            "would be a second framing system beside the window stage that "
+            "already owns the concern"
+        )
+        assert block["sample_count"] * block["channels"] == block["scalars_read"], (
+            "the block's declared count and the samples it actually carries "
+            "have to be the same fact"
+        )
+
+    for earlier, later in zip(blocks, blocks[1:]):
+        assert (
+            later["timestamp_ns"] - earlier["timestamp_ns"]
+        ) == NANOSECONDS_PER_OPUS_PACKET, (
+            "the stamps are exactly 20 ms apart, derived from the run's anchor "
+            "in integer rational arithmetic rather than read off a clock: "
+            f"{earlier['timestamp_ns']} → {later['timestamp_ns']}"
+        )
+
+    # One minted encoder for the whole run — the channel count never changes,
+    # so nothing re-mints and there is one lookahead to reason about.
+    reported_lookaheads = {packet["pre_skip"] for packet in packets}
+    assert len(reported_lookaheads) == 1, (
+        f"the run reported {reported_lookaheads} lookaheads; a second one means "
+        "the encoder re-minted, which nothing in this graph asks it to do"
+    )
+    trim_ns = reported_lookaheads.pop() * 1_000_000_000 // 48_000
+
+    # Bounded by the encoded probe's own report: the two probes attach
+    # independently, and a decoded block whose packet fell outside that window
+    # rode a bag nobody wrote down.
+    packet_stamps = {packet["timestamp_ns"] for packet in packets}
+    paired = [
+        block for block in blocks if block["timestamp_ns"] + trim_ns in packet_stamps
+    ]
+    assert len(paired) >= DECODED_BLOCKS_TO_CROSS_CHECK, (
+        f"only {len(paired)} of {len(blocks)} decoded blocks paired with an "
+        "encoded packet a lookahead later, which is too few to be about the "
+        f"stream; standard error:\n{tatolabd.recent_stderr()}"
+    )
+
+    # The un-trimmed signature, and why the pairing above is the trim rather
+    # than an arbitrary offset that happened to fit: packets are 20 ms apart
+    # and the lookahead is a fraction of that, so a block stamped at any
+    # packet's own instant is a decoder that emitted its priming.
+    assert not [
+        block for block in blocks if block["timestamp_ns"] in packet_stamps
+    ], (
+        "a decoded block is stamped at its packet's own instant, so the "
+        "encoder's priming was never discarded — every block then holds audio "
+        "a lookahead older than the moment it claims"
+    )
