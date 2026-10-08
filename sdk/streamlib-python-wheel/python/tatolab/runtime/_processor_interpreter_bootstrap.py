@@ -142,11 +142,7 @@ from tatolab.stream._node_declaration import (
     NODE_DECLARATION_SCHEDULING_PRIORITY_STAMP,
 )
 
-from tatolab.runtime._capability_extensions import (
-    load_installed_capability_extensions_once_per_process,
-)
 from tatolab.runtime._engine import (
-    capability_extension_host_for_the_helper_process,
     capture_this_helper_processes_engine_log_records,
     drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
@@ -1649,23 +1645,6 @@ def run_one_processor_until_its_parent_tears_it_down() -> None:
                 error=str(watch_failure),
             )
             sys.exit(1)
-
-    # Before the processor's own module is imported: its class may reach for a
-    # stack an extension in the same wheel brings up, and a hook that fails
-    # here is reportable on the channel the sink above just installed.
-    try:
-        load_installed_capability_extensions_once_per_process(
-            capability_extension_host_for_the_helper_process
-        )
-    except Exception as extension_failure:
-        engine_log_forwarder.stop_after_forwarding_what_is_left()
-        log.error(
-            "the helper could not load a capability extension",
-            entrypoint=import_path,
-            error=str(extension_failure),
-            traceback=traceback.format_exc(),
-        )
-        sys.exit(1)
 
     try:
         processor_class = load_processor_class(import_path)

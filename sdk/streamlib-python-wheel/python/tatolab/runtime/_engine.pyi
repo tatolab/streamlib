@@ -36,13 +36,10 @@ __all__ = [
     "LocalApiMcpRequestRefused",
     "LocalApiMcpServerUnreachable",
     "LocalApiMcpToolCallFailed",
-    "CapabilityExtensionHost",
     "Runtime",
     "TestBagCollector",
     "TestBagFeeder",
     "await_test_harness_bag",
-    "capability_extension_host_for_the_app_process",
-    "capability_extension_host_for_the_helper_process",
     "capture_this_helper_processes_engine_log_records",
     "close_test_harness_channel",
     "decode_tapped_channel_bag_frame_to_python_object",
@@ -233,37 +230,6 @@ class Runtime:
         traceback: TracebackType | None = ...,
     ) -> Literal[False]: ...
 
-@final
-class CapabilityExtensionHost:
-    """What a capability extension's `load(host)` hook is handed.
-
-    A wheel declares its hook as a `streamlib.extensions` entry point in its
-    `pyproject.toml`, and the engine calls it once in every process taking an
-    engine role — the app process as `Runtime()` is constructed, and each
-    helper process before the processor's own module is imported. App code
-    never constructs one.
-
-    A hook is expected to be cheap and to do no I/O: bring a runtime or a
-    device library up, register the capability's name, and return. It must not
-    connect, open a device, or block — the app is waiting on `Runtime()` and a
-    helper is inside its registration budget. Raising from a hook fails the
-    process it was loading into, by design: an extension that half loaded is
-    worse than one that refused.
-    """
-
-    @property
-    def role(self) -> Literal["app", "helper"]:
-        """Which role this process takes."""
-
-    def register_capability(self, name: str, version: str) -> None:
-        """Declare a capability this wheel brought up.
-
-        The name is unique across every installed distribution: a second
-        distribution registering one already taken is refused, naming both. In
-        the app process the registration renders under `extensions` in
-        `streamlib graph`; in a helper it is the process's own record.
-        """
-
 def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
     """A helper process's own data plane, opened in the iceoryx2 domain its parent handed it.
 
@@ -344,16 +310,6 @@ def decode_tapped_channel_bag_frame_to_python_object(
     shorter than its own declared length rather than returning the prefix that
     did arrive, and one whose containers nest more than 128 deep.
     """
-
-def capability_extension_host_for_the_app_process(
-    distribution: str,
-) -> CapabilityExtensionHost:
-    """Mint the host `distribution`'s hook is handed in the app process."""
-
-def capability_extension_host_for_the_helper_process(
-    distribution: str,
-) -> CapabilityExtensionHost:
-    """Mint the host `distribution`'s hook is handed in a helper process."""
 
 def processor_class_import_paths_in_this_processes_catalog() -> list[str]:
     """Every processor class import path in the calling process's catalog.

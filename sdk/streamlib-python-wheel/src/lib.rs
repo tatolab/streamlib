@@ -9,7 +9,6 @@ use pyo3::prelude::*;
 #[cfg(target_os = "macos")]
 mod darwin_close_on_exec_kqueue;
 mod python_bag_conversion;
-mod python_capability_extension_host;
 #[cfg(test)]
 mod python_class_from_source_for_tests;
 mod python_control_plane_hosting;
@@ -41,7 +40,6 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     python_native_builtin_blocks::register_native_builtin_processor_types();
     python_test_harness_endpoints::register_test_harness_processor_types();
     module.add_class::<PythonRuntimeHandle>()?;
-    module.add_class::<python_capability_extension_host::PythonCapabilityExtensionHost>()?;
     python_test_harness_endpoints::add_test_harness_marker_classes_to_the_module(module)?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
     module.add_function(wrap_pyfunction!(
@@ -94,14 +92,6 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         python_bag_conversion::decode_msgpack_bytes_to_python_object,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        python_capability_extension_host::capability_extension_host_for_the_app_process,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        python_capability_extension_host::capability_extension_host_for_the_helper_process,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

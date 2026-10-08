@@ -11,7 +11,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
-use crate::core::runtime::LoadedCapabilityExtension;
 
 /// The processor-identity wire type. Defined in the engine-free
 /// `streamlib-processor-schema` crate so the engine and the engine-free
@@ -42,33 +41,9 @@ pub struct GraphResponse {
     /// exposes none.
     #[serde(default)]
     pub exposed: Vec<ExposedOutputPortOutput>,
-    /// The capabilities the extension wheels installed beside this engine
-    /// registered at startup. Always present; empty when none loaded.
-    pub extensions: Vec<LoadedCapabilityExtensionOutput>,
     /// This runtime's name, the first chunk of a tap channel
     /// `<runtime_name>/<node>/<port>`.
     pub runtime_name: String,
-}
-
-/// A capability a loaded extension wheel registered.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct LoadedCapabilityExtensionOutput {
-    /// The capability's name, unique across every loaded distribution.
-    pub name: String,
-    /// The version the registering distribution declared for it.
-    pub version: String,
-    /// The distribution whose entry point registered it.
-    pub distribution: String,
-}
-
-impl From<LoadedCapabilityExtension> for LoadedCapabilityExtensionOutput {
-    fn from(registered: LoadedCapabilityExtension) -> Self {
-        Self {
-            name: registered.name,
-            version: registered.version,
-            distribution: registered.distribution,
-        }
-    }
 }
 
 /// A node in the graph.
@@ -1024,41 +999,34 @@ mod port_rendering_tests {
 }
 
 #[cfg(test)]
-mod capability_extension_and_runtime_name_rendering_tests {
-    //! `extensions` and `runtime_name` are top-level keys beside `nodes` and
-    //! `links`, and a reader that finds `extensions` absent cannot tell
-    //! "nothing loaded" from "this engine predates the key" — so it is always
-    //! present.
-
+mod graph_response_top_level_key_rendering_tests {
     use super::*;
     use crate::core::graph::Graph;
-    use crate::core::runtime::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
 
     const RUNTIME_NAME: &str = "rig-desk-a1b2";
 
+    /// No package extends the engine, so nothing a package registered renders.
     #[test]
-    fn a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list() {
-        let rendered = serde_json::to_value(
-            Graph::new().to_graph_response(Vec::new(), RUNTIME_NAME.to_string()),
-        )
-        .unwrap();
+    fn a_graph_renders_no_extensions_key_and_its_schema_declares_none() {
+        let rendered =
+            serde_json::to_value(Graph::new().to_graph_response(RUNTIME_NAME.to_string())).unwrap();
 
         let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
-        assert_eq!(
-            keys,
-            ["nodes", "links", "exposed", "extensions", "runtime_name"]
+        assert_eq!(keys, ["nodes", "links", "exposed", "runtime_name"]);
+
+        let schema = serde_json::to_value(schemars::schema_for!(GraphResponse)).unwrap();
+        assert!(
+            schema["properties"].get("extensions").is_none(),
+            "the GraphResponse schema declares no extensions property: {schema}"
         );
-        assert_eq!(rendered["extensions"], serde_json::json!([]));
     }
 
     /// `tap` spells its channel from the top-level `runtime_name`, so it is the
     /// name the runtime was given, verbatim, and it reads back.
     #[test]
     fn the_runtime_name_is_a_top_level_key_and_no_mesh_key_renders() {
-        let rendered = serde_json::to_value(
-            Graph::new().to_graph_response(Vec::new(), RUNTIME_NAME.to_string()),
-        )
-        .unwrap();
+        let rendered =
+            serde_json::to_value(Graph::new().to_graph_response(RUNTIME_NAME.to_string())).unwrap();
 
         assert_eq!(rendered["runtime_name"], RUNTIME_NAME);
         assert!(
@@ -1069,37 +1037,6 @@ mod capability_extension_and_runtime_name_rendering_tests {
         let read_back: GraphResponse =
             serde_json::from_value(rendered).expect("a rendered graph deserializes");
         assert_eq!(read_back.runtime_name, RUNTIME_NAME);
-    }
-
-    #[test]
-    fn a_registered_extension_renders_its_name_version_and_distribution() {
-        let registry = LoadedCapabilityExtensionRegistry::default();
-        registry
-            .register(LoadedCapabilityExtension {
-                name: "webrtc".to_string(),
-                version: "0.2.0".to_string(),
-                distribution: "streamlib-webrtc".to_string(),
-            })
-            .expect("the capability registers");
-        let extensions: Vec<_> = registry
-            .registered()
-            .into_iter()
-            .map(LoadedCapabilityExtensionOutput::from)
-            .collect();
-
-        let rendered = serde_json::to_value(
-            Graph::new().to_graph_response(extensions, RUNTIME_NAME.to_string()),
-        )
-        .unwrap();
-
-        assert_eq!(
-            rendered["extensions"],
-            serde_json::json!([{
-                "name": "webrtc",
-                "version": "0.2.0",
-                "distribution": "streamlib-webrtc",
-            }])
-        );
     }
 }
 

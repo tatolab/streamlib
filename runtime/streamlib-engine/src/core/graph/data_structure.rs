@@ -12,8 +12,7 @@ use petgraph::graph::DiGraph;
 use super::traversal::{TraversalSource, TraversalSourceMut};
 use crate::core::graph::{ExposedOutputPortsComponent, GraphNodeWithComponents};
 use crate::core::json_schema::{
-    ExposedOutputPortOutput, GraphResponse, LinkOutput, LoadedCapabilityExtensionOutput,
-    NodeNamesByProcessorId, ProcessorNodeOutput,
+    ExposedOutputPortOutput, GraphResponse, LinkOutput, NodeNamesByProcessorId, ProcessorNodeOutput,
 };
 
 /// Graph state.
@@ -152,17 +151,9 @@ impl std::fmt::Display for Graph {
 }
 
 impl Graph {
-    /// Render this graph as the `/api/graph` payload, carrying
-    /// `loaded_capability_extensions` and `runtime_name` alongside it.
-    ///
-    /// Neither is a property of the graph — the extensions belong to the
-    /// process and the name to the runtime — so the runtime that reads them
-    /// passes them in.
-    pub(crate) fn to_graph_response(
-        &self,
-        loaded_capability_extensions: Vec<LoadedCapabilityExtensionOutput>,
-        runtime_name: String,
-    ) -> GraphResponse {
+    /// Render this graph as the `/api/graph` payload, carrying the runtime's
+    /// `runtime_name` alongside it.
+    pub(crate) fn to_graph_response(&self, runtime_name: String) -> GraphResponse {
         let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
         GraphResponse {
             stream: self.loaded_stream_name.clone(),
@@ -190,7 +181,6 @@ impl Graph {
                         })
                 })
                 .collect(),
-            extensions: loaded_capability_extensions,
             runtime_name,
         }
     }
