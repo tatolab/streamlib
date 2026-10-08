@@ -255,11 +255,7 @@ impl AttachedTatolabdTestbed {
         self.set_control("compile_document.json", &compile_document_text);
     }
 
-    fn start_tatolab(
-        &self,
-        working_directory: &Path,
-        tatolab_arguments: &[&str],
-    ) -> RunningTatolab {
+    fn tatolab_command(&self, working_directory: &Path, tatolab_arguments: &[&str]) -> Command {
         let tatolab_stderr = fs::File::create(self.tatolab_stderr_path()).unwrap();
         let mut tatolab_command = Command::new(self.tatolab_executable());
         tatolab_command
@@ -270,6 +266,41 @@ impl AttachedTatolabdTestbed {
             .stderr(tatolab_stderr)
             .env_remove("STREAMLIB_RUNTIME_NAME")
             .env_remove("STREAMLIB_APP_DIRECTORY");
+        tatolab_command
+    }
+
+    fn start_tatolab(
+        &self,
+        working_directory: &Path,
+        tatolab_arguments: &[&str],
+    ) -> RunningTatolab {
+        RunningTatolab {
+            tatolab_child: spawn_retrying_a_busy_executable(
+                &mut self.tatolab_command(working_directory, tatolab_arguments),
+            ),
+        }
+    }
+
+    /// Start `tatolab` as `nohup` or a non-interactive shell's `&` would: with
+    /// `inherited_ignored_signals` set to SIG_IGN before it executes.
+    fn start_tatolab_inheriting_ignored_signals(
+        &self,
+        working_directory: &Path,
+        tatolab_arguments: &[&str],
+        inherited_ignored_signals: &'static [libc::c_int],
+    ) -> RunningTatolab {
+        let mut tatolab_command = self.tatolab_command(working_directory, tatolab_arguments);
+        // SAFETY: the closure only calls `signal`, which is async-signal-safe after fork.
+        unsafe {
+            tatolab_command.pre_exec(move || {
+                for &ignored_signal in inherited_ignored_signals {
+                    if libc::signal(ignored_signal, libc::SIG_IGN) == libc::SIG_ERR {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
         RunningTatolab {
             tatolab_child: spawn_retrying_a_busy_executable(&mut tatolab_command),
         }
@@ -558,30 +589,11 @@ fn tatolab_resets_an_inherited_ignored_interrupt_and_terminate_and_keeps_an_inhe
             .replace("@CONTROL@", control_directory.to_str().unwrap()),
     );
 
-    let tatolab_stderr = fs::File::create(testbed.tatolab_stderr_path()).unwrap();
-    let mut tatolab_command = Command::new(testbed.tatolab_executable());
-    tatolab_command
-        .arg("run")
-        .current_dir(testbed.project_directory())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(tatolab_stderr)
-        .env_remove("STREAMLIB_RUNTIME_NAME")
-        .env_remove("STREAMLIB_APP_DIRECTORY");
-    // SAFETY: the closure only calls `signal`, which is async-signal-safe after fork.
-    unsafe {
-        tatolab_command.pre_exec(|| {
-            for ignored_signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-                if libc::signal(ignored_signal, libc::SIG_IGN) == libc::SIG_ERR {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            Ok(())
-        });
-    }
-    let mut running_tatolab = RunningTatolab {
-        tatolab_child: spawn_retrying_a_busy_executable(&mut tatolab_command),
-    };
+    let mut running_tatolab = testbed.start_tatolab_inheriting_ignored_signals(
+        &testbed.project_directory(),
+        &["run"],
+        &[libc::SIGINT, libc::SIGTERM, libc::SIGHUP],
+    );
     let exit_status = running_tatolab.wait_for_exit();
     assert_eq!(exit_status.code(), Some(0), "{}", testbed.tatolab_stderr());
 
@@ -592,6 +604,39 @@ fn tatolab_resets_an_inherited_ignored_interrupt_and_terminate_and_keeps_an_inhe
         "tatolab must reset an inherited ignored SIGINT and SIGTERM, since an ignored signal \
          never reaches its sigwait listener on macOS, and keep an inherited ignored SIGHUP"
     );
+}
+
+/// Linux queues a blocked signal whatever its disposition, so a SIGHUP `nohup` told `tatolab` to
+/// ignore must stay unblocked to stay ignored.
+#[test]
+fn run_under_nohup_ignores_a_hangup_during_the_compile_and_still_forwards_an_interrupt() {
+    let testbed = AttachedTatolabdTestbed::new();
+    testbed.set_control("compile_delay_seconds", "1");
+    testbed.set_control("tatolabd_exit_code", "7");
+    let mut running_tatolab = testbed.start_tatolab_inheriting_ignored_signals(
+        &testbed.project_directory(),
+        &["run"],
+        &[libc::SIGHUP],
+    );
+    wait_until("the compile to start", || {
+        !testbed.compile_invocations().is_empty()
+    });
+    running_tatolab.send_signal(libc::SIGHUP);
+
+    wait_until("tatolabd to start or tatolab to exit", || {
+        !testbed.started_tatolabd_process_ids().is_empty() || !running_tatolab.is_still_running()
+    });
+    assert!(
+        running_tatolab.is_still_running(),
+        "a SIGHUP tatolab inherited ignored stopped it during the compile: {}",
+        testbed.tatolab_stderr()
+    );
+    let tatolabd_process_id = testbed.wait_for_tatolabd_start_count(1)[0].process_id;
+
+    running_tatolab.send_signal(libc::SIGINT);
+    assert_eq!(running_tatolab.wait_for_exit().code(), Some(7));
+    assert_eq!(testbed.tatolabd_run(tatolabd_process_id).signals, ["INT"]);
+    assert_eq!(testbed.started_tatolabd_process_ids().len(), 1);
 }
 
 #[test]
