@@ -100,14 +100,17 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             .expect("setup must be called before start");
 
         let runtime = handles.runtime.clone();
-        self.running_local_api_socket_server =
-            Some(crate::local_api_socket::serve_router_on_local_api_socket(
+        self.running_local_api_socket_server = Some(
+            crate::control_plane_host::take_the_local_api_socket_its_host_bound(
+                &handles.local_api_socket_path,
+            )?
+            .serve_router(
                 |local_api_stopping_token| {
                     crate::handlers::build_router(runtime, local_api_stopping_token)
                 },
                 &handles.tokio_handle,
-                &handles.local_api_socket_path,
-            )?);
+            )?,
+        );
         self.runtime_id = Some(handles.runtime_id.clone());
 
         tracing::info!(

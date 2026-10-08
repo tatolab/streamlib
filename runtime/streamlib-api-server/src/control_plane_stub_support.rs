@@ -451,12 +451,15 @@ pub(crate) fn serve_the_control_plane_router_at(
     runtime: ::std::sync::Arc<dyn ::streamlib::sdk::runtime::RuntimeOperations>,
     local_api_socket_path: &::std::path::Path,
 ) -> crate::local_api_socket::RunningLocalApiSocketServer {
-    crate::local_api_socket::serve_router_on_local_api_socket(
-        |local_api_stopping_token| crate::handlers::build_router(runtime, local_api_stopping_token),
-        &::tokio::runtime::Handle::current(),
-        local_api_socket_path,
-    )
-    .expect("the local API socket binds in a fresh directory")
+    crate::local_api_socket::bind_local_api_socket(local_api_socket_path)
+        .expect("the local API socket binds in a fresh directory")
+        .serve_router(
+            |local_api_stopping_token| {
+                crate::handlers::build_router(runtime, local_api_stopping_token)
+            },
+            &::tokio::runtime::Handle::current(),
+        )
+        .expect("the bound local API socket is served")
 }
 
 /// The real router over a runtime, served on a local API socket in a fresh

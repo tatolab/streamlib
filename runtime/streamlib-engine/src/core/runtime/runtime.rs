@@ -412,6 +412,11 @@ impl Runner {
         &self.runtime_name
     }
 
+    /// The runtime directory this runtime resolved as it was built.
+    pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
+        &self.runtime_directory
+    }
+
     /// This runtime's iceoryx2 node.
     pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
         &self.iceoryx2_node
