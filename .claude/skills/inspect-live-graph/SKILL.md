@@ -1,6 +1,6 @@
 ---
 name: inspect-live-graph
-description: Dump a running StreamLib node's live graph — nodes by name, ports, links, the runtime name channels are addressed under, states, and metrics — as JSON, to use as ground truth before tapping it. Use when you need the current topology of a running app: to find a channel name for `tap-live-channel`, to learn the exact port names a node publishes on, or to diff the graph across an app-code change. Wraps `streamlib graph`.
+description: Dump a running StreamLib node's live graph — nodes by name, ports, links, the runtime name channels are addressed under, states, and metrics — as JSON, to use as ground truth before tapping it. Use when you need the current topology of a running stream: to find a channel name for `tap-live-channel`, to learn the exact port names a node publishes on, or to diff the graph across a stream-code change. Wraps `tatolab graph`.
 ---
 
 # inspect-live-graph
@@ -12,9 +12,9 @@ The read-only ground-truth verb. Everything else keys off names that only the li
 ### 1. Export the live graph
 Target the node with the same flag you pinned in `drive-running-node`:
 ```bash
-streamlib graph --node <runtime name>
+tatolab graph --node <runtime name>
 # or, when exactly one node is live:
-streamlib graph
+tatolab graph
 ```
 The result is the `graph` MCP tool's JSON (pretty-printed): `stream` (once one is loaded), `nodes`, `links`, `exposed` and `runtime_name`.
 
@@ -28,7 +28,7 @@ The result is the `graph` MCP tool's JSON (pretty-printed): `stream` (once one i
 ### 3. Save it when it is evidence
 To freeze the topology for a PR or a before/after diff, redirect to a file (`graph` has no `--output` flag — use shell redirection):
 ```bash
-streamlib graph --node <runtime_id> > /tmp/graph-before.json
+tatolab graph --node <runtime_id> > /tmp/graph-before.json
 ```
 For a full evidence bundle (graph + tapped frames + logs), use `capture-node-evidence`.
 

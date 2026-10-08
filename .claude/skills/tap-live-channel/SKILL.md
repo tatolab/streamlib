@@ -1,6 +1,6 @@
 ---
 name: tap-live-channel
-description: Attach a read-only tap to one named channel of a running StreamLib node and collect a bounded sample of raw bags to confirm data is actually flowing. Use to answer "are frames/samples really moving through this link?" — after inspecting the graph, or to spot-check a link before and after an app-code change. Wraps `streamlib tap`.
+description: Attach a read-only tap to one named channel of a running StreamLib node and collect a bounded sample of raw bags to confirm data is actually flowing. Use to answer "are frames/samples really moving through this link?" — after inspecting the graph, or to spot-check a link before and after a stream-code change. Wraps `tatolab tap`.
 ---
 
 # tap-live-channel
@@ -19,9 +19,9 @@ A tap reads a channel on the runtime it targets: a channel naming another runtim
 ### 2. Tap a bounded sample
 The channel is a positional argument; `--count` bounds how many bags to collect before returning:
 ```bash
-streamlib tap --node <runtime name> lab-one/camera/frames --count 10
+tatolab tap --node <runtime name> lab-one/camera/frames --count 10
 # or, when exactly one node is live:
-streamlib tap lab-one/camera/frames --count 10
+tatolab tap lab-one/camera/frames --count 10
 ```
 Each collected bag prints as a hex preview and a byte length. Omitting `--count` uses the tool's own default sample bound.
 
@@ -31,6 +31,6 @@ Each collected bag prints as a hex preview and a byte length. Omitting `--count`
 - **Zero bags / the call blocks then returns empty** — nothing is publishing on that channel; re-check the channel name against the graph, and confirm the source processor is running (states/metrics in `inspect-live-graph`).
 
 ## Notes
-- `tap` has NO `--output` flag. To persist the sample as evidence, redirect stdout (`streamlib tap ... > frames.json`) — see `capture-node-evidence`.
+- `tap` has NO `--output` flag. To persist the sample as evidence, redirect stdout (`tatolab tap ... > frames.json`) — see `capture-node-evidence`.
 - Read-only: a tap never mutates the graph and never disturbs the real subscribers on the channel.
 - The channel positional and `--count` can appear in either order; the node is selected by `--node` exactly like the other verbs.

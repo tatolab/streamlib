@@ -1,6 +1,6 @@
 ---
 name: capture-node-evidence
-description: Freeze a verifiable record of a running StreamLib node — a live graph snapshot, N tapped bags from one or more channels on disk, and a bounded log excerpt — into a directory for a PR, an issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around an app-code change. Wraps `streamlib graph`, `streamlib tap`, and `streamlib logs` with shell redirection.
+description: Freeze a verifiable record of a running StreamLib node — a live graph snapshot, N tapped bags from one or more channels on disk, and a bounded log excerpt — into a directory for a PR, an issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around a stream-code change. Wraps `tatolab graph`, `tatolab tap`, and `tatolab logs` with shell redirection.
 ---
 
 # capture-node-evidence
@@ -18,21 +18,21 @@ mkdir -p "$EVIDENCE_DIR"
 
 ### 2. Snapshot the live graph
 ```bash
-streamlib graph --node <runtime_id> > "$EVIDENCE_DIR/graph.json"
+tatolab graph --node <runtime_id> > "$EVIDENCE_DIR/graph.json"
 ```
 Read the channel names you want to tap out of this snapshot (`<runtime_name>/<node>/<port>` — see `inspect-live-graph`).
 
 ### 3. Tap N bags per channel to disk
 `tap` has NO `--output` flag — redirect stdout. Repeat per channel:
 ```bash
-streamlib tap --node <runtime_id> lab-one/camera/frames --count 30 > "$EVIDENCE_DIR/frames-camera.json"
-streamlib tap --node <runtime_id> lab-one/convert/frames --count 30 > "$EVIDENCE_DIR/frames-convert.json"
+tatolab tap --node <runtime_id> lab-one/camera/frames --count 30 > "$EVIDENCE_DIR/frames-camera.json"
+tatolab tap --node <runtime_id> lab-one/convert/frames --count 30 > "$EVIDENCE_DIR/frames-convert.json"
 ```
 Each file holds the hex-preview-plus-byte-length sample for that channel (bytes-flowing proof, not decoded pixels).
 
 ### 4. Capture a bounded log excerpt
 ```bash
-streamlib logs --node <runtime_id> --count 200 > "$EVIDENCE_DIR/logs.txt"
+tatolab logs --node <runtime_id> --count 200 > "$EVIDENCE_DIR/logs.txt"
 ```
 `--count` bounds the sample of the runtime event stream (all topics) within a short window. In this live mode `logs` is addressed by `--node` and bounded by `--count` — there is no positional `runtime_id` here (that form is the offline on-disk log reader, a different mode).
 
