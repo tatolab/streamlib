@@ -31,6 +31,10 @@ fn the_exchange_help_names_both_forms_and_every_flag() {
     ] {
         assert!(help_text.contains(named), "{named}:\n{help_text}");
     }
+    assert!(
+        !help_text.contains('`'),
+        "help reads plainly, with no markdown:\n{help_text}"
+    );
 }
 
 /// Control is reachable only through a runtime's local API socket, so the verb dials no address.

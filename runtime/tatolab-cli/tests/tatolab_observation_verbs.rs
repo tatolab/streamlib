@@ -49,6 +49,10 @@ fn the_tap_help_names_the_channel_its_bounds_and_the_runtime_flag() {
     ] {
         assert!(help_text.contains(named), "{named}:\n{help_text}");
     }
+    assert!(
+        !help_text.contains('`'),
+        "help reads plainly, with no markdown:\n{help_text}"
+    );
 }
 
 /// Control is reachable only through a runtime's local API socket, so a verb dials no address.

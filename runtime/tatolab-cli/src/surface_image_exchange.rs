@@ -48,15 +48,19 @@ const FILE_NAME_STEM_OF_AN_EMPTY_SURFACE_ID: &str = "surface";
 /// `tatolab exchange`'s arguments: SURFACE_ID, or `--channel` with its sampling bounds.
 #[derive(Args, Debug, Clone)]
 pub(crate) struct SurfaceImageExchangeArguments {
-    /// A surface id a bag published, e.g. `{slot}#{generation}`.
+    /// A surface id a bag published, e.g. {slot}#{generation}.
     #[arg(value_name = "SURFACE_ID")]
     pub(crate) published_surface_id: Option<String>,
     /// Directory the PNGs are written into (created when absent).
     #[arg(long = "out", value_name = "DIR")]
     pub(crate) output_directory: OsString,
-    /// Sample this channel instead of naming one id: an output port's address,
-    /// `<runtime_name>/<node>/<port>`.
-    #[arg(long = "channel", value_name = "CHANNEL")]
+    /// The channel sampled instead of one named id, addressed as its output port.
+    #[arg(
+        long = "channel",
+        value_name = "CHANNEL",
+        help = "Sample this channel instead of naming one id: an output port's address, \
+                <runtime_name>/<node>/<port>"
+    )]
     pub(crate) channel: Option<String>,
     /// (--channel only) Frames to exchange before returning. Default 1.
     #[arg(long = "count", value_name = "N", allow_negative_numbers = true)]
