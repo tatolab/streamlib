@@ -189,8 +189,9 @@ pub fn newest_runtime_log_instance_in_directory(
 
 /// The instances [`runtime_log_instances_in_directory`] lists, of the runtimes
 /// `admits_runtime_id` admits; a segment of any other runtime is never read for its size. A
-/// segment gone between the listing and the read of its size is left out: a rotation renamed
-/// it, or a cleanup removed it.
+/// segment whose size cannot be read is left out — a rotation renamed it, a cleanup removed it,
+/// or it cannot be stat'd — so one bad segment never sinks a listing. Only a failure to list
+/// the directory itself is an error.
 fn runtime_log_instances_in_directory_whose_runtime_id(
     log_directory: &Path,
     admits_runtime_id: impl Fn(&str) -> bool,
@@ -215,10 +216,14 @@ fn runtime_log_instances_in_directory_whose_runtime_id(
         if !admits_runtime_id(&segment_file_name.runtime_id) {
             continue;
         }
-        let segment_byte_len = match std::fs::metadata(directory_entry.path()) {
+        let segment_path = directory_entry.path();
+        let segment_byte_len = match std::fs::metadata(&segment_path) {
             Ok(segment_metadata) => segment_metadata.len(),
             Err(stat_failure) if stat_failure.kind() == io::ErrorKind::NotFound => continue,
-            Err(stat_failure) => return Err(stat_failure),
+            Err(stat_failure) => {
+                tracing::warn!(path = %segment_path.display(), %stat_failure, "skipping runtime log segment whose size cannot be read");
+                continue;
+            }
         };
         *total_segment_bytes_by_instance
             .entry((
@@ -526,10 +531,9 @@ mod tests {
         assert!(newest_runtime_log_instance_in_directory(&not_a_directory, "Rabc").is_err());
     }
 
-    /// A link to itself cannot be read for its size, and names another runtime's segment, so
-    /// the lookup succeeds only when it never reads that segment.
+    /// A link to itself cannot be read for its size; the runtimes beside it are still listed.
     #[test]
-    fn the_newest_instance_lookup_reads_no_other_runtimes_segment() {
+    fn a_segment_whose_size_cannot_be_read_does_not_sink_the_listing() {
         let log_directory = tempfile::tempdir().unwrap();
         write_segment_of_bytes(log_directory.path(), "Rabc-1000.jsonl", 3);
         std::os::unix::fs::symlink(
@@ -538,7 +542,14 @@ mod tests {
         )
         .unwrap();
 
-        assert!(runtime_log_instances_in_directory(log_directory.path()).is_err());
+        assert_eq!(
+            runtime_log_instances_in_directory(log_directory.path())
+                .unwrap()
+                .into_iter()
+                .map(|instance| (instance.runtime_id, instance.total_segment_bytes))
+                .collect::<Vec<_>>(),
+            [("Rabc".to_owned(), 3)]
+        );
         assert_eq!(
             newest_runtime_log_instance_in_directory(log_directory.path(), "Rabc")
                 .unwrap()

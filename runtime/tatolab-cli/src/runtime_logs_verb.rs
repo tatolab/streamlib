@@ -22,8 +22,8 @@ use crate::process_signal_handling::{
     an_interrupt_was_delivered_during_the_read, end_the_read_on_interrupt,
 };
 use crate::runtime_log_files_reader::{
-    RUNTIME_LOG_FOLLOW_POLL_INTERVAL, RuntimeLogReadStep, RuntimeLogRecordFilters,
-    RuntimeLogRecordsReader, RuntimeLogSegmentReadFailure,
+    RUNTIME_LOG_FOLLOW_POLL_INTERVAL, RuntimeLogReadFailure, RuntimeLogReadStep,
+    RuntimeLogRecordFilters, RuntimeLogRecordsReader,
 };
 use crate::runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime;
 use crate::{RuntimeTargetArguments, TatolabCommandFailure};
@@ -314,10 +314,10 @@ pub(crate) fn print_runtime_log_files(
         Err(RuntimeLogRecordsPrintFailure::StandardOutputNotWritable(write_failure)) => {
             standard_output_closed_or_failed(write_failure)
         }
-        Err(RuntimeLogRecordsPrintFailure::SegmentNotReadable(segment_read_failure)) => {
+        Err(RuntimeLogRecordsPrintFailure::RuntimeLogNotReadable(runtime_log_read_failure)) => {
             let _ = standard_output.flush();
             Err(TatolabCommandFailure::refused(
-                segment_read_failure.to_string(),
+                runtime_log_read_failure.to_string(),
             ))
         }
     }
@@ -329,9 +329,9 @@ enum RuntimeLogRecordsPrintFailure {
     /// Standard output refused a write or a flush.
     #[error(transparent)]
     StandardOutputNotWritable(#[from] io::Error),
-    /// A segment could not be read.
+    /// A segment or the log directory could not be read.
     #[error(transparent)]
-    SegmentNotReadable(#[from] RuntimeLogSegmentReadFailure),
+    RuntimeLogNotReadable(#[from] RuntimeLogReadFailure),
 }
 
 /// Print `runtime_log_records_reader`'s rendered records to `standard_output` until the read
@@ -407,10 +407,9 @@ fn runtime_log_directory_unreadable(
     log_directory: &Path,
     listing_failure: std::io::Error,
 ) -> TatolabCommandFailure {
-    TatolabCommandFailure::refused(format!(
-        "cannot read the runtime log directory {}: {listing_failure}",
-        log_directory.display()
-    ))
+    TatolabCommandFailure::refused(
+        RuntimeLogReadFailure::of_log_directory(log_directory, listing_failure).to_string(),
+    )
 }
 
 /// What `--list` prints for `runtime_log_instances` found in `log_directory`: newest started

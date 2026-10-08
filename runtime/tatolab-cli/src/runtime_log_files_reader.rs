@@ -74,22 +74,38 @@ impl RuntimeLogRecordFilters {
     }
 }
 
-/// A runtime log segment that could not be opened or read, for a reason other than being gone.
+/// Part of a runtime's log on disk that could not be read, for a reason other than being gone.
 #[derive(Debug, thiserror::Error)]
-#[error("cannot read the runtime log segment {}: {read_failure}", .segment_path.display())]
-pub(crate) struct RuntimeLogSegmentReadFailure {
-    /// The segment, or the active name, the read failed on.
-    pub(crate) segment_path: PathBuf,
-    /// What the operating system answered.
-    #[source]
-    pub(crate) read_failure: io::Error,
+pub(crate) enum RuntimeLogReadFailure {
+    /// A segment, or the active name, could not be opened, read or stat'd.
+    #[error("cannot read the runtime log segment {}: {read_failure}", .segment_path.display())]
+    SegmentUnreadable {
+        segment_path: PathBuf,
+        #[source]
+        read_failure: io::Error,
+    },
+    /// The log directory exists and could not be listed.
+    #[error("cannot read the runtime log directory {}: {listing_failure}", .log_directory.display())]
+    LogDirectoryUnreadable {
+        log_directory: PathBuf,
+        #[source]
+        listing_failure: io::Error,
+    },
 }
 
-impl RuntimeLogSegmentReadFailure {
+impl RuntimeLogReadFailure {
     fn of_segment(segment_path: &Path, read_failure: io::Error) -> Self {
-        Self {
+        Self::SegmentUnreadable {
             segment_path: segment_path.to_path_buf(),
             read_failure,
+        }
+    }
+
+    /// `log_directory`, which exists, could not be listed.
+    pub(crate) fn of_log_directory(log_directory: &Path, listing_failure: io::Error) -> Self {
+        Self::LogDirectoryUnreadable {
+            log_directory: log_directory.to_path_buf(),
+            listing_failure,
         }
     }
 }
@@ -145,11 +161,11 @@ impl RuntimeLogSegmentLineReader {
     }
 
     /// The next line the segment holds whole right now, its newline included.
-    fn next_complete_line(&mut self) -> Result<Option<Vec<u8>>, RuntimeLogSegmentReadFailure> {
+    fn next_complete_line(&mut self) -> Result<Option<Vec<u8>>, RuntimeLogReadFailure> {
         self.segment_reader
             .read_until(b'\n', &mut self.unfinished_line)
             .map_err(|read_failure| {
-                RuntimeLogSegmentReadFailure::of_segment(&self.segment_path, read_failure)
+                RuntimeLogReadFailure::of_segment(&self.segment_path, read_failure)
             })?;
         if self.unfinished_line.ends_with(b"\n") {
             return Ok(Some(std::mem::take(&mut self.unfinished_line)));
@@ -231,7 +247,7 @@ impl RuntimeLogInstanceSegmentsReader {
     pub(crate) fn next_step(
         &mut self,
         note_output: &mut dyn Write,
-    ) -> Result<RuntimeLogInstanceReadStep, RuntimeLogSegmentReadFailure> {
+    ) -> Result<RuntimeLogInstanceReadStep, RuntimeLogReadFailure> {
         loop {
             if let Some(rotated_segment_line_reader) = &mut self.rotated_segment_being_read {
                 if let Some(line) = rotated_segment_line_reader.next_complete_line()? {
@@ -380,7 +396,7 @@ fn list_rotated_segment_sequences(active_segment_path: &Path) -> Vec<u64> {
 /// unchanged across the open.
 fn open_active_segment_after_listing(
     active_segment_path: &Path,
-) -> Result<(Option<File>, Vec<u64>), RuntimeLogSegmentReadFailure> {
+) -> Result<(Option<File>, Vec<u64>), RuntimeLogReadFailure> {
     loop {
         let listed_rotation_sequences = list_rotated_segment_sequences(active_segment_path);
         let active_segment_file = match File::open(active_segment_path) {
@@ -389,7 +405,7 @@ fn open_active_segment_after_listing(
                 return Ok((None, listed_rotation_sequences));
             }
             Err(open_failure) => {
-                return Err(RuntimeLogSegmentReadFailure::of_segment(
+                return Err(RuntimeLogReadFailure::of_segment(
                     active_segment_path,
                     open_failure,
                 ));
@@ -408,7 +424,7 @@ fn open_rotated_segment(
     active_segment_path: &Path,
     rotation_sequence: u64,
     note_output: &mut dyn Write,
-) -> Result<Option<RuntimeLogSegmentLineReader>, RuntimeLogSegmentReadFailure> {
+) -> Result<Option<RuntimeLogSegmentLineReader>, RuntimeLogReadFailure> {
     let rotated_segment_path =
         rotated_runtime_log_segment_path(active_segment_path, rotation_sequence);
     match File::open(&rotated_segment_path) {
@@ -427,7 +443,7 @@ fn open_rotated_segment(
             );
             Ok(None)
         }
-        Err(open_failure) => Err(RuntimeLogSegmentReadFailure::of_segment(
+        Err(open_failure) => Err(RuntimeLogReadFailure::of_segment(
             &rotated_segment_path,
             open_failure,
         )),
@@ -446,7 +462,7 @@ fn is_the_same_file(first: &std::fs::Metadata, second: &std::fs::Metadata) -> bo
 fn held_segment_was_rotated_away(
     held_segment_file: &File,
     active_segment_path: &Path,
-) -> Result<bool, RuntimeLogSegmentReadFailure> {
+) -> Result<bool, RuntimeLogReadFailure> {
     reached_interleaving_point(
         RuntimeLogReadInterleavingPoint::BeforeCheckingWhetherTheHeldSegmentWasRotatedAway,
     );
@@ -463,7 +479,7 @@ fn held_segment_was_rotated_away(
             },
         )
         .map_err(|stat_failure| {
-            RuntimeLogSegmentReadFailure::of_segment(active_segment_path, stat_failure)
+            RuntimeLogReadFailure::of_segment(active_segment_path, stat_failure)
         });
     reached_interleaving_point(
         RuntimeLogReadInterleavingPoint::AfterCheckingWhetherTheHeldSegmentWasRotatedAway,
@@ -480,9 +496,9 @@ fn rotation_sequence_of_held_segment(
     held_segment_file: &File,
     active_segment_path: &Path,
     last_read_rotation_sequence: u64,
-) -> Result<u64, RuntimeLogSegmentReadFailure> {
+) -> Result<u64, RuntimeLogReadFailure> {
     let held_segment_metadata = held_segment_file.metadata().map_err(|stat_failure| {
-        RuntimeLogSegmentReadFailure::of_segment(active_segment_path, stat_failure)
+        RuntimeLogReadFailure::of_segment(active_segment_path, stat_failure)
     })?;
     for rotation_sequence in list_rotated_segment_sequences(active_segment_path) {
         let rotated_segment_path =
@@ -491,7 +507,7 @@ fn rotation_sequence_of_held_segment(
             Ok(rotated_segment_metadata) => rotated_segment_metadata,
             Err(stat_failure) if stat_failure.kind() == io::ErrorKind::NotFound => continue,
             Err(stat_failure) => {
-                return Err(RuntimeLogSegmentReadFailure::of_segment(
+                return Err(RuntimeLogReadFailure::of_segment(
                     &rotated_segment_path,
                     stat_failure,
                 ));
@@ -552,7 +568,7 @@ impl RuntimeLogRecordsReader {
     pub(crate) fn next_step(
         &mut self,
         note_output: &mut dyn Write,
-    ) -> Result<RuntimeLogReadStep, RuntimeLogSegmentReadFailure> {
+    ) -> Result<RuntimeLogReadStep, RuntimeLogReadFailure> {
         loop {
             match self.instance_segments_reader.next_step(note_output)? {
                 RuntimeLogInstanceReadStep::Line(line) => {
@@ -570,7 +586,7 @@ impl RuntimeLogRecordsReader {
                         &self.instance_being_read.runtime_id,
                     )
                     .map_err(|listing_failure| {
-                        RuntimeLogSegmentReadFailure::of_segment(
+                        RuntimeLogReadFailure::of_log_directory(
                             &self.log_directory,
                             listing_failure,
                         )
@@ -1077,6 +1093,49 @@ mod tests {
         assert_eq!(
             followed_runtime_log.notes(),
             "note: runtime 'Rabc' restarted into a newer log file; switching.\n"
+        );
+    }
+
+    /// At the live edge a follow lists the log directory for a restart, so a listing that fails
+    /// names the directory, not a segment.
+    #[test]
+    fn a_follow_whose_log_directory_cannot_be_listed_names_the_log_directory() {
+        let segment_directory = tempfile::tempdir().unwrap();
+        write_segment(
+            &segment_directory.path().join("Rabc-1000.jsonl"),
+            &["before"],
+        );
+        let log_directory_that_is_a_file = segment_directory.path().join("logs");
+        std::fs::write(&log_directory_that_is_a_file, b"not a directory").unwrap();
+        let mut runtime_log_records_reader = RuntimeLogRecordsReader::reading(
+            &log_directory_that_is_a_file,
+            instance_rabc_1000(segment_directory.path()),
+            RuntimeLogRecordFilters::default(),
+            true,
+        );
+        let mut note_output = Vec::new();
+        assert!(matches!(
+            runtime_log_records_reader.next_step(&mut note_output),
+            Ok(RuntimeLogReadStep::RenderedRecord(_))
+        ));
+
+        let listing_failure = runtime_log_records_reader
+            .next_step(&mut note_output)
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                listing_failure,
+                RuntimeLogReadFailure::LogDirectoryUnreadable { .. }
+            ),
+            "{listing_failure:?}"
+        );
+        assert!(
+            listing_failure.to_string().starts_with(&format!(
+                "cannot read the runtime log directory {}: ",
+                log_directory_that_is_a_file.display()
+            )),
+            "{listing_failure}"
         );
     }
 
