@@ -48,8 +48,9 @@
 //! Honest limits, so nobody reads a green run as more than it is:
 //!
 //! - This is vocabulary, not behaviour. A watchdog renamed to avoid these
-//!   patterns passes. The behavioural guarantee is structural: `tatolabd`, the
-//!   process that hosts a stream, links no Python interpreter.
+//!   patterns passes. The behavioural proof that no processor class runs in
+//!   the process hosting the stream is `tests/stream-on-runtime/test_helper_placement.py`;
+//!   structurally, `tatolabd`, that process, links no Python interpreter.
 //! - **The pattern set is a subset of the rule's STOP-WORK vocabulary, not the
 //!   whole of it**, and the list below is not exhaustive either. Probed misses:
 //!   the runtime described as "one process" or "one big process" (the same two
