@@ -16,6 +16,7 @@ suite venv, which holds `tatolab-stream` and nothing of the runtime.
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import signal
@@ -338,7 +339,13 @@ def test_a_project_directory_whose_name_is_not_utf8_is_accepted(
     """A directory name that is not UTF-8 is still a path `tatolabd` hands its
     processor interpreters; the describe of a Python type imports from it."""
     project_directory_not_utf8 = bytes(tmp_path) + b"/caf\xe9"
-    os.mkdir(project_directory_not_utf8)
+    try:
+        os.mkdir(project_directory_not_utf8)
+    except OSError as refused_name:
+        if refused_name.errno != errno.EILSEQ:
+            raise
+        # APFS stores names as UTF-8 only, so no project there can carry one.
+        pytest.skip("this filesystem refuses a file name that is not UTF-8")
     (Path(os.fsdecode(project_directory_not_utf8)) / f"{DESCRIBED_NODE_MODULE}.py").write_text(
         (Path(__file__).with_name(f"{DESCRIBED_NODE_MODULE}.py")).read_text()
     )
