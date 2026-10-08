@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.41.0](https://github.com/tatolab/streamlib/compare/v0.40.0...v0.41.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** `tatolab run` starts a stream on the native `tatolabd`, and the Python-hosted runtime is gone ([#2693](https://github.com/tatolab/streamlib/issues/2693))
+
+### Features
+
+* **runtime:** `tatolab run` starts a stream on the native `tatolabd`, and the Python-hosted runtime is gone ([#2693](https://github.com/tatolab/streamlib/issues/2693)) ([df9e7c4](https://github.com/tatolab/streamlib/commit/df9e7c49f4acefe52aa7853affd2554da6b173f3))
+
 ## [0.40.0](https://github.com/tatolab/streamlib/compare/v0.39.0...v0.40.0) (2026-10-08)
 
 
