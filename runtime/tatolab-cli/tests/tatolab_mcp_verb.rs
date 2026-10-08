@@ -74,13 +74,13 @@ mod against_an_isolated_registry {
     const RMCP_CHILD_PROCESS_KILL_DEADLINE: Duration = Duration::from_secs(3);
 
     /// What the MCP host hands the verb as its stdin.
-    enum McpHostStdin<'host_bytes> {
+    enum McpHostStdin<'mcp_host_stdin> {
         /// A pipe the host writes these bytes into, then closes.
-        WrittenThenClosed(&'host_bytes [u8]),
+        WrittenThenClosed(&'mcp_host_stdin [u8]),
         /// A pipe the host holds open, writing nothing, until the verb exits.
         HeldOpen,
         /// A file the verb opens as stdin and cannot read: a directory.
-        UnreadableDirectory(&'host_bytes Path),
+        UnreadableDirectory(&'mcp_host_stdin Path),
     }
 
     /// Launch `tatolab mcp <mcp_verb_flags>` reading the registry under `xdg_runtime_dir`, its
