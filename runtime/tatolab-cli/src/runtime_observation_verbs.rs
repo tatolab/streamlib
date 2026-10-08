@@ -28,6 +28,10 @@ const NODES_TABLE_HINT_COLUMN_HEADER: &str = "HINT";
 const NODES_TABLE_PID_COLUMN_WIDTH: usize = 7;
 const NODES_TABLE_ALIVE_COLUMN_WIDTH: usize = 6;
 
+/// One line of the `nodes` table: runtime name, runtime_id, local API socket, pid, alive? and
+/// hint.
+type NodesTableLineCells<'cell> = [&'cell str; 6];
+
 /// What `nodes` prints for `liveness_checked_entries` read from `node_registry_directory`: a
 /// header and one aligned row per entry, or a line naming the registry when it holds none.
 pub(crate) fn render_node_registry_listing(
@@ -72,8 +76,8 @@ pub(crate) fn render_node_registry_listing(
     let runtime_name_width = column_width(0, NODES_TABLE_RUNTIME_NAME_COLUMN_HEADER);
     let runtime_id_width = column_width(1, NODES_TABLE_RUNTIME_ID_COLUMN_HEADER);
     let local_api_socket_width = column_width(2, NODES_TABLE_LOCAL_API_SOCKET_COLUMN_HEADER);
-    let render_line = |[runtime_name, runtime_id, local_api_socket, pid, alive, hint]: [&str;
-                           6]| {
+    let render_line = |line_cells: NodesTableLineCells<'_>| {
+        let [runtime_name, runtime_id, local_api_socket, pid, alive, hint] = line_cells;
         format!(
             "{runtime_name:<runtime_name_width$}  {runtime_id:<runtime_id_width$}  \
              {local_api_socket:<local_api_socket_width$}  \

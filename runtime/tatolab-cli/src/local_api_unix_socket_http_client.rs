@@ -117,7 +117,7 @@ pub(crate) async fn send_request_over_the_local_api_socket(
             .map_err(|handshake_failure| {
                 local_api_unreachable(local_api_socket_path, handshake_failure)
             })?;
-    // Ends on its own once the response is read, or once an upgraded stream is dropped.
+    // Served until the exchange completes, or until a `101` hands the stream to its upgrade.
     tokio::spawn(local_api_connection.with_upgrades());
     request_sender
         .send_request(request)
