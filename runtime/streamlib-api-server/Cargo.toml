@@ -70,3 +70,8 @@ serial_test = "3.2"
 # The request-trace level test drives a request under a real `EnvFilter` and
 # captures what reached the subscriber.
 tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Pins `VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH` against the path the
+# built-in itself registers under; the built-in is Linux-only.
+streamlib-media-builtins = { path = "../streamlib-media-builtins" }

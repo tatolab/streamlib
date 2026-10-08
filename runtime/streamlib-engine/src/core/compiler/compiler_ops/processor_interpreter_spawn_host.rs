@@ -299,8 +299,8 @@ impl ProcessorInterpreterSpawnHostProcessor {
     /// once; a child that is *alive but not reading* — a user callback blocked
     /// on a socket, a wedged `teardown` — would never reply, and this runs on
     /// the lifecycle thread holding the processor's lock, so waiting forever
-    /// there is a hung `rt.run()`, with the kill that would have resolved it
-    /// sitting unreachable further down teardown.
+    /// there hangs the runtime's teardown, with the kill that would have
+    /// resolved it sitting unreachable further down it.
     fn exchange_with_child(
         &mut self,
         message: &serde_json::Value,

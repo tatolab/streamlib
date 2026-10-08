@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The boot recipe a host follows to stand this crate's control plane up inside
-//! its own runtime — the wheel's `Runtime.host_control_plane` and any Rust app
-//! that wants a node `streamlib nodes` can find.
+//! its own runtime — `tatolabd`, and any Rust app that wants a node
+//! `streamlib nodes` can find.
 
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};

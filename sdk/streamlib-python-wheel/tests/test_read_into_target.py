@@ -27,7 +27,10 @@ from typing_extensions import assert_type
 from tatolab.runtime import _engine
 from tatolab.stream import NodeLinkDataAccess
 
-pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+pytestmark = pytest.mark.usefixtures(
+    "private_iceoryx2_domain_for_this_test_process",
+    "log_records_this_process_sends_its_stand_in_parent",
+)
 
 OUTPUT_PORT = "detections_to_downstream"
 INPUT_PORT = "detections_from_upstream"

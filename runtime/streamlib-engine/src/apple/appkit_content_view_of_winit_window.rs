@@ -37,7 +37,7 @@ pub fn appkit_content_view_of(
 /// Make `window` leave the screen as soon as it closes rather than animate
 /// out. AppKit runs the close animation on the app's run loop, and a window
 /// closed as the event loop exits would otherwise stay on screen until the
-/// loop runs long enough to finish it — after `rt.run()` returns, never.
+/// loop runs long enough to finish it — after the run returns, never.
 pub fn close_without_animating(window: &Window, first_thread: MainThreadMarker) -> Result<()> {
     let ns_window = appkit_content_view_of(window, first_thread)?
         .window()

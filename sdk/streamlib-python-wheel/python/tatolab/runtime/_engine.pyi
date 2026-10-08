@@ -5,7 +5,7 @@
 
 A type checker and an editor can read nothing out of `_engine.abi3.so`, so this
 file describes the native names only the runtime's own Python reaches — the
-engine, the bootstrap's calls, the test harness and the local API client.
+bootstrap's calls and the local API client.
 
 What a node is handed while it runs is declared once, in `tatolab.stream`: its
 classes as `typing.Protocol`s and its functions as runtime-backed functions.
@@ -20,215 +20,29 @@ there. `mypy.stubtest` checks the rest of this file, skipping the names the
 conformance gate prints as its allowlist.
 """
 
-import os
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import TracebackType
-from typing import Any, ClassVar, Literal, final
+from typing import Any, Literal, final
 
 from tatolab.stream import _node_context_protocols as _stream_protocols
-
-from typing_extensions import Self, disjoint_base
 
 __all__ = [
     "LocalApiMcpClient",
     "LocalApiMcpRequestRefused",
     "LocalApiMcpServerUnreachable",
     "LocalApiMcpToolCallFailed",
-    "Runtime",
-    "TestBagCollector",
-    "TestBagFeeder",
-    "await_test_harness_bag",
     "capture_this_helper_processes_engine_log_records",
-    "close_test_harness_channel",
     "decode_tapped_channel_bag_frame_to_python_object",
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
-    "feed_test_harness_bag",
     "limited_access_view_of_runtime_context_for_helper_process",
     "note_pause_state_from_parent_on_runtime_context",
     "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
-    "open_test_harness_channel",
-    "processor_class_import_paths_in_this_processes_catalog",
     "runtime_log_directory",
 ]
-
-@final
-class TestBagFeeder:
-    """`tatolab.runtime.testing`'s feeder endpoint: publishes bags a test queued.
-
-    A marker type — never instantiated, passed to
-    `stream_builder.add`. Native so that its queue lives in the app process, where the
-    test reading it does.
-    """
-
-    type: ClassVar[str]
-
-    # Keeps pytest from collecting the `Test*`-named class in user suites.
-    __test__: Literal[False]
-
-@final
-class TestBagCollector:
-    """`tatolab.runtime.testing`'s collector endpoint: records every bag produced."""
-
-    type: ClassVar[str]
-
-    # Keeps pytest from collecting the `Test*`-named class in user suites.
-    __test__: Literal[False]
-
-@disjoint_base
-class Runtime:
-    """The engine, running in this process."""
-
-    def __new__(
-        cls,
-        *,
-        runtime_name: str | None = None,
-    ) -> Self:
-        """Build the engine, named `runtime_name`.
-
-        The name is the first chunk of every tap channel this runtime serves,
-        `<runtime name>/<node name>/<port>`, and the name on its registry
-        row that `--node` matches. It belongs to the runtime and is stable
-        across runs of one app. It is non-empty, carries none of `/ * $ # ?`,
-        and does not begin with `@`; spaces and unicode are fine. A name
-        breaking that is refused here, naming the character.
-
-        Left out, the engine reads `STREAMLIB_RUNTIME_NAME`, and failing that
-        names the runtime `<hostname>-<app directory name>-<id>`, where the id
-        hashes the app directory's full path — so two checkouts of one app on
-        one machine differ and every run of one checkout matches. `streamlib
-        run` and `dev` pass their `--runtime-name` through to here.
-
-        A name is never auto-suffixed, so it does not depend on start order.
-        Nothing refuses a name another runtime already holds — two runs from
-        one directory both start — and `--node` refuses a name two live
-        runtimes hold, naming both.
-
-        The directory holding the `tatolab/runtime/` package this module was
-        imported from is the lend directory: every processor interpreter
-        borrows `tatolab.runtime` from it.
-        """
-
-    def load(
-        self,
-        graph: Mapping[str, Any],
-        *,
-        project_directory: str | os.PathLike[str],
-        interpreter: str | os.PathLike[str],
-        name: str | None = None,
-    ) -> None:
-        """Load a graph into this Runtime before `run()`.
-
-        `project_directory` and `interpreter` are the stream's environment,
-        each made absolute against the working directory: every processor
-        interpreter is an exec of `interpreter`, run in `project_directory`
-        with the runtime's `tatolab.runtime` lent ahead of the project on its
-        `PYTHONPATH`. Every `type` that is not a built-in is described in that
-        interpreter before anything is added; one that will not import, or
-        names a class `@node` did not stamp, raises `RuntimeError` naming it
-        with the reason that interpreter gave for it. An interpreter that
-        writes no describe document — one that cannot load the lent runtime,
-        imported another engine build, or crashed — refuses every type, and
-        the `RuntimeError` quotes the end of its standard error. A path that is
-        neither a str nor an `os.PathLike[str]` raises `TypeError`.
-
-        `graph` is the mapping `compile_stream_to_graph` returns, or a graph
-        `streamlib graph` rendered; anything not a mapping raises `TypeError`.
-        It is converted to JSON: a tuple reads as a list, NaN and infinity as
-        null, and what JSON cannot carry — a set, bytes, a nested mapping that
-        is not a dict, a key that is not a str, an int wider than 64 bits, a
-        str that cannot be encoded as UTF-8, containers nested more than 128
-        deep, as one holding itself is — raises `TypeError` or `ValueError`
-        saying the graph is not JSON data, with the converter's own error as
-        `__cause__`. `name`, when given, is a str that encodes as UTF-8. The
-        stream's name — `name` when given, else the graph's own `stream` — is
-        cast the way a node name is, and one casting to nothing raises
-        `ValueError`. A Runtime takes exactly one `load`: a second raises
-        `RuntimeError` naming the stream already loaded, the earlier refusal,
-        or the load still underway on another thread. An empty graph raises
-        `RuntimeError`, naming the stream when it has one; one that does not
-        parse, and one the engine refuses — a key it does not read, an unknown
-        `type` (named beside the runtime's own version), a built-in this
-        platform does not have (naming the platform), a setting a built-in
-        does not take or a value of the wrong kind for one (naming the node and
-        the setting), a taken node name, a link to a port no node has — raise
-        `RuntimeError` with the engine's own text. A refused load can leave part
-        of its graph behind, so every refused call is recorded — save one
-        refused because this Runtime is already running or shut down, which
-        `run()` refuses anyway — and so is a panic inside the load; `run()` then
-        raises naming the load's own refusal or panic, else the first refusal
-        recorded, and raises while a load is still underway. Construct a new
-        Runtime and load a corrected graph.
-        """
-
-    def host_control_plane(self) -> None:
-        """Host the control plane in this process, so the node is discoverable.
-
-        Serves the control API on
-        `<runtime directory>/local-api-<runtime_id>.sock`, a Unix socket only
-        this user can open, and on nothing else: control is reachable only on
-        its machine. Opt-in: a runtime that never calls this publishes no
-        node-registry entry. Call it before `run()`.
-
-        The entry it publishes carries the runtime's own name, which
-        `streamlib nodes` lists and `--node` resolves; the control plane never
-        names the runtime, so there is nothing to pass here.
-        """
-
-    def run(self) -> None:
-        """Run the pipeline until Ctrl-C, SIGTERM, SIGHUP or `shutdown()`, then tear down.
-
-        Call it from the main thread. It owns SIGINT, SIGTERM and SIGHUP from
-        startup until the engine is dropped, then hands them back to Python.
-        The first interrupt stops the graph gracefully: every processor stops at
-        once, and each Python processor's `stop()` and `teardown()` run. The
-        second forces it: every helper process group is terminated without its
-        `teardown()`, and a native processor still inside its callback is
-        abandoned. The third kills every helper process group and exits the
-        process with status 130 at once. `shutdown()` is the first step only,
-        however often it is called.
-
-        Raises `RuntimeError` naming each processor, by node name and id,
-        whose thread ignored shutdown past its budget and was abandoned — the
-        engine then stays alive beneath it until the process exits. A forced
-        shutdown that abandoned nothing returns normally. A teardown still hung
-        after about fifteen seconds ends the process with status 124.
-
-        On macOS the main thread drives the window event pump while this
-        blocks, so a `DisplayWindow` opens only under `run()`. There SIGINT and
-        SIGTERM are never handed back to Python, and SIGHUP is not owned.
-        """
-
-    def wait_until_every_node_is_running(self, *, timeout: float = 30.0) -> None:
-        """Block until every node in the graph is running.
-
-        Call it before `run()` or from another thread while `run()` blocks — a
-        graph that has not started yet is waited through, not refused. A Python
-        node is running once its helper process has registered and wired
-        its ports; anything published into the graph before that is dropped by
-        the link. Raises `RuntimeError` if a node failed instead of
-        starting — carrying that node's own refusal text, so a built-in
-        that refused at setup is read by name — if `timeout` elapses, or if
-        this runtime has already been shut down; and `ValueError` for a
-        `timeout` that is negative, NaN, or too large to be a duration.
-        """
-
-    def shutdown(self) -> None:
-        """Ask the pipeline to stop. Safe from any thread; idempotent."""
-
-    def __enter__(self) -> Runtime: ...
-    # `Literal[False]`, not `bool`: `__exit__` never suppresses the exception,
-    # and saying so is what lets a checker know that code after a `with` block
-    # only runs when the block completed.
-    def __exit__(
-        self,
-        exception_type: type[BaseException] | None = ...,
-        exception: BaseException | None = ...,
-        traceback: TracebackType | None = ...,
-    ) -> Literal[False]: ...
 
 def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
     """A helper process's own data plane, opened in the iceoryx2 domain its parent handed it.
@@ -311,14 +125,6 @@ def decode_tapped_channel_bag_frame_to_python_object(
     did arrive, and one whose containers nest more than 128 deep.
     """
 
-def processor_class_import_paths_in_this_processes_catalog() -> list[str]:
-    """Every processor class import path in the calling process's catalog.
-
-    What `GET /api/registry` renders, readable in a process that serves no
-    control plane. A Python class appears here once a graph naming it loads;
-    decorating it registers nothing.
-    """
-
 def engine_build_id_compiled_into_this_extension() -> str:
     """The build id of the engine compiled into this extension:
     `<crate version>+<git sha>.<per-build nonce>`, the sha `unknown` where the
@@ -331,18 +137,6 @@ def engine_build_id_compiled_into_this_extension() -> str:
 
 def runtime_log_directory() -> Path:
     """The directory the engine writes its per-runtime JSONL logs into."""
-
-def open_test_harness_channel(channel: str) -> None:
-    """Open a test-harness channel; raises if the name is already in use."""
-
-def close_test_harness_channel(channel: str) -> None:
-    """Close a test-harness channel, dropping anything still queued on it."""
-
-def feed_test_harness_bag(channel: str, bag: Any) -> None:
-    """Queue one bag for delivery through `channel`'s feeder."""
-
-def await_test_harness_bag(channel: str, timeout_seconds: float) -> Any | None:
-    """The next bag collected on `channel`, or `None` if the wait ran out."""
 
 def capture_this_helper_processes_engine_log_records() -> None:
     """Start capturing this helper process's engine `tracing` records,

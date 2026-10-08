@@ -19,7 +19,7 @@
 //! In `core/` rather than `linux/` because it is one seam with a per-platform
 //! loop under it. On Linux the loop runs on a thread of its own. On Apple it
 //! must live on the process's first thread, so it is built there when the
-//! runtime starts and driven there while `rt.run()` blocks; AppKit touches a
+//! runtime starts and driven there while the run blocks; AppKit touches a
 //! view only from that thread, so the pump also attaches each window's Metal
 //! layer as it mints the window. Neither changes what a window owner asks for.
 

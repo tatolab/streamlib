@@ -1110,18 +1110,6 @@ impl Runner {
         Ok(GraphLoadObservingShutdownRequests::AbandonedForAShutdownRequest)
     }
 
-    /// [`start`](Self::start) and block until a shutdown is requested, tearing
-    /// nothing down — for an embedding host that holds the shutdown signals
-    /// through its own teardown and the engine's drop, so a second or third
-    /// interrupt still escalates wherever that teardown is.
-    pub fn start_and_block_until_shutdown_is_requested(
-        self: &Arc<Self>,
-        _shutdown_signals_held_by_the_caller: &ScopedShutdownSignalOwnership,
-    ) -> Result<()> {
-        self.start()?;
-        self.block_until_shutdown_is_observed_with(|_| ControlFlow::Continue(()))
-    }
-
     /// Take any request that landed after the run loop stopped observing, and
     /// how far this run's interrupts escalated.
     ///
@@ -1134,7 +1122,7 @@ impl Runner {
     /// Own SIGINT, SIGTERM and SIGHUP until the returned value drops.
     ///
     /// Fails if another run loop in this process already owns them.
-    pub fn take_shutdown_signal_ownership() -> Result<ScopedShutdownSignalOwnership> {
+    fn take_shutdown_signal_ownership() -> Result<ScopedShutdownSignalOwnership> {
         crate::core::signals::ScopedShutdownSignalOwnership::take_until_dropped().map_err(
             |ownership_failure| {
                 crate::core::Error::Configuration(format!(

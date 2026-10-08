@@ -48,8 +48,8 @@
 //! Honest limits, so nobody reads a green run as more than it is:
 //!
 //! - This is vocabulary, not behaviour. A watchdog renamed to avoid these
-//!   patterns passes. The behavioural proof that the parent never hosts a
-//!   processor class is `sdk/streamlib-python-wheel/tests/test_helper_placement.py`.
+//!   patterns passes. The behavioural guarantee is structural: `tatolabd`, the
+//!   process that hosts a stream, links no Python interpreter.
 //! - **The pattern set is a subset of the rule's STOP-WORK vocabulary, not the
 //!   whole of it**, and the list below is not exhaustive either. Probed misses:
 //!   the runtime described as "one process" or "one big process" (the same two
@@ -268,7 +268,7 @@ const REJECTED_ALTERNATIVE_GUIDANCE: &str = "subinterpreters and a per-interpret
 const RETRACTED_NUMBERS_GUIDANCE: &str = "the #1702 spike's latency numbers are retracted as placement evidence — the two arms ran different CPython builds and were never re-measured";
 
 /// The paired-term rules exist because the bare words are legitimate: the
-/// engine has an EPOLLHUP watchdog, `rt.run()` documents a GIL-release contract
+/// engine has an EPOLLHUP watchdog, the wheel documents a GIL-release contract
 /// about a processor's own threads, and `both placements` appears in the very
 /// sentences that retire it. `unless_any_of` carries the rule's "these are NOT
 /// the ban" boundary — a helper's own interpreter, and a processor's own

@@ -63,11 +63,11 @@ dev = [
     # The second consumer of the Metal capsule; Apple silicon only.
     "mlx>=0.32; sys_platform == 'darwin'",
     "pydantic>=2.0",
-    # `assert_type` at the 3.10 floor, and the stub's own `disjoint_base`.
+    # `assert_type` at the 3.10 floor.
     "typing_extensions>=4.6",
     # The official MCP Python SDK: the observation-verb tests stand a node's
-    # control plane in with its server, and the live MCP test drives a real
-    # node with its client. Tests only; the wheel's own client is rmcp.
+    # control plane in with its server. Tests only; the wheel's own client is
+    # rmcp.
     "mcp==2.3.0",
 ]
 
@@ -123,7 +123,7 @@ include = ["python", "tests", "tests_against_the_runtime_unit_lend"]
 extraPaths = ["python", "../tatolab-stream"]
 pythonVersion = "3.10"
 # Standard rather than strict: strict turns on `reportPrivateUsage`, which
-# fights the `_engine` / `_NativeRuntime` shape this package is built on, and
+# fights the private `_engine` names this package is built on, and
 # demands annotations on every pytest fixture parameter.
 typeCheckingMode = "standard"
 venvPath = "."

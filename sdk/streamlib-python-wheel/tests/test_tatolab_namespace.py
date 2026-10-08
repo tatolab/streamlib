@@ -21,7 +21,6 @@ from typing import Callable, is_typeddict
 import tatolab
 import tatolab.runtime
 import tatolab.runtime._engine as engine
-import tatolab.runtime.testing
 import tatolab.stream
 from tatolab.stream._runtime_lend import runtime_backed_protocol_registry
 
@@ -184,7 +183,6 @@ def test_every_public_tatolab_module_is_swept_for_processor():
     assert {
         "tatolab.stream",
         "tatolab.runtime",
-        "tatolab.runtime.testing",
         "tatolab.runtime.cli",
         "tatolab.stream.node_output_texture_ring",
     } <= swept_module_names
@@ -240,13 +238,6 @@ def _public_callables_tatolab_publishes() -> "list[tuple[str, Callable[..., obje
 def test_no_parameter_of_the_node_decorator_says_processor():
     node_parameter_names = list(inspect.signature(tatolab.stream.node).parameters)
     assert not [name for name in node_parameter_names if "processor" in name.lower()]
-
-
-def test_the_single_node_test_pipeline_names_its_class_parameter_node_class():
-    pipeline_parameter_names = list(
-        inspect.signature(tatolab.runtime.testing.SingleNodeTestPipeline).parameters
-    )
-    assert pipeline_parameter_names[0] == "node_class"
 
 
 def test_no_parameter_of_a_public_callable_tatolab_publishes_says_processor():

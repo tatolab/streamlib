@@ -6,10 +6,9 @@
 //! Ownership is a value, not a process-wide side effect: whoever owns the run
 //! loop takes [`ScopedShutdownSignalOwnership`] for as long as it blocks and
 //! drops it afterwards, which restores the signal dispositions that were
-//! installed before. The wheel's `rt.run()` depends on that restoration — it
-//! hands SIGINT back to CPython, so a Ctrl-C after `run()` returns raises
-//! `KeyboardInterrupt` instead of being swallowed by a handler whose run loop
-//! is gone.
+//! installed before. A Rust host that keeps running after its run returns
+//! depends on that restoration: a Ctrl-C then reaches the disposition it had
+//! installed instead of being swallowed by a handler whose run loop is gone.
 //!
 //! `docs/plan/ARCHITECTURE.md` §Language SDKs: each delivered signal escalates
 //! the shutdown one step — graceful, forced, then every helper's process group
@@ -517,9 +516,10 @@ mod tests {
     use serial_test::serial;
 
     /// The restoration contract, asserted at the only layer that can witness it:
-    /// the kernel's own record of the handler. `rt.run()` returning with SIGINT
+    /// the kernel's own record of the handler. A run returning with SIGINT
     /// still pointed at a dead run loop's forwarding thread is exactly the
-    /// "Ctrl-C stops working after run()" failure the wheel must not ship.
+    /// "Ctrl-C stops working after the run" failure a host that outlives its
+    /// run must not see.
     ///
     /// Mental-revert: dropping the `restore_now` calls from `Drop` leaves
     /// `sa_sigaction` pointing at the self-pipe handler and fails.
@@ -682,9 +682,8 @@ mod tests {
         );
     }
 
-    /// Re-taking after a drop is the wheel's second-`Runtime()`-in-one-process
-    /// case, and it must still *work* — asserting the handler pointer alone
-    /// would not catch it.
+    /// Re-taking after a drop is a second run loop in one process, and it must
+    /// still *work* — asserting the handler pointer alone would not catch it.
     ///
     /// This is a regression lock on a real defect: a registry-based
     /// implementation (signal-hook's `Signals`) installs its dispatcher once

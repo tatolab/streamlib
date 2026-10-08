@@ -24,7 +24,10 @@ import pytest
 from tatolab.runtime import _engine
 from tatolab.stream import AudioBlock, NodeLinkDataAccess
 
-pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+pytestmark = pytest.mark.usefixtures(
+    "private_iceoryx2_domain_for_this_test_process",
+    "log_records_this_process_sends_its_stand_in_parent",
+)
 
 OUTPUT_PORT = "audio_to_downstream"
 INPUT_PORT = "audio_from_upstream"

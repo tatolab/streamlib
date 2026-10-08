@@ -25,7 +25,10 @@ from tatolab.stream import (
     gpu_limited_access_of_the_typed_read_in_progress,
 )
 
-pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+pytestmark = pytest.mark.usefixtures(
+    "private_iceoryx2_domain_for_this_test_process",
+    "log_records_this_process_sends_its_stand_in_parent",
+)
 
 FRAME_BAG = {
     "surface_id": "surface-7",
