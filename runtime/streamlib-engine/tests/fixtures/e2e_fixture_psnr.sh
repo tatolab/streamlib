@@ -71,6 +71,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+# shellcheck source=fixture_runtime_unit.sh
+. "$SCRIPT_DIR/fixture_runtime_unit.sh"
 REFERENCES_DIR="$SCRIPT_DIR/psnr"
 
 OUTPUT_DIR="${1:-/tmp/streamlib-fixture-psnr-$(date +%s)}"
@@ -93,23 +95,10 @@ case "$CODEC" in
         ;;
 esac
 
-# The CLI ships in the wheel. The venv copy is the fallback for a machine that
-# has not put it on PATH; a stale build there scores old code, so it is named
-# rather than searched for.
-STREAMLIB_CLI="$(command -v streamlib || true)"
-if [ -z "$STREAMLIB_CLI" ]; then
-    STREAMLIB_CLI="$REPO_ROOT/sdk/streamlib-python-wheel/.venv/bin/streamlib"
-fi
-if [ ! -x "$STREAMLIB_CLI" ]; then
-    echo "[psnr] SKIP: no streamlib CLI on PATH or at $STREAMLIB_CLI" >&2
-    exit 77
-fi
-# The interpreter beside the CLI reads the node registry, because that is the
-# one whose environment the CLI ships in.
-STREAMLIB_CLI_PYTHON="$(dirname "$(readlink -f "$STREAMLIB_CLI" 2>/dev/null || echo "$STREAMLIB_CLI")")/python3"
-if [ ! -x "$STREAMLIB_CLI_PYTHON" ]; then
-    STREAMLIB_CLI_PYTHON="$(command -v python3)"
-fi
+# The rig is read through the observation verbs the runtime unit's lend carries
+# (see fixture_runtime_unit.sh).
+require_the_runtime_unit
+require_the_fixture_venv
 
 if [ ! -d "$REFERENCES_DIR" ]; then
     echo "[psnr] SKIP: reference set not found at $REFERENCES_DIR" >&2
@@ -148,7 +137,7 @@ mkdir -p "$DECODED_DIR" "$ARMS_DIR" "$SCORED_REFERENCES_DIR"
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
 decoded_channel_of_running_rig() {
-    "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+    streamlib_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -233,12 +222,8 @@ stop_rig() {
 }
 trap stop_rig EXIT
 
-# The runtime_id of the live node the launched process runs. `timeout` wraps the
-# rig, so the runtime is the launched pid's child rather than the pid itself.
-runtime_id_of_the_node_launched_as() {
-    "$STREAMLIB_CLI_PYTHON" "$SCRIPT_DIR/runtime_id_of_launched_node.py" "$1"
-}
-
+# `timeout` wraps the rig, so the runtime is the launched pid's child rather
+# than the pid itself; `runtime_id_of_the_node_launched_as` walks that chain.
 # Wait for the launched node to register and answer a graph round trip over its
 # local API socket, which is the first moment a tap can attach. Sets RUNTIME_ID.
 wait_for_the_launched_node() {
@@ -248,7 +233,7 @@ wait_for_the_launched_node() {
         if [ -z "$RUNTIME_ID" ]; then
             RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$1")" || RUNTIME_ID=""
         fi
-        if [ -n "$RUNTIME_ID" ] && "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        if [ -n "$RUNTIME_ID" ] && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.5
@@ -294,7 +279,7 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
     echo "[psnr]     decoded channel: $decoded_channel"
 
     exchange_log="$arm_dir/exchange.log"
-    if ! "$STREAMLIB_CLI" exchange \
+    if ! streamlib_observation_verb exchange \
             --channel "$decoded_channel" \
             --out "$arm_dir/exchanged" \
             --count "$SAMPLES_PER_REFERENCE" \

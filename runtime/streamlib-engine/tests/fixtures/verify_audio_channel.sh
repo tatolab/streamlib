@@ -26,11 +26,17 @@
 # stamps at publication does not — so it is asked for rather than assumed.
 #
 # Assumes a node is already running and hosting its control plane. Exit status
-# is the verdict; stdout is the report JSON, progress is on stderr.
+# is the verdict; stdout is the report JSON, progress is on stderr. The graph,
+# the tap and the bag decoder are read through the runtime unit's lend (see
+# fixture_runtime_unit.sh).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="${PYTHON:-python3}"
+# shellcheck source=fixture_runtime_unit.sh
+. "$HERE/fixture_runtime_unit.sh"
+
+require_the_runtime_unit
+require_the_fixture_venv
 
 NODE_NAME="${1:?usage: verify_audio_channel.sh <node-name> [--node RUNTIME_NAME_OR_ID] [--count N]}"
 shift
@@ -102,7 +108,7 @@ for node in graph["nodes"]:
 else:
     sys.exit(f"no node named {wanted} in the running graph")
 PY
-CHANNEL="$("$PYTHON" -c "$CHANNEL_RESOLVING_PROGRAM" \
+CHANNEL="$(python_with_the_lend -c "$CHANNEL_RESOLVING_PROGRAM" \
     "$RUNTIME_NAME_OR_ID" "$NODE_NAME" "$OUTPUT_PORT")" || exit 1
 
 RUNTIME_SELECTION=()
@@ -111,7 +117,7 @@ if [ -n "$RUNTIME_NAME_OR_ID" ]; then
 fi
 
 echo "tapping $CHANNEL for $BAG_COUNT bags" >&2
-if ! "$PYTHON" -m tatolab.runtime.cli tap "$CHANNEL" --count "$BAG_COUNT" \
+if ! streamlib_observation_verb tap "$CHANNEL" --count "$BAG_COUNT" \
     ${RUNTIME_SELECTION[@]+"${RUNTIME_SELECTION[@]}"} \
     > "$OUTPUT_DIR/tapped.json" 2>"$OUTPUT_DIR/tap.err"; then
     cat "$OUTPUT_DIR/tap.err" >&2
@@ -119,7 +125,7 @@ if ! "$PYTHON" -m tatolab.runtime.cli tap "$CHANNEL" --count "$BAG_COUNT" \
 fi
 
 # shellcheck disable=SC2086  # deliberately unquoted: empty means "not asked for"
-"$PYTHON" "$HERE/tap_audio_channel.py" "$OUTPUT_DIR/tapped.json" \
+python_with_the_lend "$HERE/tap_audio_channel.py" "$OUTPUT_DIR/tapped.json" \
     --waveform "$OUTPUT_DIR/published.wav" $EXPECT_FRAME_NOT_RESTAMPED \
     | tee "$OUTPUT_DIR/report.json"
 VERDICT=${PIPESTATUS[0]}

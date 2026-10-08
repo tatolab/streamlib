@@ -9,12 +9,12 @@ Engine-free, and none of it needs pyobjc:
 - Name the Mac's built-in speaker and microphone by UID, so an acoustic run
   pins them and can never measure Camo, Wave Link or a Continuity iPhone.
 - Turn this process's own output into a capture device: a private process tap
-  of this process under a private aggregate device, which a `MicrophoneSource`
-  in this same process opens by UID. It is the Mac's peer of a PipeWire null
-  sink's monitor. It has to be made in the node, because the native built-ins
-  run in the app process and a private device is visible only to the process
-  that created it — which also means it dies with that process and, unlike the
-  null sink, can never be stranded in the user's session.
+  of this process under a private aggregate device, opened by UID in this same
+  process. It is the Mac's peer of a PipeWire null sink's monitor. A private
+  device is visible only to the process that created it — so it dies with that
+  process and, unlike the null sink, can never be stranded in the user's
+  session, and so no fixture process can make one for the native built-ins,
+  which run in `tatolabd`.
 - Run an IOProc on a device, which is how the rig peer plays and records
   through that same tap with no StreamLib in the path.
 

@@ -17,42 +17,22 @@
 # capture endpoint the session already routes: whatever is played into the sink
 # is readable from the monitor, which is the loopback the fixture needs.
 #
-# On macOS the device is a private Core Audio process tap of the node's own
-# output, under a private aggregate device (`coreaudio_process_tap.py`). Only
-# the node can create it — a private device is visible to its creator alone —
-# so `start` names the aggregate the node will create and creates nothing, and
-# `stop` has nothing to destroy: both objects die with the node.
+# macOS has no null sink. Its peer is a private Core Audio process tap of the
+# process that plays, under a private aggregate device — visible only to the
+# process that created it. The engine's speaker plays inside `tatolabd`, which
+# makes no such tap, so there is no device for a fixture to name there: `check`
+# and `start` report it unavailable, and `stop` has nothing to destroy.
 set -uo pipefail
 
 if [ "$(uname -s)" = Darwin ]; then
-    PYTHON="${PYTHON:-python3}"
     case "${1:-}" in
-        check)
-            # Opens no device and raises no prompt: a version, and two imports.
-            IFS=. read -r MACOS_MAJOR MACOS_MINOR _ <<<"$(sw_vers -productVersion)"
-            if [ "${MACOS_MAJOR:-0}" -lt 14 ] \
-                || { [ "$MACOS_MAJOR" -eq 14 ] && [ "${MACOS_MINOR:-0}" -lt 2 ]; }; then
-                echo "UNAVAILABLE: macOS $MACOS_MAJOR.${MACOS_MINOR:-0} has no Core Audio process taps (14.2 brought them)"
-                exit 1
-            fi
-            if ! "$PYTHON" -c "import numpy" &>/dev/null; then
-                echo "UNAVAILABLE: $PYTHON cannot import numpy"
-                exit 1
-            fi
-            if ! "$PYTHON" -c "import tatolab.runtime" &>/dev/null; then
-                echo "UNAVAILABLE: $PYTHON cannot import tatolab.runtime — build the wheel with" \
-                    "(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)"
-                exit 1
-            fi
-            echo "AVAILABLE: Core Audio process taps (macOS $MACOS_MAJOR.${MACOS_MINOR:-0}); the node creates its own"
-            exit 0
-            ;;
-        start)
-            echo "streamlib-fixture-process-tap-$$"
-            exit 0
+        check|start)
+            echo "UNAVAILABLE: macOS has no null sink, and a private process tap of the speaker's" \
+                "output can be made only inside tatolabd, which makes none"
+            exit 1
             ;;
         stop)
-            echo "not running: a private process tap dies with the node that created it"
+            echo "not running"
             exit 0
             ;;
         *)
