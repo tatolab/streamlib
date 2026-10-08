@@ -2,17 +2,30 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolab`: `new` writes a stream project; `run` and `dev` compile a stream in its project's
-//! venv and start `tatolabd` attached; `enable-virtual-camera` grants this machine's users the
-//! virtual camera's loopback device, once.
+//! venv and start `tatolabd` attached; `nodes` lists the runtimes running on this machine, and
+//! `graph` and `tap` read one through its local API socket; `enable-virtual-camera` grants this
+//! machine's users the virtual camera's loopback device, once.
 
 // stdout and stderr are this binary's output channel to the user, as they are xtask's.
 #![allow(clippy::disallowed_macros)]
 
 mod attached_tatolabd_supervisor;
 mod forwarded_signal_listener;
+mod local_api_mcp_tool_client;
+mod local_api_runtime_selection;
+mod local_api_unix_socket_http_client;
 mod project_source_change_watcher;
+mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
 mod virtual_camera_loopback_permission_grant;
+
+#[cfg(test)]
+#[path = "../tests/common/stub_local_api_server.rs"]
+mod stub_local_api_server;
+
+#[cfg(test)]
+#[path = "../tests/common/isolated_node_registry.rs"]
+mod isolated_node_registry;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -55,7 +68,8 @@ impl TatolabCommandFailure {
 #[command(
     name = "tatolab",
     version,
-    about = "StreamLib — write a stream project, then run it on tatolabd.",
+    about = "Tatolab — write a stream project, run it on tatolabd, and observe the runtimes \
+             running on this machine.",
     disable_help_subcommand = true
 )]
 struct TatolabCommandLine {
@@ -83,6 +97,44 @@ enum TatolabVerb {
     Run(StreamLaunchArguments),
     /// Run this stream on tatolabd and restart it on every saved edit.
     Dev(StreamLaunchArguments),
+    /// List the runtimes running on this machine.
+    #[command(
+        long_about = "Scans the node registry, liveness-checks every entry, prunes the ones that \
+                      are gone, and prints runtime_name, runtime_id, local_api_socket, pid, alive? \
+                      and hint. Only runtimes hosting a control plane register."
+    )]
+    Nodes,
+    /// Export a running runtime's live graph as JSON.
+    #[command(
+        long_about = "Nodes, ports, links, channel names, states and metrics, as the runtime \
+                      reports them right now."
+    )]
+    Graph(RuntimeTargetArguments),
+    /// Collect a bounded sample of raw bags from one channel.
+    #[command(
+        long_about = "Attaches a read-only tap to CHANNEL and collects a bounded sample. The tap \
+                      forwards bags verbatim and never blocks the producer, so a quiet channel \
+                      returns a partial sample rather than hanging."
+    )]
+    Tap {
+        /// The output port's address, <runtime_name>/<node>/<port>, as `graph` names them: its
+        /// top-level runtime_name and a node's name.
+        channel: String,
+        /// Bags to collect before returning (default: a small sample).
+        #[arg(long = "count", value_name = "N", allow_negative_numbers = true)]
+        requested_bag_count: Option<i64>,
+        /// Per-bag ceiling on the bytes returned. A bag over the cap comes back flagged and cannot
+        /// be decoded, so raise this rather than accept one (default: high enough to carry any
+        /// audio block whole).
+        #[arg(
+            long = "max-bag-bytes",
+            value_name = "BYTES",
+            allow_negative_numbers = true
+        )]
+        requested_max_bag_bytes: Option<i64>,
+        #[command(flatten)]
+        runtime_target: RuntimeTargetArguments,
+    },
     /// Grant this machine's users the permission a VirtualCameraSink needs, once.
     #[command(
         long_about = "Install the standard grant behind the virtual camera's loopback door: load \
@@ -119,6 +171,15 @@ pub(crate) struct StreamLaunchArguments {
     pub(crate) requested_runtime_name: Option<OsString>,
 }
 
+/// `--node`, which pins the runtime a verb drives; without it the verb takes the sole live one.
+#[derive(Args, Debug, Clone, Default)]
+pub(crate) struct RuntimeTargetArguments {
+    /// Registered runtime name or runtime_id to target, reached through its local API socket
+    /// (resolved via the node registry).
+    #[arg(long = "node", value_name = "RUNTIME_NAME_OR_ID")]
+    pub(crate) requested_runtime_name_or_id: Option<String>,
+}
+
 fn main() -> ExitCode {
     let command_line = TatolabCommandLine::parse();
     let command_outcome = match command_line.verb {
@@ -149,6 +210,28 @@ fn main() -> ExitCode {
                 &stream_launch_arguments,
             )
         }
+        TatolabVerb::Nodes => runtime_observation_verbs::print_node_registry_listing(),
+        TatolabVerb::Graph(runtime_target) => {
+            runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime(
+                runtime_target.requested_runtime_name_or_id.as_deref(),
+                runtime_observation_verbs::GRAPH_TOOL_NAME,
+                serde_json::Map::new(),
+            )
+        }
+        TatolabVerb::Tap {
+            channel,
+            requested_bag_count,
+            requested_max_bag_bytes,
+            runtime_target,
+        } => runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime(
+            runtime_target.requested_runtime_name_or_id.as_deref(),
+            runtime_observation_verbs::TAP_TOOL_NAME,
+            runtime_observation_verbs::tap_tool_arguments(
+                &channel,
+                requested_bag_count,
+                requested_max_bag_bytes,
+            ),
+        ),
         TatolabVerb::EnableVirtualCamera {
             print_grant_without_installing,
         } => {

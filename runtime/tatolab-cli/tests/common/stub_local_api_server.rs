@@ -1,0 +1,356 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! A runtime's local API stood in by a stub on a fresh Unix socket: the official MCP SDK's server
+//! answering scripted tool calls, beside the surface-image route answering scripted images, each
+//! recording what it was sent. Shared by the integration tests and, through `#[path]`, the unit
+//! tests.
+
+#![allow(dead_code)]
+
+use std::borrow::Cow;
+use std::collections::{HashMap, VecDeque};
+use std::future::IntoFuture;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use axum::extract::{Path as RoutePathSegment, State};
+use axum::http::{StatusCode, Uri, header};
+use axum::response::{IntoResponse, Response};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+    ProtocolVersion, ServerCapabilities, ServerConfig,
+};
+use rmcp::service::RequestContext;
+use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+use rmcp::{ErrorData, RoleServer, ServerHandler};
+
+/// What the stub answers a tool call with when the script names no fixed answer.
+pub const STUB_DEFAULT_TOOL_ANSWER_TEXT: &str = "{}";
+
+/// The headers the surface-image route states the surface's own extent in.
+pub const SOURCE_SURFACE_PIXEL_WIDTH_HEADER: &str = "x-streamlib-surface-pixel-width";
+pub const SOURCE_SURFACE_PIXEL_HEIGHT_HEADER: &str = "x-streamlib-surface-pixel-height";
+
+/// The revision the stub serves, and the only one: a runtime's local API serves the latest alone.
+const STUB_SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
+
+/// A directory socket paths fit under: a socket path is capped near 104 bytes, and a
+/// per-user temporary directory can eat most of that.
+const SHORT_SOCKET_DIRECTORY_PARENT: &str = "/tmp";
+
+/// How the stub answers one `tools/call`: the tool's text, and whether the tool ran and failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StubToolAnswer {
+    pub text: String,
+    pub is_error: bool,
+}
+
+impl StubToolAnswer {
+    /// A tool that ran and answered `text`.
+    pub fn tool_result(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            is_error: false,
+        }
+    }
+
+    /// A tool that ran and failed, saying `text`.
+    pub fn tool_failure(text: &str) -> Self {
+        Self {
+            text: text.to_owned(),
+            is_error: true,
+        }
+    }
+}
+
+/// One `tools/call` the stub received, as the runtime would have.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedToolCall {
+    pub tool_name: String,
+    /// The call's arguments object; empty when it sent none.
+    pub tool_arguments: serde_json::Value,
+}
+
+/// How the stub answers one `GET /api/surfaces/{surface_id}/image`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StubSurfaceImageAnswer {
+    pub http_status: u16,
+    pub png_image_bytes: Vec<u8>,
+    pub source_surface_pixel_width: Option<u32>,
+    pub source_surface_pixel_height: Option<u32>,
+    /// The `{"error": …}` a refusal carries.
+    pub error_message: String,
+}
+
+impl StubSurfaceImageAnswer {
+    /// A `200` carrying `png_image_bytes`, stating whichever extent headers are given.
+    pub fn png_image(
+        png_image_bytes: &[u8],
+        source_surface_pixel_width: Option<u32>,
+        source_surface_pixel_height: Option<u32>,
+    ) -> Self {
+        Self {
+            http_status: 200,
+            png_image_bytes: png_image_bytes.to_vec(),
+            source_surface_pixel_width,
+            source_surface_pixel_height,
+            error_message: String::new(),
+        }
+    }
+
+    /// A refusal with `http_status` and `{"error": error_message}` — a `410` is a recycled frame.
+    pub fn refusal(http_status: u16, error_message: &str) -> Self {
+        Self {
+            http_status,
+            png_image_bytes: Vec::new(),
+            source_surface_pixel_width: None,
+            source_surface_pixel_height: None,
+            error_message: error_message.to_owned(),
+        }
+    }
+}
+
+/// What the stub answers. Tool calls drain `queued_tool_answers` in order, then
+/// `fixed_tool_answer` answers forever, so a test names only the rounds it cares about.
+#[derive(Debug, Clone, Default)]
+pub struct StubLocalApiScript {
+    /// Answers every call once the queue is drained; `{}` when unset.
+    pub fixed_tool_answer: Option<StubToolAnswer>,
+    pub queued_tool_answers: Vec<StubToolAnswer>,
+    /// Refuse every call with an invalid-params MCP error carrying this message.
+    pub refuse_every_tool_call_with: Option<String>,
+    /// Answers by decoded surface id; an id not listed answers `404 {"error": "no such surface"}`.
+    pub surface_image_answers: HashMap<String, StubSurfaceImageAnswer>,
+}
+
+struct StubLocalApiState {
+    fixed_tool_answer: StubToolAnswer,
+    queued_tool_answers: Mutex<VecDeque<StubToolAnswer>>,
+    refuse_every_tool_call_with: Option<String>,
+    surface_image_answers: HashMap<String, StubSurfaceImageAnswer>,
+    recorded_tool_calls: Mutex<Vec<RecordedToolCall>>,
+    recorded_image_request_paths: Mutex<Vec<String>>,
+}
+
+#[derive(Clone)]
+struct StubLocalApiMcpServerHandler {
+    stub_state: Arc<StubLocalApiState>,
+}
+
+impl ServerHandler for StubLocalApiMcpServerHandler {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("stub-local-api", "0"))
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(STUB_SERVED_MCP_PROTOCOL_VERSIONS)
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        self.stub_state
+            .recorded_tool_calls
+            .lock()
+            .unwrap()
+            .push(RecordedToolCall {
+                tool_name: request.name.to_string(),
+                tool_arguments: serde_json::Value::Object(request.arguments.unwrap_or_default()),
+            });
+        if let Some(refusal_message) = &self.stub_state.refuse_every_tool_call_with {
+            return Err(ErrorData::invalid_params(refusal_message.clone(), None));
+        }
+        let answer = self
+            .stub_state
+            .queued_tool_answers
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| self.stub_state.fixed_tool_answer.clone());
+        let content = vec![ContentBlock::text(answer.text)];
+        Ok(if answer.is_error {
+            CallToolResult::error(content)
+        } else {
+            CallToolResult::success(content)
+        }
+        .into())
+    }
+}
+
+async fn answer_surface_image_request(
+    State(stub_state): State<Arc<StubLocalApiState>>,
+    RoutePathSegment(surface_id): RoutePathSegment<String>,
+    request_uri: Uri,
+) -> Response {
+    stub_state
+        .recorded_image_request_paths
+        .lock()
+        .unwrap()
+        .push(request_uri.path().to_owned());
+    let answer = stub_state
+        .surface_image_answers
+        .get(&surface_id)
+        .cloned()
+        .unwrap_or_else(|| StubSurfaceImageAnswer::refusal(404, "no such surface"));
+    let http_status = StatusCode::from_u16(answer.http_status).unwrap();
+    if http_status != StatusCode::OK {
+        return (
+            http_status,
+            [(header::CONTENT_TYPE, "application/json")],
+            serde_json::json!({ "error": answer.error_message }).to_string(),
+        )
+            .into_response();
+    }
+    let mut image_response = (
+        http_status,
+        [(header::CONTENT_TYPE, "image/png")],
+        answer.png_image_bytes,
+    )
+        .into_response();
+    for (extent_header, extent) in [
+        (
+            SOURCE_SURFACE_PIXEL_WIDTH_HEADER,
+            answer.source_surface_pixel_width,
+        ),
+        (
+            SOURCE_SURFACE_PIXEL_HEIGHT_HEADER,
+            answer.source_surface_pixel_height,
+        ),
+    ] {
+        if let Some(extent) = extent {
+            image_response
+                .headers_mut()
+                .insert(extent_header, extent.to_string().parse().unwrap());
+        }
+    }
+    image_response
+}
+
+/// The stub's router: `/mcp` as a runtime's local API configures it — stateless, JSON answers, no
+/// allowed-hosts check since the socket's file mode is the gate — and the surface-image route.
+/// Axum routes on the request target's path, so `rmcp`'s absolute-form `POST
+/// http://localhost/mcp` reaches `/mcp` as RFC 9112 §3.2.2 requires.
+fn stub_local_api_router(stub_state: Arc<StubLocalApiState>) -> axum::Router {
+    let mcp_server_handler = StubLocalApiMcpServerHandler {
+        stub_state: stub_state.clone(),
+    };
+    let local_api_mcp_service = StreamableHttpService::new(
+        move || Ok(mcp_server_handler.clone()),
+        Arc::new(NeverSessionManager::default()),
+        StreamableHttpServerConfig::default()
+            .with_legacy_session_mode(false)
+            .with_stateless_protocol_metadata_required(true)
+            .with_json_response(true)
+            .disable_allowed_hosts(),
+    );
+    axum::Router::new()
+        .route_service("/mcp", local_api_mcp_service)
+        .route(
+            "/api/surfaces/{surface_id}/image",
+            axum::routing::get(answer_surface_image_request),
+        )
+        .with_state(stub_state)
+}
+
+/// A stub local API being served; dropping it stops serving and removes its socket.
+pub struct StubLocalApiServer {
+    /// The socket the stub answers on.
+    pub local_api_socket_path: PathBuf,
+    stub_state: Arc<StubLocalApiState>,
+    stop_serving: Option<tokio::sync::oneshot::Sender<()>>,
+    serving_thread: Option<std::thread::JoinHandle<()>>,
+    local_api_socket_directory: tempfile::TempDir,
+}
+
+impl StubLocalApiServer {
+    /// Serve `stub_local_api_script` on a fresh socket; it accepts connections once this returns.
+    pub fn serve(stub_local_api_script: StubLocalApiScript) -> Self {
+        let local_api_socket_directory = tempfile::Builder::new()
+            .prefix("tl-stub-")
+            .tempdir_in(SHORT_SOCKET_DIRECTORY_PARENT)
+            .unwrap();
+        let local_api_socket_path = local_api_socket_directory.path().join("local-api.sock");
+        let bound_listener =
+            std::os::unix::net::UnixListener::bind(&local_api_socket_path).unwrap();
+        bound_listener.set_nonblocking(true).unwrap();
+
+        let stub_state = Arc::new(StubLocalApiState {
+            fixed_tool_answer: stub_local_api_script
+                .fixed_tool_answer
+                .unwrap_or_else(|| StubToolAnswer::tool_result(STUB_DEFAULT_TOOL_ANSWER_TEXT)),
+            queued_tool_answers: Mutex::new(stub_local_api_script.queued_tool_answers.into()),
+            refuse_every_tool_call_with: stub_local_api_script.refuse_every_tool_call_with,
+            surface_image_answers: stub_local_api_script.surface_image_answers,
+            recorded_tool_calls: Mutex::new(Vec::new()),
+            recorded_image_request_paths: Mutex::new(Vec::new()),
+        });
+        let (stop_serving, serving_stopped) = tokio::sync::oneshot::channel::<()>();
+        let served_stub_state = stub_state.clone();
+        let serving_thread = std::thread::spawn(move || {
+            let serving_tokio_runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            serving_tokio_runtime.block_on(async move {
+                let local_api_listener =
+                    tokio::net::UnixListener::from_std(bound_listener).unwrap();
+                tokio::spawn(
+                    axum::serve(local_api_listener, stub_local_api_router(served_stub_state))
+                        .into_future(),
+                );
+                // Dropping the runtime on return ends every connection still open.
+                let _stopped_or_abandoned = serving_stopped.await;
+            });
+        });
+        Self {
+            local_api_socket_path,
+            stub_state,
+            stop_serving: Some(stop_serving),
+            serving_thread: Some(serving_thread),
+            local_api_socket_directory,
+        }
+    }
+
+    /// Serve a stub that answers every tool call with `stub_tool_answer`.
+    pub fn serve_answering_every_tool_call_with(stub_tool_answer: StubToolAnswer) -> Self {
+        Self::serve(StubLocalApiScript {
+            fixed_tool_answer: Some(stub_tool_answer),
+            ..StubLocalApiScript::default()
+        })
+    }
+
+    /// Serve a stub that answers every tool call `{}`.
+    pub fn serve_default() -> Self {
+        Self::serve(StubLocalApiScript::default())
+    }
+
+    /// Every tool call received so far, in arrival order.
+    pub fn recorded_tool_calls(&self) -> Vec<RecordedToolCall> {
+        self.stub_state.recorded_tool_calls.lock().unwrap().clone()
+    }
+
+    /// The path of every surface-image request received so far, percent-encoded as sent.
+    pub fn recorded_image_request_paths(&self) -> Vec<String> {
+        self.stub_state
+            .recorded_image_request_paths
+            .lock()
+            .unwrap()
+            .clone()
+    }
+}
+
+impl Drop for StubLocalApiServer {
+    fn drop(&mut self) {
+        if let Some(stop_serving) = self.stop_serving.take() {
+            let _serving_already_ended = stop_serving.send(());
+        }
+        if let Some(serving_thread) = self.serving_thread.take() {
+            let _serving_thread_outcome = serving_thread.join();
+        }
+    }
+}

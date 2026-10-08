@@ -4853,11 +4853,18 @@ checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 name = "tatolab-cli"
 version = "0.41.0"
 dependencies = [
+ "axum",
  "clap",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "libc",
+ "rmcp",
  "serde",
  "serde_json",
+ "streamlib-runtime-on-disk-contract",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

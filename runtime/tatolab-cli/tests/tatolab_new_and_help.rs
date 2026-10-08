@@ -77,7 +77,15 @@ fn help_lists_exactly_the_served_verbs() {
         .collect();
     assert_eq!(
         listed_verbs,
-        ["new", "run", "dev", "enable-virtual-camera"],
+        [
+            "new",
+            "run",
+            "dev",
+            "nodes",
+            "graph",
+            "tap",
+            "enable-virtual-camera"
+        ],
         "help was:\n{help_text}"
     );
 }
