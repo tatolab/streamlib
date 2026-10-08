@@ -63,7 +63,7 @@ fn expected_scaffolded_file_paths() -> BTreeSet<String> {
 }
 
 #[test]
-fn help_lists_exactly_new_run_and_dev() {
+fn help_lists_exactly_the_served_verbs() {
     let scratch_directory = tempfile::tempdir().unwrap();
     let help_output = run_tatolab(scratch_directory.path(), &["--help"]);
     assert!(help_output.status.success());
@@ -77,7 +77,7 @@ fn help_lists_exactly_new_run_and_dev() {
         .collect();
     assert_eq!(
         listed_verbs,
-        ["new", "run", "dev"],
+        ["new", "run", "dev", "enable-virtual-camera"],
         "help was:\n{help_text}"
     );
 }

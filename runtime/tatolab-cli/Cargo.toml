@@ -3,7 +3,7 @@
 
 [package]
 name = "tatolab-cli"
-description = "The `tatolab` CLI: `new` writes a stream project; `run` and `dev` compile a stream in its project's venv and start `tatolabd` attached."
+description = "The `tatolab` CLI: `new` writes a stream project; `run` and `dev` compile a stream in its project's venv and start `tatolabd` attached; `enable-virtual-camera` grants this machine's users the virtual camera's loopback device, once."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
