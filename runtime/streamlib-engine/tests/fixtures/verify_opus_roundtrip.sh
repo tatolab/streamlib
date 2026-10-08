@@ -17,11 +17,13 @@
 #   ./verify_opus_roundtrip.sh [--record-seconds SECONDS]
 #
 # Exit status is the verdict, stdout is the report JSON and nothing else, so a
-# caller can pipe it. Progress goes to stderr.
+# caller can pipe it. Progress goes to stderr. The stream runs on the runtime
+# unit with `tatolab run` (see fixture_runtime_unit.sh).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="${PYTHON:-python3}"
+# shellcheck source=fixture_runtime_unit.sh
+. "$HERE/fixture_runtime_unit.sh"
 
 # The signal is 2.78 s and the source stops publishing at 3.78 s, so the record
 # window sits between them: past the source's end nothing further arrives and
@@ -34,12 +36,15 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# The only thing this arm can be skipped for. No audio device is in the path,
-# and libopus is linked into the wheel — what is left is the GPU the engine's
-# own context needs. A render node that exists but cannot make a Vulkan device
-# is an engine-visible failure and gets the failure verdict, not a quiet skip.
+# What this arm can be skipped for. No audio device is in the path, and libopus
+# is linked into the engine — what is left is the runtime unit, and the GPU the
+# engine's own context needs. A render node that exists but cannot make a
+# Vulkan device is an engine-visible failure and gets the failure verdict, not
+# a quiet skip.
+require_the_runtime_unit
+require_the_fixture_venv
 if ! compgen -G "/dev/dri/renderD*" >/dev/null; then
-    echo "SKIP: no DRM render node, so no GPU-backed Runtime can start here" >&2
+    echo "SKIP: no DRM render node, so no GPU-backed runtime can start here" >&2
     exit 77
 fi
 
@@ -49,28 +54,35 @@ CAPTURED_WAVEFORM="$OUTPUT_DIR/decoded.wav"
 NODE_PID=""
 # Installed before the node starts and idempotent — `kill` of an unset pid is
 # swallowed. A strand here costs a live engine holding a GPU context and an
-# iceoryx2 node, which contaminates every later run on the same rig.
-trap 'kill "$NODE_PID" 2>/dev/null' EXIT
+# iceoryx2 node, which contaminates every later run on the same rig; the
+# SIGTERM reaches `tatolab run`, which forwards it to `tatolabd`, and the wait
+# is bounded so a stop that hangs cannot hold the script open.
+stop_and_wait_for_the_stream() {
+    [ -n "$NODE_PID" ] || return 0
+    kill "$NODE_PID" 2>/dev/null || return 0
+    for _ in $(seq 60); do
+        kill -0 "$NODE_PID" 2>/dev/null || break
+        sleep 0.5
+    done
+    wait "$NODE_PID" 2>/dev/null
+}
+trap stop_and_wait_for_the_stream EXIT
 # Without this the shell survives its interrupted children and runs on to the
 # analysis, which can report PASS for a run the user aborted.
 trap 'exit 130' INT TERM
 
-echo "starting the Opus round-trip node" >&2
-# `exec`, so NODE_PID is the node itself and matches its registry entry.
-(
-    cd "$HERE" || exit 1
-    exec "$PYTHON" opus_roundtrip_node.py "$CAPTURED_WAVEFORM" \
-        --record-seconds "$RECORD_SECONDS"
-) >"$OUTPUT_DIR/node.log" 2>&1 &
+echo "starting the Opus round-trip stream" >&2
+# The recorder runs in its own helper process, and `tatolab run` hands a stream
+# no argv, so where it writes and how much it records travel in the environment
+# every helper inherits.
+STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
+    STREAMLIB_CAPTURED_WAVEFORM_SECONDS="$RECORD_SECONDS" \
+    "$TATOLAB_EXECUTABLE" run --dir "$HERE" opus_roundtrip_stream.py \
+    >"$OUTPUT_DIR/node.log" 2>&1 &
 NODE_PID=$!
 
-# The runtime_id of the live node the launched process runs: the pid itself, or
-# its child when the interpreter is a wrapper that forks rather than execs.
-# Matched by pid rather than by name, so another node on the machine declaring
-# an OpusDecoder of its own is never the one measured.
-runtime_id_of_the_node_launched_as() {
-    "$PYTHON" "$HERE/runtime_id_of_launched_node.py" "$1"
-}
+# Matched by the launched pid rather than by name, so another node on the
+# machine declaring an OpusDecoder of its own is never the one measured.
 
 # Polled rather than slept: the node has a GPU context and an iceoryx2 node to
 # bring up, and a fixed sleep is either flaky or slow.
@@ -86,7 +98,7 @@ for _ in $(seq 60); do
         RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$NODE_PID")" || RUNTIME_ID=""
     fi
     if [ -n "$RUNTIME_ID" ] \
-        && "$PYTHON" -m tatolab.runtime.cli graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
         NODE_ANSWERED=1
         break
     fi
@@ -147,7 +159,7 @@ if ! [ -s "$CAPTURED_WAVEFORM" ]; then
     exit 1
 fi
 
-"$PYTHON" "$HERE/known_audio_signal.py" analyse \
+"$FIXTURE_PYTHON" "$HERE/known_audio_signal.py" analyse \
     "$CAPTURED_WAVEFORM" "$OUTPUT_DIR/spectrogram.png"
 VERDICT=$?
 

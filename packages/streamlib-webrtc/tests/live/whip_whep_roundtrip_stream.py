@@ -1,15 +1,14 @@
-#!/usr/bin/env python3
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The graph the WebRTC live proof measures: WHIP out, WHEP back, in one node.
+"""The stream the WebRTC live proof measures: WHIP out, WHEP back, in one runtime.
 
 `CameraSource -> H264Encoder -> WhipPublisher` beside
 `MicrophoneSource -> OpusEncoder -> WhipPublisher`, and
 `WhepPlayer -> H264Decoder -> DisplayWindow` beside `-> OpusDecoder ->
 SpeakerSink`. It is `examples/camera-webrtc-publish` with the playback half
 attached: the same publish shape, with node names the driving script can
-find processors by and a local API socket it can read them through.
+find nodes by and a local API socket it can read them through.
 
 Nothing joins the two halves locally. Every frame the decoder publishes was
 packetised into RTP, ingested by the endpoint, and depacketised back out of it,
@@ -20,19 +19,19 @@ The two URLs arrive in the environment and never in argv: Cloudflare Stream
 carries the stream key as a path segment, and argv is world-readable through
 `/proc`. Neither is logged, printed, or written to the output directory.
 
-`whip_whep_roundtrip.sh` drives it.
+`whip_whep_roundtrip.sh` runs it with `tatolab run`, which hands a stream no
+argv, so the devices arrive in the environment too: `STREAMLIB_CAMERA_DEVICE`
+names the V4L2 node (else the first the engine finds), and
+`STREAMLIB_AUDIO_CAPTURE_DEVICE_ID` the audio device to capture from — the
+driver passes the fixture sink's monitor, so the known signal played into that
+sink is what crosses the network (else the backend's own default device).
 """
 
-import argparse
-import functools
 import os
-import sys
-from pathlib import Path
 
-import tatolab.runtime
 import tatolab.stream
 from tatolab.webrtc import WhepPlayer, WhipPublisher
-from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
+from tatolab.stream import StreamBuilder, stream
 
 #: Stated rather than left to the encoder's default, because the baseline this
 #: run locks against was captured with it stated: one baseline scores two paths
@@ -65,33 +64,11 @@ def _session_configuration(url_variable: str, token_variable: str) -> dict[str, 
     return configuration
 
 
-@functools.cache
-def _parse_fixture_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    # An argument and never an environment variable: a rig carrying both a
-    # virtual and a real camera hands the first-enumerated node to a run that
-    # does not name the one it means.
-    parser.add_argument(
-        "--camera",
-        default=None,
-        help="V4L2 node to capture from (default: the first the engine finds)",
-    )
-    parser.add_argument(
-        "--audio-capture-device",
-        default=None,
-        help=(
-            "audio device to capture from; the driver passes the fixture sink's "
-            "monitor, so the known signal played into that sink is what crosses "
-            "the network (default: the backend's own default device)"
-        ),
-    )
-    return parser.parse_args()
-
-
 @stream
 def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
-    """The round trip this process's argv and endpoint URLs describe."""
-    arguments = _parse_fixture_arguments()
+    """The round trip this process's environment describes."""
+    camera_device = os.environ.get("STREAMLIB_CAMERA_DEVICE")
+    audio_capture_device = os.environ.get("STREAMLIB_AUDIO_CAPTURE_DEVICE_ID")
 
     publisher = stream_builder.add(
         WhipPublisher,
@@ -110,7 +87,7 @@ def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
 
     camera = stream_builder.add(
         tatolab.stream.CameraSource,
-        config={"device_id": arguments.camera} if arguments.camera else {},
+        config={"device_id": camera_device} if camera_device else {},
         name="camera",
     )
     video_encoder = stream_builder.add(
@@ -120,11 +97,7 @@ def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
     )
     microphone = stream_builder.add(
         tatolab.stream.MicrophoneSource,
-        config=(
-            {"device_id": arguments.audio_capture_device}
-            if arguments.audio_capture_device
-            else {}
-        ),
+        config={"device_id": audio_capture_device} if audio_capture_device else {},
         name="microphone",
     )
     audio_encoder = stream_builder.add(tatolab.stream.OpusEncoder, name="audio_encoder")
@@ -154,21 +127,3 @@ def whip_whep_roundtrip(stream_builder: StreamBuilder) -> None:
     )
     stream_builder.connect(audio_decoder.output("audio"), speaker.input("audio"))
 
-
-def main() -> None:
-    _parse_fixture_arguments()
-    graph = compile_stream_to_graph(whip_whep_roundtrip)
-
-    runtime = tatolab.runtime.Runtime(runtime_name="whip-whep-roundtrip-node")
-    runtime.load(
-        graph,
-        project_directory=Path(__file__).resolve().parent,
-        interpreter=sys.executable,
-    )
-
-    runtime.host_control_plane()
-    runtime.run()
-
-
-if __name__ == "__main__":
-    main()

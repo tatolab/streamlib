@@ -104,6 +104,35 @@ pub(crate) fn path_dependency_directories_linked_into(
     linked_directories
 }
 
+/// The variable through which one build of the runtime unit hands both of its
+/// engine compiles — the lend's `_engine` and `tatolabd` — the same nonce, so
+/// the unit's two halves carry one build id. `cargo xtask build-runtime` sets
+/// it; a build without it mints its own.
+pub(crate) const RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE: &str =
+    "STREAMLIB_RUNTIME_UNIT_ENGINE_BUILD_NONCE";
+
+/// The nonce a runtime unit's build handed this compile, `None` when it handed
+/// none, or a refusal naming a value that is not 32 lowercase hex digits.
+pub(crate) fn runtime_unit_build_nonce_from(
+    handed_nonce: Option<&str>,
+) -> Result<Option<String>, String> {
+    match handed_nonce {
+        None | Some("") => Ok(None),
+        Some(nonce) if is_a_per_build_nonce(nonce) => Ok(Some(nonce.to_owned())),
+        Some(nonce) => Err(format!(
+            "{RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE}={nonce:?} is not 32 lowercase \
+             hex digits"
+        )),
+    }
+}
+
+fn is_a_per_build_nonce(candidate: &str) -> bool {
+    candidate.len() == 32
+        && candidate
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 /// 128 bits from the operating system's random source, as 32 lowercase hex
 /// digits.
 pub(crate) fn mint_per_build_nonce() -> std::io::Result<String> {
@@ -334,6 +363,29 @@ mod tests {
                 .any(|directory| directory.ends_with("streamlib-api-server")),
             "a dev-dependency is not linked into the engine: {found:?}"
         );
+    }
+
+    #[test]
+    fn a_runtime_unit_nonce_is_taken_as_handed_and_a_malformed_one_is_refused() {
+        let handed_nonce = mint_per_build_nonce().unwrap();
+        assert_eq!(
+            runtime_unit_build_nonce_from(Some(&handed_nonce)),
+            Ok(Some(handed_nonce.clone()))
+        );
+        assert_eq!(runtime_unit_build_nonce_from(None), Ok(None));
+        assert_eq!(runtime_unit_build_nonce_from(Some("")), Ok(None));
+        for malformed_nonce in [
+            "abc",
+            &handed_nonce.to_uppercase(),
+            &format!("{handed_nonce}0"),
+            &"g".repeat(32),
+        ] {
+            let refusal = runtime_unit_build_nonce_from(Some(malformed_nonce)).unwrap_err();
+            assert!(
+                refusal.contains(RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE),
+                "{refusal}"
+            );
+        }
     }
 
     #[test]

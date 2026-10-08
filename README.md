@@ -84,27 +84,40 @@ you need one, it is a stage you write against the driver or binding you already 
 
 ## Install
 
+There are two halves, and they install separately. The **runtime** — `tatolabd`, the native
+program that hosts a stream, and `tatolab`, the CLI that starts it — has no installer yet; build it
+from a checkout of this repo:
+
 ```bash
-pip install streamlib --index-url https://tatolab.github.io/streamlib/simple/
+cargo xtask build-runtime                       # add --release for an optimized build
+export PATH="$PWD/target/tatolab-runtime/bin:$PATH"
 ```
 
-A static PEP 503 index served from this repo's releases — PyPI publication is pending a project
-rename, and the artifact is identical either way. The `streamlib` wheel carries the engine and the
-CLI, and installs the `tatolab-stream` wheel beside it at the same version: the Python API
-(`tatolab.stream`) your streams import. Nothing is generated, compiled, or downloaded at run time.
+That lays out `target/tatolab-runtime/` as an install prefix: `bin/tatolabd`, `bin/tatolab`, and
+`lib/tatolab/lend/`, the engine's Python half a node's interpreter borrows. Keep the three
+together; `tatolabd` finds the lend relative to its own executable.
+
+**Your stream** is an ordinary Python project whose venv holds `tatolab-stream` — the Python API
+(`tatolab.stream`) your streams import — and the stream's own dependencies, and no engine.
+`tatolab new` writes a `pyproject.toml` that takes `tatolab-stream` from this repo's static PEP 503
+index, `https://tatolab.github.io/streamlib/simple/` (PyPI publication is pending a project rename),
+so `uv sync` installs it. Nothing is generated, compiled, or downloaded at run time.
 
 ## Quickstart
 
 ```bash
-streamlib new my-rig        # camera → GPU effect → window, plus a CPU meter, wired and working
+tatolab new my-rig          # camera → GPU effect → window, plus a CPU meter, wired and working
 cd my-rig
-streamlib dev               # your camera, live and inverted, in a window
+uv sync                     # the stream's venv: tatolab-stream and numpy
+tatolab dev                 # your camera, live and inverted, in a window
 ```
 
-No camera on this machine? `streamlib new my-rig --test-pattern` uses the built-in test source.
+No camera on this machine? `tatolab new my-rig --test-pattern` uses the built-in test source.
 
 `stream.py` is wiring and nothing else — no manifest, no registration file. `dev` reads it from the
-working directory, compiles its one `@stream` function to the stream's graph, and loads that graph:
+working directory, compiles its one `@stream` function to the stream's graph in the project's
+`.venv`, and starts `tatolabd` on that graph in the foreground; Ctrl-C stops it. `tatolab run` does
+the same once, without watching for edits:
 
 ```python
 from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream
@@ -131,7 +144,7 @@ def main(stream_builder: StreamBuilder) -> None:
 ```
 
 One output, two readers: the window shows the frame, the meter measures it. With several streams in
-a file, `streamlib dev stream.py:<function>` picks one.
+a file, `tatolab dev stream.py:<function>` picks one.
 
 Pixels stay on the GPU. `nodes/inverting_effect.py` is one shader function:
 
@@ -179,10 +192,18 @@ Logic runs on the CPU. `nodes/brightness_meter.py` reads each frame back through
 `frame.cpu()` view and logs its mean brightness once a second. It sits on a fan-out in its own
 process, so it never slows the picture — it is the stage you replace with your model call.
 
-Edit a stage, re-run `dev`. Each stage runs `reactive` (the default once it has an input),
-`manual`, or `continuous` at an interval you set.
+Edit a stage and save: `dev` recompiles the stream and restarts `tatolabd` on it, and keeps the
+running stream when the edit fails to compile. Each stage runs `reactive` (the default once it has
+an input), `manual`, or `continuous` at an interval you set.
 
 ## Inspect a device that's already running
+
+The observation verbs — `nodes`, `graph`, `tap`, `logs`, `exchange` and `mcp` — are still the
+Python `streamlib` CLI, until the native `tatolab` carries them. Install the engine wheel that
+ships it into a venv of its own, never the stream's
+(`pip install streamlib --index-url https://tatolab.github.io/streamlib/simple/`), or run it from a
+checkout's runtime unit with any interpreter that has `tatolab-stream`:
+`PYTHONPATH=target/tatolab-runtime/lib/tatolab/lend python -m tatolab.runtime.cli <verb>`.
 
 Run these on the machine the node runs on. `--node <runtime name>` picks a node by the
 `RUNTIME_NAME` column `streamlib nodes` prints, and reaches it through its local API socket — a
@@ -191,7 +212,7 @@ Unix socket only your user can open, so control is reachable only on the node's 
 ```console
 $ streamlib nodes
 RUNTIME_NAME      RUNTIME_ID                 LOCAL_API_SOCKET                                                       PID  ALIVE?  HINT
-desk-my-rig-8kq3  Rq1w8xk3m2v0pz7ny4tbd6hsf  /run/user/1000/streamlib/local-api-Rq1w8xk3m2v0pz7ny4tbd6hsf.sock    48212  yes     streamlib (/home/you/my-rig)
+desk-my-rig-8kq3  Rq1w8xk3m2v0pz7ny4tbd6hsf  /run/user/1000/streamlib/local-api-Rq1w8xk3m2v0pz7ny4tbd6hsf.sock    48212  yes     tatolabd (/home/you/my-rig)
 
 $ streamlib tap desk-my-rig-8kq3/camerasource/video --count 3
 {"channel": "desk-my-rig-8kq3/camerasource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
@@ -395,11 +416,12 @@ is unbuilt and no macOS wheel is published. Windows is unbuilt.
 cargo xtask build-runtime            # debug; add --release for an optimized build
 ```
 
-This builds the runtime unit — the engine and `tatolab.runtime` — as a wheel in
-`target/tatolab-runtime/wheel/`, then lays its contents out at
-`target/tatolab-runtime/lib/tatolab/lend/`: the directory holding `tatolab/runtime/`, which a
-processor interpreter puts first on `PYTHONPATH`. It runs the pinned maturin through `uvx`, so `uv`
-must be on `PATH`. On macOS it first stages the Vulkan loader and MoltenVK beside `_engine`.
+This builds the runtime unit. The engine's Python half, `tatolab.runtime`, is built as a wheel in
+`target/tatolab-runtime/wheel/` and laid out at `target/tatolab-runtime/lib/tatolab/lend/`: the
+directory holding `tatolab/runtime/`, which a processor interpreter puts first on `PYTHONPATH`.
+Then `tatolabd` and `tatolab` are built into `target/tatolab-runtime/bin/`. It runs the pinned
+maturin through `uvx`, so `uv` must be on `PATH`. On macOS it first stages the Vulkan loader and
+MoltenVK beside `_engine`.
 
 ## License
 

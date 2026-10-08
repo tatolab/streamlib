@@ -9,9 +9,10 @@ needs a display window. An audio block carries its samples inline, so the tap
 already exposes everything needed to measure what a processor produced — per
 processor, with no second device in the path.
 
-Unlike the loopback fixture beside it, this needs the wheel installed: the tap's
-payloads are transport-framed and the engine ships the decoder for them, and
-`tatolab.stream.AudioBlock` is the cast that says what a well-formed block is.
+Unlike the loopback fixture beside it, this needs the runtime: the tap's
+payloads are transport-framed and the engine ships the decoder for them, so it
+runs with the runtime unit's lend on `PYTHONPATH`, and `tatolab.stream.AudioBlock`
+is the cast that says what a well-formed block is.
 That is the right trade — what is under test is a running engine, so an engine
 that will not build has already answered the question.
 

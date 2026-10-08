@@ -16,9 +16,10 @@
 #
 # Three phases, each of which can fail on its own terms:
 #
-#   record   recording_node.py runs until the file holds enough video, then
-#            takes SIGTERM. A run that needs SIGKILL is a hard FAIL, not a
-#            slow exit — teardown is what closes the last fragment.
+#   record   recording_stream.py runs on `tatolab run` until the file holds
+#            enough video, then `tatolab run` takes SIGTERM and forwards it to
+#            `tatolabd`. A run that needs SIGKILL is a hard FAIL, not a slow
+#            exit — teardown is what closes the last fragment.
 #   inspect  `cargo xtask mp4-inspect` on the written file: two tracks named
 #            after their producers, the video one an avc1/hvc1 entry matching
 #            the codec, the audio one Opus, and fragments actually closed.
@@ -34,6 +35,10 @@
 #   output_dir — defaults to /tmp/streamlib-recording-<timestamp>
 #   codec      — h264 (default) or h265. Each locks against the vivid rig's
 #                own baseline for that codec; there is no recording baseline.
+#
+# The record phase runs on the runtime unit and the replay phase is the Rust
+# rig; both are read through the observation verbs the lend carries (see
+# fixture_runtime_unit.sh).
 #
 # Environment overrides:
 #   VIVID_TEST_PATTERN     — vivid test_pattern index (default 7 = "100% Red"),
@@ -61,6 +66,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+# shellcheck source=fixture_runtime_unit.sh
+. "$SCRIPT_DIR/fixture_runtime_unit.sh"
 # The vivid rig's own baselines, unsuffixed for h264 the way it names them.
 baseline_tsv_for_codec() {
     case "$1" in
@@ -113,40 +120,12 @@ if [ ! -f "$BASELINE_TSV" ]; then
     exit 1
 fi
 
-STREAMLIB_CLI="$(command -v streamlib || true)"
-if [ -z "$STREAMLIB_CLI" ]; then
-    STREAMLIB_CLI="$REPO_ROOT/sdk/streamlib-python-wheel/.venv/bin/streamlib"
-fi
-if [ ! -x "$STREAMLIB_CLI" ]; then
-    echo "[recording] SKIP: no streamlib CLI on PATH or at $STREAMLIB_CLI" >&2
-    exit 77
-fi
-
-# The interpreter beside the CLI, because that is the one whose environment the
-# CLI ships in; a bare `python3` can be an unrelated one that happens to be
-# first on PATH.
-FIXTURE_NODE_PYTHON="$(dirname "$(readlink -f "$STREAMLIB_CLI" 2>/dev/null || echo "$STREAMLIB_CLI")")/python3"
-if [ ! -x "$FIXTURE_NODE_PYTHON" ]; then
-    FIXTURE_NODE_PYTHON="$(command -v python3)"
-fi
-# The node runs whatever `_engine.abi3.so` that interpreter imports, so an
-# extension predating the sink would be measured and reported as a PASS for
-# code that is not in the tree. Refused by name instead.
-if ! MARKER_IMPORT_FAILURE="$("$FIXTURE_NODE_PYTHON" -c '
-import sys
-
-import tatolab.stream
-
-tatolab.stream.Mp4Sink
-tatolab.stream.OpusEncoder
-getattr(tatolab.stream, sys.argv[1].upper() + "Encoder")
-' "$CODEC" 2>&1)"; then
-    echo "[recording] SKIP: $FIXTURE_NODE_PYTHON cannot import tatolab.stream's Mp4Sink," >&2
-    echo "[recording] OpusEncoder or $CODEC encoder. Rebuild the wheel with" >&2
-    echo "[recording] \`(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop)\` — this measures the extension, not the tree." >&2
-    echo "$MARKER_IMPORT_FAILURE" >&2
-    exit 77
-fi
+# The recording stream runs whatever engine the runtime unit's `tatolabd`
+# carries, so a unit predating the sink would be measured and reported as a
+# PASS for code that is not in the tree — rebuild it with `cargo xtask
+# build-runtime --release` before a run that should see an engine edit.
+require_the_runtime_unit
+require_the_fixture_venv
 
 # vivid is an in-kernel V4L2 test driver — no DKMS or out-of-tree modules.
 if ! lsmod | grep -q vivid; then
@@ -258,15 +237,9 @@ restore_pattern_and_stop() {
 }
 trap restore_pattern_and_stop EXIT
 
-# The runtime_id of the live node the launched process runs. `timeout` wraps
-# both phases, so the runtime is the launched pid's child rather than the pid
-# itself.
-runtime_id_of_the_node_launched_as() {
-    "$FIXTURE_NODE_PYTHON" "$SCRIPT_DIR/runtime_id_of_launched_node.py" "$1"
-}
-
 # Wait for the launched node to register and answer a graph round trip over its
-# local API socket. Sets RUNTIME_ID.
+# local API socket. Sets RUNTIME_ID. `timeout` wraps both phases, so the node is
+# beneath the launched pid — `tatolab run`'s `tatolabd`, or the replay rig.
 wait_for_the_launched_node() {
     RUNTIME_ID=""
     for _ in $(seq 1 60); do
@@ -274,7 +247,7 @@ wait_for_the_launched_node() {
         if [ -z "$RUNTIME_ID" ]; then
             RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$1")" || RUNTIME_ID=""
         fi
-        if [ -n "$RUNTIME_ID" ] && "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        if [ -n "$RUNTIME_ID" ] && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.5
@@ -312,12 +285,16 @@ XTASK="$REPO_ROOT/target/release/xtask"
 
 # ── Record ───────────────────────────────────────────────────────────
 echo "[recording] Recording $VIVID_DEVICE and the known signal..."
+# `tatolab run` hands a stream no argv, so its settings travel in the
+# environment. The camera is named rather than left to enumeration, so a rig
+# carrying both a virtual and a real one never records the wrong one.
+STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC" \
+STREAMLIB_CAMERA_DEVICE="$VIVID_DEVICE" \
+STREAMLIB_RECORDING_PATH="$RECORDING_PATH" \
 RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
     timeout --kill-after=5 "$RECORD_SECONDS" \
-        "$FIXTURE_NODE_PYTHON" "$SCRIPT_DIR/recording_node.py" \
-        --codec "$CODEC" \
-        --camera "$VIVID_DEVICE" \
-        --path "$RECORDING_PATH" \
+        "$TATOLAB_EXECUTABLE" run --dir "$SCRIPT_DIR" --runtime-name recording-node \
+        recording_stream.py \
         > "$RECORD_LOG" 2>&1 &
 RUNNING_PID=$!
 
@@ -469,7 +446,7 @@ fi
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
-DECODED_CHANNEL="$("$STREAMLIB_CLI" graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+DECODED_CHANNEL="$(streamlib_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -485,7 +462,7 @@ print(graph["runtime_name"] + "/" + decoder["name"] + "/video")
 }
 echo "[recording] Decoded channel:   $DECODED_CHANNEL"
 
-if ! "$STREAMLIB_CLI" exchange \
+if ! streamlib_observation_verb exchange \
         --channel "$DECODED_CHANNEL" \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \

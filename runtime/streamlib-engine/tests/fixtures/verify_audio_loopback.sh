@@ -11,14 +11,18 @@
 # `MicrophoneSource` captures it back off that sink's monitor. Both ends are
 # StreamLib, so a failure here with the rig fixture green is the engine's.
 #
-# macOS has no null sink, so `--path` picks what closes the loop there. Both
-# ends stay StreamLib on every path, and `e2e_audio_loopback.sh` with the same
-# `--path` is its rig peer — the same loop with the engine taken out:
+# macOS has no null sink, so `--path` picks what closes the loop there, and
+# `e2e_audio_loopback.sh` with the same `--path` is its rig peer — the same loop
+# with the engine taken out:
 #
-#   tap-muted    (default) a private, muted Core Audio process tap of the
-#                node's own output, which `MicrophoneSource` opens through a
-#                private aggregate device. Digital and silent, and scored as
-#                strictly as the null sink.
+#   tap-muted    (default) a shared, muted Core Audio global tap of all
+#                output, which `MicrophoneSource` opens through a shared
+#                aggregate device. Digital and silent, and scored as strictly as
+#                the null sink. Shared, not private like the rig peer's, because
+#                the speaker plays inside `tatolabd` and a private device is
+#                visible only to the process that made it: this script holds
+#                both for the run and destroys them on exit. Being global, it
+#                also hears anything else that plays during the run.
 #   tap-audible  the same tap unmuted, so the signal also plays out of the
 #                built-in speakers while it is scored strictly.
 #   acoustic     the built-in speakers into the built-in microphone, through
@@ -28,11 +32,14 @@
 # STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1 says someone is listening.
 #
 # Both tap paths need System Audio Recording for the app that launched this,
-# asked of TCC before the node starts, and they fail closed: unattended, only
+# asked of TCC before the tap is made, and they fail closed: unattended, only
 # `authorized` makes a tap. Denied is 77 even attended, since the tap could
 # hear only zeros. Never-answered, or a TCC that will not answer, is 77 unless
-# attended, because the run that makes the tap raises the prompt. A preflight
-# that cannot be asked at all is an error, before any node starts.
+# attended, because making the tap raises the prompt. A preflight that cannot
+# be asked at all is an error, before anything starts.
+#
+# The stream runs on the runtime unit with `tatolab run` (see
+# fixture_runtime_unit.sh).
 #
 # Usage:
 #   ./verify_audio_loopback.sh [--count N]
@@ -46,7 +53,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="${PYTHON:-python3}"
+# shellcheck source=fixture_runtime_unit.sh
+. "$HERE/fixture_runtime_unit.sh"
 
 # What the block-level tap asks for. Bounded by the control plane's own 500 ms
 # sample window in practice, which is why the signal itself is measured off the
@@ -80,24 +88,46 @@ if [ "$PLATFORM" = Darwin ] && [ "$LOOPBACK_PATH" != tap-muted ] \
     exit 77
 fi
 
+require_the_runtime_unit
+require_the_fixture_venv
+
 # Spelled in full rather than `mktemp -t`, which BSD reads as a prefix to
 # suffix under $TMPDIR — so the directory is where the skill looks on both.
 TEMPORARY_DIRECTORY="${TMPDIR:-/tmp}"
 OUTPUT_DIR="$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-loopback-XXXXXX")"
 
-if ! "$HERE/virtual_audio_device.sh" check >&2; then
+if [ "$PLATFORM" != Darwin ] && ! "$HERE/virtual_audio_device.sh" check >&2; then
     echo "SKIP: no virtual audio device available on this machine" >&2
     exit 77
 fi
 
 NODE_PID=""
-# Installed BEFORE the sink is created and before the node starts, and
-# idempotent — `stop` handles "not running", and `kill` of an unset pid is
-# swallowed. Installing it after would leave a window in which a failure
-# strands an Audio/Sink in the user's live session, and `object.linger` means
-# it outlives this process; wireplumber can then promote it to the default sink
-# and silence the machine.
-trap 'kill "$NODE_PID" 2>/dev/null; "$HERE/virtual_audio_device.sh" stop >&2' EXIT
+SHARED_TAP_HOLDER_PID=""
+# Bounded, so a stop that hangs still lets the next cleanup step run.
+stop_and_wait_for() {
+    local started_pid="$1"
+    [ -n "$started_pid" ] || return 0
+    kill "$started_pid" 2>/dev/null || return 0
+    for _ in $(seq 60); do
+        kill -0 "$started_pid" 2>/dev/null || break
+        sleep 0.5
+    done
+    wait "$started_pid" 2>/dev/null
+}
+# The stream first, so the microphone has let go of the shared aggregate before
+# it is destroyed.
+stop_everything_this_run_started() {
+    stop_and_wait_for "$NODE_PID"
+    stop_and_wait_for "$SHARED_TAP_HOLDER_PID"
+    "$HERE/virtual_audio_device.sh" stop >&2
+}
+# Installed BEFORE the sink or tap is created and before the node starts, and
+# idempotent — `stop` handles "not running", and a pid never set is skipped.
+# Installing it after would leave a window in which a failure strands an
+# Audio/Sink in the user's live session, and `object.linger` means it outlives
+# this process; wireplumber can then promote it to the default sink and silence
+# the machine. A shared tap is likewise not tied to the process that made it.
+trap stop_everything_this_run_started EXIT
 # Without this the shell survives its interrupted children and runs on to the
 # analysis, which can report PASS for a run the user aborted.
 trap 'exit 130' INT TERM
@@ -108,25 +138,23 @@ if [ "$PLATFORM" = Darwin ]; then
     # Pinned rather than the default output, so the tap reads a 48 kHz device
     # whatever the user has plugged in, and `acoustic` measures the laptop's own
     # speakers rather than headphones or a Bluetooth device.
-    SPEAKER_DEVICE_ID="$("$PYTHON" "$HERE/coreaudio_process_tap.py" built-in-speaker-uid 2>/dev/null)"
+    SPEAKER_DEVICE_ID="$("$FIXTURE_PYTHON" "$HERE/coreaudio_process_tap.py" built-in-speaker-uid 2>/dev/null)"
     case "$LOOPBACK_PATH" in
         acoustic)
-            CAPTURE_DEVICE_ID="$("$PYTHON" "$HERE/coreaudio_process_tap.py" built-in-microphone-uid 2>/dev/null)"
+            CAPTURE_DEVICE_ID="$("$FIXTURE_PYTHON" "$HERE/coreaudio_process_tap.py" built-in-microphone-uid 2>/dev/null)"
             if [ -z "$SPEAKER_DEVICE_ID" ] || [ -z "$CAPTURE_DEVICE_ID" ]; then
                 echo "SKIP: --path acoustic needs the Mac's built-in speakers and microphone, and" >&2
                 echo "      this one lacks one (or headphones are on the jack). What it has:" >&2
-                "$PYTHON" "$HERE/coreaudio_process_tap.py" devices >&2
+                "$FIXTURE_PYTHON" "$HERE/coreaudio_process_tap.py" devices >&2
                 exit 77
             fi
-            PROCESS_TAP_MUTE_BEHAVIOUR=""
             ANALYSIS_PATH=acoustic
             ;;
         tap-muted | tap-audible)
-            # The node creates its tap before SpeakerSink plays anything, so
-            # this is the last point at which a missing grant costs nothing.
-            # Re-checked here rather than trusted to the helper's verdict.
+            # The tap is made before the speaker plays anything, so this is the
+            # last point at which a missing grant costs nothing.
             SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN="$(
-                "$PYTHON" "$HERE/coreaudio_process_tap.py" authorize-a-tap
+                "$FIXTURE_PYTHON" "$HERE/coreaudio_process_tap.py" authorize-a-tap
             )"
             AUTHORIZE_A_TAP_STATUS=$?
             [ "$AUTHORIZE_A_TAP_STATUS" -eq 77 ] && exit 77
@@ -134,18 +162,42 @@ if [ "$PLATFORM" = Darwin ]; then
                 || [ -z "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN" ]; then
                 echo "ERROR: could not ask TCC whether System Audio Recording is granted (the" >&2
                 echo "       preflight exited $AUTHORIZE_A_TAP_STATUS and answered" \
-                    "'$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN'), so no node is started" >&2
+                    "'$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN'), so nothing is started" >&2
                 exit 1
             fi
             if [ "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN" != authorized ] \
                 && [ "${STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS:-}" != 1 ]; then
                 echo "ERROR: TCC answered '$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN' and this run" \
-                    "is unattended, when only 'authorized' may make a tap unattended — no node is started" >&2
+                    "is unattended, when only 'authorized' may make a tap unattended — nothing is started" >&2
                 exit 1
             fi
-            CAPTURE_DEVICE_ID="$("$HERE/virtual_audio_device.sh" start)" || exit 1
+            SHARED_TAP_CLOCK_DEVICE_ID="$SPEAKER_DEVICE_ID"
+            if [ -z "$SHARED_TAP_CLOCK_DEVICE_ID" ]; then
+                SHARED_TAP_CLOCK_DEVICE_ID="$("$FIXTURE_PYTHON" "$HERE/coreaudio_process_tap.py" default-output-uid)" \
+                    || { echo "ERROR: this Mac has no output device for the speaker to play into" >&2; exit 1; }
+            fi
             PROCESS_TAP_MUTE_BEHAVIOUR=muted
             [ "$LOOPBACK_PATH" = tap-audible ] && PROCESS_TAP_MUTE_BEHAVIOUR=unmuted
+            CAPTURE_DEVICE_ID="streamlib-fixture-shared-tap-$$"
+            "$FIXTURE_PYTHON" "$HERE/coreaudio_process_tap.py" hold-a-shared-tap-of-all-output \
+                "$CAPTURE_DEVICE_ID" "$PROCESS_TAP_MUTE_BEHAVIOUR" "$SHARED_TAP_CLOCK_DEVICE_ID" \
+                >"$OUTPUT_DIR/shared_tap.log" 2>&1 &
+            SHARED_TAP_HOLDER_PID=$!
+            SHARED_TAP_READY=0
+            for _ in $(seq 40); do
+                if grep -q '^READY ' "$OUTPUT_DIR/shared_tap.log"; then
+                    SHARED_TAP_READY=1
+                    break
+                fi
+                kill -0 "$SHARED_TAP_HOLDER_PID" 2>/dev/null || break
+                sleep 0.25
+            done
+            if [ "$SHARED_TAP_READY" -ne 1 ]; then
+                echo "ERROR: the shared tap of all output was not made:" >&2
+                cat "$OUTPUT_DIR/shared_tap.log" >&2
+                exit 1
+            fi
+            echo "shared tap: $(sed -n 's/^READY //p' "$OUTPUT_DIR/shared_tap.log")" >&2
             ;;
     esac
 else
@@ -159,37 +211,23 @@ fi
 
 CAPTURED_WAVEFORM="$OUTPUT_DIR/captured.wav"
 if [ "$PLATFORM" = Darwin ]; then
-    echo "starting the loopback node ($LOOPBACK_PATH): speaker" \
-        "${SPEAKER_DEVICE_ID:-<default output>}, microphone $CAPTURE_DEVICE_ID" >&2
-    # `exec`, so NODE_PID is the node itself: a private tap lives exactly as
-    # long as its process, and the EXIT trap has to reach that process.
-    (
-        cd "$HERE" || exit 1
-        STREAMLIB_AUDIO_SINK="$SPEAKER_DEVICE_ID" \
-            STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$CAPTURE_DEVICE_ID" \
-            STREAMLIB_COREAUDIO_PROCESS_TAP_MUTE_BEHAVIOUR="$PROCESS_TAP_MUTE_BEHAVIOUR" \
-            STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
-            STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
-            exec "$PYTHON" audio_loopback_node.py
-    ) >"$OUTPUT_DIR/node.log" 2>&1 &
+    echo "starting the loopback stream ($LOOPBACK_PATH): speaker $SPEAKER_DEVICE_ID," \
+        "microphone $CAPTURE_DEVICE_ID" >&2
+    STREAMLIB_AUDIO_SINK="$SPEAKER_DEVICE_ID" \
+        STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$CAPTURE_DEVICE_ID" \
+        STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
+        STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
+        "$TATOLAB_EXECUTABLE" run --dir "$HERE" audio_loopback_stream.py \
+        >"$OUTPUT_DIR/node.log" 2>&1 &
 else
-    echo "starting the loopback node against $SINK" >&2
-    # `exec`, so NODE_PID is the node itself and matches its registry entry.
-    (
-        cd "$HERE" || exit 1
-        STREAMLIB_AUDIO_SINK="$SINK" \
-            STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
-            STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
-            exec "$PYTHON" audio_loopback_node.py
-    ) >"$OUTPUT_DIR/node.log" 2>&1 &
+    echo "starting the loopback stream against $SINK" >&2
+    STREAMLIB_AUDIO_SINK="$SINK" \
+        STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
+        STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
+        "$TATOLAB_EXECUTABLE" run --dir "$HERE" audio_loopback_stream.py \
+        >"$OUTPUT_DIR/node.log" 2>&1 &
 fi
 NODE_PID=$!
-
-# The runtime_id of the live node the launched process runs: the pid itself, or
-# its child when the interpreter is a wrapper that forks rather than execs.
-runtime_id_of_the_node_launched_as() {
-    "$PYTHON" "$HERE/runtime_id_of_launched_node.py" "$1"
-}
 
 # Polled rather than slept: the node has a GPU context and an iceoryx2 node to
 # bring up, and a fixed sleep is either flaky or slow.
@@ -205,7 +243,7 @@ for _ in $(seq 60); do
         RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$NODE_PID")" || RUNTIME_ID=""
     fi
     if [ -n "$RUNTIME_ID" ] \
-        && "$PYTHON" -m tatolab.runtime.cli graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
         NODE_ANSWERED=1
         break
     fi
@@ -235,9 +273,10 @@ first_node_log_line_matching() {
 }
 
 if [ "$PLATFORM" = Darwin ]; then
-    # The node runs whatever `_engine.abi3.so` the interpreter imports, and one
-    # predating the CoreAudio arm lands on the silent-null arm — which captures
-    # silence and plays nothing, so a loopback over it measures nothing at all.
+    # The stream runs whatever engine the runtime unit's `tatolabd` carries, and
+    # one predating the CoreAudio arm lands on the silent-null arm — which
+    # captures silence and plays nothing, so a loopback over it measures nothing
+    # at all.
     COREAUDIO_ARM='audio_backend="?coreaudio("|[[:space:]]|$)'
     if ! PROBE_LINE="$(first_node_log_line_matching "audio device backend chain probed")"; then
         echo "ERROR: the node never probed an audio backend" >&2
@@ -246,14 +285,14 @@ if [ "$PLATFORM" = Darwin ]; then
     fi
     if ! printf '%s' "$PROBE_LINE" | grep -Eq "$COREAUDIO_ARM"; then
         if grep "demoting to the next arm" "$OUTPUT_DIR/node.log" | grep -Eq "$COREAUDIO_ARM"; then
-            echo "ERROR: this wheel carries the CoreAudio arm and it did not open:" >&2
+            echo "ERROR: this runtime unit carries the CoreAudio arm and it did not open:" >&2
             grep "demoting to the next arm" "$OUTPUT_DIR/node.log" >&2
             exit 1
         fi
         echo "SKIP: refusing to score — the engine probed another audio arm than coreaudio," >&2
-        echo "      so this wheel predates the CoreAudio arm and would measure silence:" >&2
+        echo "      so this runtime unit predates the CoreAudio arm and would measure silence:" >&2
         echo "      $PROBE_LINE" >&2
-        echo "      Rebuild it: (cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)" >&2
+        echo "      Rebuild it: cargo xtask build-runtime --release" >&2
         exit 77
     fi
     echo "probed: $PROBE_LINE" >&2
@@ -321,12 +360,12 @@ if ! [ -s "$CAPTURED_WAVEFORM" ]; then
     exit 1
 fi
 
-# A process tap with no System Audio Recording grant behind it reports no
-# error: it delivers exact zeros. Told apart from an engine that played nothing
-# by asking TCC, which answers without prompting.
+# A tap with no System Audio Recording grant behind it reports no error: it
+# delivers exact zeros. Told apart from an engine that played nothing by asking
+# TCC, which answers without prompting.
 if [ "$PLATFORM" = Darwin ] && [ "$ANALYSIS_PATH" = digital ] \
-    && "$PYTHON" "$HERE/known_audio_signal.py" exact-digital-silence "$CAPTURED_WAVEFORM"; then
-    "$PYTHON" "$HERE/coreaudio_process_tap.py" explain-exact-zeros \
+    && "$FIXTURE_PYTHON" "$HERE/known_audio_signal.py" exact-digital-silence "$CAPTURED_WAVEFORM"; then
+    "$FIXTURE_PYTHON" "$HERE/coreaudio_process_tap.py" explain-exact-zeros \
         "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN"
     EXACT_ZEROS_STATUS=$?
     echo "artifacts: $OUTPUT_DIR" >&2
@@ -334,7 +373,7 @@ if [ "$PLATFORM" = Darwin ] && [ "$ANALYSIS_PATH" = digital ] \
     exit 1
 fi
 
-"$PYTHON" "$HERE/known_audio_signal.py" analyse \
+"$FIXTURE_PYTHON" "$HERE/known_audio_signal.py" analyse \
     "$CAPTURED_WAVEFORM" "$OUTPUT_DIR/spectrogram.png" --path "$ANALYSIS_PATH"
 VERDICT=$?
 

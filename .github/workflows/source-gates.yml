@@ -26,8 +26,8 @@ name: Source Gates
 #   itself, and honors `#[allow(clippy::disallowed_macros)]`, `#[cfg(test)]` and
 #   platform cfg gates exactly as clippy would on ubuntu-latest.
 # - check-no-in-process-placement gates *vocabulary*, not behaviour. The
-#   behavioural proof that the parent never hosts a processor class is
-#   `sdk/streamlib-python-wheel/tests/test_helper_placement.py`. Markdown and
+#   behavioural proof that `tatolabd` never hosts a processor class is
+#   `tests/stream-on-runtime/test_helper_placement.py`. Markdown and
 #   Rust doc comments are in scope on purpose: the shipped violation announced
 #   itself in a `//!` line that three review rounds read past.
 #

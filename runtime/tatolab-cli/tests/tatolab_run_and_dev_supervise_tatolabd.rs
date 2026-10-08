@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -462,6 +462,97 @@ fn run_compiles_in_the_venv_and_hands_tatolabd_the_graph_project_and_interpreter
     assert!(
         !Path::new(&tatolabd_run.argv[1]).exists(),
         "the graph file outlived tatolab"
+    );
+}
+
+/// A fake `tatolabd` in Python, which, unlike the shell, starts with the signal mask its parent
+/// handed it: it records the signals blocked at its start and exits 0.
+const SIGNAL_MASK_RECORDING_TATOLABD_SCRIPT: &str = r#"#!/usr/bin/env python3
+import signal
+blocked_at_start = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+with open('@CONTROL@/tatolabd_signals_blocked_at_start', 'w') as record:
+    record.write(' '.join(sorted(blocked_signal.name for blocked_signal in blocked_at_start)))
+"#;
+
+#[test]
+fn tatolabd_starts_with_none_of_the_forwarded_signals_blocked() {
+    let testbed = AttachedTatolabdTestbed::new();
+    let control_directory = testbed.control_directory();
+    write_executable_script(
+        &testbed.bin_directory().join("tatolabd"),
+        &SIGNAL_MASK_RECORDING_TATOLABD_SCRIPT
+            .replace("@CONTROL@", control_directory.to_str().unwrap()),
+    );
+
+    let (exit_status, tatolab_stderr) = testbed.run_tatolab_to_exit(&["run"]);
+    assert_eq!(exit_status.code(), Some(0), "{tatolab_stderr}");
+
+    let signals_blocked_at_start =
+        fs::read_to_string(control_directory.join("tatolabd_signals_blocked_at_start")).unwrap();
+    for forwarded_signal_name in ["SIGINT", "SIGTERM", "SIGHUP"] {
+        assert!(
+            !signals_blocked_at_start
+                .split_whitespace()
+                .any(|blocked_signal_name| blocked_signal_name == forwarded_signal_name),
+            "tatolabd started with {forwarded_signal_name} blocked ({signals_blocked_at_start}), \
+             so no forwarded {forwarded_signal_name} could stop it"
+        );
+    }
+}
+
+const SIGNAL_DISPOSITION_RECORDING_TATOLABD_SCRIPT: &str = r#"#!/usr/bin/env python3
+import signal
+with open('@CONTROL@/tatolabd_signals_ignored_at_start', 'w') as record:
+    record.write(' '.join(sorted(
+        forwarded_signal.name
+        for forwarded_signal in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+        if signal.getsignal(forwarded_signal) == signal.SIG_IGN
+    )))
+"#;
+
+#[test]
+fn tatolab_resets_an_inherited_ignored_interrupt_and_terminate_and_keeps_an_inherited_ignored_hangup()
+ {
+    let testbed = AttachedTatolabdTestbed::new();
+    let control_directory = testbed.control_directory();
+    write_executable_script(
+        &testbed.bin_directory().join("tatolabd"),
+        &SIGNAL_DISPOSITION_RECORDING_TATOLABD_SCRIPT
+            .replace("@CONTROL@", control_directory.to_str().unwrap()),
+    );
+
+    let tatolab_stderr = fs::File::create(testbed.tatolab_stderr_path()).unwrap();
+    let mut tatolab_command = Command::new(testbed.tatolab_executable());
+    tatolab_command
+        .arg("run")
+        .current_dir(testbed.project_directory())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(tatolab_stderr)
+        .env_remove("STREAMLIB_RUNTIME_NAME")
+        .env_remove("STREAMLIB_APP_DIRECTORY");
+    unsafe {
+        tatolab_command.pre_exec(|| {
+            for ignored_signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+                if libc::signal(ignored_signal, libc::SIG_IGN) == libc::SIG_ERR {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+    let mut running_tatolab = RunningTatolab {
+        tatolab_child: spawn_retrying_a_busy_executable(&mut tatolab_command),
+    };
+    let exit_status = running_tatolab.wait_for_exit();
+    assert_eq!(exit_status.code(), Some(0), "{}", testbed.tatolab_stderr());
+
+    let signals_ignored_at_start =
+        fs::read_to_string(control_directory.join("tatolabd_signals_ignored_at_start")).unwrap();
+    assert_eq!(
+        signals_ignored_at_start, "SIGHUP",
+        "tatolab must reset an inherited ignored SIGINT and SIGTERM, since an ignored signal \
+         never reaches its sigwait listener on macOS, and keep an inherited ignored SIGHUP"
     );
 }
 

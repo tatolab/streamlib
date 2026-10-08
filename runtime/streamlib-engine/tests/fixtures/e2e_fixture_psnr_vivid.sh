@@ -44,15 +44,15 @@
 # Environment overrides:
 #   PIPELINE           — which authoring surface builds the graph: `rust`
 #                         (default) runs the `codec_roundtrip_rig` example,
-#                         `python` runs `codec_roundtrip_node.py` through the
-#                         wheel's built-in classes. Only the argv differs; both
-#                         arms lock to the same baseline at the same tolerance,
-#                         so a python-arm mismatch is a finding, and the arm is
-#                         refused BASELINE_CAPTURE outright. It scores whatever
-#                         `_engine.abi3.so` the venv holds — rebuild the wheel
-#                         before running it: in sdk/streamlib-python-wheel,
-#                         `uv pip install -e ../tatolab-stream` then
-#                         `maturin develop`.
+#                         `python` runs `codec_roundtrip_stream.py` through
+#                         `tatolab.stream`'s built-in classes with `tatolab
+#                         run`. Only the launch differs; both arms lock to the
+#                         same baseline at the same tolerance, so a python-arm
+#                         mismatch is a finding, and the arm is refused
+#                         BASELINE_CAPTURE outright. It scores whatever engine
+#                         the runtime unit's `tatolabd` carries — rebuild it
+#                         before running it: `cargo xtask build-runtime
+#                         --release` (see fixture_runtime_unit.sh).
 #   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 = "100% Red";
 #                         8=Green, 9=Blue work the same shape if a future
 #                         regression-classifier wants per-primary sensitivity)
@@ -84,6 +84,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+# shellcheck source=fixture_runtime_unit.sh
+. "$SCRIPT_DIR/fixture_runtime_unit.sh"
 # h264 keeps the unsuffixed name its baseline was captured under; every later
 # codec is suffixed, so adding one never moves an existing lock's file.
 baseline_tsv_for_codec() {
@@ -148,45 +150,11 @@ if [ "$INJECT_BUG" = "range-swap" ]; then
     exit 1
 fi
 
-STREAMLIB_CLI="$(command -v streamlib || true)"
-if [ -z "$STREAMLIB_CLI" ]; then
-    STREAMLIB_CLI="$REPO_ROOT/sdk/streamlib-python-wheel/.venv/bin/streamlib"
-fi
-if [ ! -x "$STREAMLIB_CLI" ]; then
-    echo "[vivid-color] SKIP: no streamlib CLI on PATH or at $STREAMLIB_CLI" >&2
-    exit 77
-fi
-# The interpreter beside the CLI reads the node registry and runs the python
-# arm, because that is the one whose environment the CLI ships in; a bare
-# `python3` can be an unrelated one that happens to be first on PATH.
-STREAMLIB_CLI_PYTHON="$(dirname "$(readlink -f "$STREAMLIB_CLI" 2>/dev/null || echo "$STREAMLIB_CLI")")/python3"
-if [ ! -x "$STREAMLIB_CLI_PYTHON" ]; then
-    STREAMLIB_CLI_PYTHON="$(command -v python3)"
-fi
-
-FIXTURE_NODE_PYTHON=""
-if [ "$PIPELINE" = "python" ]; then
-    FIXTURE_NODE_PYTHON="$STREAMLIB_CLI_PYTHON"
-    # This arm scores whatever `_engine.abi3.so` that interpreter imports, so an
-    # extension predating the codec markers would be measured and reported as a
-    # PASS for code that is not in the tree. Refused by name instead.
-    if ! MARKER_IMPORT_FAILURE="$("$FIXTURE_NODE_PYTHON" -c '
-import sys
-
-import tatolab.stream
-
-codec = sys.argv[1].upper()
-for role in ("Encoder", "Decoder"):
-    getattr(tatolab.stream, codec + role)
-' "$CODEC" 2>&1)"; then
-        echo "[vivid-color] SKIP: $FIXTURE_NODE_PYTHON cannot import tatolab.stream's" >&2
-        echo "[vivid-color] $CODEC blocks. Rebuild the wheel with" >&2
-        echo "[vivid-color] \`(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop)\` before" >&2
-        echo "[vivid-color] running the python arm — it measures the extension, not the tree." >&2
-        echo "$MARKER_IMPORT_FAILURE" >&2
-        exit 77
-    fi
-fi
+# Both arms read the live graph and exchange frames through the observation
+# verbs the lend carries; the python arm also compiles its stream in the
+# fixture venv.
+require_the_runtime_unit
+require_the_fixture_venv
 
 # vivid is an in-kernel V4L2 test driver — no DKMS or out-of-tree modules.
 if ! lsmod | grep -q vivid; then
@@ -231,7 +199,8 @@ stop_rig() {
     RIG_NEEDED_SIGKILL=0
     if [ -n "$RIG_PID" ] && kill -0 "$RIG_PID" 2>/dev/null; then
         # SIGTERM so the graph tears down the way a real stop does — a killed
-        # rig would hide exactly the shutdown race #335 is about.
+        # rig would hide exactly the shutdown race #335 is about. `timeout`
+        # passes it on, and `tatolab run` forwards it to `tatolabd`.
         kill -TERM "$RIG_PID" 2>/dev/null || true
         for _ in $(seq 1 50); do
             kill -0 "$RIG_PID" 2>/dev/null || break
@@ -290,13 +259,19 @@ fi
 
 # ── Run ──────────────────────────────────────────────────────────────
 echo "[vivid-color] Running the round trip against $VIVID_DEVICE..."
-# The arms differ in their argv and nowhere else: same environment, same
+# The arms differ in their launch and nowhere else: same environment, same
 # budget, same log, and everything downstream reads the same control plane.
+# `tatolab run` hands a stream no argv, so the python arm's codec and camera
+# travel in the environment; naming the camera keeps a rig carrying both a
+# virtual and a real one from handing it the first-enumerated node.
 if [ "$PIPELINE" = "python" ]; then
+    export STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC"
+    export STREAMLIB_CAMERA_DEVICE="$VIVID_DEVICE"
     PIPELINE_LAUNCH_COMMAND=(
-        "$FIXTURE_NODE_PYTHON" "$SCRIPT_DIR/codec_roundtrip_node.py"
-        --codec "$CODEC"
-        --camera "$VIVID_DEVICE"
+        "$TATOLAB_EXECUTABLE" run
+        --dir "$SCRIPT_DIR"
+        --runtime-name codec-roundtrip-node
+        codec_roundtrip_stream.py
     )
 else
     PIPELINE_LAUNCH_COMMAND=(
@@ -313,13 +288,9 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         > "$LOG_FILE" 2>&1 &
 RIG_PID=$!
 
-# The runtime_id of the live node the launched process runs. `timeout` wraps
-# either arm, so the runtime is the launched pid's child rather than the pid
-# itself.
-runtime_id_of_the_node_launched_as() {
-    "$STREAMLIB_CLI_PYTHON" "$SCRIPT_DIR/runtime_id_of_launched_node.py" "$1"
-}
-
+# `timeout` wraps either arm, so the runtime is the launched pid's child — or,
+# for the python arm, the `tatolabd` beneath `tatolab run` — rather than the
+# pid itself; `runtime_id_of_the_node_launched_as` walks that chain.
 RUNTIME_ID=""
 NODE_ANSWERED=0
 for _ in $(seq 1 60); do
@@ -327,7 +298,7 @@ for _ in $(seq 1 60); do
     if [ -z "$RUNTIME_ID" ]; then
         RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$RIG_PID")" || RUNTIME_ID=""
     fi
-    if [ -n "$RUNTIME_ID" ] && "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+    if [ -n "$RUNTIME_ID" ] && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
         NODE_ANSWERED=1
         break
     fi
@@ -342,7 +313,7 @@ fi
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
-DECODED_CHANNEL="$("$STREAMLIB_CLI" graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+DECODED_CHANNEL="$(streamlib_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -358,7 +329,7 @@ print(graph["runtime_name"] + "/" + decoder["name"] + "/video")
 }
 echo "[vivid-color] Decoded channel:   $DECODED_CHANNEL"
 
-if ! "$STREAMLIB_CLI" exchange \
+if ! streamlib_observation_verb exchange \
         --channel "$DECODED_CHANNEL" \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \

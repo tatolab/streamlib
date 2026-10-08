@@ -102,6 +102,16 @@ class AggregateDeviceDescription(unittest.TestCase):
         self.assertEqual(self.description["subdevices"], [{"uid": "BuiltInSpeakerDevice"}])
         self.assertEqual(self.description["taps"], [{"uid": "TAP-UUID", "drift": 1}])
 
+    def test_a_shared_aggregate_is_visible_to_the_process_that_hosts_the_built_ins(self):
+        shared_description = helper.aggregate_device_description(
+            "streamlib-fixture-shared-tap-1",
+            "TAP-UUID",
+            "BuiltInSpeakerDevice",
+            is_private=False,
+        )
+        self.assertEqual(shared_description["private"], 0)
+        self.assertEqual(shared_description["taps"], [{"uid": "TAP-UUID", "drift": 1}])
+
     def test_the_aggregate_does_not_wait_for_the_tap_to_start(self):
         """`tapautostart` makes starting the device wait for tapped audio, and the
         graph may start the microphone before the speaker plays anything."""
@@ -266,9 +276,29 @@ class StreamFormat(unittest.TestCase):
 
 class MuteBehaviour(unittest.TestCase):
     def test_an_unknown_mute_behaviour_is_refused_before_core_audio_is_touched(self):
-        with self.assertRaises(ValueError):
-            helper.PrivateCaptureDeviceTappingThisProcessesOutput(
-                "streamlib-fixture-process-tap-1", "quiet", "BuiltInSpeakerDevice"
+        for capture_device_class in (
+            helper.PrivateCaptureDeviceTappingThisProcessesOutput,
+            helper.SharedCaptureDeviceTappingAllOutput,
+        ):
+            with self.subTest(capture_device_class=capture_device_class.__name__):
+                with self.assertRaises(ValueError):
+                    capture_device_class(
+                        "streamlib-fixture-process-tap-1", "quiet", "BuiltInSpeakerDevice"
+                    )
+
+    def test_holding_a_shared_tap_with_an_unknown_mute_behaviour_is_a_usage_error(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                helper.main(
+                    [
+                        "coreaudio_process_tap.py",
+                        "hold-a-shared-tap-of-all-output",
+                        "streamlib-fixture-shared-tap-1",
+                        "quiet",
+                        "BuiltInSpeakerDevice",
+                    ]
+                ),
+                2,
             )
 
 
@@ -297,6 +327,17 @@ class CoreAudioShortOfATap(unittest.TestCase):
                     this_process, mute_behaviour, "streamlib fixture unit test"
                 ) as tap_description:
                     self.assertTrue(tap_description.is_private())
+                    self.assertEqual(tap_description.mute_behaviour(), mute_behaviour)
+                    self.assertRegex(tap_description.tap_uid(), r"^[0-9A-F-]{36}$")
+
+    def test_a_shared_global_tap_description_is_not_private_and_muted_as_asked(self):
+        """Only the Objective-C object: it is never handed to the HAL."""
+        for mute_behaviour in ("muted", "unmuted"):
+            with self.subTest(mute_behaviour=mute_behaviour):
+                with helper._SharedGlobalTapDescription(
+                    mute_behaviour, "streamlib fixture unit test"
+                ) as tap_description:
+                    self.assertFalse(tap_description.is_private())
                     self.assertEqual(tap_description.mute_behaviour(), mute_behaviour)
                     self.assertRegex(tap_description.tap_uid(), r"^[0-9A-F-]{36}$")
 

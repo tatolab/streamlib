@@ -5,12 +5,12 @@
 """The known signal through a private Core Audio process tap, with no StreamLib.
 
 `verify_audio_loopback.sh --path tap-muted` plays through `SpeakerSink` and
-captures through a `MicrophoneSource` opened on a private process tap's
-aggregate device. This closes the same loop with only the engine taken out:
-the same `PrivateCaptureDeviceTappingThisProcessesOutput`, an IOProc on the
-speaker where `SpeakerSink` was, and an IOProc on the aggregate, found by its
-UID, where `MicrophoneSource` was. When that run fails and this one passes,
-the tap is sound and the engine is not.
+captures through a `MicrophoneSource` opened on a shared global tap's
+aggregate device. This closes the same loop with the engine taken out: a tap
+made by the same helper — private, of this process, since nothing outside it
+needs to open the device — an IOProc on the speaker where `SpeakerSink` was,
+and an IOProc on the aggregate, found by its UID, where `MicrophoneSource` was.
+When that run fails and this one passes, the tap is sound and the engine is not.
 
 The tap is of this process, not of a player such as `afplay`: the HAL has no
 process object to tap until a process is its client, so a tap of another

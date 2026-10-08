@@ -2,8 +2,8 @@
 # E2E test: the camera-display stream (`camera_display_stream.py`, beside this
 # script) on a vivid virtual camera.
 #
-# Boots the stream with `streamlib run`, proves it live through the control
-# plane, captures its window, and stops it with SIGTERM.
+# Boots the stream with `tatolab run` on the runtime unit, proves it live
+# through the control plane, captures its window, and stops it with SIGTERM.
 #
 # Assertions ride the plan's durable contracts — the `graph` tool's JSON, the
 # JSONL log schema, and a captured PNG — never engine tracing prose, which is
@@ -14,11 +14,13 @@
 #   - Both native built-ins are in the graph, linked camera → window
 #   - The window renders (PNG captured and non-trivial)
 #   - No Vulkan allocation / device-loss / process() failure in the logs
-#   - SIGTERM tears the pipeline down cleanly
+#   - SIGTERM to `tatolab run`, forwarded to `tatolabd`, tears the pipeline
+#     down cleanly
 #
 # Prerequisites:
 #   - vivid kernel module available: sudo modprobe vivid
-#   - `streamlib` on PATH (or a built wheel venv in the checkout)
+#   - the runtime unit: `cargo xtask build-runtime` (see fixture_runtime_unit.sh)
+#   - uv, to make the fixture venv on first use
 #   - xdotool + xwd + python3-PIL for the window capture
 #
 # Exit codes: 0 = pass, 1 = fail, 77 = skip
@@ -26,7 +28,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+# shellcheck source=fixture_runtime_unit.sh
+. "$SCRIPT_DIR/fixture_runtime_unit.sh"
 STREAM_ENTRY_FILE_NAME="camera_display_stream.py"
 OUTPUT_DIR="${1:-/tmp/streamlib-e2e}"
 # Long enough for the swapchain to settle and several frames to present.
@@ -53,19 +56,9 @@ trap cleanup EXIT
 # ── Prerequisites ────────────────────────────────────────────────────
 echo "[e2e] Checking prerequisites..."
 
-# The CLI ships inside the wheel, so `streamlib` on PATH means an installed
-# wheel. Fall back to the checkout's own wheel venv, which is what a session
-# working in-tree has.
-STREAMLIB="${STREAMLIB_BIN:-streamlib}"
-if ! command -v "$STREAMLIB" >/dev/null 2>&1; then
-    STREAMLIB="$REPO_ROOT/sdk/streamlib-python-wheel/.venv/bin/streamlib"
-    if [ ! -x "$STREAMLIB" ]; then
-        echo "[e2e] SKIP: no streamlib CLI on PATH and no wheel venv in the checkout"
-        echo "[e2e]       build one with: (cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop)"
-        exit 77
-    fi
-fi
-echo "[e2e] streamlib CLI: $STREAMLIB"
+require_the_runtime_unit
+require_the_fixture_venv
+echo "[e2e] Runtime unit: $RUNTIME_UNIT_DIRECTORY"
 
 if ! command -v xdotool &>/dev/null; then
     echo "[e2e] SKIP: xdotool not installed (needed to find the window)"
@@ -74,7 +67,7 @@ fi
 
 # ImageMagick's `import` grabs and encodes in one step. capture_window.py is the
 # fallback, and it needs PIL in whichever `python3` wins on PATH — which is not
-# the wheel venv, so it is the less portable of the two.
+# the fixture venv, so it is the less portable of the two.
 if command -v import &>/dev/null; then
     CAPTURE_WITH="import"
 elif command -v xwd &>/dev/null && python3 -c "import PIL" 2>/dev/null; then
@@ -115,19 +108,22 @@ fi
 echo "[e2e] Using vivid capture device: $VIRTUAL_DEVICE"
 
 # ── Boot the stream ──────────────────────────────────────────────────
-# No build step: the wheel carries the engine, and the stream is Python. There
-# is nothing between an edit of the stream file and this run. `--dir` anchors
-# the launch at this directory, so the cross-floor check reads these fixtures
-# rather than whatever directory the script was started from.
-echo "[e2e] Booting $SCRIPT_DIR/$STREAM_ENTRY_FILE_NAME with \`streamlib run\` (${RUN_SECS}s)..."
+# No build step here: the stream is Python and the runtime unit is already
+# built, so nothing sits between an edit of the stream file and this run.
+# `--dir` anchors the launch at this directory, so the stream compiles in the
+# fixture venv and the cross-floor check reads these fixtures rather than
+# whatever directory the script was started from.
+echo "[e2e] Booting $SCRIPT_DIR/$STREAM_ENTRY_FILE_NAME with \`tatolab run\` (${RUN_SECS}s)..."
 STREAMLIB_CAMERA_DEVICE="$VIRTUAL_DEVICE" \
 RUST_LOG="${RUST_LOG:-warn,streamlib=info}" \
-    "$STREAMLIB" run --dir "$SCRIPT_DIR" "$STREAM_ENTRY_FILE_NAME" >"$LOG_FILE" 2>&1 &
+    "$TATOLAB_EXECUTABLE" run --dir "$SCRIPT_DIR" "$STREAM_ENTRY_FILE_NAME" >"$LOG_FILE" 2>&1 &
 NODE_PID=$!
 
 # ── Wait for the node to register ────────────────────────────────────
 # The registry entry is published only once the stream's graph has loaded, so
-# its appearance is the node's own liveness signal — not a fixed sleep.
+# its appearance is the node's own liveness signal — not a fixed sleep. Matched
+# by the launched pid rather than by being the first live row, so another node
+# on the machine is never the one measured.
 RUNTIME_ID=""
 for _ in $(seq 1 "$RUN_SECS"); do
     if ! kill -0 "$NODE_PID" 2>/dev/null; then
@@ -135,7 +131,7 @@ for _ in $(seq 1 "$RUN_SECS"); do
         tail -30 "$LOG_FILE"
         exit 1
     fi
-    RUNTIME_ID="$("$STREAMLIB" nodes 2>/dev/null | awk 'NR>1 && $5=="yes" {print $2; exit}')"
+    RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$NODE_PID")" || RUNTIME_ID=""
     [ -n "$RUNTIME_ID" ] && break
     sleep 1
 done
@@ -148,7 +144,7 @@ fi
 echo "[e2e] Node registered: $RUNTIME_ID"
 
 # ── Graph assertions ─────────────────────────────────────────────────
-"$STREAMLIB" graph --node "$RUNTIME_ID" >"$GRAPH_FILE" 2>/dev/null || true
+streamlib_observation_verb graph --node "$RUNTIME_ID" >"$GRAPH_FILE" 2>/dev/null || true
 
 GRAPH_VERDICT="$(python3 - "$GRAPH_FILE" <<'PYEOF'
 import json
@@ -226,8 +222,8 @@ else
 fi
 
 # ── Stop the node ────────────────────────────────────────────────────
-# `rt.run()` owns SIGTERM and tears the engine down before the interpreter
-# finalizes — the interpreter-lifecycle contract. A clean exit IS the gate.
+# `tatolab run` forwards SIGTERM to `tatolabd`, whose signal ladder tears the
+# engine down and exits. A clean exit IS the gate.
 echo "[e2e] Stopping the node (SIGTERM)..."
 kill -TERM "$NODE_PID" 2>/dev/null || true
 SHUTDOWN_STATUS="timeout"

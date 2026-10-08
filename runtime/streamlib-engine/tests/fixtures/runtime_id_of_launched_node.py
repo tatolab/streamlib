@@ -3,17 +3,21 @@
 
 """Print the runtime_id of the live registered node a fixture launched.
 
-Usage: python runtime_id_of_launched_node.py <launched pid>
+Usage: PYTHONPATH=<lend> python runtime_id_of_launched_node.py <launched pid>
 
-The launched pid is the node itself, or a wrapper (`timeout`) whose direct child
-it is. Exits 1 unless exactly one live registry entry matches, so a caller polls
-until the node has registered and its local API socket answers.
+The node is a `tatolabd`; the launched pid is that process or one of its
+ancestors — `tatolab run`, or a wrapper (`timeout`) around it. Exits 1 unless
+exactly one live registry entry matches, so a caller polls until the node has
+registered and its local API socket answers.
 """
 
 import subprocess
 import sys
 
 from tatolab.runtime._node_registry import live_nodes
+
+# `timeout` -> `tatolab run` -> `tatolabd` is the deepest chain a fixture launches.
+DEEPEST_LAUNCH_CHAIN = 3
 
 
 def parent_pid_of(pid: int) -> int:
@@ -23,12 +27,18 @@ def parent_pid_of(pid: int) -> int:
     return int(ps.stdout.strip() or 0)
 
 
+def launch_chain_of(node_pid: int) -> "list[int]":
+    """The node's pid and its ancestors, nearest first, as far as a launch reaches."""
+    chain = [node_pid]
+    while len(chain) < DEEPEST_LAUNCH_CHAIN + 1 and chain[-1] > 1:
+        chain.append(parent_pid_of(chain[-1]))
+    return chain
+
+
 def main() -> int:
     launched_pid = int(sys.argv[1])
     matching_runtime_ids = [
-        node.runtime_id
-        for node in live_nodes()
-        if launched_pid in (node.pid, parent_pid_of(node.pid))
+        node.runtime_id for node in live_nodes() if launched_pid in launch_chain_of(node.pid)
     ]
     if len(matching_runtime_ids) != 1:
         return 1
