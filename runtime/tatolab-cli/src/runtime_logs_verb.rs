@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Datelike};
 use clap::Args;
-use clap::builder::PossibleValue;
+use clap::builder::{PossibleValuesParser, TypedValueParser};
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
 use streamlib_runtime_client_contract::runtime_log_file_paths::{
     RuntimeLogInstanceOnDisk, log_dir, newest_runtime_log_instance_in_directory,
@@ -23,7 +23,7 @@ use crate::process_signal_handling::{
 };
 use crate::runtime_log_files_reader::{
     RUNTIME_LOG_FOLLOW_POLL_INTERVAL, RuntimeLogReadStep, RuntimeLogRecordFilters,
-    RuntimeLogRecordsReader,
+    RuntimeLogRecordsReader, RuntimeLogSegmentReadFailure,
 };
 use crate::runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime;
 use crate::{RuntimeTargetArguments, TatolabCommandFailure};
@@ -59,11 +59,19 @@ pub(crate) struct RuntimeLogsVerbArguments {
     #[arg(long = "rhi")]
     pub(crate) rhi_operations_only: bool,
     /// Minimum severity to show.
-    #[arg(long = "level", value_name = "LEVEL")]
-    pub(crate) minimum_level: Option<MinimumLogLevelArgument>,
+    #[arg(
+        long = "level",
+        value_name = "LEVEL",
+        value_parser = value_parser_of_the_jsonl_spellings_of(&LogLevel::ALL, LogLevel::as_str)
+    )]
+    pub(crate) minimum_level: Option<LogLevel>,
     /// Only records emitted by this runtime language.
-    #[arg(long = "source", value_name = "SOURCE")]
-    pub(crate) source: Option<LogSourceArgument>,
+    #[arg(
+        long = "source",
+        value_name = "SOURCE",
+        value_parser = value_parser_of_the_jsonl_spellings_of(&Source::ALL, Source::as_str)
+    )]
+    pub(crate) source: Option<Source>,
     /// Only intercepted records (captured stdout/stderr/print).
     #[arg(long = "intercepted-only")]
     pub(crate) intercepted_only: bool,
@@ -74,38 +82,24 @@ pub(crate) struct RuntimeLogsVerbArguments {
     pub(crate) runtime_target: RuntimeTargetArguments,
 }
 
-/// `--level`'s value: a [`LogLevel`] spelled as the JSONL record spells it.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct MinimumLogLevelArgument(LogLevel);
-
-impl clap::ValueEnum for MinimumLogLevelArgument {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[
-            Self(LogLevel::Trace),
-            Self(LogLevel::Debug),
-            Self(LogLevel::Info),
-            Self(LogLevel::Warn),
-            Self(LogLevel::Error),
-        ]
-    }
-
-    fn to_possible_value(&self) -> Option<PossibleValue> {
-        Some(PossibleValue::new(self.0.as_str()))
-    }
-}
-
-/// `--source`'s value: a [`Source`] spelled as the JSONL record spells it.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct LogSourceArgument(Source);
-
-impl clap::ValueEnum for LogSourceArgument {
-    fn value_variants<'a>() -> &'a [Self] {
-        &[Self(Source::Rust), Self(Source::Python)]
-    }
-
-    fn to_possible_value(&self) -> Option<PossibleValue> {
-        Some(PossibleValue::new(self.0.as_str()))
-    }
+/// A flag's value parser that takes exactly the JSONL record's spellings of `every_value`, listed
+/// in that order, and answers the value spelled.
+fn value_parser_of_the_jsonl_spellings_of<JsonlSpelledValue>(
+    every_value: &'static [JsonlSpelledValue],
+    jsonl_spelling_of: fn(&JsonlSpelledValue) -> &'static str,
+) -> impl TypedValueParser<Value = JsonlSpelledValue>
+where
+    JsonlSpelledValue: Copy + Send + Sync + 'static,
+{
+    PossibleValuesParser::new(every_value.iter().map(jsonl_spelling_of)).try_map(
+        move |spelled_value: String| {
+            every_value
+                .iter()
+                .copied()
+                .find(|value| jsonl_spelling_of(value) == spelled_value)
+                .ok_or_else(|| format!("`{spelled_value}` is not a spelling the record uses"))
+        },
+    )
 }
 
 /// What `logs` was asked to do on disk, once `--node` and `--count` are ruled out.
@@ -167,10 +161,8 @@ impl From<&RuntimeLogsVerbArguments> for OnDiskRuntimeLogRequest {
                 processor_id: logs_arguments.processor_id.clone(),
                 pipeline_id: logs_arguments.pipeline_id.clone(),
                 rhi_operations_only: logs_arguments.rhi_operations_only,
-                minimum_level: logs_arguments
-                    .minimum_level
-                    .map(|minimum_level| minimum_level.0),
-                source: logs_arguments.source.map(|source| source.0),
+                minimum_level: logs_arguments.minimum_level,
+                source: logs_arguments.source,
                 intercepted_only: logs_arguments.intercepted_only,
             },
         }
@@ -311,33 +303,61 @@ pub(crate) fn print_runtime_log_files(
         on_disk_request.record_filters.clone(),
         on_disk_request.follow_appended_records,
     );
-    loop {
-        if read_interrupted() {
-            break;
-        }
-        let read_step = runtime_log_records_reader
-            .next_step(standard_error)
-            .map_err(|segment_read_failure| {
-                let _ = standard_output.flush();
-                TatolabCommandFailure::refused(segment_read_failure.to_string())
-            })?;
-        let written = match read_step {
-            RuntimeLogReadStep::RenderedRecord(rendered_record) => {
-                standard_output.write_all(rendered_record.as_bytes())
-            }
-            RuntimeLogReadStep::LiveEdgeReached => standard_output.flush().map(|()| {
-                std::thread::sleep(follow_poll_interval);
-            }),
-            RuntimeLogReadStep::Finished => break,
-        };
-        if let Err(write_failure) = written {
-            return standard_output_closed_or_failed(write_failure);
-        }
-    }
-    match standard_output.flush() {
+    match print_rendered_records_until_the_read_ends(
+        &mut runtime_log_records_reader,
+        standard_output,
+        standard_error,
+        read_interrupted,
+        follow_poll_interval,
+    ) {
         Ok(()) => Ok(0),
-        Err(write_failure) => standard_output_closed_or_failed(write_failure),
+        Err(RuntimeLogRecordsPrintFailure::StandardOutputNotWritable(write_failure)) => {
+            standard_output_closed_or_failed(write_failure)
+        }
+        Err(RuntimeLogRecordsPrintFailure::SegmentNotReadable(segment_read_failure)) => {
+            let _ = standard_output.flush();
+            Err(TatolabCommandFailure::refused(
+                segment_read_failure.to_string(),
+            ))
+        }
     }
+}
+
+/// Why printing a runtime's rendered records stopped before the read ended.
+#[derive(Debug, thiserror::Error)]
+enum RuntimeLogRecordsPrintFailure {
+    /// Standard output refused a write or a flush.
+    #[error(transparent)]
+    StandardOutputNotWritable(#[from] io::Error),
+    /// A segment could not be read.
+    #[error(transparent)]
+    SegmentNotReadable(#[from] RuntimeLogSegmentReadFailure),
+}
+
+/// Print `runtime_log_records_reader`'s rendered records to `standard_output` until the read
+/// finishes or `read_interrupted` answers true; at each live edge, flush what was printed, then
+/// wait `follow_poll_interval` for more.
+fn print_rendered_records_until_the_read_ends(
+    runtime_log_records_reader: &mut RuntimeLogRecordsReader,
+    standard_output: &mut dyn Write,
+    standard_error: &mut dyn Write,
+    read_interrupted: &dyn Fn() -> bool,
+    follow_poll_interval: Duration,
+) -> Result<(), RuntimeLogRecordsPrintFailure> {
+    while !read_interrupted() {
+        match runtime_log_records_reader.next_step(standard_error)? {
+            RuntimeLogReadStep::RenderedRecord(rendered_record) => {
+                standard_output.write_all(rendered_record.as_bytes())?;
+            }
+            RuntimeLogReadStep::LiveEdgeReached => {
+                standard_output.flush()?;
+                std::thread::sleep(follow_poll_interval);
+            }
+            RuntimeLogReadStep::Finished => break,
+        }
+    }
+    standard_output.flush()?;
+    Ok(())
 }
 
 /// A reader that closed its end of the pipe has seen all it wanted, which ends the read
@@ -751,6 +771,46 @@ mod tests {
                 log_directory.path().display()
             )
         );
+    }
+
+    /// A file where the directory should be answers `ENOTDIR` to the listing, which no runtime
+    /// writing logs would leave and an empty listing would hide.
+    #[test]
+    fn an_unreadable_log_directory_is_refused_by_name_rather_than_read_as_empty() {
+        let scratch_directory = tempfile::tempdir().unwrap();
+        let log_directory_that_is_a_file = scratch_directory.path().join("logs");
+        std::fs::write(&log_directory_that_is_a_file, b"not a directory").unwrap();
+
+        for on_disk_request in [
+            OnDiskRuntimeLogRequest {
+                list_runtimes_with_log_files: true,
+                ..Default::default()
+            },
+            OnDiskRuntimeLogRequest {
+                runtime_id: Some("Rabc".to_owned()),
+                ..Default::default()
+            },
+            OnDiskRuntimeLogRequest {
+                runtime_id: Some("Rabc".to_owned()),
+                follow_appended_records: true,
+                ..Default::default()
+            },
+        ] {
+            let (printed, _, outcome) = print_runtime_log_files_capturing_output(
+                &log_directory_that_is_a_file,
+                &on_disk_request,
+            );
+
+            let refusal = refusal_message(outcome);
+            assert!(
+                refusal.starts_with(&format!(
+                    "cannot read the runtime log directory {}: ",
+                    log_directory_that_is_a_file.display()
+                )),
+                "{on_disk_request:?}: {refusal}"
+            );
+            assert_eq!(printed, "", "{on_disk_request:?}");
+        }
     }
 
     #[test]
