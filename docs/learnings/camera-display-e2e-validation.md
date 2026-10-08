@@ -49,8 +49,7 @@ The script:
    the fixture venv — the stream is Python, so there is no build step between an
    edit and the run
 3. Waits for the `tatolabd` it started to register, then asserts against
-   `streamlib graph` (the observation verbs, run from the runtime unit's lend):
-   both native built-ins present, linked camera → window
+   `tatolab graph`: both native built-ins present, linked camera → window
 4. Captures the window to PNG, then sends SIGTERM to `tatolab run`, which
    forwards it to `tatolabd`, and requires a clean exit
 5. Gates the log on `OUT_OF_DEVICE_MEMORY` / `DEVICE_LOST` / `process() failed`
