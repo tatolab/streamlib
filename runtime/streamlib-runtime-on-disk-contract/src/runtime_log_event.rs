@@ -191,12 +191,9 @@ mod tests {
         assert_eq!(serde_json::to_string(&LogLevel::Warn).unwrap(), "\"warn\"");
     }
 
-    /// Parses the example line documented in `docs/logging-schema.md`.
+    /// Parses the exact example line documented in `docs/logging-schema.md`.
     /// If this test fails, the published schema example and the
     /// implementation have drifted — fix one or the other.
-    ///
-    /// The `target` names a module outside the engine: `check-boundaries`
-    /// reads an engine module path in this crate's source as an engine import.
     #[test]
     fn docs_example_line_parses() {
         let line = r#"{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;

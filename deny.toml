@@ -85,9 +85,10 @@ license-files = []
 # `license-file` is not the fix: cargo then warns `only one of 'license' or
 # 'license-file' is necessary` on every build, and dropping `license-file`
 # would stop cargo copying the parameterized text into each published `.crate`.
-# `licenses.private.ignore` is no shortcut either: of the eighteen it reaches
-# only `xtask` and `streamlib-test-fixtures`, the two that set
-# `publish = false`, and the other sixteen still need an entry apiece.
+# `licenses.private.ignore` is no shortcut either: of the twenty-one it reaches
+# only `xtask`, `streamlib-test-fixtures`, `tatolab-cli` and `tatolabd`, the
+# four that set `publish = false`, and the other seventeen still need an entry
+# apiece.
 #
 # A new workspace crate reds this gate until it is listed. That is the intended
 # cost: the list is also the roster of what ships under our own terms.
@@ -154,6 +155,11 @@ license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-processor-schema"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-runtime-on-disk-contract"
 expression = "BUSL-1.1"
 license-files = []
 
