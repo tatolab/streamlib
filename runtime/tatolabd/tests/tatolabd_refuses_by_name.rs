@@ -15,6 +15,7 @@ use common::{
     SpawnedTatolabd, TatolabdRunState, TemporaryRuntimeUnit,
     an_executable_standing_in_for_the_interpreter, run_to_exit_within,
 };
+use streamlib::sdk::processor_interpreter::lend_directory_in_the_runtime_unit;
 
 const A_REFUSAL_BEFORE_ANY_STREAM_RUNS_EXITS_WITHIN: Duration = Duration::from_secs(60);
 
@@ -114,14 +115,12 @@ fn a_tatolabd_outside_a_runtime_unit_is_refused_naming_where_it_looked_for_the_l
         &[],
     ));
 
-    let looked_for_the_lend_at = runtime_unit
-        .tatolabd
-        .canonicalize()
-        .unwrap()
-        .parent()
-        .and_then(Path::parent)
-        .unwrap()
-        .join("lib/tatolab/lend");
+    let looked_for_the_lend_at = lend_directory_in_the_runtime_unit(
+        &runtime_unit
+            .runtime_unit_root()
+            .canonicalize()
+            .expect("the runtime unit's root exists"),
+    );
     assert!(
         refusal.contains(&format!("no lend at {}", looked_for_the_lend_at.display())),
         "{refusal}"

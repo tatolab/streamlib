@@ -8,16 +8,23 @@
 //! interpreter puts first on `PYTHONPATH`. The wheel is kept beside the lend
 //! because CI hands that same file to the jobs that install the engine. Then
 //! builds `tatolabd` and `tatolab` and places them in `bin/`, beside `lib/`,
-//! the install prefix's own shape: `tatolabd` finds the lend at
-//! `../lib/tatolab/lend` from its own directory.
+//! the install prefix's own shape, in which `tatolabd` finds the lend from its
+//! own directory.
+//!
+//! The unit's layout below its root is `streamlib-consumer-rhi`'s
+//! `runtime_unit_layout`, included by path because xtask does not link the
+//! engine; only where the root sits in the workspace, and the `wheel/` CI
+//! hands on, are xtask's own.
 
-use crate::check_no_tatolab_namespace_package_init::{
-    RUNTIME_UNIT_LEND_DIRECTORY_RELATIVE_TO_WORKSPACE,
-    ensure_lend_directory_keeps_tatolab_a_namespace,
-};
+use crate::check_no_tatolab_namespace_package_init::ensure_lend_directory_keeps_tatolab_a_namespace;
 use anyhow::{Context, Result};
 use engine_build_id_composition::{
     RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
+};
+use runtime_unit_layout::{
+    BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, BUNDLED_VULKAN_DRIVER_FILE_NAMES,
+    LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND, bundled_vulkan_driver_directory_in_the_lend,
+    lend_directory_in_the_runtime_unit,
 };
 use std::path::{Path, PathBuf};
 
@@ -25,11 +32,38 @@ use std::path::{Path, PathBuf};
 #[allow(dead_code)]
 mod engine_build_id_composition;
 
-/// Where the runtime unit's wheel is written, relative to the workspace.
-pub const RUNTIME_UNIT_WHEEL_DIRECTORY_RELATIVE_TO_WORKSPACE: &str = "target/tatolab-runtime/wheel";
+#[path = "../../runtime/streamlib-consumer-rhi/src/runtime_unit_layout.rs"]
+#[allow(dead_code)]
+mod runtime_unit_layout;
 
-/// Where the runtime unit's two binaries are placed, relative to the workspace.
-pub const RUNTIME_UNIT_BIN_DIRECTORY_RELATIVE_TO_WORKSPACE: &str = "target/tatolab-runtime/bin";
+/// Where `cargo xtask build-runtime` lays out the runtime unit, relative to the
+/// workspace.
+pub const RUNTIME_UNIT_ROOT_RELATIVE_TO_WORKSPACE: &str = "target/tatolab-runtime";
+
+/// Where the runtime unit's wheel is kept, relative to the runtime unit's root.
+const WHEEL_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "wheel";
+
+/// The runtime unit `cargo xtask build-runtime` lays out in `workspace_root`.
+pub fn runtime_unit_root_in_the_workspace(workspace_root: &Path) -> PathBuf {
+    workspace_root.join(RUNTIME_UNIT_ROOT_RELATIVE_TO_WORKSPACE)
+}
+
+/// The lend of the runtime unit in `workspace_root`.
+pub fn runtime_unit_lend_directory_in_the_workspace(workspace_root: &Path) -> PathBuf {
+    lend_directory_in_the_runtime_unit(&runtime_unit_root_in_the_workspace(workspace_root))
+}
+
+/// Where the runtime unit in `workspace_root` keeps its two binaries.
+fn runtime_unit_binary_directory_in_the_workspace(workspace_root: &Path) -> PathBuf {
+    runtime_unit_root_in_the_workspace(workspace_root)
+        .join(BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT)
+}
+
+/// Where the runtime unit in `workspace_root` keeps its wheel.
+fn runtime_unit_wheel_directory_in_the_workspace(workspace_root: &Path) -> PathBuf {
+    runtime_unit_root_in_the_workspace(workspace_root)
+        .join(WHEEL_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT)
+}
 
 /// Each binary the runtime unit carries, as the cargo package that builds it
 /// and the binary target's name, which is also its file name in `bin/`.
@@ -44,16 +78,6 @@ pub const PINNED_MATURIN_REQUIREMENT_FOR_UVX: &str = "maturin@1.9.6";
 
 const MACOS_BUNDLED_VULKAN_DRIVER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE: &str =
     "scripts/stage_macos_bundled_vulkan_driver.sh";
-
-/// What the staging script writes; the engine dlopens the loader beside `_engine`.
-const MACOS_BUNDLED_VULKAN_DRIVER_FILE_NAMES: &[&str] = &[
-    "libvulkan.1.dylib",
-    "libMoltenVK.dylib",
-    "MoltenVK_icd.json",
-];
-
-/// The package every lend exists to carry.
-const LENT_RUNTIME_PACKAGE_PREFIX: &str = "tatolab/runtime/";
 
 /// Left in the lend so the namespace gate refuses it by path.
 const TATOLAB_NAMESPACE_PACKAGE_INIT_MEMBER: &str = "tatolab/__init__.py";
@@ -78,8 +102,8 @@ impl RuntimeUnitBuildProfile {
 pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Result<()> {
     let maturin_project_directory =
         workspace_root.join(RUNTIME_UNIT_MATURIN_PROJECT_RELATIVE_TO_WORKSPACE);
-    let wheel_directory = workspace_root.join(RUNTIME_UNIT_WHEEL_DIRECTORY_RELATIVE_TO_WORKSPACE);
-    let lend_directory = workspace_root.join(RUNTIME_UNIT_LEND_DIRECTORY_RELATIVE_TO_WORKSPACE);
+    let wheel_directory = runtime_unit_wheel_directory_in_the_workspace(workspace_root);
+    let lend_directory = runtime_unit_lend_directory_in_the_workspace(workspace_root);
     let building_for_macos = cfg!(target_os = "macos");
 
     let macos_deployment_target = if building_for_macos {
@@ -114,7 +138,7 @@ pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Res
         lend_directory.display()
     );
 
-    let bin_directory = workspace_root.join(RUNTIME_UNIT_BIN_DIRECTORY_RELATIVE_TO_WORKSPACE);
+    let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);
     let built_binaries = build_runtime_unit_binaries(
         workspace_root,
         build_profile,
@@ -388,6 +412,7 @@ fn ensure_wheel_members_are_the_runtime_package_and_its_dist_info(
     runtime_unit_wheel: &Path,
     wheel_archive: &mut zip::ZipArchive<std::fs::File>,
 ) -> Result<()> {
+    let lent_runtime_package_prefix = format!("{LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND}/");
     let mut dist_info_directory_names: Vec<String> = Vec::new();
     let mut carries_the_runtime_package_init = false;
 
@@ -415,16 +440,16 @@ fn ensure_wheel_members_are_the_runtime_package_and_its_dist_info(
             }
             continue;
         }
-        if member_name == format!("{LENT_RUNTIME_PACKAGE_PREFIX}__init__.py") {
+        if member_name == format!("{lent_runtime_package_prefix}__init__.py") {
             carries_the_runtime_package_init = true;
         }
         let is_a_directory_on_the_way_to_the_runtime_package =
-            wheel_member.is_dir() && LENT_RUNTIME_PACKAGE_PREFIX.starts_with(&member_name);
+            wheel_member.is_dir() && lent_runtime_package_prefix.starts_with(&member_name);
         anyhow::ensure!(
-            member_name.starts_with(LENT_RUNTIME_PACKAGE_PREFIX)
+            member_name.starts_with(lent_runtime_package_prefix.as_str())
                 || member_name == TATOLAB_NAMESPACE_PACKAGE_INIT_MEMBER
                 || is_a_directory_on_the_way_to_the_runtime_package,
-            "{} carries `{member_name}`, outside `{LENT_RUNTIME_PACKAGE_PREFIX}` and its \
+            "{} carries `{member_name}`, outside `{lent_runtime_package_prefix}` and its \
              .dist-info — a lend holds the runtime package and nothing else, and \
              `tatolab/stream/` is the stream venv's own",
             runtime_unit_wheel.display()
@@ -433,7 +458,7 @@ fn ensure_wheel_members_are_the_runtime_package_and_its_dist_info(
 
     anyhow::ensure!(
         carries_the_runtime_package_init,
-        "{} carries no `{LENT_RUNTIME_PACKAGE_PREFIX}__init__.py` — `tatolab.runtime` must be a \
+        "{} carries no `{lent_runtime_package_prefix}__init__.py` — `tatolab.runtime` must be a \
          regular package for the lend to merge with the venv's `tatolab.stream`",
         runtime_unit_wheel.display()
     );
@@ -449,8 +474,9 @@ fn ensure_wheel_members_are_the_runtime_package_and_its_dist_info(
 
 /// Refuse a macOS lend missing any file of the bundled Vulkan driver.
 pub fn ensure_lend_carries_macos_bundled_vulkan_driver(lend_directory: &Path) -> Result<()> {
-    let bundled_vulkan_driver_directory = lend_directory.join("tatolab/runtime/_vulkan_driver");
-    let missing_driver_files: Vec<&str> = MACOS_BUNDLED_VULKAN_DRIVER_FILE_NAMES
+    let bundled_vulkan_driver_directory =
+        bundled_vulkan_driver_directory_in_the_lend(lend_directory);
+    let missing_driver_files: Vec<&str> = BUNDLED_VULKAN_DRIVER_FILE_NAMES
         .iter()
         .copied()
         .filter(|driver_file_name| {
@@ -506,7 +532,7 @@ mod tests {
             .path()
             .join("streamlib-0.0.0-cp310-abi3-linux_x86_64.whl");
         write_synthetic_wheel(&wheel_path, members);
-        let lend_directory = scratch.path().join("lib/tatolab/lend");
+        let lend_directory = lend_directory_in_the_runtime_unit(scratch.path());
 
         let refusal = replace_lend_directory_with_wheel_contents(&wheel_path, &lend_directory)
             .unwrap_err()
@@ -527,7 +553,7 @@ mod tests {
             .path()
             .join("streamlib-0.0.0-cp310-abi3-linux_x86_64.whl");
         write_synthetic_wheel(&wheel_path, &runtime_unit_members());
-        let lend_directory = scratch.path().join("lib/tatolab/lend");
+        let lend_directory = lend_directory_in_the_runtime_unit(scratch.path());
         std::fs::create_dir_all(lend_directory.join("tatolab/runtime")).unwrap();
         std::fs::write(lend_directory.join("tatolab/runtime/stale_module.py"), "").unwrap();
 
@@ -723,7 +749,7 @@ mod tests {
         let built_tatolabd = scratch.path().join("built-tatolabd");
         std::fs::write(&built_tatolabd, "new tatolabd").unwrap();
         std::fs::set_permissions(&built_tatolabd, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let bin_directory = scratch.path().join("tatolab-runtime/bin");
+        let bin_directory = runtime_unit_binary_directory_in_the_workspace(scratch.path());
         std::fs::create_dir_all(&bin_directory).unwrap();
         std::fs::write(bin_directory.join("tatolabd"), "old tatolabd").unwrap();
 
@@ -785,17 +811,32 @@ mod tests {
     #[test]
     fn a_macos_lend_missing_a_driver_file_is_refused_naming_it() {
         let lend_directory = tempfile::TempDir::new().unwrap();
-        let driver_directory = lend_directory.path().join("tatolab/runtime/_vulkan_driver");
+        let driver_directory = bundled_vulkan_driver_directory_in_the_lend(lend_directory.path());
         std::fs::create_dir_all(&driver_directory).unwrap();
-        std::fs::write(driver_directory.join("libvulkan.1.dylib"), "").unwrap();
-        std::fs::write(driver_directory.join("MoltenVK_icd.json"), "").unwrap();
+        std::fs::write(
+            driver_directory.join(runtime_unit_layout::VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME),
+            "",
+        )
+        .unwrap();
+        std::fs::write(
+            driver_directory.join(runtime_unit_layout::BUNDLED_ICD_MANIFEST_FILE_NAME),
+            "",
+        )
+        .unwrap();
 
         let refusal = ensure_lend_carries_macos_bundled_vulkan_driver(lend_directory.path())
             .unwrap_err()
             .to_string();
-        assert!(refusal.contains("libMoltenVK.dylib"), "{refusal}");
+        assert!(
+            refusal.contains(runtime_unit_layout::BUNDLED_MOLTENVK_LIBRARY_FILE_NAME),
+            "{refusal}"
+        );
 
-        std::fs::write(driver_directory.join("libMoltenVK.dylib"), "").unwrap();
+        std::fs::write(
+            driver_directory.join(runtime_unit_layout::BUNDLED_MOLTENVK_LIBRARY_FILE_NAME),
+            "",
+        )
+        .unwrap();
         ensure_lend_carries_macos_bundled_vulkan_driver(lend_directory.path()).unwrap();
     }
 }

@@ -88,7 +88,8 @@ pub mod helper_process_transport {
 }
 
 /// What a processor interpreter's own side shares with the engine that starts
-/// it: where its bootstrap sits in a lend, the variables it is named by, the
+/// it: where its bootstrap sits in a lend, where a runtime unit lays out the
+/// lend and the Vulkan driver it carries, the variables it is named by, the
 /// shutdown ladder's budgets, and the reader of a described node type.
 pub mod processor_interpreter {
     pub use super::compiler::compiler_ops::processor_interpreter_shutdown_ladder::{
@@ -102,5 +103,10 @@ pub mod processor_interpreter {
     pub use super::compiler::compiler_ops::python_processor_declaration::{
         AudioWindowFieldRefusal, PythonProcessorDeclaration,
         read_a_channel_count_or_the_source_spelling,
+    };
+    pub use streamlib_consumer_rhi::runtime_unit_layout::{
+        BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, BUNDLED_ICD_MANIFEST_FILE_NAME,
+        LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT,
+        bundled_vulkan_driver_directory_in_the_lend, lend_directory_in_the_runtime_unit,
     };
 }
