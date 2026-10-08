@@ -44,7 +44,8 @@ receives its window and that window's events, and keeps every window
 policy decision. On Linux the loop runs on its own thread (X11 and
 Wayland both permit an off-main-thread loop, each behind its own
 any-thread opt-in). On macOS the loop lives on the process's first
-thread and is driven there while `rt.run()` blocks; AppKit touches a
+thread and is driven there while `tatolabd`'s main thread waits for the
+shutdown; AppKit touches a
 view only from that thread, so the pump adds each window's `CAMetalLayer`
 as it mints the window, and the present target is minted from that layer.
 Neither changes what a window owner asks for or is handed back.

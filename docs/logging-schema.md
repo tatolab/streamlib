@@ -72,9 +72,9 @@ it, and reopens the active name. `streamlib logs --follow` does this.
 | Field | Type | Nullable | Notes |
 | --- | --- | --- | --- |
 | `schema_version` | integer | no | Bumped on breaking schema changes. |
-| `host_ts` | integer | no | Host wall-clock timestamp (nanoseconds since UNIX epoch). Stamped on the emitting thread for a Rust or app-process Python record, and at receipt for a record a helper process sends. Not monotonic — see [Ordering](#ordering). |
+| `host_ts` | integer | no | Host wall-clock timestamp (nanoseconds since UNIX epoch). Stamped on the emitting thread for a Rust record, and at receipt for a record a helper process sends. Not monotonic — see [Ordering](#ordering). |
 | `runtime_id` | string | no | The owning runtime's id ([`RuntimeUniqueId`][rs_id]). |
-| `source` | enum | no | `"rust"` \| `"python"`. Rust events come from the `tracing` pipeline — the app process's own, or a helper process's, captured there and relayed over the `{op:"log"}` escalate IPC; python events come from `tatolab.stream.log.*` in the app's interpreter, from a helper process via that same IPC, or from a helper process's captured stdout / stderr. |
+| `source` | enum | no | `"rust"` \| `"python"`. Rust events come from the `tracing` pipeline — the runtime process's own, or a helper process's, captured there and relayed over the `{op:"log"}` escalate IPC; python events come from `tatolab.stream.log.*` in a helper process via that same IPC, or from a helper process's captured stdout / stderr. |
 | `level` | enum | no | `"trace"` \| `"debug"` \| `"info"` \| `"warn"` \| `"error"`. |
 | `message` | string | no | Primary human-readable message. May be empty for events that carry only structured fields. |
 | `target` | string | no | Tracing target (module path, typically) for Rust, a record relayed from a helper process included — a call site keeps its own target wherever it ran; subprocess-declared target for polyglot. |
@@ -97,8 +97,8 @@ it, and reopens the active name. `streamlib logs --follow` does this.
 
 - **Within a runtime**: file order — rotated segments by ascending `seq`,
   then the active segment — is the order the drain worker wrote the
-  records in, and every source of a runtime (Rust, app-process Python,
-  each helper process) shares that one stream. `host_ts` is not
+  records in, and every source of a runtime (its own Rust, each helper
+  process) shares that one stream. `host_ts` is not
   monotonic in it: many threads stamp a record and then race into one
   queue, and a wall-clock step moves `host_ts` backwards. Sorting a
   runtime's records by `host_ts` can reorder records its file holds in
@@ -179,7 +179,7 @@ type.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `STREAMLIB_QUIET` | unset (`0`) | When `1`, suppresses the pretty log mirror (stdout, or stderr when the host chose it) only. JSONL continues writing. |
+| `STREAMLIB_QUIET` | unset (`0`) | When `1`, suppresses the pretty log mirror only — on stderr for `tatolabd`, whose stdout carries nothing, and on stdout for an engine a Rust app hosts. JSONL continues writing. |
 | `STREAMLIB_LOG_BATCH_BYTES` | `65536` | Size threshold for JSONL flush. |
 | `STREAMLIB_LOG_BATCH_MS` | `100` | Time threshold for JSONL flush. |
 | `STREAMLIB_LOG_CHANNEL_CAPACITY` | `65536` | Bounded MPMC channel depth. Drop-oldest when full. |
