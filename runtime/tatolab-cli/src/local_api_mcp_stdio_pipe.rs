@@ -7,12 +7,16 @@
 //! copies bytes, stdin to socket and socket to stdout. It parses no message, so the protocol
 //! revision is the runtime's alone, and stdout carries nothing but what the runtime wrote.
 
+use std::io;
 use std::path::Path;
+use std::time::Duration;
 
 use streamlib_runtime_client_contract::node_registry::NodeRegistryEntry;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::TatolabCommandFailure;
+use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
 use crate::local_api_runtime_selection::{
     LocalApiRuntimeSelectionFailure, select_live_runtime_in_node_registry,
     this_users_node_registry_directory,
@@ -28,14 +32,17 @@ const MCP_STDIO_PIPE_CHUNK_BYTES: usize = 64 * 1024;
 const NO_LIVE_RUNTIME_FOR_THE_MCP_VERB_REFUSAL: &str = "no runtime is live on this machine \
      for `tatolab mcp` to reach; `tatolab nodes` lists the live ones.";
 
-/// How copying the host's stdin to the runtime stopped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How copying the host's stdin to the runtime stopped. Every ending drops the socket's owned
+/// write half, which shuts down its write direction, so the runtime reads the end of its input
+/// and still answers what it owes.
+#[derive(Debug)]
 enum McpHostInputCopyEnding {
-    /// Stdin reached its end and the socket's write side was shut down behind it.
+    /// Stdin reached its end.
     McpHostInputEnded,
-    /// Stdin could not be read, or the runtime's side stopped taking bytes; the copy the other
-    /// way reports the runtime's side.
-    CopyBrokeOff,
+    /// Stdin could not be read.
+    McpHostInputUnreadable(io::Error),
+    /// The runtime's side stopped taking bytes; the copy the other way reports it.
+    RuntimeStoppedTakingBytes,
 }
 
 /// How copying the runtime's stream to the host's stdout stopped.
@@ -46,7 +53,7 @@ enum RuntimeOutputCopyEnding {
     /// Stdout's reader went away: the host stopped reading.
     McpHostStoppedReading,
     /// Stdout refused a write for another reason.
-    McpHostOutputFailed(std::io::Error),
+    McpHostOutputFailed(io::Error),
 }
 
 /// How the whole pipe ended, which decides the verb's exit.
@@ -56,10 +63,13 @@ enum McpStdioPipeEnding {
     RuntimeClosedAfterMcpHostInputEnded,
     /// The runtime closed or reset its side while stdin was still open.
     RuntimeClosedWithMcpHostInputOpen,
+    /// Stdin could not be read; the runtime has since closed its side, or the host stopped
+    /// reading.
+    McpHostInputUnreadable(io::Error),
     /// The host stopped reading stdout; nobody is left to answer.
     McpHostStoppedReading,
     /// Stdout refused a write for another reason.
-    McpHostOutputFailed(std::io::Error),
+    McpHostOutputFailed(io::Error),
 }
 
 /// `tatolab mcp`: pipe this process's stdin and stdout to the MCP server of the live runtime
@@ -72,16 +82,19 @@ pub(crate) fn pipe_stdio_to_the_selected_runtimes_mcp_server(
         requested_runtime_name_or_id,
         tokio::io::stdin(),
         tokio::io::stdout(),
+        OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
     )
 }
 
 /// Select the live runtime in `node_registry_directory` and pipe the host's input and output to
-/// its MCP server.
+/// its MCP server, refusing a runtime that does not answer the upgrade within
+/// `mcp_stdio_upgrade_timeout`.
 fn pipe_mcp_host_io_to_a_runtime_in_node_registry(
     node_registry_directory: &Path,
     requested_runtime_name_or_id: Option<&str>,
     mcp_host_input: impl AsyncRead + Unpin,
     mcp_host_output: impl AsyncWrite + Unpin,
+    mcp_stdio_upgrade_timeout: Duration,
 ) -> Result<u8, TatolabCommandFailure> {
     let selected_runtime = match select_live_runtime_in_node_registry(
         node_registry_directory,
@@ -95,15 +108,21 @@ fn pipe_mcp_host_io_to_a_runtime_in_node_registry(
         }
         Err(runtime_selection_failure) => return Err(runtime_selection_failure.into()),
     };
-    pipe_mcp_host_io_to_the_runtimes_mcp_server(&selected_runtime, mcp_host_input, mcp_host_output)
+    pipe_mcp_host_io_to_the_runtimes_mcp_server(
+        &selected_runtime,
+        mcp_host_input,
+        mcp_host_output,
+        mcp_stdio_upgrade_timeout,
+    )
 }
 
-/// Open `selected_runtime`'s MCP stream and copy bytes both ways until the runtime closes it or
-/// the host stops reading.
+/// Open `selected_runtime`'s MCP stream, waiting at most `mcp_stdio_upgrade_timeout` for its
+/// `101`, and copy bytes both ways until the runtime closes it or the host stops reading.
 fn pipe_mcp_host_io_to_the_runtimes_mcp_server(
     selected_runtime: &NodeRegistryEntry,
     mcp_host_input: impl AsyncRead + Unpin,
     mcp_host_output: impl AsyncWrite + Unpin,
+    mcp_stdio_upgrade_timeout: Duration,
 ) -> Result<u8, TatolabCommandFailure> {
     let runtime_named_for_stderr = format!(
         "runtime `{}` ({})",
@@ -120,15 +139,26 @@ fn pipe_mcp_host_io_to_the_runtimes_mcp_server(
         })?;
     let pipe_outcome: Result<McpStdioPipeEnding, TatolabCommandFailure> = pipe_tokio_runtime
         .block_on(async {
-            let upgraded_mcp_stdio_stream =
-                upgrade_local_api_connection_to_mcp_stdio(&selected_runtime.local_api_socket_path)
-                    .await
-                    .map_err(|upgrade_failure| {
-                        TatolabCommandFailure::refused(format!(
-                            "{runtime_named_for_stderr} did not open its MCP stream: \
-                             {upgrade_failure}"
-                        ))
-                    })?;
+            let upgraded_mcp_stdio_stream = match tokio::time::timeout(
+                mcp_stdio_upgrade_timeout,
+                upgrade_local_api_connection_to_mcp_stdio(&selected_runtime.local_api_socket_path),
+            )
+            .await
+            {
+                Ok(Ok(upgraded_mcp_stdio_stream)) => upgraded_mcp_stdio_stream,
+                Ok(Err(upgrade_failure)) => {
+                    return Err(TatolabCommandFailure::refused(format!(
+                        "{runtime_named_for_stderr} did not open its MCP stream: \
+                         {upgrade_failure}"
+                    )));
+                }
+                Err(_elapsed) => {
+                    return Err(TatolabCommandFailure::refused(format!(
+                        "{runtime_named_for_stderr} did not open its MCP stream: it did not \
+                         answer within {mcp_stdio_upgrade_timeout:?}"
+                    )));
+                }
+            };
             Ok(copy_both_ways_until_the_pipe_ends(
                 upgraded_mcp_stdio_stream,
                 mcp_host_input,
@@ -145,6 +175,12 @@ fn pipe_mcp_host_io_to_the_runtimes_mcp_server(
         McpStdioPipeEnding::RuntimeClosedWithMcpHostInputOpen => {
             Err(TatolabCommandFailure::refused(format!(
                 "{runtime_named_for_stderr} closed its MCP stream."
+            )))
+        }
+        McpStdioPipeEnding::McpHostInputUnreadable(input_failure) => {
+            Err(TatolabCommandFailure::refused(format!(
+                "cannot read stdin into the MCP stream of {runtime_named_for_stderr}: \
+                 {input_failure}"
             )))
         }
         McpStdioPipeEnding::McpHostOutputFailed(output_failure) => {
@@ -164,10 +200,10 @@ async fn copy_both_ways_until_the_pipe_ends(
     mcp_host_output: impl AsyncWrite + Unpin,
 ) -> McpStdioPipeEnding {
     let UpgradedLocalApiMcpStdioStream {
-        mut local_api_stream,
+        local_api_stream,
         bytes_streamed_behind_the_response_head,
     } = upgraded_mcp_stdio_stream;
-    let (local_api_stream_read_half, local_api_stream_write_half) = local_api_stream.split();
+    let (local_api_stream_read_half, local_api_stream_write_half) = local_api_stream.into_split();
     let mcp_host_input_to_the_runtime =
         copy_mcp_host_input_to_the_runtime(mcp_host_input, local_api_stream_write_half);
     let the_runtime_to_mcp_host_output = copy_the_runtime_to_mcp_host_output(
@@ -188,20 +224,21 @@ async fn copy_both_ways_until_the_pipe_ends(
                 mcp_host_input_copy_ending = Some(host_input_copy_ending);
             }
             runtime_output_copy_ending = &mut the_runtime_to_mcp_host_output => {
-                return match runtime_output_copy_ending {
-                    RuntimeOutputCopyEnding::RuntimeClosedItsSide
-                        if mcp_host_input_copy_ending
-                            == Some(McpHostInputCopyEnding::McpHostInputEnded) =>
-                    {
-                        McpStdioPipeEnding::RuntimeClosedAfterMcpHostInputEnded
+                return match (runtime_output_copy_ending, mcp_host_input_copy_ending) {
+                    (_, Some(McpHostInputCopyEnding::McpHostInputUnreadable(input_failure))) => {
+                        McpStdioPipeEnding::McpHostInputUnreadable(input_failure)
                     }
-                    RuntimeOutputCopyEnding::RuntimeClosedItsSide => {
+                    (
+                        RuntimeOutputCopyEnding::RuntimeClosedItsSide,
+                        Some(McpHostInputCopyEnding::McpHostInputEnded),
+                    ) => McpStdioPipeEnding::RuntimeClosedAfterMcpHostInputEnded,
+                    (RuntimeOutputCopyEnding::RuntimeClosedItsSide, _) => {
                         McpStdioPipeEnding::RuntimeClosedWithMcpHostInputOpen
                     }
-                    RuntimeOutputCopyEnding::McpHostStoppedReading => {
+                    (RuntimeOutputCopyEnding::McpHostStoppedReading, _) => {
                         McpStdioPipeEnding::McpHostStoppedReading
                     }
-                    RuntimeOutputCopyEnding::McpHostOutputFailed(output_failure) => {
+                    (RuntimeOutputCopyEnding::McpHostOutputFailed(output_failure), _) => {
                         McpStdioPipeEnding::McpHostOutputFailed(output_failure)
                     }
                 };
@@ -210,37 +247,36 @@ async fn copy_both_ways_until_the_pipe_ends(
     }
 }
 
-/// Copy stdin to the runtime until it ends, then shut down the socket's write side so the runtime
-/// reads the end and still answers what it owes.
+/// Copy stdin to the runtime until stdin ends or either side fails.
 async fn copy_mcp_host_input_to_the_runtime(
     mut mcp_host_input: impl AsyncRead + Unpin,
-    mut local_api_stream_write_half: tokio::net::unix::WriteHalf<'_>,
+    mut local_api_stream_write_half: OwnedWriteHalf,
 ) -> McpHostInputCopyEnding {
     let mut mcp_host_input_chunk = vec![0_u8; MCP_STDIO_PIPE_CHUNK_BYTES];
     loop {
         let read_byte_count = match mcp_host_input.read(&mut mcp_host_input_chunk).await {
-            Ok(0) => break,
+            Ok(0) => return McpHostInputCopyEnding::McpHostInputEnded,
             Ok(read_byte_count) => read_byte_count,
-            Err(_unreadable_mcp_host_input) => return McpHostInputCopyEnding::CopyBrokeOff,
+            Err(input_failure) if input_failure.kind() == io::ErrorKind::Interrupted => continue,
+            Err(input_failure) => {
+                return McpHostInputCopyEnding::McpHostInputUnreadable(input_failure);
+            }
         };
         if local_api_stream_write_half
             .write_all(&mcp_host_input_chunk[..read_byte_count])
             .await
             .is_err()
         {
-            return McpHostInputCopyEnding::CopyBrokeOff;
+            return McpHostInputCopyEnding::RuntimeStoppedTakingBytes;
         }
     }
-    // A runtime already gone has nothing left to read the end; the copy the other way reports it.
-    let _write_side_shut_down_or_already_gone = local_api_stream_write_half.shutdown().await;
-    McpHostInputCopyEnding::McpHostInputEnded
 }
 
 /// Copy the runtime's stream to stdout, starting with the bytes it streamed behind the `101`'s
 /// head, flushing every chunk so the host reads each message as it lands.
 async fn copy_the_runtime_to_mcp_host_output(
     bytes_streamed_behind_the_response_head: &[u8],
-    mut local_api_stream_read_half: tokio::net::unix::ReadHalf<'_>,
+    mut local_api_stream_read_half: OwnedReadHalf,
     mut mcp_host_output: impl AsyncWrite + Unpin,
 ) -> RuntimeOutputCopyEnding {
     if let Err(output_failure) = write_and_flush_to_mcp_host_output(
@@ -315,14 +351,51 @@ mod tests {
     /// Longer than any pipe here takes; a pipe still running past it never ended.
     const PIPE_TEST_DEADLINE: Duration = Duration::from_secs(20);
 
-    /// Run the pipe on a thread of its own against `node_registry_directory`, answering its
-    /// outcome and the host output it wrote; fails the test if it outlives
-    /// [`PIPE_TEST_DEADLINE`].
+    /// An upgrade bound short enough that a test waiting it out stays quick.
+    const SHORT_MCP_STDIO_UPGRADE_TIMEOUT: Duration = Duration::from_millis(200);
+
+    /// Stdin that fails every read, as a host's closed or broken stdin does.
+    struct McpHostInputThatCannotBeRead;
+
+    impl AsyncRead for McpHostInputThatCannotBeRead {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _context: &mut std::task::Context<'_>,
+            _read_buffer: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            std::task::Poll::Ready(Err(io::Error::other("the host's stdin went away")))
+        }
+    }
+
+    /// [`pipe_within_the_test_deadline_bounding_the_upgrade_by`] the verb's own upgrade bound.
     fn pipe_within_the_test_deadline<McpHostInput, McpHostOutput>(
         node_registry_directory: PathBuf,
         requested_runtime_name_or_id: Option<&'static str>,
         mcp_host_input: McpHostInput,
         mcp_host_output: McpHostOutput,
+    ) -> (Result<u8, TatolabCommandFailure>, McpHostOutput)
+    where
+        McpHostInput: AsyncRead + Unpin + Send + 'static,
+        McpHostOutput: AsyncWrite + Unpin + Send + 'static,
+    {
+        pipe_within_the_test_deadline_bounding_the_upgrade_by(
+            node_registry_directory,
+            requested_runtime_name_or_id,
+            mcp_host_input,
+            mcp_host_output,
+            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+        )
+    }
+
+    /// Run the pipe on a thread of its own against `node_registry_directory`, answering its
+    /// outcome and the host output it wrote; fails the test if it outlives
+    /// [`PIPE_TEST_DEADLINE`].
+    fn pipe_within_the_test_deadline_bounding_the_upgrade_by<McpHostInput, McpHostOutput>(
+        node_registry_directory: PathBuf,
+        requested_runtime_name_or_id: Option<&'static str>,
+        mcp_host_input: McpHostInput,
+        mcp_host_output: McpHostOutput,
+        mcp_stdio_upgrade_timeout: Duration,
     ) -> (Result<u8, TatolabCommandFailure>, McpHostOutput)
     where
         McpHostInput: AsyncRead + Unpin + Send + 'static,
@@ -336,6 +409,7 @@ mod tests {
                 requested_runtime_name_or_id,
                 mcp_host_input,
                 &mut mcp_host_output,
+                mcp_stdio_upgrade_timeout,
             );
             let _test_still_waiting = pipe_finished.send((pipe_outcome, mcp_host_output));
         });
@@ -472,6 +546,84 @@ mod tests {
             )
         );
         assert_eq!(mcp_host_output, b"");
+    }
+
+    /// The stub writes its owed answer only once it reads the client's half-close, so the answer
+    /// on the host's output proves the failed read still shut the write direction.
+    #[test]
+    fn an_unreadable_stdin_half_closes_the_stream_and_is_refused_naming_stdin() {
+        let answer_owed_once_stdin_ended = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n";
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
+                written_once_upgraded: Vec::new(),
+                written_once_the_client_half_closed: answer_owed_once_stdin_ended.to_vec(),
+            },
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
+
+        let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
+            isolated_node_registry.node_registry_directory(),
+            None,
+            McpHostInputThatCannotBeRead,
+            Vec::new(),
+        );
+
+        assert_eq!(
+            refusal_line_and_exit_code(pipe_outcome),
+            (
+                format!(
+                    "cannot read stdin into the MCP stream of runtime `{SCRIPTED_RUNTIME_NAME}` \
+                     ({SCRIPTED_RUNTIME_ID}): the host's stdin went away"
+                ),
+                1
+            )
+        );
+        assert_eq!(mcp_host_output, answer_owed_once_stdin_ended);
+        assert_eq!(stub_local_api_server.recorded_mcp_stdio_client_bytes(), b"");
+    }
+
+    #[test]
+    fn an_upgrade_the_runtime_never_answers_is_refused_once_its_bound_elapses() {
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::NeverAnswer,
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
+        let pipe_started = std::time::Instant::now();
+
+        let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline_bounding_the_upgrade_by(
+            isolated_node_registry.node_registry_directory(),
+            None,
+            tokio::io::empty(),
+            Vec::new(),
+            SHORT_MCP_STDIO_UPGRADE_TIMEOUT,
+        );
+
+        assert_eq!(
+            refusal_line_and_exit_code(pipe_outcome),
+            (
+                format!(
+                    "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) did not open its \
+                     MCP stream: it did not answer within 200ms"
+                ),
+                1
+            )
+        );
+        assert!(
+            pipe_started.elapsed() < PIPE_TEST_DEADLINE / 4,
+            "the pipe took {:?}",
+            pipe_started.elapsed()
+        );
+        assert_eq!(mcp_host_output, b"");
+        assert_eq!(
+            stub_local_api_server
+                .recorded_mcp_stdio_request_heads()
+                .len(),
+            1
+        );
     }
 
     #[test]

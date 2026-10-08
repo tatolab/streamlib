@@ -147,6 +147,8 @@ pub enum StubMcpStdioUpgradeAnswer {
     CloseOnceUpgraded,
     /// Refuse the upgrade with `http_status` and an empty body.
     RefuseTheUpgrade { http_status: u16 },
+    /// Read the upgrade request and never answer it.
+    NeverAnswer,
 }
 
 /// One request head the stub received, as HTTP parsed it.
@@ -334,10 +336,16 @@ async fn answer_mcp_stdio_upgrade_request(
                 })
                 .collect(),
         });
-    if let StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { http_status } =
-        stub_state.mcp_stdio_upgrade_answer
-    {
-        return StatusCode::from_u16(http_status).unwrap().into_response();
+    match stub_state.mcp_stdio_upgrade_answer {
+        StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { http_status } => {
+            return StatusCode::from_u16(http_status).unwrap().into_response();
+        }
+        StubMcpStdioUpgradeAnswer::NeverAnswer => {
+            return std::future::pending::<Response>().await;
+        }
+        StubMcpStdioUpgradeAnswer::ServeTheStubMcpServer
+        | StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses { .. }
+        | StubMcpStdioUpgradeAnswer::CloseOnceUpgraded => {}
     }
     let pending_upgrade = hyper::upgrade::on(&mut upgrade_request);
     tokio::spawn(async move {
@@ -405,7 +413,8 @@ async fn play_the_upgraded_mcp_stdio_stream(
             let _closed_or_already_gone = upgraded_mcp_stdio_stream.shutdown().await;
         }
         StubMcpStdioUpgradeAnswer::CloseOnceUpgraded
-        | StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { .. } => {}
+        | StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { .. }
+        | StubMcpStdioUpgradeAnswer::NeverAnswer => {}
     }
 }
 

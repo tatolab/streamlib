@@ -71,6 +71,16 @@ pub(crate) enum LocalApiHttpRequestFailure {
         #[source]
         transport_failure: LocalApiTransportFailure,
     },
+    /// The runtime took the request and closed the connection without answering it.
+    #[error(
+        "the runtime at {} closed the connection before answering",
+        .local_api_socket_path.display()
+    )]
+    ConnectionClosedBeforeAnswering {
+        local_api_socket_path: PathBuf,
+        #[source]
+        closed_connection_failure: hyper::Error,
+    },
 }
 
 fn local_api_unreachable(
@@ -126,10 +136,17 @@ pub(crate) async fn send_request_over_the_local_api_socket(
         .send_request(request)
         .await
         .map_err(|send_failure| {
-            local_api_unreachable(
-                local_api_socket_path,
-                LocalApiTransportFailure::HttpExchangeFailed(send_failure),
-            )
+            if send_failure.is_incomplete_message() || send_failure.is_canceled() {
+                LocalApiHttpRequestFailure::ConnectionClosedBeforeAnswering {
+                    local_api_socket_path: local_api_socket_path.to_path_buf(),
+                    closed_connection_failure: send_failure,
+                }
+            } else {
+                local_api_unreachable(
+                    local_api_socket_path,
+                    LocalApiTransportFailure::HttpExchangeFailed(send_failure),
+                )
+            }
         })
 }
 
@@ -665,11 +682,12 @@ mod mcp_stdio_upgrade_tests {
     }
 
     #[test]
-    fn a_runtime_closing_before_it_answers_leaves_the_upgrade_unanswered() {
+    fn a_runtime_closing_the_connection_before_it_answers_is_named_as_closing_it() {
         let scripted_local_api_socket =
             ScriptedLocalApiSocket::playing(move |mut runtime_connection| {
                 read_until(&mut runtime_connection, b"\r\n\r\n");
             });
+        let local_api_socket_path = scripted_local_api_socket.local_api_socket_path.clone();
 
         let unanswered = upgrade_on_a_fresh_tokio_runtime(
             &scripted_local_api_socket.local_api_socket_path,
@@ -681,10 +699,17 @@ mod mcp_stdio_upgrade_tests {
             matches!(
                 unanswered,
                 LocalApiMcpStdioUpgradeFailure::RequestUnanswered(
-                    LocalApiHttpRequestFailure::LocalApiUnreachable { .. }
+                    LocalApiHttpRequestFailure::ConnectionClosedBeforeAnswering { .. }
                 )
             ),
             "{unanswered:?}"
+        );
+        assert_eq!(
+            unanswered.to_string(),
+            format!(
+                "the runtime at {} closed the connection before answering",
+                local_api_socket_path.display()
+            )
         );
     }
 

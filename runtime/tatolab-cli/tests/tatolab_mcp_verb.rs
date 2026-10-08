@@ -73,16 +73,18 @@ mod against_an_isolated_registry {
     /// child's stdin, before killing it.
     const RMCP_CHILD_PROCESS_KILL_DEADLINE: Duration = Duration::from_secs(3);
 
-    /// What the MCP host does with the verb's stdin.
+    /// What the MCP host hands the verb as its stdin.
     enum McpHostStdin<'host_bytes> {
-        /// Write these bytes, then close stdin.
+        /// A pipe the host writes these bytes into, then closes.
         WrittenThenClosed(&'host_bytes [u8]),
-        /// Hold stdin open, writing nothing, until the verb exits.
+        /// A pipe the host holds open, writing nothing, until the verb exits.
         HeldOpen,
+        /// A file the verb opens as stdin and cannot read: a directory.
+        UnreadableDirectory(&'host_bytes Path),
     }
 
-    /// Launch `tatolab mcp <mcp_verb_flags>` reading the registry under `xdg_runtime_dir`, feed
-    /// its stdin as `mcp_host_stdin` says, and answer how it exited; stderr is always captured,
+    /// Launch `tatolab mcp <mcp_verb_flags>` reading the registry under `xdg_runtime_dir`, its
+    /// stdin as `mcp_host_stdin` says, and answer how it exited; stderr is always captured,
     /// stdout only when `mcp_host_stdout` is piped.
     fn run_tatolab_mcp(
         xdg_runtime_dir: &Path,
@@ -90,23 +92,30 @@ mod against_an_isolated_registry {
         mcp_host_stdin: McpHostStdin<'_>,
         mcp_host_stdout: Stdio,
     ) -> Output {
-        let mut tatolab_mcp = Command::new(env!("CARGO_BIN_EXE_tatolab"))
+        let mut tatolab_mcp_command = Command::new(env!("CARGO_BIN_EXE_tatolab"));
+        tatolab_mcp_command
             .arg("mcp")
             .args(mcp_verb_flags)
             .env("XDG_RUNTIME_DIR", xdg_runtime_dir)
-            .stdin(Stdio::piped())
             .stdout(mcp_host_stdout)
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut mcp_host_stdin_writer = tatolab_mcp.stdin.take().unwrap();
+            .stderr(Stdio::piped());
+        match mcp_host_stdin {
+            McpHostStdin::UnreadableDirectory(directory) => {
+                tatolab_mcp_command.stdin(std::fs::File::open(directory).unwrap())
+            }
+            McpHostStdin::WrittenThenClosed(_) | McpHostStdin::HeldOpen => {
+                tatolab_mcp_command.stdin(Stdio::piped())
+            }
+        };
+        let mut tatolab_mcp = tatolab_mcp_command.spawn().unwrap();
         let held_open_mcp_host_stdin = match mcp_host_stdin {
             McpHostStdin::WrittenThenClosed(mcp_host_bytes) => {
+                let mut mcp_host_stdin_writer = tatolab_mcp.stdin.take().unwrap();
                 mcp_host_stdin_writer.write_all(mcp_host_bytes).unwrap();
-                drop(mcp_host_stdin_writer);
                 None
             }
-            McpHostStdin::HeldOpen => Some(mcp_host_stdin_writer),
+            McpHostStdin::HeldOpen => tatolab_mcp.stdin.take(),
+            McpHostStdin::UnreadableDirectory(_) => None,
         };
         let tatolab_mcp_pid = libc::pid_t::try_from(tatolab_mcp.id()).unwrap();
         let (tatolab_mcp_exited, tatolab_mcp_exiting) = mpsc::channel();
@@ -222,6 +231,43 @@ mod against_an_isolated_registry {
             )
         );
         assert_eq!(piped.stdout, b"");
+    }
+
+    /// Reading a directory fails with `EISDIR`, so the verb's stdin cannot be read at all.
+    #[test]
+    fn an_unreadable_stdin_exits_non_zero_naming_stdin_after_the_runtime_answers_what_it_owes() {
+        let answer_owed_once_stdin_ended = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n";
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
+                written_once_upgraded: Vec::new(),
+                written_once_the_client_half_closed: answer_owed_once_stdin_ended.to_vec(),
+            },
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
+        let directory_as_stdin = tempfile::tempdir().unwrap();
+
+        let piped = run_tatolab_mcp(
+            isolated_node_registry.xdg_runtime_dir(),
+            &[],
+            McpHostStdin::UnreadableDirectory(directory_as_stdin.path()),
+            Stdio::piped(),
+        );
+
+        assert_eq!(piped.status.code(), Some(1));
+        let stderr_line = the_one_stderr_line(&piped);
+        assert!(
+            stderr_line.starts_with(&format!(
+                "error: cannot read stdin into the MCP stream of runtime \
+                 `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}): "
+            )),
+            "{stderr_line}"
+        );
+        assert_eq!(
+            piped.stdout, answer_owed_once_stdin_ended,
+            "the stream was half-closed, so the runtime answered what it owed"
+        );
     }
 
     #[test]
