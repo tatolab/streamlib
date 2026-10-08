@@ -198,7 +198,7 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   with the project as import root (graph JSON on stdout, cross-floor warnings on stderr, a failed
   compile's traceback as the error), start `tatolabd` attached, forward Ctrl-C; `dev` restarts it
   on an edit. `graph`, `tap`, `logs`, `nodes`, `exchange`, `mcp` speak the local API. `new` writes
-  the embedded templates with `dependencies = ["tatolab-stream", "numpy>=2.1"]`.
+  the embedded templates with `dependencies = ["tatolab-stream>=0.41", "numpy>=2.1"]`.
 
 ## ADDED: §Processor model — the runtime refuses by name what it does not understand
 
