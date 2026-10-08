@@ -100,13 +100,22 @@ pub(crate) enum PrivilegeEscalationHelper {
 }
 
 impl PrivilegeEscalationHelper {
-    /// The executable run, and named to the user.
+    /// The executable looked up on PATH, and named to the user.
     pub(crate) fn executable_name(self) -> &'static str {
         match self {
             PrivilegeEscalationHelper::Pkexec => "pkexec",
             PrivilegeEscalationHelper::Sudo => "sudo",
         }
     }
+}
+
+/// A privilege helper and the executable its PATH lookup resolved to, which is the one run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedPrivilegeEscalationHelper {
+    /// Which helper it is.
+    pub(crate) privilege_escalation_helper: PrivilegeEscalationHelper,
+    /// The file the lookup found.
+    pub(crate) resolved_helper_executable: PathBuf,
 }
 
 /// Resolves an executable name against PATH.
@@ -116,9 +125,9 @@ pub(crate) type ExecutableOnPathFinder<'machine> = Box<dyn Fn(&str) -> Option<Pa
 pub(crate) type EnvironmentVariableReader<'machine> =
     Box<dyn Fn(&str) -> Option<OsString> + 'machine>;
 
-/// Runs `<helper> sh -c <script>` and reports how it ended.
+/// Runs `<resolved helper executable> sh -c <script>` and reports how it ended.
 pub(crate) type PrivilegedScriptRunner<'machine> =
-    Box<dyn FnMut(PrivilegeEscalationHelper, &str) -> io::Result<ExitStatus> + 'machine>;
+    Box<dyn FnMut(&ResolvedPrivilegeEscalationHelper, &str) -> io::Result<ExitStatus> + 'machine>;
 
 /// The machine facts `enable-virtual-camera` decides on and the one command it runs, passed in so
 /// every decision runs without root.
@@ -211,10 +220,10 @@ fn find_executable_on_search_path(
 }
 
 fn run_privileged_script_through_helper_on_this_terminal(
-    privilege_escalation_helper: PrivilegeEscalationHelper,
+    resolved_privilege_escalation_helper: &ResolvedPrivilegeEscalationHelper,
     privileged_script: &str,
 ) -> io::Result<ExitStatus> {
-    Command::new(privilege_escalation_helper.executable_name())
+    Command::new(&resolved_privilege_escalation_helper.resolved_helper_executable)
         .args(["sh", "-c", privileged_script])
         .status()
 }
@@ -311,7 +320,7 @@ fn loopback_module_is_installed_for_kernel(
 pub(crate) fn choose_privilege_escalation_helper(
     find_executable_on_path: &dyn Fn(&str) -> Option<PathBuf>,
     read_environment_variable: &dyn Fn(&str) -> Option<OsString>,
-) -> Option<PrivilegeEscalationHelper> {
+) -> Option<ResolvedPrivilegeEscalationHelper> {
     let has_desktop_session =
         DESKTOP_SESSION_ENVIRONMENT_VARIABLES
             .iter()
@@ -319,18 +328,21 @@ pub(crate) fn choose_privilege_escalation_helper(
                 read_environment_variable(session_variable)
                     .is_some_and(|session_value| !session_value.is_empty())
             });
-    let is_on_path = |privilege_escalation_helper: PrivilegeEscalationHelper| {
-        find_executable_on_path(privilege_escalation_helper.executable_name()).is_some()
+    let resolved_on_path = |privilege_escalation_helper: PrivilegeEscalationHelper| {
+        find_executable_on_path(privilege_escalation_helper.executable_name()).map(
+            |resolved_helper_executable| ResolvedPrivilegeEscalationHelper {
+                privilege_escalation_helper,
+                resolved_helper_executable,
+            },
+        )
     };
-    if has_desktop_session && is_on_path(PrivilegeEscalationHelper::Pkexec) {
-        Some(PrivilegeEscalationHelper::Pkexec)
-    } else if is_on_path(PrivilegeEscalationHelper::Sudo) {
-        Some(PrivilegeEscalationHelper::Sudo)
-    } else if is_on_path(PrivilegeEscalationHelper::Pkexec) {
-        Some(PrivilegeEscalationHelper::Pkexec)
-    } else {
-        None
+    if has_desktop_session
+        && let Some(resolved_pkexec) = resolved_on_path(PrivilegeEscalationHelper::Pkexec)
+    {
+        return Some(resolved_pkexec);
     }
+    resolved_on_path(PrivilegeEscalationHelper::Sudo)
+        .or_else(|| resolved_on_path(PrivilegeEscalationHelper::Pkexec))
 }
 
 fn describe_privilege_escalation_helper_ending(helper_exit_status: ExitStatus) -> String {
@@ -371,7 +383,7 @@ pub(crate) fn install_virtual_camera_grant_through_privilege_escalation_helper(
              or on a kernel that ships the module, `linux-modules-{kernel_release}` — then re-run."
         )));
     }
-    let Some(privilege_escalation_helper) = choose_privilege_escalation_helper(
+    let Some(resolved_privilege_escalation_helper) = choose_privilege_escalation_helper(
         &*grant_target_machine.find_executable_on_path,
         &*grant_target_machine.read_environment_variable,
     ) else {
@@ -381,13 +393,15 @@ pub(crate) fn install_virtual_camera_grant_through_privilege_escalation_helper(
              commands to run as root."
         )));
     };
-    let helper_executable_name = privilege_escalation_helper.executable_name();
+    let helper_executable_name = resolved_privilege_escalation_helper
+        .privilege_escalation_helper
+        .executable_name();
     println!(
         "Installing the virtual camera permission via {helper_executable_name} — this is the one \
          privileged step, and it asks for your password."
     );
     let helper_exit_status = (grant_target_machine.run_privileged_script_through_helper)(
-        privilege_escalation_helper,
+        &resolved_privilege_escalation_helper,
         &virtual_camera_grant_privileged_script(),
     )
     .map_err(|start_failure| {
@@ -467,14 +481,28 @@ mod tests {
         fs::write(dkms_module_directory.join(module_object_file_name), b"").unwrap();
     }
 
+    /// The directory [`executables_on_path`] resolves every helper into.
+    const SCRIPTED_PATH_DIRECTORY: &str = "/opt/scripted-path";
+
     fn executables_on_path(
         available_executable_names: &'static [&'static str],
     ) -> ExecutableOnPathFinder<'static> {
         Box::new(move |executable_name| {
             available_executable_names
                 .contains(&executable_name)
-                .then(|| PathBuf::from("/usr/bin").join(executable_name))
+                .then(|| PathBuf::from(SCRIPTED_PATH_DIRECTORY).join(executable_name))
         })
+    }
+
+    /// `privilege_escalation_helper` as [`executables_on_path`] resolves it.
+    fn resolved_on_the_scripted_path(
+        privilege_escalation_helper: PrivilegeEscalationHelper,
+    ) -> ResolvedPrivilegeEscalationHelper {
+        ResolvedPrivilegeEscalationHelper {
+            privilege_escalation_helper,
+            resolved_helper_executable: PathBuf::from(SCRIPTED_PATH_DIRECTORY)
+                .join(privilege_escalation_helper.executable_name()),
+        }
     }
 
     fn environment_of(
@@ -713,30 +741,40 @@ mod tests {
                 &*both_helpers,
                 &*environment_of(&[("DISPLAY", ":1")])
             ),
-            Some(PrivilegeEscalationHelper::Pkexec)
+            Some(resolved_on_the_scripted_path(
+                PrivilegeEscalationHelper::Pkexec
+            ))
         );
         assert_eq!(
             choose_privilege_escalation_helper(
                 &*both_helpers,
                 &*environment_of(&[("WAYLAND_DISPLAY", "wayland-0")])
             ),
-            Some(PrivilegeEscalationHelper::Pkexec)
+            Some(resolved_on_the_scripted_path(
+                PrivilegeEscalationHelper::Pkexec
+            ))
         );
         assert_eq!(
             choose_privilege_escalation_helper(&*both_helpers, &*environment_of(&[])),
-            Some(PrivilegeEscalationHelper::Sudo)
+            Some(resolved_on_the_scripted_path(
+                PrivilegeEscalationHelper::Sudo
+            ))
         );
         assert_eq!(
             choose_privilege_escalation_helper(
                 &*both_helpers,
                 &*environment_of(&[("DISPLAY", "")])
             ),
-            Some(PrivilegeEscalationHelper::Sudo),
+            Some(resolved_on_the_scripted_path(
+                PrivilegeEscalationHelper::Sudo
+            )),
             "an empty DISPLAY is no session"
         );
         assert_eq!(
             choose_privilege_escalation_helper(&*only_pkexec, &*environment_of(&[])),
-            Some(PrivilegeEscalationHelper::Pkexec)
+            Some(resolved_on_the_scripted_path(
+                PrivilegeEscalationHelper::Pkexec
+            ))
         );
         assert_eq!(
             choose_privilege_escalation_helper(&*no_helper, &*environment_of(&[("DISPLAY", ":1")])),
@@ -762,7 +800,7 @@ mod tests {
     #[test]
     fn installs_through_the_chosen_helper_and_succeeds_once_the_control_node_opens_read_write() {
         let scratch_directory = tempfile::tempdir().unwrap();
-        let recorded_helper_runs: RefCell<Vec<(PrivilegeEscalationHelper, String)>> =
+        let recorded_helper_runs: RefCell<Vec<(ResolvedPrivilegeEscalationHelper, String)>> =
             RefCell::new(Vec::new());
         let mut grant_target_machine = scripted_linux_machine(scratch_directory.path());
         install_scripted_loopback_module(
@@ -774,10 +812,11 @@ mod tests {
         grant_target_machine.read_environment_variable = environment_of(&[("DISPLAY", ":1")]);
         grant_target_machine.loopback_control_node_path = PathBuf::from("/dev/null");
         grant_target_machine.run_privileged_script_through_helper =
-            Box::new(|privilege_escalation_helper, privileged_script| {
-                recorded_helper_runs
-                    .borrow_mut()
-                    .push((privilege_escalation_helper, privileged_script.to_owned()));
+            Box::new(|resolved_privilege_escalation_helper, privileged_script| {
+                recorded_helper_runs.borrow_mut().push((
+                    resolved_privilege_escalation_helper.clone(),
+                    privileged_script.to_owned(),
+                ));
                 Ok(ExitStatus::from_raw(0))
             });
 
@@ -792,9 +831,58 @@ mod tests {
         assert_eq!(
             recorded_helper_runs.into_inner(),
             [(
-                PrivilegeEscalationHelper::Pkexec,
+                resolved_on_the_scripted_path(PrivilegeEscalationHelper::Pkexec),
                 virtual_camera_grant_privileged_script()
             )]
+        );
+    }
+
+    /// The helper runs from the file its lookup found, not by its name again: the stand-in sits in
+    /// a directory this process's PATH does not hold.
+    #[test]
+    fn the_helper_runs_from_the_path_its_lookup_resolved() {
+        let scratch_directory = tempfile::tempdir().unwrap();
+        let stand_in_helper = scratch_directory.path().join("sudo");
+        let recorded_arguments = scratch_directory
+            .path()
+            .join("arguments-the-helper-was-given");
+        fs::write(
+            &stand_in_helper,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+                recorded_arguments.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&stand_in_helper, fs::Permissions::from_mode(0o755)).unwrap();
+        let resolved_stand_in_helper = ResolvedPrivilegeEscalationHelper {
+            privilege_escalation_helper: PrivilegeEscalationHelper::Sudo,
+            resolved_helper_executable: stand_in_helper,
+        };
+
+        // Another test's fork can briefly hold the just-written file open, so exec answers
+        // ETXTBSY until that child execs in turn.
+        let mut busy_executable_retries_left = 500;
+        let helper_exit_status = loop {
+            match run_privileged_script_through_helper_on_this_terminal(
+                &resolved_stand_in_helper,
+                "true",
+            ) {
+                Err(start_failure)
+                    if start_failure.raw_os_error() == Some(libc::ETXTBSY)
+                        && busy_executable_retries_left > 0 =>
+                {
+                    busy_executable_retries_left -= 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                started => break started.unwrap(),
+            }
+        };
+
+        assert!(helper_exit_status.success());
+        assert_eq!(
+            fs::read_to_string(&recorded_arguments).unwrap(),
+            "sh\n-c\ntrue\n"
         );
     }
 
