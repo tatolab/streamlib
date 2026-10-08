@@ -468,6 +468,10 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
             )
         )  # fmt: skip
         assert tapped_for_a_surface_id["bags"], f"no bag reached the tap: {tapped_for_a_surface_id}"
+        assert tapped_for_a_surface_id["bags"][0]["hex_truncated"] is False, (
+            "the tapped bag is past the tap's preview cap, so its hex cannot be decoded: "
+            f"{tapped_for_a_surface_id['bags'][0]['byte_len']} bytes"
+        )
         published_surface_id = run_python_with_the_lend(
             runtime_unit,
             private_runtime_directories.environment,
