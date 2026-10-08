@@ -37,7 +37,8 @@ skill runs it and sends what it wrote.
    `codec_roundtrip_rig --source mp4:<file>` replays the video track back through our decoder,
    locked to the per-codec vivid baseline within ±0.05.
 
-   Exit codes: `0` pass, `1` fail, `77` skip (no vivid, no GPU, no runtime unit, or a fixture venv
+   Exit codes: `0` pass, `1` fail, `77` skip (no vivid, a missing tool — `cargo`, `python3`,
+   `v4l2-ctl` —, no runtime unit or lend, no fixture venv and no uv to make one, or a fixture venv
    that cannot import `tatolab.stream` and numpy). A skip is not a pass — say so.
 
 2. Read the verdict and the written MP4 out of the output directory:
