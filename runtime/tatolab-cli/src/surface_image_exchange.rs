@@ -475,18 +475,24 @@ pub(crate) fn fetch_surface_image_png_bytes(
     })
 }
 
+/// Everything outside RFC 3986's unreserved set, percent-encoded in the route's `{surface_id}`
+/// segment — the set the runtime's own route builder encodes with.
+const SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET: &percent_encoding::AsciiSet =
+    &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+
 /// The exchange route's path for `published_surface_id`. A pooled frame id is
 /// `<slot>#<generation>`, and a bare `#` would make the generation a fragment the runtime never
 /// sees, so the id is percent-encoded down to RFC 3986's unreserved set.
 fn surface_image_exchange_route_path(published_surface_id: &str) -> String {
-    let mut percent_encoded_surface_id = String::with_capacity(published_surface_id.len());
-    for surface_id_byte in published_surface_id.bytes() {
-        if surface_id_byte.is_ascii_alphanumeric() || b"-._~".contains(&surface_id_byte) {
-            percent_encoded_surface_id.push(char::from(surface_id_byte));
-        } else {
-            percent_encoded_surface_id.push_str(&format!("%{surface_id_byte:02X}"));
-        }
-    }
+    let percent_encoded_surface_id = percent_encoding::utf8_percent_encode(
+        published_surface_id,
+        SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET,
+    )
+    .to_string();
     SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace("{surface_id}", &percent_encoded_surface_id)
 }
 
@@ -775,25 +781,12 @@ fn json_value_is_truthy(json_value: &serde_json::Value) -> bool {
 /// The bytes a hex preview spells: two hex digits per byte, ASCII whitespace between bytes
 /// ignored.
 fn bytes_of_a_hex_preview(hex_preview: &str) -> Result<Vec<u8>, String> {
-    let hex_preview_bytes = hex_preview.as_bytes();
-    let mut decoded_bytes = Vec::with_capacity(hex_preview_bytes.len() / 2);
-    let mut position = 0;
-    while position < hex_preview_bytes.len() {
-        if hex_preview_bytes[position].is_ascii_whitespace() {
-            position += 1;
-            continue;
-        }
-        let hex_digit_value_at = |digit_position: usize| {
-            hex_preview_bytes
-                .get(digit_position)
-                .and_then(|hex_digit| char::from(*hex_digit).to_digit(16))
-                .and_then(|hex_digit_value| u8::try_from(hex_digit_value).ok())
-                .ok_or_else(|| format!("non-hexadecimal number found at position {digit_position}"))
-        };
-        let high_nibble = hex_digit_value_at(position)?;
-        let low_nibble = hex_digit_value_at(position + 1)?;
-        decoded_bytes.push(high_nibble << 4 | low_nibble);
-        position += 2;
+    let mut decoded_bytes = Vec::with_capacity(hex_preview.len() / 2);
+    for whitespace_separated_hex_run in hex_preview.split_ascii_whitespace() {
+        decoded_bytes.extend(
+            hex::decode(whitespace_separated_hex_run)
+                .map_err(|hex_failure| hex_failure.to_string())?,
+        );
     }
     Ok(decoded_bytes)
 }
@@ -1655,7 +1648,7 @@ mod tests {
             (
                 r#"{"bags": [{"hex_preview": "0g"}]}"#,
                 "tap of `cam/frame` returned a bag whose hex preview does not decode: \
-                 non-hexadecimal number found at position 1",
+                 Invalid character 'g' at position 1",
             ),
         ] {
             assert_eq!(
@@ -1673,11 +1666,11 @@ mod tests {
         );
         assert_eq!(
             bytes_of_a_hex_preview("abc"),
-            Err("non-hexadecimal number found at position 3".to_owned())
+            Err(hex::FromHexError::OddLength.to_string())
         );
         assert_eq!(
             bytes_of_a_hex_preview("a b"),
-            Err("non-hexadecimal number found at position 1".to_owned())
+            Err(hex::FromHexError::OddLength.to_string())
         );
     }
 

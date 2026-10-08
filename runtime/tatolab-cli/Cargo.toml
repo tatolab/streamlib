@@ -39,6 +39,10 @@ http-body-util = "0.1"
 # its msgpack payload decoded.
 streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.41.0" }
 rmpv = { workspace = true }
+# The exchange route's surface-id segment, percent-encoded as the runtime's route builder does.
+percent-encoding = "2.3"
+# A tapped bag's hex preview back to its framed bytes.
+hex = "0.4"
 # `logs --list`'s STARTED_AT as an ISO-8601 UTC date.
 chrono = { version = "0.4.45", default-features = false, features = ["alloc"] }
 
