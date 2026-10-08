@@ -149,6 +149,12 @@ expect_silent "tatolab graph is a control-plane read"
 run_hook 'tatolab logs abc123'
 expect_silent "tatolab logs is a control-plane read"
 
+run_hook 'tatolab nodes' '/home/dev/streamlib/examples/camera-display'
+expect_silent "tatolab nodes from inside an example directory is still a registry read"
+
+run_hook 'tatolabd --dir examples/camera-display'
+expect_silent "tatolabd is not the tatolab launch verb"
+
 # ── Prose mentioning the launch path is not the launch path ──────────
 run_hook 'grep -rn "tatolab run" examples/ .claude/'
 expect_silent "grepping for the words tatolab run stays silent"
