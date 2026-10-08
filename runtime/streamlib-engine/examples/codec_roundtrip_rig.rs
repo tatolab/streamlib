@@ -1001,7 +1001,7 @@ mod linux_rig {
         // Hosted, not optional: an unobservable rig can only be watched, and
         // the codec proof is scored by tapping the decoded channel and
         // exchanging its surface ids for exact pixels.
-        streamlib_api_server::control_plane_host::register_api_server_control_plane_processor_on_runtime(
+        let _local_api_socket_held_for_its_processor = streamlib_api_server::control_plane_host::register_api_server_control_plane_processor_on_runtime(
             app.runner(),
             streamlib_api_server::control_plane_host::ApiServerControlPlaneHostConfig::default(),
         )?;

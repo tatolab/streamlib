@@ -53,11 +53,12 @@ pub struct ApiServerControlPlaneHostConfig {}
 /// discovers, under the runtime's own name.
 ///
 /// A socket that cannot be bound refuses here, before the runtime starts: a
-/// runtime nobody can reach over its local API does not run.
+/// runtime nobody can reach over its local API does not run. The host holds
+/// what this returns until the runtime is torn down.
 pub fn register_api_server_control_plane_processor_on_runtime(
     runtime: &Runner,
     ApiServerControlPlaneHostConfig {}: ApiServerControlPlaneHostConfig,
-) -> Result<()> {
+) -> Result<LocalApiSocketHeldForItsProcessor> {
     let local_api_socket_bound_by_this_host = bind_local_api_socket(
         &runtime
             .runtime_directory()
@@ -87,11 +88,30 @@ pub fn register_api_server_control_plane_processor_on_runtime(
     hand_the_bound_local_api_socket_to_its_processor(local_api_socket_bound_by_this_host)
 }
 
+/// A host's claim on the local API socket it bound for its `ApiServer`
+/// processor. Dropping it closes the socket and removes its file if the
+/// processor never took it — a run refused before it started.
+#[must_use = "dropping this before the runtime starts leaves its ApiServer no socket to serve"]
+#[derive(Debug)]
+pub struct LocalApiSocketHeldForItsProcessor {
+    local_api_socket_path: PathBuf,
+}
+
+impl Drop for LocalApiSocketHeldForItsProcessor {
+    fn drop(&mut self) {
+        drop(
+            LOCAL_API_SOCKETS_BOUND_BY_THEIR_HOST
+                .lock()
+                .remove(&self.local_api_socket_path),
+        );
+    }
+}
+
 /// Leave `local_api_socket_bound_by_this_host` for the `ApiServer` processor
 /// serving it to take, refusing a path that already holds one.
 fn hand_the_bound_local_api_socket_to_its_processor(
     local_api_socket_bound_by_this_host: LocalApiSocketBoundAndNotYetServed,
-) -> Result<()> {
+) -> Result<LocalApiSocketHeldForItsProcessor> {
     match LOCAL_API_SOCKETS_BOUND_BY_THEIR_HOST.lock().entry(
         local_api_socket_bound_by_this_host
             .local_api_socket_path()
@@ -102,8 +122,11 @@ fn hand_the_bound_local_api_socket_to_its_processor(
             occupied.key().display()
         ))),
         Entry::Vacant(vacant) => {
+            let local_api_socket_path = vacant.key().clone();
             vacant.insert(local_api_socket_bound_by_this_host);
-            Ok(())
+            Ok(LocalApiSocketHeldForItsProcessor {
+                local_api_socket_path,
+            })
         }
     }
 }
@@ -130,7 +153,7 @@ mod tests {
     fn a_socket_its_host_bound_is_taken_once() {
         let socket_directory = tempfile::tempdir().unwrap();
         let local_api_socket_path = socket_directory.path().join("local-api-Rtakenonce.sock");
-        hand_the_bound_local_api_socket_to_its_processor(
+        let _held = hand_the_bound_local_api_socket_to_its_processor(
             bind_local_api_socket(&local_api_socket_path).unwrap(),
         )
         .unwrap();
@@ -138,6 +161,22 @@ mod tests {
         let taken = take_the_local_api_socket_its_host_bound(&local_api_socket_path).unwrap();
 
         assert_eq!(taken.local_api_socket_path(), local_api_socket_path);
+        assert!(take_the_local_api_socket_its_host_bound(&local_api_socket_path).is_err());
+    }
+
+    #[test]
+    fn a_socket_its_processor_never_took_is_closed_and_removed_when_its_host_lets_go() {
+        let socket_directory = tempfile::tempdir().unwrap();
+        let local_api_socket_path = socket_directory.path().join("local-api-Rnevertaken.sock");
+        let held = hand_the_bound_local_api_socket_to_its_processor(
+            bind_local_api_socket(&local_api_socket_path).unwrap(),
+        )
+        .unwrap();
+        assert!(local_api_socket_path.exists());
+
+        drop(held);
+
+        assert!(!local_api_socket_path.exists());
         assert!(take_the_local_api_socket_its_host_bound(&local_api_socket_path).is_err());
     }
 }
