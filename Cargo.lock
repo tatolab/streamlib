@@ -4414,7 +4414,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4423,7 +4423,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cpu-readback"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "libc",
  "serde",
@@ -4442,7 +4442,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cuda"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "cudarc",
  "dlpark",
@@ -4463,7 +4463,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-opengl"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "gl",
  "khronos-egl",
@@ -4486,7 +4486,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-skia"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "libc",
  "png",
@@ -4508,7 +4508,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-vulkan"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "libc",
  "serde",
@@ -4557,7 +4557,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "libc",
  "objc2 0.6.4",
@@ -4572,7 +4572,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-engine"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -4657,7 +4657,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-error"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "anyhow",
  "streamlib-consumer-rhi",
@@ -4667,7 +4667,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-ipc-types"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "iceoryx2",
  "tracing",
@@ -4675,7 +4675,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-macros"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "crossbeam-channel",
  "proc-macro-crate",
@@ -4689,7 +4689,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-media-builtins"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "dispatch2",
  "libc",
@@ -4714,7 +4714,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-processor-schema"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "rmp-serde",
  "schemars 0.8.22",
@@ -4728,7 +4728,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-python-wheel"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "cudarc",
  "libc",
@@ -4753,7 +4753,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-runtime-client-contract"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "libc",
  "percent-encoding",
@@ -4767,7 +4767,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-adapter"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "bitflags 2.11.0",
  "libc",
@@ -4778,7 +4778,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "libc",
  "mach2",
@@ -4791,7 +4791,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-test-fixtures"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4864,7 +4864,7 @@ checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 
 [[package]]
 name = "tatolab-cli"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "axum",
  "chrono",
@@ -4917,7 +4917,7 @@ dependencies = [
 
 [[package]]
 name = "tatolabd"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "clap",
  "libc",
@@ -5532,7 +5532,7 @@ dependencies = [
 
 [[package]]
 name = "vulkan-jpeg"
-version = "0.42.0"
+version = "0.42.1"
 dependencies = [
  "bytemuck",
  "jpeg-encoder",
