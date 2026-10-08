@@ -17,7 +17,11 @@ name: Release to PyPI
 #
 # Only a run whose `dry_run` is false uploads. release-please's call passes
 # false; every other run is a dry run unless dispatched with `dry_run` unticked,
-# which is how a release whose upload failed is published by hand. A dry run
+# which is how a release whose distributions were never built or uploaded is
+# published by hand. A partially failed upload is recovered by re-running the
+# original run's failed publish-to-pypi job instead: a new dispatch rebuilds the
+# tatolab-webrtc wheels, whose compiled `_native` differs byte for byte from the
+# files PyPI already holds, so their upload fails on a hash mismatch. A dry run
 # builds and checks every distribution and stops short of PyPI.
 on:
   workflow_call:
@@ -274,8 +278,9 @@ jobs:
         if: inputs.dry_run
         run: uv publish --dry-run --trusted-publishing never dist/*
 
-      # `--check-url` makes a re-run after a partial upload skip the files PyPI
-      # already holds rather than fail on the first of them.
+      # `--check-url` skips a file PyPI already holds byte for byte, so re-running
+      # this job in the original run after a partial upload sends only the rest;
+      # a rebuilt distribution differs and fails on a hash mismatch.
       - name: Upload every distribution to PyPI
         if: ${{ !inputs.dry_run }}
         env:
