@@ -55,16 +55,19 @@ pub(crate) fn host_the_stream_until_shutdown(
     engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory);
     streamlib_media_builtins::register_media_builtin_processor_types();
 
+    let mut local_api_socket_held_for_its_processor = None;
     let run_outcome = engine
         .load_graph_snapshot_start_and_wait_for_shutdown(
             &stream_graph,
             Some(stream_environment),
             |loaded_engine| {
                 log_that_the_stream_loaded(loaded_engine)?;
-                register_api_server_control_plane_processor_on_runtime(
-                    loaded_engine,
-                    ApiServerControlPlaneHostConfig::default(),
-                )
+                local_api_socket_held_for_its_processor =
+                    Some(register_api_server_control_plane_processor_on_runtime(
+                        loaded_engine,
+                        ApiServerControlPlaneHostConfig::default(),
+                    )?);
+                Ok(())
             },
         )
         .map_err(|run_refusal| format!("the stream did not run: {run_refusal}"));
@@ -73,6 +76,7 @@ pub(crate) fn host_the_stream_until_shutdown(
     }
 
     let engine_teardown_outcome = tear_the_engine_down(engine);
+    drop(local_api_socket_held_for_its_processor);
     let mut exit_code = ExitCode::SUCCESS;
     for refusal in
         refusals_written_once_the_engine_is_torn_down(run_outcome, engine_teardown_outcome)

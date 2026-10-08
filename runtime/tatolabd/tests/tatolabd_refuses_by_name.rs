@@ -321,6 +321,90 @@ fn a_graph_that_loads_is_logged_loaded_before_the_engine_starts() {
     );
 }
 
+/// A local API socket another live process answers on refuses the run naming
+/// the socket, before the engine starts: a runtime nobody can reach over its
+/// local API does not run. The Vulkan loader is left no driver, so a run that
+/// went on to start the engine would be refused at the GPU instead.
+#[test]
+fn a_local_api_socket_a_live_process_holds_is_refused_naming_it_before_the_engine_starts() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let run_state = TatolabdRunState::new();
+    let stream_graph_file = run_state.write_stream_graph(&a_graph_of_one_test_pattern());
+    let pinned_runtime_id = "Rtatolabdlocalapiheld";
+    let runtime_directory = run_state.runtime_directory();
+    std::fs::create_dir_all(&runtime_directory).unwrap();
+    std::fs::set_permissions(
+        &runtime_directory,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let held_local_api_socket_path =
+        runtime_directory.join(format!("local-api-{pinned_runtime_id}.sock"));
+    let _live_holder = std::os::unix::net::UnixListener::bind(&held_local_api_socket_path).unwrap();
+    let no_vulkan_driver_file = run_state.path().join("no-vulkan-driver-here.json");
+    let no_vulkan_driver_file = no_vulkan_driver_file.to_string_lossy();
+
+    let refusal = the_refusal_of(&run_tatolabd(
+        &runtime_unit.tatolabd,
+        &run_state,
+        &stream_graph_file,
+        &run_state.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        &[
+            ("STREAMLIB_RUNTIME_ID", pinned_runtime_id),
+            ("VK_DRIVER_FILES", &no_vulkan_driver_file),
+            ("VK_ICD_FILENAMES", &no_vulkan_driver_file),
+        ],
+    ));
+
+    let last_line = refusal.lines().last().unwrap_or_default();
+    assert!(
+        last_line.contains(&format!(
+            "{} is already bound by a live process",
+            held_local_api_socket_path.display()
+        )),
+        "{refusal}"
+    );
+    assert!(!refusal.contains("Starting runtime"), "{refusal}");
+    assert!(held_local_api_socket_path.exists());
+    std::fs::remove_file(&held_local_api_socket_path).unwrap();
+}
+
+/// A run refused after its local API socket was bound — here at the GPU,
+/// because the Vulkan loader is left no driver — leaves no socket file behind.
+#[test]
+fn a_run_refused_after_its_local_api_socket_was_bound_leaves_no_socket_file() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let run_state = TatolabdRunState::new();
+    let stream_graph_file = run_state.write_stream_graph(&a_graph_of_one_test_pattern());
+    let pinned_runtime_id = "Rtatolabdlocalapiunserved";
+    let no_vulkan_driver_file = run_state.path().join("no-vulkan-driver-here.json");
+    let no_vulkan_driver_file = no_vulkan_driver_file.to_string_lossy();
+
+    let refusal = the_refusal_of(&run_tatolabd(
+        &runtime_unit.tatolabd,
+        &run_state,
+        &stream_graph_file,
+        &run_state.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        &[
+            ("STREAMLIB_RUNTIME_ID", pinned_runtime_id),
+            ("VK_DRIVER_FILES", &no_vulkan_driver_file),
+            ("VK_ICD_FILENAMES", &no_vulkan_driver_file),
+        ],
+    ));
+
+    assert!(refusal.contains("loaded with 1 nodes"), "{refusal}");
+    let local_api_socket_path = run_state
+        .runtime_directory()
+        .join(format!("local-api-{pinned_runtime_id}.sock"));
+    assert!(
+        !local_api_socket_path.exists(),
+        "{} was left behind:\n{refusal}",
+        local_api_socket_path.display()
+    );
+}
+
 /// Under `STREAMLIB_QUIET` no log mirror carries an engine refusal, so the
 /// refusal still ends standard error as `tatolabd`'s own line.
 #[test]

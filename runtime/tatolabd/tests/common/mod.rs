@@ -96,8 +96,16 @@ impl TatolabdRunState {
         self.state_root.path().join("project")
     }
 
+    /// The runtime directory a `tatolabd` run from this state resolves: inside
+    /// its `XDG_RUNTIME_DIR` on Linux, and on macOS, which reads no
+    /// `XDG_RUNTIME_DIR`, the machine's `/tmp/streamlib-<uid>/`.
     pub fn runtime_directory(&self) -> PathBuf {
-        self.state_root.path().join("xdg/streamlib")
+        if cfg!(target_os = "linux") {
+            self.state_root.path().join("xdg/streamlib")
+        } else {
+            // SAFETY: getuid takes no arguments, cannot fail and touches no memory.
+            PathBuf::from(format!("/tmp/streamlib-{}", unsafe { libc::getuid() }))
+        }
     }
 
     /// Write `stream_graph` as a graph file and return its path.

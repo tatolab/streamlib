@@ -17,10 +17,39 @@ use tokio_util::sync::CancellationToken;
 /// Owner read-write only: the socket's file mode is what keeps every other user out.
 pub const LOCAL_API_SOCKET_FILE_MODE: u32 = 0o600;
 
+/// The local API's socket file, removed when this drops.
+#[derive(Debug)]
+struct LocalApiSocketFileRemovedOnDrop {
+    local_api_socket_path: PathBuf,
+}
+
+impl Drop for LocalApiSocketFileRemovedOnDrop {
+    fn drop(&mut self) {
+        // Logged, not raised: the next bind at the path clears a stale file anyway.
+        if let Err(error) = remove_local_api_socket_file(&self.local_api_socket_path) {
+            tracing::warn!(
+                %error,
+                "failed to remove the local API socket {}",
+                self.local_api_socket_path.display()
+            );
+        }
+    }
+}
+
+/// The local API's listener, bound and not yet served. Dropping it closes the
+/// listener and removes the socket file.
+#[derive(Debug)]
+pub(crate) struct LocalApiSocketBoundAndNotYetServed {
+    local_api_listener: std::os::unix::net::UnixListener,
+    local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
+}
+
 /// Bind the local API's listener at `local_api_socket_path`, refusing a path a
 /// live runtime answers on, replacing a stale file, and leaving the socket at
-/// [`LOCAL_API_SOCKET_FILE_MODE`]. Must run inside a tokio runtime.
-fn bind_local_api_unix_listener(local_api_socket_path: &Path) -> Result<tokio::net::UnixListener> {
+/// [`LOCAL_API_SOCKET_FILE_MODE`].
+pub(crate) fn bind_local_api_socket(
+    local_api_socket_path: &Path,
+) -> Result<LocalApiSocketBoundAndNotYetServed> {
     let cleared = clear_unix_socket_path_for_bind(local_api_socket_path)
         .map_err(|refusal| Error::Runtime(format!("Local API socket: {refusal}")))?;
     if cleared == UnixSocketPathClearedForBind::StaleSocketFileRemoved {
@@ -30,8 +59,8 @@ fn bind_local_api_unix_listener(local_api_socket_path: &Path) -> Result<tokio::n
         );
     }
 
-    let listener =
-        tokio::net::UnixListener::bind(local_api_socket_path).map_err(|bind_failure| {
+    let local_api_listener = std::os::unix::net::UnixListener::bind(local_api_socket_path)
+        .map_err(|bind_failure| {
             Error::Runtime(format!(
                 "Failed to bind the local API socket {}: {bind_failure}",
                 local_api_socket_path.display()
@@ -47,57 +76,76 @@ fn bind_local_api_unix_listener(local_api_socket_path: &Path) -> Result<tokio::n
             local_api_socket_path.display()
         ))
     })?;
-    Ok(listener)
+    Ok(LocalApiSocketBoundAndNotYetServed {
+        local_api_listener,
+        local_api_socket_file: LocalApiSocketFileRemovedOnDrop {
+            local_api_socket_path: local_api_socket_path.to_path_buf(),
+        },
+    })
+}
+
+impl LocalApiSocketBoundAndNotYetServed {
+    /// Where the listener is bound.
+    pub(crate) fn local_api_socket_path(&self) -> &Path {
+        &self.local_api_socket_file.local_api_socket_path
+    }
+
+    /// Serve the router `build_control_plane_router` builds on this listener
+    /// from `tokio_handle`, until the returned server is dropped.
+    ///
+    /// The builder is handed the token the server cancels as it stops, so
+    /// whatever the router holds open can end before the graceful shutdown
+    /// waits on it.
+    pub(crate) fn serve_router(
+        self,
+        build_control_plane_router: impl FnOnce(CancellationToken) -> axum::Router,
+        tokio_handle: &tokio::runtime::Handle,
+    ) -> Result<RunningLocalApiSocketServer> {
+        let Self {
+            local_api_listener,
+            local_api_socket_file,
+        } = self;
+        let local_api_socket_path = &local_api_socket_file.local_api_socket_path;
+        let adopt_failure = |failure: std::io::Error| {
+            Error::Runtime(format!(
+                "Failed to serve the local API socket {}: {failure}",
+                local_api_socket_path.display()
+            ))
+        };
+        local_api_listener
+            .set_nonblocking(true)
+            .map_err(adopt_failure)?;
+        let local_api_listener = {
+            let _entered_tokio_runtime = tokio_handle.enter();
+            tokio::net::UnixListener::from_std(local_api_listener).map_err(adopt_failure)?
+        };
+        let local_api_stopping_token = CancellationToken::new();
+        tokio_handle.spawn(serve_local_api_until_stopped(
+            local_api_listener,
+            build_control_plane_router(local_api_stopping_token.clone()),
+            local_api_stopping_token.clone(),
+        ));
+        Ok(RunningLocalApiSocketServer {
+            local_api_stopping_token,
+            _local_api_socket_file: local_api_socket_file,
+        })
+    }
 }
 
 /// The local API socket being served. Dropping it stops serving and removes
 /// the socket file.
 #[must_use = "dropping this stops the local API server"]
 #[derive(Debug)]
-pub struct RunningLocalApiSocketServer {
+pub(crate) struct RunningLocalApiSocketServer {
     local_api_stopping_token: CancellationToken,
-    local_api_socket_path: PathBuf,
+    _local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
 }
 
 impl Drop for RunningLocalApiSocketServer {
     fn drop(&mut self) {
+        // The socket file goes after this, as its field drops.
         self.local_api_stopping_token.cancel();
-        // Logged, not raised: the next bind at the path clears a stale file anyway.
-        if let Err(error) = remove_local_api_socket_file(&self.local_api_socket_path) {
-            tracing::warn!(
-                %error,
-                "failed to remove the local API socket {} on stop",
-                self.local_api_socket_path.display()
-            );
-        }
     }
-}
-
-/// Bind the local API socket at `local_api_socket_path` and serve the router
-/// `build_control_plane_router` builds on it from `tokio_handle`, until the
-/// returned server is dropped.
-///
-/// The builder is handed the token the server cancels as it stops, so whatever
-/// the router holds open can end before the graceful shutdown waits on it.
-pub fn serve_router_on_local_api_socket(
-    build_control_plane_router: impl FnOnce(CancellationToken) -> axum::Router,
-    tokio_handle: &tokio::runtime::Handle,
-    local_api_socket_path: &Path,
-) -> Result<RunningLocalApiSocketServer> {
-    let local_api_listener = {
-        let _entered_tokio_runtime = tokio_handle.enter();
-        bind_local_api_unix_listener(local_api_socket_path)?
-    };
-    let local_api_stopping_token = CancellationToken::new();
-    tokio_handle.spawn(serve_local_api_until_stopped(
-        local_api_listener,
-        build_control_plane_router(local_api_stopping_token.clone()),
-        local_api_stopping_token.clone(),
-    ));
-    Ok(RunningLocalApiSocketServer {
-        local_api_stopping_token,
-        local_api_socket_path: local_api_socket_path.to_path_buf(),
-    })
 }
 
 async fn serve_local_api_until_stopped(
@@ -265,7 +313,7 @@ mod tests {
         let served = serve_the_stub_router_on_a_fresh_socket();
         let local_api_socket_path = &served.local_api_socket_path;
 
-        let refusal = bind_local_api_unix_listener(local_api_socket_path)
+        let refusal = bind_local_api_socket(local_api_socket_path)
             .unwrap_err()
             .to_string();
 
@@ -296,6 +344,18 @@ mod tests {
                 .to_ascii_lowercase()
                 .contains("content-type: text/plain")
         );
+    }
+
+    #[test]
+    fn dropping_a_socket_bound_and_never_served_removes_its_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let local_api_socket_path = directory.path().join("local-api-Rneverserved.sock");
+        let bound = bind_local_api_socket(&local_api_socket_path).unwrap();
+        assert!(local_api_socket_path.exists());
+
+        drop(bound);
+
+        assert!(!local_api_socket_path.exists());
     }
 
     #[test]
@@ -361,7 +421,7 @@ mod tests {
             .collect()
     }
 
-    /// Serving the real router through [`serve_router_on_local_api_socket`]
+    /// Serving the real router through [`LocalApiSocketBoundAndNotYetServed::serve_router`]
     /// leaves this process holding no new TCP listener, loopback included. The
     /// scan covers the whole test process, so no other test in this binary may
     /// hold a TCP listener. A launched node's own proof is the rig test
