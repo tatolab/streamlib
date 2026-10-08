@@ -19,7 +19,7 @@ members = [
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux and macOS; GL arm Linux)
     "sdk/streamlib-python-wheel", # `tatolab.runtime` — the processor-interpreter bindings (`_engine`) and bootstrap a runtime unit lends, plus the observation-verb CLI until the native one; hosts no engine
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
-    "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into `tatolabd` and Rust hosts
+    "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into `tatolabd`
     "runtime/tatolabd", # `tatolabd` — the runtime process: hosts one stream in the foreground, engine and built-ins, no Python in its process
     "runtime/tatolab-cli", # `tatolab` — the native CLI: `new`, and `run`/`dev`, which compile in the project's venv and start `tatolabd` attached
     "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
