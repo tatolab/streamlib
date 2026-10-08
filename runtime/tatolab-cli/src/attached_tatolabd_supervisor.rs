@@ -36,10 +36,9 @@ const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// How long a `tatolabd` left running by an early exit has to stop on SIGTERM before it is killed.
 ///
-/// Covers the engine's shutdown ladder for a helper — 1 s for a callback to return, 5 s of
-/// `teardown()`, 0.5 s to leave, 0.5 s for its group on SIGTERM, 1 s to reap — plus the engine's
-/// own stop, so a `tatolabd` that is tearing down is never cut short mid-ladder.
-const ABANDONED_TATOLABD_TERMINATION_GRACE: Duration = Duration::from_secs(10);
+/// Must exceed the engine's teardown watchdog (15 s) plus its log-flush grace, so `tatolab` kills
+/// only a `tatolabd` whose own watchdog failed to end it. A literal: `tatolab` links no engine.
+const ABANDONED_TATOLABD_TERMINATION_GRACE: Duration = Duration::from_secs(20);
 
 /// Which verb launched the stream: `dev` adds the restart on edit.
 #[derive(Clone, Copy, PartialEq, Eq)]
