@@ -267,7 +267,7 @@ its PR. Paths under `sdk/streamlib-python-wheel/` unless rooted. One file per ro
 | `src/python_runtime_mesh_observation.rs`, `cli.py`, `_control_plane_client.py`, `_node_registry.py`, `_runtime_log_reader.py`, `_surface_image_exchange.py` | rewritten in `tatolab`, then deleted | S5 |
 | `runtime/streamlib-engine/src/core/signals.rs:9-12` (names CPython), the hand-back bookkeeping | the doc and the dead arm deleted; the ladder is reused as-is through `start_and_wait_for_shutdown` | S4 |
 | `_engine.pyi` beyond the bootstrap's surface | replaced by the Protocols and the conformance gate | S2 |
-| CI: one venv with `maturin develop` (`python-wheel.yml:101-188`, `:255-305`, `:375-401`, `:436-465`; `test.yml:772`, `:856-883`); `macos-wheel.yml:112-151`; `release-wheel.yml:206-247`; `build_simple_index.py:31`; release-please's wheel `pyproject.toml` bump | three suite jobs and the runtime-unit build | S2–S5 |
+| CI: one venv with `maturin develop` (`python-wheel.yml:101-188`, `:255-305`, `:375-401`, `:436-465`; `test.yml:772`, `:856-883`); `macos-wheel.yml:112-151`; `release-wheel.yml:206-247`; `build_simple_index.py:31`; release-please's wheel `pyproject.toml` bump | three suite jobs and the runtime-unit build; the simple index deleted, the release uploading `tatolab-stream` and `tatolab-webrtc` to PyPI (owner, 2026-10-08) | S2–S5 |
 | xtask paths (`check_no_in_process_placement.rs:52`, `:114`; `check_clock_usage.rs:107`, `:628`, `:775`; `lint_logging.rs:50-56`; `check_boundaries.rs:521`, `:988`, `:2223-2268`; `generate_third_party_notices.rs:852`, `:1204`, `:1277-1312`; `main.rs:142`, `:383`) | re-pointed | S1 |
 | ≈20 engine fixtures calling `streamlib` or `Runtime` (`runtime/streamlib-engine/tests/fixtures/*.sh`, `*_node.py`) | rewritten to `tatolab` and `tatolabd` | S4, S5 |
 | `.claude/` skills (eight live-ops and verify skills), `agents/evidence-verifier.md`, `hooks/rig-brake.sh:107` and its test | corrected in one operating-model PR | after S5 |
@@ -299,7 +299,6 @@ its subject; no test runs against a path its slice deleted.
 | `run` loading into the running `tatolabd` instead of starting its own; several streams per `tatolabd`; the state directory; `run -d`; the `<machine>/` segment | step 4 (`:107-129`) | runtime hosting |
 | Installing and managing the runtime | owner: the app, long term | step 4's align and the app |
 | The engine's Rust crate names, `STREAMLIB_*` | step 10 | the app |
-| Publishing `tatolab-stream` to PyPI | outward-facing; names unregistered | the owner's call |
 | Needs, packs, the control client, engine-grade extension capabilities | OPEN | their steps |
 | The thirteen examples | converted consumers | backlog filed at ship |
 | Testing a user's stream without a runtime | separate work (`:127-129`) | its own change |

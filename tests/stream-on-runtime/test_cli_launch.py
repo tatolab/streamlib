@@ -152,7 +152,8 @@ import json, sys
 from tatolab.runtime._engine import decode_tapped_channel_bag_frame_to_python_object
 
 bag = decode_tapped_channel_bag_frame_to_python_object(bytes.fromhex(sys.argv[1]))
-print(json.dumps(bag.get("surface_id") if isinstance(bag, dict) else None))
+surface_id = bag.get("surface_id") if isinstance(bag, dict) else None
+print(json.dumps(surface_id if isinstance(surface_id, str) else None))
 """
 
 
