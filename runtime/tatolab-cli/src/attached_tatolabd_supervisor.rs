@@ -10,7 +10,9 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use crate::forwarded_signal_listener::block_forwarded_signals_and_listen;
+use crate::forwarded_signal_listener::{
+    block_forwarded_signals_and_listen, unblock_forwarded_signals_in_the_child,
+};
 use crate::project_source_change_watcher::watch_project_sources;
 use crate::{StreamLaunchArguments, TatolabCommandFailure};
 
@@ -158,19 +160,20 @@ fn refuse_a_venv_without_tatolab_stream(
     project_anchor_directory: &Path,
     project_venv_interpreter: &Path,
 ) -> Result<(), TatolabCommandFailure> {
-    let probe_status = Command::new(project_venv_interpreter)
+    let mut probe_command = Command::new(project_venv_interpreter);
+    probe_command
         .args(["-I", "-c", TATOLAB_STREAM_IMPORT_PROBE])
         .current_dir(project_anchor_directory)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|io_failure| {
-            TatolabCommandFailure::refused(format!(
-                "cannot run {}: {io_failure}",
-                project_venv_interpreter.display()
-            ))
-        })?;
+        .stderr(Stdio::null());
+    unblock_forwarded_signals_in_the_child(&mut probe_command);
+    let probe_status = probe_command.status().map_err(|io_failure| {
+        TatolabCommandFailure::refused(format!(
+            "cannot run {}: {io_failure}",
+            project_venv_interpreter.display()
+        ))
+    })?;
     if !probe_status.success() {
         return Err(TatolabCommandFailure::refused(format!(
             "the virtual environment at {} cannot import tatolab.stream — add `tatolab-stream` \
@@ -228,7 +231,8 @@ fn start_stream_compile(
     stream_launch_environment: &StreamLaunchEnvironment,
     stream_launch_verb: StreamLaunchVerb,
 ) -> Result<StreamCompileInFlight, TatolabCommandFailure> {
-    let mut compile_child = Command::new(&stream_launch_environment.project_venv_interpreter)
+    let mut compile_command = Command::new(&stream_launch_environment.project_venv_interpreter);
+    compile_command
         // `-I` keeps the anchor off `sys.path` until the compile entry has imported what it
         // needs, so a project module named like a stdlib one cannot replace it.
         .args([
@@ -242,14 +246,14 @@ fn start_stream_compile(
         .current_dir(&stream_launch_environment.project_anchor_directory)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|io_failure| {
-            TatolabCommandFailure::refused(format!(
-                "cannot run {}: {io_failure}",
-                stream_launch_environment.project_venv_interpreter.display()
-            ))
-        })?;
+        .stderr(Stdio::inherit());
+    unblock_forwarded_signals_in_the_child(&mut compile_command);
+    let mut compile_child = compile_command.spawn().map_err(|io_failure| {
+        TatolabCommandFailure::refused(format!(
+            "cannot run {}: {io_failure}",
+            stream_launch_environment.project_venv_interpreter.display()
+        ))
+    })?;
     let compile_stdout: Option<ChildStdout> = compile_child.stdout.take();
     let compile_stdout_collector = std::thread::Builder::new()
         .name("tatolab-compile-stdout-collector".to_owned())
@@ -363,6 +367,7 @@ fn start_attached_tatolabd(
     if let Some(requested_runtime_name) = &stream_launch_environment.requested_runtime_name {
         tatolabd_command.env(RUNTIME_NAME_ENVIRONMENT_VARIABLE, requested_runtime_name);
     }
+    unblock_forwarded_signals_in_the_child(&mut tatolabd_command);
     end_tatolabd_when_tatolab_dies(&mut tatolabd_command);
     let tatolabd_child = tatolabd_command.spawn().map_err(|io_failure| {
         TatolabCommandFailure::refused(format!(

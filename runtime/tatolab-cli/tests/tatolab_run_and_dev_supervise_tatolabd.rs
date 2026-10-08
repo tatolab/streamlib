@@ -465,6 +465,41 @@ fn run_compiles_in_the_venv_and_hands_tatolabd_the_graph_project_and_interpreter
     );
 }
 
+/// A fake `tatolabd` in Python, which, unlike the shell, starts with the signal mask its parent
+/// handed it: it records the signals blocked at its start and exits 0.
+const SIGNAL_MASK_RECORDING_TATOLABD_SCRIPT: &str = r#"#!/usr/bin/env python3
+import signal
+blocked_at_start = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+with open('@CONTROL@/tatolabd_signals_blocked_at_start', 'w') as record:
+    record.write(' '.join(sorted(blocked_signal.name for blocked_signal in blocked_at_start)))
+"#;
+
+#[test]
+fn tatolabd_starts_with_none_of_the_forwarded_signals_blocked() {
+    let testbed = AttachedTatolabdTestbed::new();
+    let control_directory = testbed.control_directory();
+    write_executable_script(
+        &testbed.bin_directory().join("tatolabd"),
+        &SIGNAL_MASK_RECORDING_TATOLABD_SCRIPT
+            .replace("@CONTROL@", control_directory.to_str().unwrap()),
+    );
+
+    let (exit_status, tatolab_stderr) = testbed.run_tatolab_to_exit(&["run"]);
+    assert_eq!(exit_status.code(), Some(0), "{tatolab_stderr}");
+
+    let signals_blocked_at_start =
+        fs::read_to_string(control_directory.join("tatolabd_signals_blocked_at_start")).unwrap();
+    for forwarded_signal_name in ["SIGINT", "SIGTERM", "SIGHUP"] {
+        assert!(
+            !signals_blocked_at_start
+                .split_whitespace()
+                .any(|blocked_signal_name| blocked_signal_name == forwarded_signal_name),
+            "tatolabd started with {forwarded_signal_name} blocked ({signals_blocked_at_start}), \
+             so no forwarded {forwarded_signal_name} could stop it"
+        );
+    }
+}
+
 #[test]
 fn run_forwards_target_and_flags_verbatim_and_runtime_name_as_the_engine_variable() {
     let testbed = AttachedTatolabdTestbed::new();
