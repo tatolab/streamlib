@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.42.1](https://github.com/tatolab/streamlib/compare/v0.42.0...v0.42.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **runtime:** a runtime that cannot bind its local API socket is refused before it starts ([#2700](https://github.com/tatolab/streamlib/issues/2700)) ([83e3769](https://github.com/tatolab/streamlib/commit/83e376929913789c314c2c78fc21939de0236688))
+
 ## [0.42.0](https://github.com/tatolab/streamlib/compare/v0.41.0...v0.42.0) (2026-10-08)
 
 
