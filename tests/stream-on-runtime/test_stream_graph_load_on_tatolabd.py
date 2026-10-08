@@ -277,11 +277,6 @@ def test_a_lone_surrogate_escape_in_a_graph_file_is_refused_naming_it(
     assert "lone leading surrogate" in refusal
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a graph file's integer wider than 64 bits parses as a float rather than "
-    "being refused; the engine's graph parse does not yet refuse it",
-)
 def test_a_config_integer_wider_than_64_bits_in_a_graph_file_is_refused_naming_it(
     load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd,
 ):
