@@ -172,9 +172,9 @@ class PrivateRuntimeDirectories:
     On Linux `XDG_RUNTIME_DIR` is a short directory of this test's own, so the
     runtime directory — `<XDG_RUNTIME_DIR>/streamlib`, where the registry and
     sockets live — is private; the user's PipeWire, PulseAudio and Wayland
-    sessions stay reachable through their own variables. On macOS the runtime directory is fixed at
-    `/tmp/streamlib-<uid>`, shared with every runtime on the machine, so a run's
-    registry entry is found by its `tatolabd`'s pid.
+    sessions stay reachable through their own variables. On macOS the runtime
+    directory is fixed at `/tmp/streamlib-<uid>`, shared with every runtime on
+    the machine, so a run's registry entry is found by its `tatolabd`'s pid.
     """
 
     xdg_runtime_directory: Path
@@ -190,8 +190,9 @@ def session_services_left_at_the_users_runtime_directory(
 
     Each finds its socket under `XDG_RUNTIME_DIR` unless named on its own, so a
     private `XDG_RUNTIME_DIR` would otherwise leave a stream's devices on the
-    null audio arm and refuse a PipeWire camera. A variable the shell already
-    set is kept as it is.
+    null audio arm and refuse a PipeWire camera. A `PIPEWIRE_RUNTIME_DIR` or
+    `PULSE_RUNTIME_PATH` the shell already set is kept as it is; a relative
+    `WAYLAND_DISPLAY` is made absolute against the user's runtime directory.
     """
     users_runtime_directory = inherited_environment.get("XDG_RUNTIME_DIR")
     if not users_runtime_directory:

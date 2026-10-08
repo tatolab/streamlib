@@ -346,6 +346,10 @@ def await_metrics_satisfying(
     )
 
 
+@pytest.mark.linux_only_capability(
+    reason="finding the `tatolab run` stream's registry entry by its tatolabd's pid in the "
+    "shared macOS runtime directory has not been proven on macOS"
+)
 def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_on_its_link(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
