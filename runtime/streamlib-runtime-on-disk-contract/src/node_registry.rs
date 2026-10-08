@@ -3,25 +3,26 @@
 
 //! On-disk discovery registry for ApiServer-hosting runtimes.
 //!
-//! A runtime that hosts an [`crate::ApiServerProcessor`] writes one JSON entry
+//! A runtime that hosts the api-server's `ApiServerProcessor` writes one JSON entry
 //! per runtime into `<runtime directory>/nodes/<runtime_id>.json` once its
 //! local API socket binds, and removes it on clean teardown. The runtime directory
-//! is the one the engine resolved and checked as the runtime started. A CLI discovers
-//! live control planes by scanning that directory. Entry existence is tied to
-//! the control endpoint existing: a runtime without an ApiServer never appears.
+//! is the one the engine resolved and checked as the runtime started
+//! ([`crate::streamlib_runtime_directory::StreamlibRuntimeDirectory::node_registry_directory`]).
+//! A CLI discovers live control planes by scanning that directory. Entry existence
+//! is tied to the control endpoint existing: a runtime without an ApiServer never appears.
 //!
 //! The file body is the wire contract between the writing runtime and any
-//! reader (today the `streamlib nodes` command, in-process via this crate);
+//! reader — the native `tatolab nodes` reads it through this module;
 //! [`NODE_REGISTRY_SCHEMA_VERSION`] stamps it so a reader rejects an entry it
 //! does not understand.
 
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::directory_at_an_explicit_mode::{
+
+use crate::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
-use streamlib::sdk::runtime::RuntimeName;
 
 /// Schema version stamped into every [`NodeRegistryEntry`]. A reader skips an
 /// entry whose `schema_version` it does not recognize.
@@ -51,13 +52,13 @@ impl NodeRegistryEntry {
     /// derived from this process's arg0 and cwd.
     pub fn for_current_process(
         runtime_id: String,
-        runtime_name: &RuntimeName,
+        runtime_name: &str,
         local_api_socket_path: PathBuf,
     ) -> Self {
         Self {
             schema_version: NODE_REGISTRY_SCHEMA_VERSION,
             runtime_id,
-            runtime_name: runtime_name.as_str().to_string(),
+            runtime_name: runtime_name.to_string(),
             local_api_socket_path,
             pid: std::process::id(),
             hint: current_process_hint(),

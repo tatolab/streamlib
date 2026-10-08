@@ -39,6 +39,10 @@ pyo3 = { version = "0.29.0", features = ["abi3-py310"] }
 
 streamlib = { path = "../streamlib-sdk", version = "0.41.0" }
 
+# The directory the runtime writes its JSONL logs into, and directories created
+# at an explicit mode.
+streamlib-runtime-on-disk-contract = { path = "../../runtime/streamlib-runtime-on-disk-contract", version = "0.41.0" }
+
 # The `VideoFrame` colour metadata a node-owned window's `show()` reads off a
 # frame. Nothing here registers or hosts a built-in.
 streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.41.0" }

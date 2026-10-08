@@ -9,10 +9,12 @@ use std::sync::OnceLock;
 
 use iceoryx2::node::Node;
 use iceoryx2::prelude::ipc;
+use streamlib_runtime_on_disk_contract::streamlib_runtime_directory::{
+    StreamlibRuntimeDirectory, current_process_uid,
+};
 
 use super::Iceoryx2Node;
 use super::node::create_iceoryx2_node_in_domain;
-use crate::core::runtime::{StreamlibRuntimeDirectory, current_process_uid};
 
 /// The folder-name stem of a test process's domain root inside the runtime directory.
 const TEST_DOMAIN_ROOT_NAME_STEM: &str = "iox2-test-";
@@ -253,12 +255,12 @@ pub(crate) mod tests {
         let gone = a_process_id_that_has_exited();
         let alive = std::os::unix::process::parent_id();
         for process_id in [gone, alive] {
-            crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
                 &runtime_directory
                     .path()
                     .join(format!("iox2-test-{process_id}"))
                     .join("nodes"),
-                crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+                streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
             )
             .unwrap();
             std::fs::write(
@@ -269,9 +271,9 @@ pub(crate) mod tests {
             )
             .unwrap();
         }
-        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+        streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
             &runtime_directory.path().join("iox2"),
-            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+            streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         )
         .unwrap();
         std::fs::write(

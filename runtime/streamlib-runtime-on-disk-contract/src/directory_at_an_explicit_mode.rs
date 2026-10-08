@@ -111,9 +111,9 @@ mod tests {
         }
 
         let scratch_directory =
-            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-        let child = crate::core::test_support::rerun_this_test_in_a_child_process(
-            "core::directory_at_an_explicit_mode::tests::a_directory_created_under_iceoryx2s_bind_umask_comes_out_at_the_mode_asked_for",
+            crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let child = crate::test_support::rerun_this_test_in_a_child_process(
+            "directory_at_an_explicit_mode::tests::a_directory_created_under_iceoryx2s_bind_umask_comes_out_at_the_mode_asked_for",
             UMASK_CHILD_SCRATCH_DIRECTORY_ENVIRONMENT_VARIABLE,
             scratch_directory.path().as_os_str(),
         );
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn a_directory_that_already_existed_is_left_as_it_was() {
         let scratch_directory =
-            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+            crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let already_there = scratch_directory.path().join("already-there");
         std::fs::create_dir(&already_there).unwrap();
         std::fs::set_permissions(&already_there, std::fs::Permissions::from_mode(0o500)).unwrap();

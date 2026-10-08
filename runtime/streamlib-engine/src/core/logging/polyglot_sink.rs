@@ -32,7 +32,7 @@
 //! Design decision recorded in issue #442, PR that landed the
 //! escalate-IPC `log` op.
 //!
-//! [`RuntimeLogEvent`]: crate::core::logging::event::RuntimeLogEvent
+//! [`RuntimeLogEvent`]: streamlib_runtime_on_disk_contract::runtime_log_event::RuntimeLogEvent
 //! [`JsonlSinkLayer`]: crate::core::logging::layer::JsonlSinkLayer
 
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -14,9 +14,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{RecvTimeoutError, Sender, bounded};
 use crossbeam_queue::ArrayQueue;
+use streamlib_runtime_on_disk_contract::runtime_log_event::{
+    LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source,
+};
+use streamlib_runtime_on_disk_contract::runtime_log_event_pretty_rendering::format_event_pretty;
 
 use crate::core::logging::config::ResolvedTunables;
-use crate::core::logging::event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source};
 use crate::core::logging::record::LogRecord;
 use crate::core::logging::writer::JsonlBatchedWriter;
 use crate::core::runtime::RuntimeUniqueId;
@@ -312,58 +315,6 @@ fn write_one(
         // Line-buffered: one flush per record so humans tail it live.
         let _ = sink.flush();
     }
-}
-
-/// Format one [`RuntimeLogEvent`] in the human-readable layout used by the
-/// runtime's pretty mirror.
-///
-/// The wheel's `streamlib logs` renders replayed JSONL to match this byte for
-/// byte. It reimplements the layout in Python rather than calling this, so the
-/// two are held together by a golden literal both sides assert — see
-/// `the_pretty_rendering_matches_the_golden_the_python_reader_asserts`.
-pub(crate) fn format_event_pretty(event: &RuntimeLogEvent, out: &mut String) {
-    use std::fmt::Write;
-    let level = match event.level {
-        LogLevel::Trace => "TRACE",
-        LogLevel::Debug => "DEBUG",
-        LogLevel::Info => " INFO",
-        LogLevel::Warn => " WARN",
-        LogLevel::Error => "ERROR",
-    };
-    let _ = write!(
-        out,
-        "{} [{:>5}] [{}/{}] {} — {}",
-        format_ns_timestamp(event.host_ts),
-        level,
-        event.runtime_id,
-        event.source.as_str(),
-        event.target,
-        event.message,
-    );
-    if let Some(p) = &event.pipeline_id {
-        let _ = write!(out, " pipeline_id={}", p);
-    }
-    if let Some(p) = &event.processor_id {
-        let _ = write!(out, " processor_id={}", p);
-    }
-    if let Some(r) = &event.rhi_op {
-        let _ = write!(out, " rhi_op={}", r);
-    }
-    for (k, v) in &event.attrs {
-        let _ = write!(out, " {}={}", k, v);
-    }
-    out.push('\n');
-}
-
-fn format_ns_timestamp(ns: u64) -> String {
-    // Compact `HH:MM:SS.mmm` — enough for humans tailing logs. Full
-    // authoritative timestamp remains in the JSONL as `host_ts`.
-    let secs_total = ns / 1_000_000_000;
-    let ms = (ns % 1_000_000_000) / 1_000_000;
-    let hh = (secs_total / 3600) % 24;
-    let mm = (secs_total / 60) % 60;
-    let ss = secs_total % 60;
-    format!("{:02}:{:02}:{:02}.{:03}", hh, mm, ss, ms)
 }
 
 pub(crate) fn now_ns() -> u64 {

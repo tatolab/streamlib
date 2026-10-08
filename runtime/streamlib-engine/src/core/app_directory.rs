@@ -178,9 +178,9 @@ mod tests {
         let parent =
             crate::core::test_support::a_temporary_directory_at_owner_only_mode().expect("tempdir");
         let app_directory = parent.path().join("myapp");
-        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+        streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
             &app_directory,
-            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+            streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         )
         .expect("create the app directory");
 
@@ -207,9 +207,9 @@ mod tests {
         let parent =
             crate::core::test_support::a_temporary_directory_at_owner_only_mode().expect("tempdir");
         let app_directory = parent.path().join("myapp");
-        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+        streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
             &app_directory,
-            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+            streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         )
         .expect("create the app directory");
 

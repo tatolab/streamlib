@@ -10,7 +10,10 @@ use std::sync::Arc;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::runtime::{RuntimeOperations, RuntimeUniqueId};
+use streamlib::sdk::runtime::RuntimeOperations;
+use streamlib_runtime_on_disk_contract::node_registry::{
+    NodeRegistryEntry, remove_entry, write_entry,
+};
 
 /// Handles cloned from the setup-time context for use in start().
 /// The `tokio_handle` points at this processor's own tokio runtime
@@ -63,7 +66,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let runtime_id = ctx.runtime_id();
         let local_api_socket_path = ctx
             .runtime_directory()
-            .local_api_socket_path(&RuntimeUniqueId::from(runtime_id.as_str()));
+            .local_api_socket_path(runtime_id.as_str());
         self.handles = Some(StashedHandles {
             runtime: ctx.runtime(),
             tokio_handle,
@@ -116,15 +119,12 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         // The socket is served, so the entry's existence tracks the control
         // endpoint's. A write failure is non-fatal — the node starts
         // regardless; it just won't be discoverable until the next run.
-        let entry = crate::node_registry::NodeRegistryEntry::for_current_process(
+        let entry = NodeRegistryEntry::for_current_process(
             handles.runtime_id.clone(),
-            ctx.runtime_name(),
+            ctx.runtime_name().as_str(),
             handles.local_api_socket_path.clone(),
         );
-        match crate::node_registry::write_entry(
-            &ctx.runtime_directory().node_registry_directory(),
-            &entry,
-        ) {
+        match write_entry(&ctx.runtime_directory().node_registry_directory(), &entry) {
             Ok(path) => tracing::debug!("Node registry entry written at {}", path.display()),
             Err(error) => {
                 tracing::warn!(%error, "failed to write node registry entry; node not discoverable")
@@ -139,7 +139,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         // advertises. Non-fatal on failure — a stale entry is pruned by the
         // reader's liveness check.
         if let Some(runtime_id) = self.runtime_id.take()
-            && let Err(error) = crate::node_registry::remove_entry(
+            && let Err(error) = remove_entry(
                 &ctx.runtime_directory().node_registry_directory(),
                 &runtime_id,
             )

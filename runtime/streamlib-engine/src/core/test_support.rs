@@ -507,7 +507,7 @@ pub(crate) fn at_owner_only_mode(
     std::fs::set_permissions(
         temporary_directory.path(),
         std::fs::Permissions::from_mode(
-            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+            streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         ),
     )?;
     Ok(temporary_directory)

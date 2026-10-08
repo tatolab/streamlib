@@ -26,14 +26,14 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use std::ffi::{CStr, c_void};
 
-use crate::core::directory_at_an_explicit_mode::{
-    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
-};
 use crate::core::rhi::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture,
     refuse_a_descriptor_set_other_than_set_0,
 };
 use crate::core::{Error, Result};
+use streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 
 /// Env var that overrides the default pipeline-cache directory. Used by tests
 /// and headless / CI scenarios that need a writable, isolated cache root.
@@ -1521,9 +1521,10 @@ fn pipeline_cache_dir() -> Option<PathBuf> {
     }
     // Co-located under the streamlib home (`<STREAMLIB_HOME>/.streamlib/cache/`),
     // NOT the XDG cache dir — every built/cached artifact lives under the
-    // streamlib working tree per the home contract. See [`core::streamlib_home`].
+    // streamlib working tree per the home contract. See
+    // `streamlib_runtime_on_disk_contract::streamlib_home`.
     Some(
-        crate::core::streamlib_home::get_streamlib_data_dir()
+        streamlib_runtime_on_disk_contract::streamlib_home::get_streamlib_data_dir()
             .join("cache")
             .join("pipeline-cache"),
     )

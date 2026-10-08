@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serial_test::serial;
+use streamlib_runtime_on_disk_contract::runtime_log_event::{LogLevel, RuntimeLogEvent, Source};
 use tempfile::TempDir;
 
 use super::log_record_from_wire;
@@ -21,8 +22,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
 };
 use crate::core::logging::{
-    LogLevel, RuntimeLogEvent, Source, StreamlibLoggingConfig, StreamlibLoggingGuard,
-    init_for_tests, push_polyglot_record,
+    StreamlibLoggingConfig, StreamlibLoggingGuard, init_for_tests, push_polyglot_record,
 };
 use crate::core::runtime::RuntimeUniqueId;
 

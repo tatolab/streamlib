@@ -17,9 +17,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
 use crate::core::logging::config::{ResolvedTunables, StreamlibLoggingConfig};
-use crate::core::logging::event::Source;
 use crate::core::logging::layer::JsonlSinkLayer;
-use crate::core::logging::paths::runtime_log_path;
 use crate::core::logging::polyglot_sink::{self, PolyglotLogSink};
 #[cfg(unix)]
 use crate::core::logging::stdio_interceptor::{self, StdioInterceptor};
@@ -27,6 +25,8 @@ use crate::core::logging::worker::{
     WorkerConfig, WorkerHandle, WorkerSignal, spawn as spawn_worker,
 };
 use crate::core::logging::writer::JsonlBatchedWriter;
+use streamlib_runtime_on_disk_contract::runtime_log_event::Source;
+use streamlib_runtime_on_disk_contract::runtime_log_file_paths::runtime_log_path;
 
 /// Drops a little later than most — on `Drop`, flushes and `fdatasync`s
 /// the JSONL writer, joins the drain worker thread, then releases

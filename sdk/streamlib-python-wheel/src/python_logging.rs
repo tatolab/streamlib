@@ -20,9 +20,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::logging::{
     self as engine_logging, EngineLogRecordForTheParentProcess, HelperProcessEngineLogRecordRing,
-    log_dir,
 };
 use streamlib::sdk::media_clock::MediaClock;
+use streamlib_runtime_on_disk_contract::runtime_log_file_paths::log_dir;
 
 use crate::python_bag_conversion::json_value_to_python_object;
 

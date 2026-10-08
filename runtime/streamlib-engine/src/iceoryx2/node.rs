@@ -26,11 +26,11 @@ use super::{
     DataChannelBagSequenceNumberUserHeader, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL,
 };
 use crate::core::error::{Error, Result};
-use crate::core::runtime::current_process_uid;
 use streamlib_ipc_types::{
     HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot,
     OutputPortRefusedBagCountBoardEntry,
 };
+use streamlib_runtime_on_disk_contract::streamlib_runtime_directory::current_process_uid;
 
 /// Nodes a channel or notify service admits per subscriber or notifier slot.
 ///
@@ -1825,9 +1825,9 @@ mod tests {
         let working_directory =
             crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let hijacked_root = working_directory.path().join("hijacked");
-        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+        streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
             &working_directory.path().join("config"),
-            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+            streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         )
         .unwrap();
         std::fs::write(

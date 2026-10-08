@@ -10,14 +10,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serial_test::serial;
+use streamlib_runtime_on_disk_contract::runtime_log_event::{
+    LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source,
+};
+use streamlib_runtime_on_disk_contract::runtime_log_file_paths::log_dir;
 use tempfile::TempDir;
 
 use crate::core::logging::{
-    LoggingTunables, PrettyLogMirrorStandardStream, StreamlibLoggingConfig,
-    event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source},
-    init::init_for_tests,
-    paths::{log_dir, runtime_log_path},
-    worker::format_event_pretty,
+    LoggingTunables, PrettyLogMirrorStandardStream, StreamlibLoggingConfig, init::init_for_tests,
 };
 use crate::core::runtime::RuntimeUniqueId;
 
@@ -179,29 +179,6 @@ fn time_triggered_flush_writes_without_size_trigger() {
         contents_before_drop
     );
     drop(guard);
-    clear_streamlib_home();
-}
-
-#[test]
-#[serial]
-fn concurrent_runtime_paths_do_not_collide() {
-    // Pure path-function test — no subscriber involvement, just
-    // confirms two distinct runtime ids resolve to distinct files in
-    // the shared log directory.
-    let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
-
-    let dir = log_dir();
-    let p1 = runtime_log_path("RtestA", 111);
-    let p2 = runtime_log_path("RtestB", 111);
-    let p3 = runtime_log_path("RtestA", 222);
-
-    assert_ne!(p1, p2);
-    assert_ne!(p1, p3);
-    assert!(p1.starts_with(&dir));
-    assert!(p2.starts_with(&dir));
-    assert!(p3.starts_with(&dir));
-
     clear_streamlib_home();
 }
 
@@ -881,45 +858,6 @@ fn burst_surfaces_dropped_counter_record() {
     );
 
     clear_streamlib_home();
-}
-
-/// The pretty rendering is a cross-language contract: the wheel's `streamlib
-/// logs` replays a JSONL record and must produce the same bytes this mirror
-/// wrote live, or one record reads as two different records.
-///
-/// The literal below is asserted character-for-character by
-/// `sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py`'s
-/// `test_a_record_renders_exactly_as_the_runtime_mirrored_it`. Changing
-/// [`format_event_pretty`] without changing that test — or the reverse — is
-/// what this pair exists to turn red.
-#[test]
-fn the_pretty_rendering_matches_the_golden_the_python_reader_asserts() {
-    let event = RuntimeLogEvent {
-        schema_version: 1,
-        host_ts: 1_786_136_667_573_387_556,
-        runtime_id: "Rabc".to_string(),
-        source: Source::Rust,
-        level: LogLevel::Info,
-        message: "Creating Runner".to_string(),
-        target: "streamlib_engine::core::runtime".to_string(),
-        pipeline_id: None,
-        processor_id: None,
-        rhi_op: None,
-        source_ts: None,
-        source_seq: None,
-        intercepted: false,
-        channel: None,
-        attrs: Default::default(),
-    };
-
-    let mut rendered = String::new();
-    format_event_pretty(&event, &mut rendered);
-
-    assert_eq!(
-        rendered,
-        "21:04:27.573 [ INFO] [Rabc/rust] streamlib_engine::core::runtime — \
-         Creating Runner\n"
-    );
 }
 
 #[test]

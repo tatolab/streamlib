@@ -12,9 +12,9 @@ use std::path::{Path, PathBuf};
 /// folder as the rest of a runtime's state, and honor the `STREAMLIB_HOME`
 /// override.
 ///
-/// [`get_streamlib_data_dir`]: crate::core::streamlib_home::get_streamlib_data_dir
+/// [`get_streamlib_data_dir`]: crate::streamlib_home::get_streamlib_data_dir
 pub fn log_dir() -> PathBuf {
-    crate::core::streamlib_home::get_streamlib_data_dir().join("logs")
+    crate::streamlib_home::get_streamlib_data_dir().join("logs")
 }
 
 /// Path of the JSONL file for one runtime instance, using
@@ -28,7 +28,7 @@ pub fn runtime_log_path(runtime_id: &str, started_at_millis: u128) -> PathBuf {
 ///
 /// The sequence is dot-separated because a pinned `STREAMLIB_RUNTIME_ID` may
 /// carry dashes, and `camera-2-1700000000000.jsonl` would read two ways.
-pub(crate) fn rotated_runtime_log_segment_path(
+pub fn rotated_runtime_log_segment_path(
     active_segment_path: &Path,
     rotation_sequence: u64,
 ) -> PathBuf {
@@ -37,7 +37,7 @@ pub(crate) fn rotated_runtime_log_segment_path(
 
 /// The rotation sequence `candidate_file_name` carries when it names a rotated
 /// segment of `active_segment_path` — the inverse of [`rotated_runtime_log_segment_path`].
-pub(crate) fn rotated_runtime_log_segment_sequence(
+pub fn rotated_runtime_log_segment_sequence(
     active_segment_path: &Path,
     candidate_file_name: &str,
 ) -> Option<u64> {
@@ -53,7 +53,7 @@ pub(crate) fn rotated_runtime_log_segment_sequence(
 }
 
 /// Path a rotation creates the next active segment at before renaming it into place.
-pub(crate) fn replacement_runtime_log_segment_path(active_segment_path: &Path) -> PathBuf {
+pub fn replacement_runtime_log_segment_path(active_segment_path: &Path) -> PathBuf {
     active_segment_path.with_extension("jsonl.rotating")
 }
 
@@ -88,8 +88,37 @@ mod tests {
         assert_eq!(file_name, "Rabc123-1700000000000.jsonl");
     }
 
-    /// The literal `test_cli_observation_verbs.py` parses back out; the two
-    /// sides are held together by this string, not by shared code.
+    #[test]
+    #[serial]
+    fn concurrent_runtime_paths_do_not_collide() {
+        let streamlib_home =
+            crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let prev = std::env::var_os("STREAMLIB_HOME");
+        // SAFETY: test modifies env; `#[serial]` keeps it off the other
+        // STREAMLIB_HOME-mutating tests.
+        unsafe { std::env::set_var("STREAMLIB_HOME", streamlib_home.path()) };
+
+        let dir = log_dir();
+        let p1 = runtime_log_path("RtestA", 111);
+        let p2 = runtime_log_path("RtestB", 111);
+        let p3 = runtime_log_path("RtestA", 222);
+
+        assert_ne!(p1, p2);
+        assert_ne!(p1, p3);
+        assert!(p1.starts_with(&dir));
+        assert!(p2.starts_with(&dir));
+        assert!(p3.starts_with(&dir));
+
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("STREAMLIB_HOME", v),
+                None => std::env::remove_var("STREAMLIB_HOME"),
+            }
+        }
+    }
+
+    /// The name a reader finds a runtime's rotated segments by, parsing it back
+    /// with [`rotated_runtime_log_segment_sequence`].
     #[test]
     fn a_rotated_segment_is_named_with_a_dot_separated_sequence() {
         let active_segment_path = runtime_log_path("Rabc123", 1_700_000_000_000);

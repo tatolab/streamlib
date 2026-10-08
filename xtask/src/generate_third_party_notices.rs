@@ -41,7 +41,7 @@
 //! allowlist landing quietly in between regenerations.
 //!
 //! `cargo about`'s own `--fail` is not the backstop and is not passed: the
-//! workspace's sixteen publishable crates carry `license-file` rather than an
+//! workspace's seventeen publishable crates carry `license-file` rather than an
 //! SPDX `license`, so it would fail every run. A dependency whose expression
 //! cannot be synthesised is warned about here and omitted from the output; what
 //! refuses it is `cargo deny check licenses`, which reads the same crate as

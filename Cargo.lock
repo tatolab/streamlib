@@ -4528,6 +4528,7 @@ dependencies = [
  "streamlib",
  "streamlib-macros",
  "streamlib-media-builtins",
+ "streamlib-runtime-on-disk-contract",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -4621,6 +4622,7 @@ dependencies = [
  "streamlib-macros",
  "streamlib-media-builtins",
  "streamlib-processor-schema",
+ "streamlib-runtime-on-disk-contract",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
@@ -4731,8 +4733,22 @@ dependencies = [
  "streamlib-adapter-cuda",
  "streamlib-consumer-rhi",
  "streamlib-media-builtins",
+ "streamlib-runtime-on-disk-contract",
  "streamlib-surface-client",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "streamlib-runtime-on-disk-contract"
+version = "0.41.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "thiserror 2.0.18",
  "tracing",
 ]
 

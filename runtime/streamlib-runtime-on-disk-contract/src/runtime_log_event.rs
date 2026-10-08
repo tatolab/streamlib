@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! JSONL event schema — the durable interface contract for the unified
-//! logging pathway. Every record written to `$XDG_STATE_HOME/streamlib/logs/`
-//! is one [`RuntimeLogEvent`] per line.
+//! logging pathway. Every record written under
+//! [`log_dir`](crate::runtime_log_file_paths::log_dir) is one [`RuntimeLogEvent`]
+//! per line.
 //!
 //! Adding fields is backwards-compatible. Renaming, removing, or changing
 //! types of existing fields requires bumping [`SCHEMA_VERSION`] and a
@@ -25,6 +26,7 @@ pub enum Source {
 }
 
 impl Source {
+    /// The lowercase name the JSONL record carries.
     pub fn as_str(&self) -> &'static str {
         match self {
             Source::Rust => "rust",
@@ -45,6 +47,7 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    /// The lowercase name the JSONL record carries.
     pub fn as_str(&self) -> &'static str {
         match self {
             LogLevel::Trace => "trace",
@@ -72,8 +75,8 @@ impl From<tracing::Level> for LogLevel {
 /// applicable.
 ///
 /// Field nullability and semantics are the load-bearing contract — see
-/// `docs/logging-schema.md`. Downstream children of #430 (`streamlib-cli
-/// logs`, polyglot SDKs, the future orchestrator) depend on this shape.
+/// `docs/logging-schema.md`. Every reader, the native `tatolab logs` among
+/// them, depends on this shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLogEvent {
     /// Schema version of this record. Bumped on breaking changes.
@@ -88,7 +91,7 @@ pub struct RuntimeLogEvent {
     /// they share a unit and are different quantities.
     pub host_ts: u64,
 
-    /// Unique runtime identifier (from [`RuntimeUniqueId`]).
+    /// The runtime's `RuntimeUniqueId`, verbatim.
     pub runtime_id: String,
 
     /// Language / origin of the record.
@@ -188,12 +191,15 @@ mod tests {
         assert_eq!(serde_json::to_string(&LogLevel::Warn).unwrap(), "\"warn\"");
     }
 
-    /// Parses the exact example line documented in `docs/logging-schema.md`.
+    /// Parses the example line documented in `docs/logging-schema.md`.
     /// If this test fails, the published schema example and the
     /// implementation have drifted — fix one or the other.
+    ///
+    /// The `target` names a module outside the engine: `check-boundaries`
+    /// reads an engine module path in this crate's source as an engine import.
     #[test]
     fn docs_example_line_parses() {
-        let line = r#"{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","source":"rust","level":"info","message":"processor started","target":"streamlib::linux::processors::camera","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;
+        let line = r#"{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;
         let ev: RuntimeLogEvent = serde_json::from_str(line).expect("docs example must parse");
         assert_eq!(ev.schema_version, SCHEMA_VERSION);
         assert_eq!(ev.runtime_id, "Rabc123");

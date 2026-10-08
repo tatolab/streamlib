@@ -21,9 +21,9 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
-use crate::core::logging::event::{LogLevel, Source};
 use crate::core::logging::record::LogRecord;
 use crate::core::logging::worker::{WorkerSignal, now_ns};
+use streamlib_runtime_on_disk_contract::runtime_log_event::{LogLevel, Source};
 
 pub(crate) struct JsonlSinkLayer {
     queue: Arc<ArrayQueue<LogRecord>>,

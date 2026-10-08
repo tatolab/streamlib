@@ -19,7 +19,6 @@ mod runtime_unique_id;
 mod stated_configuration_value;
 mod status;
 mod stream_environment;
-mod streamlib_runtime_directory;
 mod surface_image_exchange;
 mod tap;
 
@@ -53,7 +52,5 @@ pub use runtime_shutdown_request::{
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use stream_environment::StreamEnvironment;
-pub use streamlib_runtime_directory::StreamlibRuntimeDirectory;
-pub(crate) use streamlib_runtime_directory::current_process_uid;
 pub use surface_image_exchange::ExchangedPublishedSurfaceFramePngImage;
 pub use tap::TapSubscription;

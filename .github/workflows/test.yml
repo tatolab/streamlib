@@ -128,6 +128,11 @@ jobs:
           cargo test --locked -p streamlib -p streamlib-macros \
             -p streamlib-processor-schema -p streamlib-ipc-types \
             -p streamlib-surface-client -p streamlib-error --lib
+          # What a running runtime leaves on disk for its clients: STREAMLIB_HOME,
+          # the runtime directory and its trust check for the runtime and for a
+          # reader, the node registry, and the JSONL log's paths, schema and
+          # pretty rendering.
+          cargo test --locked -p streamlib-runtime-on-disk-contract
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # A `graph` document loads back as the same graph, and a node's name
           # is cast, suffixed when defaulted and refused when typed twice. A
@@ -256,12 +261,10 @@ jobs:
           # end-to-end half through a helper-placed Python consumer is
           # rig-gated like every other graph test in the wheel.
           # `graph` renders no `extensions` key: no package extends the engine.
-          # The JSONL writer's segment rotation and retention, the knobs that
-          # resolve its policy, and the rotated-segment name the wheel's
-          # `streamlib logs` parses back out — tempdir-only, no GPU, no env
-          # beyond the logging knobs themselves.
-          # The runtime directory's resolver arms and refusals, and the
-          # engine-owned iceoryx2 domain: the socket-path budget, a working
+          # The JSONL writer's segment rotation and retention, and the knobs that
+          # resolve its policy — tempdir-only, no GPU, no env beyond the logging
+          # knobs themselves.
+          # The engine-owned iceoryx2 domain: the socket-path budget, a working
           # directory's `iceoryx2.toml` ignored, two test processes as two domains,
           # and the sweep of what a dead test process left.
           # The runner arm starts a runtime with `XDG_RUNTIME_DIR` unset.
@@ -433,7 +436,6 @@ jobs:
             iceoryx2::output::tests::an_output_ports_refusals_leave_with_its_last_link \
             core::runtime::tap::tests::stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly \
             iceoryx2::node::tests::overflow_enabled_publisher_does_not_block_on_full_buffer \
-            core::runtime::streamlib_runtime_directory \
             iceoryx2::node::tests::a_domain_root_past_the_socket_path_budget_is_refused_by_name \
             iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node \
             iceoryx2::node::tests::two_test_process_domains_share_neither_files_nor_shared_memory \
@@ -442,7 +444,6 @@ jobs:
             iceoryx2::node::tests::the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one \
             iceoryx2::output::tests::write_raw_refuses_over_ceiling_and_grows_within_it \
             iceoryx2::posix_shared_memory_headroom \
-            core::directory_at_an_explicit_mode \
             core::unix_socket_path_cleared_for_bind \
             iceoryx2::child_process_start_outside_listener_binds \
             iceoryx2::channel_idle_poll_backoff \
@@ -486,10 +487,6 @@ jobs:
             core::logging::config \
             core::logging::helper_process_engine_log_capture \
             core::logging::iceoryx2_log_bridge \
-            core::logging::paths::tests::a_rotated_segment_is_named_with_a_dot_separated_sequence \
-            core::logging::paths::tests::a_runtime_id_carrying_dots_and_dashes_keeps_its_whole_name_when_rotated \
-            core::logging::paths::tests::filename_shape_round_trips \
-            core::logging::paths::tests::a_file_that_is_not_one_of_this_segments_rotations_parses_to_no_sequence \
             core::engine_build_id_composition \
             core::compiler::compiler_ops::subprocess_bridge::tests::the_compiled_engine_build_id_leads_with_this_crates_version \
             core::json_schema::port_rendering_tests::port_info_output_renders_exactly_the_declared_keys \
@@ -872,6 +869,7 @@ jobs:
           cargo test --locked -p streamlib -p streamlib-macros \
             -p streamlib-processor-schema -p streamlib-ipc-types \
             -p streamlib-error --lib
+          cargo test --locked -p streamlib-runtime-on-disk-contract
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           cargo test --locked -p streamlib-media-builtins --lib
           # Where a golden names a built-in macOS compiles out, the load is

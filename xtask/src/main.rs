@@ -349,6 +349,16 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             ],
         ),
         (
+            "runtime on-disk contract tests (home, runtime directory, node registry, JSONL log)",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-runtime-on-disk-contract",
+            ],
+        ),
+        (
             "processor-macro emission locks",
             "cargo",
             &[
@@ -563,7 +573,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::output::tests::an_output_ports_refusals_leave_with_its_last_link",
                 "core::runtime::tap::tests::stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly",
                 "iceoryx2::node::tests::overflow_enabled_publisher_does_not_block_on_full_buffer",
-                "core::runtime::streamlib_runtime_directory",
                 "iceoryx2::node::tests::a_domain_root_past_the_socket_path_budget_is_refused_by_name",
                 "iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node",
                 "iceoryx2::node::tests::two_test_process_domains_share_neither_files_nor_shared_memory",
@@ -572,7 +581,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::node::tests::the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one",
                 "iceoryx2::output::tests::write_raw_refuses_over_ceiling_and_grows_within_it",
                 "iceoryx2::posix_shared_memory_headroom",
-                "core::directory_at_an_explicit_mode",
                 "core::unix_socket_path_cleared_for_bind",
                 "iceoryx2::child_process_start_outside_listener_binds",
                 "iceoryx2::channel_idle_poll_backoff",
@@ -616,10 +624,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::logging::config",
                 "core::logging::helper_process_engine_log_capture",
                 "core::logging::iceoryx2_log_bridge",
-                "core::logging::paths::tests::a_rotated_segment_is_named_with_a_dot_separated_sequence",
-                "core::logging::paths::tests::a_runtime_id_carrying_dots_and_dashes_keeps_its_whole_name_when_rotated",
-                "core::logging::paths::tests::filename_shape_round_trips",
-                "core::logging::paths::tests::a_file_that_is_not_one_of_this_segments_rotations_parses_to_no_sequence",
                 "core::engine_build_id_composition",
                 "core::compiler::compiler_ops::subprocess_bridge::tests::the_compiled_engine_build_id_leads_with_this_crates_version",
                 "core::json_schema::port_rendering_tests::port_info_output_renders_exactly_the_declared_keys",
