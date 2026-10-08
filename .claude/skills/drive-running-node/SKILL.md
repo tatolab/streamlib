@@ -26,10 +26,10 @@ tatolab graph
 ```
 
 A JSON graph dump (nodes, links, states, metrics) means the node is healthy and the address is good. A non-zero exit means it is not drivable:
-- `no running runtime found on this machine` — nothing is running; start one with `tatolab run`.
+- `no running runtime found on this machine` — no runtime's local API answers: nothing is running (start one with `tatolab run`), or a registered node is still starting or is wedged — `tatolab nodes` shows it with `ALIVE?` `no`.
 - `N live runtimes — pick one with --node <runtime name or id>` — more than one is live and you passed no `--node`; re-run with one.
 - `no live runtime named <name>, and none with that runtime_id` — the `--node` value is wrong or the node exited; re-run `tatolab nodes`. `N live runtimes answer to <name>` means two runtimes were given one name: pick one by `runtime_id`.
-- An error naming the node's socket path — the registry lists it but nothing answers there; the node is starting, wedged, or died without deregistering. Re-run `tatolab nodes`.
+- An error naming the node's socket path — the node answered the liveness check and then stopped answering before the verb's call; it is shutting down or wedged. Re-run `tatolab nodes`.
 
 ### 3. Pin it for the rest of the session
 Record the chosen `--node <runtime name>` (preferred — stable across runs) or `--node <runtime_id>`, and pass the same flag to every subsequent verb (`inspect-live-graph`, `tap-live-channel`, `capture-node-evidence`, `teardown-running-node`).

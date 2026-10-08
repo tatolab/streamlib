@@ -40,9 +40,11 @@ when the engine will not build, or when you are checking the machine rather than
 A Mac has no null sink, so both fixtures dispatch on `uname -s` and close the loop differently.
 Both ends of the through-engine loop stay StreamLib on every path:
 
-- **`--path tap-muted` (the default)** — the node creates a private, *muted* Core Audio process
-  tap of its own output plus a private aggregate device over it, and `MicrophoneSource` opens that
-  aggregate by UID. Digital and silent, scored under the **unchanged strict thresholds**. This is
+- **`--path tap-muted` (the default)** — the fixture script makes a shared, *muted* Core Audio
+  global tap of all output plus a shared aggregate device over it, holds both for the run, and
+  `MicrophoneSource` inside `tatolabd` opens that aggregate by UID. Digital and silent, scored
+  under the **unchanged strict thresholds**. Being global, the tap also hears anything else that
+  plays during the run. This is
   the one a session runs.
 - **`--path tap-audible`** — the same tap unmuted: the signal also plays out of the built-in
   speakers while the same strict numbers are taken. **Attended.**
@@ -65,16 +67,18 @@ session is reachable, printing `SKIP: no virtual audio device available on this 
 container with no session audio daemon hits this, and so does a machine where `pw-cli` /
 `pw-play` / `pw-record` are not installed.
 
+On every platform the through-engine fixture first needs the runtime unit and the fixture venv
+(`fixture_runtime_unit.sh`). A missing unit or lend, or a fixture venv that cannot import
+`tatolab.stream` and numpy, is **77**, naming its fix: `cargo xtask build-runtime`, or delete
+`runtime/streamlib-engine/tests/fixtures/.venv` to have it made again. A fixture venv that carries
+`tatolab.runtime`, or a `STREAMLIB_FIXTURE_VENV` that names no directory, is exit 1.
+
 **77 is reported as cannot-run and never as a pass.** There is no verdict to report: nothing was
 measured. Say the environment cannot run the fixture, say which reason it gave, and stop — do not
 fall back to a unit test and call the area verified.
 
 On macOS the 77 reasons are different, and each names its fix:
 
-- **No process taps** — macOS older than 14.2 has no `CATapDescription`, and the tap modes say so.
-- **No runtime unit, or no usable fixture venv** — the through-engine fixture names what is
-  missing: build the unit with `cargo xtask build-runtime`, or delete
-  `runtime/streamlib-engine/tests/fixtures/.venv` to have it made again.
 - **An audible mode or the rig-only fixture without `STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1`.**
 - **The runtime unit predates the CoreAudio arm** — the node's probe chose another arm than
   `coreaudio`, so the fixture **refuses to score** and names `cargo xtask build-runtime --release`
@@ -87,6 +91,9 @@ On macOS the 77 reasons are different, and each names its fix:
 - **Acoustic, or rig-only: no built-in speaker or microphone, or headphones on the jack**, and for
   rig-only, **a default output that is not the built-in speakers** (`afplay` takes no device).
 - **Rig-only: `afplay` or `ffmpeg` missing.**
+
+macOS older than 14.2 has no process taps: the tap modes fail with **exit 1**, naming
+`macOS 14.2`, unless the System Audio Recording preflight already refused with 77.
 
 To check before committing to a run (Linux; on macOS it always reports no null sink):
 
