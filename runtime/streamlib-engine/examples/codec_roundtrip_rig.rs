@@ -30,7 +30,7 @@
 //! compiles it, which is what keeps it from rotting between rig runs.
 //!
 //! Scoring is not this binary's job: it hosts the control plane and stays up,
-//! so `streamlib tap` and the surface-id `exchange` read the decoded
+//! so `tatolab tap` and the surface-id `exchange` read the decoded
 //! channel's exact pixels out of process — no window in the observation path,
 //! and the graph unchanged by being watched.
 //!
@@ -48,7 +48,7 @@
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1 --camera-max-width 3840 --camera-max-height 2160
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source mp4:/tmp/recording.mp4 --codec h264
-//! streamlib exchange --channel <decoder_id>/video --out /tmp/decoded --count 4
+//! tatolab exchange --channel <decoder_id>/video --out /tmp/decoded --count 4
 //! ```
 
 fn main() -> streamlib::sdk::error::Result<()> {

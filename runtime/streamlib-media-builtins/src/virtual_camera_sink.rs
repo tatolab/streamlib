@@ -57,7 +57,7 @@ pub(crate) const VIRTUAL_CAMERA_SINK_PROCESSOR_NAME: &str = "VirtualCameraSink";
 pub(crate) const V4L2LOOPBACK_CONTROL_NODE_PATH: &str = "/dev/v4l2loopback";
 
 /// The one-time command that grants the loopback door.
-pub(crate) const ENABLE_VIRTUAL_CAMERA_VERB: &str = "streamlib enable-virtual-camera";
+pub(crate) const ENABLE_VIRTUAL_CAMERA_VERB: &str = "tatolab enable-virtual-camera";
 
 /// What an unnamed camera is called, before its stable id.
 const DEFAULT_CAMERA_NAME_PREFIX: &str = "StreamLib Camera";
@@ -687,7 +687,7 @@ impl std::fmt::Display for LatchedRefusal {
                   control node is writable — the door every application sees — and otherwise \
                   registers a PipeWire camera node, which needs no module and no root. The door \
                   is logged at setup; without permission to create a loopback camera the log \
-                  names `streamlib enable-virtual-camera`, the one-time command that grants it \
+                  names `tatolab enable-virtual-camera`, the one-time command that grants it \
                   behind your desktop's password prompt. The `v4l2loopback` door refuses by name \
                   at `setup()` in that case, and the runtime keeps running. The `pipewire` door \
                   is taken whatever the control node says, refusing by name only where no \
@@ -1673,7 +1673,7 @@ mod tests {
         assert_eq!(
             absent,
             "VirtualCameraSink \"Desk cam\": no permission to create a v4l2loopback camera: \
-             /dev/v4l2loopback is absent. Run `streamlib enable-virtual-camera` once (it asks \
+             /dev/v4l2loopback is absent. Run `tatolab enable-virtual-camera` once (it asks \
              for your password), then re-run; or set door=\"auto\" to use the PipeWire door \
              meanwhile."
         );

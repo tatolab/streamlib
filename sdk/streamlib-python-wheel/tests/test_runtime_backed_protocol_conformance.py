@@ -340,7 +340,8 @@ def test_a_name_declared_in_the_stub_and_as_a_protocol_is_reported():
 
 def test_a_name_the_engine_exports_and_nothing_declares_is_reported():
     stub_source = ENGINE_STUB_PATH.read_text().replace(
-        "def runtime_log_directory() -> Path:", "def renamed_runtime_log_directory() -> Path:"
+        "def engine_build_id_compiled_into_this_extension() -> str:",
+        "def renamed_engine_build_id_compiled_into_this_extension() -> str:",
     )
     findings = _finding_texts_by_held_name(
         holding_findings(
@@ -350,9 +351,15 @@ def test_a_name_the_engine_exports_and_nothing_declares_is_reported():
             stub_source,
         )
     )
-    assert set(findings) == {"runtime_log_directory", "renamed_runtime_log_directory"}
-    assert "declared nowhere" in findings["runtime_log_directory"]
-    assert findings["renamed_runtime_log_directory"] == "declared but not exported by the engine"
+    assert set(findings) == {
+        "engine_build_id_compiled_into_this_extension",
+        "renamed_engine_build_id_compiled_into_this_extension",
+    }
+    assert "declared nowhere" in findings["engine_build_id_compiled_into_this_extension"]
+    assert (
+        findings["renamed_engine_build_id_compiled_into_this_extension"]
+        == "declared but not exported by the engine"
+    )
 
 
 def test_the_stubtest_allowlist_names_exactly_what_only_tatolab_stream_declares():

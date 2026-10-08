@@ -5,9 +5,7 @@
 
 `_engine` is the native extension behind every runtime-backed name
 `tatolab.stream` declares, and `_processor_interpreter_bootstrap` is the
-script the runtime starts each processor interpreter with. `cli` holds the
-observation verbs and `enable-virtual-camera` until the native `tatolab` CLI
-takes them.
+script the runtime starts each processor interpreter with.
 """
 
 import os

@@ -7,7 +7,7 @@
 //!
 //! The unit coverage of the rule lives beside `add_v`; what this locks is the
 //! path an author meets: the add reports the assigned name a handle carries,
-//! and the graph JSON — the payload `streamlib graph` and `GET /api/graph`
+//! and the graph JSON — the payload `tatolab graph` and `GET /api/graph`
 //! serve — carries the assigned names, not the requested ones.
 
 use serial_test::serial;
@@ -72,7 +72,7 @@ fn the_graph_json_carries_distinct_names_for_two_defaulted_nodes_of_one_type() {
     assert_eq!(
         node_names_in_the_graph_json(&runtime),
         vec!["suffixedcamera", "suffixedcamera-2"],
-        "`streamlib graph` must name the two instances apart"
+        "`tatolab graph` must name the two instances apart"
     );
 }
 

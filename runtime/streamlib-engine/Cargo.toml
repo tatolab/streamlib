@@ -201,7 +201,7 @@ streamlib = { path = "../../sdk/streamlib-sdk" }
 # the SDK, which re-exports this crate.
 streamlib-media-builtins = { path = "../streamlib-media-builtins" }
 # The control plane the `codec_roundtrip_rig` example hosts, so a rig run is
-# reachable by `streamlib graph` / `tap` / `exchange` — the observation
+# reachable by `tatolab graph` / `tap` / `exchange` — the observation
 # surface the codec proof is scored on. Same permitted dev-dep cycle.
 streamlib-api-server = { path = "../streamlib-api-server" }
 tokio = { workspace = true, features = ["full"] }

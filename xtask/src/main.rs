@@ -1287,7 +1287,7 @@ enum Commands {
     /// The codec proof's scorer: PSNR of a decoded frame set against the
     /// references that produced it, and the vivid rig's channel-mean drift
     /// lock, with the three bug-injection modes that keep either gate
-    /// non-vacuous. Pure image math over PNGs `streamlib exchange` wrote —
+    /// non-vacuous. Pure image math over PNGs `tatolab exchange` wrote —
     /// GPU-free, so it is tested in CI while the rig runs that feed it are
     /// not. See `docs/plan/ARCHITECTURE.md` §Media I/O.
     #[command(subcommand)]

@@ -5,7 +5,7 @@
 
 A type checker and an editor can read nothing out of `_engine.abi3.so`, so this
 file describes the native names only the runtime's own Python reaches — the
-bootstrap's calls and the local API client.
+bootstrap's calls and the tapped-bag decoder.
 
 What a node is handed while it runs is declared once, in `tatolab.stream`: its
 classes as `typing.Protocol`s and its functions as runtime-backed functions.
@@ -22,17 +22,11 @@ conformance gate prints as its allowlist.
 
 import sys
 from collections.abc import Callable, Mapping
-from pathlib import Path
-from types import TracebackType
-from typing import Any, Literal, final
+from typing import Any
 
 from tatolab.stream import _node_context_protocols as _stream_protocols
 
 __all__ = [
-    "LocalApiMcpClient",
-    "LocalApiMcpRequestRefused",
-    "LocalApiMcpServerUnreachable",
-    "LocalApiMcpToolCallFailed",
     "capture_this_helper_processes_engine_log_records",
     "decode_tapped_channel_bag_frame_to_python_object",
     "drain_the_engine_log_records_this_helper_captured",
@@ -41,7 +35,6 @@ __all__ = [
     "note_pause_state_from_parent_on_runtime_context",
     "open_node_link_data_access_for_helper_process",
     "open_runtime_context_full_access_for_helper_process",
-    "runtime_log_directory",
 ]
 
 def open_node_link_data_access_for_helper_process() -> _stream_protocols.NodeLinkDataAccess:
@@ -75,44 +68,6 @@ def note_pause_state_from_parent_on_runtime_context(
 ) -> None:
     """Record on a helper's context the pause state its parent just announced."""
 
-class LocalApiMcpServerUnreachable(Exception):
-    """Nothing answered MCP on the local API socket."""
-
-class LocalApiMcpRequestRefused(Exception):
-    """The node answered and refused the MCP request."""
-
-class LocalApiMcpToolCallFailed(Exception):
-    """The tool ran and reported a failure, or answered with no text."""
-
-@final
-class LocalApiMcpClient:
-    """An MCP client of one running node, over its local API socket.
-
-    Connecting sends `server/discover` at the latest revision; a node that
-    does not answer raises `LocalApiMcpServerUnreachable`, one that refuses
-    raises `LocalApiMcpRequestRefused`. Every call releases the GIL.
-    """
-
-    def __new__(cls, local_api_socket_path: str, timeout_seconds: float) -> LocalApiMcpClient: ...
-    def call_tool(self, tool_name: str, arguments_json: str) -> str:
-        """Call `tool_name` with a JSON object of arguments; answer the text its result carries.
-
-        A tool that ran and failed, or answered no text, raises
-        `LocalApiMcpToolCallFailed`; a call the node refused outright raises
-        `LocalApiMcpRequestRefused`.
-        """
-
-    def close(self) -> None:
-        """End the client's connection. Idempotent."""
-
-    def __enter__(self) -> LocalApiMcpClient: ...
-    def __exit__(
-        self,
-        exception_type: type[BaseException] | None = ...,
-        exception: BaseException | None = ...,
-        traceback: TracebackType | None = ...,
-    ) -> Literal[False]: ...
-
 def decode_tapped_channel_bag_frame_to_python_object(
     framed_bag_bytes: bytes,
 ) -> Any:
@@ -134,9 +89,6 @@ def engine_build_id_compiled_into_this_extension() -> str:
     `STREAMLIB_ENGINE_BUILD_ID` and refuses to start on any difference, so two
     builds of one commit are still two ids.
     """
-
-def runtime_log_directory() -> Path:
-    """The directory the engine writes its per-runtime JSONL logs into."""
 
 def capture_this_helper_processes_engine_log_records() -> None:
     """Start capturing this helper process's engine `tracing` records,

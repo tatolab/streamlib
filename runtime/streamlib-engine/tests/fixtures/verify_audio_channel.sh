@@ -14,9 +14,9 @@
 #                             [--count N] [--port NAME]
 #                             [--expect-frame-not-restamped]
 #
-# `<node-name>` is the node's `name` as `streamlib graph` lists it. `--node`
-# picks the running runtime the way the CLI's own `--node` does; without it the
-# sole live runtime is the one read. `--port`
+# `<node-name>` is the node's `name` as `tatolab graph` lists it. `--node`
+# is handed to `tatolab`'s own `--node`; without it the sole live runtime is the
+# one read. `--port`
 # names which output to tap. Without it the node must declare exactly one,
 # because guessing at a node that declares several would tap whichever the
 # graph happened to list first.
@@ -26,9 +26,9 @@
 # stamps at publication does not — so it is asked for rather than assumed.
 #
 # Assumes a node is already running and hosting its control plane. Exit status
-# is the verdict; stdout is the report JSON, progress is on stderr. The graph,
-# the tap and the bag decoder are read through the runtime unit's lend (see
-# fixture_runtime_unit.sh).
+# is the verdict; stdout is the report JSON, progress is on stderr. The graph
+# and the tap are read through the runtime unit's `tatolab`, and the bag decoder
+# through its lend (see fixture_runtime_unit.sh).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,6 +59,11 @@ done
 TEMPORARY_DIRECTORY="${TMPDIR:-/tmp}"
 OUTPUT_DIR="$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-channel-XXXXXX")"
 
+RUNTIME_SELECTION=()
+if [ -n "$RUNTIME_NAME_OR_ID" ]; then
+    RUNTIME_SELECTION=(--node "$RUNTIME_NAME_OR_ID")
+fi
+
 # The channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`.
 # Read into a variable rather than fed to `$(...)` as a heredoc: macOS's bash
@@ -67,20 +72,12 @@ OUTPUT_DIR="$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-channel-XXXXXX
 read -r -d '' CHANNEL_RESOLVING_PROGRAM <<'PY'
 import json, sys
 
-# The engine's own resolver and client, so this cannot drift from the node and
-# socket `streamlib graph --node` actually drives.
-from tatolab.runtime._control_plane_client import (
-    ControlPlaneError,
-    call_tool,
-    resolve_local_api_socket_of_requested_node,
-)
-
-runtime_name_or_id, wanted, requested_port = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    local_api_socket = resolve_local_api_socket_of_requested_node(runtime_name_or_id or None)
-    graph = json.loads(call_tool(local_api_socket, "graph", {}))
-except ControlPlaneError as control_plane_error:
-    sys.exit(str(control_plane_error))
+wanted, requested_port = sys.argv[1], sys.argv[2]
+graph_text = sys.stdin.read()
+if not graph_text.strip():
+    # `tatolab graph` failed, and said why on stderr.
+    sys.exit(1)
+graph = json.loads(graph_text)
 for node in graph["nodes"]:
     if node["name"] != wanted:
         continue
@@ -108,16 +105,11 @@ for node in graph["nodes"]:
 else:
     sys.exit(f"no node named {wanted} in the running graph")
 PY
-CHANNEL="$(python_with_the_lend -c "$CHANNEL_RESOLVING_PROGRAM" \
-    "$RUNTIME_NAME_OR_ID" "$NODE_NAME" "$OUTPUT_PORT")" || exit 1
-
-RUNTIME_SELECTION=()
-if [ -n "$RUNTIME_NAME_OR_ID" ]; then
-    RUNTIME_SELECTION=(--node "$RUNTIME_NAME_OR_ID")
-fi
+CHANNEL="$(tatolab_observation_verb graph ${RUNTIME_SELECTION[@]+"${RUNTIME_SELECTION[@]}"} \
+    | "$FIXTURE_PYTHON" -c "$CHANNEL_RESOLVING_PROGRAM" "$NODE_NAME" "$OUTPUT_PORT")" || exit 1
 
 echo "tapping $CHANNEL for $BAG_COUNT bags" >&2
-if ! streamlib_observation_verb tap "$CHANNEL" --count "$BAG_COUNT" \
+if ! tatolab_observation_verb tap "$CHANNEL" --count "$BAG_COUNT" \
     ${RUNTIME_SELECTION[@]+"${RUNTIME_SELECTION[@]}"} \
     > "$OUTPUT_DIR/tapped.json" 2>"$OUTPUT_DIR/tap.err"; then
     cat "$OUTPUT_DIR/tap.err" >&2

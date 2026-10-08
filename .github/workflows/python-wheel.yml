@@ -99,10 +99,9 @@ jobs:
           # module scope — collection needs it even when `requires_gpu`
           # deselects every test that would use it. pydantic is what proves a
           # model is a legal `read(port, into=T)` target; the wheel never
-          # imports it. The MCP SDK stands a node's control plane in for the
-          # observation-verb tests. The stream package goes in from source,
-          # at a version no index carries before release.
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions mcp==2.3.0
+          # imports it. The stream package goes in from source, at a version
+          # no index carries before release.
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
@@ -191,11 +190,10 @@ jobs:
       # memory, and a software rasterizer (lavapipe) cannot — verified in a
       # GPU-less container. So this runs the half of the wheel's own suite that
       # needs no device: the casts and the bag codec, a processor interpreter's
-      # bootstrap and helper process, the observation verbs against a scripted
-      # control plane, and the conformance gate. Streams running on `tatolabd`
-      # are the integration suite's, in its own job below. The `requires_gpu`
-      # half is rig-only by owner decision (2026-08-03) rather than a
-      # self-hosted GPU runner.
+      # bootstrap and helper process, and the conformance gate. Streams running
+      # on `tatolabd` are the integration suite's, in its own job below. The
+      # `requires_gpu` half is rig-only by owner decision (2026-08-03) rather
+      # than a self-hosted GPU runner.
       - name: Wheel suite (GPU-free half)
         working-directory: sdk/streamlib-python-wheel
         run: |
@@ -596,7 +594,7 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy pydantic typing_extensions mcp==2.3.0
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy pydantic typing_extensions
           # CPU torch: the exchange tests type-check against torch's API, and
           # pyright reports a missing import as an error. The cpu wheel keeps
           # the download tractable for a no-build job.

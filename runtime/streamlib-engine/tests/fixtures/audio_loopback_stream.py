@@ -12,7 +12,7 @@ all — so when this run fails and that one passes, the rig is sound and the
 engine is not.
 
 What consumes the microphone writes the capture out as one waveform, because
-that is the only way to measure the whole signal: `streamlib tap` collects
+that is the only way to measure the whole signal: `tatolab tap` collects
 inside a bounded 500 ms window, and the signal runs for nearly three seconds.
 The recorder is an ordinary consumer reading the microphone's port over a real
 link, so the tap still sees the same channel and can judge the block-level

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: BUSL-1.1
 #
 # Sourced by the fixture drivers: the runtime unit a fixture stream runs on,
-# the venv it compiles in, and the observation verbs reached through the lend.
+# the venv it compiles in, and the runtime unit's `tatolab` observation verbs.
 #
 # The runtime unit is what `cargo xtask build-runtime` lays out —
 # `bin/tatolab`, `bin/tatolabd` and `lib/tatolab/lend/` — at
@@ -90,10 +90,10 @@ sys.exit(0 if importlib.util.find_spec("tatolab.runtime") is not None else 1)
     fi
 }
 
-# Runs a verb of the Python `streamlib` CLI (`nodes`, `graph`, `tap`, `logs`,
-# `exchange`) from the lend, until the native CLI carries them.
-streamlib_observation_verb() {
-    PYTHONPATH="$RUNTIME_UNIT_LEND_DIRECTORY" "$FIXTURE_PYTHON" -m tatolab.runtime.cli "$@"
+# Runs a verb of the runtime unit's `tatolab` (`nodes`, `graph`, `tap`, `logs`,
+# `exchange`).
+tatolab_observation_verb() {
+    "$TATOLAB_EXECUTABLE" "$@"
 }
 
 # Runs the fixture venv's interpreter with the lend importable, for a fixture
@@ -102,9 +102,10 @@ python_with_the_lend() {
     PYTHONPATH="$RUNTIME_UNIT_LEND_DIRECTORY" "$FIXTURE_PYTHON" "$@"
 }
 
-# Prints the runtime_id of the live node a launched process runs, and fails
-# until exactly one has registered. The launched pid is `tatolab run`, or a
-# wrapper (`timeout`) around it; the node is the `tatolabd` beneath.
+# Prints the runtime_id of the live node a launched process runs, read off
+# `tatolab nodes`, and fails until exactly one has registered. The launched pid
+# is `tatolab run`, or a wrapper (`timeout`) around it; the node is the
+# `tatolabd` beneath.
 runtime_id_of_the_node_launched_as() {
-    python_with_the_lend "$FIXTURE_DIRECTORY/runtime_id_of_launched_node.py" "$1"
+    "$FIXTURE_PYTHON" "$FIXTURE_DIRECTORY/runtime_id_of_launched_node.py" "$TATOLAB_EXECUTABLE" "$1"
 }

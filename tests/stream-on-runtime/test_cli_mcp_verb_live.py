@@ -1,19 +1,17 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `mcp` verb against a stream on `tatolabd`, launched the way an MCP host launches it.
+"""`tatolab mcp` against a stream on `tatolabd`, launched the way an MCP host launches it.
 
-The verb is the lend's Python `mcp`, run with the lend leading `PYTHONPATH`
-until the native CLI takes it. The client is the official MCP Python SDK's
-stdio client: it spawns the verb and speaks over the verb's stdin and stdout,
-exactly as a host configured to run the verb does.
+The verb is the runtime unit's `bin/tatolab mcp`. The client is the official
+MCP Python SDK's stdio client: it spawns the verb and speaks over the verb's
+stdin and stdout, exactly as a host configured to run the verb does.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import os
 import subprocess
 import time
 from collections.abc import Callable
@@ -28,7 +26,7 @@ from mcp_types.version import LATEST_PROTOCOL_VERSION
 
 from conftest import PrivateRuntimeDirectories
 from runtime_process_under_test import ENGINE_STARTED_LOG_LINE, RuntimeProcessUnderTest
-from runtime_unit_under_test import SUITE_VENV_INTERPRETER, RuntimeUnitUnderTest
+from runtime_unit_under_test import RuntimeUnitUnderTest
 from test_cli_launch import NODE_READY_TIMEOUT_SECONDS, STREAM_WITH_ONE_NATIVE_SOURCE
 
 pytestmark = pytest.mark.requires_gpu
@@ -53,23 +51,8 @@ NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"
 
 
-def mcp_verb_command(runtime_name: str) -> "list[str]":
-    return [str(SUITE_VENV_INTERPRETER), "-m", "tatolab.runtime.cli", "mcp", "--node", runtime_name]
-
-
-def environment_reaching_the_node_with_the_lend(
-    runtime_unit: RuntimeUnitUnderTest, private_runtime_directories: PrivateRuntimeDirectories
-) -> "dict[str, str]":
-    """This test's runtime directory, with the lend leading `PYTHONPATH`."""
-    environment = private_runtime_directories.environment
-    existing_python_path = environment.get("PYTHONPATH")
-    return {
-        **environment,
-        "PYTHONPATH": os.pathsep.join(
-            [str(runtime_unit.lend_directory)]
-            + ([existing_python_path] if existing_python_path else [])
-        ),
-    }
+def mcp_verb_command(runtime_unit: RuntimeUnitUnderTest, runtime_name: str) -> "list[str]":
+    return [str(runtime_unit.tatolab_executable), "mcp", "--node", runtime_name]
 
 
 def launch_a_ready_node(
@@ -83,9 +66,11 @@ def launch_a_ready_node(
     return tatolab, entry["runtime_name"]
 
 
-def start_the_verb(environment: "dict[str, str]", runtime_name: str) -> "subprocess.Popen[bytes]":
+def start_the_verb(
+    runtime_unit: RuntimeUnitUnderTest, environment: "dict[str, str]", runtime_name: str
+) -> "subprocess.Popen[bytes]":
     return subprocess.Popen(
-        mcp_verb_command(runtime_name),
+        mcp_verb_command(runtime_unit, runtime_name),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -101,10 +86,11 @@ def test_a_stdio_client_through_the_verb_reaches_the_nodes_tools_resources_and_p
     start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
 ):
     _tatolab, runtime_name = launch_a_ready_node(make_tatolab_project, start_tatolab)
+    verb_command = mcp_verb_command(runtime_unit, runtime_name)
     verb = StdioServerParameters(
-        command=mcp_verb_command(runtime_name)[0],
-        args=mcp_verb_command(runtime_name)[1:],
-        env=environment_reaching_the_node_with_the_lend(runtime_unit, private_runtime_directories),
+        command=verb_command[0],
+        args=verb_command[1:],
+        env=private_runtime_directories.environment,
     )
 
     async def session_through_the_verb() -> "dict[str, Any]":
@@ -160,10 +146,7 @@ def test_closing_stdin_ends_the_verb_promptly(
     start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
 ):
     _tatolab, runtime_name = launch_a_ready_node(make_tatolab_project, start_tatolab)
-    verb = start_the_verb(
-        environment_reaching_the_node_with_the_lend(runtime_unit, private_runtime_directories),
-        runtime_name,
-    )
+    verb = start_the_verb(runtime_unit, private_runtime_directories.environment, runtime_name)
 
     started = time.monotonic()
     stdout, stderr = verb.communicate(b"", timeout=VERB_EXIT_AFTER_STDIN_CLOSES_TIMEOUT_SECONDS)
@@ -181,10 +164,7 @@ def test_the_node_dying_ends_the_verb_non_zero_with_one_line_naming_the_runtime(
     start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
 ):
     tatolab, runtime_name = launch_a_ready_node(make_tatolab_project, start_tatolab)
-    verb = start_the_verb(
-        environment_reaching_the_node_with_the_lend(runtime_unit, private_runtime_directories),
-        runtime_name,
-    )
+    verb = start_the_verb(runtime_unit, private_runtime_directories.environment, runtime_name)
     # Wait until the verb holds an open stream, so the kill lands on a live pipe.
     assert verb.stdin is not None
     verb.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n')

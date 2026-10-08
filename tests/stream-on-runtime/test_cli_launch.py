@@ -7,9 +7,9 @@
 symlink to the suite venv, holding `tatolab-stream` and nothing of the runtime —
 and starts `tatolabd` beside itself. The stream it hosts is a first-class node:
 it publishes a registry entry naming `tatolabd`'s pid and an owner-only local
-API socket, the observation verbs discover it, and a Ctrl-C to `tatolab` takes
-both away. Starting the engine initializes a GPU context, so the module needs a
-device.
+API socket, `tatolab`'s observation verbs discover it, and a Ctrl-C to
+`tatolab` takes both away. Starting the engine initializes a GPU context, so the
+module needs a device.
 
 The MVP minute is measured here too, with every processor in its own processor
 interpreter: what `new` writes runs frame after frame, a graph of helpers goes
@@ -43,9 +43,14 @@ from runtime_process_under_test import (
     registry_entry_paths_in,
 )
 from runtime_unit_under_test import (
+    NODE_REGISTRY_DIRECTORY_NAME,
     STREAM_ON_RUNTIME_SUITE_DIRECTORY,
     SUITE_VENV_INTERPRETER,
     RuntimeUnitUnderTest,
+    TatolabNodesTableRow,
+    rows_of_the_tatolab_nodes_table,
+    run_tatolab_observation_verb_in_environment,
+    runtime_directory_tatolab_nodes_read,
 )
 from tatolab.stream import TestPatternSource
 from test_processor_interpreter_lend import assert_runs_in_a_process_of_its_own_beneath
@@ -139,37 +144,15 @@ DEV_RESTARTING_THE_STREAM = "tatolab dev: restarting the stream"
 # What `dev` says when a stream it stopped for a restart did not exit 0.
 DEV_PREVIOUS_STREAM_EXITED_BADLY = "tatolab dev: the previous stream exited with"
 
-# Run in a processor-interpreter-free Python with the lend on `PYTHONPATH`: the
-# lend's own registry reader resolves the runtime directory exactly as the
-# engine does, which is the contract the fallback test holds it to.
-REGISTRY_READER_REPORT_SOURCE = """\
+# The `surface_id` field of one bag `tatolab tap` forwarded, given its hex.
+# Run with the lend on `PYTHONPATH`: a tapped bag is the channel's
+# transport-framed msgpack, and the engine's own decoder is what reads it.
+SURFACE_ID_OF_A_TAPPED_BAG_SOURCE = """\
 import json, sys
-from tatolab.runtime._node_registry import registry_directory, runtime_directory, scan_check_and_prune
+from tatolab.runtime._engine import decode_tapped_channel_bag_frame_to_python_object
 
-print(json.dumps({
-    "runtime_directory": str(runtime_directory()),
-    "registry_directory": str(registry_directory()),
-    "discovered": [
-        {"pid": found.entry.pid, "runtime_id": found.entry.runtime_id, "reachable": found.reachable}
-        for found in scan_check_and_prune()
-    ],
-}))
-"""
-
-# The surface id the next bag on a channel publishes, read the way the
-# `exchange` verb's channel form reads it.
-PUBLISHED_SURFACE_ID_SOURCE = """\
-import json, sys
-from tatolab.runtime._control_plane_client import LocalApiSocket
-from tatolab.runtime._surface_image_exchange import (
-    DEFAULT_SURFACE_ID_BAG_FIELD_NAME,
-    _surface_id_in_bag,
-    _tapped_bag_frames,
-)
-
-local_api_socket_path, channel = sys.argv[1:3]
-frames = _tapped_bag_frames(LocalApiSocket(local_api_socket_path), channel, 1)
-print(json.dumps(_surface_id_in_bag(frames[0].framed_bytes, channel, DEFAULT_SURFACE_ID_BAG_FIELD_NAME)))
+bag = decode_tapped_channel_bag_frame_to_python_object(bytes.fromhex(sys.argv[1]))
+print(json.dumps(bag.get("surface_id") if isinstance(bag, dict) else None))
 """
 
 
@@ -410,7 +393,7 @@ def test_a_launched_node_listens_on_no_tcp_socket(
 def succeeded(completed: "subprocess.CompletedProcess[str]") -> str:
     """The verb's stdout, once it exited 0 — or a failure carrying what it said."""
     assert completed.returncode == 0, (
-        f"`{' '.join(map(str, completed.args[3:]))}` exited {completed.returncode}:\n"
+        f"`tatolab {' '.join(map(str, completed.args[1:]))}` exited {completed.returncode}:\n"
         f"stdout: {completed.stdout}\nstderr: {completed.stderr}"
     )
     return completed.stdout
@@ -423,13 +406,12 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
     private_runtime_directories: PrivateRuntimeDirectories,
     make_tatolab_project: "Callable[..., Path]",
     start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
-    run_observation_verb: "Callable[..., subprocess.CompletedProcess[str]]",
+    run_tatolab_observation_verb: "Callable[..., subprocess.CompletedProcess[str]]",
 ):
-    """`nodes`, `graph`, `tap`, `logs` and both forms of `exchange` — the lend's
-    Python verbs until the native CLI takes them — driven the way a user drives
-    them: a separate process, with only the registry to find the node by. The
-    source is wired to a reader, since a channel is tappable only once a
-    connect has wired its output."""
+    """`tatolab nodes`, `graph`, `tap`, `logs` and both forms of `exchange`,
+    driven the way a user drives them: a separate process, with only the
+    registry to find the node by. The source is wired to a reader, since a
+    channel is tappable only once a connect has wired its output."""
     app_directory = make_tatolab_project(project_files_with_helper_placed_processors(1))
     tatolab = start_tatolab("run", working_directory=app_directory)
     entry = tatolab.registry_entry(timeout=NODE_READY_TIMEOUT_SECONDS)
@@ -437,11 +419,11 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
     runtime_name = entry["runtime_name"]
     local_api_socket_path = entry["local_api_socket_path"]
 
-    listed = succeeded(run_observation_verb("nodes"))
+    listed = succeeded(run_tatolab_observation_verb("nodes"))
     assert listed.splitlines()[0].split()[2] == "LOCAL_API_SOCKET", listed
     assert local_api_socket_path in listed
 
-    graph = json.loads(succeeded(run_observation_verb("graph", "--node", runtime_name)))
+    graph = json.loads(succeeded(run_tatolab_observation_verb("graph", "--node", runtime_name)))
     assert graph["runtime_name"] == runtime_name
     source_name = next(
         graph_node["name"]
@@ -452,7 +434,7 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
 
     tapped = json.loads(
         succeeded(
-            run_observation_verb(
+            run_tatolab_observation_verb(
                 "tap", channel, "--count", "2", "--node", runtime_name,
                 timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
             )
@@ -460,11 +442,11 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
     )  # fmt: skip
     assert tapped["received"] > 0, f"no bags reached the tap over the socket: {tapped}"
 
-    succeeded(run_observation_verb("logs", "--node", runtime_name, "--count", "1"))
+    succeeded(run_tatolab_observation_verb("logs", "--node", runtime_name, "--count", "1"))
 
     channel_form_directory = tmp_path / "channel-form"
     channel_form_written = succeeded(
-        run_observation_verb(
+        run_tatolab_observation_verb(
             "exchange", "--channel", channel, "--count", "1",
             "--out", str(channel_form_directory), "--node", runtime_name,
             timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
@@ -476,15 +458,23 @@ def test_every_observation_verb_reaches_a_launched_node_through_its_local_api_so
     id_form_directory = tmp_path / "id-form"
     id_form_attempts: "list[str]" = []
     for _ in range(SURFACE_ID_EXCHANGE_ATTEMPTS):
+        tapped_for_a_surface_id = json.loads(
+            succeeded(
+                run_tatolab_observation_verb(
+                    "tap", channel, "--count", "1", "--node", runtime_name,
+                    timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
+                )
+            )
+        )  # fmt: skip
+        assert tapped_for_a_surface_id["bags"], f"no bag reached the tap: {tapped_for_a_surface_id}"
         published_surface_id = run_python_with_the_lend(
             runtime_unit,
             private_runtime_directories.environment,
-            PUBLISHED_SURFACE_ID_SOURCE,
-            local_api_socket_path,
-            channel,
+            SURFACE_ID_OF_A_TAPPED_BAG_SOURCE,
+            tapped_for_a_surface_id["bags"][0]["hex_preview"],
         )
         assert published_surface_id is not None, f"{channel} published no surface id"
-        exchanged = run_observation_verb(
+        exchanged = run_tatolab_observation_verb(
             "exchange", published_surface_id,
             "--out", str(id_form_directory), "--node", runtime_name,
             timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
@@ -612,10 +602,10 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
 
     The node carries a Python processor, so a frame reaching it proves
     `tatolabd` and the processor interpreter opened their nodes in one iceoryx2
-    domain. Discovery goes through the lend's own registry reader, never a
-    hand-built path, because the reader resolving exactly as the engine does is
-    the contract. The launch tests above all set `XDG_RUNTIME_DIR`, so none of
-    them reaches this arm.
+    domain. Discovery goes through `tatolab nodes`, never a hand-built path,
+    because `nodes` resolving the runtime directory exactly as the engine does
+    is the contract. The launch tests above all set `XDG_RUNTIME_DIR`, so none
+    of them reaches this arm.
     """
     per_user_fallback = Path("/tmp") / f"streamlib-{os.getuid()}"
     environment_without_xdg_runtime_dir = {
@@ -648,26 +638,31 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
     tatolabd_pid = tatolab.registry_entry()["pid"]
 
     deadline = time.monotonic() + NODE_READY_TIMEOUT_SECONDS
-    registry_reader_report: "dict[str, Any]" = {}
-    discovered: "list[dict[str, Any]]" = []
+    listed_nodes = ""
+    discovered: "list[TatolabNodesTableRow]" = []
     while not discovered and time.monotonic() < deadline:
-        registry_reader_report = run_python_with_the_lend(
-            runtime_unit, environment_without_xdg_runtime_dir, REGISTRY_READER_REPORT_SOURCE
+        listed_nodes = succeeded(
+            run_tatolab_observation_verb_in_environment(
+                runtime_unit, environment_without_xdg_runtime_dir, "nodes"
+            )
         )
         discovered = [
-            found
-            for found in registry_reader_report["discovered"]
-            if found["pid"] == tatolabd_pid and found["reachable"]
+            row
+            for row in rows_of_the_tatolab_nodes_table(listed_nodes)
+            if row.pid == tatolabd_pid and row.local_api_answered
         ]
         time.sleep(0.2)
-    assert Path(registry_reader_report["runtime_directory"]) == per_user_fallback
+    runtime_directory_read_by_nodes = runtime_directory_tatolab_nodes_read(listed_nodes)
+    assert runtime_directory_read_by_nodes == per_user_fallback
     assert discovered, (
-        f"the reader never found the node in {registry_reader_report['registry_directory']}; "
-        f"standard error ended:\n{tatolab.recent_stderr()}"
+        f"`tatolab nodes` never listed the node live in {runtime_directory_read_by_nodes}:\n"
+        f"{listed_nodes}\nstandard error ended:\n{tatolab.recent_stderr()}"
     )
-    runtime_id = discovered[0]["runtime_id"]
+    runtime_id = discovered[0].runtime_id
 
-    entry_file = Path(registry_reader_report["registry_directory"]) / f"{runtime_id}.json"
+    entry_file = (
+        runtime_directory_read_by_nodes / NODE_REGISTRY_DIRECTORY_NAME / f"{runtime_id}.json"
+    )
     assert entry_file.is_file()
     assert (per_user_fallback / f"surface-share-{runtime_id}.sock").exists()
     new_node_details = (
@@ -684,12 +679,15 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
         f"the node must exit cleanly on SIGINT; standard error ended:\n{tatolab.recent_stderr()}"
     )
     assert not entry_file.exists(), "clean teardown must remove the node-registry entry"
-    assert all(
-        found["pid"] != tatolabd_pid
-        for found in run_python_with_the_lend(
-            runtime_unit, environment_without_xdg_runtime_dir, REGISTRY_READER_REPORT_SOURCE
-        )["discovered"]
+    listed_nodes_after_teardown = succeeded(
+        run_tatolab_observation_verb_in_environment(
+            runtime_unit, environment_without_xdg_runtime_dir, "nodes"
+        )
     )
+    assert all(
+        row.pid != tatolabd_pid
+        for row in rows_of_the_tatolab_nodes_table(listed_nodes_after_teardown)
+    ), listed_nodes_after_teardown
 
 
 @pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
