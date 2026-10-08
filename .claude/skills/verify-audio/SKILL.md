@@ -40,9 +40,11 @@ when the engine will not build, or when you are checking the machine rather than
 A Mac has no null sink, so both fixtures dispatch on `uname -s` and close the loop differently.
 Both ends of the through-engine loop stay StreamLib on every path:
 
-- **`--path tap-muted` (the default)** — the node creates a private, *muted* Core Audio process
-  tap of its own output plus a private aggregate device over it, and `MicrophoneSource` opens that
-  aggregate by UID. Digital and silent, scored under the **unchanged strict thresholds**. This is
+- **`--path tap-muted` (the default)** — the fixture script makes a shared, *muted* Core Audio
+  global tap of all output plus a shared aggregate device over it, holds both for the run, and
+  `MicrophoneSource` inside `tatolabd` opens that aggregate by UID. Digital and silent, scored
+  under the **unchanged strict thresholds**. Being global, the tap also hears anything else that
+  plays during the run, so keep every other app silent until scoring completes. This is
   the one a session runs.
 - **`--path tap-audible`** — the same tap unmuted: the signal also plays out of the built-in
   speakers while the same strict numbers are taken. **Attended.**
@@ -65,19 +67,22 @@ session is reachable, printing `SKIP: no virtual audio device available on this 
 container with no session audio daemon hits this, and so does a machine where `pw-cli` /
 `pw-play` / `pw-record` are not installed.
 
+On every platform the through-engine fixture first needs the runtime unit and the fixture venv
+(`fixture_runtime_unit.sh`). A missing unit or lend, or a fixture venv that cannot import
+`tatolab.stream` and numpy, is **77**, naming its fix: `cargo xtask build-runtime`, or delete
+`runtime/streamlib-engine/tests/fixtures/.venv` to have it made again. A fixture venv that carries
+`tatolab.runtime`, or a `STREAMLIB_FIXTURE_VENV` that names no directory, is exit 1.
+
 **77 is reported as cannot-run and never as a pass.** There is no verdict to report: nothing was
 measured. Say the environment cannot run the fixture, say which reason it gave, and stop — do not
 fall back to a unit test and call the area verified.
 
 On macOS the 77 reasons are different, and each names its fix:
 
-- **`check` is UNAVAILABLE** — macOS older than 14.2 (no process taps), or the interpreter cannot
-  import `numpy` or `streamlib`. It opens no device and raises no prompt.
 - **An audible mode or the rig-only fixture without `STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1`.**
-- **The wheel predates the CoreAudio arm** — the node's probe chose another arm than `coreaudio`,
-  so the fixture **refuses to score** and names
-  `(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)`
-  (see Running it). An arm that is in the wheel and failed to open is *not* 77: that is exit 1, a real failure.
+- **The runtime unit predates the CoreAudio arm** — the node's probe chose another arm than
+  `coreaudio`, so the fixture **refuses to score** and names `cargo xtask build-runtime --release`
+  (see Running it). An arm that is in the unit and failed to open is *not* 77: that is exit 1, a real failure.
 - **The tap delivered exact digital zeros and TCC says System Audio Recording is not granted**
   (`not-determined`, `denied` or `unknown`) — a tap without that grant reports no error, it just
   hears nothing. The fix is System Settings › Privacy & Security › Screen & System Audio
@@ -87,11 +92,13 @@ On macOS the 77 reasons are different, and each names its fix:
   rig-only, **a default output that is not the built-in speakers** (`afplay` takes no device).
 - **Rig-only: `afplay` or `ffmpeg` missing.**
 
-To check before committing to a run:
+macOS older than 14.2 has no process taps: the tap modes fail with **exit 1**, naming
+`macOS 14.2`, unless the System Audio Recording preflight already refused with 77.
+
+To check before committing to a run (Linux; on macOS it always reports no null sink):
 
 ```bash
-PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
-  runtime/streamlib-engine/tests/fixtures/virtual_audio_device.sh check
+runtime/streamlib-engine/tests/fixtures/virtual_audio_device.sh check
 ```
 
 ## Running it
@@ -103,32 +110,30 @@ through-engine one also brings up a GPU context and an iceoryx2 node.
 
 ```bash
 # through-engine (default; on macOS this is --path tap-muted)
-PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
-  runtime/streamlib-engine/tests/fixtures/verify_audio_loopback.sh
+runtime/streamlib-engine/tests/fixtures/verify_audio_loopback.sh
 
 # rig-only — a fresh directory, because the fixture never clears the one you give it
-PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
-  runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh \
+runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh \
   "$(mktemp -d "${TMPDIR:-/tmp}/verify-audio-rig-XXXXXX")"
 
 # macOS, attended — the owner at the machine and listening
 STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1 \
-PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
   runtime/streamlib-engine/tests/fixtures/verify_audio_loopback.sh --path tap-audible   # or acoustic
 ```
 
-**`PYTHON` must be absolute.** The through-engine fixture starts the node from a subshell that
-`cd`s into the fixtures directory first, so a repo-relative interpreter path resolves against the
-wrong directory and dies there. It defaults to `python3`, which only works if that interpreter can
-already `import streamlib` — the wheel venv is the reliable answer.
+**The through-engine fixture runs on the runtime unit and compiles in the fixture venv.** The
+stream runs with `target/tatolab-runtime/bin/tatolab run` (or the unit `STREAMLIB_RUNTIME_UNIT_DIRECTORY`
+names), compiled in `runtime/streamlib-engine/tests/fixtures/.venv`, which holds `tatolab-stream`
+and numpy and never the runtime; the fixture makes that venv with uv the first time
+(`fixture_runtime_unit.sh`). The rig-only fixture runs no engine and needs only an interpreter
+with numpy: `PYTHON`, default `python3` — the fixture venv is one once it exists.
 
-**Build the wheel from the tree first:
-`(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)`.**
-The node runs whatever `_engine.abi3.so` that venv imports, and one
-built before the change under test is measured and reported as though it were the change. On
+**Build the runtime unit from the tree first: `cargo xtask build-runtime --release`.**
+The node runs whatever unit is on disk, and one built before the change under test is measured
+and reported as though it were the change. On
 macOS the fixture enforces the sharpest case of this: it **refuses to score unless `node.log`
 shows the probe line `audio device backend chain probed` with `audio_backend=coreaudio`**, because
-a wheel predating the CoreAudio arm lands on `silent-null` — silence captured, nothing played. Quote
+a unit predating the CoreAudio arm lands on `silent-null` — silence captured, nothing played. Quote
 the probe line in the report; the fixture echoes it on stderr as `probed: …`. It also refuses a run
 whose `MicrophoneSource: capture stream opened` line names any device but the one it asked for.
 
@@ -144,15 +149,15 @@ Things only the owner can do, asked for once, before the first run that needs th
 - **System Audio Recording** — System Settings › Privacy & Security › Screen & System Audio
   Recording › System Audio Recording Only › Terminal. The tap modes need it; without it they
   exit 77 as above. The first tap run may raise the prompt instead.
-- **Headphones for anything that wires the microphone to the speaker** — the wheel's
-  `test_speaker_sink.py` graph test feeds back through laptop speakers. It is marked
+- **Headphones for anything that wires the microphone to the speaker** — the
+  `tests/stream-on-runtime/test_speaker_sink.py` graph test feeds back through laptop speakers. It is marked
   `audible_on_macos` and skipped there unless `STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1`.
 - **For `acoustic` and rig-only:** headphones *off*, the built-in speakers as the output, a quiet
   room, and the output volume noted in the report.
 
 **The through-engine fixture measures the node it launched, and no other.** It resolves that
 process's `runtime_id` from the registry and passes `--node <runtime_id>` to every verb, so an
-orphaned `audio_loopback_node.py` from a killed run cannot answer in its place. A node that exits
+orphaned `audio_loopback_stream.py` node from a killed run cannot answer in its place. A node that exits
 first fails at `the loopback node exited before serving its local API`; one that never answers
 fails at `the loopback node never answered over its local API socket`, with the tail of
 `node.log` — both are real failures.
@@ -254,8 +259,7 @@ device check leaves the *previous* run's `report.json` and spectrogram sitting t
 
 ```bash
 TRIAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/verify-audio-triage-XXXXXX")"
-PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
-  runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh "$TRIAGE_DIR"
+runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh "$TRIAGE_DIR"
 ```
 
 - rig-only **passes** → the rig is sound, so the failure is on the StreamLib side of the loop.
@@ -308,8 +312,8 @@ without its label invites it to be read as though it were.
 - **Path**: null-sink monitor (Linux) | `tap-muted` | `tap-audible` | `acoustic` (macOS)
 - **Owner heard it**: n/a — silent path | yes — <what they heard: the tone, six beeps> | no — <why>
 - **Injected fault**: none | `silence` | `drop` | `gain`
-- **Backend probed** (macOS): `<the probe line, audio_backend=coreaudio>` · wheel rebuilt with
-  `(cd sdk/streamlib-python-wheel && uv pip install -e ../tatolab-stream && maturin develop --release)`
+- **Backend probed** (macOS): `<the probe line, audio_backend=coreaudio>` · runtime unit rebuilt with
+  `cargo xtask build-runtime --release`
   at `<commit>`
 - **Command**:
     ```

@@ -116,103 +116,109 @@ echo "rig-brake.sh — default config: every rule notes, nothing prompts"
 clear_config
 
 # ── The Python launch path ───────────────────────────────────────────
-run_hook 'streamlib run --dir examples/camera-display'
-expect_warn "streamlib run of an app under examples/ is noted" example_launch
+run_hook 'tatolab run --dir examples/camera-display'
+expect_warn "tatolab run of an app under examples/ is noted" example_launch
 
-run_hook 'streamlib dev --dir examples/camera-python-effects'
-expect_warn "streamlib dev of an app under examples/ is noted" example_launch
+run_hook 'tatolab dev --dir examples/camera-python-effects'
+expect_warn "tatolab dev of an app under examples/ is noted" example_launch
 
-run_hook 'STREAMLIB_CAMERA_DEVICE=/dev/video0 streamlib run --dir examples/camera-display'
-expect_warn "an env-prefixed streamlib run is noted" example_launch
+run_hook 'STREAMLIB_CAMERA_DEVICE=/dev/video0 tatolab run --dir examples/camera-display'
+expect_warn "an env-prefixed tatolab run is noted" example_launch
 
-run_hook '/home/dev/streamlib/sdk/streamlib-python-wheel/.venv/bin/streamlib run --dir /home/dev/streamlib/examples/camera-display'
-expect_warn "the wheel venv CLI named by absolute path is noted" example_launch
+run_hook '/home/dev/streamlib/target/tatolab-runtime/bin/tatolab run --dir /home/dev/streamlib/examples/camera-display'
+expect_warn "the runtime unit's tatolab named by absolute path is noted" example_launch
 
-run_hook 'streamlib run' '/home/dev/streamlib/examples/camera-display'
-expect_warn "streamlib run from inside an example directory is noted" example_launch
+run_hook 'tatolab run' '/home/dev/streamlib/examples/camera-display'
+expect_warn "tatolab run from inside an example directory is noted" example_launch
 
 # ── The observation verbs stay silent ────────────────────────────────
 # /verify-live taps a channel and exchanges surface ids per frame; a note on
 # each read would bury the audit in reminders.
-run_hook 'streamlib exchange --channel CyberpunkGlitch/video_to_downstream --out /tmp/e2e --count 3'
-expect_silent "streamlib exchange is a control-plane read, not a rig command"
+run_hook 'tatolab exchange --channel CyberpunkGlitch/video_to_downstream --out /tmp/e2e --count 3'
+expect_silent "tatolab exchange is a control-plane read, not a rig command"
 
-run_hook 'streamlib tap camera/video --count 5'
-expect_silent "streamlib tap is a control-plane read"
+run_hook 'tatolab tap camera/video --count 5'
+expect_silent "tatolab tap is a control-plane read"
 
-run_hook 'streamlib nodes'
-expect_silent "streamlib nodes is a registry read"
+run_hook 'tatolab nodes'
+expect_silent "tatolab nodes is a registry read"
 
-run_hook 'streamlib graph --node abc123'
-expect_silent "streamlib graph is a control-plane read"
+run_hook 'tatolab graph --node abc123'
+expect_silent "tatolab graph is a control-plane read"
 
-run_hook 'streamlib logs abc123'
-expect_silent "streamlib logs is a control-plane read"
+run_hook 'tatolab logs abc123'
+expect_silent "tatolab logs is a control-plane read"
+
+run_hook 'tatolab nodes' '/home/dev/streamlib/examples/camera-display'
+expect_silent "tatolab nodes from inside an example directory is still a registry read"
+
+run_hook 'tatolabd --dir examples/camera-display'
+expect_silent "tatolabd is not the tatolab launch verb"
 
 # ── Prose mentioning the launch path is not the launch path ──────────
-run_hook 'grep -rn "streamlib run" examples/ .claude/'
-expect_silent "grepping for the words streamlib run stays silent"
+run_hook 'grep -rn "tatolab run" examples/ .claude/'
+expect_silent "grepping for the words tatolab run stays silent"
 
-run_hook 'git commit -m "fix(cli): streamlib run --dir examples/foo now resolves app.py"'
+run_hook 'git commit -m "fix(cli): tatolab run --dir examples/foo now resolves app.py"'
 expect_silent "a commit message quoting the launch path stays silent"
 
-run_hook 'gh pr create --title docs --body "run it with streamlib run --dir examples/x"'
+run_hook 'gh pr create --title docs --body "run it with tatolab run --dir examples/x"'
 expect_silent "a PR body quoting the launch path stays silent"
 
-run_hook 'sed -i "s|streamlib run |streamlib dev |" examples/camera-display/README.md'
+run_hook 'sed -i "s|tatolab run |tatolab dev |" examples/camera-display/README.md'
 expect_silent "rewriting the launch path in a doc stays silent"
 
 # A compound whose FIRST word is a text tool hides a launch behind it. Rare, and
 # the miss costs a note, where the false positives above are frequent.
-run_hook 'git status && streamlib run --dir examples/camera-display'
+run_hook 'git status && tatolab run --dir examples/camera-display'
 expect_silent "a launch hidden behind a leading text tool is NOT noted (accepted trade-off)"
 
-run_hook 'cd examples/camera-display && streamlib run'
+run_hook 'cd examples/camera-display && tatolab run'
 expect_warn "a compound not led by a text tool is noted" example_launch
 
 # Only the first word of a LINE may suppress; a text-tool line above or below a
 # launch does not hide it.
-run_hook 'streamlib run --dir examples/camera-display > /tmp/rig.log 2>&1 &
+run_hook 'tatolab run --dir examples/camera-display > /tmp/rig.log 2>&1 &
 echo "pid $!"'
 expect_warn "a backgrounded launch followed by echo is noted" example_launch
 
 run_hook 'cd examples/camera-display
-streamlib run > /tmp/rig.log 2>&1 &
+tatolab run > /tmp/rig.log 2>&1 &
 echo started'
 expect_warn "a multi-line cd + launch + echo is noted" example_launch
 
-run_hook 'STREAMLIB_CAMERA_DEVICE=/dev/video0 streamlib run --dir examples/camera-display > /tmp/rig.log 2>&1 &
+run_hook 'STREAMLIB_CAMERA_DEVICE=/dev/video0 tatolab run --dir examples/camera-display > /tmp/rig.log 2>&1 &
 echo "launched $!"'
 expect_warn "the skill's own prescribed launch shape is noted" example_launch
 
 run_hook 'echo starting
-streamlib run --dir examples/camera-display &'
+tatolab run --dir examples/camera-display &'
 expect_warn "an echo preamble does not hide the launch beneath it" example_launch
 
 run_hook 'grep -q vivid /proc/modules
-streamlib run --dir examples/camera-display &'
+tatolab run --dir examples/camera-display &'
 expect_warn "probing the rig then launching is noted" example_launch
 
 # Exec wrappers: bounding an unattended run is what a sandboxed firing does.
-run_hook 'nohup streamlib run --dir examples/camera-display &'
+run_hook 'nohup tatolab run --dir examples/camera-display &'
 expect_warn "a launch behind nohup is noted" example_launch
 
-run_hook 'timeout 30 streamlib run --dir examples/camera-display'
+run_hook 'timeout 30 tatolab run --dir examples/camera-display'
 expect_warn "a launch behind timeout is noted" example_launch
 
-run_hook 'timeout --kill-after=5 30 streamlib run --dir examples/camera-display'
+run_hook 'timeout --kill-after=5 30 tatolab run --dir examples/camera-display'
 expect_warn "a launch behind timeout with flags is noted" example_launch
 
-run_hook 'uv run streamlib run --dir examples/camera-display'
+run_hook 'uv run tatolab run --dir examples/camera-display'
 expect_warn "a launch behind uv run is noted" example_launch
 
-run_hook 'DISPLAY=:1 STREAMLIB_CAMERA_DEVICE=/dev/video0 nohup streamlib run --dir examples/camera-display >/tmp/log 2>&1 &'
+run_hook 'DISPLAY=:1 STREAMLIB_CAMERA_DEVICE=/dev/video0 nohup tatolab run --dir examples/camera-display >/tmp/log 2>&1 &'
 expect_warn "env assignments plus a wrapper plus redirection is noted" example_launch
 
-run_hook "python3 -c \"print('streamlib run --dir examples/x')\""
+run_hook "python3 -c \"print('tatolab run --dir examples/x')\""
 expect_silent "printing the launch path from a script is not launching it"
 
-run_hook 'curl -sX POST -d "streamlib run --dir examples/x" http://localhost:9000/notes'
+run_hook 'curl -sX POST -d "tatolab run --dir examples/x" http://localhost:9000/notes'
 expect_silent "posting the launch path as data is not launching it"
 
 run_hook 'ls examples/ && grep -rn "cargo run" examples/'
@@ -222,11 +228,11 @@ run_hook 'tail -20 examples/jpeg-psnr/README.md'
 expect_silent "reading an example README stays silent"
 
 # ── Not a launch: --help, and cargo run of a workspace target ────────
-run_hook '.venv/bin/streamlib run --help 2>&1 | head -25' '/home/dev/streamlib/examples/audio-mixer-demo'
-expect_silent "streamlib run --help prints and exits"
+run_hook '../../target/tatolab-runtime/bin/tatolab run --help 2>&1 | head -25' '/home/dev/streamlib/examples/audio-mixer-demo'
+expect_silent "tatolab run --help prints and exits"
 
-run_hook 'streamlib run -h' '/home/dev/streamlib/examples/audio-mixer-demo'
-expect_silent "streamlib run -h prints and exits"
+run_hook 'tatolab run -h' '/home/dev/streamlib/examples/audio-mixer-demo'
+expect_silent "tatolab run -h prints and exits"
 
 run_hook 'cd /home/dev/streamlib && cargo run -q -p xtask -- check-all-source-gates 2>&1 | grep -v examples/'
 expect_silent "cargo run -p xtask beside an examples/ mention is a workspace tool, not a launch"
@@ -255,27 +261,27 @@ run_hook 'cat > examples/camera-codec-roundtrip/README.md <<'"'"'MD'"'"'
 
 Run it:
 
-streamlib run --dir examples/camera-codec-roundtrip
+tatolab run --dir examples/camera-codec-roundtrip
 MD'
 expect_silent "a README heredoc quoting the launch stays silent"
 
 run_hook 'cat > app.py <<'"'"'PY'"'"'
 """Run with:
-streamlib run --dir .
+tatolab run --dir .
 """
 PY' '/home/dev/streamlib/examples/camera-halftone'
 expect_silent "a docstring heredoc quoting the launch stays silent"
 
 run_hook 'cat > /tmp/evidence/report.md <<EOF
 **Command**:
-streamlib run --dir examples/camera-display
+tatolab run --dir examples/camera-display
 EOF'
 expect_silent "an evidence report heredoc quoting the launch stays silent"
 
 run_hook 'git commit -q -m "$(cat <<'"'"'EOF'"'"'
 feat(examples): camera-codec-roundtrip
 
-streamlib run --dir examples/camera-codec-roundtrip
+tatolab run --dir examples/camera-codec-roundtrip
 EOF
 )"'
 expect_silent "a commit-message heredoc quoting the launch stays silent"
@@ -288,18 +294,18 @@ expect_silent "a heredoc quoting cargo run inside an example directory stays sil
 run_hook 'cat > /tmp/notes.md <<'"'"'EOF'"'"'
 see examples/
 EOF
-streamlib run --dir examples/camera-display'
+tatolab run --dir examples/camera-display'
 expect_warn "a heredoc above a launch does not hide the launch" example_launch
 
 # ── Known-uncovered shapes, locked so a change to them fails loudly ──
-run_hook 'bash -c "streamlib run --dir examples/camera-display"'
+run_hook 'bash -c "tatolab run --dir examples/camera-display"'
 expect_silent "a launch inside bash -c is NOT noted (unparsed string body)"
 
-run_hook 'streamlib run --dir /tmp/myapp'
+run_hook 'tatolab run --dir /tmp/myapp'
 expect_silent "a scaffolded app outside examples/ is NOT noted (scoped to examples/)"
 
-run_hook 'streamlib dev --dir /home/dev/scaffolds/camera-app'
-expect_silent "streamlib dev outside examples/ is NOT noted (scoped to examples/)"
+run_hook 'tatolab dev --dir /home/dev/scaffolds/camera-app'
+expect_silent "tatolab dev outside examples/ is NOT noted (scoped to examples/)"
 
 # ── e2e fixture scripts: executing one is noted, naming one is not ───
 run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e'
@@ -328,7 +334,7 @@ run_hook 'for codec in h264 h265; do
 done'
 expect_warn "an e2e run inside a for loop is noted" e2e_fixture
 
-run_hook 'PYTHON=sdk/streamlib-python-wheel/.venv/bin/python \
+run_hook 'PYTHON=/usr/bin/python3 \
   ./runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/va-healthy'
 expect_warn "an e2e run on a continuation line is noted" e2e_fixture
 
@@ -419,17 +425,17 @@ expect_silent "a benign command that merely mentions a device path stays silent"
 run_hook 'cargo build -p streamlib-engine'
 expect_silent "an ordinary build stays silent"
 
-run_hook 'cd examples/camera-display && ffmpeg -f v4l2 -i /dev/video0 -t 2 /tmp/a.mp4 && streamlib run'
+run_hook 'cd examples/camera-display && ffmpeg -f v4l2 -i /dev/video0 -t 2 /tmp/a.mp4 && tatolab run'
 expect_warn "a command matching two rules names both in the note" ffmpeg_v4l2
 [[ "$(field '.hookSpecificOutput.additionalContext')" == *example_launch* ]] \
   && ok "the second matched rule is named too" || bad "the second matched rule is missing from the note"
 
 echo ""
 echo "rig-brake.sh — what the owner and the model are told"
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 [[ "$(field '.systemMessage')" == *"rig-brake rule example_launch off"* ]] \
   && ok "the owner's line names the rule switch" || bad "the owner's line does not name the rule switch"
-[[ "$(field '.systemMessage')" == *"rig-brake allow '*streamlib run*'"* ]] \
+[[ "$(field '.systemMessage')" == *"rig-brake allow '*tatolab run*'"* ]] \
   && ok "the owner's line offers a glob cut after the key" || bad "the owner's line does not offer the glob"
 [[ "$(field '.hookSpecificOutput.additionalContext')" == *"never add an exception yourself"* ]] \
   && ok "the model is told not to add exceptions on its own" || bad "the model's note lacks the no-self-exception line"
@@ -441,28 +447,28 @@ run_hook 'DISPLAY=:1 runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vi
   && ok "the suggested glob keeps the line up to the script name" || bad "the suggested glob is not cut after the script name"
 
 set_config project '{"preferences": "Ask me before touching /dev/video2."}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_warn "owner preferences reach the model's note" "Ask me before touching /dev/video2."
 clear_config
 
 echo ""
 echo "rig-brake.sh — outcomes from config"
 set_config project '{"mode": "ask"}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_ask "mode ask turns a note into a prompt" "rig-brake rule example_launch warn"
 run_hook 'cargo build -p streamlib-engine'
 expect_silent "mode ask does not touch a command no rule matches"
 clear_config
 
 set_config project '{"rules": {"example_launch": "ask"}}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_ask "a per-rule ask prompts on that rule" "rules.example_launch"
 run_hook 'runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/e2e'
 expect_warn "a per-rule ask leaves the other rules at warn" e2e_fixture
 clear_config
 
 set_config project '{"rules": {"example_launch": "off"}}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_silent "a per-rule off silences that rule"
 run_hook 'ffmpeg -f v4l2 -i /dev/video10 -t 5 out.mp4'
 expect_warn "a per-rule off leaves the other rules at warn" ffmpeg_v4l2
@@ -474,12 +480,12 @@ expect_silent "e2e_fixture off silences a fixture run"
 clear_config
 
 set_config project '{"mode": "off"}'
-run_hook 'cd examples/camera-display && ffmpeg -f v4l2 -i /dev/video0 -t 2 /tmp/a.mp4 && streamlib run'
+run_hook 'cd examples/camera-display && ffmpeg -f v4l2 -i /dev/video0 -t 2 /tmp/a.mp4 && tatolab run'
 expect_silent "mode off silences every rule"
 clear_config
 
 set_config project '{"rules": {"ffmpeg_v4l2": "ask"}}'
-run_hook 'cd examples/camera-display && ffmpeg -f v4l2 -i /dev/video0 -t 2 /tmp/a.mp4 && streamlib run'
+run_hook 'cd examples/camera-display && ffmpeg -f v4l2 -i /dev/video0 -t 2 /tmp/a.mp4 && tatolab run'
 expect_ask "when two rules match, an ask on either prompts" "rules.ffmpeg_v4l2"
 clear_config
 
@@ -501,18 +507,18 @@ run_hook 'cargo test -p streamlib-engine'
 expect_silent "an ask glob leaves a non-matching command alone"
 clear_config
 
-set_config project '{"allow": ["*streamlib run*"], "ask": ["*streamlib run*"]}'
-run_hook 'streamlib run --dir examples/camera-display'
+set_config project '{"allow": ["*tatolab run*"], "ask": ["*tatolab run*"]}'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_ask "an ask glob beats an allow glob"
 clear_config
 
-set_config project '{"rules": {"example_launch": "ask"}, "allow": ["*streamlib run*"]}'
-run_hook 'streamlib run --dir examples/camera-display'
+set_config project '{"rules": {"example_launch": "ask"}, "allow": ["*tatolab run*"]}'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_silent "an allow glob beats a per-rule ask"
 clear_config
 
 set_config project '{"allow": ["*camera-display*"]}'
-run_hook 'streamlib run --dir examples/camera-display
+run_hook 'tatolab run --dir examples/camera-display
 echo "pid $!"'
 expect_silent "a glob matches across the whole multi-line command"
 clear_config
@@ -521,25 +527,25 @@ echo ""
 echo "rig-brake.sh — scopes"
 set_config user '{"mode": "ask"}'
 set_config project '{"mode": "warn"}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_warn "project mode wins over user mode" example_launch
 clear_config
 
 set_config project '{"mode": "warn"}'
 set_config local '{"rules": {"example_launch": "off"}}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_silent "a local rule wins over project mode"
 clear_config
 
 set_config project '{"rules": {"example_launch": "off"}}'
 set_config local '{"rules": {"example_launch": "ask"}}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_ask "a local rule wins over a project rule"
 clear_config
 
 set_config user '{"allow": ["*camera-display*"]}'
 set_config local '{"allow": ["*ffmpeg*"]}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_silent "a user allow glob still applies beside a local one"
 run_hook 'ffmpeg -f v4l2 -i /dev/video10 -t 5 out.mp4'
 expect_silent "a local allow glob applies beside a user one"
@@ -550,14 +556,14 @@ clear_config
 echo ""
 echo "rig-brake.sh — broken config degrades to a note, never a prompt"
 printf '{"mode": {\n' >"$local_config"
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_warn "invalid JSON in one file still notes" example_launch
 [[ "$(field '.systemMessage')" == *"rig-brake.local.json is not valid JSON"* ]] \
   && ok "the owner's line names the broken file" || bad "the owner's line does not name the broken file"
 clear_config
 
 set_config project '{"mode": "loud", "rules": {"bogus": "ask", "example_launch": "maybe"}}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_warn "unknown outcomes and rules fall back to warn" example_launch
 [[ "$(field '.systemMessage')" == *"Ignored rig-brake config entries"* && "$(field '.systemMessage')" == *"rules.bogus"* ]] \
   && ok "the owner's line lists the ignored entries" || bad "the owner's line does not list the ignored entries"
@@ -572,14 +578,14 @@ reason="$(field '.hookSpecificOutput.permissionDecisionReason')"
 clear_config
 
 set_config project '{"ask": "ffmpeg *"}'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_warn "a scalar ask list falls back to mode and is reported" example_launch
 [[ "$(field '.systemMessage')" == *'ask="ffmpeg *"'* ]] \
   && ok "the owner's line names the scalar ask list" || bad "the scalar ask list went unreported"
 clear_config
 
 set_config local '[1, 2]'
-run_hook 'streamlib run --dir examples/camera-display'
+run_hook 'tatolab run --dir examples/camera-display'
 expect_warn "a config file whose top-level value is not an object still notes" example_launch
 [[ "$(field '.systemMessage')" == *"not an object"* ]] \
   && ok "the owner's line reports the non-object file" || bad "the non-object file went unreported"
@@ -647,12 +653,12 @@ expect_status "show prints the effective config" 0 '"mode": "ask"'
   && ok "show lists every source file" || bad "show does not list every source file"
 
 clear_config
-run_helper test 'streamlib run --dir examples/camera-display'
+run_helper test 'tatolab run --dir examples/camera-display'
 expect_status "test reports a note" 0 "outcome: warn"
 run_helper test 'cargo build'
 expect_status "test reports silence" 0 "outcome: silent"
 set_config project '{"mode": "ask"}'
-run_helper test 'streamlib run --dir examples/camera-display'
+run_helper test 'tatolab run --dir examples/camera-display'
 expect_status "test reports a prompt" 0 "outcome: ask"
 run_helper test --cwd /home/dev/streamlib/examples/camera-display 'cargo run --release'
 expect_status "test honours --cwd" 0 "outcome: ask"

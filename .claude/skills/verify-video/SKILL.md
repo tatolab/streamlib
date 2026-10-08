@@ -22,17 +22,24 @@ skill runs it and sends what it wrote.
 
 ## Steps
 
-1. Run the recording gate (**debug build only** — release has a known race condition, see #273):
+1. Build the runtime unit from the tree, then run the recording gate:
    ```bash
+   cargo xtask build-runtime --release
    runtime/streamlib-engine/tests/fixtures/e2e_fixture_recording.sh /tmp/streamlib-verify-video $codec
    ```
-   Three phases, each failing on its own terms: `recording_node.py` records until the file holds
-   enough video and then takes SIGTERM (a run needing SIGKILL is a hard fail — teardown is what
-   closes the last fragment); `cargo xtask mp4-inspect` reads the written file; and
+   The record phase runs on whatever unit is on disk, so one built before the change under test is
+   measured as though it were the change. The stream compiles in the fixtures directory's `.venv`,
+   which the fixture makes with uv the first time (`fixture_runtime_unit.sh`).
+
+   Three phases, each failing on its own terms: `recording_stream.py` runs on `tatolab run` until
+   the file holds enough video, then `tatolab run` takes SIGTERM and forwards it to `tatolabd` (a
+   run needing SIGKILL is a hard fail — teardown is what closes the last fragment); `cargo xtask mp4-inspect` reads the written file; and
    `codec_roundtrip_rig --source mp4:<file>` replays the video track back through our decoder,
    locked to the per-codec vivid baseline within ±0.05.
 
-   Exit codes: `0` pass, `1` fail, `77` skip (no vivid, no GPU). A skip is not a pass — say so.
+   Exit codes: `0` pass, `1` fail, `77` skip (no vivid, a missing tool — `cargo`, `python3`,
+   `v4l2-ctl` —, no runtime unit or lend, no fixture venv and no uv to make one, or a fixture venv
+   that cannot import `tatolab.stream` and numpy). A skip is not a pass — say so.
 
 2. Read the verdict and the written MP4 out of the output directory:
    ```bash
@@ -50,9 +57,8 @@ skill runs it and sends what it wrote.
 
 ## Important
 
-- **Always use debug build** (no `--release`) — release build has a threading race condition (#273)
-- The vivid virtual camera is at `/dev/video2` — outputs animated SMPTE color bars with frame counter
-- If vivid isn't available, check `v4l2-ctl --list-devices`
+- The fixture finds the vivid capture node itself; if it reports none, check
+  `v4l2-ctl --list-devices`
 - No ffmpeg step: `Mp4Sink` strips parameter sets from samples and writes `avc1`/`hvc1`, which is
   already what Apple hardware plays, so there is no re-tag to do
 - `INJECT_BUG=bt601-bt709 | swap-channels | swap-chroma` proves the decode-back's lock is

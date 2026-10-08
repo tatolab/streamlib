@@ -28,38 +28,38 @@ When unsure, default to the more demanding scenario (encode/decode also exercise
 
 It matters because window capture could only ever read a channel that *terminates in a window*, so observing a mid-graph channel meant adding a `DisplayWindow` to look at it — and you were then testing a topology you don't ship. Exchange reads any channel and leaves the graph alone. It is also exact: a window grab returns whatever the compositor composited (scaled, letterboxed), which makes PSNR against it meaningless.
 
-**Ids come from bags, and the engine never reads one for you.** Tap is untouched — it forwards bags verbatim. The consumer decodes the bag, finds the surface id, and exchanges it. `streamlib tap <channel>` shows what a bag actually carries.
+**Ids come from bags, and the engine never reads one for you.** Tap is untouched — it forwards bags verbatim. The consumer decodes the bag, finds the surface id, and exchanges it. `tatolab tap <channel>` shows what a bag actually carries.
 
-**Deriving the channel name.** A channel is the output port's address, `<runtime_name>/<node>/<port>`, all three read off `streamlib graph`: its top-level `runtime_name`, the source node's `name`, and the port's name under its `ports.outputs` — e.g. `lab-one/decoder/video`. A node's name is already cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`, a defaulted `CameraSource` is `camerasource`), so copy it out of the graph rather than spelling it from the app source.
+**Deriving the channel name.** A channel is the output port's address, `<runtime_name>/<node>/<port>`, all three read off `tatolab graph`: its top-level `runtime_name`, the source node's `name`, and the port's name under its `ports.outputs` — e.g. `lab-one/decoder/video`. A node's name is already cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`, a defaulted `CameraSource` is `camerasource`), so copy it out of the graph rather than spelling it from the stream source.
 
 ### The spelling you will use — CLI, channel form
 
 ```bash
-streamlib exchange --channel <runtime_name>/<node>/<output_port> --out <dir> --count N [--every N] [--field NAME]
+tatolab exchange --channel <runtime_name>/<node>/<output_port> --out <dir> --count N [--every N] [--field NAME]
 ```
 
 One warm process: it taps a bounded round of bags, reads a surface id out of each sampled bag, and exchanges them — per tap round, not per bag as it lands. Writes **exact full-resolution** PNGs into `--out` and prints their paths on stdout, one per line. **Read those printed paths** — `--out` is not cleared, so listing the directory can hand you an older run's frames.
 
 - `--count N` — frames to exchange before returning (default 1). A short sample **exits 1**: fewer frames than you asked for is a failure, not a partial success.
 - `--every N` — exchange every Nth sampled bag, for temporal spread.
-- `--field NAME` — the bag field carrying the id (default `surface_id`). If the run reports bags carrying no id in the named field, name the right one from `streamlib tap`.
+- `--field NAME` — the bag field carrying the id (default `surface_id`). If the run reports bags carrying no id in the named field, name the right one from `tatolab tap`.
 - `--node` pins the target node; without it, the sole live node is resolved.
 
-**Two shipped ceilings, so you can tell a bound from a regression.** The run gives up after **8 tap rounds** and returns short (exit 1) — on a fast-recycling channel that is the bound, not a broken channel. And `tap` previews only the first **4096 bytes** of a bag: a *selected* bag longer than that fails the channel form by name, and the single-id form is the way through (tap the channel, pull the id yourself, exchange it).
+**Two shipped ceilings, so you can tell a bound from a regression.** The run gives up after **8 tap rounds** and returns short (exit 1) — on a fast-recycling channel that is the bound, not a broken channel. And the channel form taps with the per-bag cap's default, **1 MiB**: a *selected* bag longer than that fails the channel form by name, and the single-id form is the way through (tap the channel with `tatolab tap --max-bag-bytes <BYTES>`, pull the id yourself, exchange it).
 
 The other spellings, when they fit:
-- **One id you already have**: `streamlib exchange <SURFACE_ID> --out <dir>`.
-- **In-session view (MCP host wired to the node — `claude mcp add streamlib -- streamlib mcp`, or `ssh <machine> streamlib mcp` for another machine)**: the `exchange` tool returns an image content block, downscaled to a declared long-edge cap, stating the surface's true extent and the REST route for exact bytes.
-- **Exact bytes over HTTP**: `curl --unix-socket <LOCAL_API_SOCKET> http://local/api/surfaces/{surface_id}/image` (the socket path is in `streamlib nodes`) → binary `image/png`, full resolution. The evidence and PSNR path. **Percent-encode the id**: its `#<generation>` suffix is a URL fragment otherwise, so `curl …/api/surfaces/abc#105/image` asks for `/api/surfaces/abc` and the generation never reaches the server — send `abc%23105`.
+- **One id you already have**: `tatolab exchange <SURFACE_ID> --out <dir>`.
+- **In-session view (MCP host wired to the node — `claude mcp add tatolab -- tatolab mcp`, or `ssh <machine> tatolab mcp` for another machine)**: the `exchange` tool returns an image content block, downscaled to a declared long-edge cap, stating the surface's true extent and the REST route for exact bytes.
+- **Exact bytes over HTTP**: `curl --unix-socket <LOCAL_API_SOCKET> http://local/api/surfaces/{surface_id}/image` (the socket path is in `tatolab nodes`) → binary `image/png`, full resolution. The evidence and PSNR path. **Percent-encode the id**: its `#<generation>` suffix is a URL fragment otherwise, so `curl …/api/surfaces/abc#105/image` asks for `/api/surfaces/abc` and the generation never reaches the server — send `abc%23105`.
 
 ### Staleness is a retry, never wrong pixels
 A surface id is per-frame (`<slot>#<generation>`). Resolving a retired one is refused by name (`410 Gone`) before any bytes move — it never answers with the slot's newer pixels. So sample-and-exchange **as you go**; batching ids to resolve later cannot work. The refusal states both generations ("this id published generation 105, the slot is on generation 163"), and that gap measures how far behind the sample fell. The channel form already retries against newer bags and reports on stderr what it retried, how many bags it examined, and over how many tap rounds.
 
 ### On macOS
-`exchange` answers on a macOS node exactly as on Linux: the same verb, the same PNGs, the same RHI conversion under MoltenVK. The pixel audit and PSNR scoring apply unchanged. What doesn't carry over is the capture rig: there is no V4L2, vivid or v4l2loopback on macOS, the camera is AVFoundation, and the `/dev/videoN` probes and V4L2 fixtures are Linux-only. Drive a macOS run with a stream file — the camera-display fixture stream or a `streamlib new` scaffold, launched as below — and read pixels with `streamlib exchange`.
+`exchange` answers on a macOS node exactly as on Linux: the same verb, the same PNGs, the same RHI conversion under MoltenVK. The pixel audit and PSNR scoring apply unchanged. What doesn't carry over is the capture rig: there is no V4L2, vivid or v4l2loopback on macOS, the camera is AVFoundation, and the `/dev/videoN` probes and V4L2 fixtures are Linux-only. Drive a macOS run with a stream file — the camera-display fixture stream or a `tatolab new` scaffold, launched as below — and read pixels with `tatolab exchange`.
 
 ### The one surviving env var
-`STREAMLIB_CAMERA_DEVICE` names the capture node a test-owned stream opens: the fixture stream `runtime/streamlib-engine/tests/fixtures/camera_display_stream.py` and the wheel's camera tests (`camera_under_test.py`) read it. It is read by those streams, **not** by the engine — any other stream opens the camera its `CameraSource` `device_id` config names, else the first one found.
+`STREAMLIB_CAMERA_DEVICE` names the capture node a test-owned stream opens: the fixture stream `runtime/streamlib-engine/tests/fixtures/camera_display_stream.py` and the runtime-backed camera tests (`tests/stream-on-runtime/camera_under_test.py`) read it. It is read by those streams, **not** by the engine — any other stream opens the camera its `CameraSource` `device_id` config names, else the first one found.
 
 ## Window capture — only when the window is the subject
 Grabbing the window is still the right tool for exactly one thing: proving the **present / swapchain** path, which is the one stretch of pipeline that exchange does not traverse. `runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh` does it (`xdotool search --name` → ImageMagick `import`, or `xwd` + `capture_window.py`), and it needs `$DISPLAY`. For anything upstream of the present — the camera frame, a kernel's output, a filter's result — use exchange; a composited grab is the wrong pixels for that job.
@@ -80,7 +80,7 @@ One rig-only fixture, owned by the extension wheel it proves. It is the codec ri
 
 It takes `SAMPLE_COUNT`, `SAMPLE_EVERY`, `TOLERANCE`, `RUN_SECONDS` and `MEDIA_DEADLINE_SECONDS` from the environment; read the script header for the full list. `MEDIA_DEADLINE_SECONDS` is the one that matters when a run reports no frames — an ingest going live and a WHEP subscribe sit between the graph coming up and the first decoded frame, so the fixture waits for one bag before spending the exchange budget.
 
-**The wheel is measured through its own venv** (`packages/streamlib-webrtc/.venv`), which must hold the engine wheel *and* a current `maturin develop` build of the extension. The fixture refuses (exit 77) only when that venv cannot import the wheel beside the engine; a stale `.so` that still imports is scored and reported as a pass for code that is not in the tree — so `maturin develop` before every run, the same rule `/verify-audio` has.
+**The wheel is measured through its own venv** (`packages/streamlib-webrtc/.venv`), which holds `tatolab-stream` and a current `maturin develop` build of the extension, and no engine — the stream runs on the runtime unit with `tatolab run`. The fixture refuses (exit 77) when the runtime unit is missing or that venv cannot import the wheel beside `tatolab-stream`; a stale `.so` that still imports is scored and reported as a pass for code that is not in the tree — so `maturin develop` before every run, and `cargo xtask build-runtime` after any engine edit, the same rule `/verify-audio` has.
 
 ### Credentials — and why absent ones are never a pass
 
@@ -88,7 +88,7 @@ Cloudflare Stream carries the stream key **in the URL path**, so each endpoint U
 
 - `STREAMLIB_WHIP_URL` / `STREAMLIB_WHEP_URL` are read first and always win. When either is missing, the repo-root gitignored `.env` is sourced and its `CLOUDFLARE_WHIP_URL` / `CLOUDFLARE_WHEP_URL` fill them in — replacing any `CLOUDFLARE_*` already exported. Export the `STREAMLIB_` names to pin a run.
 - **Absent credentials exit 77 — cannot-run, never a pass.** Report it as cannot-run in the template's Outcome line.
-- **Never echo one.** The script redacts the endpoints in its own output; do the same in a report, a PR body, or a log excerpt you paste. `streamlib graph` renders every processor's config, so a WHIP or WHEP node's graph JSON contains the key — read it in a pipe, never save it into the evidence directory and never attach it.
+- **Never echo one.** The script redacts the endpoints in its own output; do the same in a report, a PR body, or a log excerpt you paste. `tatolab graph` renders every processor's config, so a WHIP or WHEP node's graph JSON contains the key — read it in a pipe, never save it into the evidence directory and never attach it.
 
 
 ## Audio loopback rigs
@@ -100,11 +100,11 @@ Drive these through **`/verify-audio`**, which owns the workflow: it picks the m
 
 ## Modes
 - **SELF-RUN (primary — rig available).** Run the pipeline yourself, no owner in the path. Probe the rig first (device nodes, `$DISPLAY`, `/dev/dri/*`) and only self-run when it is present.
-  1. **Launch** under the Bash `dangerouslyDisableSandbox` bypass — the sandbox blocks the rig, and the bypass is what unlocks GPU/V4L2/X11. A Python stream has no build step between an edit and the run: `streamlib run --dir <dir holding its stream.py>`, or `streamlib run --dir <dir> <file>.py` for a stream file under another name, backgrounded, with its output redirected to a log file you will grep. Launch a stream file: the change's own `stream.py`, a `streamlib new <dir>` scaffold (camera → a Python effect → window), or the camera-display fixture stream — `streamlib run --dir runtime/streamlib-engine/tests/fixtures camera_display_stream.py`. The codec rig is an engine example and *is* a workspace member — `cargo run -p streamlib-engine --example codec_roundtrip_rig` (`--codec h264|h265`, `--source fixture|camera`, and `--camera /dev/videoN` for the camera arm — the rig takes its device as an argument and reads no environment variable). The Rust example crates under `examples/` are not workspace members, so they build and run from their own directory; the fixture scripts carry the current invocation. Point the fixture stream at the vivid virtual camera with `STREAMLIB_CAMERA_DEVICE=/dev/videoN` (resolve N by probe; unset, `CameraSource` grabs whatever capture device it finds first). The CLI ships in the wheel — use `sdk/streamlib-python-wheel/.venv/bin/streamlib` when nothing is on PATH.
-  2. **Confirm it is live**: `streamlib nodes` until the node registers, then `streamlib graph` for the topology. Derive the channel name from it as above, and `streamlib tap` it once to confirm both the name and the id field before you exchange. These are local API reads — `rig-brake` lets them through, and they need no bypass.
-  3. **Read pixels**: `streamlib exchange --channel <chan> --out <dir> --count N`, on a channel chosen for what the change touched. Prefer a **mid-graph** channel — that it needs no window is the proof the observation isn't changing the graph.
+  1. **Launch** under the Bash `dangerouslyDisableSandbox` bypass — the sandbox blocks the rig, and the bypass is what unlocks GPU/V4L2/X11. A stream runs on the runtime unit: `cargo xtask build-runtime` (add `--release` for a release engine) lays out `target/tatolab-runtime/bin/tatolab` and `tatolabd` and the lend, so rebuild it after any engine edit — the run measures whatever unit is on disk, not the tree. Then `tatolab run --dir <dir holding its stream.py>`, or `tatolab run --dir <dir> <file>.py` for a stream file under another name, backgrounded, with its output redirected to a log file you will grep. `tatolab run` compiles the stream in the project's own `.venv`, which holds `tatolab-stream` and the nodes' dependencies and never the runtime — each processor interpreter borrows `tatolab.runtime` from the lend — then starts `tatolabd` attached. Launch a stream file: the change's own `stream.py`, a `tatolab new <dir>` scaffold (camera → a Python effect → window; `--test-pattern` for a machine with no camera), or the camera-display fixture stream — `tatolab run --dir runtime/streamlib-engine/tests/fixtures camera_display_stream.py`, whose venv is the fixtures directory's `.venv`, made by any fixture driver on first use (`fixture_runtime_unit.sh`). The codec rig is an engine example and *is* a workspace member — `cargo run -p streamlib-engine --example codec_roundtrip_rig` (`--codec h264|h265`, `--source fixture|camera`, and `--camera /dev/videoN` for the camera arm — the rig takes its device as an argument and reads no environment variable). The Rust example crates under `examples/` are not workspace members, so they build and run from their own directory; the fixture scripts carry the current invocation. Point the fixture stream at the vivid virtual camera with `STREAMLIB_CAMERA_DEVICE=/dev/videoN` (resolve N by probe; unset, `CameraSource` grabs whatever capture device it finds first). Use `target/tatolab-runtime/bin/tatolab` when no `tatolab` is on PATH.
+  2. **Confirm it is live**: `tatolab nodes` until the node registers, then `tatolab graph` for the topology. Derive the channel name from it as above, and `tatolab tap` it once to confirm both the name and the id field before you exchange. These are local API reads — `rig-brake` lets them through, and they need no bypass.
+  3. **Read pixels**: `tatolab exchange --channel <chan> --out <dir> --count N`, on a channel chosen for what the change touched. Prefer a **mid-graph** channel — that it needs no window is the proof the observation isn't changing the graph.
   4. **Audit**: Read each printed PNG and describe it / compute PSNR, per the checklist below. Attach the PNG(s) to R2 and embed them in the PR (see the `attach-artifact` skill).
-  5. **Stop the node** with SIGTERM and require a clean exit — `rt.run()` owns teardown, and a node that needs SIGKILL is a finding, not a flake.
+  5. **Stop the node** with SIGTERM to the `tatolab run` and require a clean exit — it forwards the signal to `tatolabd`, which owns teardown, and a node that needs SIGKILL is a finding, not a flake.
 
   Read-only observation evals auto-run, but a real-world SAFETY gate (actuators, motors, drone control) still asks the owner first.
 - **Handshake fallback (rig unavailable / bypass denied).** Print the command block for the owner's terminal, then audit what it produced. Two sub-modes:
@@ -124,12 +124,12 @@ Drive these through **`/verify-audio`**, which owns the workflow: it picks the m
 ### E2E Test Report
 
 - **Scenario**: encoder/decoder | camera+display-only | networking (whip-whep)
-- **App / fixture**: `streamlib new` scaffold | `camera_display_stream.py` | `e2e_camera_display.sh` | `whip_whep_roundtrip.sh`
+- **Stream / fixture**: `tatolab new` scaffold | `camera_display_stream.py` | `e2e_camera_display.sh` | `whip_whep_roundtrip.sh`
 - **Codec**: h264 | h265 | n/a
 - **Camera device**: `/dev/videoN` (vivid | Cam Link 4K | other)
 - **Resolution**: 1920x1080 | 1280x720 | other
 - **Run length**: <seconds the node was up before SIGTERM>
-- **Build profile**: debug | release | n/a — Python app, no build step
+- **Build profile**: the runtime unit's — debug | release (`cargo xtask build-runtime [--release]`)
 - **Command**:
     ```
     <exact launch command with env vars, and the exchange command>
