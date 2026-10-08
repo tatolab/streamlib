@@ -20,12 +20,9 @@ static APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST: OnceLock<PathBuf> = On
 /// Record where the app's entry file was run from, for a host that knows it and
 /// the engine cannot see.
 ///
-/// The wheel calls this from `Runtime()`'s constructor with the directory it
-/// captured off `sys.path[0]`, which is the only thing that tells a hand-run
-/// `python <script>.py` apart from a `streamlib run`. The first call wins and
-/// there is no way back — the entry file does not move while the process lives,
-/// which is also why no test records one: doing so would rename every runtime
-/// constructed later in the same binary.
+/// The first call wins and there is no way back — the entry file does not move
+/// while the process lives, which is also why no test records one: doing so
+/// would rename every runtime constructed later in the same binary.
 pub fn record_the_app_entry_directory_the_language_host_captured(entry_directory: PathBuf) {
     let _ = APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST.set(entry_directory);
 }

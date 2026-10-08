@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The clock and logging surfaces against the runtime that backs them, without an engine.
+"""The clock surface against the runtime that backs it, without an engine.
 
-`monotonic_now_ns` and `start_monotonic_timer` are pure kernel-facing calls
-and `log.*` degrades to a no-op sink before an engine boots, so none of this
-needs a GPU. What `tatolab.stream` declares about them is the stream suite's
+`monotonic_now_ns` and `start_monotonic_timer` are pure kernel-facing calls,
+so none of this needs a GPU. What `tatolab.stream` declares about them, and
+where `log.*` sends its records, is the stream suite's
 (`sdk/tatolab-stream/tests/test_clock_and_log.py`).
 """
 
@@ -13,7 +13,7 @@ import pytest
 
 from engine_media_clock import engine_media_clock_now_ns
 from tatolab.runtime import _engine
-from tatolab.stream import log, monotonic_now_ns, start_monotonic_timer
+from tatolab.stream import monotonic_now_ns, start_monotonic_timer
 
 # Small, so the one wiring test below returns at once.
 TIMER_TEST_INTERVAL_NS = 1_000_000
@@ -106,16 +106,3 @@ def test_the_context_manager_closes_the_timer():
 def test_a_non_positive_interval_is_refused(invalid_interval_ns):
     with pytest.raises(ValueError, match="interval_ns must be > 0"):
         start_monotonic_timer(invalid_interval_ns)
-
-
-def test_every_log_level_accepts_structured_attrs():
-    """The old SDK's `log.info("msg", key=value)` shape, engine or no engine."""
-    log.trace("trace record", detail="fine")
-    log.debug("debug record", frame_number=7)
-    log.info("info record", width=1920, height=1080)
-    log.warn("warn record", dropped=3)
-    log.error("error record", error="synthetic")
-
-
-def test_log_functions_accept_a_bare_message():
-    log.info("no attrs at all")

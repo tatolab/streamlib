@@ -182,7 +182,7 @@ def resolve_requested_live_node(requested_node: "Optional[str]") -> "NodeRegistr
     if not nodes:
         raise NoLiveNodeError(
             "no running StreamLib nodes found.\n"
-            "Start one with `streamlib dev`."
+            "Start one with `tatolab dev`."
         )
 
     if requested_node:

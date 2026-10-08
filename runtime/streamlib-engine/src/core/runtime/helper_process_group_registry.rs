@@ -28,7 +28,7 @@ const FREE_HELPER_PROCESS_GROUP_SLOT: i32 = 0;
 ///
 /// Never zero, one or a negative, and never the app's own group: a third
 /// interrupt killing that would take the shell job the app runs in with it —
-/// `streamlib run | tee log` included.
+/// `tatolab run | tee log` included.
 fn is_a_registrable_helper_process_group_id(process_group_id: i32) -> bool {
     // SAFETY: `getpgrp` takes no arguments and cannot fail.
     process_group_id > 1 && process_group_id != unsafe { libc::getpgrp() }

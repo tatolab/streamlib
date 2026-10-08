@@ -110,7 +110,7 @@ def _import_the_lent_runtime_or_refuse() -> None:
             "not attempted: the runtime is built for the GIL-enabled CPython"
         )
     try:
-        importlib.import_module("tatolab.runtime")
+        importlib.import_module("tatolab.runtime._engine")
     except Exception as import_failure:
         _refuse_an_interpreter_that_cannot_load_the_lent_runtime(
             "".join(traceback.format_exception_only(type(import_failure), import_failure))

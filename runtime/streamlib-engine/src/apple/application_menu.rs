@@ -4,7 +4,7 @@
 //! The application menu the engine installs over the window event pump.
 //!
 //! Its Quit asks the runtime to shut down, the same request Ctrl-C makes, so
-//! `rt.run()` tears the graph down and returns. `terminate:` — what a stock
+//! the run tears the graph down and returns. `terminate:` — what a stock
 //! Quit sends — would exit the process from under the run loop instead.
 
 use std::cell::OnceCell;

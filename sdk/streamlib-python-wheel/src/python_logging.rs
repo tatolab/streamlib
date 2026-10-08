@@ -1,34 +1,30 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Logging and timekeeping for the app's own Python code.
+//! Logging and timekeeping for a processor interpreter.
 //!
-//! In the app process, a log line goes straight into the engine's unified
-//! JSONL pipeline — the same drain the engine's own records go through, so
-//! the app's output interleaves with the engine's in one ordered stream
-//! instead of arriving as captured stdout. A processor's records take the
-//! other route: its helper process forwards them over the escalate `Log` op,
-//! and the parent stamps and enqueues them into this same pipeline.
+//! A processor's records travel to the runtime process: its helper forwards
+//! them over the escalate `Log` op, and the runtime stamps and enqueues them
+//! into the engine's unified JSONL pipeline.
 //!
 //! The engine's own records made inside a helper take that same route: the
 //! helper installs the capture below, and its forwarding thread drains what
-//! the engine wrote into the ring and sends each record on as the parent's
+//! the engine wrote into the ring and sends each record on as the runtime's
 //! `source: "rust"`.
 
-use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::logging::{
     self as engine_logging, EngineLogRecordForTheParentProcess, HelperProcessEngineLogRecordRing,
-    LogLevel, emit_app_process_python_log_record, log_dir,
+    log_dir,
 };
 use streamlib::sdk::media_clock::MediaClock;
 
-use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
+use crate::python_bag_conversion::json_value_to_python_object;
 
 /// The ring this helper's captured engine records queue in, waiting for the
 /// thread that forwards them. Set once: one process holds one `tracing`
@@ -138,45 +134,6 @@ pub(crate) fn runtime_log_directory() -> std::path::PathBuf {
 /// default output stamp, `ctx.time`, and `MonotonicTimer`'s deadlines.
 pub(crate) fn monotonic_clock_now_ns() -> u64 {
     MediaClock::now().as_nanos() as u64
-}
-
-/// Emit one record on the engine's log pipeline, with structured attrs.
-///
-/// This is the app process's own Python logging. A processor's records never
-/// come through here — it runs in its own child, whose `tatolab.stream.log` routes
-/// to the parent over the escalate `Log` op.
-#[pyfunction]
-#[pyo3(signature = (level, message, attrs = None))]
-pub(crate) fn log_event(
-    level: &str,
-    message: &str,
-    attrs: Option<&Bound<'_, PyDict>>,
-) -> PyResult<()> {
-    let level = parse_log_level_name(level)?;
-    let mut attribute_map = BTreeMap::new();
-    if let Some(attrs) = attrs {
-        for (key, value) in attrs.iter() {
-            let key = key.extract::<String>().map_err(|_| {
-                PyValueError::new_err("log attr keys must be strings — they become JSONL columns")
-            })?;
-            attribute_map.insert(key, python_object_to_json_value(&value)?);
-        }
-    }
-    emit_app_process_python_log_record(level, message.to_string(), attribute_map);
-    Ok(())
-}
-
-fn parse_log_level_name(level: &str) -> PyResult<LogLevel> {
-    match level {
-        "trace" => Ok(LogLevel::Trace),
-        "debug" => Ok(LogLevel::Debug),
-        "info" => Ok(LogLevel::Info),
-        "warn" => Ok(LogLevel::Warn),
-        "error" => Ok(LogLevel::Error),
-        unknown => Err(PyValueError::new_err(format!(
-            "unknown log level {unknown:?}: expected trace, debug, info, warn or error"
-        ))),
-    }
 }
 
 #[cfg(test)]
