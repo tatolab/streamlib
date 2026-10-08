@@ -438,7 +438,6 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::OsStr;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     const GOOD_TYPE: &str = "my_app.filters:BlurProcessor";
@@ -458,10 +457,10 @@ mod tests {
         fn running(body: &str) -> Self {
             let project_directory = tempfile::tempdir().expect("a project directory");
             let interpreter = project_directory.path().join("stub-python");
-            std::fs::write(&interpreter, format!("#!/bin/sh\n{body}\n"))
-                .expect("the stub interpreter is written");
-            std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755))
-                .expect("the stub interpreter is executable");
+            crate::core::test_support::write_an_executable_script_from_a_child_process(
+                &interpreter,
+                &format!("#!/bin/sh\n{body}\n"),
+            );
             let stream_environment = StreamEnvironment {
                 project_directory: project_directory.path().to_path_buf(),
                 interpreter,

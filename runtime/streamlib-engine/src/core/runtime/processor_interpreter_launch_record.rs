@@ -124,7 +124,6 @@ impl ProcessorInterpreterLaunchRecord {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
     use super::*;
@@ -176,13 +175,10 @@ mod tests {
             "described_node_types": described_node_types,
             "refused_node_types": [],
         });
-        std::fs::write(
+        crate::core::test_support::write_an_executable_script_from_a_child_process(
             &interpreter,
-            format!("#!/bin/sh\ncat <<'DESCRIBED'\n{describe_document}\nDESCRIBED\n"),
-        )
-        .expect("the stub interpreter is written");
-        std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755))
-            .expect("the stub interpreter is executable");
+            &format!("#!/bin/sh\ncat <<'DESCRIBED'\n{describe_document}\nDESCRIBED\n"),
+        );
         let stream_environment = StreamEnvironment {
             project_directory: project_directory.path().to_path_buf(),
             interpreter,
@@ -287,10 +283,10 @@ mod tests {
         let python_type = import_path("my_app.hangs_at_import:Blur");
         let project_directory = tempfile::tempdir().expect("a project directory");
         let interpreter = project_directory.path().join("stub-python");
-        std::fs::write(&interpreter, "#!/bin/sh\nsleep 30 &\nwait\n")
-            .expect("the stub interpreter is written");
-        std::fs::set_permissions(&interpreter, std::fs::Permissions::from_mode(0o755))
-            .expect("the stub interpreter is executable");
+        crate::core::test_support::write_an_executable_script_from_a_child_process(
+            &interpreter,
+            "#!/bin/sh\nsleep 30 &\nwait\n",
+        );
         let runtime = std::sync::Arc::new(Runner::new().unwrap());
         runtime.set_processor_interpreter_lend_directory("/opt/tatolab/lib/tatolab/lend".into());
         let started = std::time::Instant::now();
@@ -329,10 +325,10 @@ mod tests {
         let later_type = import_path("my_app.described_after_an_interrupted_load:Blur");
         let hanging_project_directory = tempfile::tempdir().expect("a project directory");
         let hanging_interpreter = hanging_project_directory.path().join("stub-python");
-        std::fs::write(&hanging_interpreter, "#!/bin/sh\nsleep 30 &\nwait\n")
-            .expect("the stub interpreter is written");
-        std::fs::set_permissions(&hanging_interpreter, std::fs::Permissions::from_mode(0o755))
-            .expect("the stub interpreter is executable");
+        crate::core::test_support::write_an_executable_script_from_a_child_process(
+            &hanging_interpreter,
+            "#!/bin/sh\nsleep 30 &\nwait\n",
+        );
         let runtime = std::sync::Arc::new(Runner::new().unwrap());
         runtime.set_processor_interpreter_lend_directory("/opt/tatolab/lib/tatolab/lend".into());
         let interrupting_runtime = std::sync::Arc::clone(&runtime);
