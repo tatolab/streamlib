@@ -19,7 +19,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get};
 use hyper_util::rt::TokioIo;
 use rmcp::ServiceExt;
-use streamlib_runtime_client_contract::local_api_wire_contract::MCP_STDIO_UPGRADE_PROTOCOL_TOKEN;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    MCP_STDIO_UPGRADE_PROTOCOL_TOKEN, MCP_STDIO_UPGRADE_REQUEST_TARGET,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::mcp::LocalApiMcpServerHandler;
@@ -47,7 +49,10 @@ async fn answer_the_mcp_stdio_upgrade(
         return (
             StatusCode::UPGRADE_REQUIRED,
             mcp_stdio_upgrade_response_headers(),
-            "`/mcp/stdio` serves MCP only after `Connection: upgrade` and `Upgrade: mcp-stdio`",
+            format!(
+                "`{MCP_STDIO_UPGRADE_REQUEST_TARGET}` serves MCP only after `Connection: upgrade` \
+                 and `Upgrade: {MCP_STDIO_UPGRADE_PROTOCOL_TOKEN}`"
+            ),
         )
             .into_response();
     }
