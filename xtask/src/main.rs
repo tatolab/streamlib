@@ -442,6 +442,11 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             "cargo",
             &["test", "--locked", "-p", "streamlib-api-server", "--lib"],
         ),
+        (
+            "runtime-process tests (tatolabd's flags and refusals)",
+            "cargo",
+            &["test", "--locked", "-p", "tatolabd"],
+        ),
         // Mirrors `test.yml`'s named slice exactly. `streamlib-engine`'s lib
         // tests are not run wholesale anywhere, so this list *is* the set of
         // engine-lib tests under CI — a test added to the workflow's slice
