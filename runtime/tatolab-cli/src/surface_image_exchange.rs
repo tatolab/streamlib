@@ -688,7 +688,8 @@ fn surface_id_in_tapped_bag(
 fn decode_tapped_channel_bag_frame(
     framed_bag_bytes: &[u8],
 ) -> Result<rmpv::Value, TappedChannelBagDecodeFailure> {
-    let mut bag_payload = FrameHeader::payload_of_a_tapped_frame(framed_bag_bytes)?;
+    let mut bag_payload = FrameHeader::payload_bounded_by_its_header(framed_bag_bytes)
+        .map_err(TappedFramePayloadRefusal::from)?;
     Ok(rmpv::decode::read_value(&mut bag_payload)?)
 }
 

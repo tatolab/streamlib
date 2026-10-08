@@ -16,7 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use rmpv::Value;
 
-use streamlib::sdk::iceoryx2::FrameHeader;
+use streamlib::sdk::iceoryx2::{FrameHeader, TappedFramePayloadRefusal};
 
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 
@@ -99,8 +99,10 @@ pub(crate) fn decode_tapped_channel_bag_frame_to_python_object<'py>(
     python: Python<'py>,
     framed_bag_bytes: &[u8],
 ) -> PyResult<Bound<'py, PyAny>> {
-    let payload = FrameHeader::payload_of_a_tapped_frame(framed_bag_bytes)
-        .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
+    let payload =
+        FrameHeader::payload_bounded_by_its_header(framed_bag_bytes).map_err(|refusal| {
+            PyValueError::new_err(TappedFramePayloadRefusal::from(refusal).to_string())
+        })?;
 
     decode_msgpack_to_python_object(python, payload)
 }
