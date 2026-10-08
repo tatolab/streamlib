@@ -16,7 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use rmpv::Value;
 
-use streamlib::sdk::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader};
+use streamlib::sdk::iceoryx2::FrameHeader;
 
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 
@@ -99,28 +99,8 @@ pub(crate) fn decode_tapped_channel_bag_frame_to_python_object<'py>(
     python: Python<'py>,
     framed_bag_bytes: &[u8],
 ) -> PyResult<Bound<'py, PyAny>> {
-    // The two arms below are `read_payload_from_slice`'s two `None` cases, in
-    // order; a third would need one here too.
-    let Some(payload) = FrameHeader::read_payload_from_slice(framed_bag_bytes) else {
-        return Err(PyValueError::new_err(
-            if framed_bag_bytes.len() < FRAME_HEADER_SIZE {
-                format!(
-                    "a tapped bag carries a {}-byte frame header; got {} bytes, which \
-                     cannot hold one",
-                    FRAME_HEADER_SIZE,
-                    framed_bag_bytes.len()
-                )
-            } else {
-                format!(
-                    "the tapped bag's header declares a {}-byte payload but only {} \
-                     bytes followed it — the sample arrived truncated, and decoding it \
-                     would invent a bag the channel never carried",
-                    FrameHeader::read_from_slice(framed_bag_bytes).len,
-                    framed_bag_bytes.len() - FRAME_HEADER_SIZE
-                )
-            },
-        ));
-    };
+    let payload = FrameHeader::payload_of_a_tapped_frame(framed_bag_bytes)
+        .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
 
     decode_msgpack_to_python_object(python, payload)
 }
@@ -541,6 +521,8 @@ fn msgpack_value_to_python_object<'py>(
 
 #[cfg(test)]
 mod tests {
+    use streamlib::sdk::iceoryx2::FRAME_HEADER_SIZE;
+
     use super::*;
 
     /// The bytes a Rust producer's own `AudioBlock` puts on the wire, decoded

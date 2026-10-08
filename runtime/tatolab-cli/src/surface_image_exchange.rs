@@ -17,7 +17,7 @@ use std::time::Duration;
 use clap::Args;
 use hyper::body::Bytes;
 use hyper::{HeaderMap, StatusCode};
-use streamlib_ipc_types::{FRAME_HEADER_SIZE, FrameHeader};
+use streamlib_ipc_types::{FrameHeader, TappedFramePayloadRefusal};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     RECYCLED_FRAME_HTTP_STATUS_CODE, SURFACE_PIXEL_HEIGHT_HEADER_NAME,
     SURFACE_PIXEL_WIDTH_HEADER_NAME, TapToolResult,
@@ -215,13 +215,8 @@ struct TappedChannelBagFrame {
 /// Why a tapped bag's bytes do not decode to a msgpack value.
 #[derive(Debug)]
 enum TappedChannelBagDecodeFailure {
-    /// Fewer bytes than a frame header.
-    ShorterThanTheFrameHeader { framed_bag_byte_len: usize },
-    /// The header declares more payload than followed it.
-    PayloadTruncated {
-        declared_payload_byte_len: u32,
-        followed_payload_byte_len: usize,
-    },
+    /// The bytes hold no whole frame payload.
+    FramePayloadRefused(TappedFramePayloadRefusal),
     /// The payload is not msgpack.
     PayloadIsNotMsgpack(rmpv::decode::Error),
 }
@@ -229,22 +224,9 @@ enum TappedChannelBagDecodeFailure {
 impl std::fmt::Display for TappedChannelBagDecodeFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ShorterThanTheFrameHeader {
-                framed_bag_byte_len,
-            } => write!(
-                formatter,
-                "a tapped bag carries a {FRAME_HEADER_SIZE}-byte frame header; got \
-                 {framed_bag_byte_len} bytes, which cannot hold one"
-            ),
-            Self::PayloadTruncated {
-                declared_payload_byte_len,
-                followed_payload_byte_len,
-            } => write!(
-                formatter,
-                "the tapped bag's header declares a {declared_payload_byte_len}-byte payload but \
-                 only {followed_payload_byte_len} bytes followed it — the sample arrived \
-                 truncated, and decoding it would invent a bag the channel never carried"
-            ),
+            Self::FramePayloadRefused(frame_payload_refusal) => {
+                write!(formatter, "{frame_payload_refusal}")
+            }
             Self::PayloadIsNotMsgpack(msgpack_decode_failure) => {
                 write!(formatter, "{msgpack_decode_failure}")
             }
@@ -754,20 +736,8 @@ fn surface_id_in_tapped_bag(
 fn decode_tapped_channel_bag_frame(
     framed_bag_bytes: &[u8],
 ) -> Result<rmpv::Value, TappedChannelBagDecodeFailure> {
-    // The two arms are `read_payload_from_slice`'s two `None` cases, in order; a third would need
-    // one here too.
-    let Some(mut bag_payload) = FrameHeader::read_payload_from_slice(framed_bag_bytes) else {
-        return Err(if framed_bag_bytes.len() < FRAME_HEADER_SIZE {
-            TappedChannelBagDecodeFailure::ShorterThanTheFrameHeader {
-                framed_bag_byte_len: framed_bag_bytes.len(),
-            }
-        } else {
-            TappedChannelBagDecodeFailure::PayloadTruncated {
-                declared_payload_byte_len: FrameHeader::read_from_slice(framed_bag_bytes).len,
-                followed_payload_byte_len: framed_bag_bytes.len() - FRAME_HEADER_SIZE,
-            }
-        });
-    };
+    let mut bag_payload = FrameHeader::payload_of_a_tapped_frame(framed_bag_bytes)
+        .map_err(TappedChannelBagDecodeFailure::FramePayloadRefused)?;
     rmpv::decode::read_value(&mut bag_payload)
         .map_err(TappedChannelBagDecodeFailure::PayloadIsNotMsgpack)
 }
@@ -827,6 +797,7 @@ mod tests {
     use std::collections::HashMap;
 
     use serde_json::json;
+    use streamlib_ipc_types::FRAME_HEADER_SIZE;
 
     use super::tapped_channel_bag_fixtures::{
         CAPPED_BAG_STATED_BYTE_LEN, FIXTURE_CHANNEL, SLICE_HOLDS_ONLY_THE_BAG,

@@ -546,8 +546,26 @@ impl FrameHeader {
     /// caller hands over whatever buffer it received the frame in — the
     /// transport itself sends a slice of exactly the stamped size.
     pub fn read_payload_from_slice(buf: &[u8]) -> Option<&[u8]> {
-        let body = buf.get(FRAME_HEADER_SIZE..)?;
-        body.get(..Self::read_from_slice(buf).len as usize)
+        Self::payload_of_a_tapped_frame(buf).ok()
+    }
+
+    /// The payload of a frame a tap forwarded, bounded by its stamped length as
+    /// [`Self::read_payload_from_slice`] bounds it, or why the bytes hold none.
+    pub fn payload_of_a_tapped_frame(
+        tapped_frame_bytes: &[u8],
+    ) -> Result<&[u8], TappedFramePayloadRefusal> {
+        let Some(followed_payload_bytes) = tapped_frame_bytes.get(FRAME_HEADER_SIZE..) else {
+            return Err(TappedFramePayloadRefusal::ShorterThanTheFrameHeader {
+                tapped_frame_byte_len: tapped_frame_bytes.len(),
+            });
+        };
+        let stamped_payload_byte_len = Self::read_from_slice(tapped_frame_bytes).len;
+        followed_payload_bytes
+            .get(..stamped_payload_byte_len as usize)
+            .ok_or(TappedFramePayloadRefusal::PayloadTruncated {
+                stamped_payload_byte_len,
+                followed_payload_byte_len: followed_payload_bytes.len(),
+            })
     }
 
     /// Get the port key as a string.
@@ -555,6 +573,43 @@ impl FrameHeader {
         self.port_key.as_str()
     }
 }
+
+/// Why the bytes a tap forwarded hold no frame payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TappedFramePayloadRefusal {
+    /// Fewer bytes than a [`FrameHeader`].
+    ShorterThanTheFrameHeader { tapped_frame_byte_len: usize },
+    /// The header stamps a longer payload than followed it.
+    PayloadTruncated {
+        stamped_payload_byte_len: u32,
+        followed_payload_byte_len: usize,
+    },
+}
+
+impl std::fmt::Display for TappedFramePayloadRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ShorterThanTheFrameHeader {
+                tapped_frame_byte_len,
+            } => write!(
+                f,
+                "a tapped bag carries a {FRAME_HEADER_SIZE}-byte frame header; got \
+                 {tapped_frame_byte_len} bytes, which cannot hold one"
+            ),
+            Self::PayloadTruncated {
+                stamped_payload_byte_len,
+                followed_payload_byte_len,
+            } => write!(
+                f,
+                "the tapped bag's header declares a {stamped_payload_byte_len}-byte payload but \
+                 only {followed_payload_byte_len} bytes followed it — the sample arrived \
+                 truncated, and decoding it would invent a bag the channel never carried"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TappedFramePayloadRefusal {}
 
 /// The iceoryx2 user header every channel data sample carries: the bag's place
 /// in its publisher's sends, so a subscriber can count the bags its ring
@@ -912,6 +967,57 @@ mod tests {
         let frame = frame_with_payload_filler("cam", 0, 0);
 
         assert_eq!(FrameHeader::read_payload_from_slice(&frame), Some(&[][..]));
+    }
+
+    #[test]
+    fn a_tapped_frame_yields_the_payload_its_stamp_bounds() {
+        let mut frame = frame_with_payload_filler("cam", 8, 0xAB);
+        frame.resize(FRAME_HEADER_SIZE + 64, 0xCD);
+
+        assert_eq!(
+            FrameHeader::payload_of_a_tapped_frame(&frame),
+            Ok(&[0xABu8; 8][..])
+        );
+    }
+
+    #[test]
+    fn a_tapped_frame_shorter_than_a_header_is_refused_naming_its_length() {
+        let refusal = FrameHeader::payload_of_a_tapped_frame(&[0u8; 8]).unwrap_err();
+
+        assert_eq!(
+            refusal,
+            TappedFramePayloadRefusal::ShorterThanTheFrameHeader {
+                tapped_frame_byte_len: 8
+            }
+        );
+        assert_eq!(
+            refusal.to_string(),
+            "a tapped bag carries a 76-byte frame header; got 8 bytes, which cannot hold one"
+        );
+    }
+
+    /// Decoding the prefix of a cut-short frame would hand back a bag missing
+    /// its later fields.
+    #[test]
+    fn a_tapped_frame_cut_short_is_refused_naming_both_lengths() {
+        let frame = frame_with_payload_filler("cam", 32, 0xAB);
+
+        let refusal =
+            FrameHeader::payload_of_a_tapped_frame(&frame[..frame.len() - 5]).unwrap_err();
+
+        assert_eq!(
+            refusal,
+            TappedFramePayloadRefusal::PayloadTruncated {
+                stamped_payload_byte_len: 32,
+                followed_payload_byte_len: 27,
+            }
+        );
+        assert_eq!(
+            refusal.to_string(),
+            "the tapped bag's header declares a 32-byte payload but only 27 bytes followed it — \
+             the sample arrived truncated, and decoding it would invent a bag the channel never \
+             carried"
+        );
     }
 
     #[test]
