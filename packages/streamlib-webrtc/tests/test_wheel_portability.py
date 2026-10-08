@@ -7,7 +7,7 @@ An extension wheel is installed beside the engine wheel on machines this
 project never sees, so it owes the same promise: everything it needs is inside
 the artifact, bar the handful of libraries manylinux lets a wheel leave to the
 host. A `libssl.so` on the `NEEDED` list would turn `pip install
-streamlib-webrtc` into an import error on whichever machine happens not to have
+tatolab-webrtc` into an import error on whichever machine happens not to have
 the version it was built against.
 
 On macOS the promise is the one the engine's macOS wheel keeps: every library
@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-import streamlib_webrtc
+import tatolab.webrtc
 
 # manylinux's policy list: the libraries a conforming wheel may leave to the
 # host. Everything else must be inside the artifact.
@@ -65,7 +65,7 @@ MACH_O_LINKING_LOAD_COMMANDS = frozenset(
 
 
 def the_native_extension() -> Path:
-    package_directory = Path(streamlib_webrtc.__file__).parent
+    package_directory = Path(tatolab.webrtc.__file__).parent
     built = sorted(package_directory.glob("_native*.so"))
     if not built:
         pytest.skip("the native module is not built beside the package")
@@ -166,7 +166,7 @@ def test_the_native_extension_links_nothing_the_host_may_not_supply():
         )
     assert not beyond_the_host, (
         f"{beyond_the_host} would have to be installed on the user's machine "
-        "for `import streamlib_webrtc` to work"
+        "for `import tatolab.webrtc` to work"
     )
 
 

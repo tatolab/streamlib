@@ -24,12 +24,12 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 # PEP 503: the projects this index serves, normalized. Each lands as an asset on
-# a release — `tatolab-stream` on the engine's, an extension on its own — so the
-# generator's only way to tell them apart is the wheel's own name, and a wheel
+# the one release every project shares, so the generator's only way to tell
+# them apart is the wheel's own name, and a wheel
 # naming a project that is not here is a packaging mistake, not another project
 # to publish. The pages are written in sorted order, so this one's is a
 # convenience, not a contract.
-PUBLISHED_PROJECT_NAMES = ("streamlib", "streamlib-webrtc", "tatolab-stream")
+PUBLISHED_PROJECT_NAMES = ("streamlib", "tatolab-stream", "tatolab-webrtc")
 
 WHEEL_FILE_SUFFIX = ".whl"
 

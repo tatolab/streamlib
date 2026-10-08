@@ -17,8 +17,8 @@ from typing import Any
 import pytest
 
 import tatolab.runtime
-from streamlib_webrtc import WhepPlayer, WhepPlayerConfig, WhipPublisher
-from streamlib_webrtc.processors import (
+from tatolab.webrtc import WhepPlayer, WhepPlayerConfig, WhipPublisher
+from tatolab.webrtc.processors import (
     FIRST_RECONNECT_DELAY_SECONDS,
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
     LONGEST_RECONNECT_DELAY_SECONDS,

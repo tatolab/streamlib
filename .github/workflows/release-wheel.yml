@@ -6,12 +6,10 @@ name: Release Wheel
 # PyPI publication waits for the project rename; the artifact is identical.
 #
 # Every project this repo publishes comes through here, because one index serves
-# them all and it is regenerated whole on every run. Each is versioned, tagged
-# and built independently — the engine's tag builds the engine wheel and the
-# `tatolab-stream` wheel released at its version, an extension's tag builds that
-# extension — but the index rebuild waits for all of them, so a run that
-# releases the engine wheel and an extension together publishes one index
-# describing every one.
+# them all and it is regenerated whole on every run. They carry the repository's
+# one version and release on its one tag — the engine wheel, `tatolab-stream`
+# and every extension — and the index rebuild waits for all of them, so a
+# release publishes one index describing every one.
 #
 # Called from release-please.yml rather than triggered by `on: release`, for the
 # same reason `trigger-schemas` is: release-please runs on the default
@@ -21,27 +19,18 @@ on:
   workflow_call:
     inputs:
       tag_name:
-        description: "Release tag to attach the engine and tatolab-stream wheels to (blank = neither this run)"
-        type: string
-        required: false
-        default: ""
-      streamlib_webrtc_tag_name:
-        description: "Release tag to attach the streamlib-webrtc wheel to (blank = not released)"
+        description: "Release tag to attach every wheel to (blank = none this run)"
         type: string
         required: false
         default: ""
   # Rebuilding the index alone is the common manual case — a release edited or
-  # deleted by hand leaves the index describing files that are not there. Every
-  # tag input blank is exactly that: no wheel is built and the index is
-  # regenerated from the release history.
+  # deleted by hand leaves the index describing files that are not there. A
+  # blank tag is exactly that: no wheel is built and the index is regenerated
+  # from the release history.
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag to attach the engine and tatolab-stream wheels to (blank = rebuild the index only)"
-        type: string
-        required: false
-      streamlib_webrtc_tag_name:
-        description: "Release tag to attach the streamlib-webrtc wheel to"
+        description: "Release tag to attach every wheel to (blank = rebuild the index only)"
         type: string
         required: false
 
@@ -344,27 +333,26 @@ jobs:
       ref: ${{ inputs.tag_name }}
       release_tag_name: ${{ inputs.tag_name }}
 
-  # An extension wheel is a standalone project with its own release cadence, so
-  # each is called out by name and only when its own tag was cut. A named block
-  # rather than a matrix over a JSON array: an empty `include` is a matrix
-  # expansion failure, and a second extension is six lines here.
-  build-streamlib-webrtc-wheel:
-    if: inputs.streamlib_webrtc_tag_name != ''
+  # An extension wheel is a standalone project built onto the same release. A
+  # named block rather than a matrix over a JSON array: an empty `include` is a
+  # matrix expansion failure, and a second extension is six lines here.
+  build-tatolab-webrtc-wheel:
+    if: inputs.tag_name != ''
     permissions:
       contents: write
     uses: ./.github/workflows/release-extension-wheel.yml
     with:
       extension_package_directory: packages/streamlib-webrtc
-      extension_distribution_name: streamlib-webrtc
-      extension_import_package_name: streamlib_webrtc
-      tag_name: ${{ inputs.streamlib_webrtc_tag_name }}
+      extension_distribution_name: tatolab-webrtc
+      extension_import_package_name: tatolab.webrtc
+      tag_name: ${{ inputs.tag_name }}
 
   publish-simple-index:
     name: PEP 503 simple index
     # Every wheel job is a dependency so that one published index describes
     # every wheel this run attached. `always()` plus the explicit result check:
-    # an index-only rebuild skips every wheel job, and a run that releases one
-    # project skips the others — a skipped dependency must not skip this too.
+    # an index-only rebuild skips every wheel job, and a skipped dependency must
+    # not skip this too.
     #
     # The failure check names the two engine wheels alone, deliberately — macOS
     # is a supported floor, so its wheel failing withholds the index exactly as
@@ -379,7 +367,7 @@ jobs:
     needs:
       - build-wheel
       - build-macos-wheel
-      - build-streamlib-webrtc-wheel
+      - build-tatolab-webrtc-wheel
     if: always() && needs.build-wheel.result != 'failure' && needs.build-macos-wheel.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -405,8 +393,8 @@ jobs:
       # Rebuilt from the whole release history rather than appended to, so a
       # re-run repairs a bad index and a deleted release drops out on its own.
       # The listing is the generator's only input, which is what lets one run
-      # publish every project: an extension's wheel is an asset on its own
-      # release, and the grouping is by the wheel's own name.
+      # publish every project: every wheel is an asset on the one release, and
+      # the grouping is by the wheel's own name.
       - name: Generate the index from every published release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -3,12 +3,9 @@ name: Release Extension Wheel
 # One extension wheel per platform the engine wheel ships for — manylinux and
 # Apple Silicon — built the way a third party would build one: its own
 # standalone maturin project, its own lockfile, no engine crate linked. Both are
-# attached to the extension's own release. Called once per released extension by
-# release-wheel.yml, which owns the PEP 503 simple index that then serves it
-# beside the engine wheel.
-#
-# Only what a tag names is built: an extension's tag never re-runs the engine
-# wheel's build, and the engine's tag never runs this.
+# attached to the repository's release beside the engine wheel. Called once per
+# extension by release-wheel.yml, which owns the PEP 503 simple index that then
+# serves it.
 on:
   workflow_call:
     inputs:
@@ -17,11 +14,11 @@ on:
         type: string
         required: true
       extension_distribution_name:
-        description: "The distribution pip installs, e.g. streamlib-webrtc"
+        description: "The distribution pip installs, e.g. tatolab-webrtc"
         type: string
         required: true
       extension_import_package_name:
-        description: "The package the smoke test imports, e.g. streamlib_webrtc"
+        description: "The package the smoke test imports, e.g. tatolab.webrtc"
         type: string
         required: true
       tag_name:
@@ -30,9 +27,9 @@ on:
         required: true
 
 env:
-  # Where the engine wheel an extension depends on resolves from — the same
+  # Where the `tatolab-stream` an extension depends on resolves from — the same
   # index this release goes on to republish. Installing against it is what
-  # proves the declared `streamlib` floor is one a user can actually satisfy,
+  # proves the declared `tatolab-stream` floor is one a user can actually satisfy,
   # rather than one that only resolves from a checkout.
   STREAMLIB_SIMPLE_INDEX_URL: https://tatolab.github.io/streamlib/simple/
 
@@ -169,11 +166,10 @@ jobs:
       # user installs. Both are asserted against this build rather than trusted
       # from the test suite: that runs against `maturin develop`, while this is
       # a release build resolving PEP 639 globs that are symlinks out of the
-      # project root. On macOS the import is also where the published macOS
-      # engine wheel and this one first meet.
+      # project root.
       #
-      # `--index-url` is the published index, not PyPI: `streamlib` is not on
-      # PyPI, and this is the one place the extension's declared floor meets the
+      # `--index-url` is the published index, not PyPI: PyPI's `tatolab-stream`
+      # is a placeholder, and this is the one place the extension's declared floor meets the
       # wheels a user can really install.
       - name: The wheel installs from the published index, imports, and carries its notices
         env:

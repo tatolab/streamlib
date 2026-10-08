@@ -820,11 +820,11 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    /// What makes a `packages/` directory an extension wheel: pip records this
-    /// group at install, and the engine reads it back when a process takes an
-    /// engine role. Only the tests below read it — the generator is pointed at
-    /// one package at a time, and discovery is what a sweep needs.
-    const EXTENSION_ENTRY_POINT_GROUP: &str = "streamlib.extensions";
+    /// What makes a `packages/` directory an extension wheel: a Python project
+    /// published under the `tatolab` namespace. Only the tests below read it —
+    /// the generator is pointed at one package at a time, and discovery is what
+    /// a sweep needs.
+    const EXTENSION_DISTRIBUTION_NAME_PREFIX: &str = "tatolab-";
 
     /// The family idiom for the workspace root in a gate's tests: free, and it
     /// needs neither cargo on PATH nor the package lock.
@@ -1249,13 +1249,13 @@ mod tests {
         );
     }
 
-    /// Every directory under `packages/` whose `pyproject.toml` declares the
-    /// extension entry-point group, as a repository-relative path.
+    /// Every directory under `packages/` whose `pyproject.toml` names a
+    /// `tatolab-` distribution, as a repository-relative path.
     ///
     /// Discovered rather than listed, so a second extension is covered the day
     /// its `pyproject.toml` lands. Read off the parsed document rather than by
     /// searching the source text, which would call a package an extension for
-    /// naming the group in a comment or a URL.
+    /// naming the prefix in a comment or a URL.
     fn extension_package_directories() -> Vec<PathBuf> {
         let mut directories = Vec::new();
         for entry in fs::read_dir(workspace_root().join("packages")).expect("read packages/") {
@@ -1266,12 +1266,12 @@ mod tests {
             };
             let pyproject: toml::Value =
                 toml::from_str(&pyproject_source).expect("parse a packages/ pyproject.toml");
-            let declares_the_group = pyproject
+            let is_a_tatolab_distribution = pyproject
                 .get("project")
-                .and_then(|project| project.get("entry-points"))
-                .and_then(|groups| groups.get(EXTENSION_ENTRY_POINT_GROUP))
-                .is_some();
-            if declares_the_group {
+                .and_then(|project| project.get("name"))
+                .and_then(toml::Value::as_str)
+                .is_some_and(|name| name.starts_with(EXTENSION_DISTRIBUTION_NAME_PREFIX));
+            if is_a_tatolab_distribution {
                 directories.push(
                     PathBuf::from("packages").join(
                         package_directory

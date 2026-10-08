@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The native half of `streamlib-webrtc` — the module the wheel's two
-//! `@node` classes import as `streamlib_webrtc._native`.
+//! The native half of `tatolab-webrtc` — the module the wheel's two
+//! `@node` classes import as `tatolab.webrtc._native`.
 //!
 //! The engine never calls anything here. A processor extension's per-frame work
 //! is its own package's Rust, reached directly from its own Python.
@@ -37,13 +37,6 @@ use crate::whip_session::{PublishedMediaSet, WhipPublishingSession};
 /// Only the first frame of a stream, so that no two frames share a presentation
 /// timestamp. Every later one advances by the gap the bags' own stamps state.
 const FIRST_FRAME_NOMINAL_DURATION: Duration = Duration::from_nanos(1_000_000_000 / 30);
-
-/// Bring up the tokio runtime and the TLS provider this wheel's sessions share.
-#[pyfunction]
-fn bring_up_the_transport_stack() -> PyResult<()> {
-    transport_stack::bring_up()?;
-    Ok(())
-}
 
 /// Publishes encoded media to a WHIP endpoint.
 ///
@@ -436,7 +429,6 @@ fn this_wheels_monotonic_now_ns() -> i64 {
 
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(bring_up_the_transport_stack, module)?)?;
     module.add_function(wrap_pyfunction!(this_wheels_monotonic_now_ns, module)?)?;
     module.add_class::<WhipSession>()?;
     module.add_class::<WhepSession>()?;

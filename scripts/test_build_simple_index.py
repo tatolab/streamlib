@@ -28,22 +28,21 @@ from build_simple_index import (
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
-# What makes a `packages/` directory an extension wheel: pip records this group
-# at install, and the engine reads it back when a process takes an engine role.
-# Read here rather than exported from the generator, which has no use for it —
-# publishing a wheel and declaring an entry point are different concerns.
-EXTENSION_ENTRY_POINT_GROUP = "streamlib.extensions"
+# What makes a `packages/` directory an extension wheel: a Python project
+# published under the `tatolab` namespace. Read here rather than exported from
+# the generator, which groups by the wheel's own name and has no use for it.
+EXTENSION_DISTRIBUTION_NAME_PREFIX = "tatolab-"
 
 WHEEL_FILE_NAME = "streamlib-0.12.0-cp310-abi3-manylinux_2_28_x86_64.whl"
 WHEEL_DOWNLOAD_URL = (
     f"https://github.com/tatolab/streamlib/releases/download/v0.12.0/{WHEEL_FILE_NAME}"
 )
 EXTENSION_WHEEL_FILE_NAME = (
-    "streamlib_webrtc-0.1.1-cp310-abi3-manylinux_2_28_x86_64.whl"
+    "tatolab_webrtc-0.12.0-cp310-abi3-manylinux_2_28_x86_64.whl"
 )
 EXTENSION_WHEEL_DOWNLOAD_URL = (
     "https://github.com/tatolab/streamlib/releases/download/"
-    f"streamlib-webrtc-v0.1.1/{EXTENSION_WHEEL_FILE_NAME}"
+    f"v0.12.0/{EXTENSION_WHEEL_FILE_NAME}"
 )
 
 
@@ -121,19 +120,19 @@ class CollectingWheelAssets(unittest.TestCase):
         )
 
     def test_each_projects_wheels_are_grouped_under_its_own_name(self):
-        """An extension is released on its own tag, so the two arrive from
-        different releases and must not land on one page."""
+        """An extension is released on the engine's own tag, so the two
+        arrive on one release and must not land on one page."""
         collected = collect_wheel_assets(
             [
                 release(
                     assets=[
+                        asset(WHEEL_FILE_NAME),
                         asset(
                             EXTENSION_WHEEL_FILE_NAME,
                             EXTENSION_WHEEL_DOWNLOAD_URL,
-                        )
+                        ),
                     ]
                 ),
-                release(assets=[asset(WHEEL_FILE_NAME)]),
             ]
         )
 
@@ -141,18 +140,18 @@ class CollectingWheelAssets(unittest.TestCase):
             [found.file_name for found in collected["streamlib"]], [WHEEL_FILE_NAME]
         )
         self.assertEqual(
-            [found.file_name for found in collected["streamlib-webrtc"]],
+            [found.file_name for found in collected["tatolab-webrtc"]],
             [EXTENSION_WHEEL_FILE_NAME],
         )
 
     def test_a_wheel_whose_name_underscores_the_project_lands_on_its_page(self):
-        """The wheel spec spells `streamlib-webrtc` as `streamlib_webrtc`, so
+        """The wheel spec spells `tatolab-webrtc` as `tatolab_webrtc`, so
         the grouping key has to be the normalized form, not the file's."""
         collected = collect_wheel_assets(
             [release(assets=[asset(EXTENSION_WHEEL_FILE_NAME)])]
         )
 
-        self.assertEqual(len(collected["streamlib-webrtc"]), 1)
+        self.assertEqual(len(collected["tatolab-webrtc"]), 1)
 
     def test_every_published_project_has_an_entry_before_its_first_release(self):
         """A project directory that exists and resolves nothing is one pip can
@@ -186,9 +185,9 @@ class RenderingTheIndex(unittest.TestCase):
         self.assertIn(WHEEL_FILE_NAME, page)
 
     def test_the_project_page_is_titled_for_its_own_project(self):
-        page = render_project_page("streamlib-webrtc", [])
+        page = render_project_page("tatolab-webrtc", [])
 
-        self.assertIn("Links for streamlib-webrtc", page)
+        self.assertIn("Links for tatolab-webrtc", page)
         self.assertNotIn("Links for streamlib<", page)
 
     def test_a_url_with_html_metacharacters_is_escaped(self):
@@ -230,7 +229,7 @@ class RenderingTheIndex(unittest.TestCase):
                 Path(output_directory),
                 {
                     "streamlib": [WheelAsset(WHEEL_FILE_NAME, WHEEL_DOWNLOAD_URL)],
-                    "streamlib-webrtc": [
+                    "tatolab-webrtc": [
                         WheelAsset(
                             EXTENSION_WHEEL_FILE_NAME, EXTENSION_WHEEL_DOWNLOAD_URL
                         )
@@ -240,10 +239,10 @@ class RenderingTheIndex(unittest.TestCase):
 
             root_page = (simple_root / "index.html").read_text()
             self.assertIn('href="streamlib/"', root_page)
-            self.assertIn('href="streamlib-webrtc/"', root_page)
+            self.assertIn('href="tatolab-webrtc/"', root_page)
             self.assertIn(
                 EXTENSION_WHEEL_FILE_NAME,
-                (simple_root / "streamlib-webrtc" / "index.html").read_text(),
+                (simple_root / "tatolab-webrtc" / "index.html").read_text(),
             )
             self.assertNotIn(
                 EXTENSION_WHEEL_FILE_NAME,
@@ -254,16 +253,16 @@ class RenderingTheIndex(unittest.TestCase):
 def extension_package_directory_names():
     """Every directory under `packages/` that is an extension wheel.
 
-    An extension is one whose `pyproject.toml` declares the entry-point group
-    pip records at install — discovered rather than listed, so a second extension
-    is covered the day its `pyproject.toml` lands.
+    An extension is one whose `pyproject.toml` names a `tatolab-` distribution —
+    discovered rather than listed, so a second extension is covered the day its
+    `pyproject.toml` lands.
     """
     names = []
     for pyproject_path in sorted((REPOSITORY_ROOT / "packages").glob("*/pyproject.toml")):
         project = tomllib.loads(pyproject_path.read_text(encoding="utf-8")).get(
             "project", {}
         )
-        if EXTENSION_ENTRY_POINT_GROUP in project.get("entry-points", {}):
+        if project.get("name", "").startswith(EXTENSION_DISTRIBUTION_NAME_PREFIX):
             names.append((pyproject_path.parent.name, project["name"]))
     return names
 
@@ -286,7 +285,10 @@ class ReleasingEveryProjectThisRepoPublishes(unittest.TestCase):
 
         self.assertEqual(set(PUBLISHED_PROJECT_NAMES), released)
 
-    def test_every_extension_wheel_is_a_release_please_package(self):
+    def test_every_extension_wheel_moves_with_the_engine_version(self):
+        """An extension released from this repository carries its one version
+        and releases on its tag, so it is no release-please package of its own
+        and both its manifests are the root package's extra files."""
         configured = json.loads(
             (REPOSITORY_ROOT / "release-please-config.json").read_text(encoding="utf-8")
         )["packages"]
@@ -295,15 +297,30 @@ class ReleasingEveryProjectThisRepoPublishes(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        engine_extra_files = configured["."]["extra-files"]
 
         for directory_name, distribution_name in extension_package_directory_names():
             package_path = f"packages/{directory_name}"
-            self.assertIn(package_path, configured, distribution_name)
-            # Without its own component every package tags `v<version>`, which
-            # collides with the engine wheel's tags.
-            self.assertEqual(configured[package_path]["component"], distribution_name)
-            # release-please refuses a package it has no recorded version for.
-            self.assertIn(package_path, seeded, distribution_name)
+            self.assertNotIn(package_path, configured, distribution_name)
+            self.assertNotIn(package_path, seeded, distribution_name)
+            self.assertIn(
+                {
+                    "type": "toml",
+                    "path": f"{package_path}/Cargo.toml",
+                    "jsonpath": "$.package.version",
+                },
+                engine_extra_files,
+                distribution_name,
+            )
+            self.assertIn(
+                {
+                    "type": "toml",
+                    "path": f"{package_path}/pyproject.toml",
+                    "jsonpath": "$.project.version",
+                },
+                engine_extra_files,
+                distribution_name,
+            )
 
     def test_tatolab_stream_and_the_engine_wheels_pin_on_it_move_with_the_engine_version(self):
         """The engine wheel depends on `tatolab-stream` at exactly its own version,

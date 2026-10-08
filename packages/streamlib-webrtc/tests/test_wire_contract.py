@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from streamlib_webrtc.processors import (
+from tatolab.webrtc.processors import (
     encoded_audio_packet_bag,
     encoded_video_frame_bag,
 )

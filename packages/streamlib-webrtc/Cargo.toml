@@ -9,7 +9,7 @@ repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
 publish = false
 
-# `_native` is the module `streamlib_webrtc.processors` imports. cdylib only:
+# `_native` is the module `tatolab.webrtc.processors` imports. cdylib only:
 # nothing links this crate as a Rust library, and the CPython ABI is the one
 # binary boundary an extension is allowed to cross.
 [lib]

@@ -97,7 +97,7 @@ STREAMLIB_CLI="$PACKAGE_DIR/.venv/bin/streamlib"
 # would be measured and reported as a PASS for code that is not in the tree.
 if ! IMPORT_FAILURE="$("$VENV_PYTHON" -c '
 import tatolab.stream
-from streamlib_webrtc import WhepPlayer, WhipPublisher
+from tatolab.webrtc import WhepPlayer, WhipPublisher
 _ = (tatolab.stream.H264Decoder, WhepPlayer, WhipPublisher)
 ' 2>&1)"; then
     say "$IMPORT_FAILURE" >&2

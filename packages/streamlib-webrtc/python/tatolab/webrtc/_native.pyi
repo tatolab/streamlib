@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The native half of `streamlib-webrtc`, as the wheel's Python sees it.
+"""The native half of `tatolab-webrtc`, as the wheel's Python sees it.
 
 Hand-written and gated against the compiled module by stubtest, the same way
 the engine wheel's own stub is. The engine never calls anything here — a
@@ -18,15 +18,8 @@ __all__ = [
     "PlayedVideoAccessUnit",
     "WhepSession",
     "WhipSession",
-    "bring_up_the_transport_stack",
     "monotonic_now_ns",
 ]
-
-def bring_up_the_transport_stack() -> None:
-    """Start the tokio runtime and install the TLS provider, once per process.
-
-    What `extension.py:load` calls. Cheap and does no I/O.
-    """
 
 def monotonic_now_ns() -> int:
     """Nanoseconds on the clock this wheel stamps bags with.
