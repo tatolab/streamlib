@@ -5,6 +5,7 @@
 //! mirrored it; with `--list`, the runtimes that have one; with `--node`, a bounded sample of a
 //! running runtime's live event stream.
 
+use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -428,12 +429,13 @@ pub(crate) fn render_runtime_log_instance_listing(
         "RUNTIME_ID", "STARTED_AT"
     );
     for runtime_log_instance in &runtime_log_instances {
-        runtime_log_listing.push_str(&format!(
-            "{:<RUNTIME_LOG_LISTING_COLUMN_WIDTH$}  {:<RUNTIME_LOG_LISTING_COLUMN_WIDTH$}  {}\n",
+        let _ = writeln!(
+            runtime_log_listing,
+            "{:<RUNTIME_LOG_LISTING_COLUMN_WIDTH$}  {:<RUNTIME_LOG_LISTING_COLUMN_WIDTH$}  {}",
             runtime_log_instance.runtime_id,
             format_started_at(&runtime_log_instance.started_at_millis_digits),
             format_size(runtime_log_instance.total_segment_bytes)
-        ));
+        );
     }
     runtime_log_listing
 }

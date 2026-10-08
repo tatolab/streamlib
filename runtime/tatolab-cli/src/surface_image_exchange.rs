@@ -11,6 +11,7 @@
 //! retried against a newer bag and reported, so a short sample never reads as a full one.
 
 use std::ffi::OsString;
+use std::fmt::Write;
 use std::path::{Component, Path, PathBuf};
 
 use clap::Args;
@@ -158,7 +159,7 @@ impl From<SurfaceImageExchangeFailure> for TatolabCommandFailure {
 }
 
 /// What one channel-form run exchanged, what it retried, and why it stopped early if it did.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub(crate) struct SampledChannelExchangeReport {
     /// Every PNG the run wrote, in the order it wrote them.
     pub(crate) written_image_paths: Vec<PathBuf>,
@@ -173,7 +174,54 @@ pub(crate) struct SampledChannelExchangeReport {
     /// A failure the run could not compose past. It is reported beside the frames that landed
     /// rather than instead of them: a PNG on disk whose path was never printed is evidence nobody
     /// can use.
-    pub(crate) stopped_early_because: Option<String>,
+    pub(crate) stopped_early_because: Option<SampledChannelExchangeStop>,
+}
+
+/// Why a channel-form run stopped before it wrote every frame it wanted.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SampledChannelExchangeStop {
+    /// The tap failed, was refused, or got no answer.
+    #[error(transparent)]
+    TapCallFailed(#[from] LocalApiMcpToolClientFailure),
+    /// The tap answered with something other than the tap tool's result.
+    #[error(
+        "tap of `{channel}` returned a result that is not the tap tool's ({shape_failure}): \
+         {tap_tool_result_text}"
+    )]
+    TapResultIsNotTheTapToolsShape {
+        channel: String,
+        tap_tool_result_text: String,
+        #[source]
+        shape_failure: serde_json::Error,
+    },
+    /// A tapped bag's hex preview does not decode to bytes.
+    #[error("tap of `{channel}` returned a bag whose hex preview does not decode: {hex_failure}")]
+    TappedBagHexPreviewDoesNotDecode {
+        channel: String,
+        #[source]
+        hex_failure: hex::FromHexError,
+    },
+    /// A selected bag is longer than the prefix `tap` previews, so its id cannot be read from
+    /// here, while the id form still reaches its frame.
+    #[error(
+        "a bag the sample selected on `{channel}` is {whole_bag_byte_len} bytes, past the prefix \
+         `tap` previews, so its surface id cannot be read from here. Exchange an id from this \
+         channel directly: `tatolab exchange <surface-id> --out <dir>`."
+    )]
+    SelectedBagPastTheTapPreviewCap {
+        channel: String,
+        whole_bag_byte_len: u64,
+    },
+    /// A selected bag does not decode to a msgpack value.
+    #[error("a bag from `{channel}` could not be decoded: {decode_failure}")]
+    SelectedBagDoesNotDecode {
+        channel: String,
+        #[source]
+        decode_failure: TappedChannelBagDecodeFailure,
+    },
+    /// An exchange the runtime refused for good, or an image that could not be written.
+    #[error(transparent)]
+    SurfaceImageExchangeFailed(#[from] SurfaceImageExchangeFailure),
 }
 
 /// One bag a tap forwarded. Whether its capped preview matters depends on whether the stride
@@ -187,7 +235,7 @@ struct TappedChannelBagFrame {
 
 /// Why a tapped bag's bytes do not decode to a msgpack value.
 #[derive(Debug, thiserror::Error)]
-enum TappedChannelBagDecodeFailure {
+pub(crate) enum TappedChannelBagDecodeFailure {
     /// The bytes hold no whole frame payload.
     #[error(transparent)]
     FramePayloadRefused(#[from] TappedFramePayloadRefusal),
@@ -503,14 +551,14 @@ pub(crate) fn sample_channel_into_exchanged_surface_images(
     sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
 ) -> SampledChannelExchangeReport {
     let mut sampled_channel_exchange_report = SampledChannelExchangeReport::default();
-    if let Err(stop_reason) = exchange_sampled_bags_across_tap_rounds(
+    if let Err(sampled_channel_exchange_stop) = exchange_sampled_bags_across_tap_rounds(
         local_api_connection,
         channel,
         output_directory,
         sampled_channel_exchange_bounds,
         &mut sampled_channel_exchange_report,
     ) {
-        sampled_channel_exchange_report.stopped_early_because = Some(stop_reason);
+        sampled_channel_exchange_report.stopped_early_because = Some(sampled_channel_exchange_stop);
     }
     sampled_channel_exchange_report
 }
@@ -523,7 +571,7 @@ fn exchange_sampled_bags_across_tap_rounds(
     output_directory: &Path,
     sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
     sampled_channel_exchange_report: &mut SampledChannelExchangeReport,
-) -> Result<(), String> {
+) -> Result<(), SampledChannelExchangeStop> {
     let SampledChannelExchangeBounds {
         wanted_image_count,
         every_nth_bag,
@@ -539,8 +587,7 @@ fn exchange_sampled_bags_across_tap_rounds(
             local_api_connection,
             channel,
             still_wanted_image_count.saturating_mul(*every_nth_bag),
-        )
-        .map_err(|tap_failure| tap_failure.to_string())?;
+        )?;
         for tapped_bag in tapped_channel_bag_frames(&tap_tool_result_text, channel)? {
             let selected_by_the_stride = sampled_channel_exchange_report
                 .bags_examined
@@ -550,10 +597,12 @@ fn exchange_sampled_bags_across_tap_rounds(
                 continue;
             }
             if tapped_bag.preview_was_capped {
-                return Err(capped_bag_stop_reason(
-                    channel,
-                    tapped_bag.whole_bag_byte_len,
-                ));
+                return Err(
+                    SampledChannelExchangeStop::SelectedBagPastTheTapPreviewCap {
+                        channel: channel.to_owned(),
+                        whole_bag_byte_len: tapped_bag.whole_bag_byte_len,
+                    },
+                );
             }
             let Some(published_surface_id) = surface_id_in_tapped_bag(
                 &tapped_bag.framed_bag_bytes,
@@ -573,7 +622,7 @@ fn exchange_sampled_bags_across_tap_rounds(
                             .push(published_surface_id);
                         continue;
                     }
-                    Err(exchange_failure) => return Err(exchange_failure.to_string()),
+                    Err(exchange_failure) => return Err(exchange_failure.into()),
                 };
             let written_image_path = write_exchanged_surface_image(
                 output_directory,
@@ -583,8 +632,7 @@ fn exchange_sampled_bags_across_tap_rounds(
                     file_name_stem_for_surface_id(&published_surface_id)
                 ),
                 &exchanged_surface_image,
-            )
-            .map_err(|write_failure| write_failure.to_string())?;
+            )?;
             sampled_channel_exchange_report
                 .written_image_paths
                 .push(written_image_path);
@@ -622,23 +670,24 @@ fn call_tap_on_the_local_api_connection(
 fn tapped_channel_bag_frames(
     tap_tool_result_text: &str,
     channel: &str,
-) -> Result<Vec<TappedChannelBagFrame>, String> {
+) -> Result<Vec<TappedChannelBagFrame>, SampledChannelExchangeStop> {
     let tap_tool_result: TapToolResult =
         serde_json::from_str(tap_tool_result_text).map_err(|shape_failure| {
-            format!(
-                "tap of `{channel}` returned a result that is not the tap tool's \
-                 ({shape_failure}): {tap_tool_result_text}"
-            )
+            SampledChannelExchangeStop::TapResultIsNotTheTapToolsShape {
+                channel: channel.to_owned(),
+                tap_tool_result_text: tap_tool_result_text.to_owned(),
+                shape_failure,
+            }
         })?;
     tap_tool_result
         .bags
         .into_iter()
         .map(|tapped_bag| {
             let framed_bag_bytes = hex::decode(&tapped_bag.hex_preview).map_err(|hex_failure| {
-                format!(
-                    "tap of `{channel}` returned a bag whose hex preview does not decode: \
-                     {hex_failure}"
-                )
+                SampledChannelExchangeStop::TappedBagHexPreviewDoesNotDecode {
+                    channel: channel.to_owned(),
+                    hex_failure,
+                }
             })?;
             Ok(TappedChannelBagFrame {
                 framed_bag_bytes,
@@ -649,16 +698,6 @@ fn tapped_channel_bag_frames(
         .collect()
 }
 
-/// Why a run stops on a selected bag whose preview `tap` capped: its id cannot be read from here,
-/// and the id form still reaches its frame.
-fn capped_bag_stop_reason(channel: &str, whole_bag_byte_len: u64) -> String {
-    format!(
-        "a bag the sample selected on `{channel}` is {whole_bag_byte_len} bytes, past the prefix \
-         `tap` previews, so its surface id cannot be read from here. Exchange an id from this \
-         channel directly: `tatolab exchange <surface-id> --out <dir>`."
-    )
-}
-
 /// The string `surface_id_bag_field_name` holds in one tapped bag, or `None` when the bag is no
 /// map, lacks the field, or holds something other than a string there. A bag that does not decode
 /// at all is an error rather than a bag without the field: counting it would say the channel
@@ -667,10 +706,13 @@ fn surface_id_in_tapped_bag(
     framed_bag_bytes: &[u8],
     channel: &str,
     surface_id_bag_field_name: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>, SampledChannelExchangeStop> {
     let tapped_bag =
         decode_tapped_channel_bag_frame(framed_bag_bytes).map_err(|decode_failure| {
-            format!("a bag from `{channel}` could not be decoded: {decode_failure}")
+            SampledChannelExchangeStop::SelectedBagDoesNotDecode {
+                channel: channel.to_owned(),
+                decode_failure,
+            }
         })?;
     let rmpv::Value::Map(tapped_bag_entries) = tapped_bag else {
         return Ok(None);
@@ -712,35 +754,42 @@ pub(crate) fn render_sampled_channel_exchange_report(
         "exchanged {} of {wanted_image_count} requested frames from `{channel}` ({bags_examined} \
          bags examined over {tap_rounds} tap {})\n",
         written_image_paths.len(),
-        if *tap_rounds == 1 { "round" } else { "rounds" }
+        noun_agreeing_with_count(*tap_rounds, "round", "rounds")
     );
     if !retried_recycled_surface_ids.is_empty() {
-        rendered_report.push_str(&format!(
-            "retried {} recycled {} against newer bags: {}\n",
+        let _ = writeln!(
+            rendered_report,
+            "retried {} recycled {} against newer bags: {}",
             retried_recycled_surface_ids.len(),
-            if retried_recycled_surface_ids.len() == 1 {
-                "frame"
-            } else {
-                "frames"
-            },
+            noun_agreeing_with_count(retried_recycled_surface_ids.len(), "frame", "frames"),
             retried_recycled_surface_ids.join(", ")
-        ));
+        );
     }
     if *bags_missing_the_surface_id_field > 0 {
-        rendered_report.push_str(&format!(
+        let _ = writeln!(
+            rendered_report,
             "{bags_missing_the_surface_id_field} {} carried no surface id in the named field — \
-             name the right one with `--field`\n",
-            if *bags_missing_the_surface_id_field == 1 {
-                "bag"
-            } else {
-                "bags"
-            }
-        ));
+             name the right one with `--field`",
+            noun_agreeing_with_count(*bags_missing_the_surface_id_field, "bag", "bags")
+        );
     }
-    if let Some(stop_reason) = stopped_early_because {
-        rendered_report.push_str(&format!("error: {stop_reason}\n"));
+    if let Some(sampled_channel_exchange_stop) = stopped_early_because {
+        let _ = writeln!(rendered_report, "error: {sampled_channel_exchange_stop}");
     }
     rendered_report
+}
+
+/// `singular_noun` for a count of one, `plural_noun` for any other.
+fn noun_agreeing_with_count<'noun, Count: PartialEq + From<u8>>(
+    count: Count,
+    singular_noun: &'noun str,
+    plural_noun: &'noun str,
+) -> &'noun str {
+    if count == Count::from(1) {
+        singular_noun
+    } else {
+        plural_noun
+    }
 }
 
 #[cfg(test)]
@@ -798,6 +847,26 @@ mod tests {
             output_directory,
             sampled_channel_exchange_bounds,
         )
+    }
+
+    /// Why `sampled_channel_exchange_report`'s run stopped early, as the report prints it.
+    fn stop_reason_as_printed(
+        sampled_channel_exchange_report: &SampledChannelExchangeReport,
+    ) -> Option<String> {
+        sampled_channel_exchange_report
+            .stopped_early_because
+            .as_ref()
+            .map(ToString::to_string)
+    }
+
+    /// [`surface_id_in_tapped_bag`], its refusal as the report prints it.
+    fn surface_id_in_tapped_bag_as_printed(
+        framed_bag_bytes: &[u8],
+        channel: &str,
+        surface_id_bag_field_name: &str,
+    ) -> Result<Option<String>, String> {
+        surface_id_in_tapped_bag(framed_bag_bytes, channel, surface_id_bag_field_name)
+            .map_err(|sampled_channel_exchange_stop| sampled_channel_exchange_stop.to_string())
     }
 
     fn written_image_contents(
@@ -1268,7 +1337,7 @@ mod tests {
     #[test]
     fn a_tapped_bag_decodes_past_the_slack_its_slice_carries() {
         assert_eq!(
-            surface_id_in_tapped_bag(
+            surface_id_in_tapped_bag_as_printed(
                 &bag_publishing_surface_id("camera/frame#7"),
                 FIXTURE_CHANNEL,
                 "surface_id"
@@ -1280,7 +1349,7 @@ mod tests {
     #[test]
     fn bytes_too_short_to_hold_a_frame_header_are_refused() {
         assert_eq!(
-            surface_id_in_tapped_bag(&[0u8; 8], FIXTURE_CHANNEL, "surface_id"),
+            surface_id_in_tapped_bag_as_printed(&[0u8; 8], FIXTURE_CHANNEL, "surface_id"),
             Err(
                 "a bag from `cam/frame` could not be decoded: a tapped bag carries a 76-byte \
                  frame header; got 8 bytes, which cannot hold one"
@@ -1302,7 +1371,7 @@ mod tests {
         let declared_payload_byte_len = whole_bag.len() - FRAME_HEADER_SIZE;
 
         assert_eq!(
-            surface_id_in_tapped_bag(
+            surface_id_in_tapped_bag_as_printed(
                 &whole_bag[..whole_bag.len() - 32],
                 FIXTURE_CHANNEL,
                 "surface_id"
@@ -1320,7 +1389,7 @@ mod tests {
     /// A one-entry map marker with no entry behind it.
     #[test]
     fn a_payload_that_is_not_msgpack_is_refused() {
-        let refused = surface_id_in_tapped_bag(
+        let refused = surface_id_in_tapped_bag_as_printed(
             &framed_bag(&[0x81], SLICE_HOLDS_ONLY_THE_BAG),
             FIXTURE_CHANNEL,
             "surface_id",
@@ -1351,7 +1420,11 @@ mod tests {
             bag_from_payload(&not_a_named_map),
         ] {
             assert_eq!(
-                surface_id_in_tapped_bag(&bag_without_the_field, FIXTURE_CHANNEL, "surface_id"),
+                surface_id_in_tapped_bag_as_printed(
+                    &bag_without_the_field,
+                    FIXTURE_CHANNEL,
+                    "surface_id"
+                ),
                 Ok(None)
             );
         }
@@ -1365,7 +1438,11 @@ mod tests {
         );
 
         assert_eq!(
-            surface_id_in_tapped_bag(&bag_repeating_the_field, FIXTURE_CHANNEL, "surface_id"),
+            surface_id_in_tapped_bag_as_printed(
+                &bag_repeating_the_field,
+                FIXTURE_CHANNEL,
+                "surface_id"
+            ),
             Ok(Some("s#2".to_owned()))
         );
     }
@@ -1428,8 +1505,9 @@ mod tests {
             ),
         ];
         for tap_tool_result_text in not_the_tap_tools_shape {
-            let refusal =
-                tapped_channel_bag_frames(&tap_tool_result_text, FIXTURE_CHANNEL).unwrap_err();
+            let refusal = tapped_channel_bag_frames(&tap_tool_result_text, FIXTURE_CHANNEL)
+                .unwrap_err()
+                .to_string();
 
             assert!(
                 refusal.starts_with(
@@ -1466,11 +1544,13 @@ mod tests {
                         "hex_truncated": false,
                     })),
                     FIXTURE_CHANNEL
-                ),
-                Err(format!(
+                )
+                .unwrap_err()
+                .to_string(),
+                format!(
                     "tap of `cam/frame` returned a bag whose hex preview does not decode: \
                      {hex_failure}"
-                )),
+                ),
                 "{hex_preview:?}"
             );
         }
@@ -1479,7 +1559,11 @@ mod tests {
     #[test]
     fn a_capped_bag_is_named_with_its_size() {
         assert_eq!(
-            capped_bag_stop_reason("cam/frame", 9000),
+            SampledChannelExchangeStop::SelectedBagPastTheTapPreviewCap {
+                channel: "cam/frame".to_owned(),
+                whole_bag_byte_len: 9000,
+            }
+            .to_string(),
             "a bag the sample selected on `cam/frame` is 9000 bytes, past the prefix `tap` \
              previews, so its surface id cannot be read from here. Exchange an id from this \
              channel directly: `tatolab exchange <surface-id> --out <dir>`."
@@ -1508,20 +1592,26 @@ mod tests {
             &sampling_bounds(2, 1),
         );
 
+        let SampledChannelExchangeReport {
+            written_image_paths,
+            retried_recycled_surface_ids,
+            bags_missing_the_surface_id_field,
+            bags_examined,
+            tap_rounds,
+            stopped_early_because,
+        } = &report;
         assert_eq!(
-            report,
-            SampledChannelExchangeReport {
-                written_image_paths: vec![
-                    output_directory.path().join("0000-s_1.png"),
-                    output_directory.path().join("0001-s_2.png"),
-                ],
-                retried_recycled_surface_ids: Vec::new(),
-                bags_missing_the_surface_id_field: 0,
-                bags_examined: 2,
-                tap_rounds: 1,
-                stopped_early_because: None,
-            }
+            written_image_paths,
+            &[
+                output_directory.path().join("0000-s_1.png"),
+                output_directory.path().join("0001-s_2.png"),
+            ]
         );
+        assert!(retried_recycled_surface_ids.is_empty());
+        assert_eq!(*bags_missing_the_surface_id_field, 0);
+        assert_eq!(*bags_examined, 2);
+        assert_eq!(*tap_rounds, 1);
+        assert!(stopped_early_because.is_none(), "{stopped_early_because:?}");
         assert_eq!(
             written_image_contents(&report),
             [png_bytes_for("one"), png_bytes_for("two")]
@@ -1592,7 +1682,7 @@ mod tests {
         assert_eq!(written_image_contents(&report), [png_bytes_for("fresh")]);
         assert_eq!(report.retried_recycled_surface_ids, ["stale#1"]);
         assert_eq!(report.tap_rounds, 2);
-        assert_eq!(report.stopped_early_because, None);
+        assert_eq!(stop_reason_as_printed(&report), None);
     }
 
     #[test]
@@ -1618,7 +1708,7 @@ mod tests {
         assert_eq!(report.tap_rounds, MAX_TAP_ROUNDS_PER_SAMPLE_RUN);
         assert_eq!(report.retried_recycled_surface_ids, ["stale#1"; 8]);
         assert!(report.written_image_paths.is_empty());
-        assert_eq!(report.stopped_early_because, None);
+        assert_eq!(stop_reason_as_printed(&report), None);
     }
 
     #[test]
@@ -1764,7 +1854,7 @@ mod tests {
 
         assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
         assert_eq!(report.tap_rounds, MAX_TAP_ROUNDS_PER_SAMPLE_RUN);
-        assert_eq!(report.stopped_early_because, None);
+        assert_eq!(stop_reason_as_printed(&report), None);
         assert!(
             render_sampled_channel_exchange_report(FIXTURE_CHANNEL, &report, 3)
                 .starts_with("exchanged 1 of 3 requested frames from `cam/frame`")
@@ -1791,7 +1881,7 @@ mod tests {
         assert!(report.written_image_paths.is_empty());
         assert_eq!(report.tap_rounds, 1);
         assert_eq!(
-            report.stopped_early_because.as_deref(),
+            stop_reason_as_printed(&report).as_deref(),
             Some("exchange of surface `s#1` answered 501: no conversion arm")
         );
     }
@@ -1822,7 +1912,7 @@ mod tests {
 
         assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
         assert_eq!(
-            report.stopped_early_because.as_deref(),
+            stop_reason_as_printed(&report).as_deref(),
             Some("exchange of surface `s#2` answered 404: no such surface")
         );
         assert_eq!(png_files_in(output_directory.path()), 1);
@@ -1853,7 +1943,7 @@ mod tests {
             &sampling_bounds(1, 1),
         );
 
-        let stop_reason = report.stopped_early_because.unwrap();
+        let stop_reason = stop_reason_as_printed(&report).unwrap();
         assert!(stop_reason.contains("truncated"), "{stop_reason}");
     }
 
@@ -1876,12 +1966,16 @@ mod tests {
             &sampling_bounds(1, 1),
         );
 
-        assert_eq!(
-            report.stopped_early_because,
-            Some(capped_bag_stop_reason(
-                FIXTURE_CHANNEL,
-                CAPPED_BAG_STATED_BYTE_LEN
-            ))
+        assert!(
+            matches!(
+                &report.stopped_early_because,
+                Some(SampledChannelExchangeStop::SelectedBagPastTheTapPreviewCap {
+                    channel,
+                    whole_bag_byte_len: CAPPED_BAG_STATED_BYTE_LEN,
+                }) if channel == FIXTURE_CHANNEL
+            ),
+            "{:?}",
+            report.stopped_early_because
         );
         assert!(
             stub_local_api_server
@@ -1914,7 +2008,8 @@ mod tests {
         );
 
         assert_eq!(
-            report.stopped_early_because, None,
+            stop_reason_as_printed(&report),
+            None,
             "a capped bag the stride skipped ended a run that never needed it"
         );
         assert_eq!(written_image_contents(&report), [png_bytes_for("three")]);
@@ -1941,7 +2036,7 @@ mod tests {
             &sampling_bounds(1, 2),
         );
 
-        assert_eq!(report.stopped_early_because, None);
+        assert_eq!(stop_reason_as_printed(&report), None);
         assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
     }
 
@@ -1967,7 +2062,7 @@ mod tests {
         );
 
         assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
-        let stop_reason = report.stopped_early_because.unwrap();
+        let stop_reason = stop_reason_as_printed(&report).unwrap();
         assert!(stop_reason.contains("9000 bytes"), "{stop_reason}");
     }
 
@@ -1995,7 +2090,7 @@ mod tests {
         );
 
         assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
-        let stop_reason = report.stopped_early_because.unwrap();
+        let stop_reason = stop_reason_as_printed(&report).unwrap();
         assert!(
             stop_reason.starts_with(&format!(
                 "could not write into `{}`: ",
@@ -2034,7 +2129,10 @@ mod tests {
             );
 
             assert_eq!(report.tap_rounds, 1);
-            assert_eq!(report.stopped_early_because.as_deref(), Some(stop_reason));
+            assert_eq!(
+                stop_reason_as_printed(&report).as_deref(),
+                Some(stop_reason)
+            );
         }
     }
 
@@ -2049,7 +2147,7 @@ mod tests {
         );
 
         assert_eq!(report.tap_rounds, 1);
-        let stop_reason = report.stopped_early_because.unwrap();
+        let stop_reason = stop_reason_as_printed(&report).unwrap();
         assert!(
             stop_reason.starts_with(&format!(
                 "no runtime answers MCP at {NOTHING_LISTENS_LOCAL_API_SOCKET_PATH} ("
@@ -2068,7 +2166,13 @@ mod tests {
             bags_missing_the_surface_id_field: 4,
             bags_examined: 9,
             tap_rounds: 3,
-            stopped_early_because: Some("exchange of surface `s#4` answered 501".to_owned()),
+            stopped_early_because: Some(SampledChannelExchangeStop::SurfaceImageExchangeFailed(
+                SurfaceImageExchangeFailure::RefusedByTheRuntime {
+                    published_surface_id: "s#4".to_owned(),
+                    http_status: StatusCode::NOT_IMPLEMENTED,
+                    refusal_detail: String::new(),
+                },
+            )),
         };
 
         assert_eq!(
