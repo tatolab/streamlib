@@ -11,11 +11,14 @@ from tatolab.stream import StreamBuilder, stream
 
 from compute_kernel_probes import (
     AcquiredTextureImpliesCopyUsageProbe,
+    BatchExceptionProbe,
+    BatchRefusalProbe,
     BindingRefusalProbe,
     ReadOneWriteAnotherProbe,
     ShaderSourceRefusalProbe,
     TextureBackedPixelsReachTheCpuProbe,
     TextureCpuDoorRaiseProbe,
+    TwoPassBatchProbe,
 )
 
 
@@ -47,3 +50,18 @@ def acquired_texture_implies_copy_usage_probe_alone(stream_builder: StreamBuilde
 @stream
 def shader_source_refusal_probe_alone(stream_builder: StreamBuilder) -> None:
     stream_builder.add(ShaderSourceRefusalProbe)
+
+
+@stream
+def two_pass_batch_probe_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(TwoPassBatchProbe)
+
+
+@stream
+def batch_exception_probe_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(BatchExceptionProbe)
+
+
+@stream
+def batch_refusal_probe_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(BatchRefusalProbe)
