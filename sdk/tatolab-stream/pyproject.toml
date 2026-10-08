@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 name = "tatolab-stream"
 # The one version everything this repository releases carries; release-please
 # bumps it with the rest.
-version = "0.39.0"
+version = "0.40.0"
 description = "Tatolab streams: declare nodes and compose them into a stream graph"
 requires-python = ">=3.10"
 # What this package's own modules import, never the runtime. numpy is imported

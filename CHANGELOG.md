@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.40.0](https://github.com/tatolab/streamlib/compare/v0.39.0...v0.40.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **packages:** tatolab-webrtc sets itself up, and no package extends the engine ([#2691](https://github.com/tatolab/streamlib/issues/2691))
+
+### Features
+
+* **packages:** tatolab-webrtc sets itself up, and no package extends the engine ([#2691](https://github.com/tatolab/streamlib/issues/2691)) ([8696a2d](https://github.com/tatolab/streamlib/commit/8696a2db363fdca577d18626c01fbb4b8b4f3bdf))
+
 ## [0.39.0](https://github.com/tatolab/streamlib/compare/v0.38.0...v0.39.0) (2026-10-08)
 
 
