@@ -4,8 +4,9 @@
 //! The raw-handle export consumed by a foreign process (#1900): a Python
 //! processor's `export_opaque_fd` hands its fd over SCM_RIGHTS plus the
 //! typed metadata as JSON, and this test — a separate process from both
-//! the exporting engine and the helper that answered the export — imports
-//! that fd on its own `VkDevice` and byte-compares the kernel's pixels.
+//! the `tatolabd` hosting the stream and the processor interpreter that
+//! answered the export — imports that fd on its own `VkDevice` and
+//! byte-compares the kernel's pixels.
 //!
 //! What this locks: the exported fd names the kernel-written allocation
 //! (a wrong fd reads wrong pixels or refuses to import), and the wire
@@ -17,10 +18,18 @@
 //! driven through the import — the importer's recipe/memoryTypeIndex
 //! conformance is the separate work noted on the change.
 //!
-//! Test gating: Linux-only by construction; skips when the wheel's venv or
-//! its built module is absent, and when Vulkan (or the OPAQUE_FD pools the
-//! local staging allocation needs) is unavailable — mirroring the
-//! sibling carve-out tests.
+//! The stream is the integration suite's own
+//! (`tests/stream-on-runtime/device_exchange_streams.py`), compiled by the
+//! suite venv's interpreter and hosted by the runtime unit's `tatolabd`
+//! (`$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else `target/tatolab-runtime`,
+//! built by `cargo xtask build-runtime`), whose processor interpreters start
+//! from that same venv.
+//!
+//! Test gating: Linux-only by construction; skips when Vulkan (or the
+//! OPAQUE_FD pools the local staging allocation needs) is unavailable —
+//! mirroring the sibling carve-out tests. Once the device is proven, a
+//! missing suite venv or runtime unit, or a `tatolabd` that ends before the
+//! probe connects for any reason but a missing Vulkan driver, fails the test.
 
 #![cfg(target_os = "linux")]
 
@@ -30,8 +39,10 @@ mod common;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -53,64 +64,123 @@ const SURFACE_HEIGHT_PIXELS: u32 = 32;
 const FILL_CONSTANT_RGBA: [u8; 4] = [64, 128, 192, 255];
 const IMAGE_BYTES: u64 = (SURFACE_WIDTH_PIXELS as u64) * (SURFACE_HEIGHT_PIXELS as u64) * 4;
 
-fn wheel_directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../sdk/streamlib-python-wheel")
+/// The `@stream` in the suite's `device_exchange_streams` that hosts the probe alone.
+const OPAQUE_FD_EXPORT_HANDOFF_STREAM: &str = "opaque_fd_export_handoff_probe_alone";
+
+const RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_UNIT_DIRECTORY";
+
+/// The refusal `tatolabd` ends with when the loader finds no Vulkan driver at all.
+const TATOLABD_NO_VULKAN_DRIVER_REFUSAL: &str = "No usable Vulkan driver";
+
+fn repository_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// The spawned wheel app plus the files its stdout/stderr drain into.
-/// `runtime.run()` blocks until SIGINT, so `Drop` — not the app — is what
-/// ends it: SIGINT, a grace window, then SIGKILL. RAII so every panic
-/// path in the test reaps the GPU-holding child instead of orphaning it
-/// for the rest of a `#[serial]` rig session.
-struct ChildAppUnderTest {
-    app_process: Child,
+fn stream_on_runtime_suite_directory() -> PathBuf {
+    repository_root().join("tests/stream-on-runtime")
+}
+
+fn runtime_unit_directory() -> PathBuf {
+    std::env::var_os(RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repository_root().join("target/tatolab-runtime"))
+}
+
+/// Compile the suite's handoff stream to a graph file with the suite venv's
+/// interpreter, from the suite directory so its modules import.
+fn compile_the_handoff_stream_graph(
+    suite_venv_interpreter: &Path,
+    stream_graph_file: &Path,
+) -> Result<(), String> {
+    let compiled = Command::new(suite_venv_interpreter)
+        .arg("-c")
+        .arg(format!(
+            "import json, sys\n\
+             from tatolab.stream import compile_stream_to_graph\n\
+             import device_exchange_streams\n\
+             json.dump(compile_stream_to_graph(device_exchange_streams.{OPAQUE_FD_EXPORT_HANDOFF_STREAM}), sys.stdout)\n"
+        ))
+        .current_dir(stream_on_runtime_suite_directory())
+        .env_remove("PYTHONPATH")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|spawn_failure| format!("the suite interpreter would not start: {spawn_failure}"))?;
+    if !compiled.status.success() {
+        return Err(format!(
+            "compiling the handoff stream exited {}:\n{}",
+            compiled.status,
+            String::from_utf8_lossy(&compiled.stderr)
+        ));
+    }
+    std::fs::write(stream_graph_file, &compiled.stdout)
+        .map_err(|write_failure| format!("writing the graph file failed: {write_failure}"))
+}
+
+/// The spawned `tatolabd` plus the files its stdout/stderr drain into. It
+/// hosts the stream until signalled, so `Drop` — not the stream — is what
+/// ends it: SIGINT, a grace window, then SIGKILL to its process group. RAII
+/// so every panic path in the test reaps the GPU-holding runtime and its
+/// processor interpreters instead of orphaning them for the rest of a
+/// `#[serial]` rig session.
+struct TatolabdHostingTheHandoffStream {
+    tatolabd_process: Child,
     stdout_capture_path: PathBuf,
     stderr_capture_path: PathBuf,
 }
 
-impl ChildAppUnderTest {
+impl TatolabdHostingTheHandoffStream {
     fn exited(&mut self) -> Option<std::process::ExitStatus> {
-        self.app_process.try_wait().ok().flatten()
+        self.tatolabd_process.try_wait().ok().flatten()
     }
 
-    /// The last stretch of a captured output file, for skip diagnostics.
-    /// The app's own log lines land on stdout, so both streams matter.
+    /// The last stretch of a captured output file, for diagnostics.
     fn capture_tail(capture_path: &Path) -> String {
         let captured = std::fs::read(capture_path).unwrap_or_default();
-        let tail_start = captured.len().saturating_sub(2000);
+        let tail_start = captured.len().saturating_sub(4000);
         String::from_utf8_lossy(&captured[tail_start..]).into_owned()
     }
 
     fn diagnostic_tails(&self) -> String {
         format!(
-            "stdout tail:\n{}\nstderr tail:\n{}",
+            "tatolabd stdout tail:\n{}\ntatolabd stderr tail:\n{}",
             Self::capture_tail(&self.stdout_capture_path),
             Self::capture_tail(&self.stderr_capture_path),
         )
     }
+
+    fn kill_its_process_group(&mut self) {
+        let process_group_id = self.tatolabd_process.id() as libc::pid_t;
+        unsafe { libc::killpg(process_group_id, libc::SIGKILL) };
+        let _ = self.tatolabd_process.kill();
+        let _ = self.tatolabd_process.wait();
+    }
 }
 
-impl Drop for ChildAppUnderTest {
+impl Drop for TatolabdHostingTheHandoffStream {
     fn drop(&mut self) {
-        // A child that already exited was (or is here) reaped by this
-        // `try_wait`; signalling afterwards could hit an unrelated process
-        // on a recycled pid. A child that exits between this check and the
-        // kill is an unreaped zombie, whose pid cannot be recycled — so
-        // check-then-signal stays race-free.
-        if matches!(self.app_process.try_wait(), Ok(Some(_))) {
+        // A `tatolabd` that already exited was (or is here) reaped by this
+        // `try_wait`; signalling its pid afterwards could hit an unrelated
+        // process on a recycled pid. Its process group may still hold a
+        // processor interpreter, which the group kill reaches.
+        if matches!(self.tatolabd_process.try_wait(), Ok(Some(_))) {
+            let process_group_id = self.tatolabd_process.id() as libc::pid_t;
+            unsafe { libc::killpg(process_group_id, libc::SIGKILL) };
             return;
         }
-        unsafe { libc::kill(self.app_process.id() as libc::pid_t, libc::SIGINT) };
+        unsafe { libc::kill(self.tatolabd_process.id() as libc::pid_t, libc::SIGINT) };
         let grace_deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            match self.app_process.try_wait() {
-                Ok(Some(_)) => return,
+            match self.tatolabd_process.try_wait() {
+                Ok(Some(_)) => {
+                    let process_group_id = self.tatolabd_process.id() as libc::pid_t;
+                    unsafe { libc::killpg(process_group_id, libc::SIGKILL) };
+                    return;
+                }
                 Ok(None) if Instant::now() < grace_deadline => {
                     std::thread::sleep(Duration::from_millis(100))
                 }
                 _ => {
-                    let _ = self.app_process.kill();
-                    let _ = self.app_process.wait();
+                    self.kill_its_process_group();
                     return;
                 }
             }
@@ -201,12 +271,6 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         .with_env_filter("streamlib=warn,streamlib_consumer_rhi=debug")
         .try_init();
 
-    let wheel_dir = wheel_directory();
-    let venv_python = wheel_dir.join(".venv/bin/python");
-    if !venv_python.exists() {
-        println!("wheel export handoff: no wheel venv at {venv_python:?} — skipping");
-        return;
-    }
     // The local staging allocation and the consumer import need the same
     // driver support the sibling carve-outs skip without.
     let host_device = match HostVulkanDevice::new() {
@@ -221,23 +285,64 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         return;
     }
 
-    let handoff_dir = tempfile::TempDir::new().expect("temp dir for the handoff socket");
-    let socket_path = handoff_dir.path().join("opaque-fd-handoff.sock");
+    let suite_venv_interpreter = stream_on_runtime_suite_directory().join(".venv/bin/python");
+    assert!(
+        suite_venv_interpreter.exists(),
+        "no integration suite venv at {suite_venv_interpreter:?}; run `uv sync` in \
+         tests/stream-on-runtime"
+    );
+    let tatolabd = runtime_unit_directory().join("bin/tatolabd");
+    assert!(
+        tatolabd.exists(),
+        "no runtime unit's tatolabd at {tatolabd:?}; run `cargo xtask build-runtime` \
+         (or point {RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE} at a built unit)"
+    );
+
+    // Under the shared temporary directory, short: the runtime directory
+    // under `XDG_RUNTIME_DIR` holds Unix sockets whose paths must fit `sun_path`.
+    let run_state_directory = tempfile::Builder::new()
+        .prefix("sl-fd-")
+        .tempdir_in("/tmp")
+        .expect("a temporary state directory for tatolabd");
+    let xdg_runtime_directory = run_state_directory.path().join("xdg");
+    let streamlib_home = run_state_directory.path().join("home");
+    for private_directory in [&xdg_runtime_directory, &streamlib_home] {
+        std::fs::create_dir(private_directory).expect("a private state directory");
+        std::fs::set_permissions(private_directory, std::fs::Permissions::from_mode(0o700))
+            .expect("the state directory is private");
+    }
+    let stream_graph_file = run_state_directory.path().join("stream-graph.json");
+    compile_the_handoff_stream_graph(&suite_venv_interpreter, &stream_graph_file)
+        .unwrap_or_else(|compile_failure| panic!("{compile_failure}"));
+
+    let socket_path = run_state_directory.path().join("opaque-fd-handoff.sock");
     let listener = UnixListener::bind(&socket_path).expect("bind the handoff socket");
     listener
         .set_nonblocking(true)
-        .expect("nonblocking accept so a dead app cannot wedge the test");
+        .expect("nonblocking accept so a dead tatolabd cannot wedge the test");
 
-    // Both output streams drain into files — the app's own log lines go
-    // to stdout, and a pipe left undrained would block the app instead.
-    let stdout_capture_path = handoff_dir.path().join("app-stdout.log");
-    let stderr_capture_path = handoff_dir.path().join("app-stderr.log");
-    let app_process = Command::new(&venv_python)
-        .arg("-u")
-        .arg("device_exchange_app.py")
-        .arg("OpaqueFdExportHandoffProbe")
-        .current_dir(wheel_dir.join("tests"))
+    // Both output streams drain into files: a pipe left undrained would
+    // block `tatolabd` instead.
+    let stdout_capture_path = run_state_directory.path().join("tatolabd-stdout.log");
+    let stderr_capture_path = run_state_directory.path().join("tatolabd-stderr.log");
+    let tatolabd_process = Command::new(&tatolabd)
+        .arg("--stream-graph")
+        .arg(&stream_graph_file)
+        .arg("--project")
+        .arg(stream_on_runtime_suite_directory())
+        .arg("--interpreter")
+        .arg(&suite_venv_interpreter)
+        .current_dir(run_state_directory.path())
+        .env("XDG_RUNTIME_DIR", &xdg_runtime_directory)
+        .env("STREAMLIB_HOME", &streamlib_home)
         .env("STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET", &socket_path)
+        .env_remove("STREAMLIB_RUNTIME_NAME")
+        .env_remove("STREAMLIB_APP_DIRECTORY")
+        .env_remove("STREAMLIB_QUIET")
+        .env_remove("STREAMLIB_ICEORYX2_DOMAIN_ROOT")
+        .env_remove("PYTHONPATH")
+        .process_group(0)
+        .stdin(Stdio::null())
         .stdout(Stdio::from(
             File::create(&stdout_capture_path).expect("create the stdout capture"),
         ))
@@ -245,9 +350,9 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
             File::create(&stderr_capture_path).expect("create the stderr capture"),
         ))
         .spawn()
-        .expect("spawn the wheel app under test");
-    let mut app = ChildAppUnderTest {
-        app_process,
+        .expect("spawn tatolabd hosting the handoff stream");
+    let mut hosting_tatolabd = TatolabdHostingTheHandoffStream {
+        tatolabd_process,
         stdout_capture_path,
         stderr_capture_path,
     };
@@ -257,21 +362,26 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         match listener.accept() {
             Ok((stream, _)) => break stream,
             Err(would_block) if would_block.kind() == std::io::ErrorKind::WouldBlock => {
-                if let Some(exit) = app.exited() {
-                    // The app died before exporting — a GPU-less box, not
-                    // a contract failure. Mirror the driver-absence skips,
-                    // with both output tails so a real failure is legible.
-                    println!(
-                        "wheel export handoff: app exited {exit} before connecting — \
-                         skipping.\n{}",
-                        app.diagnostic_tails()
+                if let Some(exit) = hosting_tatolabd.exited() {
+                    let stderr_tail = TatolabdHostingTheHandoffStream::capture_tail(
+                        &hosting_tatolabd.stderr_capture_path,
                     );
-                    return;
+                    if stderr_tail.contains(TATOLABD_NO_VULKAN_DRIVER_REFUSAL) {
+                        println!(
+                            "wheel export handoff: tatolabd found no Vulkan driver — skipping.\n{}",
+                            hosting_tatolabd.diagnostic_tails()
+                        );
+                        return;
+                    }
+                    panic!(
+                        "tatolabd exited {exit} before the probe connected.\n{}",
+                        hosting_tatolabd.diagnostic_tails()
+                    );
                 }
                 assert!(
                     Instant::now() < accept_deadline,
-                    "the app never connected to the handoff socket.\n{}",
-                    app.diagnostic_tails()
+                    "the probe never connected to the handoff socket.\n{}",
+                    hosting_tatolabd.diagnostic_tails()
                 );
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -375,8 +485,8 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         }
         Err(import_failure) => {
             panic!(
-                "the wheel-exported fd would not import: {import_failure}\n{}",
-                app.diagnostic_tails()
+                "the exported fd would not import: {import_failure}\n{}",
+                hosting_tatolabd.diagnostic_tails()
             );
         }
     };
@@ -392,7 +502,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         Err(import_failure) => {
             panic!(
                 "the local staging fd would not import: {import_failure}\n{}",
-                app.diagnostic_tails()
+                hosting_tatolabd.diagnostic_tails()
             );
         }
     };
@@ -436,11 +546,11 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     use std::io::Write;
     let _ = (&stream).write_all(verdict);
     drop(stream);
-    drop(app);
+    drop(hosting_tatolabd);
 
     assert!(
         pixels_match,
-        "the foreign import driven by the wheel's export bundle must read the kernel's \
+        "the foreign import driven by the processor's export bundle must read the kernel's \
          fill constant {FILL_CONSTANT_RGBA:?}; first pixel was {:?}",
         &readback[..4]
     );

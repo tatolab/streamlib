@@ -3,7 +3,7 @@
 #   vhs docs/assets/demo.tape        # writes docs/assets/demo.gif
 #
 # Run this on the rig, with a node already running in another shell
-# (`streamlib dev` from a scaffolded app), so `nodes`, `graph` and `tap`
+# (`tatolab dev` from a scaffolded stream), so `nodes`, `graph` and `tap`
 # have something live to answer about.
 
 Output docs/assets/demo.gif

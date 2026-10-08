@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The native half of the streamlib wheel — the extension module CPython
-//! imports as `tatolab.runtime._engine`.
+//! The native half of `tatolab.runtime` — the extension module a processor
+//! interpreter imports as `tatolab.runtime._engine`.
 
 use pyo3::prelude::*;
 
@@ -11,7 +11,6 @@ mod darwin_close_on_exec_kqueue;
 mod python_bag_conversion;
 #[cfg(test)]
 mod python_class_from_source_for_tests;
-mod python_control_plane_hosting;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
 mod python_gpu_surface_pixel_exchange;
@@ -23,24 +22,15 @@ mod python_logging;
 #[cfg(target_os = "macos")]
 mod python_metal_framework_queue_synchronization;
 mod python_monotonic_timer;
-mod python_native_builtin_blocks;
 mod python_processor_context;
 mod python_processor_declaration;
 mod python_processor_link_data_access;
 mod python_processor_owned_window;
-mod python_runtime_lifecycle;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod python_surface_share_service_for_tests;
-mod python_test_harness_endpoints;
-
-pub use python_runtime_lifecycle::PythonRuntimeHandle;
 
 #[pymodule]
 fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    python_native_builtin_blocks::register_native_builtin_processor_types();
-    python_test_harness_endpoints::register_test_harness_processor_types();
-    module.add_class::<PythonRuntimeHandle>()?;
-    python_test_harness_endpoints::add_test_harness_marker_classes_to_the_module(module)?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
     module.add_function(wrap_pyfunction!(
         python_processor_link_data_access::open_node_link_data_access_for_helper_process,
@@ -95,15 +85,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_runtime_lifecycle::processor_class_import_paths_in_this_processes_catalog,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
         python_processor_context::engine_build_id_compiled_into_this_extension,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
-    module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     module.add_function(wrap_pyfunction!(
         python_logging::capture_this_helper_processes_engine_log_records,
         module
@@ -127,21 +112,5 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
             module
         )?)?;
     }
-    module.add_function(wrap_pyfunction!(
-        python_test_harness_endpoints::open_test_harness_channel,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        python_test_harness_endpoints::close_test_harness_channel,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        python_test_harness_endpoints::feed_test_harness_bag,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        python_test_harness_endpoints::await_test_harness_bag,
-        module
-    )?)?;
     Ok(())
 }

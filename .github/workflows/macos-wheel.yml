@@ -6,11 +6,12 @@ name: macOS Wheel
 # breaks it, not on release day — and by release-wheel.yml, which attaches the
 # wheel to the release beside the manylinux one.
 #
-# A stock Mac has no Vulkan driver, so the wheel carries the loader and MoltenVK
+# A stock Mac has no Vulkan driver, so the wheel — and the runtime unit's lend,
+# which is that wheel unpacked — carries the loader and MoltenVK
 # (`scripts/stage_macos_bundled_vulkan_driver.sh`, which `cargo xtask
 # build-runtime` runs first). The runner image ships neither, which is what
-# makes it a clean machine for that claim: a scaffolded app that runs here ran
-# on the driver inside the wheel.
+# makes it a clean machine for that claim: a scaffolded stream that runs here on
+# `tatolabd` ran on the driver inside the lend.
 on:
   workflow_call:
     inputs:
@@ -69,10 +70,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       # Stages the Vulkan loader and MoltenVK, builds the release wheel at the
-      # deployment target the maturin project pins, and lays out its lend. It
-      # refuses a lend missing a driver file, and a wheel carrying anything
-      # beside `tatolab/runtime/` and its `.dist-info`.
-      - name: Build the runtime unit and lay out its lend
+      # deployment target the maturin project pins, lays out its lend, and
+      # builds `tatolabd` and `tatolab` into `bin/`. It refuses a lend missing a
+      # driver file, and a wheel carrying anything beside `tatolab/runtime/`
+      # and its `.dist-info`.
+      - name: Build the runtime unit
         run: cargo xtask build-runtime --release
 
       # The engine wheel's one dependency, at its own version, which no index
@@ -92,11 +94,18 @@ jobs:
           find target/tatolab-runtime/lib/tatolab/lend \( -name '*.so' -o -name '*.dylib' \) \
             -exec codesign --verify --strict --verbose=1 {} +
 
+      # The linker signs an arm64 executable ad hoc; one whose signature is
+      # missing or broken is killed by the kernel before its first instruction.
+      - name: tatolabd and tatolab are signed
+        run: |
+          codesign --verify --strict --verbose=1 \
+            target/tatolab-runtime/bin/tatolabd target/tatolab-runtime/bin/tatolab
+
       # Against the lend a processor interpreter borrows, from a venv holding
       # `tatolab-stream` and pytest and nothing of the runtime: the lend is the
       # only `tatolab.runtime` on the path. The portability proof reads every
       # Mach-O the lend carries, and the macOS floor from its `.dist-info`.
-      - name: Portability, driver-search and describe tests against the lend
+      - name: Portability and driver-search tests against the lend
         run: |
           python3 -m venv /tmp/lend-check
           /tmp/lend-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
@@ -135,22 +144,59 @@ jobs:
         run: |
           /tmp/wheel-check/bin/python -m pytest -v tests/test_third_party_notices.py
 
+      # The integration suite's GPU-free half on this floor, run as the Linux
+      # lane runs it: the suite's own venv, holding `tatolab-stream` and nothing
+      # of the runtime, and streams on the `tatolabd` built above.
+      - name: The suite's venv, from its lockfile
+        working-directory: tests/stream-on-runtime
+        # --frozen: registry packages stay hash-pinned; the editable tatolab-stream's locked version is never read.
+        run: uv sync --frozen
+
+      - name: Integration suite (GPU-free half)
+        working-directory: tests/stream-on-runtime
+        run: .venv/bin/pytest -v -m "not requires_gpu"
+
       # The MVP sentence on a clean machine, minus the camera no runner has:
-      # the scaffold's test-pattern variant through the Python effect into a
-      # window, on the Vulkan driver the wheel carries.
-      - name: The scaffolded app runs on the driver the wheel carries
+      # `tatolab new`'s test-pattern variant through the Python effect into a
+      # window, hosted by `tatolabd` on the Vulkan driver the lend carries. The
+      # project's venv holds what a user's `uv sync` gives it — `tatolab-stream`
+      # and the numpy the scaffold declares — and no runtime.
+      - name: The scaffolded stream runs on the driver the lend carries
         run: |
-          /tmp/wheel-check/bin/streamlib new /tmp/scaffold-check --test-pattern
+          tatolab_executable="$GITHUB_WORKSPACE/target/tatolab-runtime/bin/tatolab"
+          "$tatolab_executable" new /tmp/scaffold-check --test-pattern
+          python3 -m venv /tmp/scaffold-check/.venv
+          /tmp/scaffold-check/.venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
+          /tmp/scaffold-check/.venv/bin/pip install 'numpy>=2.1'
+          if /tmp/scaffold-check/.venv/bin/python -c '
+          import importlib.util, sys
+          sys.exit(0 if importlib.util.find_spec("tatolab.runtime") is not None else 1)
+          '; then
+            echo "::error::the scaffold's venv can import tatolab.runtime — a stream's venv holds no runtime"
+            exit 1
+          fi
+
           cd /tmp/scaffold-check
-          /tmp/wheel-check/bin/streamlib run > /tmp/scaffold-run.log 2>&1 &
-          scaffold_pid=$!
+          "$tatolab_executable" run > /tmp/scaffold-run.log 2>&1 &
+          tatolab_pid=$!
           sleep 20
-          kill -INT "$scaffold_pid"
-          wait "$scaffold_pid" || true
+          kill -INT "$tatolab_pid"
+          stop_deadline=$((SECONDS + 30))
+          while kill -0 "$tatolab_pid" 2>/dev/null && [ "$SECONDS" -lt "$stop_deadline" ]; do
+            sleep 1
+          done
+          if kill -0 "$tatolab_pid" 2>/dev/null; then
+            pkill -KILL -P "$tatolab_pid" || true
+            kill -KILL "$tatolab_pid" || true
+            cat /tmp/scaffold-run.log
+            echo "::error::tatolab run did not stop within 30s of SIGINT"
+            exit 1
+          fi
+          wait "$tatolab_pid" || true
           cat /tmp/scaffold-run.log
 
           if ! grep -q 'Vulkan loader library opened.*_vulkan_driver/libvulkan.1.dylib' /tmp/scaffold-run.log; then
-            echo "::error::the engine did not open the Vulkan loader the wheel carries"
+            echo "::error::tatolabd did not open the Vulkan loader the lend carries"
             exit 1
           fi
           if grep -q 'process() failed' /tmp/scaffold-run.log; then
@@ -166,8 +212,18 @@ jobs:
           fi
           echo "the window showed $frames_shown frames"
 
-      # Also what python-wheel.yml's macOS extension lane installs its
-      # extensions into.
+      # The unit as an install prefix, for python-wheel.yml's macOS extension
+      # lane. Tarred, because an artifact keeps no file modes.
+      - name: Pack the runtime unit
+        run: tar -C target/tatolab-runtime -czf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz" bin lib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tatolab-runtime-unit-macos
+          path: ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Keep the wheel for a clean-machine run
         uses: actions/upload-artifact@v4
         with:

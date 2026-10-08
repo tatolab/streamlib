@@ -14,27 +14,24 @@ use std::sync::OnceLock;
 /// Set by the CLI launcher to the app's anchor directory, as a full path.
 pub const APP_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_APP_DIRECTORY";
 
-/// The entry directory a language host captured from its own interpreter.
-static APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST: OnceLock<PathBuf> = OnceLock::new();
+/// The app directory the runtime's host was given — `tatolabd`'s `--project`.
+static APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN: OnceLock<PathBuf> = OnceLock::new();
 
-/// Record where the app's entry file was run from, for a host that knows it and
-/// the engine cannot see.
+/// Record the app directory the runtime's host was given, which the engine
+/// cannot see and which outranks the directory the host was started from.
 ///
-/// The wheel calls this from `Runtime()`'s constructor with the directory it
-/// captured off `sys.path[0]`, which is the only thing that tells a hand-run
-/// `python <script>.py` apart from a `streamlib run`. The first call wins and
-/// there is no way back — the entry file does not move while the process lives,
-/// which is also why no test records one: doing so would rename every runtime
-/// constructed later in the same binary.
-pub fn record_the_app_entry_directory_the_language_host_captured(entry_directory: PathBuf) {
-    let _ = APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST.set(entry_directory);
+/// The first call wins and there is no way back — a host hosts one app for its
+/// whole life, which is also why no test records one: doing so would rename
+/// every runtime constructed later in the same binary.
+pub fn record_the_app_directory_the_runtime_host_was_given(app_directory: PathBuf) {
+    let _ = APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN.set(app_directory);
 }
 
 /// The directory of the app this runtime belongs to.
 pub fn resolve_the_app_directory_this_runtime_belongs_to() -> PathBuf {
     resolve_app_directory(
         std::env::var_os(APP_DIRECTORY_ENVIRONMENT_VARIABLE),
-        APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST
+        APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN
             .get()
             .map(PathBuf::as_path),
         std::env::current_dir().ok(),
@@ -42,22 +39,22 @@ pub fn resolve_the_app_directory_this_runtime_belongs_to() -> PathBuf {
 }
 
 /// The resolver with every input named, so each arm is testable without
-/// reaching into the process's environment or its one-shot capture.
+/// reaching into the process's environment or its one-shot record.
 ///
 /// [`APP_DIRECTORY_ENVIRONMENT_VARIABLE`] first, so a CLI-launched app is
-/// anchored where the launcher anchored it; then the entry directory a language
-/// host recorded, which is what a hand-run `python <script>.py` has; then the
-/// working directory, which is what a Rust app gets. An empty environment value
+/// anchored where the launcher anchored it; then the app directory the
+/// runtime's host recorded, which is what a stream `tatolabd` hosts has; then
+/// the working directory, which is what a Rust app gets. An empty environment value
 /// reads as unset, the way an empty `XDG_RUNTIME_DIR` does.
 fn resolve_app_directory(
     app_directory_from_the_environment: Option<OsString>,
-    entry_directory_the_language_host_captured: Option<&Path>,
+    app_directory_the_runtime_host_was_given: Option<&Path>,
     working_directory: Option<PathBuf>,
 ) -> PathBuf {
     let chosen = app_directory_from_the_environment
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| entry_directory_the_language_host_captured.map(Path::to_path_buf))
+        .or_else(|| app_directory_the_runtime_host_was_given.map(Path::to_path_buf))
         .or_else(|| working_directory.clone())
         .unwrap_or_default();
     the_one_spelling_of(chosen, working_directory.as_deref())
@@ -97,34 +94,34 @@ mod tests {
     /// A CLI-launched app is anchored where its launcher anchored it, over
     /// everything else.
     #[test]
-    fn the_environment_outranks_the_captured_entry_directory_and_the_working_directory() {
+    fn the_environment_outranks_the_runtime_hosts_app_directory_and_the_working_directory() {
         assert_eq!(
             resolve_app_directory(
                 Some(OsString::from("/apps/from-the-launcher")),
-                Some(Path::new("/apps/from-the-interpreter")),
+                Some(Path::new("/apps/from-the-runtime-host")),
                 Some(PathBuf::from("/apps/from-the-shell")),
             ),
             Path::new("/apps/from-the-launcher")
         );
     }
 
-    /// A hand-run `python <script>.py` is anchored at the entry directory its
-    /// interpreter reported, not at the shell it was launched from.
+    /// A stream `tatolabd` hosts is anchored at the project directory it was
+    /// given, not at the directory it was started from.
     #[test]
-    fn the_captured_entry_directory_outranks_the_working_directory() {
+    fn the_app_directory_the_runtime_host_was_given_outranks_the_working_directory() {
         assert_eq!(
             resolve_app_directory(
                 None,
-                Some(Path::new("/apps/from-the-interpreter")),
+                Some(Path::new("/apps/from-the-runtime-host")),
                 Some(PathBuf::from("/apps/from-the-shell")),
             ),
-            Path::new("/apps/from-the-interpreter")
+            Path::new("/apps/from-the-runtime-host")
         );
     }
 
     /// A Rust app has neither, and takes the working directory.
     #[test]
-    fn a_host_that_captured_nothing_takes_the_working_directory() {
+    fn a_host_that_recorded_nothing_takes_the_working_directory() {
         assert_eq!(
             resolve_app_directory(None, None, Some(PathBuf::from("/apps/from-the-shell"))),
             Path::new("/apps/from-the-shell")
@@ -203,8 +200,8 @@ mod tests {
         );
     }
 
-    /// The captured entry directory takes the same spelling as an absolute
-    /// environment value naming the same place.
+    /// The app directory the runtime's host was given takes the same spelling
+    /// as an absolute environment value naming the same place.
     #[test]
     fn every_arm_that_names_a_real_directory_agrees_on_its_spelling() {
         let parent =

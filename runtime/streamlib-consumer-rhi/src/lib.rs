@@ -48,6 +48,7 @@
 mod error;
 mod formats;
 mod pixel_format;
+pub mod runtime_unit_layout;
 
 // Compiled wherever `ConsumerVulkanDevice` is, because it is
 // `ConsumerMarker::Buffer` and the privilege ladder does not resolve without

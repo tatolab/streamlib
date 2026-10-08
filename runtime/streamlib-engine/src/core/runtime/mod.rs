@@ -26,7 +26,6 @@ mod tap;
 pub use crate::core::compiler::{
     DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,
 };
-pub use crate::core::signals::ScopedShutdownSignalOwnership;
 pub use address_chunk::what_one_address_chunk_may_be;
 pub(crate) use end_the_process_at_once::{
     kill_every_helper_process_group_and_end_the_process_at_once, park_forever,
@@ -41,7 +40,7 @@ pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-pub use runtime::Runner;
+pub use runtime::{Runner, RunnerConstructionOptions};
 pub use runtime_name::RuntimeName;
 #[cfg(test)]
 pub(crate) use runtime_shutdown_request::RuntimeShutdownEscalationClearedOnDrop;

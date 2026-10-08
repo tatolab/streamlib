@@ -252,6 +252,39 @@ def test_a_module_that_raises_at_import_is_refused_with_its_traceback(project_di
     assert "RuntimeError: the node module's own failure" in described.stderr
 
 
+def test_a_module_that_logs_at_import_is_described_with_its_records_on_stderr(
+    project_directory: Path,
+):
+    write_project_module(
+        project_directory,
+        "logging_at_import_nodes",
+        """
+        from tatolab.stream import log, node
+
+        log.info("module imported", phase="import")
+
+
+        @node(execution="reactive")
+        class LoggingAtImport:
+            @node.input(delivery_profile="newest")
+            def frames_from_upstream(self) -> None: ...
+
+            def process(self, ctx) -> None: ...
+        """,
+    )
+
+    described = describe(project_directory, "logging_at_import_nodes:LoggingAtImport")
+
+    assert described.returncode == 0, described.stderr
+    document = described_document(described)
+    assert refused_import_paths_in(document) == []
+    assert [
+        described_node_type["import_path"]
+        for described_node_type in document["described_node_types"]
+    ] == ["logging_at_import_nodes:LoggingAtImport"]
+    assert "INFO module imported phase='import'" in described.stderr
+
+
 def test_an_unstamped_class_is_refused_naming_it(project_directory: Path):
     described = describe(project_directory, "described_nodes:Unstamped")
 
@@ -671,7 +704,7 @@ def test_the_bootstrap_drops_its_own_directory_from_the_import_path(project_dire
 
         from tatolab.stream import node
 
-        BESIDE_THE_BOOTSTRAP = ("_processor_hosting", "_node_registry", "testing")
+        BESIDE_THE_BOOTSTRAP = ("_processor_hosting", "_node_registry", "_bundled_vulkan_driver")
 
 
         @node(

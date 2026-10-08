@@ -32,12 +32,10 @@ env:
 
 jobs:
   wheel-interpreter-lifecycle:
-    name: Wheel build + interpreter lifecycle (no GPU)
+    name: Wheel build + runtime unit (no GPU)
     runs-on: ubuntu-latest
-    # A lock-order defect between the lifecycle mutex and the GIL wedges the
-    # whole interpreter rather than raising, so its regression test can only go
-    # red by running out of time. Without a bound it would burn the default six
-    # hours instead.
+    # A wedged helper or a hung engine teardown can only go red by running out
+    # of time. Without a bound it would burn the default six hours instead.
     timeout-minutes: 45
 
     steps:
@@ -101,30 +99,37 @@ jobs:
           # module scope — collection needs it even when `requires_gpu`
           # deselects every test that would use it. pydantic is what proves a
           # model is a legal `read(port, into=T)` target; the wheel never
-          # imports it. ruff lints each `streamlib new` render in test_cli.py.
-          # The stream package goes in from source first: it is the engine
-          # wheel's one dependency, at a version no index carries before release.
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions ruff==0.16.9 mcp==2.3.0
+          # imports it. The MCP SDK stands a node's control plane in for the
+          # observation-verb tests. The stream package goes in from source
+          # first: it is the engine wheel's one dependency, at a version no
+          # index carries before release.
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions mcp==2.3.0
           VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
-      # The runtime unit's one build: the wheel in `target/tatolab-runtime/wheel/`
-      # and its lend in `target/tatolab-runtime/lib/tatolab/lend/`. It refuses a
-      # wheel carrying anything beside `tatolab/runtime/` and its `.dist-info` —
-      # a `tatolab/__init__.py` through the namespace gate. Debug, like the
-      # develop build above, and with the same `VIRTUAL_ENV`, so it is
-      # incremental over it. An extension wheel's in-process engine tests
-      # need the runtime, so its lane installs this wheel rather than building
-      # the engine a second time.
-      - name: Build the runtime unit and lay out its lend
+      # The runtime unit's one build: `tatolabd` and `tatolab` in
+      # `target/tatolab-runtime/bin/`, the wheel in `wheel/` and its lend in
+      # `lib/tatolab/lend/`. It refuses a wheel carrying anything beside
+      # `tatolab/runtime/` and its `.dist-info` — a `tatolab/__init__.py`
+      # through the namespace gate. Debug, like the develop build above, and
+      # with the same `VIRTUAL_ENV`. It mints the engine build nonce both its
+      # compiles share, so it recompiles the engine and everything above it.
+      - name: Build the runtime unit
         env:
           VIRTUAL_ENV: ${{ github.workspace }}/sdk/streamlib-python-wheel/.venv
         run: cargo xtask build-runtime
 
+      # The unit as an install prefix, `bin/` and `lib/`, for the jobs that
+      # run streams on it — the integration suite and the extension lane — so
+      # neither builds the engine a second time. Tarred, because an artifact
+      # keeps no file modes and `bin/` must stay executable.
+      - name: Pack the runtime unit
+        run: tar -C target/tatolab-runtime -czf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz" bin lib
+
       - uses: actions/upload-artifact@v4
         with:
-          name: streamlib-wheel
-          path: target/tatolab-runtime/wheel/*.whl
+          name: tatolab-runtime-unit-linux
+          path: ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
           retention-days: 1
           if-no-files-found: error
 
@@ -133,7 +138,7 @@ jobs:
       # only `tatolab.runtime` on the path, and the tests fail if they imported
       # one from anywhere else. They live outside `tests/` so that a develop
       # venv's whole-suite run never collects them.
-      - name: Portability, driver-search and describe tests against the lend
+      - name: Portability and driver-search tests against the lend
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
           uv venv --python 3.12 "$RUNNER_TEMP/lend-check-venv"
@@ -185,29 +190,74 @@ jobs:
       # The runner has no GPU. `Runner::start()` initializes a GPU context whose
       # DMA-BUF pool pre-warm needs a driver that can allocate exportable device
       # memory, and a software rasterizer (lavapipe) cannot — verified in a
-      # GPU-less container. So this job proves the half of the contract that
-      # does not need a device: the wheel imports, the engine boots and tears
-      # down, and neither the exception path nor a Runtime still referenced at
-      # interpreter exit hangs finalization. The `requires_gpu` half — Ctrl-C
-      # during and after startup, GIL release while blocking, SIGINT handback,
-      # cross-thread shutdown, no surviving process group — is rig-only by
-      # owner decision (2026-08-03) rather than a self-hosted GPU runner.
-      - name: Interpreter-lifecycle contract (GPU-free half)
+      # GPU-less container. So this runs the half of the wheel's own suite that
+      # needs no device: the casts and the bag codec, a processor interpreter's
+      # bootstrap and helper process, the observation verbs against a scripted
+      # control plane, and the conformance gate. Streams running on `tatolabd`
+      # are the integration suite's, in its own job below. The `requires_gpu`
+      # half is rig-only by owner decision (2026-08-03) rather than a
+      # self-hosted GPU runner.
+      - name: Wheel suite (GPU-free half)
         working-directory: sdk/streamlib-python-wheel
         run: |
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
-      # The Rust half of the same lifecycle contract the pytest step above
-      # checks from Python: who owns SIGINT while `rt.run()` blocks, and that a
-      # second stop is a no-op. `test.yml` deliberately does not run
-      # streamlib-engine's lib tests, so this carve-out is their only home.
+      # The engine's half of the shutdown contract `tatolabd` runs on: who owns
+      # SIGINT while its run loop blocks, and that a second stop is a no-op.
+      # `test.yml` deliberately does not run streamlib-engine's lib tests, so
+      # this carve-out is their only home.
       #
-      # Last, so that a failure here cannot cost the five steps above their
-      # report — while this ran first, the wheel was never built when it failed.
+      # Last, so that a failure here cannot cost the steps above their report —
+      # while this ran first, the wheel was never built when it failed.
       - name: Shutdown-signal ownership and stop-idempotency tests
         run: |
           cargo test --locked -p streamlib-engine --lib -- \
             core::signals core::runtime::runtime::tests::stopping
+
+  # The integration suite: a fixture stream compiled in the suite's venv, run
+  # on `tatolabd` from the runtime unit the job above built, and driven over
+  # its local API. The venv holds `tatolab-stream`, the suite's tooling and
+  # nothing of the runtime — a test reaching for `tatolab.runtime` fails to
+  # import — and every processor interpreter borrows the runtime from the lend.
+  integration-suite:
+    name: Integration suite (stream on runtime, no GPU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Runs PR-authored code, so it gets the read it needs and nothing else.
+    permissions:
+      contents: read
+    needs: wheel-interpreter-lifecycle
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Runs PR-authored code; a persisted checkout token would be readable
+          # by it.
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tatolab-runtime-unit-linux
+          path: ${{ runner.temp }}/tatolab-runtime-unit
+
+      # Where the suite looks for it by default, `<repository>/target/tatolab-runtime`.
+      - name: Unpack the runtime unit
+        run: |
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit/tatolab-runtime-unit.tar.gz"
+
+      - name: The suite's venv, from its lockfile
+        working-directory: tests/stream-on-runtime
+        # --frozen: registry packages stay hash-pinned; the editable tatolab-stream's locked version is never read.
+        run: uv sync --frozen
+
+      # The runner has no GPU, so the `requires_gpu` half runs on the rig.
+      - name: Integration suite (GPU-free half)
+        working-directory: tests/stream-on-runtime
+        run: .venv/bin/pytest -v -m "not requires_gpu"
 
   extension-wheels:
     name: Extension wheel (${{ matrix.extension }})
@@ -217,8 +267,8 @@ jobs:
     # nothing else rather than inheriting the workflow's defaults.
     permissions:
       contents: read
-    # Installs the wheel that job built. An extension links no engine crate, so
-    # nothing here needs Vulkan, glslc or the engine's build set.
+    # Runs on the runtime unit that job built. An extension links no engine
+    # crate, so nothing here needs Vulkan, glslc or the engine's build set.
     needs: wheel-interpreter-lifecycle
 
     strategy:
@@ -270,21 +320,28 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: streamlib-wheel
-          path: streamlib-wheel
+          name: tatolab-runtime-unit-linux
+          path: ${{ runner.temp }}/tatolab-runtime-unit
 
-      # The engine as a binary dependency, exactly as a third party installs
-      # it: from a built wheel, never from this checkout's source. The engine
-      # wheel depends on `tatolab-stream` at its own version, which no index
-      # carries before release, so that wheel is built from this checkout and
-      # installed beside it.
-      - name: Install the engine wheel and build the extension into it
+      # Where the extension's tests look for it by default,
+      # `<repository>/target/tatolab-runtime`: they start its `tatolabd`, and
+      # the helper-side tests borrow `tatolab.runtime` from its lend.
+      - name: Unpack the runtime unit
+        run: |
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit/tatolab-runtime-unit.tar.gz"
+
+      # A stream's venv, exactly as a third party's holds the extension:
+      # `tatolab-stream` and the extension, and no engine. `tatolab-stream`
+      # is built from this checkout, at a version no index carries before
+      # release.
+      - name: Build the extension into a venv holding tatolab-stream
         working-directory: packages/${{ matrix.extension }}
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$GITHUB_WORKSPACE"/streamlib-wheel/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # The repo-root `cargo fmt --all` does not reach a non-member, so an
@@ -315,14 +372,16 @@ jobs:
         run: uvx pyright@1.1.411
 
       # Carries the portability gate over the built `.so`: an extension wheel
-      # installs beside the engine wheel on machines this project never sees,
-      # so it owes the same manylinux promise.
+      # installs on machines this project never sees, so it owes the engine's
+      # manylinux promise. The tests that import `tatolab.runtime` borrow it
+      # from the lend, as a processor interpreter does.
       - name: Extension tests, GPU-free
         working-directory: packages/${{ matrix.extension }}
         run: |
-          .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
-  # The extension lane on Apple Silicon, against the macOS engine wheel. An
+  # The extension lane on Apple Silicon, against the macOS runtime unit. An
   # extension reads the engine's clock itself, per platform, and on Linux the
   # two candidate clocks agree — so a macOS stamp on the wrong one is visible
   # only here. Formatting and pyright read no platform and stay on the Linux
@@ -382,17 +441,23 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: streamlib-macos-wheel
-          path: streamlib-macos-wheel
+          name: tatolab-runtime-unit-macos
+          path: ${{ runner.temp }}/tatolab-runtime-unit
 
-      # `tatolab-stream` beside the engine wheel, as the Linux lane installs it.
-      - name: Install the engine wheel and build the extension into it
+      - name: Unpack the runtime unit
+        run: |
+          mkdir -p target/tatolab-runtime
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit/tatolab-runtime-unit.tar.gz"
+
+      # `tatolab-stream` and the extension, and no engine, as the Linux lane
+      # builds it.
+      - name: Build the extension into a venv holding tatolab-stream
         working-directory: packages/${{ matrix.extension }}
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" "$GITHUB_WORKSPACE/sdk/tatolab-stream"
           uv venv --python 3.12 .venv
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
-          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl "$GITHUB_WORKSPACE"/streamlib-macos-wheel/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       - name: Extension crate tests
@@ -411,12 +476,14 @@ jobs:
         working-directory: packages/${{ matrix.extension }}
         run: .venv/bin/python -m mypy.stubtest ${{ matrix.native_module }}
 
-      # Carries the clock-parity test against the engine wheel, and the
-      # portability gate's Mach-O arm over the built `.so`.
+      # Carries the clock-parity test against the engine's clock, and the
+      # portability gate's Mach-O arm over the built `.so`. The tests that
+      # import `tatolab.runtime` borrow it from the lend.
       - name: Extension tests, GPU-free
         working-directory: packages/${{ matrix.extension }}
         run: |
-          .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
   # The aarch64-apple-darwin wheel exactly as a release builds it, installed on
   # a runner with no Vulkan SDK and run there.
@@ -481,7 +548,7 @@ jobs:
       # to its graph.
       - name: The scaffold compiles and type-checks with no runtime installed
         run: |
-          cp -R sdk/streamlib-python-wheel/python/tatolab/runtime/_scaffold_template "$RUNNER_TEMP/scaffold"
+          cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
           uv venv --python ${{ matrix.python }} "$RUNNER_TEMP/scaffold-venv"
           VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl 'numpy>=2.1'

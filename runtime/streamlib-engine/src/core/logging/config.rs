@@ -12,7 +12,7 @@ use crate::core::runtime::RuntimeUniqueId;
 
 /// Environment variables read at [`init`](super::init) time.
 pub mod env {
-    /// Suppresses the pretty stdout mirror. JSONL is unaffected.
+    /// Suppresses the pretty log mirror. JSONL is unaffected.
     pub const QUIET: &str = "STREAMLIB_QUIET";
     /// Batched JSONL flush size threshold in bytes.
     pub const BATCH_BYTES: &str = "STREAMLIB_LOG_BATCH_BYTES";
@@ -45,9 +45,9 @@ pub struct StreamlibLoggingConfig {
     /// lived CLI invocations that only want env-filtered tracing).
     pub runtime_id: Option<Arc<RuntimeUniqueId>>,
 
-    /// Enable the line-buffered pretty mirror. Overridden to
-    /// `false` when `STREAMLIB_QUIET=1` is set.
-    pub stdout: bool,
+    /// The standard stream the line-buffered pretty mirror writes to; `None`
+    /// installs no mirror. Read as `None` when `STREAMLIB_QUIET=1` is set.
+    pub pretty_log_mirror_stream: Option<PrettyLogMirrorStandardStream>,
 
     /// Enable the batched JSONL file writer. Requires `runtime_id` to be
     /// set; silently disabled when `runtime_id == None`.
@@ -60,6 +60,31 @@ pub struct StreamlibLoggingConfig {
     /// Advanced tunables. Defaults below are used when fields are `None`;
     /// env vars override both.
     pub tunables: LoggingTunables,
+}
+
+/// The standard stream a process's pretty log mirror writes to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PrettyLogMirrorStandardStream {
+    /// The process's real standard output.
+    #[default]
+    StandardOutput,
+    /// The process's real standard error, for a host whose standard output
+    /// carries nothing.
+    StandardError,
+}
+
+impl PrettyLogMirrorStandardStream {
+    /// Whichever of `standard_output` and `standard_error` this stream names.
+    pub(crate) fn pick<StandardStreamWriter>(
+        self,
+        standard_output: StandardStreamWriter,
+        standard_error: StandardStreamWriter,
+    ) -> StandardStreamWriter {
+        match self {
+            Self::StandardOutput => standard_output,
+            Self::StandardError => standard_error,
+        }
+    }
 }
 
 /// Advanced tunables for the batched drain worker. Prefer environment
@@ -127,35 +152,36 @@ impl StreamlibLoggingConfig {
         Self {
             service_name: service_name.into(),
             runtime_id: None,
-            stdout: true,
+            pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardOutput),
             jsonl: false,
             intercept_stdio: false,
             tunables: LoggingTunables::default(),
         }
     }
 
-    /// Full config for a long-lived runtime: stdout + JSONL to disk,
-    /// with fd-level stdio interception on by default so raw
-    /// `println!` / `printf` output lands in the JSONL flagged as
-    /// intercepted.
+    /// Full config for a long-lived runtime: the pretty mirror on stdout +
+    /// JSONL to disk, with fd-level stdio interception on by default so raw
+    /// `println!` / `printf` output lands in the JSONL flagged as intercepted.
     pub fn for_runtime(service_name: impl Into<String>, runtime_id: Arc<RuntimeUniqueId>) -> Self {
         Self {
             service_name: service_name.into(),
             runtime_id: Some(runtime_id),
-            stdout: true,
+            pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardOutput),
             jsonl: true,
             intercept_stdio: true,
             tunables: LoggingTunables::default(),
         }
     }
 
-    /// `true` when the pretty stdout mirror should be installed, accounting
-    /// for `STREAMLIB_QUIET`.
-    pub(crate) fn effective_stdout(&self) -> bool {
-        if !self.stdout {
-            return false;
+    /// The stream the pretty mirror is installed on, if any, accounting for
+    /// `STREAMLIB_QUIET`.
+    pub(crate) fn effective_pretty_log_mirror_stream(
+        &self,
+    ) -> Option<PrettyLogMirrorStandardStream> {
+        if env_bool(env::QUIET).unwrap_or(false) {
+            return None;
         }
-        !env_bool(env::QUIET).unwrap_or(false)
+        self.pretty_log_mirror_stream
     }
 }
 
@@ -257,6 +283,51 @@ mod tests {
                 retained_segment_count: NonZeroUsize::new(7),
             }
         );
+    }
+
+    #[test]
+    fn a_runtime_mirrors_its_log_on_standard_output_unless_its_host_chooses_standard_error() {
+        let runtime_id = Arc::new(RuntimeUniqueId::from("RmirrorStream"));
+        let runtime_config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
+        assert_eq!(
+            runtime_config.pretty_log_mirror_stream,
+            Some(PrettyLogMirrorStandardStream::StandardOutput)
+        );
+        assert_eq!(
+            PrettyLogMirrorStandardStream::default(),
+            PrettyLogMirrorStandardStream::StandardOutput
+        );
+
+        assert_eq!(
+            PrettyLogMirrorStandardStream::StandardOutput.pick("real stdout", "real stderr"),
+            "real stdout"
+        );
+        assert_eq!(
+            PrettyLogMirrorStandardStream::StandardError.pick("real stdout", "real stderr"),
+            "real stderr"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn quiet_installs_no_pretty_log_mirror_on_either_stream() {
+        let runtime_id = Arc::new(RuntimeUniqueId::from("RmirrorQuiet"));
+        let config_mirroring_on_standard_error = StreamlibLoggingConfig {
+            pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardError),
+            ..StreamlibLoggingConfig::for_runtime("test", runtime_id)
+        };
+
+        unsafe { std::env::remove_var(env::QUIET) };
+        assert_eq!(
+            config_mirroring_on_standard_error.effective_pretty_log_mirror_stream(),
+            Some(PrettyLogMirrorStandardStream::StandardError)
+        );
+        unsafe { std::env::set_var(env::QUIET, "1") };
+        let quiet_mirror_stream =
+            config_mirroring_on_standard_error.effective_pretty_log_mirror_stream();
+        unsafe { std::env::remove_var(env::QUIET) };
+
+        assert_eq!(quiet_mirror_stream, None);
     }
 
     #[test]

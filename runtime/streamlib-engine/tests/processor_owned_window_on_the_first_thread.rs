@@ -43,7 +43,9 @@ mod apple_first_thread {
         drive_the_window_event_pump_on_the_first_thread_until, process_wide_window_event_pump,
         release_the_windows_handed_back_while_the_event_pump_was_not_driven,
     };
-    use streamlib_engine::logging::{LoggingTunables, StreamlibLoggingConfig};
+    use streamlib_engine::logging::{
+        LoggingTunables, PrettyLogMirrorStandardStream, StreamlibLoggingConfig,
+    };
 
     use crate::processor_owned_window_named_surface_contract::{
         mint_and_hold_a_window_to_the_named_surface_contract, request_for,
@@ -87,7 +89,7 @@ mod apple_first_thread {
         let _logging = streamlib_engine::logging::init(StreamlibLoggingConfig {
             service_name: "processor-owned-window-on-the-first-thread".to_string(),
             runtime_id: None,
-            stdout: true,
+            pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardOutput),
             jsonl: false,
             intercept_stdio: false,
             tunables: LoggingTunables::default(),

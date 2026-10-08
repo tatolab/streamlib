@@ -133,6 +133,7 @@ pub struct GraphSnapshotLink {
 impl GraphSnapshot {
     /// Read a graph from JSON — a `graph` document or the spec keys alone.
     pub fn from_json_str(json: &str) -> Result<Self> {
+        refuse_an_integer_literal_wider_than_64_bits(json)?;
         Self::from_graph_document(
             serde_json::from_str(json)
                 .map_err(|e| Error::GraphError(format!("the graph does not parse: {e}")))?,
@@ -390,6 +391,54 @@ fn refuse_a_port_the_node_does_not_have(
             port_names.join(", ")
         }
     )))
+}
+
+/// Refuse an integer literal outside `i64::MIN..=u64::MAX`, which `serde_json`
+/// would otherwise read as the nearest `f64`, handing a node another number.
+fn refuse_an_integer_literal_wider_than_64_bits(json: &str) -> Result<()> {
+    let json_bytes = json.as_bytes();
+    let mut byte_index = 0;
+    while byte_index < json_bytes.len() {
+        match json_bytes[byte_index] {
+            b'"' => {
+                byte_index += 1;
+                while byte_index < json_bytes.len() && json_bytes[byte_index] != b'"' {
+                    byte_index += if json_bytes[byte_index] == b'\\' {
+                        2
+                    } else {
+                        1
+                    };
+                }
+                byte_index += 1;
+            }
+            b'-' | b'0'..=b'9' => {
+                let literal_start = byte_index;
+                byte_index += 1;
+                while byte_index < json_bytes.len()
+                    && matches!(
+                        json_bytes[byte_index],
+                        b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-'
+                    )
+                {
+                    byte_index += 1;
+                }
+                let number_literal = &json[literal_start..byte_index];
+                let integer_digits = number_literal.strip_prefix('-').unwrap_or(number_literal);
+                let is_an_integer_literal = !integer_digits.is_empty()
+                    && integer_digits.bytes().all(|byte| byte.is_ascii_digit());
+                if is_an_integer_literal
+                    && number_literal.parse::<i64>().is_err()
+                    && number_literal.parse::<u64>().is_err()
+                {
+                    return Err(Error::GraphError(format!(
+                        "the graph does not parse: the integer {number_literal} does not fit in 64 bits"
+                    )));
+                }
+            }
+            _ => byte_index += 1,
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -844,5 +893,44 @@ mod tests {
 
         assert!(graph.validate().is_ok());
         assert!(graph.links.is_empty() && graph.exposed.is_empty());
+    }
+    #[test]
+    fn an_integer_wider_than_64_bits_is_refused_naming_it_rather_than_read_as_a_float() {
+        let refusal = GraphSnapshot::from_json_str(
+            r#"{"nodes": [{"name": "sink", "type": "a:B", "config": {"value": 18446744073709551616}}]}"#,
+        )
+        .expect_err("an integer past u64::MAX is refused");
+        assert!(
+            refusal
+                .to_string()
+                .contains("the integer 18446744073709551616 does not fit in 64 bits"),
+            "{refusal}"
+        );
+        let refusal = GraphSnapshot::from_json_str(
+            r#"{"nodes": [{"name": "sink", "type": "a:B", "config": {"value": -9223372036854775809}}]}"#,
+        )
+        .expect_err("an integer below i64::MIN is refused");
+        assert!(
+            refusal.to_string().contains("-9223372036854775809"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn every_64_bit_integer_a_float_and_digits_inside_a_string_still_parse() {
+        let graph = GraphSnapshot::from_json_str(
+            r#"{"nodes": [{"name": "sink", "type": "a:B", "config": {
+                "largest": 18446744073709551615,
+                "smallest": -9223372036854775808,
+                "float": 1.8446744073709552e19,
+                "digits": "18446744073709551616",
+                "escaped": "\"18446744073709551616\""
+            }}]}"#,
+        )
+        .expect("each value fits");
+        let config = &graph.nodes[0].config;
+        assert_eq!(config["largest"], serde_json::json!(u64::MAX));
+        assert_eq!(config["smallest"], serde_json::json!(i64::MIN));
+        assert_eq!(config["digits"], "18446744073709551616");
     }
 }

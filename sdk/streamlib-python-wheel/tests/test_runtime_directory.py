@@ -4,15 +4,11 @@
 """Where a runtime keeps its live files, read from Python.
 
 `streamlib nodes` finds what a runtime wrote only if the wheel's reader resolves
-the runtime directory exactly as the engine does. `Runtime()` opens its iceoryx2
-node and surface socket without starting, so the agreement is checked against
-a real engine on every pull request, with no device.
+the runtime directory exactly as the engine does.
 """
 
-import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -134,72 +130,3 @@ def test_a_fallback_open_to_other_users_or_its_group_is_refused_by_name(
     with pytest.raises(UntrustedRuntimeDirectoryError, match=f"mode is {mode:o}") as refusal:
         _resolve_runtime_directory(None, "linux", shared_temporary_directory, os.getuid())
     assert str(fallback) in str(refusal.value)
-
-
-RUNTIME_THAT_REPORTS_WHERE_IT_OPENED = """
-import json, os, sys
-from pathlib import Path
-
-import tatolab.runtime
-from tatolab.runtime._node_registry import runtime_directory
-
-resolved = runtime_directory()
-def node_details():
-    return {str(path) for path in (resolved / "iox2" / "nodes").glob("*/*node.details")}
-def sockets():
-    return {str(path) for path in resolved.glob("surface-share-*.sock")}
-node_details_before, sockets_before = node_details(), sockets()
-runtime = tatolab.runtime.Runtime()
-try:
-    print(json.dumps({
-        "resolved_by_the_reader": str(resolved),
-        "new_node_details": sorted(node_details() - node_details_before),
-        "new_sockets": sorted(sockets() - sockets_before),
-    }))
-finally:
-    runtime.shutdown()
-"""
-
-
-@pytest.mark.parametrize("xdg_runtime_dir_arm", ["set", "empty", "unset"])
-def test_the_reader_resolves_the_directory_a_runtime_opened_its_domain_in(
-    short_xdg_runtime_dir: Path, xdg_runtime_dir_arm: str
-):
-    """The engine's half of the agreement is what it actually created: its
-    iceoryx2 domain and, on Linux, its surface socket. The reader must name the
-    directory holding both.
-
-    A child process each: the first `Runtime()` in a process pins the process's
-    event bus to its own domain, so one arm's directory must not outlive into
-    another's runtime.
-    """
-    environment = {**os.environ}
-    if xdg_runtime_dir_arm == "set":
-        environment["XDG_RUNTIME_DIR"] = str(short_xdg_runtime_dir)
-    elif xdg_runtime_dir_arm == "empty":
-        environment["XDG_RUNTIME_DIR"] = ""
-    else:
-        environment.pop("XDG_RUNTIME_DIR", None)
-
-    finished = subprocess.run(
-        [sys.executable, "-c", RUNTIME_THAT_REPORTS_WHERE_IT_OPENED],
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert finished.returncode == 0, finished.stderr
-    report = json.loads(finished.stdout.strip().splitlines()[-1])
-
-    resolved = Path(report["resolved_by_the_reader"])
-    if xdg_runtime_dir_arm == "set" and sys.platform == "linux":
-        assert resolved == short_xdg_runtime_dir / "streamlib"
-    else:
-        assert resolved == PER_USER_FALLBACK
-    assert [Path(details).name for details in report["new_node_details"]] == [
-        f"sl{os.getuid()}_node.details"
-    ], f"the runtime's iceoryx2 node must be in {resolved / 'iox2'}: {report}"
-    if sys.platform == "linux":
-        assert len(report["new_sockets"]) == 1, (
-            f"the runtime's surface socket must be in {resolved}: {report}"
-        )

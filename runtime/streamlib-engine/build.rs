@@ -43,11 +43,13 @@ fn main() {
 /// it replaced and a stale helper would pass the check. The checked-out commit
 /// is deliberately not watched — every commit would rebuild the engine and
 /// everything above it — so the sha names the commit checked out when the
-/// script last ran.
+/// script last ran. A runtime unit compiles the engine twice, into the lend's
+/// `_engine` and into `tatolabd`, so its build hands both compiles one nonce.
 fn stamp_the_engine_build_id() {
     use engine_build_id_composition::{
-        compose_engine_build_id, git_sha_of_the_checkout_containing, mint_per_build_nonce,
-        path_dependency_directories_linked_into,
+        RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, compose_engine_build_id,
+        git_sha_of_the_checkout_containing, mint_per_build_nonce,
+        path_dependency_directories_linked_into, runtime_unit_build_nonce_from,
     };
 
     let manifest_directory = std::path::PathBuf::from(
@@ -72,8 +74,14 @@ fn stamp_the_engine_build_id() {
         println!("cargo:rerun-if-changed={}", watched_path.display());
     }
 
-    let per_build_nonce = mint_per_build_nonce()
-        .expect("could not read /dev/urandom for the engine build id's per-build nonce");
+    println!("cargo:rerun-if-env-changed={RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE}");
+    let handed_nonce = std::env::var(RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE).ok();
+    let per_build_nonce = match runtime_unit_build_nonce_from(handed_nonce.as_deref()) {
+        Ok(Some(runtime_unit_build_nonce)) => runtime_unit_build_nonce,
+        Ok(None) => mint_per_build_nonce()
+            .expect("could not read /dev/urandom for the engine build id's per-build nonce"),
+        Err(refusal) => panic!("{refusal}"),
+    };
     let engine_build_id = compose_engine_build_id(
         &std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION not set"),
         git_sha_of_the_checkout_containing(&manifest_directory).as_deref(),

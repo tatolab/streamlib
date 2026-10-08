@@ -1,0 +1,26 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "tatolab-cli"
+description = "The `tatolab` CLI: `new` writes a stream project; `run` and `dev` compile a stream in its project's venv and start `tatolabd` attached."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "tatolab"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+# The compile entry's JSON document in; its stream graph copied byte-for-byte to the graph file.
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
+# The stream graph file `tatolabd` reads, deleted when it exits.
+tempfile = { workspace = true }
+# Signal mask, sigwait, kill and the parent-death signal: the attached `tatolabd`'s lifecycle.
+libc = { workspace = true }

@@ -110,7 +110,7 @@ def _import_the_lent_runtime_or_refuse() -> None:
             "not attempted: the runtime is built for the GIL-enabled CPython"
         )
     try:
-        importlib.import_module("tatolab.runtime")
+        importlib.import_module("tatolab.runtime._engine")
     except Exception as import_failure:
         _refuse_an_interpreter_that_cannot_load_the_lent_runtime(
             "".join(traceback.format_exception_only(type(import_failure), import_failure))
@@ -595,6 +595,16 @@ def _decode_frame_payload(payload: bytes) -> "dict[str, Any]":
 # =============================================================================
 # Logging
 # =============================================================================
+
+
+def write_a_describe_time_log_record_to_stderr(
+    level: str, message: str, attrs: "Optional[dict[str, Any]]"
+) -> None:
+    """Write one record a described module logs at import as a line on stderr,
+    which the parent mirrors into its own log; a describe has no parent channel."""
+    rendered_attrs = "".join(f" {name}={value!r}" for name, value in (attrs or {}).items())
+    sys.stderr.write(f"{level.upper()} {message}{rendered_attrs}\n")
+    sys.stderr.flush()
 
 
 class ParentProcessLogSink:
@@ -1595,6 +1605,7 @@ def main(arguments: "list[str]") -> int:
             )
             return 1
         _end_the_describe_once_its_parent_closes_stdin()
+        log.install_helper_process_sink(write_a_describe_time_log_record_to_stderr)
         try:
             describe_exit_status = describe_processor_classes_onto_stdout(arguments[1:])
         except BaseException:

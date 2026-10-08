@@ -149,15 +149,10 @@ def test_a_configuration_that_is_not_a_mapping_is_refused_before_construction():
 # The migrated fixtures, guarded where CI can see them
 # ---------------------------------------------------------------------------
 
-# Every other test that runs these five is `requires_gpu` and so runs on the rig
-# alone. Decoration is where a bad migration raises, so importing them here is
+# Decoration is where a bad migration raises, so importing the fixture here is
 # what puts the migration in front of CI at all.
 MIGRATED_FIXTURES = [
-    ("capability_context_probes", "ConfigProbe", "ConfigProbeConfig"),
-    ("helper_placement_processors", "ReportsItsOwnProcessSource", "ReportsItsOwnProcessSourceConfig"),
     ("helper_process_probes", "PassThroughProbe", "PassThroughProbeConfig"),
-    ("single_processor_under_test", "ConfiguredScaler", "ConfiguredScalerConfig"),
-    ("texture_ring_producer_probes", "TextureRingPublishingVideoSource", "TextureRingPublishingVideoSourceConfig"),
 ]
 
 
@@ -175,23 +170,6 @@ def test_a_migrated_fixture_declares_the_config_class_beside_it(
     assert processor_class.__tatolab_node_config_class__ is getattr(
         module, config_name
     )
-
-
-def test_the_live_mutation_fixture_written_as_a_source_string_still_declares():
-    """`LiveAddedEffect` lives as a triple-quoted literal, so no import, no
-    linter and no AST sweep reaches it — running it here is the only way a bad
-    migration of it fails anywhere but on the rig."""
-    from test_live_graph_mutation import LIVE_ADDED_EFFECT_SOURCE
-
-    namespace: "dict[str, Any]" = {"__name__": "processors.live_added_effect"}
-    exec(compile(LIVE_ADDED_EFFECT_SOURCE, "live_added_effect.py", "exec"), namespace)
-
-    effect = namespace["LiveAddedEffect"]
-    assert effect.__tatolab_node_config_class__ is namespace["LiveAddedEffectConfig"]
-    assert effect.__tatolab_node_config_schema__["properties"]["marker"] == {
-        "type": "string",
-        "default": "LIVE_FRAME",
-    }
 
 
 # ---------------------------------------------------------------------------

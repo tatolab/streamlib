@@ -155,6 +155,40 @@ fn a_loaded_stream_renders_its_name_and_its_exposures_and_round_trips_them() {
 
 #[test]
 #[serial]
+fn a_loaded_stream_name_is_recorded_in_its_cast_and_one_casting_to_nothing_is_refused() {
+    let camera = register_test_type("StreamNameCastCamera", "_unused_in", "video");
+
+    let runtime = Runner::new().unwrap();
+    runtime
+        .load_graph_snapshot(
+            &the_spec_in(serde_json::json!({
+                "stream": "My Stream",
+                "nodes": [{"name": "camera", "type": camera.as_str()}]
+            })),
+            None,
+        )
+        .expect("the graph loads");
+    assert_eq!(the_graph_document_of(&runtime)["stream"], "my-stream");
+
+    let refusal = Runner::new()
+        .unwrap()
+        .load_graph_snapshot(
+            &the_spec_in(serde_json::json!({
+                "stream": "!!!",
+                "nodes": [{"name": "camera", "type": camera.as_str()}]
+            })),
+            None,
+        )
+        .expect_err("a stream name casting to nothing is refused")
+        .to_string();
+    assert!(
+        refusal.contains("cannot load the graph as the stream `!!!`"),
+        "{refusal}"
+    );
+}
+
+#[test]
+#[serial]
 fn a_loaded_name_already_in_the_graph_is_refused_rather_than_suffixed() {
     let camera = register_test_type("LoadedTwiceCamera", "_unused_in", "video");
 
@@ -179,6 +213,36 @@ fn a_loaded_name_already_in_the_graph_is_refused_rather_than_suffixed() {
         }
         other => panic!("expected NodeNameTaken, got {other:?}"),
     }
+}
+
+/// A stream whose function adds nothing compiles to an empty graph, and the
+/// runtime refuses it by name rather than running nothing.
+#[test]
+#[serial]
+fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
+    let runtime = Runner::new().unwrap();
+
+    let refusal = runtime
+        .load_graph_snapshot(
+            &the_spec_in(serde_json::json!({"stream": "main", "nodes": []})),
+            None,
+        )
+        .expect_err("an empty graph is refused")
+        .to_string();
+    assert!(
+        refusal.contains("the stream `main` holds no node"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("stream_builder.add("), "{refusal}");
+
+    let unnamed_refusal = runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({"nodes": []})), None)
+        .expect_err("an empty graph is refused")
+        .to_string();
+    assert!(
+        unnamed_refusal.contains("the graph holds no node"),
+        "{unnamed_refusal}"
+    );
 }
 
 #[test]

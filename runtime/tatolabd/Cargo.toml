@@ -1,0 +1,36 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "tatolabd"
+description = "The runtime process: hosts one stream in the foreground — the engine, its built-ins and the local API — with no Python in its process."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "tatolabd"
+path = "src/main.rs"
+
+[features]
+# The tests that start the engine on a GPU, gated the engine's way:
+# `cargo test -p tatolabd --features hardware-tests` on the rig.
+hardware-tests = ["streamlib/hardware-tests"]
+
+[dependencies]
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.40.0" }
+streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.40.0" }
+streamlib-api-server = { path = "../streamlib-api-server" }
+clap = { version = "4.5", features = ["derive"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+libc = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,18 +1,18 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Fixtures shared by the suites that drive an app out of process."""
+"""The suite's platform markers, and the iceoryx2 domain and log route a test standing in for a helper is handed."""
 
 import os
 import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pytest
 
-from app_under_test import AppUnderTest, start_app
+from tatolab.stream import log
 
 ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE = "STREAMLIB_ICEORYX2_DOMAIN_ROOT"
 DOMAIN_ROOT_NAME_PREFIX = "sl-iox2-"
@@ -74,36 +74,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Ite
                 )
 
 
-@pytest.fixture
-def start_app_under_test():
-    """Hands out apps and kills their process groups no matter how a test ends.
-
-    Without the teardown a failed assertion strands a live engine holding a GPU
-    context, an iceoryx2 node and a socket, silently contaminating every later
-    run on the same rig.
-
-    `launcher` picks the launch arrangement — `python <script>.py` unless a
-    suite names one of `app_under_test`'s others. The reaping is the same
-    whichever it is, which is the point of routing them all through here.
-    """
-    started: "list[AppUnderTest]" = []
-
-    def start(
-        app_path: Path,
-        *arguments: str,
-        launcher: "Callable[..., AppUnderTest]" = start_app,
-    ) -> AppUnderTest:
-        app = launcher(app_path, *arguments)
-        started.append(app)
-        return app
-
-    try:
-        yield start
-    finally:
-        for app in started:
-            app.kill_process_group()
-
-
 def _remove_iceoryx2_domain_roots_whose_test_process_is_gone() -> None:
     """A root outlives its session: a node can still be dropping as the process
     exits, and iceoryx2 warns when its files vanish first. So a root is swept by
@@ -116,6 +86,29 @@ def _remove_iceoryx2_domain_roots_whose_test_process_is_gone() -> None:
             shutil.rmtree(domain_root, ignore_errors=True)
         except (ValueError, PermissionError, OSError):
             continue
+
+
+HelperProcessLogRecord = Tuple[str, str, Optional[Dict[str, Any]]]
+
+
+@pytest.fixture(scope="module")
+def log_records_this_process_sends_its_stand_in_parent() -> "Iterator[List[HelperProcessLogRecord]]":
+    """Stands in for the parent's end of a helper's log route.
+
+    A helper's `tatolab.stream.log` records travel to its parent, and a record
+    made anywhere else is refused; this process stands in for a helper, so the
+    records it makes land here.
+    """
+    sent_records: "List[HelperProcessLogRecord]" = []
+
+    def send_to_the_stand_in_parent(
+        level: str, message: str, attrs: "Optional[Dict[str, Any]]"
+    ) -> None:
+        sent_records.append((level, message, attrs))
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(log, "_helper_process_sink", send_to_the_stand_in_parent)
+        yield sent_records
 
 
 @pytest.fixture(scope="session")

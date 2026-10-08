@@ -34,7 +34,8 @@ use crate::mcp_resources::exported_live_graph_json;
 
 /// The import path `VirtualCameraSink` registers under, which the virtual
 /// camera recipe looks up in the catalog. This crate does not link the media
-/// built-ins, so the wheel pins it against the built-in's own derived path.
+/// built-ins, so a dev-dependency test pins it against the built-in's own
+/// derived path.
 pub const VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH: &str =
     "tatolab.stream:VirtualCameraSink";
 
@@ -578,4 +579,16 @@ fn look_at_what_a_channel_carries_recipe(
                 .to_string(),
         ),
     })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    #[test]
+    fn the_virtual_camera_prompt_names_the_path_the_built_in_registers_under() {
+        assert_eq!(
+            super::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
+            streamlib_media_builtins::VirtualCameraSink::Processor::processor_class_import_path()
+                .as_str()
+        );
+    }
 }

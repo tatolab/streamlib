@@ -7,8 +7,7 @@
 a node's MCP server, and of the on-disk JSONL log. Each of those is stood up
 here — a real MCP server on a local API socket, a temp registry directory, a
 temp log directory — so the whole surface is exercised in CI, where no GPU
-exists to boot a real node with. `test_cli_launch.py` covers the live path on
-the rig.
+exists to boot a real node with.
 
 The rendering assertions are the load-bearing ones: the JSONL schema and its
 pretty form are durable contracts, and a record read by this CLI must come out
@@ -468,7 +467,7 @@ def test_no_live_nodes_names_the_command_that_starts_one(isolated_registry):
     with pytest.raises(ControlPlaneError) as failure:
         resolve_local_api_socket_of_requested_node(None)
 
-    assert "streamlib dev" in str(failure.value)
+    assert "tatolab dev" in str(failure.value)
 
 
 # ─── Driving a tool ──────────────────────────────────────────────────────────
@@ -1366,25 +1365,19 @@ def test_nodes_prints_the_registry_table_alone(
 
 # Each spelled from its parts so the retired flag's own text does not survive
 # here, where a source-walking gate would still find it.
-RETIRED_LAUNCH_FLAGS = tuple(
+RETIRED_NODES_FLAGS = tuple(
     "--" + "-".join(parts)
     for parts in (
         ("mesh", "name"),
         ("mesh", "peer"),
-        ("mesh", "listen"),
         ("no", "mesh", "multicast", "discovery"),
     )
-)
-RETIRED_NODES_FLAGS = tuple(
-    flag for flag in RETIRED_LAUNCH_FLAGS if not flag.endswith("listen")
 )
 
 
 @pytest.mark.parametrize(
     "verb, retired_flag",
-    [("run", flag) for flag in RETIRED_LAUNCH_FLAGS]
-    + [("dev", flag) for flag in RETIRED_LAUNCH_FLAGS]
-    + [("nodes", flag) for flag in RETIRED_NODES_FLAGS],
+    [("nodes", flag) for flag in RETIRED_NODES_FLAGS],
 )
 def test_a_retired_flag_is_a_usage_error(isolated_registry, capsys, verb, retired_flag):
     with pytest.raises(SystemExit) as usage_error:
@@ -1400,12 +1393,6 @@ def test_a_retired_flag_is_a_usage_error(isolated_registry, capsys, verb, retire
 @pytest.mark.parametrize(
     "verb_arguments, network_address_flag, network_address",
     [
-        (("run",), "--host", "127.0.0.1"),
-        (("run",), "--port", "9100"),
-        (("run",), "-p", "9100"),
-        (("dev",), "--host", "127.0.0.1"),
-        (("dev",), "--port", "9100"),
-        (("dev",), "-p", "9100"),
         (("graph",), "--url", "http://127.0.0.1:9100"),
         (("tap", "rig/pattern/video"), "--url", "http://127.0.0.1:9100"),
         (("logs",), "--url", "http://127.0.0.1:9100"),
@@ -1415,8 +1402,8 @@ def test_a_retired_flag_is_a_usage_error(isolated_registry, capsys, verb, retire
 def test_no_verb_takes_a_network_address_for_the_control_plane(
     isolated_registry, capsys, verb_arguments, network_address_flag, network_address
 ):
-    """Control is reachable only through a node's local API socket, so a launch
-    verb binds no address and an observation verb dials none."""
+    """Control is reachable only through a node's local API socket, so an
+    observation verb dials no address."""
     with pytest.raises(SystemExit) as usage_error:
         cli.main([*verb_arguments, network_address_flag, network_address])
 

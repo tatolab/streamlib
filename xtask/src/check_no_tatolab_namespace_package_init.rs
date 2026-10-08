@@ -13,12 +13,9 @@
 //! other gate. And the lend `cargo xtask build-runtime` lays out under
 //! `target/`, which git ignores, so it is walked directly when it exists.
 
+use crate::build_runtime::runtime_unit_lend_directory_in_the_workspace;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-
-/// Where `cargo xtask build-runtime` lays out the lend, relative to the workspace.
-pub const RUNTIME_UNIT_LEND_DIRECTORY_RELATIVE_TO_WORKSPACE: &str =
-    "target/tatolab-runtime/lib/tatolab/lend";
 
 /// The file whose presence turns the shared `tatolab` namespace into one package.
 const TATOLAB_NAMESPACE_PACKAGE_INIT_RELATIVE_PATH: &str = "tatolab/__init__.py";
@@ -84,7 +81,7 @@ pub fn scan(workspace_root: &Path) -> Result<TatolabNamespacePackageInitScanRepo
         .cloned()
         .collect();
 
-    let lend_directory = workspace_root.join(RUNTIME_UNIT_LEND_DIRECTORY_RELATIVE_TO_WORKSPACE);
+    let lend_directory = runtime_unit_lend_directory_in_the_workspace(workspace_root);
     let lend_paths_holding_an_init = if lend_directory.exists() {
         tatolab_namespace_package_inits_under_lend_directory(&lend_directory)?
     } else {
@@ -171,7 +168,7 @@ mod tests {
     }
 
     fn plant_lend(workspace_root: &Path) -> PathBuf {
-        let lend_directory = workspace_root.join(RUNTIME_UNIT_LEND_DIRECTORY_RELATIVE_TO_WORKSPACE);
+        let lend_directory = runtime_unit_lend_directory_in_the_workspace(workspace_root);
         write_file(&lend_directory.join("tatolab/runtime/__init__.py"), "");
         write_file(
             &lend_directory.join("streamlib-0.0.0.dist-info/WHEEL"),

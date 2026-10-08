@@ -42,7 +42,7 @@ use crate::iceoryx2::{
 };
 
 /// The bootstrap a processor interpreter runs, relative to the lend directory.
-pub(crate) const PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY: &str =
+pub const PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY: &str =
     "tatolab/runtime/_processor_interpreter_bootstrap.py";
 
 /// The environment variable carrying the class import path a processor
@@ -101,7 +101,7 @@ const STANDARD_ERROR_TAIL_BYTES: usize = 16 * 1024;
 // =============================================================================
 
 /// The bootstrap a processor interpreter runs, in `lend_directory`.
-pub(crate) fn processor_interpreter_bootstrap_path(lend_directory: &Path) -> PathBuf {
+pub fn processor_interpreter_bootstrap_path(lend_directory: &Path) -> PathBuf {
     lend_directory.join(PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY)
 }
 
@@ -299,8 +299,8 @@ impl ProcessorInterpreterSpawnHostProcessor {
     /// once; a child that is *alive but not reading* — a user callback blocked
     /// on a socket, a wedged `teardown` — would never reply, and this runs on
     /// the lifecycle thread holding the processor's lock, so waiting forever
-    /// there is a hung `rt.run()`, with the kill that would have resolved it
-    /// sitting unreachable further down teardown.
+    /// there hangs the runtime's teardown, with the kill that would have
+    /// resolved it sitting unreachable further down it.
     fn exchange_with_child(
         &mut self,
         message: &serde_json::Value,
@@ -1851,6 +1851,20 @@ sys.exit(0)
                 "/opt/tatolab/lib/tatolab/lend/tatolab/runtime/_processor_interpreter_bootstrap.py"
             )]
         );
+    }
+
+    /// The bootstrap sits in the lent runtime package wherever the runtime
+    /// unit's layout puts that package.
+    #[test]
+    fn the_bootstrap_sits_in_the_lent_runtime_package_the_layout_declares() {
+        let lent_runtime_package_prefix = format!(
+            "{}/",
+            streamlib_consumer_rhi::runtime_unit_layout::LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND
+        );
+        let bootstrap_file_name = PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY
+            .strip_prefix(&lent_runtime_package_prefix)
+            .expect("the bootstrap path starts with the lent runtime package");
+        assert!(!bootstrap_file_name.contains('/'));
     }
 
     /// The class the child imports, and the identifiers it reports itself by,

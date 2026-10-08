@@ -10,28 +10,23 @@ Keyword arguments become the structured `attrs` columns of the JSONL record —
 `log.info("captured frame", width=1920)` — and node attribution is
 automatic inside lifecycle hooks; nothing needs to be threaded through.
 
-Each function reaches the runtime, which lends `tatolab.runtime` to the
-interpreter it starts for a node; where nothing is lent it raises
-`RuntimeError` naming itself.
+Each function hands its record to the runtime from the interpreter the
+runtime starts for a node; called anywhere else it raises `RuntimeError`
+naming itself.
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from ._runtime_lend import (
-    native_callable_of_runtime_backed_function,
-    runtime_backed_function,
-)
+from ._runtime_lend import RuntimeIsNotLentToThisInterpreterError
 
 __all__ = ["debug", "error", "info", "trace", "warn", "warning"]
 
 HelperProcessLogSink = Callable[[str, str, "Optional[dict[str, Any]]"], None]
 
-# A helper process has no engine in it, so its records travel to the parent's
-# pipeline instead of being handed straight to one. Installed by
-# `tatolab/runtime/_processor_interpreter_bootstrap.py` at startup and never by
-# app code.
+# Installed by `tatolab/runtime/_processor_interpreter_bootstrap.py` at startup
+# and never by app code.
 _helper_process_sink: "Optional[HelperProcessLogSink]" = None
 
 
@@ -41,14 +36,6 @@ def install_helper_process_sink(sink: HelperProcessLogSink) -> None:
     _helper_process_sink = sink
 
 
-@runtime_backed_function(native_callable_name="log_event")
-def _emit_record_on_the_engine_log_pipeline(
-    level: str, message: str, attrs: "Optional[dict[str, Any]]" = None
-) -> None:
-    """Emit one record on the engine's log pipeline, with structured attrs."""
-    ...
-
-
 def _emit(
     level: str,
     message: str,
@@ -56,12 +43,13 @@ def _emit(
     called_function_name: str,
 ) -> None:
     sink = _helper_process_sink
-    if sink is not None:
-        sink(level, message, attrs)
-        return
-    native_callable_of_runtime_backed_function(
-        _emit_record_on_the_engine_log_pipeline, called_function_name
-    )(level, message, attrs)
+    if sink is None:
+        raise RuntimeIsNotLentToThisInterpreterError(
+            f"{called_function_name}() runs only in the interpreter the runtime "
+            "starts for a node, which hands its records to the runtime; this "
+            "interpreter has nowhere to send them"
+        )
+    sink(level, message, attrs)
 
 
 def trace(message: str, **attrs: Any) -> None:

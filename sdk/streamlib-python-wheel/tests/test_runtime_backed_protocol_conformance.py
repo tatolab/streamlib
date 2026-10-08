@@ -117,7 +117,6 @@ def test_every_runtime_backed_name_the_ticket_lists_is_held_by_tatolab_stream():
         "decode_msgpack_bytes_to_python_object",
         "monotonic_now_ns",
         "gpu_limited_access_of_the_typed_read_in_progress",
-        "log_event",
     } <= held_by_tatolab_stream
 
 
@@ -367,4 +366,3 @@ def test_the_stubtest_allowlist_names_exactly_what_only_tatolab_stream_declares(
     assert r"tatolab\.runtime\._engine\.monotonic_now_ns(\..*)?" in allowlist
     assert r"tatolab\.runtime\._engine\.RuntimeContextFullAccess(\..*)?" in allowlist
     assert r"tatolab\.runtime\._engine\.NodeLinkDataAccess(\..*)?" in allowlist
-    assert r"tatolab\.runtime\._engine\.log_event(\..*)?" in allowlist

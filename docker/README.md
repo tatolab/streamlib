@@ -21,6 +21,7 @@ The image-layer knowledge those two do not carry — the CUDA runtime base, the 
 dispatch set NVIDIA Vulkan needs even headless, the V4L2 and userspace-audio packages, and
 the PipeWire startup order — is in
 [`docs/learnings/headless-nvidia-vulkan-container.md`](../docs/learnings/headless-nvidia-vulkan-container.md).
-A deployment image for the wheel-hosted runtime is a short Dockerfile written from that
-learning: a CUDA runtime base, those packages, `pip install streamlib`, the app, and
-`streamlib run`.
+A deployment image is a short Dockerfile written from that learning: a CUDA runtime base, those
+packages, the runtime unit `cargo xtask build-runtime --release` lays out in
+`target/tatolab-runtime/` (its `bin/` on `PATH`), the stream's project with its venv synced, and
+`tatolab run`.
