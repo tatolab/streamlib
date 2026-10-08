@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolabd`'s arguments and refusals: each wrong input is refused naming
-//! what is wrong, with status 1 and nothing on standard output.
+//! what is wrong, with status 1 and nothing on standard output. An interrupt
+//! before the stream starts is a shutdown, not a refusal.
 
 mod common;
 
@@ -11,8 +12,8 @@ use std::process::Output;
 use std::time::Duration;
 
 use common::{
-    TatolabdRunState, TemporaryRuntimeUnit, an_executable_standing_in_for_the_interpreter,
-    run_to_exit_within,
+    SpawnedTatolabd, TatolabdRunState, TemporaryRuntimeUnit,
+    an_executable_standing_in_for_the_interpreter, run_to_exit_within,
 };
 
 const A_REFUSAL_BEFORE_ANY_STREAM_RUNS_EXITS_WITHIN: Duration = Duration::from_secs(60);
@@ -267,8 +268,6 @@ fn an_interpreter_that_is_not_executable_is_refused_naming_it() {
     );
 }
 
-/// The engine is built before the load refuses, so the refusal is its log
-/// record — on standard error, as every engine log line is.
 #[test]
 fn a_graph_holding_no_node_is_refused_naming_the_stream() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
@@ -289,6 +288,106 @@ fn a_graph_holding_no_node_is_refused_naming_the_stream() {
         refusal.contains("the stream `main` holds no node"),
         "{refusal}"
     );
+}
+
+/// Under `STREAMLIB_QUIET` no log mirror carries an engine refusal, so the
+/// refusal still ends standard error as `tatolabd`'s own line.
+#[test]
+fn a_refusal_after_the_engine_is_built_is_named_on_standard_error_under_streamlib_quiet() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let run_state = TatolabdRunState::new();
+    let stream_graph_file =
+        run_state.write_stream_graph(&serde_json::json!({"stream": "main", "nodes": []}));
+
+    let refusal = the_refusal_of(&run_tatolabd(
+        &runtime_unit.tatolabd,
+        &run_state,
+        &stream_graph_file,
+        &run_state.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        &[("STREAMLIB_QUIET", "1")],
+    ));
+
+    let last_line = refusal.lines().last().unwrap_or_default();
+    assert!(last_line.starts_with("tatolabd: "), "{refusal}");
+    assert!(
+        last_line.contains("the stream `main` holds no node"),
+        "{refusal}"
+    );
+}
+
+/// An interrupt while a describe runs kills the describe's process group and
+/// ends the run without starting the stream: a shutdown, not a refusal.
+#[test]
+fn an_interrupt_while_the_graph_loads_ends_the_describe_and_exits_zero() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let run_state = TatolabdRunState::new();
+    let stream_graph_file = run_state.write_stream_graph(&serde_json::json!({
+        "stream": "main",
+        "nodes": [{"name": "slow", "type": "slow_to_describe_module:SlowToDescribeNode"}],
+    }));
+    let describe_process_id_file = run_state.path().join("describe-process-id");
+    let interpreter_that_never_finishes_describing = run_state.path().join("python");
+    std::fs::write(
+        &interpreter_that_never_finishes_describing,
+        format!(
+            "#!/bin/sh\necho $$ > '{}'\nexec sleep 60\n",
+            describe_process_id_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        &interpreter_that_never_finishes_describing,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+
+    let mut tatolabd_command = run_state.tatolabd_command(&runtime_unit.tatolabd);
+    tatolabd_command
+        .arg("--stream-graph")
+        .arg(&stream_graph_file)
+        .arg("--project")
+        .arg(run_state.project_directory())
+        .arg("--interpreter")
+        .arg(&interpreter_that_never_finishes_describing);
+    let mut spawned = SpawnedTatolabd::spawn(tatolabd_command);
+    let describe_process_id = the_process_id_written_to(
+        &describe_process_id_file,
+        A_REFUSAL_BEFORE_ANY_STREAM_RUNS_EXITS_WITHIN,
+    );
+
+    spawned.deliver(libc::SIGINT);
+    let exit_status = spawned.wait_for_exit_within(Duration::from_secs(20));
+
+    let standard_error = spawned.standard_error();
+    assert_eq!(exit_status.code(), Some(0), "{standard_error}");
+    assert!(spawned.standard_output().is_empty());
+    assert!(
+        standard_error.contains("so the stream was never started"),
+        "{standard_error}"
+    );
+    // SAFETY: `kill` reads only its two integer arguments.
+    let describe_is_alive = unsafe { libc::kill(describe_process_id, 0) } == 0;
+    assert!(!describe_is_alive, "the describe outlived the run");
+}
+
+/// Wait for a process id written to `process_id_file`, or panic after `budget`.
+fn the_process_id_written_to(process_id_file: &Path, budget: Duration) -> i32 {
+    let deadline = std::time::Instant::now() + budget;
+    loop {
+        if let Some(process_id) = std::fs::read_to_string(process_id_file)
+            .ok()
+            .and_then(|written| written.trim().parse().ok())
+        {
+            return process_id;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no process id was written to {} within {budget:?}",
+            process_id_file.display()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 #[test]

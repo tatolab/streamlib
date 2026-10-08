@@ -20,7 +20,7 @@ use streamlib_api_server::control_plane_host::{
     ApiServerControlPlaneHostConfig, register_api_server_control_plane_processor_on_runtime,
 };
 
-use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
+use crate::refusal_on_standard_error::write_refusal_to_standard_error;
 use crate::stream_launch_inputs::StreamLaunchInputs;
 
 /// Host the stream until a shutdown is requested, tear the engine down, and
@@ -56,33 +56,33 @@ pub(crate) fn host_the_stream_until_shutdown(
     streamlib_media_builtins::register_media_builtin_processor_types();
 
     let run_outcome = engine
-        .load_graph_snapshot(&stream_graph, Some(stream_environment))
-        .map_err(|load_refusal| format!("the stream graph was refused: {load_refusal}"))
-        .and_then(|()| {
-            register_api_server_control_plane_processor_on_runtime(
-                &engine,
-                ApiServerControlPlaneHostConfig::default(),
-            )
-            .map_err(|hosting_refusal| {
-                format!("the local API could not be hosted: {hosting_refusal}")
-            })
-        })
-        .and_then(|()| {
-            engine
-                .start_and_wait_for_shutdown()
-                .map_err(|run_failure| format!("the stream did not run cleanly: {run_failure}"))
-        });
+        .load_graph_snapshot_start_and_wait_for_shutdown(
+            &stream_graph,
+            Some(stream_environment),
+            |loaded_engine| {
+                register_api_server_control_plane_processor_on_runtime(
+                    loaded_engine,
+                    ApiServerControlPlaneHostConfig::default(),
+                )
+            },
+        )
+        .map_err(|run_refusal| format!("the stream did not run: {run_refusal}"));
     if let Err(run_refusal) = &run_outcome {
         tracing::error!("{run_refusal}");
     }
 
-    match tear_the_engine_down(engine) {
-        EngineTeardownOutcome::Dropped if run_outcome.is_ok() => ExitCode::SUCCESS,
-        EngineTeardownOutcome::Dropped => ExitCode::from(EXIT_STATUS_OF_A_REFUSAL),
-        EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(description)
-        | EngineTeardownOutcome::StillReferenced(description) => {
-            write_refusal_to_standard_error(&description)
+    match (tear_the_engine_down(engine), run_outcome) {
+        (EngineTeardownOutcome::Dropped, Ok(())) => ExitCode::SUCCESS,
+        // Written again once the engine is gone, because under
+        // `STREAMLIB_QUIET` no log mirror carried it to standard error.
+        (EngineTeardownOutcome::Dropped, Err(run_refusal)) => {
+            write_refusal_to_standard_error(&run_refusal)
         }
+        (
+            EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(description)
+            | EngineTeardownOutcome::StillReferenced(description),
+            _,
+        ) => write_refusal_to_standard_error(&description),
     }
 }
 
@@ -122,14 +122,20 @@ fn tear_the_engine_down(engine: Arc<Runner>) -> EngineTeardownOutcome {
     }
 
     note_what_the_engine_teardown_is_waiting_on("the engine's own drop");
-    match Arc::into_inner(engine) {
-        Some(owned_engine) => {
+    match Arc::try_unwrap(engine) {
+        Ok(owned_engine) => {
             drop(owned_engine);
             EngineTeardownOutcome::Dropped
         }
-        None => EngineTeardownOutcome::StillReferenced(
-            "engine teardown left a live reference behind, so its threads were not joined"
-                .to_owned(),
-        ),
+        Err(still_referenced_engine) => {
+            // Its stdio interceptor is still installed, so the report would
+            // otherwise land in the intercept pipe and die with the process.
+            still_referenced_engine.stop_intercepting_the_standard_streams();
+            std::mem::forget(still_referenced_engine);
+            EngineTeardownOutcome::StillReferenced(
+                "engine teardown left a live reference behind, so its threads were not joined"
+                    .to_owned(),
+            )
+        }
     }
 }

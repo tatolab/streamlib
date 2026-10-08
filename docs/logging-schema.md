@@ -179,7 +179,7 @@ type.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `STREAMLIB_QUIET` | unset (`0`) | When `1`, suppresses the pretty stdout mirror only. JSONL continues writing. |
+| `STREAMLIB_QUIET` | unset (`0`) | When `1`, suppresses the pretty log mirror (stdout, or stderr when the host chose it) only. JSONL continues writing. |
 | `STREAMLIB_LOG_BATCH_BYTES` | `65536` | Size threshold for JSONL flush. |
 | `STREAMLIB_LOG_BATCH_MS` | `100` | Time threshold for JSONL flush. |
 | `STREAMLIB_LOG_CHANNEL_CAPACITY` | `65536` | Bounded MPMC channel depth. Drop-oldest when full. |
