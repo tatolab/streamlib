@@ -63,7 +63,7 @@ exit "$exit_code"
 /// logging each compile's cwd and arguments to `<control>/compile_invocations`.
 const FAKE_PROJECT_PYTHON_SCRIPT: &str = r#"#!/bin/sh
 control_directory='@CONTROL@'
-if [ "$1" = "-c" ]; then
+if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then
   if [ -f "$control_directory/probe_fails" ]; then exit 1; fi
   exit 0
 fi
@@ -357,7 +357,7 @@ impl AttachedTatolabdTestbed {
 }
 
 fn compile_arguments(verb: &str, forwarded_arguments: &[&str]) -> Vec<String> {
-    ["-m", COMPILE_ENTRY_MODULE, "--verb", verb]
+    ["-I", "-m", COMPILE_ENTRY_MODULE, "--verb", verb]
         .iter()
         .chain(forwarded_arguments)
         .map(|argument| (*argument).to_owned())
@@ -529,6 +529,16 @@ fn a_failed_compile_ends_run_with_its_exit_code_and_starts_no_tatolabd() {
     let (exit_status, tatolab_stderr) = testbed.run_tatolab_to_exit(&["run"]);
     assert_eq!(exit_status.code(), Some(3));
     assert_eq!(tatolab_stderr, "Traceback: the probe stream raised\n");
+    assert!(testbed.started_tatolabd_process_ids().is_empty());
+}
+
+#[test]
+fn an_app_that_exits_zero_while_it_compiles_ends_run_cleanly_and_starts_no_tatolabd() {
+    let testbed = AttachedTatolabdTestbed::new();
+    testbed.set_control("compile_document.json", "");
+    let (exit_status, tatolab_stderr) = testbed.run_tatolab_to_exit(&["run"]);
+    assert_eq!(exit_status.code(), Some(0));
+    assert_eq!(tatolab_stderr, "");
     assert!(testbed.started_tatolabd_process_ids().is_empty());
 }
 

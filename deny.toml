@@ -181,3 +181,13 @@ license-files = []
 name = "xtask"
 expression = "BUSL-1.1"
 license-files = []
+
+[[licenses.clarify]]
+name = "tatolab-cli"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "tatolabd"
+expression = "BUSL-1.1"
+license-files = []

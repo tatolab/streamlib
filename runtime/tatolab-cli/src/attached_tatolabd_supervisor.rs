@@ -159,7 +159,7 @@ fn refuse_a_venv_without_tatolab_stream(
     project_venv_interpreter: &Path,
 ) -> Result<(), TatolabCommandFailure> {
     let probe_status = Command::new(project_venv_interpreter)
-        .args(["-c", TATOLAB_STREAM_IMPORT_PROBE])
+        .args(["-I", "-c", TATOLAB_STREAM_IMPORT_PROBE])
         .current_dir(project_anchor_directory)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -229,7 +229,10 @@ fn start_stream_compile(
     stream_launch_verb: StreamLaunchVerb,
 ) -> Result<StreamCompileInFlight, TatolabCommandFailure> {
     let mut compile_child = Command::new(&stream_launch_environment.project_venv_interpreter)
+        // `-I` keeps the anchor off `sys.path` until the compile entry has imported what it
+        // needs, so a project module named like a stdlib one cannot replace it.
         .args([
+            "-I",
             "-m",
             PROJECT_STREAM_COMPILE_ENTRY_MODULE,
             "--verb",
@@ -311,6 +314,12 @@ fn finish_stream_compile(
         };
     }
     let compiled_stream = match collected_compile_stdout {
+        // An app that exits 0 on purpose while it compiles leaves no document: a clean stop.
+        Ok(Ok(compile_stdout)) if compile_stdout.trim_ascii().is_empty() => {
+            return StreamCompileOutcome::Failed {
+                compile_exit_code: 0,
+            };
+        }
         Ok(Ok(compile_stdout)) => compiled_stream_from_compile_document(&compile_stdout),
         Ok(Err(io_failure)) => Err(format!("its stdout could not be read: {io_failure}")),
         Err(_) => Err("its stdout could not be read".to_owned()),

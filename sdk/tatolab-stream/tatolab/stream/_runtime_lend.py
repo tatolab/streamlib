@@ -127,20 +127,3 @@ def runtime_backed_protocol(
     runtime_backed_protocol_registry[protocol.__name__] = protocol
     return protocol
 
-
-def native_callable_of_runtime_backed_function(
-    declared_runtime_backed_function: RuntimeBackedFunctionDeclaration,
-    called_function_name: str,
-) -> RuntimeBackedFunctionDeclaration:
-    """The native callable a runtime-backed function forwards to, typed as its declaration.
-
-    For a caller that reaches it on behalf of a function of its own: where
-    nothing is lent, the error names `called_function_name`.
-    """
-    return cast(
-        RuntimeBackedFunctionDeclaration,
-        native_callable_lent_by_the_runtime(
-            runtime_backed_function_registry[declared_runtime_backed_function],
-            called_function_name,
-        ),
-    )
