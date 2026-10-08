@@ -22,7 +22,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 `[moq-on-the-tailnet]` entries.
 
 ## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting, authoring-names)
-<!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
+<!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
   pip-installs streamlib (initially from this repo's releases; PyPI after the project
@@ -37,10 +37,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   would. Every ticket traces to this sentence or does not exist.
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
   SHIPPED #2357, #2359, #2361, #2362; amended by one-runtime-per-machine: the package names, the stream vocabulary, "with an NVIDIA GPU" (accelerators are optional), and the install step — the runtime arrives from an installer that registers it as a per-user service, so the loop is install, then `new`, then `run`]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_a_working_app -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
-  <!-- verify: grep -n "The scaffolded app runs on the driver the wheel carries" .github/workflows/macos-wheel.yml -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
+  <!-- verify: grep -n "The scaffolded stream runs on the driver the lend carries" .github/workflows/macos-wheel.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_mach_o_the_lend_carries_is_portable -->
 - **DECIDED** — Terms of the sentence: StreamLib is an importable Python library — one
   PyPI wheel carrying the Python API, the CLI, and the Rust engine (PyO3, the
@@ -54,15 +54,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `stream.add` takes the class; the builder's API is `add`/`connect`/`expose`.
   [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567, #2569; amended by authoring-names: the builder is `StreamBuilder`, held as `stream_builder`; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node` — stream-graph builds the authoring clauses]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_project_stream_compile_entry.py::test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
   processor; the scaffold pins `.python-version` (3.12) and the wheel supports a small
   Python version range. [importable-python-library — SHIPPED #1684, #1711; schema-free-ports
   — SHIPPED #1814]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_each_scaffolded_processor_lives_outside_the_entry_file -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_each_node_lives_outside_the_entry_file -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one -->
 - **DECIDED** — Rust authoring stays a supported capability: a Rust app is a plain
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
@@ -90,7 +90,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
   <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py::test_the_engine_conforms_to_tatolab_stream_and_its_stub -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
+  <!-- verify: pytest tests/stream-on-runtime/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_an_fd_shaped_raw_handle_refuses_by_name_off_linux -->
   <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
 - **DECIDED** — The scaffold models the pathway: pixels on the GPU, logic on the CPU, the
@@ -105,11 +105,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   over every render, pyright over the template tree, and the cross-floor check gates the
   output.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438; amended by stream-graph: the entry file and the nodes' directory re-spelled]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_tatolab_stream_and_numpy_only -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_exactly_the_rendered_templates -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_every_scaffolded_python_file_passes_ruff -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py::test_the_scaffold_binds_to_no_floor -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_depends_on_tatolab_stream_and_numpy_only -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tatolab_new.py::test_every_scaffolded_python_file_passes_ruff -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_binds_to_no_floor -->
 - **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
   `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
   stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
@@ -258,7 +258,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   reaching past the surface. Codec sessions are not exported to Python; an extension that
   needs one brings that export as engine work. [extension-model; virtual-camera-sink —
   SHIPPED #2196, #2197, #2198]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_virtual_camera_sink.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_virtual_camera_sink.py -->
 - **DECIDED** — The `streamlib` wheel exports its bag codec as two module-level functions
   with stub entries: `encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes` and
   `decode_msgpack_bytes_to_python_object(msgpack_bytes: bytes) -> Any`. They are the
@@ -499,7 +499,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/tatolab-stream/tests/test_claimed_surface_pixel_access.py::test_a_frame_that_cannot_take_a_write_back_arrives_read_only -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_video_frame_claim.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_frame_claim.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_publication_rule -->
+  <!-- verify: pytest tests/stream-on-runtime/test_compute_kernel.py::test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_publication_rule -->
 - **DECIDED** — The portable path for GPU math in a Python processor is torch over the
   frame's own DLPack capsule: `torch.from_dlpack(frame)` on every floor, the device taken
   from that tensor or from `torch.accelerator`, and never spelled by name. Any DLPack
@@ -515,7 +515,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `VirtualCameraSink`; torch is a dependency of neither the wheel nor the scaffold.
   [portable-gpu-interop — SHIPPED #2420, #2422, #2423, #2424]
   <!-- verify: git grep -n -e "copy_surface_to_surface" -e "torch.accelerator" -- examples -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_tatolab_stream_and_numpy_only -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_depends_on_tatolab_stream_and_numpy_only -->
 - **DECIDED** — A frame's DLPack export honours a request for the host side on every
   floor: `dl_device=(kDLCPU, 0)` hands back the surface's host mapping, so
   `numpy.from_dlpack(frame, device="cpu")` is one line on both floors — on macOS the same
@@ -552,7 +552,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_cross_floor_check.py::test_the_stream_packages_own_python_binds_to_no_floor -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py::test_the_runtimes_own_python_binds_to_no_floor -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway -->
 - **DECIDED** — streamlib offers an extension point for an external control client, and runs
   complete without one. [one-runtime-per-machine]
 - **DECIDED** — The package split and the lend. `tatolab-stream`, importing as
@@ -923,7 +923,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::helper_process_loss_count_board::tests::the_parent_reads_each_entry_only_for_the_wiring_it_assigned -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::helper_process_loss_count_board::tests::a_write_from_a_wiring_the_slot_has_moved_past_lands_nothing -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted -->
-  <!-- verify: pytest -m requires_gpu sdk/streamlib-python-wheel/tests/test_helper_loss_counts.py -->
+  <!-- verify: pytest -m requires_gpu tests/stream-on-runtime/test_helper_loss_counts.py -->
 - **DECIDED** — No link ever blocks a producer: no profile resolves to producer-blocking and
   no overflow policy parks a producer. A processor publishing to a slow consumer loses bags at
   that consumer's port, counted as the entry above states; it is never parked. A parked
@@ -1035,7 +1035,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/tatolab-stream/tests/test_node_config_class.py::test_a_keyword_parameter_is_refused_with_the_fix_named -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_construction.py::test_the_helper_constructs_the_processor_by_the_config_keyword -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_node_config_class.py::test_the_document_is_2020_12_with_no_meta_schema_key -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_catalog.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_processor_config_catalog.py -->
   <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
 - **DECIDED** — Port rendering in the control plane is name, description, delivery
   profile, direction, and — on an audio input that declared one — its window contract; no
@@ -1250,14 +1250,14 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266; macos-platform-floor —
   SHIPPED #2357; macos-capability-parity — SHIPPED #2410; amended by one-runtime-per-machine:
   an installer-registered per-user service starts the runtime, which never detaches itself]
-  <!-- verify: sdk/streamlib-python-wheel/tests/test_helper_placement.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_processor_interrupted_while_still_setting_up_still_tears_down -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_worker_a_processor_forked_goes_down_with_the_apps_helper -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_three_helpers_slow_to_stop_cost_about_one_ladder -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_no_helper_outlives_an_app_killed_outright -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_helper_whose_app_was_killed_still_runs_its_teardown_on_macos -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
+  <!-- verify: tests/stream-on-runtime/test_helper_placement.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_placement.py::test_a_processor_interrupted_while_still_setting_up_still_tears_down -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_placement.py::test_a_worker_a_processor_forked_goes_down_with_the_apps_helper -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_three_helpers_slow_to_stop_cost_about_one_ladder -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_no_helper_outlives_an_app_killed_outright -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_helper_whose_app_was_killed_still_runs_its_teardown_on_macos -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
   <!-- verify: cargo test -p streamlib-engine --lib core::signals::tests::sighup_is_not_owned_on_macos -->
   <!-- verify: cargo test -p streamlib-python-wheel --lib python_helper_process_parent_death_watch::tests::the_watch_fires_when_the_watched_process_exits -->
 - **DECIDED** — A link onto a helper reads `wired` only once the helper says so. The helper
@@ -1293,14 +1293,14 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [local-transport-hardening — SHIPPED #2262; amended by package-split-and-lend: the lend
   gives both sides one build by construction, and this check stays as the backstop]
   <!-- verify: cargo test -p streamlib-engine --lib core::engine_build_id_composition -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_helper_that_imported_another_engine_build_is_refused_naming_both_builds -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_placement.py::test_a_helper_that_imported_another_engine_build_is_refused_naming_both_builds -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_a_helper_handed_no_engine_build_id_refuses_rather_than_passing -->
 - **DECIDED** — The MVP edit loop is re-running `dev` (warm restart is sub-second by
   construction). Reload-on-save is a nicety, not MVP-gating, and when built it is
   processor-granular — stop the processor, respawn its helper (a fresh interpreter
   re-imports the class), rewire its ports — never module-loading machinery.
   [importable-python-library — SHIPPED #1711]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_bad_config_is_reported_without_a_launcher_traceback -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_bad_config_is_reported_without_a_launcher_traceback -->
 - **DECIDED** — A processor's identity is its class, named by its fully-qualified
   import path (`my_app.filters:BlurProcessor` in Python, the type path in Rust) —
   derived mechanically, never authored, and the same string in the registry, in the
@@ -1322,8 +1322,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   helper-process-placement-only — SHIPPED #1714; amended by built-in-node-type: a built-in is
   named by its class's import path in `tatolab.stream`, never by its Rust type path]
   <!-- verify: cargo test -p streamlib-engine --test processor_class_import_path_test -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_identity.py::test_the_launch_arrangement_never_changes_the_identity -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_identity.py::test_a_processor_declared_in_the_entry_file_is_refused -->
+  <!-- verify: pytest tests/stream-on-runtime/test_processor_identity.py::test_the_launch_arrangement_never_changes_the_identity -->
+  <!-- verify: pytest tests/stream-on-runtime/test_processor_identity.py::test_a_processor_declared_in_the_entry_file_is_refused -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-12-processor-class-identity.md -->
 - **DECIDED** — A built-in node's type is the import path of its class in `tatolab.stream` —
   `tatolab.stream:CameraSource` — the same string in the runtime's registry, on the stream
@@ -1475,12 +1475,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine device_without_video_refuses_every_codec_operation_naming_its_direction -->
   <!-- verify: cargo test -p streamlib-engine a_subgroup_operation_in_a_stage_the_driver_does_not_serve_is_refused -->
   <!-- verify: cargo test -p streamlib-engine a_vsync_off_request_takes_fifo_where_the_driver_advertises_no_mailbox -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
+  <!-- verify: pytest tests/stream-on-runtime/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
 - **DECIDED** — The engine's kernel primitives are exposable to Python as configured
   blocks: shader/compute source and binding config passed from Python, compiled and
   executed by the engine on its device — no user-side Vulkan, ever.
   [importable-python-library — SHIPPED #1717; python-kernel-surface — SHIPPED #1773, #1775]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_compute_kernel.py -->
 - **DECIDED** — Python reaches every kernel kind Rust authoring reaches, per floor: compute,
   graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python names
   and drives; the engine allocates, compiles, binds, and dispatches. No kernel kind is
@@ -1506,7 +1506,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine every_staging_op_and_acquire_image_refuse_on_macos_naming_the_reason -->
   <!-- verify: cargo test -p streamlib-engine a_uniform_buffer_binding_is_refused_naming_its_kind -->
   <!-- verify: cargo test -p streamlib-engine a_trace_refuses_a_storage_buffer_binding_by_name -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_uniform_buffer_binding_is_refused_naming_its_kind -->
+  <!-- verify: pytest tests/stream-on-runtime/test_graphics_kernel.py::test_a_uniform_buffer_binding_is_refused_naming_its_kind -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_graphics_kernel_surface.py::test_a_draw_takes_no_vertex_buffer_no_index_buffer_and_no_depth_target -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_graphics_kernel_surface.py::test_a_graphics_kernel_carries_no_depth_or_vertex_input_state -->
 - **DECIDED** — A kernel's output is an engine-owned texture that Python names by
@@ -1597,8 +1597,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine a_staging_registration_states_the_exporters_memory_type_index -->
   <!-- verify: cargo test -p streamlib-engine parse_texture_usages_combines_tokens_and_implies_both_copy_bits -->
   <!-- verify: cargo test -p streamlib-engine the_seam_publishes_a_staged_edit_back_into_the_pooled_backing -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_publication_rule -->
+  <!-- verify: pytest tests/stream-on-runtime/test_compute_kernel.py::test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone -->
+  <!-- verify: pytest tests/stream-on-runtime/test_compute_kernel.py::test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_publication_rule -->
   <!-- verify: cargo test -p streamlib-python-wheel a_checked_out_texture_reads_its_iosurface_rows_and_releases_on_its_shared_event -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-24-texture-backed-cpu-reach.md -->
 - **DECIDED** — The RHI imports a caller's own host mapping as memory the GPU writes
@@ -1726,8 +1726,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine an_rgba_pool_frame_lands_in_an_rgba8_unorm_texture -->
   <!-- verify: cargo test -p streamlib-engine a_retired_frame_is_refused_by_name -->
   <!-- verify: cargo test -p streamlib-engine a_pool_frame_its_producer_still_owns_is_refused_as_taking_no_write_back -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_surface_copy.py::test_a_frame_lands_in_a_kernel_input_texture_with_no_array_library -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_surface_copy.py::test_the_landing_check_fails_when_the_copy_is_skipped -->
+  <!-- verify: pytest tests/stream-on-runtime/test_surface_copy.py::test_a_frame_lands_in_a_kernel_input_texture_with_no_array_library -->
+  <!-- verify: pytest tests/stream-on-runtime/test_surface_copy.py::test_the_landing_check_fails_when_the_copy_is_skipped -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-26-portable-gpu-interop.md -->
 - **DECIDED** — Python holds a tensor buffer: `acquire_storage_buffer(shape, dtype)` on the
   Limited GPU capability, and so on Full, mints an engine-owned storage buffer of a declared
@@ -1762,11 +1762,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the processor output pool below, whose held slots are never rewritten. Uniform buffers
   trail it; push constants carry per-dispatch parameters meanwhile.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2429, #2430, #2431]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_a_tensor_written_through_torch_is_read_by_another_process -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_an_odd_shaped_tensor_round_trips -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_a_tensor_acquired_after_a_window_opens_round_trips -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_mlx_reads_the_tensor_torch_mps_wrote_in_another_process -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_a_tensor_written_through_torch_is_read_by_another_process -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_an_odd_shaped_tensor_round_trips -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_a_tensor_acquired_after_a_window_opens_round_trips -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_mlx_reads_the_tensor_torch_mps_wrote_in_another_process -->
   <!-- verify: cargo test -p streamlib-engine a_storage_buffer_registration_without_its_layout_is_refused_by_name -->
   <!-- verify: cargo test -p streamlib-engine a_later_pass_in_a_batch_reads_the_tensor_an_earlier_pass_wrote -->
   <!-- verify: cargo test -p streamlib-engine a_retired_tensor_frame_id_is_refused_and_writes_nothing -->
@@ -1802,9 +1802,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests offscreen_draw_into_a_slot_the_display_is_still_composing_is_ordered_after_the_compose -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_texture_ring_producer.py::test_a_frame_a_consumer_holds_keeps_its_pixels_while_the_producer_produces -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_texture_ring_producer.py::test_the_same_schedule_with_no_claim_recycles_the_first_frame -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_a_tensor_a_consumer_holds_is_never_rewritten -->
+  <!-- verify: pytest tests/stream-on-runtime/test_texture_ring_producer.py::test_a_frame_a_consumer_holds_keeps_its_pixels_while_the_producer_produces -->
+  <!-- verify: pytest tests/stream-on-runtime/test_texture_ring_producer.py::test_the_same_schedule_with_no_claim_recycles_the_first_frame -->
+  <!-- verify: pytest tests/stream-on-runtime/test_tensor_storage_buffer.py::test_a_tensor_a_consumer_holds_is_never_rewritten -->
 - **DECIDED** — A pixel effect is written as a shader body: `GlslPixelEffect`, pure wheel
   Python over `create_compute_kernel`, the processor output texture ring,
   `copy_surface_to_surface` and dispatch, with no engine, wire or stub change. The user writes
@@ -1824,10 +1824,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   reserved dial name, a `vec3`, an oversize block, an undeclared, missing or mistyped dial,
   and a frame the copy refuses. No Rust peer until a Rust consumer names one.
   [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2428]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_glsl_pixel_effect.py::test_an_invert_effect_with_a_strength_dial_outputs_255_minus_the_source -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_glsl_pixel_effect.py::test_the_invert_check_fails_for_an_identity_effect -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_glsl_pixel_effect.py::test_every_dial_type_reaches_the_shader_at_its_std430_offset -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_glsl_pixel_effect.py::test_a_compiler_diagnostic_names_the_line_of_the_users_body -->
+  <!-- verify: pytest tests/stream-on-runtime/test_glsl_pixel_effect.py::test_an_invert_effect_with_a_strength_dial_outputs_255_minus_the_source -->
+  <!-- verify: pytest tests/stream-on-runtime/test_glsl_pixel_effect.py::test_the_invert_check_fails_for_an_identity_effect -->
+  <!-- verify: pytest tests/stream-on-runtime/test_glsl_pixel_effect.py::test_every_dial_type_reaches_the_shader_at_its_std430_offset -->
+  <!-- verify: pytest tests/stream-on-runtime/test_glsl_pixel_effect.py::test_a_compiler_diagnostic_names_the_line_of_the_users_body -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_glsl_pixel_effect_refusals.py -->
 - **DECIDED** — Model input is prepared on the GPU by `ModelInputTensorKernel`, pure wheel
   Python over a compute kernel, the tensor side of the processor output pool and binding by
@@ -1847,9 +1847,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   or non-RGBA source; a float16 tensor with an odd element count; an extent past one
   dispatch. No colour conversion: a YUV frame is converted by the engine before it is
   published. [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2432]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_model_input_tensor_kernel.py::test_every_layout_and_dtype_of_a_fit_matches_the_torch_reference -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_model_input_tensor_kernel.py::test_the_comparison_fails_for_a_kernel_compiled_with_the_wrong_mean -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_model_input_tensor_kernel.py::test_a_pad_bottom_right_tensor_follows_its_frame_across_an_extent_change -->
+  <!-- verify: pytest tests/stream-on-runtime/test_model_input_tensor_kernel.py::test_every_layout_and_dtype_of_a_fit_matches_the_torch_reference -->
+  <!-- verify: pytest tests/stream-on-runtime/test_model_input_tensor_kernel.py::test_the_comparison_fails_for_a_kernel_compiled_with_the_wrong_mean -->
+  <!-- verify: pytest tests/stream-on-runtime/test_model_input_tensor_kernel.py::test_a_pad_bottom_right_tensor_follows_its_frame_across_an_extent_change -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_model_input_tensor_kernel_refusals.py -->
 - **OPEN** — Everything else, including the two graphics capabilities no language can
   render: depth attachments — Rust constructs a depth-testing pipeline that Python cannot
@@ -1880,8 +1880,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   first-party capability is a built-in only under the criterion in §Packages & extension
   model, and is otherwise an extension wheel.
   [importable-python-library — SHIPPED #1709; extension-model]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_native_builtin_blocks.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
+  <!-- verify: pytest tests/stream-on-runtime/test_native_builtin_blocks.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
   (c): `VirtualCameraSink`, in the media built-ins crate, Linux only — with no Apple port,
   stated rather than deferred: a macOS virtual camera is a CoreMediaIO Camera Extension
@@ -1950,7 +1950,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   a working PipeWire camera consumer. [virtual-camera-sink — SHIPPED #2196, #2197, #2198;
   macos-capability-parity]
   <!-- verify: cargo test -p streamlib-media-builtins virtual_camera_sink -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_virtual_camera_sink.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_virtual_camera_sink.py -->
   <!-- verify: cargo test -p streamlib-engine a_pipewire_camera_node_offers_a_modifier_and_a_shared_memory_sibling -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_enable_virtual_camera_refuses_by_name_off_linux -->
 - **OPEN** — Two `VirtualCameraSink` behaviours the loopback door shipped with, each a
@@ -2000,7 +2000,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib the_largest_format_within_the_cap_is_chosen -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib a_captured_frame_is_published_as_the_bag_a_camera_has_always_published -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test avfoundation_camera_captures_through_the_video_device_seam -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_camera_source.py::test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup -->
+  <!-- verify: pytest tests/stream-on-runtime/test_camera_source.py::test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-29-macos-platform-floor.md -->
 - **DECIDED** — A camera frame carries one capture instant on both of its stamps. The
   seam's hand-off carries `capture_timestamp_ns`, resolved under one rule every arm shares
@@ -2213,7 +2213,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib the_macos_chain_offers_coreaudio_before_falling_through_to_null -->
   <!-- verify: cargo test -p streamlib-engine --lib the_walk_demotes_past_every_arm_that_declines_in_the_order_it_was_given -->
   <!-- verify: cargo test -p streamlib-engine --lib the_linux_chain_offers_pipewire_then_alsa_before_falling_through_to_null -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_microphone_source.py::test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup -->
+  <!-- verify: pytest tests/stream-on-runtime/test_microphone_source.py::test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup -->
 - **DECIDED** — The audio device seam is an engine primitive beside the audio clock,
   not built-in-private code: `AudioDeviceBackend` opening `AudioCaptureStream` and
   `AudioPlaybackStream`, living in `core/context/` with its Linux implementations under
@@ -2493,7 +2493,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_48k_stereo_source_reaches_a_16k_mono_512_port_as_exact_windows_32ms_apart -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_bag_the_stage_cannot_read_is_refused_by_name_rather_than_reshaped -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_i16_contract_saturates_at_both_endpoints_rather_than_wrapping -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_window_stage.py::test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared -->
+  <!-- verify: pytest tests/stream-on-runtime/test_audio_window_stage.py::test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared -->
 - **DECIDED** — Readiness on a windowed port means a full window, not an arrived bag.
   Windowing is N-in → M-out — one 1024-sample quantum satisfies two 512-sample windows, a
   one-second rolling window needs about forty-seven of them — so the stage owns a per-port
@@ -2508,7 +2508,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::one_1024_sample_quantum_against_a_512_512_contract_yields_exactly_two_windows -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_stream_that_stops_mid_window_hands_over_nothing_rather_than_a_short_block -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_window_stage.py::test_a_hop_below_the_window_rolls_at_the_hops_cadence_not_the_windows -->
+  <!-- verify: pytest tests/stream-on-runtime/test_audio_window_stage.py::test_a_hop_below_the_window_rolls_at_the_hops_cadence_not_the_windows -->
 - **DECIDED** — The stage derives a stamp; it never reads a clock. One device stamp anchors
   each contiguous run — taken from the first block after start or after a flush — and every
   window's `first_sample_timestamp_ns` is that anchor plus the emitted-sample offset in
@@ -2648,9 +2648,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   exists to fix. Conditioning and immediate cancel are a later rung.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1992;
   audio-port-window-contract — SHIPPED #2034]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_microphone_source.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_speaker_sink.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_speaker_sink.py::test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured -->
+  <!-- verify: pytest tests/stream-on-runtime/test_microphone_source.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_speaker_sink.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_speaker_sink.py::test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured -->
   <!-- verify: cargo test -p streamlib-media-builtins --test speaker_sink_matches_its_device a_sixteen_kilohertz_source_reaches_whatever_this_machines_speaker_opened_at -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-29-audio-port-window-contract.md -->
 - **DECIDED** — Codec blocks are native built-ins beside camera, display and the audio
@@ -2836,8 +2836,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [python-codec-block-api — SHIPPED #2105; macos-capability-parity — SHIPPED #2413;
   stream-graph — SHIPPED #2567]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_node_name_defaults_to_the_type_name -->
+  <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
+  <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_node_name_defaults_to_the_type_name -->
 - **DECIDED** — `tatolab.stream.EncodedVideoFrame` is the Python cast over the encoded-frame
   bag's wire keys: pure Python beside `audio_block.py`, read with
   `ctx.inputs.read("encoded_video", into=EncodedVideoFrame)`, owing no `.pyi` entry
@@ -2879,7 +2879,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   gets no Python arm — nothing Python-specific sits on the colour path.
   [python-codec-block-api — SHIPPED #2107]
   <!-- verify: PIPELINE=python bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
-  <!-- verify: git ls-files runtime/streamlib-engine/tests/fixtures/codec_roundtrip_node.py -->
+  <!-- verify: git ls-files runtime/streamlib-engine/tests/fixtures/codec_roundtrip_stream.py -->
 - **DECIDED** — An encoded audio packet is an ordinary bag, the encoded-frame convention
   applied to audio: `codec` (`"opus"`), `bitstream` (msgpack `bin`, one Opus packet as
   RFC 6716 §3 frames it), `is_sync_point` (`true` on every packet — a decoder enters at
@@ -3080,8 +3080,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   nothing it reads sits under the Vulkan Video tree.
   [opus-mp4-recording-rung — SHIPPED #2126, #2128; macos-capability-parity — SHIPPED #2414;
   stream-graph — SHIPPED #2567]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_opus_blocks.py::test_the_round_trip_wires_without_an_adapter -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_mp4_sink.py::test_two_encoders_wire_into_the_one_input_without_an_adapter -->
+  <!-- verify: pytest tests/stream-on-runtime/test_opus_blocks.py::test_the_round_trip_wires_without_an_adapter -->
+  <!-- verify: pytest tests/stream-on-runtime/test_mp4_sink.py::test_two_encoders_wire_into_the_one_input_without_an_adapter -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
 - **DECIDED** — The rung's CI-run, GPU-free proof: the stage with `channels` absent emits
   the source's count and converts when one is declared, in Rust and through the Python
@@ -3104,8 +3104,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `sample_count` is 960, decoded blocks are 48 kHz `f32` in the source's channels;
   `test_mp4_sink.py` — two sources into one sink give a file whose `mp4-inspect` names two
   tracks after their producers. [opus-mp4-recording-rung — SHIPPED #2126, #2128]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_opus_blocks.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_mp4_sink.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_opus_blocks.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_mp4_sink.py -->
 - **DECIDED** — Live, two arms on engine-owned fixtures beside `audio_loopback_node.py`
   and `codec_roundtrip_node.py`. `opus_roundtrip_node.py`: `KnownAudioSignalSource →
   OpusEncoder → OpusDecoder → CapturedAudioWaveformRecorder`, scored by
@@ -3293,7 +3293,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   sharing step's (the moq-on-the-tailnet entries below).
   [zenoh-and-moq-wheel-removal — SHIPPED #2643]
   <!-- verify: cargo test -p streamlib-engine --lib core::graph_snapshot::tests::a_link_end_naming_a_runtime_is_refused_naming_that_runtime -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_load.py::test_a_link_end_naming_a_runtime_is_refused_by_load_naming_it -->
+  <!-- verify: pytest tests/stream-on-runtime/test_stream_graph_load_on_tatolabd.py::test_a_link_end_naming_a_runtime_is_refused_by_load_naming_it -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_connect_refuses_an_input_as_its_source_naming_the_fix -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-05-zenoh-and-moq-wheel-removal.md -->
 - **DECIDED** — A link between streams is always pulled. Only the stream that owns the input
@@ -3486,7 +3486,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [moq-on-the-tailnet]
 
 ## Language SDKs & parity — IN-FLIGHT (→ package-split-and-lend)
-<!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
+<!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py -->
 
 - **DECIDED** — Python is the sole focus runtime: the importable PyO3 wheel is the
   primary authoring surface. TypeScript authoring is paused,
@@ -3537,11 +3537,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   a teardown outside it — `shutdown()` before a run, `Drop`, `atexit`, `__exit__` — owns no
   signals, and the watchdog alone bounds it.
   [shutdown-ladder; local-transport-hardening — SHIPPED #2266; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_ctrl_c_exits_cleanly -->
+  <!-- verify: cargo test -p tatolabd --test tatolabd_hosts_a_stream_on_the_gpu an_interrupt_stops_the_stream_cleanly_and_exits_zero -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sigint_is_handed_back_to_cpython -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sighup_tears_the_graph_down_gracefully -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
+  <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_sighup_tears_the_graph_down_gracefully -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
 ## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend, runtime-hosting)
@@ -3558,7 +3558,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   one-runtime-per-machine: two distributions, a stream package and a runtime package; amended
   by tatolab-names: the crate is `tatolab-stream`; amended by package-split-and-lend: one
   version for everything (the entry below)]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_pins_streamlib_and_tatolab_stream_to_their_own_index -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_sources_tatolab_stream_from_its_own_index -->
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
   ships — `tatolabd`, the `tatolab` CLI, the desktop app and `tatolab.runtime` — and the
@@ -3731,7 +3731,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   moq-on-the-tailnet: `tap` and `exchange` leave the tool set at the sharing step]
   <!-- verify: cargo test -p streamlib-api-server the_upgraded_stream_serves_the_same_tools_and_resources_as_post_mcp -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_live_graph_mutation.py -->
   <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_node_catalog_and_the_live_graph -->
   <!-- verify: cargo test -p streamlib-api-server every_step_of_every_prompt_calls_a_tool_the_node_serves -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth -->
@@ -3926,7 +3926,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   #2660, #2662, #2663; amended by moq-on-the-tailnet: the URL listener's tailnet half,
   through `tailscale serve`]
   <!-- verify: cargo test -p streamlib-api-server serving_the_router_on_the_local_api_socket_opens_no_tcp_listener -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_launched_node_listens_on_no_tcp_socket -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_launched_node_listens_on_no_tcp_socket -->
 - **DECIDED** — An MCP host reaches the local API by launching the CLI's `mcp` verb as a
   stdio server — `claude mcp add streamlib -- <cli> mcp`. The verb resolves the runtime,
   opens its socket, sends the one `/mcp/stdio` upgrade request, and then copies bytes,
