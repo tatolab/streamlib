@@ -17,6 +17,8 @@ dependencies = [
     # The official MCP Python SDK, whose streamable-HTTP client drives a
     # node's local API over its Unix socket.
     "mcp==2.3.0",
+    # A fixture stream's node takes a model as its config class.
+    "pydantic>=2.0",
 ]
 
 [dependency-groups]

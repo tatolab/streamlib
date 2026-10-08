@@ -35,6 +35,8 @@ LINK_STATE_TIMEOUT_SECONDS = 15.0
 GRAPH_POLL_INTERVAL_SECONDS = 0.05
 
 RUNNING_NODE_STATE = "Running"
+#: The states a node passes through before its `setup` has run, as the engine renders them.
+NODE_STATES_BEFORE_SETUP_COMPLETED = ("Pending", "Idle")
 LINK_ERROR_STATE = "error"
 
 McpAnswer = TypeVar("McpAnswer")
@@ -151,6 +153,33 @@ class LocalApiClient:
                 raise AssertionError(
                     f"not every node was {RUNNING_NODE_STATE} within {timeout}s "
                     f"(expected {sorted(expected)}): {node_states}"
+                )
+            time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
+
+    def await_every_node_past_setup(
+        self, *, timeout: float = EVERY_NODE_RUNNING_TIMEOUT_SECONDS
+    ) -> "dict[str, Any]":
+        """Poll `/api/graph` until no node is still before setup, and return each node's state.
+
+        `Running` is a setup that returned and `Error` one that refused, so a
+        caller asserting a refusal reads it here without waiting out a timeout
+        for a `Running` that will never come. Past the timeout raises naming
+        each node's last state.
+        """
+        deadline = time.monotonic() + timeout
+        node_states: "dict[str, Any]" = {}
+        while True:
+            node_states = {
+                node["name"]: node.get("components", {}).get("state")
+                for node in self.graph()["nodes"]
+            }
+            if node_states and not any(
+                state in NODE_STATES_BEFORE_SETUP_COMPLETED for state in node_states.values()
+            ):
+                return node_states
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"a node was still before setup after {timeout}s: {node_states}"
                 )
             time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
 
