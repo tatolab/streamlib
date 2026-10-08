@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `tatolab`: `new` writes a stream project; `run` and `dev` compile a stream in its project's
-//! venv and start `tatolabd` attached.
+//! venv and start `tatolabd` attached; `enable-virtual-camera` grants this machine's users the
+//! virtual camera's loopback device, once.
 
 // stdout and stderr are this binary's output channel to the user, as they are xtask's.
 #![allow(clippy::disallowed_macros)]
@@ -11,12 +12,17 @@ mod attached_tatolabd_supervisor;
 mod forwarded_signal_listener;
 mod project_source_change_watcher;
 mod scaffold_new_stream_project;
+mod virtual_camera_loopback_permission_grant;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
+
+use crate::virtual_camera_loopback_permission_grant::{
+    VirtualCameraGrantDelivery, VirtualCameraGrantTargetMachine,
+};
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
 #[derive(Debug)]
@@ -77,6 +83,18 @@ enum TatolabVerb {
     Run(StreamLaunchArguments),
     /// Run this stream on tatolabd and restart it on every saved edit.
     Dev(StreamLaunchArguments),
+    /// Grant this machine's users the permission a VirtualCameraSink needs, once.
+    #[command(
+        long_about = "Install the standard grant behind the virtual camera's loopback door: load \
+                      v4l2loopback with no devices (persisted in modules-load.d and modprobe.d) \
+                      and tag its control node `uaccess` for the logged-in user. One privileged \
+                      step through pkexec (sudo in a headless shell); the engine never runs it."
+    )]
+    EnableVirtualCamera {
+        /// Write the three files' contents and the commands to stdout and change nothing.
+        #[arg(long = "print")]
+        print_grant_without_installing: bool,
+    },
 }
 
 /// The flags `run` and `dev` share; all but `--runtime-name` go to the compile entry verbatim.
@@ -130,6 +148,28 @@ fn main() -> ExitCode {
                 attached_tatolabd_supervisor::StreamLaunchVerb::Dev,
                 &stream_launch_arguments,
             )
+        }
+        TatolabVerb::EnableVirtualCamera {
+            print_grant_without_installing,
+        } => {
+            let virtual_camera_grant_delivery = if print_grant_without_installing {
+                VirtualCameraGrantDelivery::PrintForHandInstall
+            } else {
+                VirtualCameraGrantDelivery::InstallThroughPrivilegeEscalationHelper
+            };
+            VirtualCameraGrantTargetMachine::this_machine()
+                .map_err(|kernel_identification_failure| {
+                    TatolabCommandFailure::refused(format!(
+                        "cannot read this machine's kernel name and release: \
+                         {kernel_identification_failure}"
+                    ))
+                })
+                .and_then(|mut grant_target_machine| {
+                    virtual_camera_loopback_permission_grant::enable_virtual_camera(
+                        virtual_camera_grant_delivery,
+                        &mut grant_target_machine,
+                    )
+                })
         }
     };
     match command_outcome {
