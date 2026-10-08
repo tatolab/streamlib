@@ -1603,12 +1603,12 @@ mod tests {
             runtime_name: Some(shared_runtime_name.to_string()),
             ..RunnerConstructionOptions::default()
         })
-            .expect("the first runner constructs");
+        .expect("the first runner constructs");
         let second = Runner::new_with_construction_options(RunnerConstructionOptions {
             runtime_name: Some(shared_runtime_name.to_string()),
             ..RunnerConstructionOptions::default()
         })
-            .expect("a second runner given the same name constructs beside the first");
+        .expect("a second runner given the same name constructs beside the first");
 
         assert_ne!(first.runtime_id(), second.runtime_id());
         for runner in [&first, &second] {
