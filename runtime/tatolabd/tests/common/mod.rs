@@ -11,10 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-/// The file a lend must hold for `tatolabd` to take it.
-const PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND: &str =
-    "tatolab/runtime/_processor_interpreter_bootstrap.py";
+use streamlib::sdk::processor_interpreter::processor_interpreter_bootstrap_path;
 
 /// A temporary runtime unit: `bin/tatolabd`, and the lend beside it unless the
 /// test asked for none.
@@ -27,13 +24,14 @@ impl TemporaryRuntimeUnit {
     /// `bin/tatolabd` beside `lib/tatolab/lend/` holding the bootstrap.
     pub fn with_its_lend() -> Self {
         let runtime_unit = Self::without_a_lend();
-        let bootstrap = runtime_unit
-            .tatolabd
-            .parent()
-            .and_then(Path::parent)
-            .expect("bin/ has a parent")
-            .join("lib/tatolab/lend")
-            .join(PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND);
+        let bootstrap = processor_interpreter_bootstrap_path(
+            &runtime_unit
+                .tatolabd
+                .parent()
+                .and_then(Path::parent)
+                .expect("bin/ has a parent")
+                .join("lib/tatolab/lend"),
+        );
         std::fs::create_dir_all(bootstrap.parent().expect("the bootstrap has a directory"))
             .expect("the lend is created");
         std::fs::write(&bootstrap, "").expect("the bootstrap is written");
