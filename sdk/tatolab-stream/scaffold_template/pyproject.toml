@@ -2,18 +2,15 @@
 name = "streamlib-app"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["streamlib", "tatolab-stream", "numpy>=2.1"]
+dependencies = ["tatolab-stream", "numpy>=2.1"]
 
-# streamlib and tatolab-stream are served from their own simple index until the
-# PyPI publication that follows the project rename; everything else resolves from
-# PyPI as usual. Each is named here because uv reads an explicit index only for
-# a dependency the project declares itself, never for one the engine wheel pulls
-# in.
+# tatolab-stream is served from its own simple index until its PyPI publication;
+# everything else resolves from PyPI as usual. uv reads an explicit index only for
+# a dependency sourced from it here.
 [[tool.uv.index]]
-name = "streamlib"
+name = "tatolab"
 url = "https://tatolab.github.io/streamlib/simple/"
 explicit = true
 
 [tool.uv.sources]
-streamlib = { index = "streamlib" }
-tatolab-stream = { index = "streamlib" }
+tatolab-stream = { index = "tatolab" }

@@ -16,7 +16,7 @@ from tatolab.stream import (
 )
 
 # The whole effect: the output pixel for the source pixel at `at`, with each
-# channel in 0.0-1.0. Edit it and re-run `streamlib dev`.
+# channel in 0.0-1.0. Edit it while `tatolab dev` runs to see the change.
 INVERT_GLSL = """
 vec4 effect(vec4 source, ivec2 at) {
     // Color channels only — inverting alpha would erase the picture.
