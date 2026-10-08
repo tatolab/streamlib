@@ -836,8 +836,7 @@ mod tests {
         );
     }
 
-    /// The helper runs from the file its lookup found, not by its name again: the stand-in sits in
-    /// a directory this process's PATH does not hold.
+    /// A relative or empty PATH entry never resolves a helper, even one that reaches `/bin/sh`.
     #[test]
     fn a_relative_or_empty_search_path_entry_never_resolves_a_helper() {
         let relative_entry_reaching_slash_bin = format!(
@@ -870,6 +869,8 @@ mod tests {
         );
     }
 
+    /// The helper runs from the file its lookup found, not by its name again: the stand-in sits in
+    /// a directory this process's PATH does not hold.
     #[test]
     fn the_helper_runs_from_the_path_its_lookup_resolved() {
         let scratch_directory = tempfile::tempdir().unwrap();
