@@ -198,11 +198,11 @@ an input), `manual`, or `continuous` at an interval you set.
 
 ## Inspect a device that's already running
 
-The observation verbs — `nodes`, `graph`, `tap`, `logs`, `exchange` and `mcp` — are still the
-Python `streamlib` CLI, until the native `tatolab` carries them. Install the engine wheel that
-ships it into a venv of its own, never the stream's
-(`pip install streamlib --index-url https://tatolab.github.io/streamlib/simple/`), or run it from a
-checkout's runtime unit with any interpreter that has `tatolab-stream`:
+The observation verbs — `nodes`, `graph`, `tap`, `logs`, `exchange` and `mcp` — and the
+machine-setup verb `enable-virtual-camera` are still the Python `streamlib` CLI, until the native
+`tatolab` carries them. Install the engine wheel that ships it into a venv of its own, never the
+stream's (`pip install streamlib --index-url https://tatolab.github.io/streamlib/simple/`), or run
+it from a checkout's runtime unit with any interpreter that has `tatolab-stream`:
 `PYTHONPATH=target/tatolab-runtime/lib/tatolab/lend python -m tatolab.runtime.cli <verb>`.
 
 Run these on the machine the node runs on. `--node <runtime name>` picks a node by the

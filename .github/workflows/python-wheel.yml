@@ -138,7 +138,7 @@ jobs:
       # only `tatolab.runtime` on the path, and the tests fail if they imported
       # one from anywhere else. They live outside `tests/` so that a develop
       # venv's whole-suite run never collects them.
-      - name: Portability, driver-search and describe tests against the lend
+      - name: Portability and driver-search tests against the lend
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
           uv venv --python 3.12 "$RUNNER_TEMP/lend-check-venv"
