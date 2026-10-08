@@ -367,6 +367,7 @@ fn a_local_api_socket_a_live_process_holds_is_refused_naming_it_before_the_engin
     );
     assert!(!refusal.contains("Starting runtime"), "{refusal}");
     assert!(held_local_api_socket_path.exists());
+    std::fs::remove_file(&held_local_api_socket_path).unwrap();
 }
 
 /// A run refused after its local API socket was bound — here at the GPU,
