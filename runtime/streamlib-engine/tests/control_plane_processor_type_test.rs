@@ -6,7 +6,7 @@
 //! Asserted against the rendered payload rather than the DTO's Rust type: the
 //! shape a reader gets is the contract, and a `Serialize` impl is what decides
 //! it. `to_json_async` is the exact payload `GET /api/graph` and
-//! `streamlib graph` serve.
+//! `tatolab graph` serve.
 //!
 //! The negative half is what makes this a lock rather than a restatement — no
 //! `org`, `package` or `version` key survives anywhere in a node's rendering,

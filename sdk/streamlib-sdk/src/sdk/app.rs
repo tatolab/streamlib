@@ -31,7 +31,7 @@ pub struct AddedProcessor {
 }
 
 impl AddedProcessor {
-    /// The engine's id for this processor — what `streamlib graph` shows.
+    /// The engine's id for this processor — what `tatolab graph` shows.
     pub fn processor_id(&self) -> &ProcessorUniqueId {
         &self.processor_id
     }
