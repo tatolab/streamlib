@@ -11,11 +11,11 @@
 #![allow(clippy::disallowed_macros)]
 
 mod attached_tatolabd_supervisor;
-mod forwarded_signal_listener;
 mod local_api_mcp_stdio_pipe;
 mod local_api_mcp_tool_client;
 mod local_api_runtime_selection;
 mod local_api_unix_socket_http_client;
+mod process_signal_handling;
 mod project_source_change_watcher;
 mod runtime_log_files_reader;
 mod runtime_logs_verb;

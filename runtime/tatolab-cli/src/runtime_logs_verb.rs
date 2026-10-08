@@ -7,7 +7,6 @@
 
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Datelike};
@@ -19,6 +18,9 @@ use streamlib_runtime_client_contract::runtime_log_file_paths::{
     runtime_log_instances_in_directory,
 };
 
+use crate::process_signal_handling::{
+    an_interrupt_was_delivered_during_the_read, end_the_read_on_interrupt,
+};
 use crate::runtime_log_files_reader::{
     RUNTIME_LOG_FOLLOW_POLL_INTERVAL, RuntimeLogReadStep, RuntimeLogRecordFilters,
     RuntimeLogRecordsReader,
@@ -222,7 +224,7 @@ pub(crate) fn run_runtime_logs_verb(
         &on_disk_request,
         &mut buffered_standard_output,
         &mut io::stderr(),
-        &|| INTERRUPT_DELIVERED_DURING_THE_READ.load(Ordering::SeqCst),
+        &an_interrupt_was_delivered_during_the_read,
         RUNTIME_LOG_FOLLOW_POLL_INTERVAL,
     )
 }
@@ -448,49 +450,6 @@ pub(crate) fn format_size(size_bytes: u64) -> String {
         }
     }
     format!("{size_bytes} B")
-}
-
-/// Set by SIGINT while `logs` reads the disk, so Ctrl-C ends the read — a `--follow` above all —
-/// with exit 0 rather than killing the process mid-line.
-static INTERRUPT_DELIVERED_DURING_THE_READ: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn record_interrupt_delivered_during_the_read(_delivered_signal: libc::c_int) {
-    INTERRUPT_DELIVERED_DURING_THE_READ.store(true, Ordering::SeqCst);
-}
-
-/// Route SIGINT to [`INTERRUPT_DELIVERED_DURING_THE_READ`]. A SIGINT inherited as ignored stays
-/// ignored, as it does for a Python console script.
-fn end_the_read_on_interrupt() -> io::Result<()> {
-    // SAFETY: a null `act` is POSIX's read-only query; `inherited_interrupt_disposition` is a
-    // zeroed `sigaction` this frame owns for the kernel to write into.
-    let inherited_interrupt_disposition = unsafe {
-        let mut inherited_interrupt_disposition: libc::sigaction = std::mem::zeroed();
-        if libc::sigaction(
-            libc::SIGINT,
-            std::ptr::null(),
-            &mut inherited_interrupt_disposition,
-        ) != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        inherited_interrupt_disposition
-    };
-    if inherited_interrupt_disposition.sa_sigaction == libc::SIG_IGN {
-        return Ok(());
-    }
-    // SAFETY: the handler only stores to an atomic, which is async-signal-safe; the action is
-    // fully initialised before it is installed, and a null old-action pointer is allowed.
-    unsafe {
-        let mut interrupt_action: libc::sigaction = std::mem::zeroed();
-        interrupt_action.sa_sigaction =
-            record_interrupt_delivered_during_the_read as extern "C" fn(libc::c_int) as usize;
-        libc::sigemptyset(&mut interrupt_action.sa_mask);
-        interrupt_action.sa_flags = libc::SA_RESTART;
-        if libc::sigaction(libc::SIGINT, &interrupt_action, std::ptr::null_mut()) != 0 {
-            return Err(io::Error::last_os_error());
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

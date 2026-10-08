@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::forwarded_signal_listener::{
+use crate::process_signal_handling::{
     block_forwarded_signals_and_listen, unblock_forwarded_signals_in_the_child,
 };
 use crate::project_source_change_watcher::watch_project_sources;
