@@ -59,7 +59,7 @@ impl RuntimeLogRecordFilters {
             return false;
         }
         if let Some(minimum_level) = self.minimum_level
-            && event.level.severity_rank() < minimum_level.severity_rank()
+            && event.level < minimum_level
         {
             return false;
         }
@@ -580,7 +580,13 @@ impl RuntimeLogRecordsReader {
                     if let Some(newer_instance) = newest_runtime_log_instance_in_directory(
                         &self.log_directory,
                         &self.instance_being_read.runtime_id,
-                    ) && newer_instance
+                    )
+                    .map_err(|listing_failure| {
+                        RuntimeLogSegmentReadFailure::of_segment(
+                            &self.log_directory,
+                            listing_failure,
+                        )
+                    })? && newer_instance
                         .compare_started_at(&self.instance_being_read)
                         .is_gt()
                     {
@@ -1399,7 +1405,8 @@ mod tests {
             &log_directory.path().join("R-with-dashes-1234.jsonl"),
             &["dashed"],
         );
-        let mut listed_instances = runtime_log_instances_in_directory(log_directory.path());
+        let mut listed_instances =
+            runtime_log_instances_in_directory(log_directory.path()).unwrap();
         assert_eq!(listed_instances.len(), 1);
         let mut note_output = Vec::new();
         let mut runtime_log_records_reader = RuntimeLogRecordsReader::reading(

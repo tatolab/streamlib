@@ -21,10 +21,22 @@ pub fn log_dir() -> PathBuf {
     crate::streamlib_home::get_streamlib_data_dir().join("logs")
 }
 
-/// Path of the JSONL file for one runtime instance, using
+/// The active segment's file name for one runtime instance:
 /// `<runtime_id>-<started_at_millis>.jsonl`.
+pub fn active_runtime_log_segment_file_name(
+    runtime_id: &str,
+    started_at_millis: impl std::fmt::Display,
+) -> String {
+    format!("{runtime_id}-{started_at_millis}.jsonl")
+}
+
+/// Path of the active JSONL segment for one runtime instance, named by
+/// [`active_runtime_log_segment_file_name`].
 pub fn runtime_log_path(runtime_id: &str, started_at_millis: u128) -> PathBuf {
-    log_dir().join(format!("{}-{}.jsonl", runtime_id, started_at_millis))
+    log_dir().join(active_runtime_log_segment_file_name(
+        runtime_id,
+        started_at_millis,
+    ))
 }
 
 /// Path a rotated segment of `active_segment_path` is renamed to:
@@ -50,7 +62,7 @@ pub fn rotated_runtime_log_segment_sequence(
         .strip_prefix(active_stem)?
         .strip_prefix('.')?
         .strip_suffix(".jsonl")?;
-    if sequence_digits.is_empty() || !sequence_digits.bytes().all(|byte| byte.is_ascii_digit()) {
+    if !is_ascii_digits(sequence_digits) {
         return None;
     }
     sequence_digits.parse().ok()
@@ -153,14 +165,46 @@ fn numeric_ordering_key_of_digits(digits: &str) -> (usize, &str) {
 }
 
 /// Every runtime instance with a segment in `log_directory`, ordered by runtime_id then start
-/// text; none when the directory cannot be read. A segment whose size cannot be read is left
-/// out.
-pub fn runtime_log_instances_in_directory(log_directory: &Path) -> Vec<RuntimeLogInstanceOnDisk> {
-    let Ok(directory_entries) = std::fs::read_dir(log_directory) else {
-        return Vec::new();
+/// text; none when the directory does not exist.
+pub fn runtime_log_instances_in_directory(
+    log_directory: &Path,
+) -> io::Result<Vec<RuntimeLogInstanceOnDisk>> {
+    runtime_log_instances_in_directory_whose_runtime_id(log_directory, |_| true)
+}
+
+/// The most recently started instance of `runtime_id` with a segment in `log_directory`; none
+/// when the directory does not exist.
+pub fn newest_runtime_log_instance_in_directory(
+    log_directory: &Path,
+    runtime_id: &str,
+) -> io::Result<Option<RuntimeLogInstanceOnDisk>> {
+    Ok(
+        runtime_log_instances_in_directory_whose_runtime_id(log_directory, |segment_runtime_id| {
+            segment_runtime_id == runtime_id
+        })?
+        .into_iter()
+        .max_by(RuntimeLogInstanceOnDisk::compare_started_at),
+    )
+}
+
+/// The instances [`runtime_log_instances_in_directory`] lists, of the runtimes
+/// `admits_runtime_id` admits; a segment of any other runtime is never read for its size. A
+/// segment gone between the listing and the read of its size is left out: a rotation renamed
+/// it, or a cleanup removed it.
+fn runtime_log_instances_in_directory_whose_runtime_id(
+    log_directory: &Path,
+    admits_runtime_id: impl Fn(&str) -> bool,
+) -> io::Result<Vec<RuntimeLogInstanceOnDisk>> {
+    let directory_entries = match std::fs::read_dir(log_directory) {
+        Ok(directory_entries) => directory_entries,
+        Err(listing_failure) if listing_failure.kind() == io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(listing_failure) => return Err(listing_failure),
     };
     let mut total_segment_bytes_by_instance: BTreeMap<(String, String), u64> = BTreeMap::new();
-    for directory_entry in directory_entries.flatten() {
+    for directory_entry in directory_entries {
+        let directory_entry = directory_entry?;
         let Some(segment_file_name) = directory_entry
             .file_name()
             .to_str()
@@ -168,41 +212,37 @@ pub fn runtime_log_instances_in_directory(log_directory: &Path) -> Vec<RuntimeLo
         else {
             continue;
         };
-        let Ok(segment_metadata) = std::fs::metadata(directory_entry.path()) else {
+        if !admits_runtime_id(&segment_file_name.runtime_id) {
             continue;
+        }
+        let segment_byte_len = match std::fs::metadata(directory_entry.path()) {
+            Ok(segment_metadata) => segment_metadata.len(),
+            Err(stat_failure) if stat_failure.kind() == io::ErrorKind::NotFound => continue,
+            Err(stat_failure) => return Err(stat_failure),
         };
         *total_segment_bytes_by_instance
             .entry((
                 segment_file_name.runtime_id,
                 segment_file_name.started_at_millis_digits,
             ))
-            .or_default() += segment_metadata.len();
+            .or_default() += segment_byte_len;
     }
-    total_segment_bytes_by_instance
+    Ok(total_segment_bytes_by_instance
         .into_iter()
         .map(
             |((runtime_id, started_at_millis_digits), total_segment_bytes)| {
                 RuntimeLogInstanceOnDisk {
-                    active_segment_path: log_directory
-                        .join(format!("{runtime_id}-{started_at_millis_digits}.jsonl")),
+                    active_segment_path: log_directory.join(active_runtime_log_segment_file_name(
+                        &runtime_id,
+                        &started_at_millis_digits,
+                    )),
                     runtime_id,
                     started_at_millis_digits,
                     total_segment_bytes,
                 }
             },
         )
-        .collect()
-}
-
-/// The most recently started instance of `runtime_id` with a segment in `log_directory`.
-pub fn newest_runtime_log_instance_in_directory(
-    log_directory: &Path,
-    runtime_id: &str,
-) -> Option<RuntimeLogInstanceOnDisk> {
-    runtime_log_instances_in_directory(log_directory)
-        .into_iter()
-        .filter(|instance| instance.runtime_id == runtime_id)
-        .max_by(RuntimeLogInstanceOnDisk::compare_started_at)
+        .collect())
 }
 
 #[cfg(test)]
@@ -417,7 +457,7 @@ mod tests {
         write_segment_of_bytes(log_directory.path(), "Rabc123-1700000000000.3.jsonl", 7);
 
         assert_eq!(
-            runtime_log_instances_in_directory(log_directory.path()),
+            runtime_log_instances_in_directory(log_directory.path()).unwrap(),
             [RuntimeLogInstanceOnDisk {
                 runtime_id: "Rabc123".to_owned(),
                 started_at_millis_digits: "1700000000000".to_owned(),
@@ -439,6 +479,7 @@ mod tests {
 
         let listed: Vec<(String, String, u64)> =
             runtime_log_instances_in_directory(log_directory.path())
+                .unwrap()
                 .into_iter()
                 .map(|instance| {
                     (
@@ -461,10 +502,90 @@ mod tests {
     #[test]
     fn a_directory_that_is_missing_holds_no_runtime_instance() {
         let log_directory = tempfile::tempdir().unwrap();
+        let absent_log_directory = log_directory.path().join("absent");
 
         assert_eq!(
-            runtime_log_instances_in_directory(&log_directory.path().join("absent")),
+            runtime_log_instances_in_directory(&absent_log_directory).unwrap(),
             []
+        );
+        assert_eq!(
+            newest_runtime_log_instance_in_directory(&absent_log_directory, "Rabc").unwrap(),
+            None
+        );
+    }
+
+    /// Only a directory that is not there reads as empty; one that cannot be listed is the
+    /// caller's to report.
+    #[test]
+    fn a_path_that_is_no_directory_is_an_error_rather_than_no_runtime_instance() {
+        let log_directory = tempfile::tempdir().unwrap();
+        let not_a_directory = log_directory.path().join("Rabc-1000.jsonl");
+        write_segment_of_bytes(log_directory.path(), "Rabc-1000.jsonl", 1);
+
+        assert!(runtime_log_instances_in_directory(&not_a_directory).is_err());
+        assert!(newest_runtime_log_instance_in_directory(&not_a_directory, "Rabc").is_err());
+    }
+
+    /// A link to itself cannot be read for its size, and names another runtime's segment, so
+    /// the lookup succeeds only when it never reads that segment.
+    #[test]
+    fn the_newest_instance_lookup_reads_no_other_runtimes_segment() {
+        let log_directory = tempfile::tempdir().unwrap();
+        write_segment_of_bytes(log_directory.path(), "Rabc-1000.jsonl", 3);
+        std::os::unix::fs::symlink(
+            "Rother-2000.jsonl",
+            log_directory.path().join("Rother-2000.jsonl"),
+        )
+        .unwrap();
+
+        assert!(runtime_log_instances_in_directory(log_directory.path()).is_err());
+        assert_eq!(
+            newest_runtime_log_instance_in_directory(log_directory.path(), "Rabc")
+                .unwrap()
+                .map(|instance| instance.total_segment_bytes),
+            Some(3)
+        );
+    }
+
+    /// A dangling link stands in for a segment a rotation renamed between the listing and the
+    /// read of its size.
+    #[test]
+    fn a_segment_gone_before_its_size_is_read_is_left_out() {
+        let log_directory = tempfile::tempdir().unwrap();
+        write_segment_of_bytes(log_directory.path(), "Rabc-1000.jsonl", 3);
+        std::os::unix::fs::symlink(
+            "renamed-by-a-rotation",
+            log_directory.path().join("Rabc-1000.1.jsonl"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            runtime_log_instances_in_directory(log_directory.path())
+                .unwrap()
+                .into_iter()
+                .map(|instance| instance.total_segment_bytes)
+                .collect::<Vec<_>>(),
+            [3]
+        );
+    }
+
+    #[test]
+    fn an_instance_names_its_active_segment_as_the_writer_does() {
+        let log_directory = tempfile::tempdir().unwrap();
+        write_segment_of_bytes(log_directory.path(), "my.node-2-1700000000000.4.jsonl", 1);
+
+        assert_eq!(
+            runtime_log_instances_in_directory(log_directory.path())
+                .unwrap()
+                .into_iter()
+                .map(|instance| instance.active_segment_path)
+                .collect::<Vec<_>>(),
+            [log_directory
+                .path()
+                .join(active_runtime_log_segment_file_name(
+                    "my.node-2",
+                    1_700_000_000_000_u128
+                ))]
         );
     }
 
@@ -478,11 +599,12 @@ mod tests {
 
         assert_eq!(
             newest_runtime_log_instance_in_directory(log_directory.path(), "Rabc")
+                .unwrap()
                 .map(|instance| instance.active_segment_path),
             Some(log_directory.path().join("Rabc-2000.jsonl"))
         );
         assert_eq!(
-            newest_runtime_log_instance_in_directory(log_directory.path(), "Rnone"),
+            newest_runtime_log_instance_in_directory(log_directory.path(), "Rnone").unwrap(),
             None
         );
     }
@@ -499,6 +621,7 @@ mod tests {
 
         assert_eq!(
             newest_runtime_log_instance_in_directory(log_directory.path(), "Rabc")
+                .unwrap()
                 .map(|instance| instance.started_at_millis_digits),
             Some("99999999999999999999999999999999999999999".to_owned())
         );

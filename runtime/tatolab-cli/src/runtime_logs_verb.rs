@@ -260,7 +260,9 @@ pub(crate) fn print_runtime_log_files(
         }
         let runtime_log_listing = render_runtime_log_instance_listing(
             log_directory,
-            runtime_log_instances_in_directory(log_directory),
+            runtime_log_instances_in_directory(log_directory).map_err(|listing_failure| {
+                runtime_log_directory_unreadable(log_directory, listing_failure)
+            })?,
         );
         return match standard_output
             .write_all(runtime_log_listing.as_bytes())
@@ -277,8 +279,11 @@ pub(crate) fn print_runtime_log_files(
                 .to_owned(),
         ));
     };
-    let instance_to_read = match newest_runtime_log_instance_in_directory(log_directory, runtime_id)
-    {
+    let newest_instance = newest_runtime_log_instance_in_directory(log_directory, runtime_id)
+        .map_err(|listing_failure| {
+            runtime_log_directory_unreadable(log_directory, listing_failure)
+        })?;
+    let instance_to_read = match newest_instance {
         Some(instance_to_read) => instance_to_read,
         None if !on_disk_request.follow_appended_records => {
             return Err(TatolabCommandFailure::refused(format!(
@@ -293,7 +298,7 @@ pub(crate) fn print_runtime_log_files(
             standard_error,
             read_interrupted,
             follow_poll_interval,
-        ) {
+        )? {
             Some(instance_to_read) => instance_to_read,
             None => return Ok(0),
         },
@@ -355,22 +360,35 @@ fn wait_for_the_first_log_file_of_runtime(
     standard_error: &mut dyn Write,
     read_interrupted: &dyn Fn() -> bool,
     follow_poll_interval: Duration,
-) -> Option<RuntimeLogInstanceOnDisk> {
+) -> Result<Option<RuntimeLogInstanceOnDisk>, TatolabCommandFailure> {
     let _ = writeln!(
         standard_error,
         "note: no log file yet for runtime '{runtime_id}', waiting in --follow mode..."
     );
     loop {
         if let Some(first_instance) =
-            newest_runtime_log_instance_in_directory(log_directory, runtime_id)
+            newest_runtime_log_instance_in_directory(log_directory, runtime_id).map_err(
+                |listing_failure| runtime_log_directory_unreadable(log_directory, listing_failure),
+            )?
         {
-            return Some(first_instance);
+            return Ok(Some(first_instance));
         }
         if read_interrupted() {
-            return None;
+            return Ok(None);
         }
         std::thread::sleep(follow_poll_interval);
     }
+}
+
+/// The refusal for a log directory that exists and cannot be listed.
+fn runtime_log_directory_unreadable(
+    log_directory: &Path,
+    listing_failure: std::io::Error,
+) -> TatolabCommandFailure {
+    TatolabCommandFailure::refused(format!(
+        "cannot read the runtime log directory {}: {listing_failure}",
+        log_directory.display()
+    ))
 }
 
 /// What `--list` prints for `runtime_log_instances` found in `log_directory`: newest started

@@ -26,6 +26,9 @@ pub enum Source {
 }
 
 impl Source {
+    /// Every origin a record can carry.
+    pub const ALL: [Source; 2] = [Source::Rust, Source::Python];
+
     /// The lowercase name the JSONL record carries.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -35,8 +38,8 @@ impl Source {
     }
 }
 
-/// Severity level of a log record. Mirrors `tracing::Level` ordering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Severity level of a log record, ordered from trace, the least severe, to error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Trace,
@@ -47,6 +50,15 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
+    /// Every level, least severe first.
+    pub const ALL: [LogLevel; 5] = [
+        LogLevel::Trace,
+        LogLevel::Debug,
+        LogLevel::Info,
+        LogLevel::Warn,
+        LogLevel::Error,
+    ];
+
     /// The lowercase name the JSONL record carries.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -55,18 +67,6 @@ impl LogLevel {
             LogLevel::Info => "info",
             LogLevel::Warn => "warn",
             LogLevel::Error => "error",
-        }
-    }
-
-    /// Rank by severity, trace lowest and error highest: the order a minimum-level floor
-    /// admits from.
-    pub fn severity_rank(&self) -> u8 {
-        match self {
-            LogLevel::Trace => 0,
-            LogLevel::Debug => 1,
-            LogLevel::Info => 2,
-            LogLevel::Warn => 3,
-            LogLevel::Error => 4,
         }
     }
 }
@@ -203,21 +203,41 @@ mod tests {
         assert_eq!(serde_json::to_string(&LogLevel::Warn).unwrap(), "\"warn\"");
     }
 
+    /// A minimum-level floor admits a level by comparing it, so the order is severity's.
     #[test]
-    fn severity_ranks_trace_below_debug_below_info_below_warn_below_error() {
-        let ranks = [
-            LogLevel::Trace,
-            LogLevel::Debug,
-            LogLevel::Info,
-            LogLevel::Warn,
-            LogLevel::Error,
-        ]
-        .map(|level| level.severity_rank());
-
+    fn levels_order_trace_below_debug_below_info_below_warn_below_error() {
         assert!(
-            ranks.is_sorted_by(|lower, higher| lower < higher),
-            "{ranks:?}"
+            LogLevel::ALL.is_sorted_by(|lower, higher| lower < higher),
+            "{:?}",
+            LogLevel::ALL
         );
+        assert_eq!(LogLevel::ALL.first(), Some(&LogLevel::Trace));
+        assert_eq!(LogLevel::ALL.last(), Some(&LogLevel::Error));
+    }
+
+    /// The arrays name every variant once, in the spelling the record carries.
+    #[test]
+    fn every_level_and_source_is_listed_once_by_its_record_name() {
+        assert_eq!(
+            LogLevel::ALL.map(|level| level.as_str()),
+            ["trace", "debug", "info", "warn", "error"]
+        );
+        assert_eq!(
+            Source::ALL.map(|source| source.as_str()),
+            ["rust", "python"]
+        );
+        for level in LogLevel::ALL {
+            assert_eq!(
+                serde_json::to_string(&level).unwrap(),
+                format!("\"{}\"", level.as_str())
+            );
+        }
+        for source in Source::ALL {
+            assert_eq!(
+                serde_json::to_string(&source).unwrap(),
+                format!("\"{}\"", source.as_str())
+            );
+        }
     }
 
     /// Parses the exact example line documented in `docs/logging-schema.md`.

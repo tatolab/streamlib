@@ -273,8 +273,7 @@ impl Runner {
         );
         tracing::info!("Creating Runner named {runtime_name} with ID: {runtime_id}");
 
-        let runtime_directory = StreamlibRuntimeDirectory::resolve()
-            .map_err(|refusal| Error::Runtime(refusal.to_string()))?;
+        let runtime_directory = StreamlibRuntimeDirectory::resolve()?;
         tracing::info!(
             "StreamLib runtime directory: {}",
             runtime_directory.path().display()

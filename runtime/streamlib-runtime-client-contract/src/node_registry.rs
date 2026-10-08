@@ -103,7 +103,7 @@ pub enum NodeRegistryError {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// Reading the registry directory or an entry file failed.
+    /// Reading the registry directory failed.
     #[error("failed to read node registry path {path}: {source}")]
     EntryRead {
         path: PathBuf,
@@ -122,8 +122,7 @@ pub enum NodeRegistryError {
         source: serde_json::Error,
     },
     /// An entry decoded but carries a `schema_version` this reader does not
-    /// understand. Only `read_entry`'s strict single-entry lookup raises this;
-    /// `scan_entries` skips such an entry instead.
+    /// understand; `scan_entries` skips such an entry rather than failing.
     #[error(
         "node registry entry {path} has unrecognized schema_version {found} \
          (this reader understands {expected})"
@@ -164,29 +163,7 @@ pub fn write_entry(
 /// missing entry is not an error (idempotent teardown).
 #[tracing::instrument]
 pub fn remove_entry(registry_directory: &Path, runtime_id: &str) -> Result<(), NodeRegistryError> {
-    let path = registry_directory.join(entry_file_name(runtime_id));
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(NodeRegistryError::EntryRemove { path, source }),
-    }
-}
-
-/// Read the single discovery entry for `runtime_id`, or `None` if no entry
-/// exists. A present-but-corrupt or version-mismatched entry is an error — this
-/// is the strict single-entry lookup a `--node <runtime_id>` resolve uses.
-#[tracing::instrument]
-pub fn read_entry(
-    registry_directory: &Path,
-    runtime_id: &str,
-) -> Result<Option<NodeRegistryEntry>, NodeRegistryError> {
-    let path = registry_directory.join(entry_file_name(runtime_id));
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => return Err(NodeRegistryError::EntryRead { path, source }),
-    };
-    decode_entry_at_this_schema_version(&path, &bytes).map(Some)
+    remove_scanned_entry_file(&registry_directory.join(entry_file_name(runtime_id)))
 }
 
 /// Decode an entry file's bytes, checking `schema_version` before the rest so an
@@ -441,23 +418,6 @@ mod tests {
     }
 
     #[test]
-    fn read_entry_returns_none_for_a_missing_runtime_and_the_entry_when_present() {
-        with_isolated_registry_directory(|registry_directory| {
-            assert!(
-                read_entry(registry_directory, "Rnobody")
-                    .expect("read missing")
-                    .is_none()
-            );
-            let entry = sample_entry("Rnode-delta");
-            write_entry(registry_directory, &entry).expect("write");
-            assert_eq!(
-                read_entry(registry_directory, &entry.runtime_id).expect("read"),
-                Some(entry)
-            );
-        });
-    }
-
-    #[test]
     fn scan_skips_a_corrupt_entry_and_still_returns_the_valid_ones() {
         with_isolated_registry_directory(|registry_directory| {
             let good = sample_entry("Rgood");
@@ -482,21 +442,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn read_entry_rejects_an_entry_with_an_unrecognized_schema_version() {
-        with_isolated_registry_directory(|registry_directory| {
-            let mut future = sample_entry("Rfuture-read");
-            future.schema_version = NODE_REGISTRY_SCHEMA_VERSION + 1;
-            write_entry(registry_directory, &future).expect("write future");
-            let error = read_entry(registry_directory, &future.runtime_id)
-                .expect_err("a version-mismatched entry must be a hard error, not Ok(Some(_))");
-            assert!(
-                matches!(error, NodeRegistryError::EntrySchemaVersionMismatch { .. }),
-                "expected a schema-version-mismatch error; got: {error}"
-            );
-        });
-    }
-
     /// Entries are per run, so a schema-2 entry — one with no socket — has
     /// nothing to migrate: it is refused by its version, not by the field it lacks.
     #[test]
@@ -510,14 +455,15 @@ mod tests {
                 "pid": 4242,
                 "hint": "streamlib (/tmp/example)",
             });
-            std::fs::write(
-                registry_directory.join("Rschema-two.json"),
-                serde_json::to_vec(&schema_two_entry).unwrap(),
-            )
-            .unwrap();
+            let schema_two_entry_path = registry_directory.join("Rschema-two.json");
+            let schema_two_entry_bytes = serde_json::to_vec(&schema_two_entry).unwrap();
+            std::fs::write(&schema_two_entry_path, &schema_two_entry_bytes).unwrap();
 
-            let error = read_entry(registry_directory, "Rschema-two")
-                .expect_err("a schema-2 entry must be refused");
+            let error = decode_entry_at_this_schema_version(
+                &schema_two_entry_path,
+                &schema_two_entry_bytes,
+            )
+            .expect_err("a schema-2 entry must be refused");
             assert!(
                 matches!(
                     error,
@@ -641,10 +587,6 @@ mod tests {
                 );
 
                 assert_eq!(scanned_entries(registry_directory), [], "{wrong_shape}");
-                assert!(
-                    read_entry(registry_directory, "Rmalformed").is_err(),
-                    "{wrong_shape}"
-                );
             });
         }
     }
@@ -668,7 +610,6 @@ mod tests {
             );
 
             assert_eq!(scanned_entries(registry_directory), []);
-            assert!(read_entry(registry_directory, "Rarray").is_err());
         });
     }
 
