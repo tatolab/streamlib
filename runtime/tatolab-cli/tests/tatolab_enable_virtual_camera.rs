@@ -170,9 +170,11 @@ fn refuses_by_name_off_linux_and_runs_nothing() {
 }
 
 /// The rig check: the verb, run for real, leaves the control node openable read-write by this
-/// user in this same session — no re-login. It asks for a password, so it is opt-in.
+/// user in this same session — no re-login. Ignored by default and gated on
+/// `TATOLAB_RUN_PRIVILEGED_VERB=1` as well, because it asks for a password.
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "runs the privileged verb, which asks for a password; run with --ignored and TATOLAB_RUN_PRIVILEGED_VERB=1"]
 #[allow(clippy::disallowed_macros)]
 fn enable_virtual_camera_makes_the_control_node_writable() {
     use std::time::{Duration, Instant};
