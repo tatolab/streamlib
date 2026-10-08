@@ -109,7 +109,8 @@ runtime/tatolab-cli/                bin tatolab — the CLI
 runtime/streamlib-runtime-client-contract/
                                     engine-free: what the runtime and tatolab share — the runtime
                                       directory, node registry and JSONL log files (owner, 2026-10-08),
-                                      and the local API's wire names
+                                      and the local API's wire names, the tap tool's result shape
+                                      and the exchange route's encoder
 runtime/streamlib-engine/src/core/compiler/compiler_ops/
                                     processor-interpreter spawn and describe, beside subprocess_bridge.rs
 tests/stream-on-runtime/            the integration suite
