@@ -57,6 +57,18 @@ impl LogLevel {
             LogLevel::Error => "error",
         }
     }
+
+    /// Rank by severity, trace lowest and error highest: the order a minimum-level floor
+    /// admits from.
+    pub fn severity_rank(&self) -> u8 {
+        match self {
+            LogLevel::Trace => 0,
+            LogLevel::Debug => 1,
+            LogLevel::Info => 2,
+            LogLevel::Warn => 3,
+            LogLevel::Error => 4,
+        }
+    }
 }
 
 impl From<tracing::Level> for LogLevel {
@@ -189,6 +201,23 @@ mod tests {
             "\"python\""
         );
         assert_eq!(serde_json::to_string(&LogLevel::Warn).unwrap(), "\"warn\"");
+    }
+
+    #[test]
+    fn severity_ranks_trace_below_debug_below_info_below_warn_below_error() {
+        let ranks = [
+            LogLevel::Trace,
+            LogLevel::Debug,
+            LogLevel::Info,
+            LogLevel::Warn,
+            LogLevel::Error,
+        ]
+        .map(|level| level.severity_rank());
+
+        assert!(
+            ranks.is_sorted_by(|lower, higher| lower < higher),
+            "{ranks:?}"
+        );
     }
 
     /// Parses the exact example line documented in `docs/logging-schema.md`.
