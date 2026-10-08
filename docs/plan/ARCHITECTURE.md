@@ -2869,9 +2869,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   same ±0.05. `e2e_fixture_psnr_vivid.sh` carries a `PIPELINE=python` arm (default
   `rust`) differing in its launch argv alone — one timeout, one environment, one
   redirect, and the same tap, `exchange`, scoring and comparison after launch — over an
-  engine-owned fixture app whose `@stream` adds four nodes, beside `audio_loopback_node.py`,
-  taking its codec, camera and control-plane port as arguments the way the Rust rig
-  does. Two refusals ride the arm rather than a note: `BASELINE_CAPTURE=1` is refused
+  engine-owned fixture stream, `codec_roundtrip_stream.py`, whose `@stream` adds four nodes,
+  beside `audio_loopback_stream.py`, taking its codec and camera from environment variables
+  where the Rust rig takes arguments. Two refusals ride the arm rather than a note: `BASELINE_CAPTURE=1` is refused
   on it, because a baseline written through the arm whose whole proof is locking to the
   Rust rig's number leaves nothing to lock to; and a venv whose extension predates the
   markers exits naming `maturin develop`, since a stale wheel would score the old code.
@@ -3106,13 +3106,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   tracks after their producers. [opus-mp4-recording-rung — SHIPPED #2126, #2128]
   <!-- verify: pytest tests/stream-on-runtime/test_opus_blocks.py -->
   <!-- verify: pytest tests/stream-on-runtime/test_mp4_sink.py -->
-- **DECIDED** — Live, two arms on engine-owned fixtures beside `audio_loopback_node.py`
-  and `codec_roundtrip_node.py`. `opus_roundtrip_node.py`: `KnownAudioSignalSource →
+- **DECIDED** — Live, two arms on engine-owned fixtures beside `audio_loopback_stream.py`
+  and `codec_roundtrip_stream.py`. `opus_roundtrip_stream.py`: `KnownAudioSignalSource →
   OpusEncoder → OpusDecoder → CapturedAudioWaveformRecorder`, scored by
   `known_audio_signal.py` — tone identity and the DTMF timing grid intact within its own
   floor, a lossy codec's verdict being the analysis's, never a sample-exact match — with
   no audio device in the path, so a failure here with the loopback green is the codec's.
-  `recording_node.py`: the vivid camera and the known signal → `H264Encoder` and
+  `recording_stream.py`: the vivid camera and the known signal → `H264Encoder` and
   `OpusEncoder` → `Mp4Sink`, stopped by SIGTERM (a run needing SIGKILL is a hard fail —
   teardown is what closes the last fragment), then `mp4-inspect` PASS, then the
   decode-back: `codec_roundtrip_rig --source mp4:<path>` demuxes the video track with
