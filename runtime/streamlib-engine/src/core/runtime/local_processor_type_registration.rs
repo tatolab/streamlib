@@ -6,8 +6,8 @@
 //!
 //! The type registers under the class import path its own `#[processor]`
 //! descriptor carries. Nothing is minted: identity is derived from the type,
-//! never synthesized for the registration, which is the same rule the Python
-//! side follows when the wheel registers a class.
+//! never synthesized for the registration, which is the same rule a Python
+//! class follows: it registers under the import path it was described by.
 
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};

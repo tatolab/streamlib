@@ -5,6 +5,7 @@
 placement: two helper processes, the surface id crossing between them."""
 
 import sys
+from pathlib import Path
 from typing import Any
 
 import tatolab.runtime
@@ -122,6 +123,10 @@ STREAM_BY_SCENARIO = {
 if __name__ == "__main__":
     graph = compile_stream_to_graph(STREAM_BY_SCENARIO[sys.argv[1]])
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

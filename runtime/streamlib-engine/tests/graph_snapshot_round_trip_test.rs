@@ -76,7 +76,7 @@ fn a_graph_document_saved_from_a_running_engine_loads_back_as_the_same_graph() {
 
     let second = Runner::new().unwrap();
     second
-        .load_graph_snapshot(&the_spec_in(rendered_first.clone()))
+        .load_graph_snapshot(&the_spec_in(rendered_first.clone()), None)
         .expect("a graph document loads");
     let rendered_second = the_graph_document_of(&second);
 
@@ -126,11 +126,14 @@ fn a_loaded_stream_renders_its_name_and_its_exposures_and_round_trips_them() {
 
     let runtime = Runner::new().unwrap();
     runtime
-        .load_graph_snapshot(&the_spec_in(serde_json::json!({
-            "stream": "main",
-            "nodes": [{"name": "Front Camera", "type": camera.as_str(), "config": {}}],
-            "exposed": [{"node": "front-camera", "port": "Video"}]
-        })))
+        .load_graph_snapshot(
+            &the_spec_in(serde_json::json!({
+                "stream": "main",
+                "nodes": [{"name": "Front Camera", "type": camera.as_str(), "config": {}}],
+                "exposed": [{"node": "front-camera", "port": "Video"}]
+            })),
+            None,
+        )
         .expect("the graph loads");
     let rendered = the_graph_document_of(&runtime);
 
@@ -142,7 +145,7 @@ fn a_loaded_stream_renders_its_name_and_its_exposures_and_round_trips_them() {
 
     let reloaded = Runner::new().unwrap();
     reloaded
-        .load_graph_snapshot(&the_spec_in(rendered.clone()))
+        .load_graph_snapshot(&the_spec_in(rendered.clone()), None)
         .expect("the render loads");
     assert_eq!(
         the_spec_in(the_graph_document_of(&reloaded)),
@@ -162,9 +165,12 @@ fn a_loaded_name_already_in_the_graph_is_refused_rather_than_suffixed() {
         )
         .unwrap();
 
-    let refusal = runtime.load_graph_snapshot(&the_spec_in(serde_json::json!({
-        "nodes": [{"name": "Camera", "type": camera.as_str()}]
-    })));
+    let refusal = runtime.load_graph_snapshot(
+        &the_spec_in(serde_json::json!({
+            "nodes": [{"name": "Camera", "type": camera.as_str()}]
+        })),
+        None,
+    );
 
     match refusal {
         Err(Error::NodeNameTaken { name, cast }) => {
@@ -182,10 +188,13 @@ fn an_exposure_naming_an_input_port_is_refused_naming_the_outputs() {
 
     let runtime = Runner::new().unwrap();
     let refusal = runtime
-        .load_graph_snapshot(&the_spec_in(serde_json::json!({
-            "nodes": [{"name": "camera", "type": camera.as_str()}],
-            "exposed": [{"node": "camera", "port": "frames_in"}]
-        })))
+        .load_graph_snapshot(
+            &the_spec_in(serde_json::json!({
+                "nodes": [{"name": "camera", "type": camera.as_str()}],
+                "exposed": [{"node": "camera", "port": "frames_in"}]
+            })),
+            None,
+        )
         .expect_err("only an output port is exposed")
         .to_string();
 
@@ -212,12 +221,15 @@ fn a_load_refused_for_a_taken_name_adds_none_of_its_nodes() {
         )
         .unwrap();
 
-    let refusal = runtime.load_graph_snapshot(&the_spec_in(serde_json::json!({
-        "nodes": [
-            {"name": "other", "type": camera.as_str()},
-            {"name": "Camera", "type": camera.as_str()}
-        ]
-    })));
+    let refusal = runtime.load_graph_snapshot(
+        &the_spec_in(serde_json::json!({
+            "nodes": [
+                {"name": "other", "type": camera.as_str()},
+                {"name": "Camera", "type": camera.as_str()}
+            ]
+        })),
+        None,
+    );
 
     assert!(
         matches!(refusal, Err(Error::NodeNameTaken { .. })),
@@ -243,14 +255,17 @@ fn a_load_refused_for_a_missing_link_port_adds_none_of_its_nodes() {
 
     let runtime = Runner::new().unwrap();
     let refusal = runtime
-        .load_graph_snapshot(&the_spec_in(serde_json::json!({
-            "nodes": [
-                {"name": "front", "type": camera.as_str()},
-                {"name": "back", "type": camera.as_str()}
-            ],
-            "links": [{"source": {"node": "front", "port": "video"},
-                       "target": {"node": "back", "port": "no_such_input"}}]
-        })))
+        .load_graph_snapshot(
+            &the_spec_in(serde_json::json!({
+                "nodes": [
+                    {"name": "front", "type": camera.as_str()},
+                    {"name": "back", "type": camera.as_str()}
+                ],
+                "links": [{"source": {"node": "front", "port": "video"},
+                           "target": {"node": "back", "port": "no_such_input"}}]
+            })),
+            None,
+        )
         .expect_err("the link names an input `back` does not have")
         .to_string();
 
@@ -271,10 +286,16 @@ fn an_exposure_named_twice_is_refused() {
 
     let refusal = Runner::new()
         .unwrap()
-        .load_graph_snapshot(&the_spec_in(serde_json::json!({
-            "nodes": [{"name": "camera", "type": camera.as_str()}],
-            "exposed": [{"node": "camera", "port": "video"}, {"node": "Camera", "port": "Video"}]
-        })))
+        .load_graph_snapshot(
+            &the_spec_in(serde_json::json!({
+                "nodes": [{"name": "camera", "type": camera.as_str()}],
+                "exposed": [
+                    {"node": "camera", "port": "video"},
+                    {"node": "Camera", "port": "Video"}
+                ]
+            })),
+            None,
+        )
         .expect_err("one port is exposed once")
         .to_string();
 
@@ -283,10 +304,13 @@ fn an_exposure_named_twice_is_refused() {
 
 /// A node whose type never resolved renders under the requested import path
 /// verbatim, and its render cannot be loaded — `validate` resolves every type.
+///
+/// A Rust path, because a Python one is described before it is added and,
+/// with no stream environment to describe it in, is refused without a node.
 #[test]
 #[serial]
 fn an_unresolved_node_renders_under_the_requested_path_and_refuses_to_load() {
-    const UNRESOLVED: &str = "my_app.filters:NeverRegistered";
+    const UNRESOLVED: &str = "my_app::filters::NeverRegistered";
 
     let runtime = Runner::new().unwrap();
     let _ = runtime.add_processor(ProcessorSpec::new(
@@ -298,7 +322,7 @@ fn an_unresolved_node_renders_under_the_requested_path_and_refuses_to_load() {
 
     match Runner::new()
         .unwrap()
-        .load_graph_snapshot(&the_spec_in(rendered))
+        .load_graph_snapshot(&the_spec_in(rendered), None)
     {
         Err(Error::UnknownProcessorType { ident }) => {
             assert_eq!(ident.as_str(), UNRESOLVED);

@@ -3,9 +3,9 @@
 
 """The `@node` class `test_runtime_load.py` names in a graph by its type alone.
 
-Nothing imports this module but the engine's type resolver, during
-`Runtime.load` — so a graph naming `runtime_load_nodes:LoadedFrameRelay` proves
-the resolver imports and registers a node type the process never imported.
+Nothing in the test process imports this module: `Runtime.load` describes it in
+a processor interpreter — so a graph naming `runtime_load_nodes:LoadedFrameRelay`
+proves a node type registers from its description alone.
 """
 
 from tatolab.stream import RuntimeContextLimitedAccess, node

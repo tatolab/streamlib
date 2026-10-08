@@ -8,7 +8,6 @@ use pyo3::prelude::*;
 
 #[cfg(target_os = "macos")]
 mod darwin_close_on_exec_kqueue;
-mod helper_process_shutdown_ladder;
 mod python_bag_conversion;
 mod python_capability_extension_host;
 #[cfg(test)]
@@ -20,7 +19,6 @@ mod python_gpu_surface_pixel_exchange;
 #[cfg(target_os = "macos")]
 mod python_helper_process_parent_death_watch;
 mod python_helper_process_pixel_exchange;
-mod python_helper_process_spawn_host;
 mod python_local_api_mcp_client;
 mod python_logging;
 #[cfg(target_os = "macos")]
@@ -29,10 +27,8 @@ mod python_monotonic_timer;
 mod python_native_builtin_blocks;
 mod python_processor_context;
 mod python_processor_declaration;
-mod python_processor_import_path;
 mod python_processor_link_data_access;
 mod python_processor_owned_window;
-mod python_processor_registration;
 mod python_runtime_lifecycle;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod python_surface_share_service_for_tests;
@@ -109,11 +105,11 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_processor_registration::processor_class_import_paths_in_this_processes_catalog,
+        python_runtime_lifecycle::processor_class_import_paths_in_this_processes_catalog,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_helper_process_spawn_host::engine_build_id_compiled_into_this_extension,
+        python_processor_context::engine_build_id_compiled_into_this_extension,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;

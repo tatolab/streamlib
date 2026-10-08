@@ -834,7 +834,7 @@ mod tests {
             .expect("the setup command goes out");
 
         envelope.refuse_every_later_link_because_the_far_side_is_gone(
-            crate::core::helper_process_transport::refusal_of_a_link_into_a_helper_process_that_failed(
+            crate::core::compiler::compiler_ops::subprocess_bridge::refusal_of_a_link_into_a_helper_process_that_failed(
                 "Blur", "Pblur",
             ),
         );
@@ -985,7 +985,7 @@ mod tests {
             .unwrap();
 
         envelope.refuse_every_later_link_because_the_far_side_is_gone(
-            crate::core::helper_process_transport::refusal_of_a_link_into_a_helper_process_that_failed(
+            crate::core::compiler::compiler_ops::subprocess_bridge::refusal_of_a_link_into_a_helper_process_that_failed(
                 "Blur", "Pblur",
             ),
         );

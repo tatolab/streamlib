@@ -30,7 +30,7 @@ pub(crate) fn resources_list_result() -> ListResourcesResult {
     ListResourcesResult::with_all_items(vec![
         Resource::new(NODE_CATALOG_RESOURCE_URI, "node-catalog")
             .with_title("Node catalog")
-            .with_description("Every node type this node can add, each under the `type` `add_node` takes: its description, its config schema (JSON Schema 2020-12; the keys `add_node`'s `config` takes) and its input and output ports. A Python class appears once the app has imported its module.")
+            .with_description("Every node type this node can add, each under the `type` `add_node` takes: its description, its config schema (JSON Schema 2020-12; the keys `add_node`'s `config` takes) and its input and output ports. A Python class appears once the stream's own interpreter has described it.")
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
         Resource::new(LIVE_GRAPH_RESOURCE_URI, "graph")
             .with_title("Live graph")

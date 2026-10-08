@@ -20,6 +20,9 @@ device. The in-window behaviour needs a real graph and lives with the harness
 that uses it (`test_single_processor_pipeline.py`).
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 
 import tatolab.runtime
@@ -50,7 +53,11 @@ def test_waiting_on_a_graph_that_was_never_run_times_out_naming_the_state():
     every processor is still `Pending` rather than blaming the caller."""
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(compile_stream_to_graph(one_never_started_source))
+        runtime.load(
+            compile_stream_to_graph(one_never_started_source),
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
         with pytest.raises(RuntimeError, match="Pending"):
             runtime.wait_until_every_node_is_running(timeout=0.5)
     finally:

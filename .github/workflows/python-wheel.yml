@@ -108,41 +108,40 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install -e ../tatolab-stream
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
-      # An extension wheel depends on `streamlib` as a binary, so its lane
-      # installs this artifact rather than building the engine a second time —
-      # which is the slowest job in the repo and would be duplicated per
-      # extension. Incremental over the develop build above, so it costs
-      # seconds rather than minutes.
-      - name: Package the wheel for the extension lane
-        working-directory: sdk/streamlib-python-wheel
-        run: VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 build --out dist
-
-      # PEP 420: `tatolab` is a namespace package. A regular `tatolab/__init__.py`
-      # in this wheel would shadow every other distribution's `tatolab.*`
-      # portion installed beside it. The listing is required to name
-      # `tatolab/runtime/__init__.py`, so a wheel missing it, or an empty or
-      # unreadable listing, fails rather than passing. `tatolab/stream/` is
-      # `tatolab-stream`'s alone; a copy here would overwrite it on install.
-      - name: The wheel ships tatolab as a namespace package
-        working-directory: sdk/streamlib-python-wheel
-        run: |
-          unzip -Z1 dist/*.whl > /tmp/wheel-member-names.txt
-          grep -qx 'tatolab/runtime/__init__.py' /tmp/wheel-member-names.txt
-          if grep -qx 'tatolab/__init__.py' /tmp/wheel-member-names.txt; then
-            echo "::error::the wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
-            exit 1
-          fi
-          if grep -q '^tatolab/stream/' /tmp/wheel-member-names.txt; then
-            echo "::error::the engine wheel ships tatolab/stream/, which is tatolab-stream's"
-            exit 1
-          fi
+      # The runtime unit's one build: the wheel in `target/tatolab-runtime/wheel/`
+      # and its lend in `target/tatolab-runtime/lib/tatolab/lend/`. It refuses a
+      # wheel carrying anything beside `tatolab/runtime/` and its `.dist-info` —
+      # a `tatolab/__init__.py` through the namespace gate. Debug, like the
+      # develop build above, and with the same `VIRTUAL_ENV`, so it is
+      # incremental over it. An extension wheel depends on `streamlib` as a
+      # binary, so its lane installs this wheel rather than building the engine
+      # a second time.
+      - name: Build the runtime unit and lay out its lend
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/sdk/streamlib-python-wheel/.venv
+        run: cargo xtask build-runtime
 
       - uses: actions/upload-artifact@v4
         with:
           name: streamlib-wheel
-          path: sdk/streamlib-python-wheel/dist/*.whl
+          path: target/tatolab-runtime/wheel/*.whl
           retention-days: 1
           if-no-files-found: error
+
+      # Against the lend a processor interpreter borrows, from a venv holding
+      # `tatolab-stream` and pytest and nothing of the runtime: the lend is the
+      # only `tatolab.runtime` on the path, and the tests fail if they imported
+      # one from anywhere else. They live outside `tests/` so that a develop
+      # venv's whole-suite run never collects them.
+      - name: Portability, driver-search and describe tests against the lend
+        run: |
+          uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
+          uv venv --python 3.12 "$RUNNER_TEMP/lend-check-venv"
+          VIRTUAL_ENV="$RUNNER_TEMP/lend-check-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl pytest
+          cd sdk/streamlib-python-wheel
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            "$RUNNER_TEMP/lend-check-venv/bin/python" -m pytest -v \
+            tests_against_the_runtime_unit_lend/
 
       # The crate's own unit tests link libpython rather than building as an
       # extension module (the `extension-module` feature is off by default for

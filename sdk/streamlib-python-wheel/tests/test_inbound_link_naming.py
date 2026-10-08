@@ -18,7 +18,9 @@ and its four neighbours, which CI does run.
 """
 
 import queue
+import sys
 import threading
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 import pytest
@@ -105,7 +107,11 @@ class TwoFeedersIntoOnePort:
         graph = compile_stream_to_graph(two_feeders_into_one_port)
         runtime = tatolab.runtime.Runtime()
         self._runtime = runtime
-        runtime.load(graph)
+        runtime.load(
+            graph,
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
 
         self._run_loop = threading.Thread(
             target=self._run_until_shut_down, name="inbound-link-naming", daemon=True

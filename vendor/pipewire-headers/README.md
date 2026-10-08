@@ -47,7 +47,8 @@ it by `sdk/streamlib-python-wheel/tests/test_third_party_notices.py`.
 
 Re-run the extraction against a new upstream tag, regenerate `version.h` from
 that tag's `version.h.in`, and check that
-`sdk/streamlib-python-wheel/tests/test_wheel_portability.py` still passes with
-no name added to `LIBRARIES_THE_HOST_MAY_SUPPLY`. Bind no symbol newer than
+`sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py`
+still passes against the lend `cargo xtask build-runtime` lays out, with no name
+added to `LIBRARIES_THE_HOST_MAY_SUPPLY`. Bind no symbol newer than
 PipeWire 0.3.50 without a `dlsym` presence probe: the headers state what the API
 looks like, not what the host's library actually exports.

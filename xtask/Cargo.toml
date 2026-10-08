@@ -32,6 +32,10 @@ tempfile = "3.15"
 # Recursive file walk for the source-walking gates
 walkdir = "2.5"
 
+# Unpacks the runtime unit's wheel into its lend for `xtask build-runtime`,
+# keeping each member's unix mode. Deflate only: that is all maturin writes.
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
 # Pure-Rust ISOBMFF box reader for `xtask mp4-inspect`. Same pin as the sink
 # that writes the files it reads, so the writer and the reader cannot drift.
 mp4-atom = "0.15"

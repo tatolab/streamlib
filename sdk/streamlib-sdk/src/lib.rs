@@ -92,6 +92,7 @@ pub mod sdk {
     pub use streamlib_engine::core::media_clock;
     pub use streamlib_engine::core::nal_unit_raw_byte_sequence_payload;
     pub use streamlib_engine::core::prelude;
+    pub use streamlib_engine::core::processor_interpreter;
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;

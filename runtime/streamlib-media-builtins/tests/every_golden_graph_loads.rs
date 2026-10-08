@@ -108,7 +108,7 @@ fn every_golden_graph_loads_on_this_floor() {
 
         let loaded = Runner::new()
             .expect("a runtime constructs")
-            .load_graph_snapshot(&graph);
+            .load_graph_snapshot(&graph, None);
 
         if node_names_compiled_out_here.is_empty() {
             loaded.unwrap_or_else(|refusal| panic!("{path:?} no longer loads: {refusal}"));
@@ -128,7 +128,7 @@ fn every_golden_graph_loads_on_this_floor() {
         .expect("a golden without some of its nodes still reads");
         Runner::new()
             .expect("a runtime constructs")
-            .load_graph_snapshot(&the_rest)
+            .load_graph_snapshot(&the_rest, None)
             .unwrap_or_else(|refusal| {
                 panic!(
                     "{path:?} without {node_names_compiled_out_here:?} no longer loads: {refusal}"

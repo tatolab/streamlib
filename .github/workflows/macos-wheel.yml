@@ -7,9 +7,10 @@ name: macOS Wheel
 # wheel to the release beside the manylinux one.
 #
 # A stock Mac has no Vulkan driver, so the wheel carries the loader and MoltenVK
-# (`scripts/stage_macos_bundled_vulkan_driver.sh`). The runner image ships
-# neither, which is what makes it a clean machine for that claim: a scaffolded
-# app that runs here ran on the driver inside the wheel.
+# (`scripts/stage_macos_bundled_vulkan_driver.sh`, which `cargo xtask
+# build-runtime` runs first). The runner image ships neither, which is what
+# makes it a clean machine for that claim: a scaffolded app that runs here ran
+# on the driver inside the wheel.
 on:
   workflow_call:
     inputs:
@@ -67,25 +68,12 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      # maturin writes `[tool.maturin.target.aarch64-apple-darwin]
-      # macos-deployment-target` into the wheel's tag but does not hand it to
-      # the link, so without this the binaries inside claim whatever rustc
-      # defaults to. Read from the one place it is pinned.
-      - name: Export the wheel's deployment target
-        run: |
-          python3 - >> "$GITHUB_ENV" <<'EOF'
-          import tomllib
-          with open("sdk/streamlib-python-wheel/pyproject.toml", "rb") as pyproject:
-              maturin_target = tomllib.load(pyproject)["tool"]["maturin"]["target"]["aarch64-apple-darwin"]
-          print(f"MACOSX_DEPLOYMENT_TARGET={maturin_target['macos-deployment-target']}")
-          EOF
-
-      - name: Stage the Vulkan loader and MoltenVK into the package
-        run: scripts/stage_macos_bundled_vulkan_driver.sh
-
-      - name: Build the wheel
-        working-directory: sdk/streamlib-python-wheel
-        run: uvx maturin@1.9.6 build --release --out dist
+      # Stages the Vulkan loader and MoltenVK, builds the release wheel at the
+      # deployment target the maturin project pins, and lays out its lend. It
+      # refuses a lend missing a driver file, and a wheel carrying anything
+      # beside `tatolab/runtime/` and its `.dist-info`.
+      - name: Build the runtime unit and lay out its lend
+        run: cargo xtask build-runtime --release
 
       # The engine wheel's one dependency, at its own version, which no index
       # carries before release. Pure Python, so the release attaches the
@@ -96,45 +84,33 @@ jobs:
       # The signature is file content, so the zip round-trip and pip should
       # both preserve it — but a binary whose signature did not survive fails
       # on every user's machine and never on this one, so it is checked on the
-      # artifact itself and again after install.
-      - name: Every binary in the built wheel is still signed
+      # lend, which is the wheel unpacked, and again after install.
+      # `-exec … +`, not a `while read` loop: find's status is non-zero if any
+      # codesign fails, where a loop reports only the last one.
+      - name: Every binary in the lend is still signed
         run: |
-          rm -rf /tmp/unzipped-wheel
-          unzip -q sdk/streamlib-python-wheel/dist/*.whl -d /tmp/unzipped-wheel
-          # Named, so a driver maturin left out fails here by name rather than
-          # passing every check below with less to check.
-          for staged_file in libvulkan.1.dylib libMoltenVK.dylib MoltenVK_icd.json; do
-            if [ ! -f "/tmp/unzipped-wheel/tatolab/runtime/_vulkan_driver/$staged_file" ]; then
-              echo "::error::the wheel does not carry _vulkan_driver/$staged_file"
-              exit 1
-            fi
-          done
-          # PEP 420: `tatolab` is a namespace package. A regular
-          # `tatolab/__init__.py` would shadow every other distribution's
-          # `tatolab.*` portion installed beside this wheel. `tatolab/stream/`
-          # is `tatolab-stream`'s alone; a copy here would overwrite it on install.
-          if [ ! -f /tmp/unzipped-wheel/tatolab/runtime/__init__.py ]; then
-            echo "::error::the wheel does not carry tatolab/runtime/__init__.py"
-            exit 1
-          fi
-          if [ -e /tmp/unzipped-wheel/tatolab/__init__.py ]; then
-            echo "::error::the wheel ships tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
-            exit 1
-          fi
-          if [ -e /tmp/unzipped-wheel/tatolab/stream ]; then
-            echo "::error::the engine wheel ships tatolab/stream/, which is tatolab-stream's"
-            exit 1
-          fi
-          # `-exec … +`, not a `while read` loop: find's status is non-zero if
-          # any codesign fails, where a loop reports only the last one.
-          find /tmp/unzipped-wheel \( -name '*.so' -o -name '*.dylib' \) \
+          find target/tatolab-runtime/lib/tatolab/lend \( -name '*.so' -o -name '*.dylib' \) \
             -exec codesign --verify --strict --verbose=1 {} +
+
+      # Against the lend a processor interpreter borrows, from a venv holding
+      # `tatolab-stream` and pytest and nothing of the runtime: the lend is the
+      # only `tatolab.runtime` on the path. The portability proof reads every
+      # Mach-O the lend carries, and the macOS floor from its `.dist-info`.
+      - name: Portability, driver-search and describe tests against the lend
+        run: |
+          python3 -m venv /tmp/lend-check
+          /tmp/lend-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
+          /tmp/lend-check/bin/pip install pytest
+          cd sdk/streamlib-python-wheel
+          PYTHONPATH="$GITHUB_WORKSPACE/target/tatolab-runtime/lib/tatolab/lend" \
+            /tmp/lend-check/bin/python -m pytest -v \
+            tests_against_the_runtime_unit_lend/
 
       - name: Install the wheel into a fresh venv
         run: |
           python3 -m venv /tmp/wheel-check
           /tmp/wheel-check/bin/pip install --no-index --find-links sdk/tatolab-stream/dist \
-            sdk/streamlib-python-wheel/dist/*.whl
+            target/tatolab-runtime/wheel/*.whl
           # The scaffolded effect's own declared dependency, and the tests'.
           /tmp/wheel-check/bin/pip install 'numpy>=2.1' pytest
           # Compared against the venv's own site-packages, resolved on both
@@ -152,16 +128,12 @@ jobs:
           find "$installed_package" \( -name '*.so' -o -name '*.dylib' \) \
             -exec codesign --verify --strict --verbose=1 {} +
 
-      # Against the installed artifact, not a checkout: the portability proof
-      # reads every Mach-O the wheel carries, and the notices are read out of
-      # `.dist-info/licenses/`.
-      - name: Portability, notices and driver-search tests against the installed wheel
+      # Against the installed artifact, not a checkout: the notices are read
+      # out of `.dist-info/licenses/`.
+      - name: Notices tests against the installed wheel
         working-directory: sdk/streamlib-python-wheel
         run: |
-          /tmp/wheel-check/bin/python -m pytest -v \
-            tests/test_wheel_portability.py \
-            tests/test_third_party_notices.py \
-            tests/test_bundled_vulkan_driver.py
+          /tmp/wheel-check/bin/python -m pytest -v tests/test_third_party_notices.py
 
       # The MVP sentence on a clean machine, minus the camera no runner has:
       # the scaffold's test-pattern variant through the Python effect into a
@@ -200,7 +172,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: streamlib-macos-wheel
-          path: sdk/streamlib-python-wheel/dist/*.whl
+          path: target/tatolab-runtime/wheel/*.whl
           retention-days: 14
 
       - name: Attach the wheel to the release
@@ -209,4 +181,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ inputs.release_tag_name }}" \
-            sdk/streamlib-python-wheel/dist/*.whl --clobber --repo "${{ github.repository }}"
+            target/tatolab-runtime/wheel/*.whl --clobber --repo "${{ github.repository }}"

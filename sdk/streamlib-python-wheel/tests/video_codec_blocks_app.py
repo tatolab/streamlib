@@ -24,6 +24,7 @@ built-in class resolved to.
 import json
 import sys
 import threading
+from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
@@ -98,7 +99,11 @@ def main() -> None:
 
     graph = compile_stream_to_graph(a_codec_round_trip_with_probes)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.host_control_plane()
     marker_class_name_by_node_name = {
         node["name"]: marker_class.__name__

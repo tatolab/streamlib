@@ -20,6 +20,7 @@ ACTIVE_CHANGES_DIRECTORY = REPOSITORY_ROOT / "docs" / "plan" / "changes"
 MARKED_TEST_DIRECTORIES = (
     REPOSITORY_ROOT / "sdk" / "tatolab-stream" / "tests",
     REPOSITORY_ROOT / "sdk" / "streamlib-python-wheel" / "tests",
+    REPOSITORY_ROOT / "sdk" / "streamlib-python-wheel" / "tests_against_the_runtime_unit_lend",
 )
 
 LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {

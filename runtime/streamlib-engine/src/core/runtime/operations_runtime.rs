@@ -6,6 +6,7 @@ use std::sync::Arc;
 use super::Runner;
 use super::RuntimeStatus;
 use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
+use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecord;
 use super::runtime::TokioRuntimeVariant;
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
 use crate::core::RuntimeContext;
@@ -14,7 +15,7 @@ use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent, node_names_listed_for_a_refusal,
 };
-use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
+use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 use crate::core::runtime::ExchangedPublishedSurfaceFramePngImage;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
@@ -76,6 +77,7 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
 async fn add_processor_impl(
     compiler: Arc<Compiler>,
     live: LiveCommitContext,
+    processor_interpreter_launch_record: Arc<ProcessorInterpreterLaunchRecord>,
     spec: ProcessorSpec,
 ) -> Result<NodeInTheGraph> {
     let emit_will_add = |id: &ProcessorUniqueId| {
@@ -96,11 +98,22 @@ async fn add_processor_impl(
         );
     };
 
-    // A type nobody registered may still be resolvable by name — the wheel
-    // resolves a Python class import path by importing the class and
-    // registering it. A resolver that fails names why; one that is absent
-    // leaves the registry miss below to say the type is unknown.
-    PROCESSOR_REGISTRY.resolve_processor_type_if_unregistered(&spec.name)?;
+    // A type nobody registered yet is described in the stream's own
+    // interpreter, off the async worker: a describe runs for as long as the
+    // module's import does.
+    if processor_interpreter_launch_record.a_live_add_must_describe(&spec.name) {
+        let node_type = spec.name.clone();
+        let launch_record = Arc::clone(&processor_interpreter_launch_record);
+        tokio::task::spawn_blocking(move || {
+            launch_record.describe_and_register_a_type_a_live_add_names(&node_type)
+        })
+        .await
+        .map_err(|join_failure| {
+            Error::Runtime(format!(
+                "the describe of a node type did not finish: {join_failure}"
+            ))
+        })??;
+    }
 
     // Held so a typed `UnknownProcessorType` can name what was asked for —
     // `spec` is moved into `add_v`.
@@ -469,16 +482,17 @@ impl Runner {
     /// requested one cast, or the class's short name with any `-2` suffix.
     pub fn add_processor_reporting_its_name(&self, spec: ProcessorSpec) -> Result<NodeInTheGraph> {
         let live = self.live_commit_context();
+        let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
         match &self.tokio_runtime_variant {
             TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
                 let compiler = Arc::clone(&self.compiler);
-                rt.block_on(add_processor_impl(compiler, live, spec))
+                rt.block_on(add_processor_impl(compiler, live, launch_record, spec))
             }
             TokioRuntimeVariant::ExternalTokioHandle(handle) => {
                 let compiler = Arc::clone(&self.compiler);
                 let (tx, rx) = std::sync::mpsc::channel();
                 handle.spawn(async move {
-                    let result = add_processor_impl(compiler, live, spec).await;
+                    let result = add_processor_impl(compiler, live, launch_record, spec).await;
                     let _ = tx.send(result);
                 });
                 rx.recv()
@@ -500,7 +514,8 @@ impl RuntimeOperations for Runner {
     fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<NodeInTheGraph>> {
         let compiler = Arc::clone(&self.compiler);
         let live = self.live_commit_context();
-        Box::pin(add_processor_impl(compiler, live, spec))
+        let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
+        Box::pin(add_processor_impl(compiler, live, launch_record, spec))
     }
 
     fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph> {

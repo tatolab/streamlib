@@ -41,7 +41,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
   <!-- verify: grep -n "The scaffolded app runs on the driver the wheel carries" .github/workflows/macos-wheel.yml -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_every_mach_o_the_wheel_carries_is_portable -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_mach_o_the_lend_carries_is_portable -->
 - **DECIDED** — Terms of the sentence: StreamLib is an importable Python library — one
   PyPI wheel carrying the Python API, the CLI, and the Rust engine (PyO3, the
   pydantic-core model); a StreamLib app is a normal Python codebase — one venv, one
@@ -298,8 +298,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `[project.entry-points."streamlib.extensions"] <name> = "<module>:load"`; the engine
   reads `importlib.metadata.entry_points(group="streamlib.extensions")` and calls each
   `load(host)` once per process taking an engine role — from `Runtime.__init__` in the app
-  process, and from `_helper.py` between the log sink's installation and the processor
-  class's import. `host` is `tatolab.runtime.CapabilityExtensionHost`, a `#[pyclass]` with a stub
+  process, and from `_processor_interpreter_bootstrap.py` between the log sink's
+  installation and the processor class's import. `host` is `tatolab.runtime.CapabilityExtensionHost`, a `#[pyclass]` with a stub
   entry: `role` (`"app"` or `"helper"`) and `register_capability(name, version)`. In the
   app process a registration lands on the runtime and renders in `graph`; in a helper it is
   recorded for the extension's own reads. A hook that raises fails `Runtime()` with the
@@ -2290,7 +2290,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and audio adds none. No name is added to the permitted-host-library list — an audio
   library appearing there is the failure this design exists to prevent, not a fix for
   it. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
 - **DECIDED** — A backend device paces the audio path: capture and playback callbacks
   are the cadence source, and a block's timestamp derives from the backend's own
   timing (status minus reported delay) in the machine monotonic epoch — never from a
@@ -2598,7 +2598,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   reset seams the stamp and flush clauses bind. Hand-rolling a polyphase resampler was
   rejected: a maintenance burden and no capability.
   [audio-port-window-contract — SHIPPED #2033]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
 - **DECIDED** — A port whose target format is not knowable at declaration declares the
   sentinel `audio_window = match_device`, and the contract resolves at `setup()` — where
   the typestate is Full, the same phase in which a processor requests a window — from the
@@ -2951,12 +2951,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `_engine.abi3.so` names.
   [codec-blocks; opus-mp4-recording-rung — SHIPPED #2125]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
 - **DECIDED** — `Mp4Sink` muxes the encoded elementary streams the blocks produce
   (H.264/H.265 video, Opus audio) in pure Rust through `mp4-atom` — no ffmpeg subprocess,
   no raw-frame transcode path, no new `DT_NEEDED` entry.
   [codec-blocks; opus-mp4-recording-rung — SHIPPED #2127]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
 - **DECIDED** — `Mp4Sink` is `reactive`/`high` with one `ordered` input, `tracks`, and no
   output. Any number of links may enter it and **each inbound link is one track**, named
   by its source channel name, so two cameras are two video tracks and three microphones
@@ -3545,7 +3545,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
 ## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend, runtime-hosting)
-<!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
+<!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py -->
 
 - **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
   (Python API + CLI + engine) and the `streamlib` crate for Rust apps. Initial
@@ -3601,13 +3601,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `.so`/`.dylib` that is neither format fails rather than skips.
   [importable-python-library — SHIPPED #1691, #1692; python-kernel-surface — SHIPPED #1775;
   macos-platform-floor — SHIPPED #2362]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_every_mach_o_the_wheel_carries_is_portable -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_every_native_binary_the_wheel_carries_parses -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_an_unsigned_binary_is_caught -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_a_binary_needing_a_newer_macos_than_the_tag_is_caught -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_bundled_vulkan_driver.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_mach_o_the_lend_carries_is_portable -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_native_binary_the_lend_carries_parses -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_an_unsigned_binary_is_caught -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_a_binary_needing_a_newer_macos_than_the_tag_is_caught -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_bundled_vulkan_driver.py -->
   <!-- verify: cargo test -p streamlib-consumer-rhi --lib vulkan_loader_library -->
 - **DECIDED** — The macOS artifact is one `aarch64-apple-darwin` wheel at the same abi3
   floor, released beside the manylinux one at the same version. Apple Silicon only: no

@@ -3,6 +3,9 @@
 
 """One native built-in feeding one Python processor in its real placement."""
 
+import sys
+from pathlib import Path
+
 import tatolab.runtime
 import tatolab.stream
 from native_builtin_probes import VideoFrameProbe
@@ -21,7 +24,11 @@ def a_test_pattern_into_a_video_frame_probe(stream_builder: StreamBuilder) -> No
 def main() -> None:
     graph = compile_stream_to_graph(a_test_pattern_into_a_video_frame_probe)
     runtime = tatolab.runtime.Runtime()
-    runtime.load(graph)
+    runtime.load(
+        graph,
+        project_directory=Path(__file__).resolve().parent,
+        interpreter=sys.executable,
+    )
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)
 

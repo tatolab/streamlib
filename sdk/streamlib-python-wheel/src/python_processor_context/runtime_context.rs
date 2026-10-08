@@ -12,9 +12,9 @@ use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
-use super::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE;
 use super::gpu_context::{PythonGpuContextFullAccess, PythonGpuContextLimitedAccess};
 use super::link_data_access::{PythonLinkInputDataReader, PythonLinkOutputDataWriter};
+use streamlib::sdk::processor_interpreter::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE;
 
 /// Privileged runtime context passed to `setup` / `teardown` / `start` / `stop`.
 ///

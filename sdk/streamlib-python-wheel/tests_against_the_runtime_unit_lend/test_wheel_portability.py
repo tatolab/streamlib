@@ -1,7 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""What the wheel's native binaries are allowed to link against.
+"""What the runtime unit's native binaries are allowed to link against.
+
+Read from the lend `cargo xtask build-runtime` lays out at
+`target/tatolab-runtime/lib/tatolab/lend`, with that directory first on
+`PYTHONPATH` — the same files a processor interpreter borrows and the wheel
+carries. Imported from anywhere else, the tests that read binaries fail.
 
 The wheel carries a C++ GLSL compiler so a kernel author needs no shader
 toolchain. "Carries" has to mean statically linked: a `libshaderc.so` on the
@@ -22,14 +27,12 @@ them. A binary this cannot parse fails the test; it is never skipped.
 """
 
 import importlib
-import importlib.util
 import re
 import shutil
 import struct
 import subprocess
 import sys
 from dataclasses import dataclass
-from importlib.metadata import distribution
 from pathlib import Path
 from typing import Optional
 
@@ -90,6 +93,32 @@ MACH_O_LINKING_LOAD_COMMANDS = frozenset(
 )
 
 MacOSVersion = tuple[int, int, int]
+
+# Where `cargo xtask build-runtime` lays the lend out, below the workspace's `target/`.
+RUNTIME_UNIT_LEND_DIRECTORY_TRAILING_PARTS = ("tatolab-runtime", "lib", "tatolab", "lend")
+
+
+def runtime_unit_lend_directory() -> Path:
+    """The lend the imported `tatolab.runtime` came from, refusing any other origin."""
+    runtime_package = importlib.import_module("tatolab.runtime")
+    assert runtime_package.__file__ is not None, "tatolab.runtime has no file on disk"
+    lend_directory = Path(runtime_package.__file__).resolve().parents[2]
+    if lend_directory.parts[-len(RUNTIME_UNIT_LEND_DIRECTORY_TRAILING_PARTS) :] != (
+        RUNTIME_UNIT_LEND_DIRECTORY_TRAILING_PARTS
+    ):
+        raise AssertionError(
+            f"tatolab.runtime was imported from {lend_directory}, not the runtime unit's lend: "
+            "run `cargo xtask build-runtime`, then these tests with "
+            "<workspace>/target/tatolab-runtime/lib/tatolab/lend first on PYTHONPATH"
+        )
+    return lend_directory
+
+
+def runtime_unit_dist_info_directory(lend_directory: Path) -> Path:
+    """The one `.dist-info` the wheel left beside `tatolab/` in the lend."""
+    dist_info_directories = sorted(lend_directory.glob("*.dist-info"))
+    assert len(dist_info_directories) == 1, (lend_directory, dist_info_directories)
+    return dist_info_directories[0]
 
 
 class NativeBinaryUnreadable(Exception):
@@ -290,11 +319,11 @@ def code_signature_verification_failure(mach_o_path: Path) -> Optional[str]:
     return f"fails `codesign --verify --strict`: {verification.stderr.strip()}"
 
 
-def _native_binaries_in(package_directory: Path) -> list[Path]:
-    """Every ELF or Mach-O file under the installed package, plus anything named
-    like one — which then has to parse, or the test fails."""
+def _native_binaries_in(directory: Path) -> list[Path]:
+    """Every ELF or Mach-O file under a directory, plus anything named like one —
+    which then has to parse, or the test fails."""
     native_binaries = []
-    for candidate in sorted(package_directory.rglob("*")):
+    for candidate in sorted(directory.rglob("*")):
         if not candidate.is_file():
             continue
         with candidate.open("rb") as candidate_file:
@@ -309,10 +338,20 @@ def _native_binaries_in(package_directory: Path) -> list[Path]:
 
 
 @pytest.fixture(scope="module")
-def native_extension_path() -> Path:
+def lend_directory() -> Path:
+    return runtime_unit_lend_directory()
+
+
+@pytest.fixture(scope="module")
+def native_extension_path(lend_directory: Path) -> Path:
     engine = importlib.import_module("tatolab.runtime._engine")
     assert engine.__file__ is not None, "the native extension has no file on disk"
-    return Path(engine.__file__)
+    native_extension_path = Path(engine.__file__).resolve()
+    assert native_extension_path.parent == lend_directory / "tatolab" / "runtime", (
+        f"tatolab.runtime._engine was imported from {native_extension_path}, outside the lend "
+        f"at {lend_directory}"
+    )
+    return native_extension_path
 
 
 @pytest.fixture(scope="module")
@@ -321,28 +360,23 @@ def native_extension_needed_libraries(native_extension_path: Path) -> list[str]:
 
 
 @pytest.fixture(scope="module")
-def native_binaries_the_package_carries() -> list[Path]:
-    native_binaries: list[Path] = []
-    for package_name in ("tatolab.stream", "tatolab.runtime"):
-        package_spec = importlib.util.find_spec(package_name)
-        assert package_spec is not None and package_spec.origin is not None, package_name
-        native_binaries.extend(_native_binaries_in(Path(package_spec.origin).parent))
-    return native_binaries
+def native_binaries_the_lend_carries(lend_directory: Path) -> list[Path]:
+    return _native_binaries_in(lend_directory)
 
 
 @pytest.fixture(scope="module")
-def mach_o_binaries_the_package_carries(native_binaries_the_package_carries) -> list[Path]:
+def mach_o_binaries_the_lend_carries(native_binaries_the_lend_carries) -> list[Path]:
     return [
         binary
-        for binary in native_binaries_the_package_carries
+        for binary in native_binaries_the_lend_carries
         if binary.read_bytes()[:4] != ELF_MAGIC
     ]
 
 
 @pytest.fixture(scope="module")
-def wheel_minimum_macos_version() -> Optional[MacOSVersion]:
-    """The macOS floor the installed wheel's platform tag admits, if it has one."""
-    wheel_metadata = distribution("streamlib").read_text("WHEEL") or ""
+def wheel_minimum_macos_version(lend_directory: Path) -> Optional[MacOSVersion]:
+    """The macOS floor the lend's wheel tag admits, if it has one."""
+    wheel_metadata = (runtime_unit_dist_info_directory(lend_directory) / "WHEEL").read_text()
     macos_platform_tags = re.findall(r"^Tag: .*-macosx_(\d+)_(\d+)_\w+$", wheel_metadata, re.M)
     if not macos_platform_tags:
         return None
@@ -384,21 +418,21 @@ def test_the_native_extension_links_nothing_the_host_may_not_supply(
     )
 
 
-def test_every_mach_o_the_wheel_carries_is_portable(
-    mach_o_binaries_the_package_carries, wheel_minimum_macos_version
+def test_every_mach_o_the_lend_carries_is_portable(
+    mach_o_binaries_the_lend_carries, wheel_minimum_macos_version
 ):
     """The extension and the bundled Vulkan driver alike: system links only,
     signed, and no newer than the tag. Vacuous on Linux, which carries none."""
-    if not mach_o_binaries_the_package_carries:
+    if not mach_o_binaries_the_lend_carries:
         return
     assert wheel_minimum_macos_version is not None, (
-        "the installed wheel carries Mach-O but its tag names no macOS version"
+        "the lend carries Mach-O but its wheel tag names no macOS version"
     )
     # A macOS host carries `codesign`, so there the signature is verified as
     # well as found. A Linux host carries no Mach-O to verify.
     signatures_are_verifiable = shutil.which("codesign") is not None
     violations_per_binary = {}
-    for binary in mach_o_binaries_the_package_carries:
+    for binary in mach_o_binaries_the_lend_carries:
         violations = mach_o_portability_violations(
             _read_mach_o_load_commands(binary.read_bytes(), binary),
             wheel_minimum_macos_version,
@@ -409,12 +443,15 @@ def test_every_mach_o_the_wheel_carries_is_portable(
             violations.append(verification_failure)
         if violations:
             violations_per_binary[str(binary)] = violations
-    assert not violations_per_binary, f"non-portable Mach-O in the wheel: {violations_per_binary}"
+    assert not violations_per_binary, f"non-portable Mach-O in the lend: {violations_per_binary}"
 
 
-def test_every_native_binary_the_wheel_carries_parses(native_binaries_the_package_carries):
+def test_every_native_binary_the_lend_carries_parses(
+    native_binaries_the_lend_carries, native_extension_path
+):
     """A binary the proof cannot read is a failure, never a skipped check."""
-    for binary in native_binaries_the_package_carries:
+    assert native_extension_path in native_binaries_the_lend_carries
+    for binary in native_binaries_the_lend_carries:
         _libraries_linked_by(binary)
 
 
@@ -524,11 +561,11 @@ def test_a_binary_built_for_another_apple_platform_is_caught():
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="`codesign` is macOS's own verifier")
 def test_a_signed_binary_rewritten_after_signing_is_caught(
-    mach_o_binaries_the_package_carries, tmp_path: Path
+    mach_o_binaries_the_lend_carries, tmp_path: Path
 ):
     """The failure a presence check cannot see: the command survives, the
     signature does not."""
-    smallest_signed_binary = min(mach_o_binaries_the_package_carries, key=lambda binary: binary.stat().st_size)
+    smallest_signed_binary = min(mach_o_binaries_the_lend_carries, key=lambda binary: binary.stat().st_size)
     rewritten_copy = tmp_path / smallest_signed_binary.name
     rewritten_bytes = bytearray(smallest_signed_binary.read_bytes())
     rewritten_bytes[len(rewritten_bytes) // 2] ^= 0xFF

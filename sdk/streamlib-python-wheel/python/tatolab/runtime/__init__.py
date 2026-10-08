@@ -3,8 +3,10 @@
 
 """The engine, running in this interpreter's process.
 
-`Runtime()` boots it, `rt.load(graph)` puts a stream's graph in it, and
-`rt.run()` blocks until Ctrl-C with the GIL released. `_engine` is the native
+`Runtime()` boots it, `rt.load(graph, project_directory=..., interpreter=...)`
+puts a stream's graph in it — its Python nodes run in processor interpreters
+started from that project's venv interpreter — and `rt.run()` blocks until
+Ctrl-C with the GIL released. `_engine` is the native
 extension behind it and behind every runtime-backed name `tatolab.stream`
 re-exports.
 """

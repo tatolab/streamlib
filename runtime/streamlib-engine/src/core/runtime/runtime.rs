@@ -175,6 +175,10 @@ pub struct Runner {
     /// construction needs the live GpuContext but whose registration must
     /// precede the first `process()` call. Drained on each `start()`.
     setup_hooks: Arc<Mutex<Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>>>>,
+    /// The lend directory and the stream environment this runtime starts its
+    /// processor interpreters with.
+    pub(crate) processor_interpreter_launch_record:
+        Arc<super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecord>,
 }
 
 impl Runner {
@@ -339,6 +343,7 @@ impl Runner {
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
+            processor_interpreter_launch_record: Arc::default(),
         });
 
         Ok(runtime)
@@ -1183,16 +1188,46 @@ impl Runner {
     // Graph Load
     // =========================================================================
 
+    /// Hand this runtime the lend directory — the directory holding the
+    /// `tatolab/runtime/` package its processor interpreters borrow. The host
+    /// calls it once, before any load.
+    pub fn set_processor_interpreter_lend_directory(&self, lend_directory: std::path::PathBuf) {
+        self.processor_interpreter_launch_record
+            .set_processor_interpreter_lend_directory(lend_directory);
+    }
+
+    /// Kill any describe this runtime is running and refuse every later one
+    /// until the next [`Self::load_graph_snapshot`] begins — its host's user
+    /// interrupted the load that started it.
+    pub fn interrupt_every_processor_interpreter_describe(&self) {
+        self.processor_interpreter_launch_record
+            .interrupt_every_describe();
+    }
+
+    /// The stream environment the last [`Self::load_graph_snapshot`] recorded.
+    #[cfg(test)]
+    pub(crate) fn stream_environment_recorded_at_the_last_load(
+        &self,
+    ) -> Option<super::StreamEnvironment> {
+        self.processor_interpreter_launch_record
+            .stream_environment_recorded_at_the_last_load()
+    }
+
     /// Load `graph` into this runtime: each node added under its name, each
     /// link connected by name, the exposures recorded on their nodes, and the
     /// stream's name recorded on the graph.
     ///
-    /// A node name already in the graph is refused rather than suffixed — a
-    /// loaded graph's names are already resolved. Every `type` must already be
-    /// registered.
+    /// A host interrupt of an earlier load is forgotten and `stream_environment`
+    /// recorded first. Every `type` the graph names that is neither a built-in
+    /// nor registered in Rust is then described in one start of the stream's
+    /// own interpreter and registered, so a load with no environment refuses
+    /// such a type by name. A node name already in
+    /// the graph is refused rather than suffixed — a loaded graph's names are
+    /// already resolved.
     pub fn load_graph_snapshot(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
+        stream_environment: Option<super::StreamEnvironment>,
     ) -> Result<()> {
         use std::collections::HashMap;
 
@@ -1200,10 +1235,14 @@ impl Runner {
             ExposedOutputPortsComponent, GraphNodeWithComponents, cast_exposed_name_to_url_safe,
         };
 
-        for node in &graph.nodes {
-            crate::core::processors::PROCESSOR_REGISTRY
-                .resolve_processor_type_if_unregistered(&node.processor_type)?;
-        }
+        self.processor_interpreter_launch_record
+            .forget_the_interrupt_of_an_earlier_load();
+        self.processor_interpreter_launch_record
+            .record_the_stream_environment_of_a_load(stream_environment);
+        self.processor_interpreter_launch_record
+            .describe_and_register_every_type_a_load_names(
+                graph.nodes.iter().map(|node| &node.processor_type),
+            )?;
         graph.validate()?;
         self.refuse_a_node_name_this_runtimes_graph_already_holds(graph)?;
 

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The helper process's end of the escalate socket, framed the way
-//! `tatolab/runtime/_helper.py` frames it: a four-byte big-endian length, then the
-//! JSON, with one correlation id per request.
+//! `tatolab/runtime/_processor_interpreter_bootstrap.py` frames it: a
+//! four-byte big-endian length, then the JSON, with one correlation id per
+//! request.
 //!
 //! Shared by the present-class op tests, which each need their own process
 //! because minting a window mints the process's one event loop.

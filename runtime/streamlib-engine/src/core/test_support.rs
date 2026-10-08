@@ -460,6 +460,37 @@ pub(crate) fn rerun_this_test_in_a_child_process(
     child_process_output
 }
 
+/// Write `script` to `path` as an executable, from a short-lived shell.
+///
+/// A file this process writes and then execs can fail with ETXTBSY: another
+/// test's thread that forks in between hands its child the still-open write
+/// descriptor until that child execs. Written from a child process, the
+/// descriptor never enters this process's table.
+pub(crate) fn write_an_executable_script_from_a_child_process(
+    path: &std::path::Path,
+    script: &str,
+) {
+    use std::io::Write;
+    let mut script_writer = std::process::Command::new("/bin/sh")
+        .args(["-c", r#"cat > "$1" && chmod 755 "$1""#, "sh"])
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("a shell writes the script");
+    script_writer
+        .stdin
+        .take()
+        .expect("the shell's standard input is piped")
+        .write_all(script.as_bytes())
+        .expect("the script reaches the shell");
+    let status = script_writer.wait().expect("the shell exits");
+    assert!(
+        status.success(),
+        "the shell could not write `{}`",
+        path.display()
+    );
+}
+
 /// A temporary directory at exactly owner-only mode, even when it was made
 /// while another test's thread was binding an iceoryx2 listener under its
 /// process-wide umask.

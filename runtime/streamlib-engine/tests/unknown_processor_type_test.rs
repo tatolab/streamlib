@@ -21,7 +21,9 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 
-const UNKNOWN_PATH: &str = "ghost_package:DefinitelyNotARegisteredProcessor";
+/// A Rust path, because a Python one nothing registered is described in the
+/// stream's own interpreter before it is added, and is refused by that.
+const UNKNOWN_PATH: &str = "ghost_package::DefinitelyNotARegisteredProcessor";
 
 fn unknown_ident() -> ProcessorClassImportPath {
     ProcessorClassImportPath::new(UNKNOWN_PATH).unwrap()
@@ -98,7 +100,7 @@ fn graph_snapshot_validate_rejects_unknown_processor_type() {
         "nodes": [
             {
                 "name": "ghost",
-                "type": "ghost_package:DefinitelyNotARegisteredProcessor",
+                "type": "ghost_package::DefinitelyNotARegisteredProcessor",
                 "config": {}
             }
         ]

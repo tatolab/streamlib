@@ -23,6 +23,7 @@ The recording is read back with `cargo xtask mp4-inspect`, the same reader
 import json
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -129,7 +130,11 @@ def test_node_name_defaults_to_the_type_name():
 
     runtime = tatolab.runtime.Runtime()
     try:
-        runtime.load(graph)
+        runtime.load(
+            graph,
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
+        )
     finally:
         runtime.shutdown()
 
@@ -156,7 +161,9 @@ def test_two_encoders_wire_into_the_one_input_without_an_adapter():
     runtime = tatolab.runtime.Runtime()
     try:
         runtime.load(
-            compile_stream_to_graph(two_microphone_encoder_pairs_into_one_mp4_sink)
+            compile_stream_to_graph(two_microphone_encoder_pairs_into_one_mp4_sink),
+            project_directory=Path(__file__).resolve().parent,
+            interpreter=sys.executable,
         )
     finally:
         runtime.shutdown()

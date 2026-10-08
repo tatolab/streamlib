@@ -799,9 +799,8 @@ impl<'a> RuntimeContextFullAccess<'a> {
 
     /// Per-runtime surface-sharing socket, for a spawn host to hand its child.
     ///
-    /// The one part of the host base a spawn host outside this crate needs:
-    /// the child's `streamlib-surface-client` dials it to import a surface
-    /// this runtime exported. Everything else on the base stays internal.
+    /// The child's `streamlib-surface-client` dials it to import a surface
+    /// this runtime exported.
     #[cfg(target_os = "linux")]
     pub fn surface_socket_path(&self) -> &std::path::Path {
         self.host_base().surface_socket_path()

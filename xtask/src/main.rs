@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
+pub mod build_runtime;
 pub mod check_boundaries;
 pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
@@ -17,6 +18,7 @@ pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inheritable_descriptor;
 pub mod check_no_inventory_submit;
+pub mod check_no_tatolab_namespace_package_init;
 pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
@@ -173,7 +175,7 @@ pub fn tracked_files_under_scan_roots(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all fourteen in well under a second, and why CI runs them as
+/// lets one process run all fifteen in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
@@ -210,6 +212,10 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     (
         "check-workspace-version-pins",
         check_workspace_version_pins::run,
+    ),
+    (
+        "check-no-tatolab-namespace-package-init",
+        check_no_tatolab_namespace_package_init::run,
     ),
 ];
 
@@ -322,7 +328,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             &["test", "--locked", "-p", "xtask"],
         ),
         (
-            "SDK + macros + processor-schema unit tests",
+            "SDK + macros + processor-schema + error unit tests",
             "cargo",
             &[
                 "test",
@@ -337,6 +343,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-ipc-types",
                 "-p",
                 "streamlib-surface-client",
+                "-p",
+                "streamlib-error",
                 "--lib",
             ],
         ),
@@ -810,7 +818,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::graph_snapshot",
                 "core::graph::traversal::mutation_ops::add_v_op::tests::a_built_in_this_floor_compiles_out_is_refused_and_nothing_is_added",
                 "core::graph::traversal::mutation_ops::add_v_op::tests::a_config_the_type_does_not_take_is_refused_naming_the_node_and_nothing_is_added",
-                "core::processors::processor_instance_factory::tests::a_built_in_type_is_never_handed_to_the_unregistered_type_resolver",
                 "core::processors::processor_instance_factory::tests::a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any",
                 "core::processors::processor_instance_factory::tests::only_a_type_recorded_absent_on_this_floor_is_refused_as_absent",
                 "core::runtime::local_processor_type_registration::tests::a_type_added_locally_refuses_a_setting_its_config_does_not_take_at_add",
@@ -822,6 +829,79 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::stated_configuration_value",
                 "linux::surface_share",
                 "core::context::surface_share_wire_verbs",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::nothing_a_helper_starts_can_hold_the_apps_output_open_past_its_own_exit",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_helper_exit_reclaims_the_iceoryx2_nodes_it_left_whatever_ended_it",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::every_path_onto_the_ladder_asks_the_helper_to_stop_and_tear_down_exactly_once",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_two_shutdown_commands_are_the_ones_the_helper_answers",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_dead_helper_is_noticed_by_its_process_while_a_survivor_still_holds_its_socket",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_escalate_socket_survives_the_sweep_that_takes_every_other_descriptor",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_wiring_envelope_carries_the_mode_the_child_drives_its_processor_in",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_late_link_into_a_helper_the_host_gave_up_on_is_refused_and_one_before_setup_is_not",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_link_held_during_a_setup_that_fails_is_refused_rather_than_left_pending",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_child_is_the_streams_interpreter_running_the_lent_bootstrap_by_path",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_child_is_told_which_class_to_import_and_who_it_is",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_child_is_handed_the_parents_iceoryx2_domain_root",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_child_is_handed_the_engine_build_id_it_must_match",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_child_is_handed_the_surface_share_channel_under_its_variable",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_helper_that_died_while_setting_up_is_refused_naming_what_it_wrote_to_standard_error",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_standard_error_left_open_bounds_the_wait_and_keeps_what_arrived",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::only_the_first_bytes_of_a_long_standard_output_are_kept_and_read_without_its_close",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::only_the_last_bytes_of_a_long_standard_error_are_kept",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_helper_that_died_writing_nothing_is_refused_saying_so",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_childs_python_path_is_the_lend_directory_then_the_project_exactly",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::an_inherited_python_path_is_not_passed_to_the_child",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::a_project_directory_holding_the_path_list_separator_is_refused_by_name",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::the_childs_working_directory_is_the_project",
+                "core::compiler::compiler_ops::processor_interpreter_spawn_host::tests::an_inherited_python_home_is_not_passed_to_the_child",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_running_helper_is_not_reported_dead_and_the_same_helper_is_once_it_is",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_helper_still_in_a_callback_is_interrupted_with_a_real_signal",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_helper_that_leaves_on_its_own_is_never_signalled_at_all",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_helper_that_ignores_the_interrupt_and_the_termination_is_killed_and_reaped",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_cooperative_helper_is_never_interrupted_and_its_group_still_goes",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_worker_the_helper_forked_dies_with_the_helpers_group",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_crash_path_takes_the_group_down_with_no_cooperative_rung",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_forced_shutdown_interrupts_nothing_and_terminates_the_group_at_once",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::a_shutdown_forced_while_teardown_is_awaited_ends_the_wait_at_once",
+                "core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::tests::the_whole_ladder_is_bounded_well_inside_the_apps_own_watchdog",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_type_the_interpreter_describes_is_read_into_its_declaration",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_document_printed_before_exiting_is_read_while_an_escaped_descendant_holds_standard_output",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::the_describe_holds_a_pipe_on_the_interpreters_standard_input",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_type_whose_module_will_not_import_is_refused_by_name_quoting_the_reason_it_was_given",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_class_carrying_no_node_stamp_is_refused_by_name",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::each_refused_type_is_quoted_with_its_own_reason_however_much_a_later_import_writes_to_standard_error",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::an_interpreter_that_printed_no_document_refuses_every_type_naming_the_interpreter",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_describe_past_its_bound_is_killed_with_its_group_and_refuses_every_type_naming_the_bound",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_shutdown_requested_during_a_describe_kills_it_and_refuses_every_type_saying_so",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_describe_its_host_interrupts_is_killed_and_refuses_every_type_saying_so",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_standard_output_that_is_not_a_document_is_refused_quoting_its_head_and_the_parse_error",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_project_directory_holding_the_path_list_separator_refuses_every_type_naming_it",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::the_describe_command_carries_the_stream_environment_and_no_processors_variables",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::a_started_describe_receives_its_arguments_working_directory_and_python_path",
+                "core::compiler::compiler_ops::processor_interpreter_describe::tests::only_a_module_and_qualname_that_names_no_built_in_is_described",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_described_node_type_reads_into_a_python_descriptor_and_its_execution",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_described_node_type_naming_another_import_path_is_refused_naming_both",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::an_unknown_execution_mode_is_refused_naming_it",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_config_schema_that_is_not_an_object_is_refused",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_hand_built_match_device_marker_still_reaches_the_descriptor",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_hand_built_marker_smuggling_an_unhonourable_contract_is_refused_naming_both_numbers",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_contract_beside_a_skipping_profile_is_refused_naming_both_knobs",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_negative_count_is_refused_naming_the_field_and_the_value",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_bool_where_a_number_belongs_is_refused_naming_the_field_and_the_kind",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::an_omitted_or_source_spelled_channel_count_follows_the_source",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_channel_count_naming_no_count_is_refused_offering_the_spelling",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_marker_missing_any_required_contract_field_is_refused_naming_the_port_and_the_field",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::an_output_port_declaring_a_contract_is_refused",
+                "core::compiler::compiler_ops::python_processor_declaration::tests::a_channel_count_refusal_says_whether_the_value_was_the_wrong_kind_or_unusable",
+                "core::runtime::processor_interpreter_launch_record::tests::a_load_records_the_stream_environment_it_was_given",
+                "core::runtime::processor_interpreter_launch_record::tests::a_graph_of_rust_types_needs_no_stream_environment",
+                "core::runtime::processor_interpreter_launch_record::tests::a_load_naming_a_type_to_describe_with_no_environment_refuses_it_by_name",
+                "core::runtime::processor_interpreter_launch_record::tests::a_load_whose_host_interrupts_its_describe_returns_refusing_the_type",
+                "core::runtime::processor_interpreter_launch_record::tests::a_load_after_one_its_host_interrupted_describes_normally",
+                "core::runtime::processor_interpreter_launch_record::tests::a_load_with_no_lend_directory_refuses_a_type_to_describe_by_name",
+                "core::runtime::processor_interpreter_launch_record::tests::a_live_add_of_an_undescribed_type_with_no_environment_recorded_is_refused_by_name",
+                "core::runtime::processor_interpreter_launch_record::tests::a_load_redescribes_its_types_and_a_live_add_describes_in_the_recorded_environment",
+                "core::processors::processor_instance_factory::tests::a_later_describe_of_a_type_replaces_the_earlier_ones_registration",
+                "core::processors::processor_instance_factory::tests::a_describe_never_replaces_a_registration_made_any_other_way",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`
@@ -1157,6 +1237,14 @@ enum Commands {
         fix: bool,
     },
 
+    /// CI gate keeping `tatolab` a PEP 420 namespace package. Fails on any
+    /// repository file ending in `tatolab/__init__.py`, and on any under the
+    /// runtime unit's lend (`target/tatolab-runtime/lib/tatolab/lend`) when one
+    /// is built. A processor interpreter merges the lent `tatolab.runtime` with
+    /// its venv's `tatolab.stream` only while no portion of the namespace is a
+    /// regular package.
+    CheckNoTatolabNamespacePackageInit,
+
     /// Run every source-walking gate in one process and report all failures.
     /// This is what CI's `source-gates` job runs; the per-gate subcommands stay
     /// for narrowing down a failure locally.
@@ -1165,6 +1253,26 @@ enum Commands {
     /// Run the gates CI runs, so a green run here predicts a green PR. Builds
     /// the workspace, so it is slower than `check-all-source-gates` alone.
     RunLocalCiGates,
+
+    /// Build the runtime unit and lay out its lend at
+    /// `target/tatolab-runtime/lib/tatolab/lend` — the directory holding
+    /// `tatolab/runtime/`, which a processor interpreter puts first on
+    /// `PYTHONPATH`. Builds `sdk/streamlib-python-wheel` as a wheel with the
+    /// pinned maturin into `target/tatolab-runtime/wheel/`, then replaces the
+    /// lend with that wheel's contents. On macOS it first stages the bundled
+    /// Vulkan driver, so `_vulkan_driver/` lands beside `_engine`. The one build
+    /// of the runtime unit for developers, CI and the installer; it installs
+    /// and publishes nothing.
+    ///
+    /// Debug by default: the profile `maturin develop` builds, so on a
+    /// developer machine or a CI job that already ran it this is an
+    /// incremental link rather than a second engine build. `--release` builds
+    /// what a release ships.
+    BuildRuntime {
+        /// Build with optimizations, as a release wheel is built.
+        #[arg(long)]
+        release: bool,
+    },
 
     /// The codec proof's scorer: PSNR of a decoded frame set against the
     /// references that produced it, and the vivid rig's channel-mean drift
@@ -1256,8 +1364,15 @@ fn main() -> Result<()> {
                 check_workspace_version_pins::run(&workspace_root)?;
             }
         }
+        Commands::CheckNoTatolabNamespacePackageInit => {
+            check_no_tatolab_namespace_package_init::run(&workspace_root()?)?
+        }
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
+        Commands::BuildRuntime { release } => build_runtime::run(
+            &workspace_root()?,
+            build_runtime::RuntimeUnitBuildProfile::from_release_flag(release),
+        )?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::Mp4Inspect(inspect_command) => mp4_inspect::run(inspect_command)?,
         Commands::GenerateBuiltInNodeClasses { check } => {

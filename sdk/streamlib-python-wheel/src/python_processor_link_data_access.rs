@@ -30,11 +30,11 @@ use streamlib::sdk::iceoryx2::{
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
     OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
 };
+use streamlib::sdk::processor_interpreter::PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 
 use crate::python_bag_conversion::{
     cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
 };
-use crate::python_helper_process_spawn_host::HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
@@ -289,10 +289,11 @@ pub(crate) fn open_node_link_data_access_for_helper_process(
                  opens its iceoryx2 node only in the domain its parent runtime hands it"
             ))
         })?;
-    let node_name = std::env::var(HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE).map_or_else(
-        |_| format!("streamlib-helper/pid{}", std::process::id()),
-        |processor_id| format!("streamlib-helper/{processor_id}"),
-    );
+    let node_name = std::env::var(PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE)
+        .map_or_else(
+            |_| format!("streamlib-helper/pid{}", std::process::id()),
+            |processor_id| format!("streamlib-helper/{processor_id}"),
+        );
     let node = python
         .detach(|| Iceoryx2Node::new(std::path::Path::new(&iceoryx2_domain_root), &node_name))
         .map_err(|node_failure| PyRuntimeError::new_err(node_failure.to_string()))?;
@@ -1337,12 +1338,13 @@ fn channel_count_the_parent_wired(
             )));
         }
     };
-    read_a_channel_count_or_the_source_spelling(&value).map_err(|refusal| {
-        refusal.framed_as(format!(
+    read_a_channel_count_or_the_source_spelling(
+        &value,
+        format!(
             "input port {port_name:?} was wired with an `audio_window` whose \"channels\" \
              the helper could not read: it"
-        ))
-    })
+        ),
+    )
 }
 
 fn not_a_helper_process_data_plane_error() -> PyErr {

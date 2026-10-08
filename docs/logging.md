@@ -103,7 +103,8 @@ doesn't include `--tests`.
 ### Individual files
 
 Files that legitimately bypass the unified pathway because they *install*
-it — e.g. the wheel's helper bootstrap (`_helper.py`) and log plumbing
+it — e.g. the processor interpreter bootstrap
+(`_processor_interpreter_bootstrap.py`) and log plumbing
 (`_runtime_log_reader.py`) — carry a file-level pragma near their
 copyright header:
 

@@ -74,6 +74,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# A bare `pytest` runs the suite against the develop venv's runtime; the lend's
+# own tests run only where a lend is named on `PYTHONPATH`.
+testpaths = ["tests"]
 markers = [
     # `Runner::start()` initializes a GPU context, and the engine's DMA-BUF
     # pool pre-warm needs a driver that can actually allocate exportable
@@ -123,7 +126,7 @@ extend-select = ["A"]
 [tool.pyright]
 # The wheel's Python half, checked at the version floor rather than whatever
 # interpreter the venv happens to be — `requires-python` is the promise.
-include = ["python", "tests"]
+include = ["python", "tests", "tests_against_the_runtime_unit_lend"]
 # The packages are checked from source, not from an install, so `tests/` needs
 # both package roots on the search path: this project's `tatolab.runtime` and
 # the stream distribution's `tatolab.stream`. Without them a checkout that has

@@ -22,16 +22,16 @@
 use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant};
 
-use streamlib::sdk::helper_process_transport::HelperProcessShutdownCommand;
+use super::subprocess_bridge::HelperProcessShutdownCommand;
 
 /// How long a Python callback has to return before the ladder interrupts it.
 ///
 /// Engine-chosen and not authorable: the plan makes every budget here the
 /// engine's, so none is reachable from a processor's configuration.
-pub(crate) const CALLBACK_RETURN_BUDGET: Duration = Duration::from_secs(1);
+pub const CALLBACK_RETURN_BUDGET: Duration = Duration::from_secs(1);
 
 /// How long `teardown()` has once the helper has been asked for it.
-pub(crate) const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
+pub const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 
 /// How long the child has to leave on its own once its hooks have returned.
 ///
@@ -44,7 +44,7 @@ pub(crate) const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 /// 15.3–31.4 ms for one holding a 16 MiB array, over three runs each. The
 /// budget is set well above that rather than at it, because what it covers is
 /// an interpreter finalizing whatever a processor imported.
-pub(crate) const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
+pub const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
 
 /// How long the helper's process group has to leave on `SIGTERM` before it is
 /// killed.
@@ -135,7 +135,7 @@ impl HelperProcessShutdownLadder {
         Self {
             processor_display_name,
             child,
-            is_shutdown_forced: streamlib::sdk::runtime::is_runtime_shutdown_forced,
+            is_shutdown_forced: crate::core::runtime::is_runtime_shutdown_forced,
         }
     }
 
@@ -300,20 +300,26 @@ impl HelperProcessShutdownLadder {
     /// the moment it returns.
     fn end_the_process_group_and_reap(&mut self) -> HelperProcessShutdownOutcome {
         if !(self.is_shutdown_forced)() {
-            self.wait_for_the_child_to_become_collectable(CHILD_SELF_EXIT_GRACE);
+            let _ =
+                wait_for_a_child_to_become_collectable_within(&self.child, CHILD_SELF_EXIT_GRACE);
         }
 
         // The group, never the pid: a fork-based worker or an `os.system`
         // child survives a signal to the helper alone, and it holds the
         // helper's sockets open behind it.
         self.signal_the_whole_process_group(libc::SIGTERM);
-        self.wait_for_the_child_to_become_collectable(PROCESS_GROUP_TERMINATION_GRACE);
+        let _ = wait_for_a_child_to_become_collectable_within(
+            &self.child,
+            PROCESS_GROUP_TERMINATION_GRACE,
+        );
 
-        self.signal_the_whole_process_group(libc::SIGKILL);
-        // Out of the registry the third interrupt kills from before the reap
-        // frees the group's id for reuse.
-        streamlib::sdk::runtime::deregister_a_helper_process_group(self.child.id() as i32);
-        self.reap_the_child_within(REAP_BUDGET)
+        match kill_the_process_group_and_reap_its_leader(
+            &mut self.child,
+            format_args!("[{}] its helper process", self.processor_display_name),
+        ) {
+            Some(exit_status) => HelperProcessShutdownOutcome::Reaped(exit_status),
+            None => HelperProcessShutdownOutcome::AbandonedAfterTheLadder,
+        }
     }
 
     fn signal_the_child_itself(&self, signal: libc::c_int) {
@@ -327,47 +333,84 @@ impl HelperProcessShutdownLadder {
         // SAFETY: as above — the pid is still this child's, and its own.
         unsafe { libc::killpg(self.child.id() as libc::pid_t, signal) };
     }
+}
 
-    /// Wait up to `budget` for the child to exit, without collecting it.
-    fn wait_for_the_child_to_become_collectable(&self, budget: Duration) {
-        let deadline = Instant::now() + budget;
-        while !a_helper_process_has_exited_without_being_reaped(self.child.id()) {
-            if Instant::now() >= deadline {
-                return;
-            }
-            std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+/// Kill `child`'s whole process group and reap its leader within
+/// [`REAP_BUDGET`], logging under `subject` a leader left unreaped.
+///
+/// `child` must lead a group of its own and still be unreaped, so the group id
+/// is still its own.
+pub(crate) fn kill_the_process_group_and_reap_its_leader(
+    child: &mut Child,
+    subject: impl std::fmt::Display,
+) -> Option<ExitStatus> {
+    // SAFETY: the pid is this process's own unreaped child's, which leads its
+    // own process group.
+    unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+    // Out of the registry the third interrupt kills from before the reap frees
+    // the group's id for reuse.
+    crate::core::runtime::deregister_a_helper_process_group(child.id() as i32);
+    match reap_a_child_within(child, REAP_BUDGET) {
+        ChildReapedWithinItsBudget::Reaped(exit_status) => Some(exit_status),
+        ChildReapedWithinItsBudget::StillRunningAfterTheBudget => {
+            tracing::error!(
+                "{subject} (pid={}) outlived its kill and is abandoned unreaped; it is not \
+                 killable from user space",
+                child.id(),
+            );
+            None
+        }
+        ChildReapedWithinItsBudget::CannotBeCollected(uncollectable) => {
+            tracing::error!(
+                "{subject} (pid={}) cannot be collected: {uncollectable}",
+                child.id(),
+            );
+            None
         }
     }
+}
 
-    fn reap_the_child_within(&mut self, budget: Duration) -> HelperProcessShutdownOutcome {
-        let deadline = Instant::now() + budget;
-        loop {
-            match self.child.try_wait() {
-                Ok(Some(exit_status)) => return HelperProcessShutdownOutcome::Reaped(exit_status),
-                Ok(None) => {}
-                Err(uncollectable) => {
-                    tracing::error!(
-                        "[{}] its helper process (pid={}) cannot be collected: {uncollectable}",
-                        self.processor_display_name,
-                        self.child.id(),
-                    );
-                    return HelperProcessShutdownOutcome::AbandonedAfterTheLadder;
-                }
-            }
-            if Instant::now() >= deadline {
-                // Uninterruptible sleep inside a driver is the case user space
-                // cannot end. Naming it beats waiting out an app that will
-                // never be allowed to quit.
-                tracing::error!(
-                    "[{}] its helper process (pid={}) outlived the shutdown ladder and is \
-                     abandoned unreaped; it is not killable from user space",
-                    self.processor_display_name,
-                    self.child.id(),
-                );
-                return HelperProcessShutdownOutcome::AbandonedAfterTheLadder;
-            }
-            std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+/// Wait up to `budget` for `child` to exit, without collecting it, and say
+/// whether it did.
+pub(crate) fn wait_for_a_child_to_become_collectable_within(
+    child: &Child,
+    budget: Duration,
+) -> bool {
+    let deadline = Instant::now() + budget;
+    while !a_helper_process_has_exited_without_being_reaped(child.id()) {
+        if Instant::now() >= deadline {
+            return false;
         }
+        std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+    }
+    true
+}
+
+/// How a bounded reap of a child ended.
+#[derive(Debug)]
+enum ChildReapedWithinItsBudget {
+    Reaped(ExitStatus),
+    /// Uninterruptible sleep inside a driver is the case user space cannot
+    /// end, so the child is left unreaped rather than waited on for good.
+    StillRunningAfterTheBudget,
+    CannotBeCollected(std::io::Error),
+}
+
+/// Collect `child` once it has exited, waiting no longer than `budget`.
+fn reap_a_child_within(child: &mut Child, budget: Duration) -> ChildReapedWithinItsBudget {
+    let deadline = Instant::now() + budget;
+    loop {
+        match child.try_wait() {
+            Ok(Some(exit_status)) => return ChildReapedWithinItsBudget::Reaped(exit_status),
+            Ok(None) => {}
+            Err(uncollectable) => {
+                return ChildReapedWithinItsBudget::CannotBeCollected(uncollectable);
+            }
+        }
+        if Instant::now() >= deadline {
+            return ChildReapedWithinItsBudget::StillRunningAfterTheBudget;
+        }
+        std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
     }
 }
 

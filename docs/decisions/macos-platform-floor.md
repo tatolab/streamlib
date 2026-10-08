@@ -98,9 +98,12 @@ not just develop on it"* — is what the nine tickets trace to.
   surface ids. Not taken; the handle path was proven instead.
 - **Restructuring the helper spawn to `posix_spawn` inside this change.** The capability-secure
   rendezvous needs it, and `POSIX_SPAWN_CLOEXEC_DEFAULT` would be stronger than today's descriptor
-  sweep — but `python_helper_process_spawn_host.rs` is one shared file, so the change alters the
+  sweep — but ~~`python_helper_process_spawn_host.rs`~~ is one shared file, so the change alters the
   spawn path on **both** platforms. It becomes its own change with its own Linux proof rather than a
   rider on this one.
+  > Superseded 2026-10-07 by the spawn's move into the engine under `package-split-and-lend.md`:
+  > the shared file is
+  > `runtime/streamlib-engine/src/core/compiler/compiler_ops/processor_interpreter_spawn_host.rs`.
 
 ## Consequences
 
