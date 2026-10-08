@@ -167,16 +167,18 @@ def node_names_loaded_by_tatolabd(
     standard_error_drain = threading.Thread(target=drain_standard_error, daemon=True)
     standard_error_drain.start()
 
-    loaded_node_count = None
-    load_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
-    while loaded_node_count is None and time.monotonic() < load_deadline:
+    def loaded_node_count_logged_so_far() -> "int | None":
         for standard_error_line in list(standard_error_lines):
             loaded_line = STREAM_LOADED_LINE.search(standard_error_line)
             if loaded_line:
-                loaded_node_count = int(loaded_line.group(1))
-                break
+                return int(loaded_line.group(1))
+        return None
+
+    loaded_node_count = None
+    load_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
+    while loaded_node_count is None and time.monotonic() < load_deadline:
+        loaded_node_count = loaded_node_count_logged_so_far()
         if loaded_node_count is None and tatolabd.poll() is not None:
-            standard_error_drain.join(timeout=STOP_DEADLINE_SECONDS)
             break
         time.sleep(0.05)
 
@@ -188,6 +190,8 @@ def node_names_loaded_by_tatolabd(
             tatolabd.kill()
             tatolabd.wait()
     standard_error_drain.join(timeout=STOP_DEADLINE_SECONDS)
+    if loaded_node_count is None:
+        loaded_node_count = loaded_node_count_logged_so_far()
 
     if loaded_node_count is None:
         pytest.fail(
