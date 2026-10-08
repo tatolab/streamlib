@@ -1955,7 +1955,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-media-builtins virtual_camera_sink -->
   <!-- verify: pytest tests/stream-on-runtime/test_virtual_camera_sink.py -->
   <!-- verify: cargo test -p streamlib-engine a_pipewire_camera_node_offers_a_modifier_and_a_shared_memory_sibling -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_enable_virtual_camera_refuses_by_name_off_linux -->
+  <!-- verify: cargo test -p tatolab-cli --bin tatolab virtual_camera_loopback_permission_grant::tests::refuses_by_name_off_linux -->
 - **OPEN** — Two `VirtualCameraSink` behaviours the loopback door shipped with, each a
   stated placeholder the implementation left for a ruling rather than deciding inline.
   Re-negotiation keys on the extent alone, so a source that changes its `color_info` at the
@@ -3283,9 +3283,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_given_one_runtime_name_both_construct -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_name.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_verb_targets_a_node_by_its_runtime_name -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_verb_given_a_name_two_live_runtimes_hold_is_refused_naming_both -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_retired_flag_is_a_usage_error -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_verb_targets_a_runtime_by_its_runtime_name -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_verb_given_a_name_two_live_runtimes_hold_is_refused_naming_both -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_retired_nodes_flag_is_a_usage_error -->
 - **DECIDED** — A link's ends are both on this runtime. `OutputLinkPortRef` and
   `InputLinkPortRef` name a port of this runtime's graph and nothing else, and the graph holds
   one link collection, which every traversal walks; `LinkState` has no state that waits on
@@ -3770,7 +3770,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   #2645]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_runtime_name_rendering_tests::the_runtime_name_is_a_top_level_key_and_no_mesh_key_renders -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_the_taps_reservation_and_refuses_past_it -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_nodes_prints_the_registry_table_alone -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs nodes_prints_the_registry_table_alone -->
 - **DECIDED** — The api-server is engine-side infrastructure and relocates into the
   `runtime/` tree: it is a host — statically linked, never dlopen'd. Its new host is
   the wheel (and the `streamlib` crate for Rust apps); the relocation is a sequencing
@@ -3797,10 +3797,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the
   installer and never in a pip wheel; amended by moq-on-the-tailnet: `tap` and `exchange` leave
   the CLI at the sharing step]
-  <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_mcp_verb.py -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help help_lists_exactly_the_served_verbs -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_exchange_verb the_channel_form_taps_then_exchanges_each_sampled_id -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_mcp_verb -->
 - **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
   on disk that means nothing once its processes are gone: the node registry, the
   surface-sharing socket, the local API socket and the iceoryx2 domain. On Linux it is
@@ -3819,9 +3819,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and the `local_api_socket_path` a client dials; a reader refuses an entry of an earlier
   schema by name. Owner, 2026-09-14. [control-plane-one-surface; local-transport-hardening
   — SHIPPED #2261; runtime-mesh — SHIPPED #2282; local-api — SHIPPED #2660, #2663]
-  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::streamlib_runtime_directory -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_directory.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_schema_two_entry_is_refused_by_its_version_and_never_pruned -->
+  <!-- verify: cargo test -p streamlib-runtime-on-disk-contract streamlib_runtime_directory -->
+  <!-- verify: cargo test -p streamlib-runtime-on-disk-contract a_fallback_that_does_not_exist_yet_is_resolved_for_a_reader_without_being_created -->
+  <!-- verify: cargo test -p tatolab-cli --bin tatolab a_schema_two_entry_is_refused_by_its_version_and_never_pruned -->
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
   bags verbatim, trading completeness for guaranteed non-interference; graph and health
   inspection ride the same control plane. [control-plane-one-surface; amended by moq-on-the-tailnet: `tap` is deleted at the sharing step; logs, `graph` and health stand]
@@ -3947,7 +3947,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   neither launch a command nor reach a machine's loopback, are not served by the local API.
   Owner, 2026-10-01; `rmcp`, owner, 2026-10-06. [local-api — SHIPPED #2665, #2667]
   <!-- verify: cargo test -p streamlib-api-server an_initialize_handshake_is_refused_with_the_unsupported_version_error_naming_the_latest -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_mcp_verb.py::test_the_verb_opens_the_stream_with_one_upgrade_and_copies_both_ways_untouched -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_mcp_verb the_verb_opens_the_stream_with_one_upgrade_and_copies_both_ways_untouched -->
 - **DECIDED** — `graph` returns every stream the runtime holds, and every stream action the CLI
   has — `run` attached, `run -d`, `stop`, `start`, `rm`, `streams`, `expose` — is also a tool,
   beside the graph-mutation tools, which stay, so an agent can do whatever the CLI can; the
