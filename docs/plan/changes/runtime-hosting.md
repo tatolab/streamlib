@@ -39,7 +39,7 @@ here with decisions 1 to 5, all resolved by the owner.
   (`processor_instance_factory.rs:232-247`, `:461`); the shutdown escalation
   (`runtime_shutdown_request.rs:62`, `:76-85`); the watchdog's exit 124
   (`engine_teardown_watchdog.rs:22-94`, `end_the_process_at_once.rs:40-51`);
-  `APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST` (`core/app_directory.rs:19`), which also
+  `APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN` (`core/app_directory.rs:18`), which also
   names virtual cameras (`runtime/streamlib-media-builtins/src/virtual_camera_sink.rs:34`, `:501`);
   `get_streamlib_home()`, the process's cwd (`E/core/streamlib_home.rs:18`), holding logs and the
   pipeline cache; first-wins logging (`logging/init.rs:48-56`, `:102`). A `GpuContext` per
@@ -257,7 +257,7 @@ runtime's own log); the pivot ADR's steps 4 and 10.
 | Old shape | Ends | Slice |
 |---|---|---|
 | `PUBSUB`'s id-less events, `RUNTIME_GLOBAL`; `PROCESSOR_REGISTRY` per process; the global shutdown funnel; the watchdog's process end; untagged group slots; first-wins logging | per stream | S1 |
-| `APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST`, `STREAMLIB_APP_DIRECTORY`, the virtual camera's app-directory id; `get_streamlib_home()`'s cwd | the stream's project directory | S1 |
+| `APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN`, `STREAMLIB_APP_DIRECTORY`, the virtual camera's app-directory id; `get_streamlib_home()`'s cwd | the stream's project directory | S1 |
 | `GpuContext` per `start()`; a surface service per `Runner`; the `ApiServer` processor, `control_plane_host.rs`, one `RuntimeOperations` | once per engine | S1 |
 | `*ThisRuntimesGraph` | `*ThisStreamsGraph` | S1 |
 | `tatolabd --stream-graph`; the CLI's compile and spawn; #2592's harness, fixtures and macOS done-proof starting `tatolabd` through `run` | `run_stream`; the harness starts `tatolabd` | S2 |
@@ -301,7 +301,7 @@ Derived 2026-10-02, milestone #58; "(ultracode)": `/implement` builds it only wi
 - **S2, split in two — the stream actions:** #2605 (ultracode; blocked by #2604, #2593); then the
   failed state and the crash recorder: #2606 (blocked by #2605).
 - **S3 — the machine segment:** #2607 (ultracode). Blocked by #2605, #2566, #2567 (the shared cast
-  fixture); it takes `APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST` and `STREAMLIB_APP_DIRECTORY`
+  fixture); it takes `APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN` and `STREAMLIB_APP_DIRECTORY`
   from S1, since the runtime-name default reading them dies here.
 - **S4 — Linux:** #2608. **S5 — `Tatolab.app`:** #2609 (ultracode; the owner copies the secrets and
   creates the tap first). Both blocked by #2605.
@@ -315,7 +315,7 @@ Derived 2026-10-02, milestone #58; "(ultracode)": `/implement` builds it only wi
 - REMOVED: duplicate_runtime_name_on_the_mesh
 - REMOVED: this_runtimes_name_on_the_mesh
 - REMOVED: RUNTIME_GLOBAL
-- REMOVED: APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST
+- REMOVED: APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN
 - REMOVED: STREAMLIB_APP_DIRECTORY
 - REMOVED: runtime/streamlib-api-server/src/node_registry.rs
 - REMOVED: runtime/streamlib-api-server/src/control_plane_host.rs

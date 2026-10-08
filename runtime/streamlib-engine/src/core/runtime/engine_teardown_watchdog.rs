@@ -8,8 +8,8 @@
 //! fifteen seconds ends a teardown hung anywhere else. It is armed when a
 //! teardown starts and disarmed when that teardown is over; on expiry it logs
 //! what the teardown was still waiting on and ends the process with status 124.
-//! An embedding host loses its interpreter with it — the change file accepts
-//! that nothing hangs the app.
+//! Whatever the process hosts ends with it — the change file accepts that so
+//! nothing hangs the app.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;

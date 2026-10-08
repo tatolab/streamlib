@@ -16,7 +16,14 @@ use crate::check_no_tatolab_namespace_package_init::{
     ensure_lend_directory_keeps_tatolab_a_namespace,
 };
 use anyhow::{Context, Result};
+use engine_build_id_composition::{
+    RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
+};
 use std::path::{Path, PathBuf};
+
+#[path = "../../runtime/streamlib-engine/src/core/engine_build_id_composition.rs"]
+#[allow(dead_code)]
+mod engine_build_id_composition;
 
 /// Where the runtime unit's wheel is written, relative to the workspace.
 pub const RUNTIME_UNIT_WHEEL_DIRECTORY_RELATIVE_TO_WORKSPACE: &str = "target/tatolab-runtime/wheel";
@@ -44,13 +51,6 @@ const MACOS_BUNDLED_VULKAN_DRIVER_FILE_NAMES: &[&str] = &[
     "libMoltenVK.dylib",
     "MoltenVK_icd.json",
 ];
-
-/// What the engine's build script reads its nonce from when a runtime unit's
-/// build hands it one (`engine_build_id_composition.rs`): the unit compiles the
-/// engine twice, into the lend's `_engine` and into `tatolabd`, and a helper
-/// refuses a parent whose build id differs from the engine it imported.
-const RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE: &str =
-    "STREAMLIB_RUNTIME_UNIT_ENGINE_BUILD_NONCE";
 
 /// The package every lend exists to carry.
 const LENT_RUNTIME_PACKAGE_PREFIX: &str = "tatolab/runtime/";
@@ -94,7 +94,8 @@ pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Res
         None
     };
 
-    let runtime_unit_engine_build_nonce = mint_runtime_unit_engine_build_nonce()?;
+    let runtime_unit_engine_build_nonce = mint_per_build_nonce()
+        .context("reading /dev/urandom for the runtime unit's engine build nonce")?;
     build_runtime_unit_wheel(
         &maturin_project_directory,
         &wheel_directory,
@@ -132,20 +133,6 @@ pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Res
 pub struct BuiltRuntimeUnitBinary {
     pub binary_target_name: String,
     pub built_executable: PathBuf,
-}
-
-/// 128 bits from the operating system's random source, as the 32 lowercase hex
-/// digits the engine's build script accepts as a nonce.
-fn mint_runtime_unit_engine_build_nonce() -> Result<String> {
-    use std::io::Read;
-    let mut nonce_bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut random_source| random_source.read_exact(&mut nonce_bytes))
-        .context("reading /dev/urandom for the runtime unit's engine build nonce")?;
-    Ok(nonce_bytes
-        .iter()
-        .map(|nonce_byte| format!("{nonce_byte:02x}"))
-        .collect())
 }
 
 fn build_runtime_unit_binaries(

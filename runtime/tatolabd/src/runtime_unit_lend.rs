@@ -6,14 +6,14 @@
 //! `lib/tatolab/lend/`.
 
 use std::path::{Path, PathBuf};
+use streamlib::sdk::processor_interpreter::{
+    PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY,
+    processor_interpreter_bootstrap_path,
+};
 
 /// The lend directory, relative to the directory holding the runtime unit's
 /// `bin/`.
 const LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT: &str = "lib/tatolab/lend";
-
-/// The file a lend must hold: what every processor interpreter runs by path.
-const PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND: &str =
-    "tatolab/runtime/_processor_interpreter_bootstrap.py";
 
 /// The lend beside this process's own executable, canonical, or the refusal
 /// naming where it was looked for.
@@ -48,11 +48,10 @@ pub(crate) fn the_lend_beside_the_executable(
             canonical_executable.display()
         ));
     };
-    let processor_interpreter_bootstrap =
-        lend_directory.join(PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND);
+    let processor_interpreter_bootstrap = processor_interpreter_bootstrap_path(&lend_directory);
     if !processor_interpreter_bootstrap.is_file() {
         return Err(format!(
-            "no lend at {}: it holds no {PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND}. \
+            "no lend at {}: it holds no {PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY}. \
              tatolabd runs from a runtime unit — `bin/tatolabd` beside \
              `{LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT}/`, as `cargo xtask \
              build-runtime` lays one out",
@@ -74,9 +73,9 @@ mod tests {
     use super::*;
 
     fn a_runtime_unit_with_its_lend(runtime_unit_root: &Path) -> PathBuf {
-        let bootstrap = runtime_unit_root
-            .join(LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT)
-            .join(PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND);
+        let bootstrap = processor_interpreter_bootstrap_path(
+            &runtime_unit_root.join(LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT),
+        );
         std::fs::create_dir_all(bootstrap.parent().unwrap()).unwrap();
         std::fs::write(&bootstrap, "").unwrap();
         std::fs::create_dir_all(runtime_unit_root.join("bin")).unwrap();
