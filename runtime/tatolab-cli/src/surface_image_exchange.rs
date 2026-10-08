@@ -895,9 +895,7 @@ mod tests {
     }
 
     fn usage_refusal(exchange_arguments: &SurfaceImageExchangeArguments) -> String {
-        let refused = surface_image_exchange_form(exchange_arguments).unwrap_err();
-        assert_eq!(refused.exit_code, 1);
-        refused.message_for_the_user.unwrap()
+        TatolabCommandFailure::refusal_message_of(surface_image_exchange_form(exchange_arguments))
     }
 
     // The REST spelling of the exchange.

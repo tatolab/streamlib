@@ -76,6 +76,20 @@ impl TatolabCommandFailure {
     }
 }
 
+#[cfg(test)]
+impl TatolabCommandFailure {
+    /// The message of the refusal `command_outcome` failed with, asserting it exits 1.
+    pub(crate) fn refusal_message_of<CommandSuccess: std::fmt::Debug>(
+        command_outcome: Result<CommandSuccess, TatolabCommandFailure>,
+    ) -> String {
+        let command_failure = command_outcome.expect_err("the command must refuse");
+        assert_eq!(command_failure.exit_code, 1, "a refusal exits 1");
+        command_failure
+            .message_for_the_user
+            .expect("a refusal names its reason")
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "tatolab",

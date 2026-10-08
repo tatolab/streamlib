@@ -22,7 +22,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 const LOCAL_API_HOST_HEADER_VALUE: &str = "localhost";
 
 /// A request body: whole, and empty for a `GET`.
-pub(crate) type LocalApiHttpRequestBody = Full<Bytes>;
+type LocalApiHttpRequestBody = Full<Bytes>;
 
 /// One answered request, whatever its status.
 #[derive(Debug)]
@@ -92,7 +92,7 @@ fn local_api_unreachable(
 }
 
 /// A request to `origin_form_request_target` with `Host` filled.
-pub(crate) fn local_api_request_builder(
+fn local_api_request_builder(
     method: Method,
     origin_form_request_target: &str,
 ) -> hyper::http::request::Builder {
@@ -100,6 +100,22 @@ pub(crate) fn local_api_request_builder(
         .method(method)
         .uri(origin_form_request_target)
         .header(hyper::header::HOST, LOCAL_API_HOST_HEADER_VALUE)
+}
+
+/// `request_builder`, built for `origin_form_request_target`, finished with no body; a target
+/// that is not a URI is refused before anything is sent.
+fn local_api_request_without_a_body(
+    request_builder: hyper::http::request::Builder,
+    origin_form_request_target: &str,
+) -> Result<Request<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
+    request_builder
+        .body(LocalApiHttpRequestBody::new(Bytes::new()))
+        .map_err(
+            |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
+                request_target: origin_form_request_target.to_owned(),
+                uri_failure,
+            },
+        )
 }
 
 /// Connect to the local API socket and hand the connection to hyper as HTTP/1.1, served with
@@ -159,7 +175,7 @@ async fn send_request_on_the_local_api_connection(
 /// Open one HTTP/1.1 connection to the local API socket and send `request` on it, answering the
 /// response head with its body still streaming. Must run inside a tokio runtime, which drives the
 /// connection.
-pub(crate) async fn send_request_over_the_local_api_socket(
+async fn send_request_over_the_local_api_socket(
     local_api_socket_path: &Path,
     request: Request<LocalApiHttpRequestBody>,
 ) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
@@ -194,25 +210,23 @@ impl LocalApiHttpConnection {
         timeout: Duration,
     ) -> Result<LocalApiHttpResponse, LocalApiHttpRequestFailure> {
         let get_request_to_the_target = || {
-            local_api_request_builder(Method::GET, origin_form_request_target)
-                .body(LocalApiHttpRequestBody::new(Bytes::new()))
-                .map_err(
-                    |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
-                        request_target: origin_form_request_target.to_owned(),
-                        uri_failure,
-                    },
-                )
+            local_api_request_without_a_body(
+                local_api_request_builder(Method::GET, origin_form_request_target),
+                origin_form_request_target,
+            )
         };
         let get_request = get_request_to_the_target()?;
         let local_api_socket_path = self.local_api_socket_path.as_path();
         let kept_request_sender = self.kept_request_sender.take();
         let answered = tokio::time::timeout(timeout, async {
-            let (mut request_sender, request_sender_was_kept) =
-                local_api_request_sender_ready_for_a_request(
-                    local_api_socket_path,
-                    kept_request_sender,
-                )
-                .await?;
+            let ReadyLocalApiRequestSender {
+                mut request_sender,
+                rides_the_kept_connection,
+            } = local_api_request_sender_ready_for_a_request(
+                local_api_socket_path,
+                kept_request_sender,
+            )
+            .await?;
             let response = match send_request_on_the_local_api_connection(
                 local_api_socket_path,
                 &mut request_sender,
@@ -224,7 +238,7 @@ impl LocalApiHttpConnection {
                 // read as ready, since nothing drove it in between; a GET is idempotent, so it
                 // goes again on a fresh connection.
                 Err(LocalApiHttpRequestFailure::ConnectionClosedBeforeAnswering { .. })
-                    if request_sender_was_kept =>
+                    if rides_the_kept_connection =>
                 {
                     request_sender =
                         open_ready_local_api_http1_connection(local_api_socket_path).await?;
@@ -270,21 +284,32 @@ impl LocalApiHttpConnection {
     }
 }
 
+/// A request sender whose connection can take a request.
+struct ReadyLocalApiRequestSender {
+    request_sender: SendRequest<LocalApiHttpRequestBody>,
+    /// Whether it is the kept connection, which the runtime may have closed since without it
+    /// reading as closed.
+    rides_the_kept_connection: bool,
+}
+
 /// `kept_request_sender` once its connection can take a request, or a freshly opened one when
-/// there is none or the runtime closed it; `true` beside it when it is the kept one.
+/// there is none or the runtime closed it.
 async fn local_api_request_sender_ready_for_a_request(
     local_api_socket_path: &Path,
     kept_request_sender: Option<SendRequest<LocalApiHttpRequestBody>>,
-) -> Result<(SendRequest<LocalApiHttpRequestBody>, bool), LocalApiHttpRequestFailure> {
+) -> Result<ReadyLocalApiRequestSender, LocalApiHttpRequestFailure> {
     if let Some(mut kept_request_sender) = kept_request_sender
         && kept_request_sender.ready().await.is_ok()
     {
-        return Ok((kept_request_sender, true));
+        return Ok(ReadyLocalApiRequestSender {
+            request_sender: kept_request_sender,
+            rides_the_kept_connection: true,
+        });
     }
-    Ok((
-        open_ready_local_api_http1_connection(local_api_socket_path).await?,
-        false,
-    ))
+    Ok(ReadyLocalApiRequestSender {
+        request_sender: open_ready_local_api_http1_connection(local_api_socket_path).await?,
+        rides_the_kept_connection: false,
+    })
 }
 
 /// A freshly opened connection to the local API, once it can take a request.
@@ -362,16 +387,12 @@ fn response_status_line<ResponseBody>(response: &Response<ResponseBody>) -> Stri
 pub(crate) async fn upgrade_local_api_connection_to_mcp_stdio(
     local_api_socket_path: &Path,
 ) -> Result<UpgradedLocalApiMcpStdioStream, LocalApiMcpStdioUpgradeFailure> {
-    let upgrade_request = local_api_request_builder(Method::GET, MCP_STDIO_UPGRADE_REQUEST_TARGET)
-        .header(CONNECTION, "Upgrade")
-        .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN)
-        .body(LocalApiHttpRequestBody::new(Bytes::new()))
-        .map_err(
-            |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
-                request_target: MCP_STDIO_UPGRADE_REQUEST_TARGET.to_owned(),
-                uri_failure,
-            },
-        )?;
+    let upgrade_request = local_api_request_without_a_body(
+        local_api_request_builder(Method::GET, MCP_STDIO_UPGRADE_REQUEST_TARGET)
+            .header(CONNECTION, "Upgrade")
+            .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN),
+        MCP_STDIO_UPGRADE_REQUEST_TARGET,
+    )?;
     let mut upgrade_response =
         send_request_over_the_local_api_socket(local_api_socket_path, upgrade_request).await?;
     if upgrade_response.status() != StatusCode::SWITCHING_PROTOCOLS {
@@ -394,6 +415,26 @@ pub(crate) async fn upgrade_local_api_connection_to_mcp_stdio(
         local_api_stream: upgraded_connection_parts.io.into_inner(),
         bytes_streamed_behind_the_response_head: upgraded_connection_parts.read_buf,
     })
+}
+
+/// What a script playing the runtime reads off `runtime_connection` through `terminator`, or
+/// up to the end of the stream when the client closes first.
+#[cfg(test)]
+fn read_from_the_client_until(
+    runtime_connection: &mut std::os::unix::net::UnixStream,
+    terminator: &[u8],
+) -> Vec<u8> {
+    use std::io::Read;
+
+    let mut received = Vec::new();
+    let mut one_byte = [0_u8; 1];
+    while !received.ends_with(terminator) {
+        if runtime_connection.read(&mut one_byte).unwrap() == 0 {
+            break;
+        }
+        received.push(one_byte[0]);
+    }
+    received
 }
 
 #[cfg(test)]
@@ -479,27 +520,16 @@ mod tests {
         let local_api_listener =
             std::os::unix::net::UnixListener::bind(&local_api_socket_path).unwrap();
         let playing_the_runtime = std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            let read_one_request_head =
-                |runtime_connection: &mut std::os::unix::net::UnixStream| {
-                    let mut received = Vec::new();
-                    let mut one_byte = [0_u8; 1];
-                    while !received.ends_with(b"\r\n\r\n") {
-                        if runtime_connection.read(&mut one_byte).unwrap() == 0 {
-                            break;
-                        }
-                        received.push(one_byte[0]);
-                    }
-                };
+            use std::io::Write;
             let (mut first_connection, _) = local_api_listener.accept().unwrap();
-            read_one_request_head(&mut first_connection);
+            read_from_the_client_until(&mut first_connection, b"\r\n\r\n");
             first_connection
                 .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\none")
                 .unwrap();
-            read_one_request_head(&mut first_connection);
+            read_from_the_client_until(&mut first_connection, b"\r\n\r\n");
             drop(first_connection);
             let (mut second_connection, _) = local_api_listener.accept().unwrap();
-            read_one_request_head(&mut second_connection);
+            read_from_the_client_until(&mut second_connection, b"\r\n\r\n");
             second_connection
                 .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\ntwo")
                 .unwrap();
@@ -730,18 +760,6 @@ mod mcp_stdio_upgrade_tests {
         }
     }
 
-    fn read_until(runtime_connection: &mut UnixStream, terminator: &[u8]) -> Vec<u8> {
-        let mut received = Vec::new();
-        let mut one_byte = [0_u8; 1];
-        while !received.ends_with(terminator) {
-            if runtime_connection.read(&mut one_byte).unwrap() == 0 {
-                break;
-            }
-            received.push(one_byte[0]);
-        }
-        received
-    }
-
     fn read_to_end(runtime_connection: &mut UnixStream) -> Vec<u8> {
         let mut received = Vec::new();
         runtime_connection.read_to_end(&mut received).unwrap();
@@ -771,7 +789,7 @@ mod mcp_stdio_upgrade_tests {
         let (received_request, request_received) = std::sync::mpsc::channel();
         let scripted_local_api_socket =
             ScriptedLocalApiSocket::playing(move |mut runtime_connection| {
-                let request_head = read_until(&mut runtime_connection, b"\r\n\r\n");
+                let request_head = read_from_the_client_until(&mut runtime_connection, b"\r\n\r\n");
                 runtime_connection
                     .write_all(SWITCHING_PROTOCOLS_HEAD)
                     .unwrap();
@@ -824,12 +842,15 @@ mod mcp_stdio_upgrade_tests {
     fn bytes_streamed_with_the_101_are_handed_over_ahead_of_the_socket() {
         let scripted_local_api_socket =
             ScriptedLocalApiSocket::playing(move |mut runtime_connection| {
-                read_until(&mut runtime_connection, b"\r\n\r\n");
+                read_from_the_client_until(&mut runtime_connection, b"\r\n\r\n");
                 // One write, so the bytes land in the same read as the head.
                 runtime_connection
                     .write_all(&[SWITCHING_PROTOCOLS_HEAD, b"streamed with the 101\n"].concat())
                     .unwrap();
-                assert_eq!(read_until(&mut runtime_connection, b"\n"), b"go on\n");
+                assert_eq!(
+                    read_from_the_client_until(&mut runtime_connection, b"\n"),
+                    b"go on\n"
+                );
                 runtime_connection
                     .write_all(b"read from the socket\n")
                     .unwrap();
@@ -882,7 +903,7 @@ mod mcp_stdio_upgrade_tests {
         ] {
             let scripted_local_api_socket =
                 ScriptedLocalApiSocket::playing(move |mut runtime_connection| {
-                    read_until(&mut runtime_connection, b"\r\n\r\n");
+                    read_from_the_client_until(&mut runtime_connection, b"\r\n\r\n");
                     runtime_connection
                         .write_all(answered_response.as_bytes())
                         .unwrap();
@@ -906,7 +927,7 @@ mod mcp_stdio_upgrade_tests {
     fn a_runtime_closing_the_connection_before_it_answers_is_named_as_closing_it() {
         let scripted_local_api_socket =
             ScriptedLocalApiSocket::playing(move |mut runtime_connection| {
-                read_until(&mut runtime_connection, b"\r\n\r\n");
+                read_from_the_client_until(&mut runtime_connection, b"\r\n\r\n");
             });
         let local_api_socket_path = scripted_local_api_socket.local_api_socket_path.clone();
 

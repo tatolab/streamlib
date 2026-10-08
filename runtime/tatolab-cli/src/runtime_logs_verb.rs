@@ -515,7 +515,7 @@ mod tests {
         ]));
 
         assert_eq!(
-            refusal_message(refused),
+            TatolabCommandFailure::refusal_message_of(refused),
             "`--node` reads a running runtime's live event stream, which takes no RUNTIME_ID, \
              --list, --follow, --processor, --pipeline, --rhi, --level, --source, \
              --intercepted-only. Drop `--node` to read an on-disk log file instead."
@@ -530,9 +530,9 @@ mod tests {
             &["--list", "--count", "5", "--node", ""],
         ] {
             assert_eq!(
-                refusal_message(run_runtime_logs_verb(logs_arguments_parsed_from(
-                    logs_flags
-                ))),
+                TatolabCommandFailure::refusal_message_of(run_runtime_logs_verb(
+                    logs_arguments_parsed_from(logs_flags)
+                )),
                 "`--count` bounds a live event-stream sample; it has no meaning for an on-disk \
                  log file. Use `--node`, or drop `--count`.",
                 "{logs_flags:?}"
@@ -604,12 +604,6 @@ mod tests {
             String::from_utf8(standard_error).unwrap(),
             printed,
         )
-    }
-
-    fn refusal_message(printed: Result<u8, TatolabCommandFailure>) -> String {
-        let command_failure = printed.unwrap_err();
-        assert_eq!(command_failure.exit_code, 1);
-        command_failure.message_for_the_user.unwrap()
     }
 
     #[test]
@@ -732,7 +726,7 @@ mod tests {
         );
 
         assert_eq!(
-            refusal_message(printed),
+            TatolabCommandFailure::refusal_message_of(printed),
             "`--list` enumerates the runtimes that have log files and reads none of them, so it \
              takes no RUNTIME_ID, --follow, --processor, --pipeline, --rhi, --level, --source, \
              --intercepted-only."
@@ -750,7 +744,7 @@ mod tests {
         );
 
         assert_eq!(
-            refusal_message(printed),
+            TatolabCommandFailure::refusal_message_of(printed),
             "missing RUNTIME_ID.\n`tatolab logs --list` enumerates the runtimes that have log \
              files, and `--node` reads a running runtime's live event stream instead."
         );
@@ -769,7 +763,7 @@ mod tests {
         );
 
         assert_eq!(
-            refusal_message(printed),
+            TatolabCommandFailure::refusal_message_of(printed),
             format!(
                 "no log file for runtime `Rnone` in {}.\nUse `tatolab logs --list` to see the \
                  runtimes that have one.",
@@ -806,7 +800,7 @@ mod tests {
                 &on_disk_request,
             );
 
-            let refusal = refusal_message(outcome);
+            let refusal = TatolabCommandFailure::refusal_message_of(outcome);
             assert!(
                 refusal.starts_with(&format!(
                     "cannot read the runtime log directory {}: ",

@@ -515,14 +515,6 @@ mod tests {
         })
     }
 
-    fn refusal_message(command_outcome: Result<u8, TatolabCommandFailure>) -> String {
-        let command_failure = command_outcome.expect_err("the verb must refuse");
-        assert_eq!(command_failure.exit_code, 1);
-        command_failure
-            .message_for_the_user
-            .expect("a refusal names its reason")
-    }
-
     fn make_fifo(fifo_path: &Path) {
         let fifo_path_c_string = CString::new(fifo_path.as_os_str().as_bytes()).unwrap();
         // SAFETY: the path is a NUL-terminated string that outlives the call.
@@ -657,7 +649,7 @@ mod tests {
         );
         grant_target_machine.read_environment_variable = environment_of(&[("DISPLAY", ":1")]);
 
-        let refusal = refusal_message(
+        let refusal = TatolabCommandFailure::refusal_message_of(
             install_virtual_camera_grant_through_privilege_escalation_helper(
                 &mut grant_target_machine,
             ),
@@ -678,7 +670,7 @@ mod tests {
         let mut grant_target_machine = scripted_linux_machine(scratch_directory.path());
         grant_target_machine.operating_system_name = "Darwin".to_owned();
 
-        let refusal = refusal_message(
+        let refusal = TatolabCommandFailure::refusal_message_of(
             install_virtual_camera_grant_through_privilege_escalation_helper(
                 &mut grant_target_machine,
             ),
@@ -701,7 +693,7 @@ mod tests {
         );
         grant_target_machine.find_executable_on_path = executables_on_path(&["pkexec", "sudo"]);
 
-        let refusal = refusal_message(
+        let refusal = TatolabCommandFailure::refusal_message_of(
             install_virtual_camera_grant_through_privilege_escalation_helper(
                 &mut grant_target_machine,
             ),
@@ -931,7 +923,7 @@ mod tests {
         grant_target_machine.run_privileged_script_through_helper =
             Box::new(|_helper, _script| Ok(ExitStatus::from_raw(126 << 8)));
 
-        let refusal = refusal_message(
+        let refusal = TatolabCommandFailure::refusal_message_of(
             install_virtual_camera_grant_through_privilege_escalation_helper(
                 &mut grant_target_machine,
             ),
@@ -956,7 +948,7 @@ mod tests {
         grant_target_machine.run_privileged_script_through_helper =
             Box::new(|_helper, _script| Ok(ExitStatus::from_raw(0)));
 
-        let refusal = refusal_message(
+        let refusal = TatolabCommandFailure::refusal_message_of(
             install_virtual_camera_grant_through_privilege_escalation_helper(
                 &mut grant_target_machine,
             ),
@@ -983,7 +975,7 @@ mod tests {
         grant_target_machine.run_privileged_script_through_helper =
             Box::new(|_helper, _script| Ok(ExitStatus::from_raw(0)));
 
-        let refusal = refusal_message(
+        let refusal = TatolabCommandFailure::refusal_message_of(
             install_virtual_camera_grant_through_privilege_escalation_helper(
                 &mut grant_target_machine,
             ),

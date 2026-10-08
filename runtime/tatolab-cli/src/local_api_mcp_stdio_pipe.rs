@@ -418,12 +418,11 @@ mod tests {
             .expect("the pipe never ended")
     }
 
-    /// The one line a refusal prints after `error: `, and the code it exits with.
-    fn refusal_line_and_exit_code(pipe_outcome: Result<u8, TatolabCommandFailure>) -> (String, u8) {
-        let refusal = pipe_outcome.expect_err("the pipe was refused");
-        let refusal_line = refusal.message_for_the_user.expect("a refusal says why");
+    /// The one line a refusal exiting 1 prints after `error: `.
+    fn refusal_line(pipe_outcome: Result<u8, TatolabCommandFailure>) -> String {
+        let refusal_line = TatolabCommandFailure::refusal_message_of(pipe_outcome);
         assert!(!refusal_line.contains('\n'), "one line: {refusal_line:?}");
-        (refusal_line, refusal.exit_code)
+        refusal_line
     }
 
     #[test]
@@ -536,13 +535,9 @@ mod tests {
         );
 
         assert_eq!(
-            refusal_line_and_exit_code(pipe_outcome),
-            (
-                format!(
-                    "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) closed its MCP \
-                     stream."
-                ),
-                1
+            refusal_line(pipe_outcome),
+            format!(
+                "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) closed its MCP stream."
             )
         );
         assert_eq!(mcp_host_output, b"");
@@ -571,13 +566,10 @@ mod tests {
         );
 
         assert_eq!(
-            refusal_line_and_exit_code(pipe_outcome),
-            (
-                format!(
-                    "cannot read stdin into the MCP stream of runtime `{SCRIPTED_RUNTIME_NAME}` \
-                     ({SCRIPTED_RUNTIME_ID}): the host's stdin went away"
-                ),
-                1
+            refusal_line(pipe_outcome),
+            format!(
+                "cannot read stdin into the MCP stream of runtime `{SCRIPTED_RUNTIME_NAME}` \
+                 ({SCRIPTED_RUNTIME_ID}): the host's stdin went away"
             )
         );
         assert_eq!(mcp_host_output, answer_owed_once_stdin_ended);
@@ -603,13 +595,10 @@ mod tests {
         );
 
         assert_eq!(
-            refusal_line_and_exit_code(pipe_outcome),
-            (
-                format!(
-                    "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) did not open its \
-                     MCP stream: it did not answer within 200ms"
-                ),
-                1
+            refusal_line(pipe_outcome),
+            format!(
+                "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) did not open its MCP \
+                 stream: it did not answer within 200ms"
             )
         );
         assert!(
@@ -643,13 +632,10 @@ mod tests {
         );
 
         assert_eq!(
-            refusal_line_and_exit_code(pipe_outcome),
-            (
-                format!(
-                    "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) did not open its \
-                     MCP stream: it answered `HTTP/1.1 426 Upgrade Required`"
-                ),
-                1
+            refusal_line(pipe_outcome),
+            format!(
+                "runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) did not open its MCP \
+                 stream: it answered `HTTP/1.1 426 Upgrade Required`"
             )
         );
         assert_eq!(mcp_host_output, b"");
@@ -667,13 +653,9 @@ mod tests {
         );
 
         assert_eq!(
-            refusal_line_and_exit_code(pipe_outcome),
-            (
-                "no runtime is live on this machine for `tatolab mcp` to reach; `tatolab nodes` \
-                 lists the live ones."
-                    .to_owned(),
-                1
-            )
+            refusal_line(pipe_outcome),
+            "no runtime is live on this machine for `tatolab mcp` to reach; `tatolab nodes` lists \
+             the live ones."
         );
         assert_eq!(mcp_host_output, b"");
     }
@@ -695,8 +677,8 @@ mod tests {
         );
 
         assert_eq!(
-            refusal_line_and_exit_code(pipe_outcome),
-            (NO_LIVE_RUNTIME_FOR_THE_MCP_VERB_REFUSAL.to_owned(), 1)
+            refusal_line(pipe_outcome),
+            NO_LIVE_RUNTIME_FOR_THE_MCP_VERB_REFUSAL
         );
         assert_eq!(mcp_host_output, b"");
     }
@@ -715,12 +697,14 @@ mod tests {
             Vec::new(),
         );
 
-        let (refusal_line, exit_code) = refusal_line_and_exit_code(pipe_outcome);
-        assert_eq!(exit_code, 1);
-        assert!(refusal_line.contains("`absent-runtime`"), "{refusal_line}");
+        let printed_refusal_line = refusal_line(pipe_outcome);
         assert!(
-            refusal_line.contains(SCRIPTED_RUNTIME_NAME),
-            "the refusal lists the live runtimes: {refusal_line}"
+            printed_refusal_line.contains("`absent-runtime`"),
+            "{printed_refusal_line}"
+        );
+        assert!(
+            printed_refusal_line.contains(SCRIPTED_RUNTIME_NAME),
+            "the refusal lists the live runtimes: {printed_refusal_line}"
         );
         assert_eq!(mcp_host_output, b"");
         assert_eq!(stub_local_api_server.recorded_mcp_stdio_request_heads(), []);
