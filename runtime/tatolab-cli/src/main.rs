@@ -17,6 +17,7 @@ mod local_api_unix_socket_http_client;
 mod project_source_change_watcher;
 mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
+mod surface_image_exchange;
 mod virtual_camera_loopback_permission_grant;
 
 #[cfg(test)]
@@ -133,6 +134,16 @@ enum TatolabVerb {
         #[command(flatten)]
         runtime_target: RuntimeTargetArguments,
     },
+    /// Exchange published surface ids for PNG files on disk.
+    #[command(
+        long_about = "With SURFACE_ID, exchanges that one id. With --channel, taps the channel, \
+                      reads a surface id out of each sampled bag, and exchanges it — one warm \
+                      process, no window in the graph and no display server in the path. Writes \
+                      exact full-resolution PNGs into --out and prints their paths on stdout, one \
+                      per line — those paths are this run's frames, and --out is not cleared, so \
+                      read them rather than listing the directory."
+    )]
+    Exchange(surface_image_exchange::SurfaceImageExchangeArguments),
     /// Grant this machine's users the permission a VirtualCameraSink needs, once.
     #[command(
         long_about = "Install the standard grant behind the virtual camera's loopback door: load \
@@ -230,6 +241,11 @@ fn main() -> ExitCode {
                 requested_max_bag_bytes,
             ),
         ),
+        TatolabVerb::Exchange(surface_image_exchange_arguments) => {
+            surface_image_exchange::run_surface_image_exchange_verb(
+                &surface_image_exchange_arguments,
+            )
+        }
         TatolabVerb::EnableVirtualCamera {
             print_grant_without_installing: true,
         } => virtual_camera_loopback_permission_grant::print_virtual_camera_grant_for_hand_install(),

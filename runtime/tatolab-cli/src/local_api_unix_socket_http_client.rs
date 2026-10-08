@@ -4,15 +4,6 @@
 //! Plain HTTP/1.1 over a runtime's local API socket, through hyper's client: the routes `tatolab`
 //! reaches without MCP. The request carries no credential; the socket's file mode is the gate.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no verb in this build sends a plain request yet; `exchange` and `mcp` are its \
-                  callers"
-    )
-)]
-
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
