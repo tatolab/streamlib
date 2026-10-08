@@ -13,15 +13,12 @@ use hyper::body::{Bytes, Incoming};
 use hyper::header::{CONNECTION, UPGRADE};
 use hyper::{HeaderMap, Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    MCP_STDIO_UPGRADE_PROTOCOL_TOKEN, MCP_STDIO_UPGRADE_REQUEST_TARGET,
+};
 
 /// The `Host` every request names; the socket path is the address.
 const LOCAL_API_HOST_HEADER_VALUE: &str = "localhost";
-
-/// The route a runtime serves MCP's stdio framing on once the connection is upgraded.
-const MCP_STDIO_REQUEST_TARGET: &str = "/mcp/stdio";
-
-/// The `Upgrade` protocol token `/mcp/stdio` switches to; the runtime matches it verbatim.
-const MCP_STDIO_UPGRADE_PROTOCOL: &str = "mcp-stdio";
 
 /// A request body: whole, and empty for a `GET`.
 pub(crate) type LocalApiHttpRequestBody = Full<Bytes>;
@@ -189,14 +186,14 @@ fn response_status_line<ResponseBody>(response: &Response<ResponseBody>) -> Stri
 pub(crate) async fn upgrade_local_api_connection_to_mcp_stdio(
     local_api_socket_path: &Path,
 ) -> Result<UpgradedLocalApiMcpStdioStream, LocalApiMcpStdioUpgradeFailure> {
-    let upgrade_request = local_api_request_builder(Method::GET, MCP_STDIO_REQUEST_TARGET)
+    let upgrade_request = local_api_request_builder(Method::GET, MCP_STDIO_UPGRADE_REQUEST_TARGET)
         .header(CONNECTION, "Upgrade")
-        .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL)
+        .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN)
         .body(LocalApiHttpRequestBody::new(Bytes::new()))
         .map_err(|uri_failure| {
             LocalApiMcpStdioUpgradeFailure::RequestUnanswered(
                 LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
-                    request_target: MCP_STDIO_REQUEST_TARGET.to_owned(),
+                    request_target: MCP_STDIO_UPGRADE_REQUEST_TARGET.to_owned(),
                     uri_failure: uri_failure.to_string(),
                 },
             )
@@ -289,8 +286,10 @@ mod tests {
     use super::*;
     use crate::isolated_node_registry::NOTHING_LISTENS_LOCAL_API_SOCKET_PATH;
     use crate::stub_local_api_server::{
-        SOURCE_SURFACE_PIXEL_HEIGHT_HEADER, SOURCE_SURFACE_PIXEL_WIDTH_HEADER, StubLocalApiScript,
-        StubLocalApiServer, StubSurfaceImageAnswer,
+        StubLocalApiScript, StubLocalApiServer, StubSurfaceImageAnswer,
+    };
+    use streamlib_runtime_client_contract::local_api_wire_contract::{
+        SURFACE_PIXEL_HEIGHT_HEADER_NAME, SURFACE_PIXEL_WIDTH_HEADER_NAME,
     };
 
     const EXCHANGE_TEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -324,8 +323,8 @@ mod tests {
         assert_eq!(answered.status, StatusCode::OK);
         assert_eq!(answered.body.as_ref(), png_image_bytes);
         assert_eq!(answered.headers[hyper::header::CONTENT_TYPE], "image/png");
-        assert_eq!(answered.headers[SOURCE_SURFACE_PIXEL_WIDTH_HEADER], "1920");
-        assert_eq!(answered.headers[SOURCE_SURFACE_PIXEL_HEIGHT_HEADER], "1080");
+        assert_eq!(answered.headers[SURFACE_PIXEL_WIDTH_HEADER_NAME], "1920");
+        assert_eq!(answered.headers[SURFACE_PIXEL_HEIGHT_HEADER_NAME], "1080");
         assert_eq!(
             stub_local_api_server.recorded_image_request_paths(),
             ["/api/surfaces/slot%237/image"]
@@ -381,12 +380,12 @@ mod tests {
         assert!(
             !answered
                 .headers
-                .contains_key(SOURCE_SURFACE_PIXEL_WIDTH_HEADER)
+                .contains_key(SURFACE_PIXEL_WIDTH_HEADER_NAME)
         );
         assert!(
             !answered
                 .headers
-                .contains_key(SOURCE_SURFACE_PIXEL_HEIGHT_HEADER)
+                .contains_key(SURFACE_PIXEL_HEIGHT_HEADER_NAME)
         );
     }
 

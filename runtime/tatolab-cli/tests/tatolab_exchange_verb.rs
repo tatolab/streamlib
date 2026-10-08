@@ -874,7 +874,6 @@ mod against_an_isolated_registry {
             &[tap_result_text_capping_bags(
                 &[bag_publishing_surface_id("s#1")],
                 &[0],
-                true,
             )],
             [("s#1", image_answer("one"))],
         );
@@ -898,30 +897,6 @@ mod against_an_isolated_registry {
         );
     }
 
-    /// The size is the tool's to state and may be missing; losing the cap would misdiagnose the
-    /// bag as one this client could not decode.
-    #[test]
-    fn a_capped_bag_with_no_stated_size_is_still_diagnosed_as_capped() {
-        let stub_local_api_server = stub_tapping(
-            &[tap_result_text_capping_bags(
-                &[bag_publishing_surface_id("s#1")],
-                &[0],
-                false,
-            )],
-            [("s#1", image_answer("one"))],
-        );
-        let output_directory = tempfile::tempdir().unwrap();
-
-        let sampled = sample_the_channel(&stub_local_api_server, output_directory.path(), &[]);
-
-        assert_eq!(sampled.status.code(), Some(1));
-        let reported = standard_error_text(&sampled);
-        assert!(
-            reported.contains("is larger than, past the prefix `tap` previews"),
-            "{reported}"
-        );
-    }
-
     /// Bag 0 is selected but publishes no id, so the loop must reach the capped bag 1 and pass it
     /// by; without that the run finishes on bag 0 and never proves where the cap check sits.
     #[test]
@@ -934,7 +909,6 @@ mod against_an_isolated_registry {
                     bag_publishing_surface_id("s#3"),
                 ],
                 &[1],
-                true,
             )],
             [("s#3", image_answer("three"))],
         );
@@ -965,7 +939,6 @@ mod against_an_isolated_registry {
                     bag_publishing_surface_id("s#2"),
                 ],
                 &[1],
-                true,
             )],
             [("s#1", image_answer("one"))],
         );
@@ -997,7 +970,6 @@ mod against_an_isolated_registry {
                     bag_publishing_surface_id("s#2"),
                 ],
                 &[1],
-                true,
             )],
             [("s#1", image_answer("one"))],
         );

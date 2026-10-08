@@ -4535,7 +4535,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "parking_lot",
- "percent-encoding",
  "rmcp",
  "serde",
  "serde_json",
@@ -4757,6 +4756,7 @@ name = "streamlib-runtime-client-contract"
 version = "0.41.0"
 dependencies = [
  "libc",
+ "percent-encoding",
  "serde",
  "serde_json",
  "serial_test",
@@ -4874,7 +4874,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
- "percent-encoding",
  "rmcp",
  "rmpv",
  "serde",

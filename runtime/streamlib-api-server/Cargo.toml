@@ -27,7 +27,8 @@ path = "src/bin/generate_openapi.rs"
 [dependencies]
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.41.0" }
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.41.0" }
-# The node registry this processor publishes its control endpoint into.
+# The node registry this processor publishes its control endpoint into, and the wire names and
+# tap result shape its local API serves.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.41.0" }
 
 tower-http = { version = "0.6", features = ["trace"] }
@@ -54,10 +55,8 @@ tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 rmcp = { version = "3.5.1", features = ["server", "macros", "transport-streamable-http-server", "transport-async-rw"] }
 tokio-util = "0.7"
 
-# The MCP `exchange` tool's image content block: base64 for the inline PNG,
-# percent-encoding for the surface id in the REST route the result names.
+# The MCP `exchange` tool's image content block: base64 for the inline PNG.
 base64 = "0.22"
-percent-encoding = "2.3"
 
 [dev-dependencies]
 # Enables the engine's `test-support` in-memory `TapSubscription` constructor

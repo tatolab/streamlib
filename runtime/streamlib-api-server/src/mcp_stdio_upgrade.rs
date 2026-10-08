@@ -19,13 +19,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get};
 use hyper_util::rt::TokioIo;
 use rmcp::ServiceExt;
+use streamlib_runtime_client_contract::local_api_wire_contract::MCP_STDIO_UPGRADE_PROTOCOL_TOKEN;
 use tokio_util::sync::CancellationToken;
 
 use crate::mcp::LocalApiMcpServerHandler;
-
-/// The `Upgrade` protocol token `/mcp/stdio` switches to; `tatolab mcp`
-/// sends it verbatim.
-const MCP_STDIO_UPGRADE_PROTOCOL: &str = "mcp-stdio";
 
 /// `/mcp/stdio`'s route: each upgraded connection is served until it closes
 /// or `local_api_stopping_token` is cancelled.
@@ -86,14 +83,14 @@ fn mcp_stdio_upgrade_response_headers() -> [(HeaderName, HeaderValue); 2] {
         (CONNECTION, HeaderValue::from_static("upgrade")),
         (
             UPGRADE,
-            HeaderValue::from_static(MCP_STDIO_UPGRADE_PROTOCOL),
+            HeaderValue::from_static(MCP_STDIO_UPGRADE_PROTOCOL_TOKEN),
         ),
     ]
 }
 
 fn requests_the_mcp_stdio_upgrade(request_headers: &HeaderMap) -> bool {
     header_lists_token(request_headers, CONNECTION, "upgrade")
-        && header_lists_token(request_headers, UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL)
+        && header_lists_token(request_headers, UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN)
 }
 
 /// Whether any `header_name` value, read as HTTP's comma-separated list, holds

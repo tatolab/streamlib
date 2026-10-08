@@ -14,11 +14,13 @@ use rmcp::service::{
 };
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
+use streamlib_runtime_client_contract::local_api_wire_contract::MCP_STREAMABLE_HTTP_ROUTE_PATH;
 
 use crate::TatolabCommandFailure;
 
-/// The URI the client addresses; it fills `Host`, and the socket path is the address.
-const LOCAL_API_MCP_URI: &str = "http://localhost/mcp";
+/// The authority of the URI the client addresses; it fills `Host`, and the socket path is the
+/// address.
+const LOCAL_API_MCP_URI_AUTHORITY: &str = "localhost";
 
 /// Bounds a liveness round trip, so a socket that accepts but never answers cannot stall a
 /// registry scan.
@@ -109,12 +111,14 @@ impl LocalApiMcpToolClient {
                     ),
                 },
             )?;
+        let local_api_mcp_uri =
+            format!("http://{LOCAL_API_MCP_URI_AUTHORITY}{MCP_STREAMABLE_HTTP_ROUTE_PATH}");
         let connected = client_tokio_runtime.block_on(async {
             // The transport spawns its worker as it is built, so it is built inside the runtime
             // that drives it.
             let transport = StreamableHttpClientTransport::with_client(
-                UnixSocketHttpClient::new(&socket_path_to_dial, LOCAL_API_MCP_URI),
-                StreamableHttpClientTransportConfig::with_uri(LOCAL_API_MCP_URI),
+                UnixSocketHttpClient::new(&socket_path_to_dial, &local_api_mcp_uri),
+                StreamableHttpClientTransportConfig::with_uri(local_api_mcp_uri.as_str()),
             );
             tokio::time::timeout(
                 request_timeout,

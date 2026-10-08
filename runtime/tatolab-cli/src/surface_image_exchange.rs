@@ -18,6 +18,11 @@ use clap::Args;
 use hyper::body::Bytes;
 use hyper::{HeaderMap, StatusCode};
 use streamlib_ipc_types::{FRAME_HEADER_SIZE, FrameHeader};
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    RECYCLED_FRAME_HTTP_STATUS_CODE, SURFACE_PIXEL_HEIGHT_HEADER_NAME,
+    SURFACE_PIXEL_WIDTH_HEADER_NAME, TapToolResult,
+    surface_image_exchange_route_path_for_surface_id,
+};
 
 use crate::local_api_mcp_tool_client::{
     LocalApiMcpToolClient, LocalApiMcpToolClientFailure, OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
@@ -41,19 +46,6 @@ pub(crate) const DEFAULT_SURFACE_ID_BAG_FIELD_NAME: &str = "surface_id";
 /// Tap rounds one channel-form run spends before giving up, so a channel whose frames always
 /// recycle before their exchange cannot retry forever.
 pub(crate) const MAX_TAP_ROUNDS_PER_SAMPLE_RUN: u32 = 8;
-
-/// The local API's REST spelling of the exchange, which serves the exact frame where the MCP tool
-/// serves a downscaled one; `{surface_id}` is filled percent-encoded.
-const SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE: &str = "/api/surfaces/{surface_id}/image";
-
-/// The source surface's own extent, which differs from the image's whenever a downscale cap
-/// applied.
-const SOURCE_SURFACE_PIXEL_WIDTH_HEADER: &str = "x-streamlib-surface-pixel-width";
-const SOURCE_SURFACE_PIXEL_HEIGHT_HEADER: &str = "x-streamlib-surface-pixel-height";
-
-/// What the exchange answers for an id whose frame's pool slot has since been reused: the id was
-/// real and the frame is gone, distinct from a `404` for an id that never resolved.
-const RECYCLED_FRAME_HTTP_STATUS: StatusCode = StatusCode::GONE;
 
 /// Bounds one exchange request as an observation verb's tool call is bounded.
 const SURFACE_IMAGE_EXCHANGE_REQUEST_TIMEOUT: Duration = OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
@@ -146,7 +138,7 @@ impl SurfaceImageExchangeFailure {
         matches!(
             self,
             Self::RefusedByTheRuntime { http_status, .. }
-                if *http_status == RECYCLED_FRAME_HTTP_STATUS
+                if http_status.as_u16() == RECYCLED_FRAME_HTTP_STATUS_CODE
         )
     }
 }
@@ -217,7 +209,7 @@ pub(crate) struct SampledChannelExchangeReport {
 struct TappedChannelBagFrame {
     framed_bag_bytes: Vec<u8>,
     preview_was_capped: bool,
-    whole_bag_byte_len: Option<serde_json::Number>,
+    whole_bag_byte_len: u64,
 }
 
 /// Why a tapped bag's bytes do not decode to a msgpack value.
@@ -451,7 +443,7 @@ pub(crate) fn fetch_surface_image_png_bytes(
 ) -> Result<ExchangedSurfaceImage, SurfaceImageExchangeFailure> {
     let answered = get_whole_response_over_the_local_api_socket(
         local_api_socket_path,
-        &surface_image_exchange_route_path(published_surface_id),
+        &surface_image_exchange_route_path_for_surface_id(published_surface_id),
         SURFACE_IMAGE_EXCHANGE_REQUEST_TIMEOUT,
     )
     .map_err(SurfaceImageExchangeFailure::LocalApiRequestFailed)?;
@@ -466,34 +458,13 @@ pub(crate) fn fetch_surface_image_png_bytes(
         png_image_bytes: answered.body,
         source_surface_pixel_width: source_surface_pixel_extent(
             &answered.headers,
-            SOURCE_SURFACE_PIXEL_WIDTH_HEADER,
+            SURFACE_PIXEL_WIDTH_HEADER_NAME,
         ),
         source_surface_pixel_height: source_surface_pixel_extent(
             &answered.headers,
-            SOURCE_SURFACE_PIXEL_HEIGHT_HEADER,
+            SURFACE_PIXEL_HEIGHT_HEADER_NAME,
         ),
     })
-}
-
-/// Everything outside RFC 3986's unreserved set, percent-encoded in the route's `{surface_id}`
-/// segment — the set the runtime's own route builder encodes with.
-const SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET: &percent_encoding::AsciiSet =
-    &percent_encoding::NON_ALPHANUMERIC
-        .remove(b'-')
-        .remove(b'.')
-        .remove(b'_')
-        .remove(b'~');
-
-/// The exchange route's path for `published_surface_id`. A pooled frame id is
-/// `<slot>#<generation>`, and a bare `#` would make the generation a fragment the runtime never
-/// sees, so the id is percent-encoded down to RFC 3986's unreserved set.
-fn surface_image_exchange_route_path(published_surface_id: &str) -> String {
-    let percent_encoded_surface_id = percent_encoding::utf8_percent_encode(
-        published_surface_id,
-        SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET,
-    )
-    .to_string();
-    SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace("{surface_id}", &percent_encoded_surface_id)
 }
 
 /// The message out of the route's `{"error": …}` refusal body, or the body's trimmed text when it
@@ -631,7 +602,7 @@ fn exchange_sampled_bags_across_tap_rounds(
             if tapped_bag.preview_was_capped {
                 return Err(capped_bag_stop_reason(
                     channel,
-                    tapped_bag.whole_bag_byte_len.as_ref(),
+                    tapped_bag.whole_bag_byte_len,
                 ));
             }
             let Some(published_surface_id) = surface_id_in_tapped_bag(
@@ -718,30 +689,18 @@ fn tapped_channel_bag_frames(
     tap_tool_result_text: &str,
     channel: &str,
 ) -> Result<Vec<TappedChannelBagFrame>, String> {
-    let tap_tool_result: serde_json::Value =
-        serde_json::from_str(tap_tool_result_text).map_err(|_| {
-            format!("tap of `{channel}` returned a non-JSON result: {tap_tool_result_text}")
+    let tap_tool_result: TapToolResult =
+        serde_json::from_str(tap_tool_result_text).map_err(|shape_failure| {
+            format!(
+                "tap of `{channel}` returned a result that is not the tap tool's \
+                 ({shape_failure}): {tap_tool_result_text}"
+            )
         })?;
-    let Some(tapped_bags) = tap_tool_result
-        .get("bags")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return Err(format!(
-            "tap of `{channel}` returned no `bags` array: {tap_tool_result_text}"
-        ));
-    };
-    tapped_bags
-        .iter()
+    tap_tool_result
+        .bags
+        .into_iter()
         .map(|tapped_bag| {
-            let Some(hex_preview) = tapped_bag
-                .get("hex_preview")
-                .and_then(serde_json::Value::as_str)
-            else {
-                return Err(format!(
-                    "tap of `{channel}` returned a bag with no hex preview: {tapped_bag}"
-                ));
-            };
-            let framed_bag_bytes = bytes_of_a_hex_preview(hex_preview).map_err(|hex_failure| {
+            let framed_bag_bytes = hex::decode(&tapped_bag.hex_preview).map_err(|hex_failure| {
                 format!(
                     "tap of `{channel}` returned a bag whose hex preview does not decode: \
                      {hex_failure}"
@@ -749,62 +708,20 @@ fn tapped_channel_bag_frames(
             })?;
             Ok(TappedChannelBagFrame {
                 framed_bag_bytes,
-                preview_was_capped: tapped_bag
-                    .get("hex_truncated")
-                    .is_some_and(json_value_is_truthy),
-                whole_bag_byte_len: match tapped_bag.get("byte_len") {
-                    Some(serde_json::Value::Number(whole_bag_byte_len))
-                        if whole_bag_byte_len.is_i64() || whole_bag_byte_len.is_u64() =>
-                    {
-                        Some(whole_bag_byte_len.clone())
-                    }
-                    _ => None,
-                },
+                preview_was_capped: tapped_bag.hex_truncated,
+                whole_bag_byte_len: tapped_bag.byte_len,
             })
         })
         .collect()
 }
 
-/// Whether a JSON value counts as set: `false`, `null`, zero, and an empty string, array or
-/// object do not.
-fn json_value_is_truthy(json_value: &serde_json::Value) -> bool {
-    match json_value {
-        serde_json::Value::Null => false,
-        serde_json::Value::Bool(flag) => *flag,
-        serde_json::Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
-        serde_json::Value::String(text) => !text.is_empty(),
-        serde_json::Value::Array(items) => !items.is_empty(),
-        serde_json::Value::Object(fields) => !fields.is_empty(),
-    }
-}
-
-/// The bytes a hex preview spells: two hex digits per byte, ASCII whitespace between bytes
-/// ignored.
-fn bytes_of_a_hex_preview(hex_preview: &str) -> Result<Vec<u8>, String> {
-    let mut decoded_bytes = Vec::with_capacity(hex_preview.len() / 2);
-    for whitespace_separated_hex_run in hex_preview.split_ascii_whitespace() {
-        decoded_bytes.extend(
-            hex::decode(whitespace_separated_hex_run)
-                .map_err(|hex_failure| hex_failure.to_string())?,
-        );
-    }
-    Ok(decoded_bytes)
-}
-
 /// Why a run stops on a selected bag whose preview `tap` capped: its id cannot be read from here,
 /// and the id form still reaches its frame.
-fn capped_bag_stop_reason(
-    channel: &str,
-    whole_bag_byte_len: Option<&serde_json::Number>,
-) -> String {
-    let stated_size = match whole_bag_byte_len {
-        Some(whole_bag_byte_len) => format!("is {whole_bag_byte_len} bytes"),
-        None => "is larger than".to_owned(),
-    };
+fn capped_bag_stop_reason(channel: &str, whole_bag_byte_len: u64) -> String {
     format!(
-        "a bag the sample selected on `{channel}` {stated_size}, past the prefix `tap` previews, \
-         so its surface id cannot be read from here. Exchange an id from this channel directly: \
-         `tatolab exchange <surface-id> --out <dir>`."
+        "a bag the sample selected on `{channel}` is {whole_bag_byte_len} bytes, past the prefix \
+         `tap` previews, so its surface id cannot be read from here. Exchange an id from this \
+         channel directly: `tatolab exchange <surface-id> --out <dir>`."
     )
 }
 
@@ -1062,14 +979,6 @@ mod tests {
     }
 
     #[test]
-    fn a_surface_id_is_encoded_down_to_the_unreserved_set() {
-        assert_eq!(
-            surface_image_exchange_route_path("Az09-._~ é#/?%"),
-            "/api/surfaces/Az09-._~%20%C3%A9%23%2F%3F%25/image"
-        );
-    }
-
-    #[test]
     fn the_exchange_states_the_surfaces_own_extent() {
         let stub_local_api_server = stub_answering_surface_images([("s#1", image_answer("one"))]);
 
@@ -1095,12 +1004,9 @@ mod tests {
         assert_eq!(exchanged.source_surface_pixel_width, None);
         assert_eq!(exchanged.source_surface_pixel_height, Some(1080));
         let mut malformed_extent_headers = HeaderMap::new();
-        malformed_extent_headers.insert(SOURCE_SURFACE_PIXEL_WIDTH_HEADER, "wide".parse().unwrap());
+        malformed_extent_headers.insert(SURFACE_PIXEL_WIDTH_HEADER_NAME, "wide".parse().unwrap());
         assert_eq!(
-            source_surface_pixel_extent(
-                &malformed_extent_headers,
-                SOURCE_SURFACE_PIXEL_WIDTH_HEADER
-            ),
+            source_surface_pixel_extent(&malformed_extent_headers, SURFACE_PIXEL_WIDTH_HEADER_NAME),
             None
         );
     }
@@ -1571,7 +1477,7 @@ mod tests {
         let second_bag = bag_publishing_surface_id("s#2");
 
         let tapped_bags = tapped_channel_bag_frames(
-            &tap_result_text_capping_bags(&[first_bag.clone(), second_bag.clone()], &[1], true),
+            &tap_result_text_capping_bags(&[first_bag.clone(), second_bag.clone()], &[1]),
             FIXTURE_CHANNEL,
         )
         .unwrap();
@@ -1580,112 +1486,105 @@ mod tests {
             tapped_bags,
             [
                 TappedChannelBagFrame {
-                    whole_bag_byte_len: Some(first_bag.len().into()),
+                    whole_bag_byte_len: u64::try_from(first_bag.len()).unwrap(),
                     framed_bag_bytes: first_bag,
                     preview_was_capped: false,
                 },
                 TappedChannelBagFrame {
                     framed_bag_bytes: second_bag,
                     preview_was_capped: true,
-                    whole_bag_byte_len: Some(CAPPED_BAG_STATED_BYTE_LEN.into()),
+                    whole_bag_byte_len: CAPPED_BAG_STATED_BYTE_LEN,
                 },
             ]
         );
     }
 
-    #[test]
-    fn a_tapped_bags_cap_is_any_set_flag_and_its_size_only_an_integer() {
-        let tapped_bags = tapped_channel_bag_frames(
-            &json!({"bags": [
-                {"hex_preview": "", "hex_truncated": 1, "byte_len": 9000.0},
-                {"hex_preview": "", "hex_truncated": "", "byte_len": "9000"},
-                {"hex_preview": "", "hex_truncated": null},
-                {"hex_preview": ""},
-            ]})
-            .to_string(),
-            FIXTURE_CHANNEL,
-        )
-        .unwrap();
+    /// A one-bag tap result whose bag is `tapped_bag`, every other key as the tool writes it.
+    fn tap_result_text_whose_bag_is(tapped_bag: serde_json::Value) -> String {
+        let mut tap_tool_result: serde_json::Value =
+            serde_json::from_str(&tap_result_text(&[bag_publishing_surface_id("s#1")])).unwrap();
+        tap_tool_result["bags"][0] = tapped_bag;
+        tap_tool_result.to_string()
+    }
 
-        assert_eq!(
-            tapped_bags
-                .iter()
-                .map(|tapped_bag| (
-                    tapped_bag.preview_was_capped,
-                    tapped_bag.whole_bag_byte_len.clone()
-                ))
-                .collect::<Vec<_>>(),
-            [(true, None), (false, None), (false, None), (false, None)]
-        );
-        for (json_value, truthy) in [
-            (json!(true), true),
-            (json!(false), false),
-            (json!(0), false),
-            (json!(0.5), true),
-            (json!("yes"), true),
-            (json!([]), false),
-            (json!({"a": 1}), true),
-        ] {
-            assert_eq!(json_value_is_truthy(&json_value), truthy, "{json_value}");
+    /// A cap is a bool and a size a whole number: a result spelling either another way, or
+    /// leaving a key out, is not the tap tool's, and reading a guess out of it would misdiagnose
+    /// the bag.
+    #[test]
+    fn a_tap_result_that_is_not_the_tap_tools_shape_is_refused_naming_the_channel() {
+        let not_the_tap_tools_shape = [
+            "not json".to_owned(),
+            r#"{"received": 0}"#.to_owned(),
+            tap_result_text_whose_bag_is(json!({"byte_len": 5, "hex_truncated": false})),
+            tap_result_text_whose_bag_is(json!({"hex_preview": "", "hex_truncated": false})),
+            tap_result_text_whose_bag_is(json!({"byte_len": 5, "hex_preview": ""})),
+            tap_result_text_whose_bag_is(
+                json!({"byte_len": 5, "hex_preview": "", "hex_truncated": 1}),
+            ),
+            tap_result_text_whose_bag_is(
+                json!({"byte_len": 5.0, "hex_preview": "", "hex_truncated": false}),
+            ),
+            tap_result_text_whose_bag_is(
+                json!({"byte_len": "5", "hex_preview": "", "hex_truncated": false}),
+            ),
+        ];
+        for tap_tool_result_text in not_the_tap_tools_shape {
+            let refusal =
+                tapped_channel_bag_frames(&tap_tool_result_text, FIXTURE_CHANNEL).unwrap_err();
+
+            assert!(
+                refusal.starts_with(
+                    "tap of `cam/frame` returned a result that is not the tap tool's ("
+                ),
+                "{refusal}"
+            );
+            assert!(
+                refusal.ends_with(&format!("): {tap_tool_result_text}")),
+                "{refusal}"
+            );
         }
     }
 
+    /// The tool writes two lowercase digits per byte with nothing between them.
     #[test]
-    fn a_tap_result_that_carries_no_readable_bags_is_refused_naming_the_channel() {
-        for (tap_tool_result_text, refusal) in [
+    fn a_hex_preview_that_is_not_unspaced_hex_is_refused_naming_the_channel() {
+        for (hex_preview, hex_failure) in [
             (
-                "not json",
-                "tap of `cam/frame` returned a non-JSON result: not json",
+                "0a ff 10",
+                hex::FromHexError::InvalidHexCharacter { c: ' ', index: 2 },
             ),
+            ("abc", hex::FromHexError::OddLength),
             (
-                r#"{"received": 0}"#,
-                r#"tap of `cam/frame` returned no `bags` array: {"received": 0}"#,
-            ),
-            (
-                r#"{"bags": [{"byte_len": 5}]}"#,
-                r#"tap of `cam/frame` returned a bag with no hex preview: {"byte_len":5}"#,
-            ),
-            (
-                r#"{"bags": [{"hex_preview": "0g"}]}"#,
-                "tap of `cam/frame` returned a bag whose hex preview does not decode: \
-                 Invalid character 'g' at position 1",
+                "0g",
+                hex::FromHexError::InvalidHexCharacter { c: 'g', index: 1 },
             ),
         ] {
             assert_eq!(
-                tapped_channel_bag_frames(tap_tool_result_text, FIXTURE_CHANNEL),
-                Err(refusal.to_owned())
+                tapped_channel_bag_frames(
+                    &tap_result_text_whose_bag_is(json!({
+                        "byte_len": hex_preview.len() / 2,
+                        "hex_preview": hex_preview,
+                        "hex_truncated": false,
+                    })),
+                    FIXTURE_CHANNEL
+                ),
+                Err(format!(
+                    "tap of `cam/frame` returned a bag whose hex preview does not decode: \
+                     {hex_failure}"
+                )),
+                "{hex_preview:?}"
             );
         }
     }
 
     #[test]
-    fn a_hex_preview_decodes_with_whitespace_between_bytes_and_refuses_half_a_byte() {
+    fn a_capped_bag_is_named_with_its_size() {
         assert_eq!(
-            bytes_of_a_hex_preview("0aFF 10\n7f"),
-            Ok(vec![0x0a, 0xff, 0x10, 0x7f])
-        );
-        assert_eq!(
-            bytes_of_a_hex_preview("abc"),
-            Err(hex::FromHexError::OddLength.to_string())
-        );
-        assert_eq!(
-            bytes_of_a_hex_preview("a b"),
-            Err(hex::FromHexError::OddLength.to_string())
-        );
-    }
-
-    #[test]
-    fn a_capped_bag_is_named_with_its_size_or_as_larger_than_the_preview() {
-        assert_eq!(
-            capped_bag_stop_reason("cam/frame", Some(&9000.into())),
+            capped_bag_stop_reason("cam/frame", 9000),
             "a bag the sample selected on `cam/frame` is 9000 bytes, past the prefix `tap` \
              previews, so its surface id cannot be read from here. Exchange an id from this \
              channel directly: `tatolab exchange <surface-id> --out <dir>`."
         );
-        assert!(capped_bag_stop_reason("cam/frame", None).starts_with(
-            "a bag the sample selected on `cam/frame` is larger than, past the prefix `tap` \
-                 previews"
-        ));
     }
 
     // The channel form.
@@ -2025,7 +1924,6 @@ mod tests {
             &[tap_result_text_capping_bags(
                 &[bag_publishing_surface_id("s#1")],
                 &[0],
-                true,
             )],
             [("s#1", image_answer("one"))],
         );
@@ -2039,36 +1937,15 @@ mod tests {
 
         assert_eq!(
             report.stopped_early_because,
-            Some(capped_bag_stop_reason(FIXTURE_CHANNEL, Some(&9000.into())))
+            Some(capped_bag_stop_reason(
+                FIXTURE_CHANNEL,
+                CAPPED_BAG_STATED_BYTE_LEN
+            ))
         );
         assert!(
             stub_local_api_server
                 .recorded_image_request_paths()
                 .is_empty()
-        );
-    }
-
-    #[test]
-    fn a_capped_bag_with_no_stated_size_is_still_diagnosed_as_capped() {
-        let stub_local_api_server = stub_tapping(
-            &[tap_result_text_capping_bags(
-                &[bag_publishing_surface_id("s#1")],
-                &[0],
-                false,
-            )],
-            [("s#1", image_answer("one"))],
-        );
-        let output_directory = tempfile::tempdir().unwrap();
-
-        let report = sample_the_stub_channel(
-            &stub_local_api_server.local_api_socket_path,
-            output_directory.path(),
-            &sampling_bounds(1, 1),
-        );
-
-        assert_eq!(
-            report.stopped_early_because,
-            Some(capped_bag_stop_reason(FIXTURE_CHANNEL, None))
         );
     }
 
@@ -2084,7 +1961,6 @@ mod tests {
                     bag_publishing_surface_id("s#3"),
                 ],
                 &[1],
-                true,
             )],
             [("s#3", image_answer("three"))],
         );
@@ -2113,7 +1989,6 @@ mod tests {
                     bag_publishing_surface_id("s#2"),
                 ],
                 &[1],
-                true,
             )],
             [("s#1", image_answer("one"))],
         );
@@ -2139,7 +2014,6 @@ mod tests {
                     bag_publishing_surface_id("s#2"),
                 ],
                 &[1],
-                true,
             )],
             [("s#1", image_answer("one"))],
         );

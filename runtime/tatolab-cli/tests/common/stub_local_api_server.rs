@@ -27,14 +27,15 @@ use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    MCP_STDIO_UPGRADE_PROTOCOL_TOKEN, MCP_STDIO_UPGRADE_REQUEST_TARGET,
+    MCP_STREAMABLE_HTTP_ROUTE_PATH, SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE,
+    SURFACE_PIXEL_HEIGHT_HEADER_NAME, SURFACE_PIXEL_WIDTH_HEADER_NAME,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// What the stub answers a tool call with when the script names no fixed answer.
 pub const STUB_DEFAULT_TOOL_ANSWER_TEXT: &str = "{}";
-
-/// The headers the surface-image route states the surface's own extent in.
-pub const SOURCE_SURFACE_PIXEL_WIDTH_HEADER: &str = "x-streamlib-surface-pixel-width";
-pub const SOURCE_SURFACE_PIXEL_HEIGHT_HEADER: &str = "x-streamlib-surface-pixel-height";
 
 /// The revision the stub serves, and the only one: a runtime's local API serves the latest alone.
 const STUB_SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
@@ -279,11 +280,11 @@ async fn answer_surface_image_request(
         .into_response();
     for (extent_header, extent) in [
         (
-            SOURCE_SURFACE_PIXEL_WIDTH_HEADER,
+            SURFACE_PIXEL_WIDTH_HEADER_NAME,
             answer.source_surface_pixel_width,
         ),
         (
-            SOURCE_SURFACE_PIXEL_HEIGHT_HEADER,
+            SURFACE_PIXEL_HEIGHT_HEADER_NAME,
             answer.source_surface_pixel_height,
         ),
     ] {
@@ -334,7 +335,7 @@ async fn answer_mcp_stdio_upgrade_request(
         StatusCode::SWITCHING_PROTOCOLS,
         [
             (header::CONNECTION, "upgrade"),
-            (header::UPGRADE, "mcp-stdio"),
+            (header::UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN),
         ],
     )
         .into_response()
@@ -412,13 +413,13 @@ fn stub_local_api_router(stub_state: Arc<StubLocalApiState>) -> axum::Router {
             .disable_allowed_hosts(),
     );
     axum::Router::new()
-        .route_service("/mcp", local_api_mcp_service)
+        .route_service(MCP_STREAMABLE_HTTP_ROUTE_PATH, local_api_mcp_service)
         .route(
-            "/api/surfaces/{surface_id}/image",
+            SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE,
             axum::routing::get(answer_surface_image_request),
         )
         .route(
-            "/mcp/stdio",
+            MCP_STDIO_UPGRADE_REQUEST_TARGET,
             axum::routing::get(answer_mcp_stdio_upgrade_request),
         )
         .with_state(stub_state)

@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 use streamlib_ipc_types::{FRAME_HEADER_SIZE, FrameHeader};
+use streamlib_runtime_client_contract::local_api_wire_contract::{TapToolResult, TapToolResultBag};
 
 /// The channel every fixture bag is tapped from.
 pub const FIXTURE_CHANNEL: &str = "cam/frame";
@@ -29,6 +30,12 @@ pub const SLICE_HOLDS_ONLY_THE_BAG: usize = 0;
 /// The whole-bag length the tap result states for a bag whose preview it capped: more than the
 /// preview carried.
 pub const CAPPED_BAG_STATED_BYTE_LEN: u64 = 9000;
+
+/// The per-bag preview ceiling a fixture tap result states.
+const FIXTURE_TAP_MAX_BAG_BYTES: usize = 1024 * 1024;
+
+/// The sample window a fixture tap result states.
+const FIXTURE_TAP_WINDOW_MS: u64 = 500;
 
 /// A msgpack named map holding `entries` in order.
 pub fn msgpack_named_map(entries: &[(&str, rmpv::Value)]) -> Vec<u8> {
@@ -86,51 +93,43 @@ pub fn bag_publishing_no_surface_id() -> Vec<u8> {
 }
 
 /// The `tap` tool's result text carrying `framed_bags`. A bag at an index in `capped_bag_indexes`
-/// is flagged as capped and stated at [`CAPPED_BAG_STATED_BYTE_LEN`]; `byte_len` is left out of
-/// every bag unless `whole_bag_byte_len_stated`, as a runtime that flags a cap without sizing it.
+/// is flagged as capped and stated at [`CAPPED_BAG_STATED_BYTE_LEN`].
 pub fn tap_result_text_capping_bags(
     framed_bags: &[Vec<u8>],
     capped_bag_indexes: &[usize],
-    whole_bag_byte_len_stated: bool,
 ) -> String {
-    let tapped_bags: Vec<serde_json::Value> = framed_bags
+    let tapped_bags: Vec<TapToolResultBag> = framed_bags
         .iter()
         .enumerate()
         .map(|(bag_index, framed_bag_bytes)| {
             let preview_was_capped = capped_bag_indexes.contains(&bag_index);
-            let mut tapped_bag = serde_json::Map::new();
-            if whole_bag_byte_len_stated {
-                tapped_bag.insert(
-                    "byte_len".to_owned(),
-                    if preview_was_capped {
-                        CAPPED_BAG_STATED_BYTE_LEN.into()
-                    } else {
-                        framed_bag_bytes.len().into()
-                    },
-                );
+            TapToolResultBag {
+                byte_len: if preview_was_capped {
+                    CAPPED_BAG_STATED_BYTE_LEN
+                } else {
+                    u64::try_from(framed_bag_bytes.len()).unwrap()
+                },
+                hex_preview: lowercase_hex(framed_bag_bytes),
+                hex_truncated: preview_was_capped,
             }
-            tapped_bag.insert(
-                "hex_preview".to_owned(),
-                lowercase_hex(framed_bag_bytes).into(),
-            );
-            tapped_bag.insert("hex_truncated".to_owned(), preview_was_capped.into());
-            serde_json::Value::Object(tapped_bag)
         })
         .collect();
-    serde_json::json!({
-        "channel": FIXTURE_CHANNEL,
-        "requested": framed_bags.len(),
-        "received": framed_bags.len(),
-        "window_ms": 500,
-        "dropped_bags": 0,
-        "bags": tapped_bags,
+    serde_json::to_string(&TapToolResult {
+        channel: FIXTURE_CHANNEL.to_owned(),
+        requested: framed_bags.len(),
+        received: framed_bags.len(),
+        window_ms: FIXTURE_TAP_WINDOW_MS,
+        dropped_bags: 0,
+        max_bag_bytes: FIXTURE_TAP_MAX_BAG_BYTES,
+        bags_withheld_at_byte_budget: 0,
+        bags: tapped_bags,
     })
-    .to_string()
+    .unwrap()
 }
 
 /// The `tap` tool's result text carrying `framed_bags`, none capped.
 pub fn tap_result_text(framed_bags: &[Vec<u8>]) -> String {
-    tap_result_text_capping_bags(framed_bags, &[], true)
+    tap_result_text_capping_bags(framed_bags, &[])
 }
 
 /// The `tap` tool's result text for a round that caught no bag.

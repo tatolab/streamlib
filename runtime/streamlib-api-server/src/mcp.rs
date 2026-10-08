@@ -54,6 +54,9 @@ use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::{ExchangedPublishedSurfaceFramePngImage, RuntimeOperations};
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    TapToolResult, TapToolResultBag, surface_image_exchange_route_path_for_surface_id,
+};
 use tokio_util::sync::CancellationToken;
 
 /// The only protocol revision the node serves: the latest `rmcp` implements.
@@ -320,7 +323,7 @@ impl LocalApiMcpServerHandler {
             .await
             .map_err(|e| format!("tap attach failed: {e}"))?;
 
-        let mut bags: Vec<Value> = Vec::with_capacity(sample);
+        let mut bags: Vec<TapToolResultBag> = Vec::with_capacity(sample);
         let mut remaining_response_bytes = MAX_TAP_RESPONSE_BAG_BYTES;
         let mut bags_withheld_at_byte_budget = 0usize;
         let deadline = tokio::time::Instant::now() + TAP_SAMPLE_WINDOW;
@@ -336,7 +339,7 @@ impl LocalApiMcpServerHandler {
                         break;
                     }
                     remaining_response_bytes -= encoded_len;
-                    bags.push(tap_bag_json(&bytes[..encoded_len], bytes.len()));
+                    bags.push(tap_tool_result_bag(&bytes[..encoded_len], bytes.len()));
                 }
                 // Tap exhausted (count reached / forwarder ended), or the bounded
                 // sample window elapsed on a quiet channel — return the partial sample.
@@ -351,16 +354,19 @@ impl LocalApiMcpServerHandler {
             tracing::warn!(channel = %channel, "tap detach task failed to join: {join_error}");
         }
 
-        Ok(json_text_tool_result(&json!({
-            "channel": channel,
-            "requested": sample,
-            "received": bags.len(),
-            "window_ms": TAP_SAMPLE_WINDOW.as_millis(),
-            "dropped_bags": dropped_bags,
-            "max_bag_bytes": max_bag_bytes,
-            "bags_withheld_at_byte_budget": bags_withheld_at_byte_budget,
-            "bags": bags,
-        })))
+        let tap_tool_result = TapToolResult {
+            channel,
+            requested: sample,
+            received: bags.len(),
+            window_ms: u64::try_from(TAP_SAMPLE_WINDOW.as_millis()).unwrap_or(u64::MAX),
+            dropped_bags,
+            max_bag_bytes,
+            bags_withheld_at_byte_budget,
+            bags,
+        };
+        let tap_tool_result_json = serde_json::to_value(&tap_tool_result)
+            .map_err(|e| format!("tap result serialization failed: {e}"))?;
+        Ok(json_text_tool_result(&tap_tool_result_json))
     }
 
     #[tool(
@@ -669,7 +675,7 @@ fn exchanged_frame_image_tool_call_result(
         "downscale_long_edge_pixel_cap": downscale_long_edge_pixel_cap,
         "exact_bytes_rest_route": format!(
             "GET {}",
-            crate::handlers::surface_image_exchange_route_path_for_surface_id(published_surface_id)
+            surface_image_exchange_route_path_for_surface_id(published_surface_id)
         ),
     });
     CallToolResult::success(vec![
@@ -698,19 +704,19 @@ fn bounded_tap_bag_bytes(requested: Option<usize>) -> usize {
         .clamp(1, MAX_TAP_RESPONSE_BAG_BYTES)
 }
 
-/// Render one raw tap bag as JSON: the bag's full byte length plus the hex of
-/// however much of it the caller's cap admitted (raw bags are wire-neutral
-/// bytes; decoding is the caller's concern).
+/// One raw tap bag as the result carries it: the bag's full byte length plus
+/// the hex of however much of it the caller's cap admitted (raw bags are
+/// wire-neutral bytes; decoding is the caller's concern).
 ///
 /// Takes the already-clamped slice rather than clamping again, because the
 /// collection loop must charge its budget the same number this encodes — two
 /// sites computing one rule is two sites that can disagree.
-fn tap_bag_json(encoded: &[u8], full_byte_len: usize) -> Value {
-    json!({
-        "byte_len": full_byte_len,
-        "hex_preview": hex_encode(encoded),
-        "hex_truncated": encoded.len() < full_byte_len,
-    })
+fn tap_tool_result_bag(encoded: &[u8], full_byte_len: usize) -> TapToolResultBag {
+    TapToolResultBag {
+        byte_len: full_byte_len as u64,
+        hex_preview: hex_encode(encoded),
+        hex_truncated: encoded.len() < full_byte_len,
+    }
 }
 
 fn event_json(event: &Event) -> Value {
@@ -777,6 +783,7 @@ pub(crate) mod tests {
     use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
     use streamlib::sdk::error::{Error, Result};
     use streamlib::sdk::runtime::{BoxFuture, RuntimeOperations, TapSubscription};
+    use streamlib_runtime_client_contract::local_api_wire_contract::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE;
 
     use super::*;
 
@@ -2246,7 +2253,7 @@ pub(crate) mod tests {
         let stated: Value = serde_json::from_str(text).unwrap();
         let named_route = stated["exact_bytes_rest_route"].as_str().unwrap();
 
-        let served = crate::handlers::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace(
+        let served = SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace(
             "{surface_id}",
             STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
         );
@@ -2255,7 +2262,7 @@ pub(crate) mod tests {
             crate::handlers::control_plane_openapi_spec()
                 .paths
                 .paths
-                .contains_key(crate::handlers::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE),
+                .contains_key(SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE),
             "the route the tool names must exist in the served spec"
         );
     }

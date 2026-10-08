@@ -128,10 +128,10 @@ jobs:
           cargo test --locked -p streamlib -p streamlib-macros \
             -p streamlib-processor-schema -p streamlib-ipc-types \
             -p streamlib-surface-client -p streamlib-error --lib
-          # What a running runtime leaves on disk for its clients: STREAMLIB_HOME,
+          # The contract a running runtime offers its clients: STREAMLIB_HOME,
           # the runtime directory and its trust check for the runtime and for a
-          # reader, the node registry, and the JSONL log's paths, schema and
-          # pretty rendering.
+          # reader, the node registry, the JSONL log's paths, schema and pretty
+          # rendering, and the local API's exchange route and tap result shape.
           cargo test --locked -p streamlib-runtime-client-contract
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # A `graph` document loads back as the same graph, and a node's name

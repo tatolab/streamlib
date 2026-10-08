@@ -24,7 +24,8 @@ serde_json = { workspace = true, features = ["raw_value"] }
 tempfile = { workspace = true }
 # Signal mask, sigwait, kill and the parent-death signal: the attached `tatolabd`'s lifecycle.
 libc = { workspace = true }
-# What a running runtime leaves on disk: the runtime directory and the node registry it is found in.
+# The contract a running runtime offers its clients: the runtime directory and the node registry
+# it is found in, its log files, and the wire names and tap result shape its local API speaks.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.41.0" }
 # The MCP client of a runtime's local API: the official SDK's, over the local API socket.
 rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket"] }
@@ -39,8 +40,6 @@ http-body-util = "0.1"
 # its msgpack payload decoded.
 streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.41.0" }
 rmpv = { workspace = true }
-# The exchange route's surface-id segment, percent-encoded as the runtime's route builder does.
-percent-encoding = "2.3"
 # A tapped bag's hex preview back to its framed bytes.
 hex = "0.4"
 # `logs --list`'s STARTED_AT as an ISO-8601 UTC date.
