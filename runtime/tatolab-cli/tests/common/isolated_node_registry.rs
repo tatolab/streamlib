@@ -28,6 +28,12 @@ pub const PID_OUTSIDE_PID_T: u32 = 4_000_000_000;
 pub const NOTHING_LISTENS_LOCAL_API_SOCKET_PATH: &str =
     "/nonexistent-tatolab-test/local-api-Rnone.sock";
 
+/// The runtime name [`IsolatedNodeRegistry::holding_one_live_runtime`] registers.
+pub const SCRIPTED_RUNTIME_NAME: &str = "scripted-runtime";
+
+/// The runtime_id [`IsolatedNodeRegistry::holding_one_live_runtime`] registers.
+pub const SCRIPTED_RUNTIME_ID: &str = "Rscripted";
+
 /// An `$XDG_RUNTIME_DIR` of a test's own, holding the runtime directory and its node registry.
 pub struct IsolatedNodeRegistry {
     xdg_runtime_dir: tempfile::TempDir,
@@ -39,6 +45,18 @@ impl IsolatedNodeRegistry {
         Self {
             xdg_runtime_dir: tempfile::tempdir().unwrap(),
         }
+    }
+
+    /// A fresh one whose one entry is [`SCRIPTED_RUNTIME_NAME`] ([`SCRIPTED_RUNTIME_ID`]),
+    /// answering on `local_api_socket_path` and hosted by this test's own process.
+    pub fn holding_one_live_runtime(local_api_socket_path: &Path) -> Self {
+        let isolated_node_registry = Self::new();
+        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
+            SCRIPTED_RUNTIME_ID,
+            SCRIPTED_RUNTIME_NAME,
+            local_api_socket_path,
+        ));
+        isolated_node_registry
     }
 
     /// The directory to hand a runtime or `tatolab` as `XDG_RUNTIME_DIR`.

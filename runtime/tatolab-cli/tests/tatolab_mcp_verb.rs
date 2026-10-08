@@ -1,12 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab mcp` launched as an MCP host launches it, its stdio piped, against a stub local API.
-//! The verb is a byte pipe, so its contract is bytes and exits: what it sends to open the stream,
-//! that it copies both ways untouched, how stdin's end and the runtime's end each finish it, and
-//! what it says on stderr. The registry is isolated through `XDG_RUNTIME_DIR`, which only Linux
-//! honours, so the tests that read one are Linux-only; the in-crate tests drive the same logic on
-//! every floor.
+//! `tatolab mcp` launched as an MCP host launches it, its stdio piped, against a stub local API:
+//! what it writes to stdout and stderr, and how it exits, over the process's real stdin and
+//! stdout. Each piping scenario is the in-crate tests'. The registry is isolated through
+//! `XDG_RUNTIME_DIR`, which only Linux honours, so the tests that read one are Linux-only.
 
 mod common;
 
@@ -59,15 +57,14 @@ mod against_an_isolated_registry {
     use serde_json::json;
     use tokio::io::AsyncReadExt;
 
-    use super::common::isolated_node_registry::{IsolatedNodeRegistry, a_registry_entry_named};
+    use super::common::isolated_node_registry::{
+        IsolatedNodeRegistry, SCRIPTED_RUNTIME_ID, SCRIPTED_RUNTIME_NAME,
+    };
     use super::common::stub_local_api_server::{
-        RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubMcpStdioUpgradeAnswer,
-        StubToolAnswer,
+        RecordedHttpRequestHead, RecordedToolCall, StubLocalApiScript, StubLocalApiServer,
+        StubMcpStdioUpgradeAnswer, StubToolAnswer,
     };
     use super::common::tatolab_binary_run::{standard_error_text, standard_output_text};
-
-    const SCRIPTED_RUNTIME_NAME: &str = "scripted-runtime";
-    const SCRIPTED_RUNTIME_ID: &str = "Rscripted";
 
     /// Longer than any run here takes; a `tatolab mcp` still running past it never exited.
     const TATOLAB_MCP_RUN_DEADLINE: Duration = Duration::from_secs(20);
@@ -82,29 +79,6 @@ mod against_an_isolated_registry {
         WrittenThenClosed(&'host_bytes [u8]),
         /// Hold stdin open, writing nothing, until the verb exits.
         HeldOpen,
-    }
-
-    /// A registry of the test's own holding one live runtime, the stub playing `stub_script`.
-    fn one_live_runtime_playing(
-        stub_script: StubLocalApiScript,
-    ) -> (IsolatedNodeRegistry, StubLocalApiServer) {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-        let stub_local_api_server = StubLocalApiServer::serve(stub_script);
-        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
-            SCRIPTED_RUNTIME_ID,
-            SCRIPTED_RUNTIME_NAME,
-            &stub_local_api_server.local_api_socket_path,
-        ));
-        (isolated_node_registry, stub_local_api_server)
-    }
-
-    fn one_live_runtime_answering_the_upgrade_with(
-        mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
-    ) -> (IsolatedNodeRegistry, StubLocalApiServer) {
-        one_live_runtime_playing(StubLocalApiScript {
-            mcp_stdio_upgrade_answer,
-            ..StubLocalApiScript::default()
-        })
     }
 
     /// Launch `tatolab mcp <mcp_verb_flags>` reading the registry under `xdg_runtime_dir`, feed
@@ -165,13 +139,15 @@ mod against_an_isolated_registry {
         let mcp_host_bytes = b"{\"not\": \"inspected\", \"bytes\": \"\\u00e9\"}\n";
         let runtime_bytes_once_upgraded = b"\x00\xffnot even json\n";
         let runtime_bytes_once_stdin_ended = b"{\"sent\": \"after the half-close\"}\n";
-        let (isolated_node_registry, stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
-                    written_once_upgraded: runtime_bytes_once_upgraded.to_vec(),
-                    written_once_the_client_half_closed: runtime_bytes_once_stdin_ended.to_vec(),
-                },
-            );
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
+                written_once_upgraded: runtime_bytes_once_upgraded.to_vec(),
+                written_once_the_client_half_closed: runtime_bytes_once_stdin_ended.to_vec(),
+            },
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
 
         let piped = run_tatolab_mcp(
             isolated_node_registry.xdg_runtime_dir(),
@@ -186,11 +162,13 @@ mod against_an_isolated_registry {
             "{}",
             standard_error_text(&piped)
         );
-        let upgrade_request_heads = stub_local_api_server.recorded_mcp_stdio_request_heads();
-        assert_eq!(upgrade_request_heads.len(), 1, "{upgrade_request_heads:?}");
-        assert_eq!(upgrade_request_heads[0].method, "GET");
-        assert_eq!(upgrade_request_heads[0].request_target, "/mcp/stdio");
-        let mut header_lines = upgrade_request_heads[0].header_lines.clone();
+        let [upgrade_request_head] = <[RecordedHttpRequestHead; 1]>::try_from(
+            stub_local_api_server.recorded_mcp_stdio_request_heads(),
+        )
+        .expect("exactly one upgrade request");
+        assert_eq!(upgrade_request_head.method, "GET");
+        assert_eq!(upgrade_request_head.request_target, "/mcp/stdio");
+        let mut header_lines = upgrade_request_head.header_lines;
         header_lines.sort();
         assert_eq!(
             header_lines,
@@ -217,47 +195,16 @@ mod against_an_isolated_registry {
         assert_eq!(standard_error_text(&piped), "");
     }
 
-    #[test]
-    fn stdin_ending_half_closes_the_stream_and_the_verb_exits_when_the_runtime_closes() {
-        let answer_owed_after_stdin_ended = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n";
-        let (isolated_node_registry, stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
-                    written_once_upgraded: Vec::new(),
-                    written_once_the_client_half_closed: answer_owed_after_stdin_ended.to_vec(),
-                },
-            );
-
-        let piped = run_tatolab_mcp(
-            isolated_node_registry.xdg_runtime_dir(),
-            &[],
-            McpHostStdin::WrittenThenClosed(b"{\"id\":1}\n"),
-            Stdio::piped(),
-        );
-
-        assert_eq!(
-            piped.status.code(),
-            Some(0),
-            "{}",
-            standard_error_text(&piped)
-        );
-        assert_eq!(
-            stub_local_api_server.recorded_mcp_stdio_client_bytes(),
-            b"{\"id\":1}\n",
-            "stdin's end reaches the runtime"
-        );
-        assert_eq!(
-            piped.stdout,
-            [b"{\"id\":1}\n".as_slice(), answer_owed_after_stdin_ended].concat()
-        );
-    }
-
+    /// Stdin is a pipe the host holds open, so the verb exits while its blocking read of stdin
+    /// is still pending.
     #[test]
     fn the_runtime_closing_while_stdin_is_open_exits_non_zero_naming_the_runtime() {
-        let (isolated_node_registry, _stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::CloseOnceUpgraded,
-            );
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::CloseOnceUpgraded,
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
 
         let piped = run_tatolab_mcp(
             isolated_node_registry.xdg_runtime_dir(),
@@ -272,31 +219,6 @@ mod against_an_isolated_registry {
             format!(
                 "error: runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) closed its MCP \
                  stream."
-            )
-        );
-        assert_eq!(piped.stdout, b"");
-    }
-
-    #[test]
-    fn a_runtime_refusing_the_upgrade_exits_non_zero_naming_it_and_its_answer() {
-        let (isolated_node_registry, _stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { http_status: 426 },
-            );
-
-        let piped = run_tatolab_mcp(
-            isolated_node_registry.xdg_runtime_dir(),
-            &[],
-            McpHostStdin::HeldOpen,
-            Stdio::piped(),
-        );
-
-        assert_eq!(piped.status.code(), Some(1));
-        assert_eq!(
-            the_one_stderr_line(&piped),
-            format!(
-                "error: runtime `{SCRIPTED_RUNTIME_NAME}` ({SCRIPTED_RUNTIME_ID}) did not open \
-                 its MCP stream: it answered `HTTP/1.1 426 Upgrade Required`"
             )
         );
         assert_eq!(piped.stdout, b"");
@@ -322,59 +244,19 @@ mod against_an_isolated_registry {
         );
     }
 
-    #[test]
-    fn no_live_runtime_is_the_same_refusal_when_node_names_one() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-
-        let refused = run_tatolab_mcp(
-            isolated_node_registry.xdg_runtime_dir(),
-            &["--node", "absent-runtime"],
-            McpHostStdin::HeldOpen,
-            Stdio::piped(),
-        );
-
-        assert_eq!(refused.status.code(), Some(1));
-        assert_eq!(standard_output_text(&refused), "");
-        assert!(
-            the_one_stderr_line(&refused).contains("`tatolab nodes`"),
-            "{}",
-            standard_error_text(&refused)
-        );
-    }
-
-    #[test]
-    fn a_node_flag_matching_no_live_runtime_is_refused_naming_it() {
-        let (isolated_node_registry, stub_local_api_server) =
-            one_live_runtime_playing(StubLocalApiScript::default());
-
-        let refused = run_tatolab_mcp(
-            isolated_node_registry.xdg_runtime_dir(),
-            &["--node", "absent-runtime"],
-            McpHostStdin::HeldOpen,
-            Stdio::piped(),
-        );
-
-        assert_eq!(refused.status.code(), Some(1));
-        assert_eq!(standard_output_text(&refused), "");
-        let refusal = standard_error_text(&refused);
-        assert!(refusal.contains("absent-runtime"), "{refusal}");
-        assert!(
-            refusal.contains(SCRIPTED_RUNTIME_NAME),
-            "the refusal lists the live runtimes: {refusal}"
-        );
-        assert_eq!(stub_local_api_server.recorded_mcp_stdio_request_heads(), []);
-    }
-
+    /// Writing to a pipe whose reader is gone fails with `EPIPE` rather than killing the verb.
     #[test]
     fn the_host_closing_stdout_ends_the_verb_without_a_refusal() {
-        let (isolated_node_registry, _stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
-                    written_once_upgraded: b"{\"jsonrpc\":\"2.0\",\"method\":\"nobody reads\"}\n"
-                        .to_vec(),
-                    written_once_the_client_half_closed: Vec::new(),
-                },
-            );
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
+                written_once_upgraded: b"{\"jsonrpc\":\"2.0\",\"method\":\"nobody reads\"}\n"
+                    .to_vec(),
+                written_once_the_client_half_closed: Vec::new(),
+            },
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
         let (closed_mcp_host_stdout_reader, mcp_host_stdout_with_no_reader) =
             std::io::pipe().unwrap();
         drop(closed_mcp_host_stdout_reader);
@@ -399,12 +281,14 @@ mod against_an_isolated_registry {
     /// speaks MCP over its stdio, at the latest revision, through the verb to the stub's server.
     #[test]
     fn an_mcp_host_lists_and_calls_a_tool_through_the_verb() {
-        let (isolated_node_registry, stub_local_api_server) =
-            one_live_runtime_playing(StubLocalApiScript {
-                fixed_tool_answer: Some(StubToolAnswer::tool_result(r#"{"nodes":[]}"#)),
-                listed_tool_names: vec!["graph".to_owned()],
-                ..StubLocalApiScript::default()
-            });
+        let stub_local_api_server = StubLocalApiServer::serve(StubLocalApiScript {
+            fixed_tool_answer: Some(StubToolAnswer::tool_result(r#"{"nodes":[]}"#)),
+            listed_tool_names: vec!["graph".to_owned()],
+            ..StubLocalApiScript::default()
+        });
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
         let mut tatolab_mcp_command = tokio::process::Command::new(env!("CARGO_BIN_EXE_tatolab"));
         tatolab_mcp_command
             .arg("mcp")

@@ -188,10 +188,10 @@ mod tests {
         );
     }
 
-    /// Text columns left-aligned to their widest cell, the pid right-aligned in seven, alive? in
-    /// six, two spaces between, the hint last and unpadded.
+    /// Text columns as wide as their widest cell, the pid in seven, alive? in six, two spaces
+    /// between.
     #[test]
-    fn the_table_lays_out_every_column_as_the_python_cli_printed_it() {
+    fn the_table_left_aligns_text_columns_right_aligns_the_pid_and_leaves_the_hint_unpadded() {
         let listing = render_node_registry_listing(
             Path::new("/unused"),
             &[

@@ -1,18 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab logs` run as a user runs it. The on-disk side reads the log directory under
-//! `STREAMLIB_HOME`, which every floor honours; `--node` reads a registry isolated through
-//! `XDG_RUNTIME_DIR`, which only Linux honours, so those tests are Linux-only.
+//! `tatolab logs` run as a user runs it: its flags, the log directory it reads under
+//! `STREAMLIB_HOME`, what it prints on stdout and on stderr, how Ctrl-C ends a follow, and how it
+//! exits. Each reading scenario is the in-crate tests'. `--node` reads a registry isolated through
+//! `XDG_RUNTIME_DIR`, which only Linux honours, so that test is Linux-only.
 
 mod common;
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::{BufRead, BufReader, Read};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
+use common::runtime_log_line_fixtures::{
+    a_log_line_with_message, a_log_line_with_message_at_level, append_to_log_file,
+};
 use common::tatolab_binary_run::{
     run_tatolab_reading_no_runtime_directory, standard_error_text, standard_output_text,
 };
@@ -56,31 +60,6 @@ impl IsolatedStreamlibHome {
     fn run_tatolab(&self, tatolab_arguments: &[&str]) -> Output {
         self.tatolab_command(tatolab_arguments).output().unwrap()
     }
-}
-
-fn a_log_line(message: &str, level: &str) -> String {
-    format!(
-        "{}\n",
-        serde_json::json!({
-            "schema_version": 1,
-            "host_ts": 1_786_136_667_573_387_556_u64,
-            "runtime_id": "Rabc",
-            "source": "rust",
-            "level": level,
-            "message": message,
-            "target": "tatolabd",
-            "intercepted": false,
-        })
-    )
-}
-
-fn append_to_log_file(log_file_path: &Path, appended_text: &str) {
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(log_file_path)
-        .unwrap()
-        .write_all(appended_text.as_bytes())
-        .unwrap();
 }
 
 /// A `tatolab logs --follow` running in the background, its output read line by line.
@@ -164,20 +143,6 @@ fn rendered_line(message: &str, level_column: &str) -> String {
 }
 
 #[test]
-fn logs_is_a_served_verb() {
-    let help_text = standard_output_text(&run_tatolab_reading_no_runtime_directory(&["--help"]));
-    let listed_verbs: Vec<&str> = help_text
-        .lines()
-        .skip_while(|help_line| !help_line.starts_with("Commands:"))
-        .skip(1)
-        .take_while(|help_line| !help_line.trim().is_empty())
-        .map(|help_line| help_line.split_whitespace().next().unwrap())
-        .collect();
-
-    assert!(listed_verbs.contains(&"logs"), "{help_text}");
-}
-
-#[test]
 fn the_logs_help_names_both_modes_and_every_flag() {
     let help_text = standard_output_text(&run_tatolab_reading_no_runtime_directory(&[
         "logs", "--help",
@@ -236,49 +201,6 @@ fn an_unknown_level_is_a_usage_error_naming_the_levels() {
 }
 
 #[test]
-fn list_refuses_the_flags_it_would_otherwise_ignore() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-
-    let refused = isolated_streamlib_home.run_tatolab(&["logs", "--list", "--level", "warn"]);
-
-    assert_eq!(refused.status.code(), Some(1));
-    assert_eq!(
-        standard_error_text(&refused),
-        "error: `--list` enumerates the runtimes that have log files and reads none of them, so \
-         it takes no --level.\n"
-    );
-    assert_eq!(standard_output_text(&refused), "");
-}
-
-#[test]
-fn a_count_without_a_runtime_target_is_refused() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-
-    let refused = isolated_streamlib_home.run_tatolab(&["logs", "Rabc", "--count", "5"]);
-
-    assert_eq!(refused.status.code(), Some(1));
-    assert!(
-        standard_error_text(&refused).starts_with("error: `--count` bounds a live event-stream"),
-        "{}",
-        standard_error_text(&refused)
-    );
-}
-
-#[test]
-fn logs_without_a_runtime_id_names_list_and_node() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-
-    let refused = isolated_streamlib_home.run_tatolab(&["logs"]);
-
-    assert_eq!(refused.status.code(), Some(1));
-    assert_eq!(
-        standard_error_text(&refused),
-        "error: missing RUNTIME_ID.\n`tatolab logs --list` enumerates the runtimes that have log \
-         files, and `--node` reads a running runtime's live event stream instead.\n"
-    );
-}
-
-#[test]
 fn a_runtime_with_no_log_file_is_refused_naming_list() {
     let isolated_streamlib_home = IsolatedStreamlibHome::new();
 
@@ -293,22 +215,7 @@ fn a_runtime_with_no_log_file_is_refused_naming_list() {
             isolated_streamlib_home.runtime_log_directory().display()
         )
     );
-}
-
-#[test]
-fn list_with_no_log_files_names_the_directory_it_read() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-
-    let listed = isolated_streamlib_home.run_tatolab(&["logs", "--list"]);
-
-    assert!(listed.status.success(), "{}", standard_error_text(&listed));
-    assert_eq!(
-        standard_output_text(&listed),
-        format!(
-            "(no runtime log files in {})\n",
-            isolated_streamlib_home.runtime_log_directory().display()
-        )
-    );
+    assert_eq!(standard_output_text(&refused), "");
 }
 
 #[test]
@@ -338,12 +245,15 @@ fn reading_a_runtime_renders_its_records_as_the_runtime_mirrored_them() {
     isolated_streamlib_home.write_log_file(
         "Rabc-1000.jsonl",
         &[
-            a_log_line("started", "info"),
-            a_log_line("slow frame", "warn"),
+            a_log_line_with_message("started"),
+            a_log_line_with_message_at_level("slow frame", "warn"),
         ]
         .concat(),
     );
-    isolated_streamlib_home.write_log_file("Rabc-1000.1.jsonl", &a_log_line("rotated", "debug"));
+    isolated_streamlib_home.write_log_file(
+        "Rabc-1000.1.jsonl",
+        &a_log_line_with_message_at_level("rotated", "debug"),
+    );
 
     let everything_read = isolated_streamlib_home.run_tatolab(&["logs", "Rabc"]);
     let warnings_read = isolated_streamlib_home.run_tatolab(&["logs", "Rabc", "--level", "warn"]);
@@ -375,9 +285,9 @@ fn a_malformed_line_is_warned_about_on_stderr_and_the_read_carries_on() {
     isolated_streamlib_home.write_log_file(
         "Rabc-1000.jsonl",
         &[
-            a_log_line("before", "info"),
+            a_log_line_with_message("before"),
             "{ truncated\n".to_owned(),
-            a_log_line("after", "info"),
+            a_log_line_with_message("after"),
         ]
         .concat(),
     );
@@ -404,8 +314,8 @@ fn a_malformed_line_is_warned_about_on_stderr_and_the_read_carries_on() {
 #[test]
 fn follow_reads_appended_and_rotated_records_until_ctrl_c_ends_it_with_exit_zero() {
     let isolated_streamlib_home = IsolatedStreamlibHome::new();
-    let active_segment_path =
-        isolated_streamlib_home.write_log_file("Rabc-1000.jsonl", &a_log_line("first", "info"));
+    let active_segment_path = isolated_streamlib_home
+        .write_log_file("Rabc-1000.jsonl", &a_log_line_with_message("first"));
     let following_tatolab = FollowingTatolab::spawn(
         isolated_streamlib_home.tatolab_command(&["logs", "Rabc", "--follow"]),
     );
@@ -414,7 +324,7 @@ fn follow_reads_appended_and_rotated_records_until_ctrl_c_ends_it_with_exit_zero
         rendered_line("first", " INFO")
     );
 
-    append_to_log_file(&active_segment_path, &a_log_line("second", "info"));
+    append_to_log_file(&active_segment_path, &a_log_line_with_message("second"));
     assert_eq!(
         following_tatolab.next_standard_output_line("the appended record"),
         rendered_line("second", " INFO")
@@ -427,7 +337,7 @@ fn follow_reads_appended_and_rotated_records_until_ctrl_c_ends_it_with_exit_zero
             .join("Rabc-1000.1.jsonl"),
     )
     .unwrap();
-    std::fs::write(&active_segment_path, a_log_line("third", "info")).unwrap();
+    std::fs::write(&active_segment_path, a_log_line_with_message("third")).unwrap();
     assert_eq!(
         following_tatolab.next_standard_output_line("the record after the rotation"),
         rendered_line("third", " INFO")
@@ -446,7 +356,7 @@ fn follow_before_the_log_file_exists_waits_with_its_note_and_ctrl_c_ends_the_wai
         "note: no log file yet for runtime 'Rlater', waiting in --follow mode..."
     );
 
-    isolated_streamlib_home.write_log_file("Rlater-1000.jsonl", &a_log_line("booted", "info"));
+    isolated_streamlib_home.write_log_file("Rlater-1000.jsonl", &a_log_line_with_message("booted"));
     assert_eq!(
         following_tatolab.next_standard_output_line("the first record of the new file"),
         rendered_line("booted", " INFO")
@@ -459,35 +369,11 @@ fn follow_before_the_log_file_exists_waits_with_its_note_and_ctrl_c_ends_the_wai
     assert_eq!(still_waiting.interrupt_and_wait().code(), Some(0));
 }
 
-#[test]
-fn follow_switches_to_a_newer_file_when_the_runtime_restarts() {
-    let isolated_streamlib_home = IsolatedStreamlibHome::new();
-    isolated_streamlib_home.write_log_file("Rabc-1000.jsonl", &a_log_line("before", "info"));
-    let following_tatolab =
-        FollowingTatolab::spawn(isolated_streamlib_home.tatolab_command(&["logs", "Rabc", "-f"]));
-    assert_eq!(
-        following_tatolab.next_standard_output_line("the pre-restart record"),
-        rendered_line("before", " INFO")
-    );
-
-    isolated_streamlib_home.write_log_file("Rabc-2000.jsonl", &a_log_line("after-restart", "info"));
-
-    assert_eq!(
-        following_tatolab.next_standard_output_line("the post-restart record"),
-        rendered_line("after-restart", " INFO")
-    );
-    assert_eq!(
-        following_tatolab.next_standard_error_line("the restart note"),
-        "note: runtime 'Rabc' restarted into a newer log file; switching."
-    );
-    assert_eq!(following_tatolab.interrupt_and_wait().code(), Some(0));
-}
-
 #[cfg(target_os = "linux")]
 mod against_an_isolated_registry {
     use serde_json::json;
 
-    use super::common::isolated_node_registry::{IsolatedNodeRegistry, a_registry_entry_named};
+    use super::common::isolated_node_registry::{IsolatedNodeRegistry, SCRIPTED_RUNTIME_NAME};
     use super::common::stub_local_api_server::{
         RecordedToolCall, StubLocalApiServer, StubToolAnswer,
     };
@@ -497,100 +383,27 @@ mod against_an_isolated_registry {
 
     #[test]
     fn logs_with_a_runtime_target_reads_its_live_event_stream_through_the_local_api_socket() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
         let stub_local_api_server = StubLocalApiServer::serve_answering_every_tool_call_with(
             StubToolAnswer::tool_result(r#"[{"event":"started"}]"#),
         );
-        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
-            "Rlogs",
-            "rig-logs",
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
             &stub_local_api_server.local_api_socket_path,
-        ));
+        );
 
         let read = run_tatolab_with_xdg_runtime_dir(
             isolated_node_registry.xdg_runtime_dir(),
-            &["logs", "--node", "rig-logs", "--count", "4"],
+            &["logs", "--node", SCRIPTED_RUNTIME_NAME, "--count", "4"],
         );
 
         assert!(read.status.success(), "{}", standard_error_text(&read));
         assert_eq!(standard_output_text(&read), "[{\"event\":\"started\"}]\n");
+        assert_eq!(standard_error_text(&read), "");
         assert_eq!(
             stub_local_api_server.recorded_tool_calls(),
             [RecordedToolCall {
                 tool_name: "logs".to_owned(),
                 tool_arguments: json!({"count": 4}),
             }]
-        );
-    }
-
-    #[test]
-    fn logs_with_a_runtime_target_and_no_count_lets_the_tool_choose_one() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-        let stub_local_api_server = StubLocalApiServer::serve_default();
-        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
-            "Rlogs",
-            "rig-logs",
-            &stub_local_api_server.local_api_socket_path,
-        ));
-
-        let read = run_tatolab_with_xdg_runtime_dir(
-            isolated_node_registry.xdg_runtime_dir(),
-            &["logs", "--node", "Rlogs"],
-        );
-
-        assert!(read.status.success(), "{}", standard_error_text(&read));
-        assert_eq!(
-            stub_local_api_server.recorded_tool_calls(),
-            [RecordedToolCall {
-                tool_name: "logs".to_owned(),
-                tool_arguments: json!({}),
-            }]
-        );
-    }
-
-    /// The live event-stream tool takes a count and nothing else, so a filter here would be
-    /// silently ignored rather than applied.
-    #[test]
-    fn a_runtime_target_with_on_disk_filters_is_refused_before_any_runtime_is_reached() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-        let stub_local_api_server = StubLocalApiServer::serve_default();
-        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
-            "Rlogs",
-            "rig-logs",
-            &stub_local_api_server.local_api_socket_path,
-        ));
-
-        let refused = run_tatolab_with_xdg_runtime_dir(
-            isolated_node_registry.xdg_runtime_dir(),
-            &["logs", "--node", "rig-logs", "--level", "warn"],
-        );
-
-        assert_eq!(refused.status.code(), Some(1));
-        assert_eq!(
-            standard_error_text(&refused),
-            "error: `--node` reads a running runtime's live event stream, which takes no \
-             --level. Drop `--node` to read an on-disk log file instead.\n"
-        );
-        assert_eq!(
-            stub_local_api_server.recorded_tool_calls(),
-            [],
-            "a refused flag reaches no runtime"
-        );
-    }
-
-    #[test]
-    fn a_runtime_target_naming_no_live_runtime_is_refused_as_the_other_verbs_refuse_it() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-
-        let refused = run_tatolab_with_xdg_runtime_dir(
-            isolated_node_registry.xdg_runtime_dir(),
-            &["logs", "--node", "rig-logs"],
-        );
-
-        assert_eq!(refused.status.code(), Some(1));
-        assert_eq!(
-            standard_error_text(&refused),
-            "error: no running runtime found on this machine.\nStart one with `tatolab run`.\n"
         );
     }
 }

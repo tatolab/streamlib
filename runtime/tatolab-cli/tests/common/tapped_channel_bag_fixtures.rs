@@ -1,15 +1,19 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Bags as a channel carries them, and the `tap` tool's result carrying them, for the `exchange`
-//! tests. The frame header is written by the transport's own writer and the payload by msgpack's,
-//! never by the decoder under test. Reached through `#[path]` by the unit tests and by the
-//! `exchange` integration tests, so it names nothing from the other test support files.
+//! Bags as a channel carries them, the `tap` tool's result carrying them, and the images exchanged
+//! for them, for the `exchange` tests. The frame header is written by the transport's own writer
+//! and the payload by msgpack's, never by the decoder under test. Shared by the integration tests
+//! and, through `#[path]`, the unit tests; either mounts it beside `stub_local_api_server`.
 
 #![allow(dead_code)]
 
+use std::path::Path;
+
 use streamlib_ipc_types::{FRAME_HEADER_SIZE, FrameHeader};
 use streamlib_runtime_client_contract::local_api_wire_contract::{TapToolResult, TapToolResultBag};
+
+use super::stub_local_api_server::StubSurfaceImageAnswer;
 
 /// The channel every fixture bag is tapped from.
 pub const FIXTURE_CHANNEL: &str = "cam/frame";
@@ -109,7 +113,7 @@ pub fn tap_result_text_capping_bags(
                 } else {
                     u64::try_from(framed_bag_bytes.len()).unwrap()
                 },
-                hex_preview: lowercase_hex(framed_bag_bytes),
+                hex_preview: hex::encode(framed_bag_bytes),
                 hex_truncated: preview_was_capped,
             }
         })
@@ -142,6 +146,22 @@ pub fn png_bytes_for(label: &str) -> Vec<u8> {
     [b"\x89PNG\r\n\x1a\n".as_slice(), label.as_bytes()].concat()
 }
 
-fn lowercase_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+/// The image route's `200` for [`png_bytes_for`]`(label)`, stating a 1920x1080 source surface.
+pub fn labelled_png_image_answer(label: &str) -> StubSurfaceImageAnswer {
+    StubSurfaceImageAnswer::png_image(&png_bytes_for(label), Some(1920), Some(1080))
+}
+
+/// How many `.png` files `directory` holds.
+pub fn png_files_in(directory: &Path) -> usize {
+    std::fs::read_dir(directory)
+        .unwrap()
+        .filter(|directory_entry| {
+            directory_entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "png")
+        })
+        .count()
 }

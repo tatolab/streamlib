@@ -455,25 +455,25 @@ mod tests {
         );
     }
 
-    /// A released engine from before the TCP listener went writes schema 3 with the URL key
-    /// beside the socket path; an app pinned to it still runs.
+    /// A released engine from before the TCP listener went writes schema 3 with its URL key beside
+    /// the socket path; the reader ignores every key it does not read, so an app pinned to that
+    /// engine still runs.
     #[test]
-    fn a_schema_three_entry_still_carrying_the_retired_url_key_is_listed() {
+    fn a_schema_three_entry_carrying_a_key_this_reader_does_not_read_is_listed() {
         let isolated_node_registry = IsolatedNodeRegistry::new();
         let stub_local_api_server = StubLocalApiServer::serve_default();
         let mut entry_json = serde_json::to_value(a_registry_entry(
-            "Rcarries-url",
+            "Rextra-key",
             &stub_local_api_server.local_api_socket_path,
         ))
         .unwrap();
-        // Joined at run time so the retired key's own text does not survive here.
-        entry_json[["control", "url"].join("_")] = json!("http://127.0.0.1:9000");
+        entry_json["a_key_this_reader_does_not_read"] = json!("http://127.0.0.1:9000");
         isolated_node_registry
-            .write_registry_entry_file("Rcarries-url", &serde_json::to_vec(&entry_json).unwrap());
+            .write_registry_entry_file("Rextra-key", &serde_json::to_vec(&entry_json).unwrap());
 
         assert_eq!(
             scanned_runtime_ids_and_liveness(&isolated_node_registry),
-            owned(&[("Rcarries-url", true)])
+            owned(&[("Rextra-key", true)])
         );
     }
 

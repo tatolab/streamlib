@@ -1,39 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab nodes`, `graph` and `tap` run as a user runs them, against a stub local API. The
-//! registry is isolated through `XDG_RUNTIME_DIR`, which only Linux honours, so the tests that
-//! read one are Linux-only; the in-crate tests drive the same logic on every floor.
+//! `tatolab nodes`, `graph` and `tap` run as a user runs them, against a stub local API: their
+//! flags, what they print on stdout and on stderr, and how they exit. Selection, rendering and
+//! the tool arguments are the in-crate tests'. The registry is isolated through
+//! `XDG_RUNTIME_DIR`, which only Linux honours, so the tests that read one are Linux-only.
 
 mod common;
 
 use common::tatolab_binary_run::{
     run_tatolab_reading_no_runtime_directory, standard_error_text, standard_output_text,
 };
-
-fn verbs_listed_in_help() -> Vec<String> {
-    let help_text = standard_output_text(&run_tatolab_reading_no_runtime_directory(&["--help"]));
-    help_text
-        .lines()
-        .skip_while(|help_line| !help_line.starts_with("Commands:"))
-        .skip(1)
-        .take_while(|help_line| !help_line.trim().is_empty())
-        .map(|help_line| help_line.split_whitespace().next().unwrap().to_owned())
-        .collect()
-}
-
-#[test]
-fn every_observation_verb_is_a_subcommand() {
-    let listed_verbs = verbs_listed_in_help();
-    for observation_verb in ["nodes", "graph", "tap"] {
-        assert!(
-            listed_verbs
-                .iter()
-                .any(|listed_verb| listed_verb == observation_verb),
-            "`tatolab {observation_verb}` must be a served verb: {listed_verbs:?}"
-        );
-    }
-}
 
 #[test]
 fn the_nodes_help_names_every_column_it_prints() {
@@ -90,33 +67,38 @@ fn no_verb_takes_a_network_address_for_the_control_plane() {
     }
 }
 
+/// `nodes` takes no flag but `--help`, so any flag it once took is a usage error.
 #[test]
 fn a_retired_nodes_flag_is_a_usage_error() {
-    // Each spelled from its parts so the retired flag's own text does not survive here.
-    for retired_flag in [
-        ["mesh", "name"].as_slice(),
-        &["mesh", "peer"],
-        &["no", "mesh", "multicast", "discovery"],
-    ]
-    .map(|flag_words| format!("--{}", flag_words.join("-")))
-    {
-        let refused = run_tatolab_reading_no_runtime_directory(&["nodes", &retired_flag]);
+    let nodes_help_text = standard_output_text(&run_tatolab_reading_no_runtime_directory(&[
+        "nodes", "--help",
+    ]));
+    let nodes_long_flags: Vec<&str> = nodes_help_text
+        .lines()
+        .skip_while(|help_line| !help_line.starts_with("Options:"))
+        .skip(1)
+        .take_while(|help_line| !help_line.trim().is_empty())
+        .filter(|help_line| help_line.trim_start().starts_with('-'))
+        .flat_map(|option_line| option_line.split_whitespace())
+        .filter(|option_word| option_word.starts_with("--"))
+        .collect();
+    assert_eq!(nodes_long_flags, ["--help"], "{nodes_help_text}");
 
-        assert_eq!(refused.status.code(), Some(2), "{retired_flag}");
-        assert!(
-            standard_error_text(&refused).contains(&retired_flag),
-            "{retired_flag}"
-        );
-    }
+    let refused = run_tatolab_reading_no_runtime_directory(&["nodes", "--name", "rig"]);
+
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(
+        standard_error_text(&refused).contains("unexpected argument '--name'"),
+        "{}",
+        standard_error_text(&refused)
+    );
 }
 
 #[cfg(target_os = "linux")]
 mod against_an_isolated_registry {
     use serde_json::json;
 
-    use super::common::isolated_node_registry::{
-        IsolatedNodeRegistry, a_registry_entry, a_registry_entry_named,
-    };
+    use super::common::isolated_node_registry::{IsolatedNodeRegistry, a_registry_entry_named};
     use super::common::stub_local_api_server::{
         RecordedToolCall, StubLocalApiServer, StubToolAnswer,
     };
@@ -143,43 +125,6 @@ mod against_an_isolated_registry {
                     .display()
             )
         );
-    }
-
-    #[test]
-    fn nodes_renders_a_live_runtime_as_a_table() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-        let stub_local_api_server = StubLocalApiServer::serve_default();
-        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
-            "Rlisted",
-            "rig-desk-a1b2",
-            &stub_local_api_server.local_api_socket_path,
-        ));
-
-        let listed =
-            run_tatolab_with_xdg_runtime_dir(isolated_node_registry.xdg_runtime_dir(), &["nodes"]);
-
-        assert!(listed.status.success(), "{}", standard_error_text(&listed));
-        let printed = standard_output_text(&listed);
-        let header = printed.lines().next().unwrap();
-        assert!(
-            header.starts_with("RUNTIME_NAME"),
-            "the runtime's name is the first column a reader sees: {header:?}"
-        );
-        assert!(header.contains("RUNTIME_ID"), "{header}");
-        assert!(header.contains("LOCAL_API_SOCKET"), "{header}");
-        assert!(!header.contains(&["CONTROL", "URL"].join("_")), "{header}");
-        assert!(printed.contains("rig-desk-a1b2"), "{printed}");
-        assert!(printed.contains("Rlisted"), "{printed}");
-        assert!(
-            printed.contains(
-                &stub_local_api_server
-                    .local_api_socket_path
-                    .display()
-                    .to_string()
-            ),
-            "{printed}"
-        );
-        assert!(printed.contains("yes"), "{printed}");
     }
 
     #[test]
@@ -222,14 +167,12 @@ mod against_an_isolated_registry {
 
     #[test]
     fn graph_prints_the_tool_result() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
         let stub_local_api_server = StubLocalApiServer::serve_answering_every_tool_call_with(
             StubToolAnswer::tool_result(r#"{"nodes":[]}"#),
         );
-        isolated_node_registry.write_registry_entry(&a_registry_entry(
-            "Ronly",
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
             &stub_local_api_server.local_api_socket_path,
-        ));
+        );
 
         let graphed =
             run_tatolab_with_xdg_runtime_dir(isolated_node_registry.xdg_runtime_dir(), &["graph"]);
@@ -240,6 +183,7 @@ mod against_an_isolated_registry {
             standard_error_text(&graphed)
         );
         assert_eq!(standard_output_text(&graphed), "{\"nodes\":[]}\n");
+        assert_eq!(standard_error_text(&graphed), "");
         assert_eq!(
             stub_local_api_server.recorded_tool_calls(),
             [RecordedToolCall {
@@ -337,56 +281,13 @@ mod against_an_isolated_registry {
     }
 
     #[test]
-    fn a_node_flag_naming_nothing_is_refused_listing_what_is_live() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-        let stub_local_api_server = StubLocalApiServer::serve_default();
-        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
-            "Rnamed",
-            "rig-desk-a1b2",
-            &stub_local_api_server.local_api_socket_path,
-        ));
-
-        let refused = run_tatolab_with_xdg_runtime_dir(
-            isolated_node_registry.xdg_runtime_dir(),
-            &["tap", "rig/pattern/video", "--node", "rig-nowhere-0000"],
-        );
-
-        assert_eq!(refused.status.code(), Some(1));
-        assert_eq!(
-            standard_error_text(&refused),
-            format!(
-                "error: no live runtime named `rig-nowhere-0000`, and none with that runtime_id. \
-                 Live runtimes: rig-desk-a1b2 (Rnamed) -> {}\n",
-                stub_local_api_server.local_api_socket_path.display()
-            )
-        );
-    }
-
-    #[test]
-    fn a_verb_with_no_runtime_running_names_the_command_that_starts_one() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-
-        let refused =
-            run_tatolab_with_xdg_runtime_dir(isolated_node_registry.xdg_runtime_dir(), &["graph"]);
-
-        assert_eq!(refused.status.code(), Some(1));
-        assert_eq!(
-            standard_error_text(&refused),
-            "error: no running runtime found on this machine.\nStart one with `tatolab run`.\n"
-        );
-        assert_eq!(standard_output_text(&refused), "");
-    }
-
-    #[test]
     fn a_tool_level_error_is_a_refusal_not_a_printed_result() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
         let stub_local_api_server = StubLocalApiServer::serve_answering_every_tool_call_with(
             StubToolAnswer::tool_failure("no such channel"),
         );
-        isolated_node_registry.write_registry_entry(&a_registry_entry(
-            "Ronly",
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
             &stub_local_api_server.local_api_socket_path,
-        ));
+        );
 
         let refused = run_tatolab_with_xdg_runtime_dir(
             isolated_node_registry.xdg_runtime_dir(),
@@ -403,12 +304,10 @@ mod against_an_isolated_registry {
 
     #[test]
     fn tap_sends_the_channel_and_count() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
         let stub_local_api_server = StubLocalApiServer::serve_default();
-        isolated_node_registry.write_registry_entry(&a_registry_entry(
-            "Ronly",
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
             &stub_local_api_server.local_api_socket_path,
-        ));
+        );
 
         let tapped = run_tatolab_with_xdg_runtime_dir(
             isolated_node_registry.xdg_runtime_dir(),
@@ -426,61 +325,14 @@ mod against_an_isolated_registry {
         );
     }
 
-    /// A bag over the tool's per-bag cap comes back undecodable, so a caller that raised the cap
-    /// and had the flag silently dropped would get exactly the failure it was trying to avoid.
-    #[test]
-    fn tap_forwards_a_named_per_bag_cap() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-        let stub_local_api_server = StubLocalApiServer::serve_default();
-        isolated_node_registry.write_registry_entry(&a_registry_entry(
-            "Ronly",
-            &stub_local_api_server.local_api_socket_path,
-        ));
-
-        let tapped = run_tatolab_with_xdg_runtime_dir(
-            isolated_node_registry.xdg_runtime_dir(),
-            &["tap", "cam/video", "--max-bag-bytes", "4096"],
-        );
-
-        assert!(tapped.status.success(), "{}", standard_error_text(&tapped));
-        assert_eq!(
-            stub_local_api_server.recorded_tool_calls()[0].tool_arguments,
-            json!({"channel": "cam/video", "max_bag_bytes": 4096})
-        );
-    }
-
-    /// Absent means absent: the tool's own default applies, and the CLI invents none of its own.
-    #[test]
-    fn tap_omits_a_per_bag_cap_nobody_named() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-        let stub_local_api_server = StubLocalApiServer::serve_default();
-        isolated_node_registry.write_registry_entry(&a_registry_entry(
-            "Ronly",
-            &stub_local_api_server.local_api_socket_path,
-        ));
-
-        let tapped = run_tatolab_with_xdg_runtime_dir(
-            isolated_node_registry.xdg_runtime_dir(),
-            &["tap", "cam/video"],
-        );
-
-        assert!(tapped.status.success(), "{}", standard_error_text(&tapped));
-        assert_eq!(
-            stub_local_api_server.recorded_tool_calls()[0].tool_arguments,
-            json!({"channel": "cam/video"})
-        );
-    }
-
-    /// The runtime owns the bounds: a count it will refuse is sent as given, as the Python verb
-    /// sent it, rather than refused here in other words.
+    /// The runtime owns the bounds, so a count it will refuse is sent as given rather than
+    /// refused here in other words.
     #[test]
     fn tap_forwards_a_negative_count_for_the_runtime_to_judge() {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
         let stub_local_api_server = StubLocalApiServer::serve_default();
-        isolated_node_registry.write_registry_entry(&a_registry_entry(
-            "Ronly",
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
             &stub_local_api_server.local_api_socket_path,
-        ));
+        );
 
         let tapped = run_tatolab_with_xdg_runtime_dir(
             isolated_node_registry.xdg_runtime_dir(),

@@ -4,7 +4,8 @@
 //! A runtime's local API stood in by a stub on a fresh Unix socket: the official MCP SDK's server
 //! answering scripted tool calls, beside the surface-image route answering scripted images and
 //! the `/mcp/stdio` upgrade playing a scripted stream, each recording what it was sent. Shared by
-//! the integration tests and, through `#[path]`, the unit tests.
+//! the integration tests and, through `#[path]`, the unit tests; either mounts it beside
+//! `tapped_channel_bag_fixtures`.
 
 #![allow(dead_code)]
 
@@ -33,6 +34,8 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     SURFACE_PIXEL_HEIGHT_HEADER_NAME, SURFACE_PIXEL_WIDTH_HEADER_NAME,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use super::tapped_channel_bag_fixtures::empty_tap_result_text;
 
 /// What the stub answers a tool call with when the script names no fixed answer.
 pub const STUB_DEFAULT_TOOL_ANSWER_TEXT: &str = "{}";
@@ -114,6 +117,17 @@ impl StubSurfaceImageAnswer {
             error_message: error_message.to_owned(),
         }
     }
+}
+
+/// `surface_image_answers` keyed by surface id, as [`StubLocalApiScript::surface_image_answers`]
+/// holds them.
+pub fn surface_image_answers_by_id<PublishedSurfaceId: Into<String>>(
+    surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
+) -> HashMap<String, StubSurfaceImageAnswer> {
+    surface_image_answers
+        .into_iter()
+        .map(|(published_surface_id, answer)| (published_surface_id.into(), answer))
+        .collect()
 }
 
 /// How the stub answers `GET /mcp/stdio`.
@@ -499,6 +513,43 @@ impl StubLocalApiServer {
     /// Serve a stub that answers every tool call `{}`.
     pub fn serve_default() -> Self {
         Self::serve(StubLocalApiScript::default())
+    }
+
+    /// Serve a stub whose surface-image route answers `surface_image_answers` by surface id.
+    pub fn serve_answering_surface_images<PublishedSurfaceId: Into<String>>(
+        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
+    ) -> Self {
+        Self::serve(StubLocalApiScript {
+            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
+            ..StubLocalApiScript::default()
+        })
+    }
+
+    /// Serve a stub whose `tap` answers `queued_tap_results` in order and then an empty round
+    /// forever, and whose surface-image route answers `surface_image_answers` by surface id.
+    pub fn serve_tapping<PublishedSurfaceId: Into<String>>(
+        queued_tap_results: &[String],
+        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
+    ) -> Self {
+        Self::serve(StubLocalApiScript {
+            fixed_tool_answer: Some(StubToolAnswer::tool_result(&empty_tap_result_text())),
+            queued_tool_answers: queued_tap_results
+                .iter()
+                .map(|tap_result| StubToolAnswer::tool_result(tap_result))
+                .collect(),
+            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
+            ..StubLocalApiScript::default()
+        })
+    }
+
+    /// Serve a stub whose `/mcp/stdio` answers as `mcp_stdio_upgrade_answer` says.
+    pub fn serve_answering_the_mcp_stdio_upgrade_with(
+        mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
+    ) -> Self {
+        Self::serve(StubLocalApiScript {
+            mcp_stdio_upgrade_answer,
+            ..StubLocalApiScript::default()
+        })
     }
 
     /// Every tool call received so far, in arrival order.

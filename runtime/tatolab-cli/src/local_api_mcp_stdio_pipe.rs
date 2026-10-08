@@ -305,41 +305,15 @@ mod tests {
     use super::*;
     use crate::isolated_node_registry::{
         IsolatedNodeRegistry, NOTHING_LISTENS_LOCAL_API_SOCKET_PATH, PID_NO_PROCESS_HAS,
-        a_registry_entry_hosted_by, a_registry_entry_named,
+        SCRIPTED_RUNTIME_ID, SCRIPTED_RUNTIME_NAME, a_registry_entry_hosted_by,
     };
     use crate::stub_local_api_server::{
         RecordedHttpRequestHead, RecordedToolCall, StubLocalApiScript, StubLocalApiServer,
         StubMcpStdioUpgradeAnswer, StubToolAnswer,
     };
 
-    const SCRIPTED_RUNTIME_NAME: &str = "scripted-runtime";
-    const SCRIPTED_RUNTIME_ID: &str = "Rscripted";
-
     /// Longer than any pipe here takes; a pipe still running past it never ended.
     const PIPE_TEST_DEADLINE: Duration = Duration::from_secs(20);
-
-    /// A registry of the test's own holding one live runtime, the stub playing `stub_script`.
-    fn one_live_runtime_playing(
-        stub_script: StubLocalApiScript,
-    ) -> (IsolatedNodeRegistry, StubLocalApiServer) {
-        let isolated_node_registry = IsolatedNodeRegistry::new();
-        let stub_local_api_server = StubLocalApiServer::serve(stub_script);
-        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
-            SCRIPTED_RUNTIME_ID,
-            SCRIPTED_RUNTIME_NAME,
-            &stub_local_api_server.local_api_socket_path,
-        ));
-        (isolated_node_registry, stub_local_api_server)
-    }
-
-    fn one_live_runtime_answering_the_upgrade_with(
-        mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
-    ) -> (IsolatedNodeRegistry, StubLocalApiServer) {
-        one_live_runtime_playing(StubLocalApiScript {
-            mcp_stdio_upgrade_answer,
-            ..StubLocalApiScript::default()
-        })
-    }
 
     /// Run the pipe on a thread of its own against `node_registry_directory`, answering its
     /// outcome and the host output it wrote; fails the test if it outlives
@@ -384,13 +358,15 @@ mod tests {
         let mcp_host_bytes = b"{\"not\": \"inspected\", \"bytes\": \"\\u00e9\"}\n".to_vec();
         let runtime_bytes_once_upgraded = b"\x00\xffnot even json\n".to_vec();
         let runtime_bytes_once_stdin_ended = b"{\"sent\": \"after the half-close\"}\n".to_vec();
-        let (isolated_node_registry, stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
-                    written_once_upgraded: runtime_bytes_once_upgraded.clone(),
-                    written_once_the_client_half_closed: runtime_bytes_once_stdin_ended.clone(),
-                },
-            );
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
+                written_once_upgraded: runtime_bytes_once_upgraded.clone(),
+                written_once_the_client_half_closed: runtime_bytes_once_stdin_ended.clone(),
+            },
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
             isolated_node_registry.node_registry_directory(),
@@ -439,13 +415,15 @@ mod tests {
     #[test]
     fn stdin_ending_half_closes_the_stream_and_the_pipe_ends_when_the_runtime_closes() {
         let answer_owed_after_stdin_ended = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n";
-        let (isolated_node_registry, stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
-                    written_once_upgraded: Vec::new(),
-                    written_once_the_client_half_closed: answer_owed_after_stdin_ended.to_vec(),
-                },
-            );
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
+                written_once_upgraded: Vec::new(),
+                written_once_the_client_half_closed: answer_owed_after_stdin_ended.to_vec(),
+            },
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
             isolated_node_registry.node_registry_directory(),
@@ -468,10 +446,12 @@ mod tests {
 
     #[test]
     fn the_runtime_closing_while_stdin_is_open_is_refused_naming_the_runtime() {
-        let (isolated_node_registry, _stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::CloseOnceUpgraded,
-            );
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::CloseOnceUpgraded,
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
         let (_held_open_mcp_host_input_writer, held_open_mcp_host_input) = tokio::io::duplex(64);
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
@@ -496,10 +476,12 @@ mod tests {
 
     #[test]
     fn a_runtime_refusing_the_upgrade_is_refused_naming_it_and_its_answer() {
-        let (isolated_node_registry, _stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { http_status: 426 },
-            );
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { http_status: 426 },
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
             isolated_node_registry.node_registry_directory(),
@@ -569,8 +551,10 @@ mod tests {
 
     #[test]
     fn a_node_flag_matching_no_live_runtime_is_refused_naming_it_and_the_live_ones() {
-        let (isolated_node_registry, stub_local_api_server) =
-            one_live_runtime_playing(StubLocalApiScript::default());
+        let stub_local_api_server = StubLocalApiServer::serve_default();
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
 
         let (pipe_outcome, mcp_host_output) = pipe_within_the_test_deadline(
             isolated_node_registry.node_registry_directory(),
@@ -592,14 +576,16 @@ mod tests {
 
     #[test]
     fn the_host_stopping_reading_ends_the_pipe_without_a_refusal() {
-        let (isolated_node_registry, _stub_local_api_server) =
-            one_live_runtime_answering_the_upgrade_with(
-                StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
-                    written_once_upgraded: b"{\"jsonrpc\":\"2.0\",\"method\":\"nobody reads\"}\n"
-                        .to_vec(),
-                    written_once_the_client_half_closed: Vec::new(),
-                },
-            );
+        let stub_local_api_server = StubLocalApiServer::serve_answering_the_mcp_stdio_upgrade_with(
+            StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
+                written_once_upgraded: b"{\"jsonrpc\":\"2.0\",\"method\":\"nobody reads\"}\n"
+                    .to_vec(),
+                written_once_the_client_half_closed: Vec::new(),
+            },
+        );
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
         let (_held_open_mcp_host_input_writer, held_open_mcp_host_input) = tokio::io::duplex(64);
         let (mcp_host_output_with_no_reader, mcp_host_output_reader) = tokio::io::duplex(64);
         drop(mcp_host_output_reader);
@@ -659,12 +645,14 @@ mod tests {
 
     #[test]
     fn an_mcp_client_lists_and_calls_a_tool_through_the_pipe() {
-        let (isolated_node_registry, stub_local_api_server) =
-            one_live_runtime_playing(StubLocalApiScript {
-                fixed_tool_answer: Some(StubToolAnswer::tool_result(r#"{"nodes":[]}"#)),
-                listed_tool_names: vec!["graph".to_owned()],
-                ..StubLocalApiScript::default()
-            });
+        let stub_local_api_server = StubLocalApiServer::serve(StubLocalApiScript {
+            fixed_tool_answer: Some(StubToolAnswer::tool_result(r#"{"nodes":[]}"#)),
+            listed_tool_names: vec!["graph".to_owned()],
+            ..StubLocalApiScript::default()
+        });
+        let isolated_node_registry = IsolatedNodeRegistry::holding_one_live_runtime(
+            &stub_local_api_server.local_api_socket_path,
+        );
         let (mcp_client_side, pipe_side) = tokio::io::duplex(64 * 1024);
         let (pipe_side_input, pipe_side_output) = tokio::io::split(pipe_side);
         let node_registry_directory = isolated_node_registry.node_registry_directory();

@@ -35,10 +35,6 @@ use crate::local_api_unix_socket_http_client::{
 use crate::runtime_observation_verbs::{TAP_TOOL_NAME, tap_tool_arguments};
 use crate::{RuntimeTargetArguments, TatolabCommandFailure};
 
-#[cfg(test)]
-#[path = "../tests/common/tapped_channel_bag_fixtures.rs"]
-mod tapped_channel_bag_fixtures;
-
 /// The bag field the channel form reads a surface id from unless `--field` names another. The
 /// runtime inspects no bag content, so which field carries an id is the caller's knowledge.
 pub(crate) const DEFAULT_SURFACE_ID_BAG_FIELD_NAME: &str = "surface_id";
@@ -762,17 +758,9 @@ pub(crate) fn render_sampled_channel_exchange_report(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use serde_json::json;
     use streamlib_ipc_types::FRAME_HEADER_SIZE;
 
-    use super::tapped_channel_bag_fixtures::{
-        CAPPED_BAG_STATED_BYTE_LEN, FIXTURE_CHANNEL, SLICE_HOLDS_ONLY_THE_BAG,
-        bag_publishing_no_surface_id, bag_publishing_surface_id,
-        bag_publishing_surface_id_in_field, empty_tap_result_text, framed_bag, msgpack_named_map,
-        png_bytes_for, tap_result_text, tap_result_text_capping_bags,
-    };
     use super::*;
     use crate::isolated_node_registry::{
         IsolatedNodeRegistry, NOTHING_LISTENS_LOCAL_API_SOCKET_PATH, a_registry_entry_named,
@@ -780,51 +768,21 @@ mod tests {
     use crate::local_api_runtime_selection::select_live_runtime_in_node_registry;
     use crate::stub_local_api_server::{
         StubLocalApiScript, StubLocalApiServer, StubSurfaceImageAnswer, StubToolAnswer,
+        surface_image_answers_by_id,
+    };
+    use crate::tapped_channel_bag_fixtures::{
+        CAPPED_BAG_STATED_BYTE_LEN, FIXTURE_CHANNEL, SLICE_HOLDS_ONLY_THE_BAG,
+        bag_publishing_no_surface_id, bag_publishing_surface_id,
+        bag_publishing_surface_id_in_field, framed_bag, labelled_png_image_answer,
+        msgpack_named_map, png_bytes_for, png_files_in, tap_result_text,
+        tap_result_text_capping_bags,
     };
 
     const RECYCLED_FRAME_ERROR_MESSAGE: &str =
         "surface frame recycled: slot reused since that generation";
 
-    fn image_answer(label: &str) -> StubSurfaceImageAnswer {
-        StubSurfaceImageAnswer::png_image(&png_bytes_for(label), Some(1920), Some(1080))
-    }
-
     fn recycled_frame_answer() -> StubSurfaceImageAnswer {
         StubSurfaceImageAnswer::refusal(410, RECYCLED_FRAME_ERROR_MESSAGE)
-    }
-
-    fn surface_image_answers_by_id<PublishedSurfaceId: Into<String>>(
-        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
-    ) -> HashMap<String, StubSurfaceImageAnswer> {
-        surface_image_answers
-            .into_iter()
-            .map(|(published_surface_id, answer)| (published_surface_id.into(), answer))
-            .collect()
-    }
-
-    fn stub_answering_surface_images<PublishedSurfaceId: Into<String>>(
-        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
-    ) -> StubLocalApiServer {
-        StubLocalApiServer::serve(StubLocalApiScript {
-            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
-            ..StubLocalApiScript::default()
-        })
-    }
-
-    /// A stub whose `tap` answers `queued_tap_results` in order, then an empty round forever.
-    fn stub_tapping<PublishedSurfaceId: Into<String>>(
-        queued_tap_results: &[String],
-        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
-    ) -> StubLocalApiServer {
-        StubLocalApiServer::serve(StubLocalApiScript {
-            fixed_tool_answer: Some(StubToolAnswer::tool_result(&empty_tap_result_text())),
-            queued_tool_answers: queued_tap_results
-                .iter()
-                .map(|tap_result| StubToolAnswer::tool_result(tap_result))
-                .collect(),
-            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
-            ..StubLocalApiScript::default()
-        })
     }
 
     fn sampling_bounds(
@@ -861,20 +819,6 @@ mod tests {
             .collect()
     }
 
-    fn png_files_in(directory: &Path) -> usize {
-        std::fs::read_dir(directory)
-            .unwrap()
-            .filter(|directory_entry| {
-                directory_entry
-                    .as_ref()
-                    .unwrap()
-                    .path()
-                    .extension()
-                    .is_some_and(|extension| extension == "png")
-            })
-            .count()
-    }
-
     fn exchange_arguments(
         published_surface_id: Option<&str>,
         channel: Option<&str>,
@@ -901,8 +845,10 @@ mod tests {
     /// A bare `#` would make the generation a URL fragment the runtime never sees.
     #[test]
     fn a_pooled_frame_id_is_percent_encoded_into_the_route() {
-        let stub_local_api_server =
-            stub_answering_surface_images([("cam/frame#7", image_answer("seven"))]);
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
+            "cam/frame#7",
+            labelled_png_image_answer("seven"),
+        )]);
 
         let exchanged = fetch_surface_image_png_bytes(
             &stub_local_api_server.local_api_socket_path,
@@ -919,7 +865,10 @@ mod tests {
 
     #[test]
     fn the_exchange_states_the_surfaces_own_extent() {
-        let stub_local_api_server = stub_answering_surface_images([("s#1", image_answer("one"))]);
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
+            "s#1",
+            labelled_png_image_answer("one"),
+        )]);
 
         let exchanged =
             fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
@@ -931,7 +880,7 @@ mod tests {
 
     #[test]
     fn an_extent_header_absent_or_malformed_is_no_extent() {
-        let stub_local_api_server = stub_answering_surface_images([(
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
             "s#1",
             StubSurfaceImageAnswer::png_image(b"png", None, Some(1080)),
         )]);
@@ -953,7 +902,7 @@ mod tests {
     #[test]
     fn a_recycled_frame_is_a_refusal_that_composes_as_a_retry() {
         let stub_local_api_server =
-            stub_answering_surface_images([("s#1", recycled_frame_answer())]);
+            StubLocalApiServer::serve_answering_surface_images([("s#1", recycled_frame_answer())]);
 
         let refused =
             fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
@@ -971,7 +920,7 @@ mod tests {
     #[test]
     fn a_refusal_that_is_not_a_recycled_frame_does_not_compose() {
         for refused_status in [404, 501] {
-            let stub_local_api_server = stub_answering_surface_images([(
+            let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
                 "s#1",
                 StubSurfaceImageAnswer::refusal(refused_status, "no"),
             )]);
@@ -1037,8 +986,10 @@ mod tests {
 
     #[test]
     fn the_id_form_writes_the_exact_bytes_into_a_directory_it_creates() {
-        let stub_local_api_server =
-            stub_answering_surface_images([("cam/frame#7", image_answer("seven"))]);
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
+            "cam/frame#7",
+            labelled_png_image_answer("seven"),
+        )]);
         let scratch_directory = tempfile::tempdir().unwrap();
         let output_directory = scratch_directory.path().join("nested").join("frames");
 
@@ -1060,8 +1011,10 @@ mod tests {
     #[test]
     fn the_id_form_reaches_a_registered_runtime_named_by_the_node_flag() {
         let isolated_node_registry = IsolatedNodeRegistry::new();
-        let stub_local_api_server =
-            stub_answering_surface_images([("cam/frame#7", image_answer("seven"))]);
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
+            "cam/frame#7",
+            labelled_png_image_answer("seven"),
+        )]);
         let other_stub_local_api_server = StubLocalApiServer::serve_default();
         isolated_node_registry.write_registry_entry(&a_registry_entry_named(
             "Rcam",
@@ -1104,8 +1057,11 @@ mod tests {
 
     #[test]
     fn a_surface_id_that_does_not_resolve_writes_nothing_and_names_the_id() {
-        let stub_local_api_server =
-            stub_answering_surface_images(Vec::<(String, StubSurfaceImageAnswer)>::new());
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images(Vec::<(
+            String,
+            StubSurfaceImageAnswer,
+        )>::new(
+        ));
         let output_directory = tempfile::tempdir().unwrap();
 
         let refused = exchange_one_published_surface_id_into_directory(
@@ -1125,7 +1081,10 @@ mod tests {
     /// `--out` naming an existing regular file is a typo, and a typo gets a message.
     #[test]
     fn an_output_directory_that_cannot_be_written_is_reported() {
-        let stub_local_api_server = stub_answering_surface_images([("s#1", image_answer("one"))]);
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
+            "s#1",
+            labelled_png_image_answer("one"),
+        )]);
         let scratch_directory = tempfile::tempdir().unwrap();
         let already_a_file = scratch_directory.path().join("already-a-file");
         std::fs::write(&already_a_file, "not a directory").unwrap();
@@ -1530,12 +1489,15 @@ mod tests {
 
     #[test]
     fn the_channel_form_taps_then_exchanges_each_sampled_id() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text(&[
                 bag_publishing_surface_id("s#1"),
                 bag_publishing_surface_id("s#2"),
             ])],
-            [("s#1", image_answer("one")), ("s#2", image_answer("two"))],
+            [
+                ("s#1", labelled_png_image_answer("one")),
+                ("s#2", labelled_png_image_answer("two")),
+            ],
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1579,12 +1541,12 @@ mod tests {
     /// `tap` keeps its contract: it is asked for bags alone, never a field to read.
     #[test]
     fn the_field_override_reads_the_key_the_caller_named_and_tap_is_never_asked_to_read_a_bag() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text(&[bag_publishing_surface_id_in_field(
                 "s#9",
                 "rendered_surface",
             )])],
-            [("s#9", image_answer("nine"))],
+            [("s#9", labelled_png_image_answer("nine"))],
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1608,14 +1570,14 @@ mod tests {
     /// different frame.
     #[test]
     fn a_recycled_frame_is_retried_against_a_newer_bag_and_reported() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[
                 tap_result_text(&[bag_publishing_surface_id("stale#1")]),
                 tap_result_text(&[bag_publishing_surface_id("fresh#2")]),
             ],
             [
                 ("stale#1", recycled_frame_answer()),
-                ("fresh#2", image_answer("fresh")),
+                ("fresh#2", labelled_png_image_answer("fresh")),
             ],
         );
         let output_directory = tempfile::tempdir().unwrap();
@@ -1660,12 +1622,12 @@ mod tests {
 
     #[test]
     fn a_bag_without_the_named_field_is_counted_rather_than_fatal() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text(&[
                 bag_publishing_no_surface_id(),
                 bag_publishing_surface_id("s#1"),
             ])],
-            [("s#1", image_answer("one"))],
+            [("s#1", labelled_png_image_answer("one"))],
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1682,11 +1644,11 @@ mod tests {
     #[test]
     fn every_nth_bag_selects_the_stride_and_asks_for_enough_bags_to_fill_it() {
         let labels = ["a", "b", "c", "d", "e", "f"];
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text(&labels.map(|label| {
                 bag_publishing_surface_id(&format!("s#{label}"))
             }))],
-            labels.map(|label| (format!("s#{label}"), image_answer(label))),
+            labels.map(|label| (format!("s#{label}"), labelled_png_image_answer(label))),
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1709,7 +1671,7 @@ mod tests {
     /// A stride restarted per round would exchange `a` then `c`, the first bag of each round.
     #[test]
     fn the_stride_runs_across_tap_rounds_on_one_client_rather_than_restarting() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[
                 tap_result_text(
                     &["a", "b"].map(|label| bag_publishing_surface_id(&format!("s#{label}"))),
@@ -1718,7 +1680,8 @@ mod tests {
                     &["c", "d"].map(|label| bag_publishing_surface_id(&format!("s#{label}"))),
                 ),
             ],
-            ["a", "b", "c", "d"].map(|label| (format!("s#{label}"), image_answer(label))),
+            ["a", "b", "c", "d"]
+                .map(|label| (format!("s#{label}"), labelled_png_image_answer(label))),
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1748,9 +1711,9 @@ mod tests {
     /// The one frame that landed is still named, and the run says it fell short.
     #[test]
     fn a_short_sample_reports_what_landed_over_every_round_it_spent() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text(&[bag_publishing_surface_id("s#1")])],
-            [("s#1", image_answer("one"))],
+            [("s#1", labelled_png_image_answer("one"))],
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1771,7 +1734,7 @@ mod tests {
 
     #[test]
     fn a_refusal_that_cannot_be_retried_stops_the_run() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text(&[bag_publishing_surface_id("s#1")])],
             [(
                 "s#1",
@@ -1797,13 +1760,13 @@ mod tests {
     /// Every PNG on disk is a PNG that was named, the stop reported beside the frames.
     #[test]
     fn frames_that_landed_before_a_fatal_stop_are_still_reported() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text(&[
                 bag_publishing_surface_id("s#1"),
                 bag_publishing_surface_id("s#2"),
             ])],
             [
-                ("s#1", image_answer("one")),
+                ("s#1", labelled_png_image_answer("one")),
                 (
                     "s#2",
                     StubSurfaceImageAnswer::refusal(404, "no such surface"),
@@ -1837,7 +1800,7 @@ mod tests {
             ]),
             SLICE_HOLDS_ONLY_THE_BAG,
         );
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text(&[
                 whole_bag[..whole_bag.len() - 32].to_vec()
             ])],
@@ -1859,12 +1822,12 @@ mod tests {
     /// limit, and retrying it would never converge; the id form still reaches its frame.
     #[test]
     fn a_bag_past_the_taps_preview_cap_stops_the_run_and_names_the_size() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text_capping_bags(
                 &[bag_publishing_surface_id("s#1")],
                 &[0],
             )],
-            [("s#1", image_answer("one"))],
+            [("s#1", labelled_png_image_answer("one"))],
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1892,7 +1855,7 @@ mod tests {
     /// by for the run to finish on bag 2.
     #[test]
     fn the_stride_steps_over_an_oversized_bag_rather_than_dying_on_it() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text_capping_bags(
                 &[
                     bag_publishing_no_surface_id(),
@@ -1901,7 +1864,7 @@ mod tests {
                 ],
                 &[1],
             )],
-            [("s#3", image_answer("three"))],
+            [("s#3", labelled_png_image_answer("three"))],
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1921,7 +1884,7 @@ mod tests {
 
     #[test]
     fn a_bag_the_stride_skips_cannot_kill_the_run_by_being_oversized() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text_capping_bags(
                 &[
                     bag_publishing_surface_id("s#1"),
@@ -1929,7 +1892,7 @@ mod tests {
                 ],
                 &[1],
             )],
-            [("s#1", image_answer("one"))],
+            [("s#1", labelled_png_image_answer("one"))],
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1946,7 +1909,7 @@ mod tests {
     /// Failing the whole tap round on bag 1 would throw away bag 0's frame, already exchanged.
     #[test]
     fn an_oversized_bag_does_not_discard_the_readable_bags_beside_it() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text_capping_bags(
                 &[
                     bag_publishing_surface_id("s#1"),
@@ -1954,7 +1917,7 @@ mod tests {
                 ],
                 &[1],
             )],
-            [("s#1", image_answer("one"))],
+            [("s#1", labelled_png_image_answer("one"))],
         );
         let output_directory = tempfile::tempdir().unwrap();
 
@@ -1973,12 +1936,15 @@ mod tests {
     /// frame landed.
     #[test]
     fn a_write_that_fails_still_names_the_frames_that_landed() {
-        let stub_local_api_server = stub_tapping(
+        let stub_local_api_server = StubLocalApiServer::serve_tapping(
             &[tap_result_text(&[
                 bag_publishing_surface_id("s#1"),
                 bag_publishing_surface_id("s#2"),
             ])],
-            [("s#1", image_answer("one")), ("s#2", image_answer("two"))],
+            [
+                ("s#1", labelled_png_image_answer("one")),
+                ("s#2", labelled_png_image_answer("two")),
+            ],
         );
         let output_directory = tempfile::tempdir().unwrap();
         std::fs::create_dir(output_directory.path().join("0001-s_2.png")).unwrap();

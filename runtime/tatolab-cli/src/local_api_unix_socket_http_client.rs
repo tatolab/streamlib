@@ -282,34 +282,19 @@ pub(crate) fn get_whole_response_over_the_local_api_socket(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
     use crate::isolated_node_registry::NOTHING_LISTENS_LOCAL_API_SOCKET_PATH;
-    use crate::stub_local_api_server::{
-        StubLocalApiScript, StubLocalApiServer, StubSurfaceImageAnswer,
-    };
+    use crate::stub_local_api_server::{StubLocalApiServer, StubSurfaceImageAnswer};
     use streamlib_runtime_client_contract::local_api_wire_contract::{
         SURFACE_PIXEL_HEIGHT_HEADER_NAME, SURFACE_PIXEL_WIDTH_HEADER_NAME,
     };
 
     const EXCHANGE_TEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-    fn stub_answering_surface_images<const SURFACE_COUNT: usize>(
-        surface_image_answers: [(&str, StubSurfaceImageAnswer); SURFACE_COUNT],
-    ) -> StubLocalApiServer {
-        StubLocalApiServer::serve(StubLocalApiScript {
-            surface_image_answers: HashMap::from(
-                surface_image_answers.map(|(surface_id, answer)| (surface_id.to_owned(), answer)),
-            ),
-            ..StubLocalApiScript::default()
-        })
-    }
-
     #[test]
     fn a_get_answers_the_status_headers_and_whole_body_of_an_image() {
         let png_image_bytes = b"\x89PNG\r\n\x1a\nnot-really-a-png".as_slice();
-        let stub_local_api_server = stub_answering_surface_images([(
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
             "slot#7",
             StubSurfaceImageAnswer::png_image(png_image_bytes, Some(1920), Some(1080)),
         )]);
@@ -334,7 +319,7 @@ mod tests {
 
     #[test]
     fn a_refused_get_answers_its_status_and_body_rather_than_failing() {
-        let stub_local_api_server = stub_answering_surface_images([(
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
             "slot#8",
             StubSurfaceImageAnswer::refusal(410, "frame recycled"),
         )]);
@@ -366,7 +351,7 @@ mod tests {
 
     #[test]
     fn an_image_without_extent_headers_answers_none_of_them() {
-        let stub_local_api_server = stub_answering_surface_images([(
+        let stub_local_api_server = StubLocalApiServer::serve_answering_surface_images([(
             "slot#9",
             StubSurfaceImageAnswer::png_image(b"png", None, None),
         )]);

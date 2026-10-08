@@ -604,10 +604,13 @@ impl RuntimeLogRecordsReader {
 mod tests {
     use std::cell::RefCell;
 
-    use serde_json::{Value, json};
+    use serde_json::json;
     use streamlib_runtime_client_contract::runtime_log_file_paths::runtime_log_instances_in_directory;
 
     use super::*;
+    use crate::runtime_log_line_fixtures::{
+        a_log_line_with_message, a_log_record, append_to_log_file, log_lines_of,
+    };
 
     type InterleavedDirectoryChange = Box<dyn FnMut(RuntimeLogReadInterleavingPoint)>;
 
@@ -652,31 +655,6 @@ mod tests {
     /// loop fails the assertion rather than hanging.
     const MOST_LINES_A_ROTATION_SCENARIO_READS: usize = 20;
 
-    fn a_log_record(overrides: Value) -> Value {
-        let mut record = json!({
-            "schema_version": 1,
-            "host_ts": 1_786_136_667_573_387_556_u64,
-            "runtime_id": "Rabc",
-            "source": "rust",
-            "level": "info",
-            "message": "Creating Runner",
-            "target": "tatolabd",
-            "intercepted": false,
-        });
-        for (field_name, field_value) in overrides.as_object().unwrap() {
-            record[field_name] = field_value.clone();
-        }
-        record
-    }
-
-    fn a_log_line_with_message(message: &str) -> String {
-        format!("{}\n", a_log_record(json!({"message": message})))
-    }
-
-    fn log_lines_of(records: &[Value]) -> String {
-        records.iter().map(|record| format!("{record}\n")).collect()
-    }
-
     fn write_segment(segment_path: &Path, messages: &[&str]) {
         std::fs::write(
             segment_path,
@@ -686,15 +664,6 @@ mod tests {
                 .collect::<String>(),
         )
         .unwrap();
-    }
-
-    fn append_to_segment(segment_path: &Path, appended_text: &str) {
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(segment_path)
-            .unwrap()
-            .write_all(appended_text.as_bytes())
-            .unwrap();
     }
 
     /// Move the active segment to its rotated name and leave an empty file under the active
@@ -1067,7 +1036,7 @@ mod tests {
             ["first"]
         );
 
-        append_to_segment(&active_segment_path, &a_log_line_with_message("second"));
+        append_to_log_file(&active_segment_path, &a_log_line_with_message("second"));
 
         assert_eq!(
             followed_runtime_log.messages_up_to_the_live_edge(),
@@ -1172,9 +1141,9 @@ mod tests {
             ["first"]
         );
 
-        append_to_segment(&active_segment_path, &a_log_line_with_message("second"));
+        append_to_log_file(&active_segment_path, &a_log_line_with_message("second"));
         rotate_like_the_engine(&active_segment_path, 1);
-        append_to_segment(&active_segment_path, &a_log_line_with_message("third"));
+        append_to_log_file(&active_segment_path, &a_log_line_with_message("third"));
 
         assert_eq!(
             followed_runtime_log.messages_up_to_the_live_edge(),
@@ -1197,7 +1166,7 @@ mod tests {
             ["first"]
         );
 
-        append_to_segment(&active_segment_path, &a_log_line_with_message("second"));
+        append_to_log_file(&active_segment_path, &a_log_line_with_message("second"));
         rotate_like_the_engine(&active_segment_path, 1);
         write_segment(&active_segment_path, &["third"]);
         rotate_like_the_engine(&active_segment_path, 2);
@@ -1269,7 +1238,7 @@ mod tests {
         interleave_directory_change_once(
             RuntimeLogReadInterleavingPoint::BeforeCheckingWhetherTheHeldSegmentWasRotatedAway,
             move || {
-                append_to_segment(
+                append_to_log_file(
                     &active_segment_path,
                     &a_log_line_with_message("flushed-before-rotation"),
                 );
@@ -1377,7 +1346,7 @@ mod tests {
             ["first"]
         );
 
-        append_to_segment(&active_segment_path, record_rest);
+        append_to_log_file(&active_segment_path, record_rest);
 
         assert_eq!(
             followed_runtime_log.messages_up_to_the_live_edge(),

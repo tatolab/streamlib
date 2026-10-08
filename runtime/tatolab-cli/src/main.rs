@@ -32,6 +32,14 @@ mod stub_local_api_server;
 #[path = "../tests/common/isolated_node_registry.rs"]
 mod isolated_node_registry;
 
+#[cfg(test)]
+#[path = "../tests/common/tapped_channel_bag_fixtures.rs"]
+mod tapped_channel_bag_fixtures;
+
+#[cfg(test)]
+#[path = "../tests/common/runtime_log_line_fixtures.rs"]
+mod runtime_log_line_fixtures;
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;

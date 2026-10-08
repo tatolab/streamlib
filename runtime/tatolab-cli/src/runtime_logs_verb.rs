@@ -459,6 +459,7 @@ mod tests {
     use clap::Parser;
 
     use super::*;
+    use crate::runtime_log_line_fixtures::a_log_line_with_message;
 
     #[derive(Parser)]
     struct LogsVerbCommandLine {
@@ -555,22 +556,6 @@ mod tests {
                 .join(format!("{runtime_id}-{started_at_millis_digits}.jsonl")),
             total_segment_bytes,
         }
-    }
-
-    fn a_log_line_with_message(message: &str) -> String {
-        format!(
-            "{}\n",
-            serde_json::json!({
-                "schema_version": 1,
-                "host_ts": 1_786_136_667_573_387_556_u64,
-                "runtime_id": "Rabc",
-                "source": "rust",
-                "level": "info",
-                "message": message,
-                "target": "tatolabd",
-                "intercepted": false,
-            })
-        )
     }
 
     /// `print_runtime_log_files` against `log_directory`, never interrupted: stdout, stderr and
