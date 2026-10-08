@@ -56,10 +56,12 @@ _FUNCTION_LOCAL_MARKER = "<locals>"
 _SMALLEST_INTEGER_A_GRAPH_CARRIES = -(2**63)
 _LARGEST_INTEGER_A_GRAPH_CARRIES = 2**64 - 1
 
-# A graph `tatolabd` loads nests at most 128 containers deep from its root, and
-# three of them — the graph dict, its `nodes` list and the node dict — enclose
-# every config.
-_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF = 128 - 3
+# `tatolab` and `tatolabd` read JSON under serde_json's default recursion limit,
+# which parses at most 127 nested containers, and `tatolab` reads the graph inside
+# the compile document, one container deeper than its root.
+_MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT = 127 - 1
+# The graph dict, its `nodes` list and the node dict enclose every config.
+_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF = _MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT - 3
 
 _STREAM_TAKES_NO_ARGUMENTS = (
     "@stream takes no arguments: the name is the function's, overridden at load "
@@ -565,9 +567,9 @@ def _json_value(
             f"config nests too deep for a graph: `{key_path}` is a container "
             f"{containers_enclosing_this_one_counting_config + 1} deep counting `config` "
             f"itself, and a config nests at most "
-            f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} — `tatolabd` counts "
-            f"containers from the graph's root, and the graph, its `nodes` list and the "
-            f"node enclose every config. Nest the data at most "
+            f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} — a graph nests at most "
+            f"{_MOST_CONTAINERS_A_GRAPH_NESTS_FROM_ITS_ROOT} containers from its root, and "
+            f"the graph, its `nodes` list and the node enclose every config. Nest the data at most "
             f"{_MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF} containers deep, or carry "
             f"the deeper part as a `str`"
         )

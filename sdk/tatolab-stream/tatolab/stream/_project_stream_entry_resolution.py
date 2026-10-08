@@ -105,11 +105,7 @@ def stream_target_forms(verb: str) -> str:
 def resolve_app_entry_file(
     verb: str, anchor_directory: Path, requested_entry_file: Optional[Path]
 ) -> Path:
-    """The entry file `-f` names (relative to the anchor), else `stream.py` directly at the anchor.
-
-    No walk-up, deliberately: inside a monorepo a walk-up makes "which project am
-    I in" ambiguous.
-    """
+    """The entry file `-f` names (relative to the anchor), else `stream.py` directly at the anchor."""
     if requested_entry_file is not None:
         return _resolve_named_entry_file(
             anchor_directory, requested_entry_file, f"-f {requested_entry_file}"
@@ -230,9 +226,6 @@ def locate_stream_entry_module(
         raise _module_already_running_refusal(
             anchor_directory, named_by, entry_module_name, stream_function_name, tatolab_command
         )
-    # `find_spec` imports nothing for a module already imported, so a
-    # `ValueError` it raises then is its own, never one a package raised.
-    entry_module_was_already_imported = entry_module_name in sys.modules
     launcher_argv = sys.argv
     sys.argv = [entry_module_name]
     try:
@@ -244,12 +237,6 @@ def locate_stream_entry_module(
         ):
             raise
         entry_module_spec = None
-    except ValueError:
-        if not entry_module_was_already_imported:
-            raise
-        raise _module_already_running_refusal(
-            anchor_directory, named_by, entry_module_name, stream_function_name, tatolab_command
-        ) from None
     finally:
         sys.argv = launcher_argv
 

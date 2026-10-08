@@ -5,7 +5,9 @@
 
 Each test runs it as `tatolab` does: `python -m` in a child, with the anchor as the
 working directory, reading the one JSON document on stdout, the refusals and
-tracebacks on stderr, and the exit code. Nothing here needs a runtime.
+tracebacks on stderr, and the exit code. A few start it the way the entry's own
+docstring gives, with the working directory dropped from the import path first.
+Nothing here needs a runtime.
 """
 
 import json
@@ -92,13 +94,30 @@ def write_app(directory: Path, file_name: str, source: str) -> Path:
     return entry_file
 
 
+# The compile entry started with the working directory dropped from `sys.path`
+# before anything but the built-in `sys` imports, as its module docstring spells it.
+COMPILE_ENTRY_STARTED_WITH_THE_WORKING_DIRECTORY_DROPPED = (
+    "import sys; getattr(sys.flags, 'safe_path', False) or sys.path.pop(0); "
+    f"import runpy; runpy.run_module({COMPILE_ENTRY_MODULE!r}, run_name='__main__', "
+    "alter_sys=True)"
+)
+
+
 def run_compile_entry(
-    anchor_directory: Path, *arguments: str, verb: Optional[str] = "run"
+    anchor_directory: Path,
+    *arguments: str,
+    verb: Optional[str] = "run",
+    started_with_the_working_directory_dropped: bool = False,
 ) -> "subprocess.CompletedProcess[str]":
     """The compile entry as `tatolab <verb>` starts it, in `anchor_directory`."""
     verb_arguments = ["--verb", verb] if verb is not None else []
+    compile_entry_start = (
+        ["-c", COMPILE_ENTRY_STARTED_WITH_THE_WORKING_DIRECTORY_DROPPED]
+        if started_with_the_working_directory_dropped
+        else ["-m", COMPILE_ENTRY_MODULE]
+    )
     return subprocess.run(
-        [sys.executable, "-m", COMPILE_ENTRY_MODULE, *verb_arguments, *arguments],
+        [sys.executable, *compile_entry_start, *verb_arguments, *arguments],
         cwd=anchor_directory,
         capture_output=True,
         text=True,
@@ -1041,6 +1060,179 @@ def test_a_stream_function_that_exits_on_purpose_keeps_its_own_exit_code(
     assert "error:" not in finished.stderr, (
         f"a deliberate exit must not be reported as a failure; stderr was:\n{finished.stderr}"
     )
+
+
+@pytest.mark.parametrize(
+    "exit_call", ["sys.exit(0)", "sys.exit()"], ids=["exit-zero", "exit-no-code"]
+)
+@pytest.mark.parametrize("exits_from", ["module-scope", "stream-function"])
+def test_an_app_that_exits_zero_on_purpose_exits_zero_with_no_document(
+    anchor_directory: Path, exit_call: str, exits_from: str
+):
+    """Exit 0 with an empty stdout is the app's choice to exit: there is no stream to start."""
+    if exits_from == "module-scope":
+        source = f"import sys\n{exit_call}\n"
+    else:
+        source = (
+            "import sys\n"
+            "\n"
+            "from tatolab.stream import StreamBuilder, stream\n"
+            "\n"
+            "\n"
+            "@stream\n"
+            "def main(stream_builder: StreamBuilder) -> None:\n"
+            f"    {exit_call}\n"
+        )
+    write_app(anchor_directory, "stream.py", source)
+
+    finished = run_compile_entry(anchor_directory)
+
+    assert finished.returncode == 0, f"stderr was:\n{finished.stderr}"
+    assert finished.stdout == ""
+    assert "error:" not in finished.stderr, finished.stderr
+
+
+def test_what_the_app_arranges_to_print_after_the_compile_never_follows_the_document(
+    anchor_directory: Path,
+):
+    """An `atexit` handler and a non-daemon thread write after the document; both reach stderr."""
+    write_app(
+        anchor_directory,
+        "stream.py",
+        "import atexit\n"
+        "import os\n"
+        "import threading\n"
+        "import time\n"
+        "\n"
+        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+        "\n"
+        "atexit.register(lambda: print('printed at exit'))\n"
+        "\n"
+        "\n"
+        "def print_late() -> None:\n"
+        "    time.sleep(0.5)\n"
+        "    print('printed by a late thread', flush=True)\n"
+        "    os.write(1, b'written to fd 1 by a late thread\\n')\n"
+        "\n"
+        "\n"
+        "threading.Thread(target=print_late).start()\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream_builder: StreamBuilder) -> None:\n"
+        "    stream_builder.add(TestPatternSource)\n",
+    )
+
+    finished = run_compile_entry(anchor_directory)
+
+    assert compiled_document(finished)["stream_graph"]["stream"] == "main"
+    for late_output in (
+        "printed at exit",
+        "printed by a late thread",
+        "written to fd 1 by a late thread",
+    ):
+        assert late_output in finished.stderr, finished.stderr
+
+
+def test_a_project_module_named_like_one_the_entry_imports_cannot_replace_it(
+    anchor_directory: Path,
+):
+    """Started with the working directory dropped, the anchor's `json.py` never answers `json`."""
+    write_app(anchor_directory, "stream.py", MINIMAL_STREAM_SOURCE)
+    write_app(
+        anchor_directory,
+        "json.py",
+        "print('the project json module was imported')\n"
+        "\n"
+        "\n"
+        "def dumps(*arguments, **keyword_arguments):\n"
+        "    return 'HIJACKED'\n",
+    )
+
+    finished = run_compile_entry(
+        anchor_directory, started_with_the_working_directory_dropped=True
+    )
+
+    assert compiled_document(finished)["stream_graph"]["stream"] == "main"
+    assert "the project json module was imported" not in finished.stdout + finished.stderr
+
+
+def test_started_with_the_working_directory_dropped_the_entry_still_imports_from_the_anchor(
+    anchor_directory: Path,
+):
+    write_app(anchor_directory, "helpers.py", "PATTERN_NODE_NAME = 'from-the-anchor'\n")
+    write_app(
+        anchor_directory,
+        "stream.py",
+        "from helpers import PATTERN_NODE_NAME\n"
+        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream_builder: StreamBuilder) -> None:\n"
+        "    stream_builder.add(TestPatternSource, name=PATTERN_NODE_NAME)\n",
+    )
+
+    finished = run_compile_entry(
+        anchor_directory, started_with_the_working_directory_dropped=True
+    )
+
+    document = compiled_document(finished)
+    assert document["stream_graph"]["nodes"][0]["name"] == "from-the-anchor"
+    assert document["project_directory"] == str(anchor_directory)
+
+
+def test_started_with_the_working_directory_dropped_the_traceback_starts_in_the_app(
+    anchor_directory: Path,
+):
+    write_app(anchor_directory, "stream.py", "raise ValueError('bad wiring')\n")
+
+    finished = run_compile_entry(
+        anchor_directory, started_with_the_working_directory_dropped=True
+    )
+
+    assert finished.returncode == 1
+    assert finished.stdout == ""
+    assert "runpy" not in finished.stderr, finished.stderr
+    assert "<string>" not in finished.stderr, finished.stderr
+    first_frame = finished.stderr.index("File ")
+    assert finished.stderr.startswith(
+        f'File "{anchor_directory / "stream.py"}", line 1, in <module>', first_frame
+    ), finished.stderr
+
+
+def containers_nested_in(json_value: Any) -> int:
+    """How many containers deep `json_value` nests, counting itself."""
+    if isinstance(json_value, dict):
+        return 1 + max((containers_nested_in(value) for value in json_value.values()), default=0)
+    if isinstance(json_value, list):
+        return 1 + max((containers_nested_in(value) for value in json_value), default=0)
+    return 0
+
+
+def test_a_config_at_the_deepest_a_graph_carries_compiles_to_a_document_serde_json_parses(
+    anchor_directory: Path,
+):
+    """serde_json's default recursion limit parses at most 127 nested containers."""
+    write_app(
+        anchor_directory,
+        "stream.py",
+        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
+        "\n"
+        "nested = []\n"
+        "for _ in range(121):\n"
+        "    nested = [nested]\n"
+        "\n"
+        "\n"
+        "@stream\n"
+        "def main(stream_builder: StreamBuilder) -> None:\n"
+        "    stream_builder.add(TestPatternSource, config={'nested': nested})\n",
+    )
+
+    document = compiled_document(run_compile_entry(anchor_directory))
+
+    assert containers_nested_in(document["stream_graph"]) == 126
+    assert containers_nested_in(document) == 127
 
 
 @pytest.mark.parametrize(

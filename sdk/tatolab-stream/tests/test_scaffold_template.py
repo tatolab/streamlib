@@ -49,7 +49,7 @@ RENDER_PLACEHOLDERS_BY_TEMPLATE_FILE = {
     "stream.py": [
         "A StreamLib stream: camera →",
         "from tatolab.stream import CameraSource, DisplayWindow, StreamBuilder, stream",
-        '"""Camera, inverted,',
+        '\"\"\"Camera, inverted,',
         "stream_builder.add(CameraSource)",
     ],
     "pyproject.toml": ['name = "streamlib-app"'],

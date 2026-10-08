@@ -11,13 +11,21 @@ directory; `--dir` is only how the caller's command spelled it. On success stdou
 carries exactly one JSON object, `{"stream_graph": ..., "project_directory": ...}`,
 and the exit code is 0. A refusal prints `error: <message>` to stderr and exits 1;
 an app or compile failure prints the app's own traceback to stderr and exits 1; an
-app's deliberate `SystemExit` keeps its code.
+app's deliberate `SystemExit` keeps its code, so exit 0 with nothing on stdout is an
+app that chose to exit, and there is no stream to start.
+
+Under `-m` the working directory leads `sys.path` while this module and
+`tatolab.stream` import, so a project module named like a standard-library one
+they import (`json.py` at the anchor) replaces it. Starting the entry with that
+directory dropped first avoids it, on every Python this package supports:
+`python -c "import sys; getattr(sys.flags, 'safe_path', False) or sys.path.pop(0);
+import runpy; runpy.run_module('tatolab.stream._project_stream_compile_entry',
+run_name='__main__', alter_sys=True)" --verb ...`.
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import importlib
 import importlib.util
 import json
@@ -25,7 +33,7 @@ import os
 import runpy
 import sys
 import traceback
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Optional
 
@@ -166,24 +174,27 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-@contextlib.contextmanager
-def _user_code_output_carried_to_stderr() -> Iterator[None]:
-    """Send everything written to stdout — `print`, or a child writing to fd 1 — to stderr.
+def _carry_every_later_stdout_write_to_stderr() -> int:
+    """Point fd 1 and `sys.stdout` at stderr for the rest of the process.
 
-    So the JSON document is the only thing on stdout, however the app's code writes.
+    Returns a descriptor on the real stdout, the only way the compiled document
+    reaches it — so nothing the app arranges to run later, an `atexit` handler, a
+    thread or a child still holding fd 1, can follow the document there.
     """
     sys.stdout.flush()
     compiled_document_stdout_descriptor = os.dup(sys.stdout.fileno())
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
-    launcher_stdout = sys.stdout
     sys.stdout = sys.stderr
-    try:
-        yield
-    finally:
-        sys.stderr.flush()
-        sys.stdout = launcher_stdout
-        os.dup2(compiled_document_stdout_descriptor, sys.stdout.fileno())
-        os.close(compiled_document_stdout_descriptor)
+    return compiled_document_stdout_descriptor
+
+
+def _write_the_compiled_document(
+    compiled_document_stdout_descriptor: int, compiled_document: dict[str, Any]
+) -> None:
+    with os.fdopen(compiled_document_stdout_descriptor, "wb") as compiled_document_stdout:
+        compiled_document_stdout.write(
+            (json.dumps(compiled_document, allow_nan=False) + "\n").encode("utf-8")
+        )
 
 
 def _drop_the_working_directory_python_m_put_on_the_import_path() -> None:
@@ -275,26 +286,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     arguments = build_argument_parser().parse_args(argv)
     _drop_the_working_directory_python_m_put_on_the_import_path()
 
-    with _user_code_output_carried_to_stderr():
-        try:
-            compiled_document = compile_the_requested_stream(
-                arguments.verb,
-                anchor_directory=Path.cwd(),
-                anchor_directory_as_typed=arguments.anchor_directory_as_typed,
-                requested_entry_file=arguments.requested_entry_file,
-                requested_stream_target=arguments.requested_stream_target,
-                requested_stream_name=arguments.requested_stream_name,
-            )
-        except ProjectStreamCompileRefusalError as refusal:
-            print(f"error: {refusal}", file=sys.stderr)
-            return 1
+    compiled_document_stdout_descriptor = _carry_every_later_stdout_write_to_stderr()
+    try:
+        compiled_document = compile_the_requested_stream(
+            arguments.verb,
+            anchor_directory=Path.cwd(),
+            anchor_directory_as_typed=arguments.anchor_directory_as_typed,
+            requested_entry_file=arguments.requested_entry_file,
+            requested_stream_target=arguments.requested_stream_target,
+            requested_stream_name=arguments.requested_stream_name,
+        )
+    except ProjectStreamCompileRefusalError as refusal:
+        os.close(compiled_document_stdout_descriptor)
+        print(f"error: {refusal}", file=sys.stderr)
+        return 1
+    except BaseException:
+        os.close(compiled_document_stdout_descriptor)
+        raise
     if compiled_document is None:
+        os.close(compiled_document_stdout_descriptor)
         return 1
 
-    sys.stdout.write(json.dumps(compiled_document, allow_nan=False) + "\n")
-    sys.stdout.flush()
+    _write_the_compiled_document(compiled_document_stdout_descriptor, compiled_document)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
