@@ -481,7 +481,7 @@ jobs:
       # to its graph.
       - name: The scaffold compiles and type-checks with no runtime installed
         run: |
-          cp -R sdk/streamlib-python-wheel/python/tatolab/runtime/_scaffold_template "$RUNNER_TEMP/scaffold"
+          cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream
           uv venv --python ${{ matrix.python }} "$RUNNER_TEMP/scaffold-venv"
           VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install "$RUNNER_TEMP"/tatolab-stream-dist/*.whl 'numpy>=2.1'

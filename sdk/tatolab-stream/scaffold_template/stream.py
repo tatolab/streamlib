@@ -3,9 +3,9 @@
 
 """A StreamLib stream: camera → GPU effect → window, with a CPU meter watching.
 
-`streamlib dev` loads the one `@stream` below by convention — there is no
-manifest. Edit `nodes/inverting_effect.py` or `nodes/brightness_meter.py` and
-re-run `streamlib dev` to see the change.
+`tatolab dev` loads the one `@stream` below by convention — there is no
+manifest — and restarts it when you edit `nodes/inverting_effect.py` or
+`nodes/brightness_meter.py`.
 
 Nodes live in their own modules, never in this file: each one runs in its
 own child interpreter, which imports the class by name.

@@ -41,6 +41,8 @@ test = [
     "pydantic>=2.0",
     # `NotRequired` and `Required` at the 3.10 floor.
     "typing_extensions>=4.6",
+    # Lints and format-checks the scaffold templates `tatolab new` writes.
+    "ruff==0.16.9",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -55,9 +57,27 @@ exclude = ["**/__pycache__"]
 
 [tool.hatch.build.targets.sdist.hooks.custom]
 
+[tool.ruff]
+# ruff runs over the scaffold templates only (tests/test_scaffold_template.py).
+# Rooted there so `nodes` sorts as the scaffolded app's own first-party package,
+# as it does in the project `tatolab new` writes.
+src = ["scaffold_template"]
+
+[tool.ruff.lint]
+# flake8-builtins, so a template that shadows a Python builtin fails.
+extend-select = ["A"]
+
 [tool.pyright]
-include = ["tatolab", "tests"]
+include = ["tatolab", "tests", "scaffold_template"]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"
+
+# The scaffold template tree, checked as the app it becomes: rooted at the app
+# directory, so `stream.py`'s `nodes` import resolves, and at the Python version
+# the scaffold pins.
+[[tool.pyright.executionEnvironments]]
+root = "scaffold_template"
+extraPaths = ["."]
+pythonVersion = "3.12"

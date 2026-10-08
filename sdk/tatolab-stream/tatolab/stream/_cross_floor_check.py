@@ -455,12 +455,12 @@ def render_cross_floor_warning_block(report: CrossFloorCheckReport, app_director
     if report.findings:
         count = len(report.findings)
         lines.append(
-            f"streamlib: the cross-floor check found {count} "
+            f"tatolab: the cross-floor check found {count} "
             f"{'thing' if count == 1 else 'things'} binding this app to one floor "
             f"(Linux or macOS). The app starts anyway."
         )
     else:
-        lines.append("streamlib: the cross-floor check found nothing binding this app to one floor.")
+        lines.append("tatolab: the cross-floor check found nothing binding this app to one floor.")
     for finding in report.findings:
         try:
             shown_path = finding.file.relative_to(app_directory)

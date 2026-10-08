@@ -65,8 +65,6 @@ dev = [
     "pydantic>=2.0",
     # `assert_type` at the 3.10 floor, and the stub's own `disjoint_base`.
     "typing_extensions>=4.6",
-    # Lints and format-checks each render of the `streamlib new` templates.
-    "ruff==0.16.9",
     # The official MCP Python SDK: the observation-verb tests stand a node's
     # control plane in with its server, and the live MCP test drives a real
     # node with its client. Tests only; the wheel's own client is rmcp.
@@ -113,16 +111,6 @@ exclude = ["**/__pycache__/**"]
 [tool.maturin.target.aarch64-apple-darwin]
 macos-deployment-target = "15.0"
 
-[tool.ruff]
-# ruff runs over the `streamlib new` renders only (tests/test_cli.py).
-# Rooted there so `nodes` sorts as the scaffolded app's own first-party
-# package, as it does in the project `new` writes.
-src = ["python/tatolab/runtime/_scaffold_template"]
-
-[tool.ruff.lint]
-# flake8-builtins, so a render that shadows a Python builtin fails.
-extend-select = ["A"]
-
 [tool.pyright]
 # The wheel's Python half, checked at the version floor rather than whatever
 # interpreter the venv happens to be — `requires-python` is the promise.
@@ -145,11 +133,3 @@ venv = ".venv"
 # `mypy.stubtest` and `tests/runtime_backed_protocol_conformance.py` are what
 # check the stub and the `tatolab.stream` Protocols against the real binary.
 reportMissingModuleSource = "none"
-
-# The `streamlib new` template tree, checked as the app it becomes: rooted
-# at the app directory, so `stream.py`'s `nodes` import resolves, and at
-# the Python version the scaffold pins.
-[[tool.pyright.executionEnvironments]]
-root = "python/tatolab/runtime/_scaffold_template"
-extraPaths = ["python", "../tatolab-stream"]
-pythonVersion = "3.12"
