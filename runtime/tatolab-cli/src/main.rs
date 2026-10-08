@@ -11,6 +11,7 @@
 
 mod attached_tatolabd_supervisor;
 mod forwarded_signal_listener;
+mod local_api_mcp_stdio_pipe;
 mod local_api_mcp_tool_client;
 mod local_api_runtime_selection;
 mod local_api_unix_socket_http_client;
@@ -133,6 +134,14 @@ enum TatolabVerb {
         #[command(flatten)]
         runtime_target: RuntimeTargetArguments,
     },
+    /// Connect an MCP host to a running runtime over this command's stdin and stdout.
+    #[command(
+        long_about = "For an MCP host to launch: `claude mcp add tatolab -- tatolab mcp`, or `ssh \
+                      <machine> tatolab mcp` for a runtime on another machine. Copies bytes \
+                      between stdio and the runtime's MCP server, through its local API socket, \
+                      without reading them."
+    )]
+    Mcp(RuntimeTargetArguments),
     /// Grant this machine's users the permission a VirtualCameraSink needs, once.
     #[command(
         long_about = "Install the standard grant behind the virtual camera's loopback door: load \
@@ -230,6 +239,11 @@ fn main() -> ExitCode {
                 requested_max_bag_bytes,
             ),
         ),
+        TatolabVerb::Mcp(runtime_target) => {
+            local_api_mcp_stdio_pipe::pipe_stdio_to_the_selected_runtimes_mcp_server(
+                runtime_target.requested_runtime_name_or_id.as_deref(),
+            )
+        }
         TatolabVerb::EnableVirtualCamera {
             print_grant_without_installing: true,
         } => virtual_camera_loopback_permission_grant::print_virtual_camera_grant_for_hand_install(),

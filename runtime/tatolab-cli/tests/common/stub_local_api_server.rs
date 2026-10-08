@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! A runtime's local API stood in by a stub on a fresh Unix socket: the official MCP SDK's server
-//! answering scripted tool calls, beside the surface-image route answering scripted images, each
-//! recording what it was sent. Shared by the integration tests and, through `#[path]`, the unit
-//! tests.
+//! answering scripted tool calls, beside the surface-image route answering scripted images and
+//! the `/mcp/stdio` upgrade playing a scripted stream, each recording what it was sent. Shared by
+//! the integration tests and, through `#[path]`, the unit tests.
 
 #![allow(dead_code)]
 
@@ -17,14 +17,17 @@ use std::sync::{Arc, Mutex};
 use axum::extract::{Path as RoutePathSegment, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
+use hyper_util::rt::TokioIo;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    ProtocolVersion, ServerCapabilities, ServerConfig,
+    ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig,
+    Tool,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use rmcp::{ErrorData, RoleServer, ServerHandler};
+use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// What the stub answers a tool call with when the script names no fixed answer.
 pub const STUB_DEFAULT_TOOL_ANSWER_TEXT: &str = "{}";
@@ -112,6 +115,34 @@ impl StubSurfaceImageAnswer {
     }
 }
 
+/// How the stub answers `GET /mcp/stdio`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum StubMcpStdioUpgradeAnswer {
+    /// Answer `101` and serve the stub's MCP server — the handler `/mcp` serves — over the
+    /// upgraded stream until the client closes it, as a runtime does.
+    #[default]
+    ServeTheStubMcpServer,
+    /// Answer `101`, write `written_once_upgraded`, echo every byte the client sends until it
+    /// half-closes, then write `written_once_the_client_half_closed` and close.
+    EchoUntilTheClientHalfCloses {
+        written_once_upgraded: Vec<u8>,
+        written_once_the_client_half_closed: Vec<u8>,
+    },
+    /// Answer `101` and close the upgraded stream at once, whatever the client still sends.
+    CloseOnceUpgraded,
+    /// Refuse the upgrade with `http_status` and an empty body.
+    RefuseTheUpgrade { http_status: u16 },
+}
+
+/// One request head the stub received, as HTTP parsed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedHttpRequestHead {
+    pub method: String,
+    pub request_target: String,
+    /// Every header line, its name lowercased by the parse, in no promised order.
+    pub header_lines: Vec<(String, String)>,
+}
+
 /// What the stub answers. Tool calls drain `queued_tool_answers` in order, then
 /// `fixed_tool_answer` answers forever, so a test names only the rounds it cares about.
 #[derive(Debug, Clone, Default)]
@@ -123,6 +154,10 @@ pub struct StubLocalApiScript {
     pub refuse_every_tool_call_with: Option<String>,
     /// Answers by decoded surface id; an id not listed answers `404 {"error": "no such surface"}`.
     pub surface_image_answers: HashMap<String, StubSurfaceImageAnswer>,
+    /// The tools `tools/list` names, each taking any object; none when empty.
+    pub listed_tool_names: Vec<String>,
+    /// How `/mcp/stdio` answers; serving the stub's MCP server when unset.
+    pub mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
 }
 
 struct StubLocalApiState {
@@ -132,6 +167,10 @@ struct StubLocalApiState {
     surface_image_answers: HashMap<String, StubSurfaceImageAnswer>,
     recorded_tool_calls: Mutex<Vec<RecordedToolCall>>,
     recorded_image_request_paths: Mutex<Vec<String>>,
+    listed_tool_names: Vec<String>,
+    mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
+    recorded_mcp_stdio_request_heads: Mutex<Vec<RecordedHttpRequestHead>>,
+    recorded_mcp_stdio_client_bytes: Mutex<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -147,6 +186,32 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         Cow::Borrowed(STUB_SERVED_MCP_PROTOCOL_VERSIONS)
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let any_object_input_schema = Arc::new(
+            serde_json::json!({ "type": "object" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        Ok(ListToolsResult::with_all_items(
+            self.stub_state
+                .listed_tool_names
+                .iter()
+                .map(|listed_tool_name| {
+                    Tool::new(
+                        listed_tool_name.clone(),
+                        "a scripted stub tool",
+                        any_object_input_schema.clone(),
+                    )
+                })
+                .collect(),
+        ))
     }
 
     async fn call_tool(
@@ -231,9 +296,107 @@ async fn answer_surface_image_request(
     image_response
 }
 
+/// `/mcp/stdio`: record the head, then refuse or answer `101` and play the scripted stream.
+async fn answer_mcp_stdio_upgrade_request(
+    State(stub_state): State<Arc<StubLocalApiState>>,
+    mut upgrade_request: axum::extract::Request,
+) -> Response {
+    stub_state
+        .recorded_mcp_stdio_request_heads
+        .lock()
+        .unwrap()
+        .push(RecordedHttpRequestHead {
+            method: upgrade_request.method().to_string(),
+            request_target: upgrade_request.uri().to_string(),
+            header_lines: upgrade_request
+                .headers()
+                .iter()
+                .map(|(header_name, header_value)| {
+                    (
+                        header_name.as_str().to_owned(),
+                        header_value.to_str().unwrap().to_owned(),
+                    )
+                })
+                .collect(),
+        });
+    if let StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { http_status } =
+        stub_state.mcp_stdio_upgrade_answer
+    {
+        return StatusCode::from_u16(http_status).unwrap().into_response();
+    }
+    let pending_upgrade = hyper::upgrade::on(&mut upgrade_request);
+    tokio::spawn(async move {
+        if let Ok(upgraded_connection) = pending_upgrade.await {
+            play_the_upgraded_mcp_stdio_stream(stub_state, TokioIo::new(upgraded_connection)).await;
+        }
+    });
+    (
+        StatusCode::SWITCHING_PROTOCOLS,
+        [
+            (header::CONNECTION, "upgrade"),
+            (header::UPGRADE, "mcp-stdio"),
+        ],
+    )
+        .into_response()
+}
+
+async fn play_the_upgraded_mcp_stdio_stream(
+    stub_state: Arc<StubLocalApiState>,
+    mut upgraded_mcp_stdio_stream: TokioIo<hyper::upgrade::Upgraded>,
+) {
+    match stub_state.mcp_stdio_upgrade_answer.clone() {
+        StubMcpStdioUpgradeAnswer::ServeTheStubMcpServer => {
+            let mcp_server_handler = StubLocalApiMcpServerHandler { stub_state };
+            if let Ok(running_mcp_server) =
+                mcp_server_handler.serve(upgraded_mcp_stdio_stream).await
+            {
+                let _served_until_the_client_closed = running_mcp_server.waiting().await;
+            }
+        }
+        StubMcpStdioUpgradeAnswer::EchoUntilTheClientHalfCloses {
+            written_once_upgraded,
+            written_once_the_client_half_closed,
+        } => {
+            if upgraded_mcp_stdio_stream
+                .write_all(&written_once_upgraded)
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let mut client_chunk = [0_u8; 4096];
+            loop {
+                let read_byte_count = match upgraded_mcp_stdio_stream.read(&mut client_chunk).await
+                {
+                    Ok(0) | Err(_) => break,
+                    Ok(read_byte_count) => read_byte_count,
+                };
+                stub_state
+                    .recorded_mcp_stdio_client_bytes
+                    .lock()
+                    .unwrap()
+                    .extend_from_slice(&client_chunk[..read_byte_count]);
+                if upgraded_mcp_stdio_stream
+                    .write_all(&client_chunk[..read_byte_count])
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            let _written_or_the_client_gone = upgraded_mcp_stdio_stream
+                .write_all(&written_once_the_client_half_closed)
+                .await;
+            let _closed_or_already_gone = upgraded_mcp_stdio_stream.shutdown().await;
+        }
+        StubMcpStdioUpgradeAnswer::CloseOnceUpgraded
+        | StubMcpStdioUpgradeAnswer::RefuseTheUpgrade { .. } => {}
+    }
+}
+
 /// The stub's router: `/mcp` as a runtime's local API configures it — stateless, JSON answers, no
-/// allowed-hosts check since the socket's file mode is the gate — and the surface-image route.
-/// Axum routes on the request target's path, so `rmcp`'s absolute-form `POST
+/// allowed-hosts check since the socket's file mode is the gate — the surface-image route, and the
+/// `/mcp/stdio` upgrade. Axum routes on the request target's path, so `rmcp`'s absolute-form `POST
 /// http://localhost/mcp` reaches `/mcp` as RFC 9112 §3.2.2 requires.
 fn stub_local_api_router(stub_state: Arc<StubLocalApiState>) -> axum::Router {
     let mcp_server_handler = StubLocalApiMcpServerHandler {
@@ -253,6 +416,10 @@ fn stub_local_api_router(stub_state: Arc<StubLocalApiState>) -> axum::Router {
         .route(
             "/api/surfaces/{surface_id}/image",
             axum::routing::get(answer_surface_image_request),
+        )
+        .route(
+            "/mcp/stdio",
+            axum::routing::get(answer_mcp_stdio_upgrade_request),
         )
         .with_state(stub_state)
 }
@@ -288,6 +455,10 @@ impl StubLocalApiServer {
             surface_image_answers: stub_local_api_script.surface_image_answers,
             recorded_tool_calls: Mutex::new(Vec::new()),
             recorded_image_request_paths: Mutex::new(Vec::new()),
+            listed_tool_names: stub_local_api_script.listed_tool_names,
+            mcp_stdio_upgrade_answer: stub_local_api_script.mcp_stdio_upgrade_answer,
+            recorded_mcp_stdio_request_heads: Mutex::new(Vec::new()),
+            recorded_mcp_stdio_client_bytes: Mutex::new(Vec::new()),
         });
         let (stop_serving, serving_stopped) = tokio::sync::oneshot::channel::<()>();
         let served_stub_state = stub_state.clone();
@@ -338,6 +509,24 @@ impl StubLocalApiServer {
     pub fn recorded_image_request_paths(&self) -> Vec<String> {
         self.stub_state
             .recorded_image_request_paths
+            .lock()
+            .unwrap()
+            .clone()
+    }
+
+    /// The head of every `/mcp/stdio` request received so far, in arrival order.
+    pub fn recorded_mcp_stdio_request_heads(&self) -> Vec<RecordedHttpRequestHead> {
+        self.stub_state
+            .recorded_mcp_stdio_request_heads
+            .lock()
+            .unwrap()
+            .clone()
+    }
+
+    /// Every byte a client sent over an echoing `/mcp/stdio` stream so far, in arrival order.
+    pub fn recorded_mcp_stdio_client_bytes(&self) -> Vec<u8> {
+        self.stub_state
+            .recorded_mcp_stdio_client_bytes
             .lock()
             .unwrap()
             .clone()

@@ -84,6 +84,7 @@ fn help_lists_exactly_the_served_verbs() {
             "nodes",
             "graph",
             "tap",
+            "mcp",
             "enable-virtual-camera"
         ],
         "help was:\n{help_text}"
