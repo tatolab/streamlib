@@ -127,7 +127,7 @@ impl LocalApiSocketBoundAndNotYetServed {
         ));
         Ok(RunningLocalApiSocketServer {
             local_api_stopping_token,
-            local_api_socket_file,
+            _local_api_socket_file: local_api_socket_file,
         })
     }
 }
@@ -138,7 +138,7 @@ impl LocalApiSocketBoundAndNotYetServed {
 #[derive(Debug)]
 pub(crate) struct RunningLocalApiSocketServer {
     local_api_stopping_token: CancellationToken,
-    local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
+    _local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
 }
 
 impl Drop for RunningLocalApiSocketServer {
