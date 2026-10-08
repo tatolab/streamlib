@@ -79,7 +79,11 @@ struct CompiledStream {
 
 enum StreamCompileOutcome {
     Compiled(CompiledStream),
-    Failed { compile_exit_code: u8 },
+    /// The app exited 0 on purpose while it compiled, leaving no document.
+    EndedWithoutAStream,
+    Failed {
+        compile_exit_code: u8,
+    },
 }
 
 struct StreamCompileInFlight {
@@ -382,21 +386,20 @@ fn finish_stream_compile(
     compile_exit_status: ExitStatus,
     stream_launch_environment: &StreamLaunchEnvironment,
 ) -> StreamCompileOutcome {
-    let collected_compile_stdout = stream_compile_in_flight
-        .compile_stdout_collector
-        .take()
-        .map(JoinHandle::join);
+    // Checked before the collector is joined: a failed compile's stdout is never read, and a
+    // process it started may still hold the pipe open.
     if !compile_exit_status.success() {
         return StreamCompileOutcome::Failed {
             compile_exit_code: exit_code_for(compile_exit_status),
         };
     }
+    let collected_compile_stdout = stream_compile_in_flight
+        .compile_stdout_collector
+        .take()
+        .map(JoinHandle::join);
     let compiled_stream = match collected_compile_stdout {
-        // An app that exits 0 on purpose while it compiles leaves no document: a clean stop.
         Some(Ok(Ok(compile_stdout))) if compile_stdout.trim_ascii().is_empty() => {
-            return StreamCompileOutcome::Failed {
-                compile_exit_code: 0,
-            };
+            return StreamCompileOutcome::EndedWithoutAStream;
         }
         Some(Ok(Ok(compile_stdout))) => compiled_stream_from_compile_document(&compile_stdout),
         Some(Ok(Err(io_failure))) => Err(format!("its stdout could not be read: {io_failure}")),
@@ -630,6 +633,20 @@ impl AttachedStreamSupervisor {
                 }
                 None => self.start_attached_tatolabd_on(compiled_stream)?,
             },
+            StreamCompileOutcome::EndedWithoutAStream => {
+                if self.stream_launch_verb == StreamLaunchVerb::Run {
+                    return Ok(AttachedStreamSupervisorNextStep::ExitTatolabWith(0));
+                }
+                if self.attached_tatolabd.is_some() {
+                    eprintln!(
+                        "tatolab dev: the compile ended without a stream — kept the running stream"
+                    );
+                } else {
+                    eprintln!(
+                        "tatolab dev: the compile ended without a stream — waiting for the next edit"
+                    );
+                }
+            }
             StreamCompileOutcome::Failed { compile_exit_code } => {
                 // Exit 2 on the first compile is a usage error in the flags, which no edit can fix.
                 if self.stream_launch_verb == StreamLaunchVerb::Run

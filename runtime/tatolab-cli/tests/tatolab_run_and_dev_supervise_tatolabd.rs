@@ -76,6 +76,7 @@ fi
 printf '%s\n' "$$" >> "$control_directory/compile_process_ids"
 if [ -f "$control_directory/compile_delay_seconds" ]; then sleep "$(cat "$control_directory/compile_delay_seconds")"; fi
 if [ -f "$control_directory/compile_stderr" ]; then cat "$control_directory/compile_stderr" >&2; fi
+if [ -f "$control_directory/compile_leaves_a_process_holding_its_stdout" ]; then sleep 30 & fi
 exit_code=$(cat "$control_directory/compile_exit_code" 2>/dev/null || echo 0)
 if [ "$exit_code" = 0 ]; then cat "$control_directory/compile_document.json"; fi
 exit "$exit_code"
@@ -657,6 +658,22 @@ fn a_failed_compile_ends_run_with_its_exit_code_and_starts_no_tatolabd() {
     let (exit_status, tatolab_stderr) = testbed.run_tatolab_to_exit(&["run"]);
     assert_eq!(exit_status.code(), Some(3));
     assert_eq!(tatolab_stderr, "Traceback: the probe stream raised\n");
+    assert!(testbed.started_tatolabd_process_ids().is_empty());
+}
+
+#[test]
+fn a_failed_compile_whose_child_still_holds_its_stdout_ends_run_without_waiting_on_it() {
+    let testbed = AttachedTatolabdTestbed::new();
+    testbed.set_control("compile_exit_code", "1");
+    testbed.set_control("compile_leaves_a_process_holding_its_stdout", "");
+    let run_started = std::time::Instant::now();
+    let (exit_status, _) = testbed.run_tatolab_to_exit(&["run"]);
+    assert_eq!(exit_status.code(), Some(1));
+    assert!(
+        run_started.elapsed() < std::time::Duration::from_secs(10),
+        "run waited {:?} on a process the failed compile left holding its stdout",
+        run_started.elapsed()
+    );
     assert!(testbed.started_tatolabd_process_ids().is_empty());
 }
 

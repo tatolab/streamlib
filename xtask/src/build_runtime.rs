@@ -181,12 +181,17 @@ fn build_runtime_unit_binaries(
         cargo_build.arg("--release");
     }
 
+    let cargo_build_package_flags = RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS
+        .iter()
+        .map(|(package, _)| format!("-p {package}"))
+        .collect::<Vec<_>>()
+        .join(" ");
     let cargo_build_output = cargo_build
         .output()
-        .context("failed to run `cargo build` for tatolabd and tatolab")?;
+        .with_context(|| format!("failed to run `cargo build {cargo_build_package_flags}`"))?;
     anyhow::ensure!(
         cargo_build_output.status.success(),
-        "`cargo build -p tatolabd -p tatolab-cli` failed ({})",
+        "`cargo build {cargo_build_package_flags}` failed ({})",
         cargo_build_output.status
     );
     runtime_unit_binaries_from_cargo_build_messages(&String::from_utf8_lossy(
