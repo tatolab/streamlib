@@ -60,6 +60,7 @@ pub(crate) fn host_the_stream_until_shutdown(
             &stream_graph,
             Some(stream_environment),
             |loaded_engine| {
+                log_that_the_stream_loaded(loaded_engine)?;
                 register_api_server_control_plane_processor_on_runtime(
                     loaded_engine,
                     ApiServerControlPlaneHostConfig::default(),
@@ -84,6 +85,27 @@ pub(crate) fn host_the_stream_until_shutdown(
             _,
         ) => write_refusal_to_standard_error(&description),
     }
+}
+
+/// Log the load's success under the stream name and node count the engine's
+/// live graph holds, so a reader of the log can tell a stream that loaded but
+/// failed to start from one the load refused.
+///
+/// Called before the local API's processor is added, so the count is the
+/// stream's own nodes.
+fn log_that_the_stream_loaded(loaded_engine: &Runner) -> streamlib::sdk::error::Result<()> {
+    let live_graph = loaded_engine.to_json()?;
+    let loaded_node_count = live_graph
+        .get("nodes")
+        .and_then(|nodes| nodes.as_array())
+        .map_or(0, Vec::len);
+    match live_graph.get("stream").and_then(|stream| stream.as_str()) {
+        Some(loaded_stream_name) => tracing::info!(
+            "the stream `{loaded_stream_name}` loaded with {loaded_node_count} nodes"
+        ),
+        None => tracing::info!("the stream loaded with {loaded_node_count} nodes"),
+    }
+    Ok(())
 }
 
 /// How a teardown ended.

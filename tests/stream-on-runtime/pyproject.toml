@@ -1,0 +1,56 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# The integration suite: compile a fixture stream, start `tatolabd` on it, and
+# drive it over its local API. Its venv is the venv every fixture stream's
+# processor interpreters start from, so it holds `tatolab-stream`, the stream's
+# own dependencies and the test tooling — and never `tatolab.runtime`, which a
+# processor interpreter borrows from the runtime unit's lend.
+[project]
+name = "stream-on-runtime-integration-suite"
+version = "0"
+requires-python = ">=3.10"
+dependencies = [
+    "tatolab-stream",
+    "pytest>=7.0",
+    "numpy>=2.1",
+    # The official MCP Python SDK, whose streamable-HTTP client drives a
+    # node's local API over its Unix socket.
+    "mcp==2.3.0",
+]
+
+[dependency-groups]
+# What only the GPU tests import, installed on the rig with
+# `uv sync --group rig`. PyPI's Linux torch wheels are CUDA builds.
+rig = [
+    "torch>=2.10",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+tatolab-stream = { path = "../../sdk/tatolab-stream", editable = true }
+
+[tool.pytest.ini_options]
+# The suite directory is on the import path, so a fixture stream's
+# `<module>:<Class>` node types import here and, as the `--project` `tatolabd`
+# is given, in every processor interpreter.
+pythonpath = ["."]
+testpaths = ["."]
+markers = [
+    # `Runner::start()` initializes a GPU context, and the engine's DMA-BUF
+    # pool pre-warm needs a driver that can actually allocate exportable
+    # device memory. A software rasterizer (lavapipe) cannot, so a GPU-less
+    # runner deselects these with `-m "not requires_gpu"`.
+    "requires_gpu: needs a Vulkan device that can allocate exportable DMA-BUF memory",
+    # The closed list of what macOS does not have, each with its reason. The
+    # stream suite's `test_platform_markers.py` pins it. Skipped off Linux.
+    "linux_only_capability(reason): a capability the closed list names as absent off Linux",
+    # A capability a named open parity ticket brings to macOS. Strict xfail
+    # there, so the ticket's own fix turns it red until the mark comes off.
+    "awaiting_macos_parity(issue): red on macOS until the named parity ticket lands; not run there unless STREAMLIB_RUN_AWAITING_MACOS_PARITY=1",
+    # A test that makes sound through a Mac's real speakers. The standing sweep
+    # there stays silent, so it is skipped on macOS unless someone is listening.
+    "audible_on_macos(reason): plays through a Mac's speakers; skipped on macOS unless STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1",
+]

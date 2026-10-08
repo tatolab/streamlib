@@ -290,6 +290,38 @@ fn a_graph_holding_no_node_is_refused_naming_the_stream() {
     );
 }
 
+/// A graph that loads is logged loaded, under the stream's name as the engine
+/// casts it and with its own nodes counted, before the engine starts — here to
+/// be refused at the GPU, because the Vulkan loader is left no driver.
+#[test]
+fn a_graph_that_loads_is_logged_loaded_before_the_engine_starts() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let run_state = TatolabdRunState::new();
+    let stream_graph_file = run_state.write_stream_graph(&serde_json::json!({
+        "stream": "Front Camera",
+        "nodes": [{"name": "testpattern", "type": "tatolab.stream:TestPatternSource"}],
+    }));
+    let no_vulkan_driver_file = run_state.path().join("no-vulkan-driver-here.json");
+    let no_vulkan_driver_file = no_vulkan_driver_file.to_string_lossy();
+
+    let refusal = the_refusal_of(&run_tatolabd(
+        &runtime_unit.tatolabd,
+        &run_state,
+        &stream_graph_file,
+        &run_state.project_directory(),
+        &an_executable_standing_in_for_the_interpreter(),
+        &[
+            ("VK_DRIVER_FILES", &no_vulkan_driver_file),
+            ("VK_ICD_FILENAMES", &no_vulkan_driver_file),
+        ],
+    ));
+
+    assert!(
+        refusal.contains("the stream `front-camera` loaded with 1 nodes"),
+        "{refusal}"
+    );
+}
+
 /// Under `STREAMLIB_QUIET` no log mirror carries an engine refusal, so the
 /// refusal still ends standard error as `tatolabd`'s own line.
 #[test]
