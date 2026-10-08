@@ -34,7 +34,11 @@ tokio = { version = "1.48.0", features = ["rt", "time", "net"] }
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
-# `logs --list`'s STARTED_AT as an ISO-8601 UTC date; already in this binary through rmcp.
+# `exchange --channel`: a tapped bag's frame header stripped by the transport's own accessor, then
+# its msgpack payload decoded.
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.41.0" }
+rmpv = { workspace = true }
+# `logs --list`'s STARTED_AT as an ISO-8601 UTC date.
 chrono = { version = "0.4.45", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]

@@ -1,0 +1,2307 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! `tatolab exchange`: published surface ids in, exact PNG files on disk out. The id form is one
+//! exchange. The channel form taps a channel, reads a surface id out of each sampled bag here, and
+//! exchanges it; the runtime is never asked to read a bag.
+//!
+//! The channel form keeps one MCP client across its tap rounds, so a sampled frame is exchanged
+//! while its pool slot still holds it rather than after a connect per frame. A frame whose slot
+//! was recycled first is retried against a newer bag and reported, so a short sample never reads
+//! as a full one.
+
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
+
+use clap::Args;
+use hyper::body::Bytes;
+use hyper::{HeaderMap, StatusCode};
+use streamlib_ipc_types::{FRAME_HEADER_SIZE, FrameHeader};
+
+use crate::local_api_mcp_tool_client::{
+    LocalApiMcpToolClient, LocalApiMcpToolClientFailure, OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+    tool_call_failure_worded_as_an_observation_verb_reports_it,
+};
+use crate::local_api_runtime_selection::select_live_runtime_on_this_machine;
+use crate::local_api_unix_socket_http_client::{
+    LocalApiHttpRequestFailure, get_whole_response_over_the_local_api_socket,
+};
+use crate::runtime_observation_verbs::{TAP_TOOL_NAME, tap_tool_arguments};
+use crate::{RuntimeTargetArguments, TatolabCommandFailure};
+
+#[cfg(test)]
+#[path = "../tests/common/tapped_channel_bag_fixtures.rs"]
+mod tapped_channel_bag_fixtures;
+
+/// The bag field the channel form reads a surface id from unless `--field` names another. The
+/// runtime inspects no bag content, so which field carries an id is the caller's knowledge.
+pub(crate) const DEFAULT_SURFACE_ID_BAG_FIELD_NAME: &str = "surface_id";
+
+/// Tap rounds one channel-form run spends before giving up, so a channel whose frames always
+/// recycle before their exchange cannot retry forever.
+pub(crate) const MAX_TAP_ROUNDS_PER_SAMPLE_RUN: u32 = 8;
+
+/// The local API's REST spelling of the exchange, which serves the exact frame where the MCP tool
+/// serves a downscaled one; `{surface_id}` is filled percent-encoded.
+const SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE: &str = "/api/surfaces/{surface_id}/image";
+
+/// The source surface's own extent, which differs from the image's whenever a downscale cap
+/// applied.
+const SOURCE_SURFACE_PIXEL_WIDTH_HEADER: &str = "x-streamlib-surface-pixel-width";
+const SOURCE_SURFACE_PIXEL_HEIGHT_HEADER: &str = "x-streamlib-surface-pixel-height";
+
+/// What the exchange answers for an id whose frame's pool slot has since been reused: the id was
+/// real and the frame is gone, distinct from a `404` for an id that never resolved.
+const RECYCLED_FRAME_HTTP_STATUS: StatusCode = StatusCode::GONE;
+
+/// Bounds one exchange request as an observation verb's tool call is bounded.
+const SURFACE_IMAGE_EXCHANGE_REQUEST_TIMEOUT: Duration = OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
+
+/// The file-name stem of an empty surface id.
+const FILE_NAME_STEM_OF_AN_EMPTY_SURFACE_ID: &str = "surface";
+
+/// `tatolab exchange`'s arguments: SURFACE_ID, or `--channel` with its sampling bounds.
+#[derive(Args, Debug, Clone)]
+pub(crate) struct SurfaceImageExchangeArguments {
+    /// A surface id a bag published, e.g. `{slot}#{generation}`.
+    #[arg(value_name = "SURFACE_ID")]
+    pub(crate) published_surface_id: Option<String>,
+    /// Directory the PNGs are written into (created when absent).
+    #[arg(long = "out", value_name = "DIR")]
+    pub(crate) output_directory: OsString,
+    /// Sample this channel instead of naming one id: an output port's address,
+    /// <runtime_name>/<node>/<port>.
+    #[arg(long = "channel", value_name = "CHANNEL")]
+    pub(crate) channel: Option<String>,
+    /// (--channel only) Frames to exchange before returning. Default 1.
+    #[arg(long = "count", value_name = "N", allow_negative_numbers = true)]
+    pub(crate) requested_frame_count: Option<i64>,
+    /// (--channel only) Exchange every Nth sampled bag. Default 1.
+    #[arg(long = "every", value_name = "N", allow_negative_numbers = true)]
+    pub(crate) requested_every_nth_bag: Option<i64>,
+    /// (--channel only) Bag field carrying the surface id (default: surface_id).
+    #[arg(long = "field", value_name = "NAME")]
+    pub(crate) requested_surface_id_bag_field_name: Option<String>,
+    #[command(flatten)]
+    pub(crate) runtime_target: RuntimeTargetArguments,
+}
+
+/// What one `tatolab exchange` asks for, its usage checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SurfaceImageExchangeForm {
+    /// One published surface id, exchanged once.
+    OnePublishedSurfaceId { published_surface_id: String },
+    /// Surface ids read out of a channel's sampled bags.
+    SampledChannel {
+        channel: String,
+        sampled_channel_exchange_bounds: SampledChannelExchangeBounds,
+    },
+}
+
+/// How a channel-form run samples.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SampledChannelExchangeBounds {
+    /// Frames to write before returning.
+    pub(crate) wanted_image_count: usize,
+    /// The stride over received bags: every Nth one is selected.
+    pub(crate) every_nth_bag: usize,
+    /// The bag field a selected bag's surface id is read from.
+    pub(crate) surface_id_bag_field_name: String,
+}
+
+/// One frame's PNG bytes, and the extent of the surface they came from when the runtime stated it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExchangedSurfaceImage {
+    /// The exact image, as written to disk.
+    pub(crate) png_image_bytes: Bytes,
+    /// The source surface's width.
+    pub(crate) source_surface_pixel_width: Option<u32>,
+    /// The source surface's height.
+    pub(crate) source_surface_pixel_height: Option<u32>,
+}
+
+/// Why an exchange wrote no image.
+#[derive(Debug)]
+pub(crate) enum SurfaceImageExchangeFailure {
+    /// The exchange request got no answer.
+    LocalApiRequestFailed(LocalApiHttpRequestFailure),
+    /// The runtime answered and refused, with the status it used and the reason it gave.
+    RefusedByTheRuntime {
+        published_surface_id: String,
+        http_status: StatusCode,
+        refusal_detail: String,
+    },
+    /// The image came back and could not be written into the output directory.
+    OutputDirectoryNotWritable {
+        output_directory: PathBuf,
+        write_failure: std::io::Error,
+    },
+}
+
+impl SurfaceImageExchangeFailure {
+    /// Whether the id named a frame whose pool slot has since been reused — the one refusal a
+    /// newer bag answers. Every other refusal answers the same forever.
+    pub(crate) fn names_a_recycled_frame(&self) -> bool {
+        matches!(
+            self,
+            Self::RefusedByTheRuntime { http_status, .. }
+                if *http_status == RECYCLED_FRAME_HTTP_STATUS
+        )
+    }
+}
+
+impl std::fmt::Display for SurfaceImageExchangeFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LocalApiRequestFailed(local_api_request_failure) => {
+                write!(formatter, "{local_api_request_failure}")
+            }
+            Self::RefusedByTheRuntime {
+                published_surface_id,
+                http_status,
+                refusal_detail,
+            } => {
+                write!(
+                    formatter,
+                    "exchange of surface `{published_surface_id}` answered {}",
+                    http_status.as_u16()
+                )?;
+                if !refusal_detail.is_empty() {
+                    write!(formatter, ": {refusal_detail}")?;
+                }
+                Ok(())
+            }
+            Self::OutputDirectoryNotWritable {
+                output_directory,
+                write_failure,
+            } => write!(
+                formatter,
+                "could not write into `{}`: {write_failure}",
+                output_directory.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SurfaceImageExchangeFailure {}
+
+impl From<SurfaceImageExchangeFailure> for TatolabCommandFailure {
+    fn from(surface_image_exchange_failure: SurfaceImageExchangeFailure) -> Self {
+        TatolabCommandFailure::refused(surface_image_exchange_failure.to_string())
+    }
+}
+
+/// What one channel-form run exchanged, what it retried, and why it stopped early if it did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct SampledChannelExchangeReport {
+    /// Every PNG the run wrote, in the order it wrote them.
+    pub(crate) written_image_paths: Vec<PathBuf>,
+    /// Ids whose frames were recycled before their exchange, each retried against a newer bag.
+    pub(crate) retried_recycled_surface_ids: Vec<String>,
+    /// Selected bags whose named field held no string.
+    pub(crate) bags_missing_the_surface_id_field: usize,
+    /// Bags received across every tap round, selected by the stride or not.
+    pub(crate) bags_examined: usize,
+    /// Tap rounds started.
+    pub(crate) tap_rounds: u32,
+    /// A failure the run could not compose past. It is reported beside the frames that landed
+    /// rather than instead of them: a PNG on disk whose path was never printed is evidence nobody
+    /// can use.
+    pub(crate) stopped_early_because: Option<String>,
+}
+
+/// One bag a tap forwarded. Whether its capped preview matters depends on whether the stride
+/// selects it, so the cap rides with the bag rather than failing its round.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TappedChannelBagFrame {
+    framed_bag_bytes: Vec<u8>,
+    preview_was_capped: bool,
+    whole_bag_byte_len: Option<serde_json::Number>,
+}
+
+/// Why a tapped bag's bytes do not decode to a msgpack value.
+#[derive(Debug)]
+enum TappedChannelBagDecodeFailure {
+    /// Fewer bytes than a frame header.
+    ShorterThanTheFrameHeader { framed_bag_byte_len: usize },
+    /// The header declares more payload than followed it.
+    PayloadTruncated {
+        declared_payload_byte_len: u32,
+        followed_payload_byte_len: usize,
+    },
+    /// The payload is not msgpack.
+    PayloadIsNotMsgpack(rmpv::decode::Error),
+}
+
+impl std::fmt::Display for TappedChannelBagDecodeFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ShorterThanTheFrameHeader {
+                framed_bag_byte_len,
+            } => write!(
+                formatter,
+                "a tapped bag carries a {FRAME_HEADER_SIZE}-byte frame header; got \
+                 {framed_bag_byte_len} bytes, which cannot hold one"
+            ),
+            Self::PayloadTruncated {
+                declared_payload_byte_len,
+                followed_payload_byte_len,
+            } => write!(
+                formatter,
+                "the tapped bag's header declares a {declared_payload_byte_len}-byte payload but \
+                 only {followed_payload_byte_len} bytes followed it — the sample arrived \
+                 truncated, and decoding it would invent a bag the channel never carried"
+            ),
+            Self::PayloadIsNotMsgpack(msgpack_decode_failure) => {
+                write!(formatter, "{msgpack_decode_failure}")
+            }
+        }
+    }
+}
+
+/// `tatolab exchange`: check the usage, pick the runtime, and exchange.
+pub(crate) fn run_surface_image_exchange_verb(
+    exchange_arguments: &SurfaceImageExchangeArguments,
+) -> Result<u8, TatolabCommandFailure> {
+    let exchange_form = surface_image_exchange_form(exchange_arguments)?;
+    let output_directory = output_directory_without_current_directory_components(Path::new(
+        &exchange_arguments.output_directory,
+    ));
+    let selected_runtime = select_live_runtime_on_this_machine(
+        exchange_arguments
+            .runtime_target
+            .requested_runtime_name_or_id
+            .as_deref(),
+    )?;
+    match exchange_form {
+        SurfaceImageExchangeForm::OnePublishedSurfaceId {
+            published_surface_id,
+        } => {
+            let written_image_path = exchange_one_published_surface_id_into_directory(
+                &selected_runtime.local_api_socket_path,
+                &published_surface_id,
+                &output_directory,
+            )?;
+            println!("{}", written_image_path.display());
+            Ok(0)
+        }
+        SurfaceImageExchangeForm::SampledChannel {
+            channel,
+            sampled_channel_exchange_bounds,
+        } => {
+            let sampled_channel_exchange_report = sample_channel_into_exchanged_surface_images(
+                &selected_runtime.local_api_socket_path,
+                &channel,
+                &output_directory,
+                &sampled_channel_exchange_bounds,
+            );
+            for written_image_path in &sampled_channel_exchange_report.written_image_paths {
+                println!("{}", written_image_path.display());
+            }
+            eprint!(
+                "{}",
+                render_sampled_channel_exchange_report(
+                    &channel,
+                    &sampled_channel_exchange_report,
+                    sampled_channel_exchange_bounds.wanted_image_count
+                )
+            );
+            // A short sample fails: a harness that found fewer frames than it asked for must not
+            // read exit 0 as "this is all the channel had".
+            let every_wanted_frame_was_written =
+                sampled_channel_exchange_report.written_image_paths.len()
+                    == sampled_channel_exchange_bounds.wanted_image_count;
+            Ok(if every_wanted_frame_was_written { 0 } else { 1 })
+        }
+    }
+}
+
+/// The form `exchange_arguments` asks for, or the usage refusal. An empty SURFACE_ID or
+/// `--channel` counts as absent, and an empty `--field` as the default.
+pub(crate) fn surface_image_exchange_form(
+    exchange_arguments: &SurfaceImageExchangeArguments,
+) -> Result<SurfaceImageExchangeForm, TatolabCommandFailure> {
+    let published_surface_id = exchange_arguments
+        .published_surface_id
+        .as_deref()
+        .filter(|published_surface_id| !published_surface_id.is_empty());
+    let channel = exchange_arguments
+        .channel
+        .as_deref()
+        .filter(|channel| !channel.is_empty());
+    match (published_surface_id, channel) {
+        (Some(_), Some(_)) => Err(TatolabCommandFailure::refused(
+            "`tatolab exchange` takes a surface id or `--channel`, not both. One id is one \
+             exchange; `--channel` samples ids off a channel."
+                .to_owned(),
+        )),
+        (None, None) => Err(TatolabCommandFailure::refused(
+            "`tatolab exchange` needs a surface id or `--channel`. Ids come from bags — \
+             `tatolab tap <channel>` shows what one carries."
+                .to_owned(),
+        )),
+        (Some(published_surface_id), None) => {
+            let channel_form_flags_given: Vec<&str> = [
+                (
+                    "--count",
+                    exchange_arguments.requested_frame_count.is_some(),
+                ),
+                (
+                    "--every",
+                    exchange_arguments.requested_every_nth_bag.is_some(),
+                ),
+                (
+                    "--field",
+                    exchange_arguments
+                        .requested_surface_id_bag_field_name
+                        .is_some(),
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(channel_form_flag, given)| given.then_some(channel_form_flag))
+            .collect();
+            if !channel_form_flags_given.is_empty() {
+                return Err(TatolabCommandFailure::refused(format!(
+                    "{} sample a channel, and a surface id names one frame already. Use \
+                     `--channel` instead of SURFACE_ID.",
+                    channel_form_flags_given.join(", ")
+                )));
+            }
+            Ok(SurfaceImageExchangeForm::OnePublishedSurfaceId {
+                published_surface_id: published_surface_id.to_owned(),
+            })
+        }
+        (None, Some(channel)) => {
+            let wanted_image_count =
+                sample_bound_at_least_one("--count", exchange_arguments.requested_frame_count)?;
+            let every_nth_bag =
+                sample_bound_at_least_one("--every", exchange_arguments.requested_every_nth_bag)?;
+            let surface_id_bag_field_name = exchange_arguments
+                .requested_surface_id_bag_field_name
+                .as_deref()
+                .filter(|surface_id_bag_field_name| !surface_id_bag_field_name.is_empty())
+                .unwrap_or(DEFAULT_SURFACE_ID_BAG_FIELD_NAME);
+            Ok(SurfaceImageExchangeForm::SampledChannel {
+                channel: channel.to_owned(),
+                sampled_channel_exchange_bounds: SampledChannelExchangeBounds {
+                    wanted_image_count,
+                    every_nth_bag,
+                    surface_id_bag_field_name: surface_id_bag_field_name.to_owned(),
+                },
+            })
+        }
+    }
+}
+
+/// `requested_sample_bound`, 1 when absent, refused below 1 naming `sample_bound_flag`.
+fn sample_bound_at_least_one(
+    sample_bound_flag: &str,
+    requested_sample_bound: Option<i64>,
+) -> Result<usize, TatolabCommandFailure> {
+    let requested_sample_bound = requested_sample_bound.unwrap_or(1);
+    if requested_sample_bound < 1 {
+        return Err(TatolabCommandFailure::refused(format!(
+            "`{sample_bound_flag}` must be at least 1."
+        )));
+    }
+    Ok(usize::try_from(requested_sample_bound).unwrap_or(usize::MAX))
+}
+
+/// `output_directory` with its `.` components dropped, so a written path reads `<dir>/<file>`
+/// however `--out` spelled the directory; `.` when nothing else is left.
+fn output_directory_without_current_directory_components(output_directory: &Path) -> PathBuf {
+    let output_directory_components: PathBuf = output_directory
+        .components()
+        .filter(|output_directory_component| {
+            !matches!(output_directory_component, Component::CurDir)
+        })
+        .collect();
+    if output_directory_components.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        output_directory_components
+    }
+}
+
+/// Exchange `published_surface_id` for its frame's exact pixels and write them into
+/// `output_directory` as `<sanitized id>.png`, answering the written path.
+pub(crate) fn exchange_one_published_surface_id_into_directory(
+    local_api_socket_path: &Path,
+    published_surface_id: &str,
+    output_directory: &Path,
+) -> Result<PathBuf, SurfaceImageExchangeFailure> {
+    let exchanged_surface_image =
+        fetch_surface_image_png_bytes(local_api_socket_path, published_surface_id)?;
+    write_exchanged_surface_image(
+        output_directory,
+        &format!(
+            "{}.png",
+            file_name_stem_for_surface_id(published_surface_id)
+        ),
+        &exchanged_surface_image,
+    )
+}
+
+/// Exchange one published surface id for its frame's exact PNG bytes over the local API's REST
+/// route. Any status outside `2xx` is a refusal carrying the status and the reason given.
+pub(crate) fn fetch_surface_image_png_bytes(
+    local_api_socket_path: &Path,
+    published_surface_id: &str,
+) -> Result<ExchangedSurfaceImage, SurfaceImageExchangeFailure> {
+    let answered = get_whole_response_over_the_local_api_socket(
+        local_api_socket_path,
+        &surface_image_exchange_route_path(published_surface_id),
+        SURFACE_IMAGE_EXCHANGE_REQUEST_TIMEOUT,
+    )
+    .map_err(SurfaceImageExchangeFailure::LocalApiRequestFailed)?;
+    if !answered.status.is_success() {
+        return Err(SurfaceImageExchangeFailure::RefusedByTheRuntime {
+            published_surface_id: published_surface_id.to_owned(),
+            http_status: answered.status,
+            refusal_detail: refusal_detail_of_the_exchange_route(&answered.body),
+        });
+    }
+    Ok(ExchangedSurfaceImage {
+        png_image_bytes: answered.body,
+        source_surface_pixel_width: source_surface_pixel_extent(
+            &answered.headers,
+            SOURCE_SURFACE_PIXEL_WIDTH_HEADER,
+        ),
+        source_surface_pixel_height: source_surface_pixel_extent(
+            &answered.headers,
+            SOURCE_SURFACE_PIXEL_HEIGHT_HEADER,
+        ),
+    })
+}
+
+/// The exchange route's path for `published_surface_id`. A pooled frame id is
+/// `<slot>#<generation>`, and a bare `#` would make the generation a fragment the runtime never
+/// sees, so the id is percent-encoded down to RFC 3986's unreserved set.
+fn surface_image_exchange_route_path(published_surface_id: &str) -> String {
+    let mut percent_encoded_surface_id = String::with_capacity(published_surface_id.len());
+    for surface_id_byte in published_surface_id.bytes() {
+        if surface_id_byte.is_ascii_alphanumeric() || b"-._~".contains(&surface_id_byte) {
+            percent_encoded_surface_id.push(char::from(surface_id_byte));
+        } else {
+            percent_encoded_surface_id.push_str(&format!("%{surface_id_byte:02X}"));
+        }
+    }
+    SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace("{surface_id}", &percent_encoded_surface_id)
+}
+
+/// The message out of the route's `{"error": …}` refusal body, or the body's trimmed text when it
+/// carries none.
+fn refusal_detail_of_the_exchange_route(refusal_body: &[u8]) -> String {
+    let refusal_text = String::from_utf8_lossy(refusal_body).trim().to_owned();
+    match serde_json::from_str::<serde_json::Value>(&refusal_text) {
+        Ok(serde_json::Value::Object(refusal_fields)) => match refusal_fields.get("error") {
+            Some(serde_json::Value::String(refusal_message)) => refusal_message.clone(),
+            _ => refusal_text,
+        },
+        _ => refusal_text,
+    }
+}
+
+/// One extent header as a pixel count; absent or malformed is `None`, since the extent only
+/// annotates pixels that did come back.
+fn source_surface_pixel_extent(
+    response_headers: &HeaderMap,
+    extent_header_name: &str,
+) -> Option<u32> {
+    response_headers
+        .get(extent_header_name)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// `published_surface_id` as a file-name stem: every character outside `[A-Za-z0-9._-]` folded to
+/// `_`.
+fn file_name_stem_for_surface_id(published_surface_id: &str) -> String {
+    let file_name_stem: String = published_surface_id
+        .chars()
+        .map(|surface_id_character| {
+            if surface_id_character.is_ascii_alphanumeric()
+                || matches!(surface_id_character, '.' | '_' | '-')
+            {
+                surface_id_character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if file_name_stem.is_empty() {
+        FILE_NAME_STEM_OF_AN_EMPTY_SURFACE_ID.to_owned()
+    } else {
+        file_name_stem
+    }
+}
+
+/// Write `exchanged_surface_image` into `output_directory`, creating it when absent, as
+/// `file_name`.
+fn write_exchanged_surface_image(
+    output_directory: &Path,
+    file_name: &str,
+    exchanged_surface_image: &ExchangedSurfaceImage,
+) -> Result<PathBuf, SurfaceImageExchangeFailure> {
+    let output_directory_not_writable =
+        |write_failure| SurfaceImageExchangeFailure::OutputDirectoryNotWritable {
+            output_directory: output_directory.to_path_buf(),
+            write_failure,
+        };
+    std::fs::create_dir_all(output_directory).map_err(output_directory_not_writable)?;
+    let written_image_path = output_directory.join(file_name);
+    std::fs::write(
+        &written_image_path,
+        &exchanged_surface_image.png_image_bytes,
+    )
+    .map_err(output_directory_not_writable)?;
+    Ok(written_image_path)
+}
+
+/// Tap `channel` on the runtime at `local_api_socket_path`, exchange the surface ids its sampled
+/// bags carry, and write the PNGs into `output_directory` as `<0000>-<sanitized id>.png`.
+///
+/// The stride counts the bags this client received, continuing across tap rounds rather than
+/// restarting per round. Each round is a fresh attach, so it is not a stride over the channel.
+pub(crate) fn sample_channel_into_exchanged_surface_images(
+    local_api_socket_path: &Path,
+    channel: &str,
+    output_directory: &Path,
+    sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
+) -> SampledChannelExchangeReport {
+    let mut sampled_channel_exchange_report = SampledChannelExchangeReport::default();
+    if let Err(stop_reason) = exchange_sampled_bags_across_tap_rounds(
+        local_api_socket_path,
+        channel,
+        output_directory,
+        sampled_channel_exchange_bounds,
+        &mut sampled_channel_exchange_report,
+    ) {
+        sampled_channel_exchange_report.stopped_early_because = Some(stop_reason);
+    }
+    sampled_channel_exchange_report
+}
+
+/// The channel form's tap rounds, accumulating into `sampled_channel_exchange_report`; the error
+/// is why the run stopped early, and the report keeps everything gathered before it.
+fn exchange_sampled_bags_across_tap_rounds(
+    local_api_socket_path: &Path,
+    channel: &str,
+    output_directory: &Path,
+    sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
+    sampled_channel_exchange_report: &mut SampledChannelExchangeReport,
+) -> Result<(), String> {
+    let SampledChannelExchangeBounds {
+        wanted_image_count,
+        every_nth_bag,
+        surface_id_bag_field_name,
+    } = sampled_channel_exchange_bounds;
+    let mut tap_rounds_local_api_mcp_tool_client = None;
+    while sampled_channel_exchange_report.written_image_paths.len() < *wanted_image_count
+        && sampled_channel_exchange_report.tap_rounds < MAX_TAP_ROUNDS_PER_SAMPLE_RUN
+    {
+        sampled_channel_exchange_report.tap_rounds += 1;
+        let still_wanted_image_count =
+            wanted_image_count - sampled_channel_exchange_report.written_image_paths.len();
+        let tap_tool_result_text = call_tap_on_the_kept_local_api_mcp_tool_client(
+            &mut tap_rounds_local_api_mcp_tool_client,
+            local_api_socket_path,
+            channel,
+            still_wanted_image_count.saturating_mul(*every_nth_bag),
+        )
+        .map_err(|tap_failure| tap_failure.to_string())?;
+        for tapped_bag in tapped_channel_bag_frames(&tap_tool_result_text, channel)? {
+            let selected_by_the_stride = sampled_channel_exchange_report
+                .bags_examined
+                .is_multiple_of(*every_nth_bag);
+            sampled_channel_exchange_report.bags_examined += 1;
+            if !selected_by_the_stride {
+                continue;
+            }
+            if tapped_bag.preview_was_capped {
+                return Err(capped_bag_stop_reason(
+                    channel,
+                    tapped_bag.whole_bag_byte_len.as_ref(),
+                ));
+            }
+            let Some(published_surface_id) = surface_id_in_tapped_bag(
+                &tapped_bag.framed_bag_bytes,
+                channel,
+                surface_id_bag_field_name,
+            )?
+            else {
+                sampled_channel_exchange_report.bags_missing_the_surface_id_field += 1;
+                continue;
+            };
+            let exchanged_surface_image =
+                match fetch_surface_image_png_bytes(local_api_socket_path, &published_surface_id) {
+                    Ok(exchanged_surface_image) => exchanged_surface_image,
+                    Err(exchange_failure) if exchange_failure.names_a_recycled_frame() => {
+                        sampled_channel_exchange_report
+                            .retried_recycled_surface_ids
+                            .push(published_surface_id);
+                        continue;
+                    }
+                    Err(exchange_failure) => return Err(exchange_failure.to_string()),
+                };
+            let written_image_path = write_exchanged_surface_image(
+                output_directory,
+                &format!(
+                    "{:04}-{}.png",
+                    sampled_channel_exchange_report.written_image_paths.len(),
+                    file_name_stem_for_surface_id(&published_surface_id)
+                ),
+                &exchanged_surface_image,
+            )
+            .map_err(|write_failure| write_failure.to_string())?;
+            sampled_channel_exchange_report
+                .written_image_paths
+                .push(written_image_path);
+            if sampled_channel_exchange_report.written_image_paths.len() == *wanted_image_count {
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Call `tap` for `requested_bag_count` bags on `channel` through the client kept across the
+/// run's rounds, connecting it on the first.
+fn call_tap_on_the_kept_local_api_mcp_tool_client(
+    kept_local_api_mcp_tool_client: &mut Option<LocalApiMcpToolClient>,
+    local_api_socket_path: &Path,
+    channel: &str,
+    requested_bag_count: usize,
+) -> Result<String, LocalApiMcpToolClientFailure> {
+    let local_api_mcp_tool_client = match kept_local_api_mcp_tool_client {
+        Some(local_api_mcp_tool_client) => local_api_mcp_tool_client,
+        None => kept_local_api_mcp_tool_client.insert(
+            LocalApiMcpToolClient::connect(
+                local_api_socket_path,
+                OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+            )
+            .map_err(|connect_failure| {
+                tool_call_failure_worded_as_an_observation_verb_reports_it(
+                    TAP_TOOL_NAME,
+                    connect_failure,
+                )
+            })?,
+        ),
+    };
+    local_api_mcp_tool_client
+        .call_tool(
+            TAP_TOOL_NAME,
+            tap_tool_arguments(
+                channel,
+                Some(i64::try_from(requested_bag_count).unwrap_or(i64::MAX)),
+                None,
+            ),
+        )
+        .map_err(|tap_failure| {
+            tool_call_failure_worded_as_an_observation_verb_reports_it(TAP_TOOL_NAME, tap_failure)
+        })
+}
+
+/// The bags one `tap` result carries, as the framed bytes the channel carried. The tool
+/// hex-encodes a bounded prefix of each bag and flags the ones it capped.
+fn tapped_channel_bag_frames(
+    tap_tool_result_text: &str,
+    channel: &str,
+) -> Result<Vec<TappedChannelBagFrame>, String> {
+    let tap_tool_result: serde_json::Value =
+        serde_json::from_str(tap_tool_result_text).map_err(|_| {
+            format!("tap of `{channel}` returned a non-JSON result: {tap_tool_result_text}")
+        })?;
+    let Some(tapped_bags) = tap_tool_result
+        .get("bags")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Err(format!(
+            "tap of `{channel}` returned no `bags` array: {tap_tool_result_text}"
+        ));
+    };
+    tapped_bags
+        .iter()
+        .map(|tapped_bag| {
+            let Some(hex_preview) = tapped_bag
+                .get("hex_preview")
+                .and_then(serde_json::Value::as_str)
+            else {
+                return Err(format!(
+                    "tap of `{channel}` returned a bag with no hex preview: {tapped_bag}"
+                ));
+            };
+            let framed_bag_bytes = bytes_of_a_hex_preview(hex_preview).map_err(|hex_failure| {
+                format!(
+                    "tap of `{channel}` returned a bag whose hex preview does not decode: \
+                     {hex_failure}"
+                )
+            })?;
+            Ok(TappedChannelBagFrame {
+                framed_bag_bytes,
+                preview_was_capped: tapped_bag
+                    .get("hex_truncated")
+                    .is_some_and(json_value_is_truthy),
+                whole_bag_byte_len: match tapped_bag.get("byte_len") {
+                    Some(serde_json::Value::Number(whole_bag_byte_len))
+                        if whole_bag_byte_len.is_i64() || whole_bag_byte_len.is_u64() =>
+                    {
+                        Some(whole_bag_byte_len.clone())
+                    }
+                    _ => None,
+                },
+            })
+        })
+        .collect()
+}
+
+/// Whether a JSON value counts as set: `false`, `null`, zero, and an empty string, array or
+/// object do not.
+fn json_value_is_truthy(json_value: &serde_json::Value) -> bool {
+    match json_value {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(flag) => *flag,
+        serde_json::Value::Number(number) => number.as_f64().is_some_and(|number| number != 0.0),
+        serde_json::Value::String(text) => !text.is_empty(),
+        serde_json::Value::Array(items) => !items.is_empty(),
+        serde_json::Value::Object(fields) => !fields.is_empty(),
+    }
+}
+
+/// The bytes a hex preview spells: two hex digits per byte, ASCII whitespace between bytes
+/// ignored.
+fn bytes_of_a_hex_preview(hex_preview: &str) -> Result<Vec<u8>, String> {
+    let hex_preview_bytes = hex_preview.as_bytes();
+    let mut decoded_bytes = Vec::with_capacity(hex_preview_bytes.len() / 2);
+    let mut position = 0;
+    while position < hex_preview_bytes.len() {
+        if hex_preview_bytes[position].is_ascii_whitespace() {
+            position += 1;
+            continue;
+        }
+        let hex_digit_value_at = |digit_position: usize| {
+            hex_preview_bytes
+                .get(digit_position)
+                .and_then(|hex_digit| char::from(*hex_digit).to_digit(16))
+                .and_then(|hex_digit_value| u8::try_from(hex_digit_value).ok())
+                .ok_or_else(|| format!("non-hexadecimal number found at position {digit_position}"))
+        };
+        let high_nibble = hex_digit_value_at(position)?;
+        let low_nibble = hex_digit_value_at(position + 1)?;
+        decoded_bytes.push(high_nibble << 4 | low_nibble);
+        position += 2;
+    }
+    Ok(decoded_bytes)
+}
+
+/// Why a run stops on a selected bag whose preview `tap` capped: its id cannot be read from here,
+/// and the id form still reaches its frame.
+fn capped_bag_stop_reason(
+    channel: &str,
+    whole_bag_byte_len: Option<&serde_json::Number>,
+) -> String {
+    let stated_size = match whole_bag_byte_len {
+        Some(whole_bag_byte_len) => format!("is {whole_bag_byte_len} bytes"),
+        None => "is larger than".to_owned(),
+    };
+    format!(
+        "a bag the sample selected on `{channel}` {stated_size}, past the prefix `tap` previews, \
+         so its surface id cannot be read from here. Exchange an id from this channel directly: \
+         `tatolab exchange <surface-id> --out <dir>`."
+    )
+}
+
+/// The string `surface_id_bag_field_name` holds in one tapped bag, or `None` when the bag is no
+/// map, lacks the field, or holds something other than a string there. A bag that does not decode
+/// at all is an error rather than a bag without the field: counting it would say the channel
+/// publishes no ids when this client simply could not read it.
+fn surface_id_in_tapped_bag(
+    framed_bag_bytes: &[u8],
+    channel: &str,
+    surface_id_bag_field_name: &str,
+) -> Result<Option<String>, String> {
+    let tapped_bag =
+        decode_tapped_channel_bag_frame(framed_bag_bytes).map_err(|decode_failure| {
+            format!("a bag from `{channel}` could not be decoded: {decode_failure}")
+        })?;
+    let rmpv::Value::Map(tapped_bag_entries) = tapped_bag else {
+        return Ok(None);
+    };
+    // A repeated key reads as its last entry, as a decoded map keeps it.
+    Ok(tapped_bag_entries
+        .iter()
+        .rev()
+        .find(|(entry_name, _)| entry_name.as_str() == Some(surface_id_bag_field_name))
+        .and_then(|(_, entry_value)| entry_value.as_str())
+        .map(str::to_owned))
+}
+
+/// One tapped bag's msgpack value, its frame header stripped by the transport's own accessor.
+fn decode_tapped_channel_bag_frame(
+    framed_bag_bytes: &[u8],
+) -> Result<rmpv::Value, TappedChannelBagDecodeFailure> {
+    // The two arms are `read_payload_from_slice`'s two `None` cases, in order; a third would need
+    // one here too.
+    let Some(mut bag_payload) = FrameHeader::read_payload_from_slice(framed_bag_bytes) else {
+        return Err(if framed_bag_bytes.len() < FRAME_HEADER_SIZE {
+            TappedChannelBagDecodeFailure::ShorterThanTheFrameHeader {
+                framed_bag_byte_len: framed_bag_bytes.len(),
+            }
+        } else {
+            TappedChannelBagDecodeFailure::PayloadTruncated {
+                declared_payload_byte_len: FrameHeader::read_from_slice(framed_bag_bytes).len,
+                followed_payload_byte_len: framed_bag_bytes.len() - FRAME_HEADER_SIZE,
+            }
+        });
+    };
+    rmpv::decode::read_value(&mut bag_payload)
+        .map_err(TappedChannelBagDecodeFailure::PayloadIsNotMsgpack)
+}
+
+/// What a channel-form run says on stderr beside the paths on stdout: what it exchanged, what it
+/// retried, how many selected bags lacked the field, and why it stopped early.
+pub(crate) fn render_sampled_channel_exchange_report(
+    channel: &str,
+    sampled_channel_exchange_report: &SampledChannelExchangeReport,
+    wanted_image_count: usize,
+) -> String {
+    let SampledChannelExchangeReport {
+        written_image_paths,
+        retried_recycled_surface_ids,
+        bags_missing_the_surface_id_field,
+        bags_examined,
+        tap_rounds,
+        stopped_early_because,
+    } = sampled_channel_exchange_report;
+    let mut rendered_report = format!(
+        "exchanged {} of {wanted_image_count} requested frames from `{channel}` ({bags_examined} \
+         bags examined over {tap_rounds} tap {})\n",
+        written_image_paths.len(),
+        if *tap_rounds == 1 { "round" } else { "rounds" }
+    );
+    if !retried_recycled_surface_ids.is_empty() {
+        rendered_report.push_str(&format!(
+            "retried {} recycled {} against newer bags: {}\n",
+            retried_recycled_surface_ids.len(),
+            if retried_recycled_surface_ids.len() == 1 {
+                "frame"
+            } else {
+                "frames"
+            },
+            retried_recycled_surface_ids.join(", ")
+        ));
+    }
+    if *bags_missing_the_surface_id_field > 0 {
+        rendered_report.push_str(&format!(
+            "{bags_missing_the_surface_id_field} {} carried no surface id in the named field — \
+             name the right one with `--field`\n",
+            if *bags_missing_the_surface_id_field == 1 {
+                "bag"
+            } else {
+                "bags"
+            }
+        ));
+    }
+    if let Some(stop_reason) = stopped_early_because {
+        rendered_report.push_str(&format!("error: {stop_reason}\n"));
+    }
+    rendered_report
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use serde_json::json;
+
+    use super::tapped_channel_bag_fixtures::{
+        CAPPED_BAG_STATED_BYTE_LEN, FIXTURE_CHANNEL, SLICE_HOLDS_ONLY_THE_BAG,
+        bag_publishing_no_surface_id, bag_publishing_surface_id,
+        bag_publishing_surface_id_in_field, empty_tap_result_text, framed_bag, msgpack_named_map,
+        png_bytes_for, tap_result_text, tap_result_text_capping_bags,
+    };
+    use super::*;
+    use crate::isolated_node_registry::{
+        IsolatedNodeRegistry, NOTHING_LISTENS_LOCAL_API_SOCKET_PATH, a_registry_entry_named,
+    };
+    use crate::local_api_runtime_selection::select_live_runtime_in_node_registry;
+    use crate::stub_local_api_server::{
+        StubLocalApiScript, StubLocalApiServer, StubSurfaceImageAnswer, StubToolAnswer,
+    };
+
+    const RECYCLED_FRAME_ERROR_MESSAGE: &str =
+        "surface frame recycled: slot reused since that generation";
+
+    fn image_answer(label: &str) -> StubSurfaceImageAnswer {
+        StubSurfaceImageAnswer::png_image(&png_bytes_for(label), Some(1920), Some(1080))
+    }
+
+    fn recycled_frame_answer() -> StubSurfaceImageAnswer {
+        StubSurfaceImageAnswer::refusal(410, RECYCLED_FRAME_ERROR_MESSAGE)
+    }
+
+    fn surface_image_answers_by_id<PublishedSurfaceId: Into<String>>(
+        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
+    ) -> HashMap<String, StubSurfaceImageAnswer> {
+        surface_image_answers
+            .into_iter()
+            .map(|(published_surface_id, answer)| (published_surface_id.into(), answer))
+            .collect()
+    }
+
+    fn stub_answering_surface_images<PublishedSurfaceId: Into<String>>(
+        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
+    ) -> StubLocalApiServer {
+        StubLocalApiServer::serve(StubLocalApiScript {
+            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
+            ..StubLocalApiScript::default()
+        })
+    }
+
+    /// A stub whose `tap` answers `queued_tap_results` in order, then an empty round forever.
+    fn stub_tapping<PublishedSurfaceId: Into<String>>(
+        queued_tap_results: &[String],
+        surface_image_answers: impl IntoIterator<Item = (PublishedSurfaceId, StubSurfaceImageAnswer)>,
+    ) -> StubLocalApiServer {
+        StubLocalApiServer::serve(StubLocalApiScript {
+            fixed_tool_answer: Some(StubToolAnswer::tool_result(&empty_tap_result_text())),
+            queued_tool_answers: queued_tap_results
+                .iter()
+                .map(|tap_result| StubToolAnswer::tool_result(tap_result))
+                .collect(),
+            surface_image_answers: surface_image_answers_by_id(surface_image_answers),
+            ..StubLocalApiScript::default()
+        })
+    }
+
+    fn sampling_bounds(
+        wanted_image_count: usize,
+        every_nth_bag: usize,
+    ) -> SampledChannelExchangeBounds {
+        SampledChannelExchangeBounds {
+            wanted_image_count,
+            every_nth_bag,
+            surface_id_bag_field_name: DEFAULT_SURFACE_ID_BAG_FIELD_NAME.to_owned(),
+        }
+    }
+
+    fn sample_the_stub_channel(
+        local_api_socket_path: &Path,
+        output_directory: &Path,
+        sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
+    ) -> SampledChannelExchangeReport {
+        sample_channel_into_exchanged_surface_images(
+            local_api_socket_path,
+            FIXTURE_CHANNEL,
+            output_directory,
+            sampled_channel_exchange_bounds,
+        )
+    }
+
+    fn written_image_contents(
+        sampled_channel_exchange_report: &SampledChannelExchangeReport,
+    ) -> Vec<Vec<u8>> {
+        sampled_channel_exchange_report
+            .written_image_paths
+            .iter()
+            .map(|written_image_path| std::fs::read(written_image_path).unwrap())
+            .collect()
+    }
+
+    fn png_files_in(directory: &Path) -> usize {
+        std::fs::read_dir(directory)
+            .unwrap()
+            .filter(|directory_entry| {
+                directory_entry
+                    .as_ref()
+                    .unwrap()
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "png")
+            })
+            .count()
+    }
+
+    fn exchange_arguments(
+        published_surface_id: Option<&str>,
+        channel: Option<&str>,
+    ) -> SurfaceImageExchangeArguments {
+        SurfaceImageExchangeArguments {
+            published_surface_id: published_surface_id.map(str::to_owned),
+            output_directory: OsString::from("frames"),
+            channel: channel.map(str::to_owned),
+            requested_frame_count: None,
+            requested_every_nth_bag: None,
+            requested_surface_id_bag_field_name: None,
+            runtime_target: RuntimeTargetArguments::default(),
+        }
+    }
+
+    fn usage_refusal(exchange_arguments: &SurfaceImageExchangeArguments) -> String {
+        let refused = surface_image_exchange_form(exchange_arguments).unwrap_err();
+        assert_eq!(refused.exit_code, 1);
+        refused.message_for_the_user.unwrap()
+    }
+
+    // The REST spelling of the exchange.
+
+    /// A bare `#` would make the generation a URL fragment the runtime never sees.
+    #[test]
+    fn a_pooled_frame_id_is_percent_encoded_into_the_route() {
+        let stub_local_api_server =
+            stub_answering_surface_images([("cam/frame#7", image_answer("seven"))]);
+
+        let exchanged = fetch_surface_image_png_bytes(
+            &stub_local_api_server.local_api_socket_path,
+            "cam/frame#7",
+        )
+        .unwrap();
+
+        assert_eq!(exchanged.png_image_bytes.as_ref(), png_bytes_for("seven"));
+        assert_eq!(
+            stub_local_api_server.recorded_image_request_paths(),
+            ["/api/surfaces/cam%2Fframe%237/image"]
+        );
+    }
+
+    #[test]
+    fn a_surface_id_is_encoded_down_to_the_unreserved_set() {
+        assert_eq!(
+            surface_image_exchange_route_path("Az09-._~ é#/?%"),
+            "/api/surfaces/Az09-._~%20%C3%A9%23%2F%3F%25/image"
+        );
+    }
+
+    #[test]
+    fn the_exchange_states_the_surfaces_own_extent() {
+        let stub_local_api_server = stub_answering_surface_images([("s#1", image_answer("one"))]);
+
+        let exchanged =
+            fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
+                .unwrap();
+
+        assert_eq!(exchanged.source_surface_pixel_width, Some(1920));
+        assert_eq!(exchanged.source_surface_pixel_height, Some(1080));
+    }
+
+    #[test]
+    fn an_extent_header_absent_or_malformed_is_no_extent() {
+        let stub_local_api_server = stub_answering_surface_images([(
+            "s#1",
+            StubSurfaceImageAnswer::png_image(b"png", None, Some(1080)),
+        )]);
+
+        let exchanged =
+            fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
+                .unwrap();
+
+        assert_eq!(exchanged.source_surface_pixel_width, None);
+        assert_eq!(exchanged.source_surface_pixel_height, Some(1080));
+        let mut malformed_extent_headers = HeaderMap::new();
+        malformed_extent_headers.insert(SOURCE_SURFACE_PIXEL_WIDTH_HEADER, "wide".parse().unwrap());
+        assert_eq!(
+            source_surface_pixel_extent(
+                &malformed_extent_headers,
+                SOURCE_SURFACE_PIXEL_WIDTH_HEADER
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_recycled_frame_is_a_refusal_that_composes_as_a_retry() {
+        let stub_local_api_server =
+            stub_answering_surface_images([("s#1", recycled_frame_answer())]);
+
+        let refused =
+            fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
+                .unwrap_err();
+
+        assert!(refused.names_a_recycled_frame());
+        assert_eq!(
+            refused.to_string(),
+            format!("exchange of surface `s#1` answered 410: {RECYCLED_FRAME_ERROR_MESSAGE}")
+        );
+    }
+
+    /// A surface that never existed, or a format with no conversion arm, refuses identically
+    /// forever, so retrying it would spin rather than recover.
+    #[test]
+    fn a_refusal_that_is_not_a_recycled_frame_does_not_compose() {
+        for refused_status in [404, 501] {
+            let stub_local_api_server = stub_answering_surface_images([(
+                "s#1",
+                StubSurfaceImageAnswer::refusal(refused_status, "no"),
+            )]);
+
+            let refused =
+                fetch_surface_image_png_bytes(&stub_local_api_server.local_api_socket_path, "s#1")
+                    .unwrap_err();
+
+            assert!(!refused.names_a_recycled_frame(), "{refused_status}");
+            assert!(
+                matches!(
+                    refused,
+                    SurfaceImageExchangeFailure::RefusedByTheRuntime { http_status, .. }
+                        if http_status.as_u16() == refused_status
+                ),
+                "{refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refusal_body_yields_its_error_message_or_else_its_trimmed_text() {
+        for (refusal_body, refusal_detail) in [
+            (r#"{"error": "no such surface"}"#, "no such surface"),
+            ("  frame gone\n", "frame gone"),
+            (r#"{"error": 5}"#, r#"{"error": 5}"#),
+            ("[1, 2]", "[1, 2]"),
+            ("", ""),
+        ] {
+            assert_eq!(
+                refusal_detail_of_the_exchange_route(refusal_body.as_bytes()),
+                refusal_detail,
+                "{refusal_body:?}"
+            );
+        }
+        assert_eq!(
+            SurfaceImageExchangeFailure::RefusedByTheRuntime {
+                published_surface_id: "s#1".to_owned(),
+                http_status: StatusCode::NOT_FOUND,
+                refusal_detail: String::new(),
+            }
+            .to_string(),
+            "exchange of surface `s#1` answered 404"
+        );
+    }
+
+    #[test]
+    fn an_exchange_nothing_answers_is_named_as_unreachable() {
+        let unreachable =
+            fetch_surface_image_png_bytes(Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH), "s#1")
+                .unwrap_err();
+
+        assert!(!unreachable.names_a_recycled_frame());
+        assert!(
+            unreachable.to_string().starts_with(&format!(
+                "no control plane reachable at {NOTHING_LISTENS_LOCAL_API_SOCKET_PATH} ("
+            )),
+            "{unreachable}"
+        );
+    }
+
+    // The id form.
+
+    #[test]
+    fn the_id_form_writes_the_exact_bytes_into_a_directory_it_creates() {
+        let stub_local_api_server =
+            stub_answering_surface_images([("cam/frame#7", image_answer("seven"))]);
+        let scratch_directory = tempfile::tempdir().unwrap();
+        let output_directory = scratch_directory.path().join("nested").join("frames");
+
+        let written_image_path = exchange_one_published_surface_id_into_directory(
+            &stub_local_api_server.local_api_socket_path,
+            "cam/frame#7",
+            &output_directory,
+        )
+        .unwrap();
+
+        assert_eq!(written_image_path, output_directory.join("cam_frame_7.png"));
+        assert_eq!(
+            std::fs::read(&written_image_path).unwrap(),
+            png_bytes_for("seven")
+        );
+        assert_eq!(png_files_in(&output_directory), 1);
+    }
+
+    #[test]
+    fn the_id_form_reaches_a_registered_runtime_named_by_the_node_flag() {
+        let isolated_node_registry = IsolatedNodeRegistry::new();
+        let stub_local_api_server =
+            stub_answering_surface_images([("cam/frame#7", image_answer("seven"))]);
+        let other_stub_local_api_server = StubLocalApiServer::serve_default();
+        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
+            "Rcam",
+            "rig-cam",
+            &stub_local_api_server.local_api_socket_path,
+        ));
+        isolated_node_registry.write_registry_entry(&a_registry_entry_named(
+            "Rother",
+            "rig-other",
+            &other_stub_local_api_server.local_api_socket_path,
+        ));
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let selected_runtime = select_live_runtime_in_node_registry(
+            &isolated_node_registry.node_registry_directory(),
+            Some("rig-cam"),
+        )
+        .unwrap();
+        let written_image_path = exchange_one_published_surface_id_into_directory(
+            &selected_runtime.local_api_socket_path,
+            "cam/frame#7",
+            output_directory.path(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(written_image_path).unwrap(),
+            png_bytes_for("seven")
+        );
+        assert_eq!(
+            stub_local_api_server.recorded_image_request_paths(),
+            ["/api/surfaces/cam%2Fframe%237/image"]
+        );
+        assert!(
+            other_stub_local_api_server
+                .recorded_image_request_paths()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_surface_id_that_does_not_resolve_writes_nothing_and_names_the_id() {
+        let stub_local_api_server =
+            stub_answering_surface_images(Vec::<(String, StubSurfaceImageAnswer)>::new());
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let refused = exchange_one_published_surface_id_into_directory(
+            &stub_local_api_server.local_api_socket_path,
+            "gone#1",
+            output_directory.path(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            refused.to_string(),
+            "exchange of surface `gone#1` answered 404: no such surface"
+        );
+        assert_eq!(png_files_in(output_directory.path()), 0);
+    }
+
+    /// `--out` naming an existing regular file is a typo, and a typo gets a message.
+    #[test]
+    fn an_output_directory_that_cannot_be_written_is_reported() {
+        let stub_local_api_server = stub_answering_surface_images([("s#1", image_answer("one"))]);
+        let scratch_directory = tempfile::tempdir().unwrap();
+        let already_a_file = scratch_directory.path().join("already-a-file");
+        std::fs::write(&already_a_file, "not a directory").unwrap();
+
+        let refused = exchange_one_published_surface_id_into_directory(
+            &stub_local_api_server.local_api_socket_path,
+            "s#1",
+            &already_a_file,
+        )
+        .unwrap_err();
+
+        assert!(
+            refused.to_string().starts_with(&format!(
+                "could not write into `{}`: ",
+                already_a_file.display()
+            )),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn a_surface_id_folds_into_a_file_name_stem() {
+        for (published_surface_id, file_name_stem) in [
+            ("cam/frame#7", "cam_frame_7"),
+            ("a.b-c_D9", "a.b-c_D9"),
+            ("é#1", "__1"),
+            ("", "surface"),
+        ] {
+            assert_eq!(
+                file_name_stem_for_surface_id(published_surface_id),
+                file_name_stem,
+                "{published_surface_id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_output_directory_drops_its_current_directory_components() {
+        for (spelled_output_directory, output_directory) in [
+            ("frames", "frames"),
+            ("./frames/", "frames"),
+            ("a/./b//c", "a/b/c"),
+            ("/tmp/frames", "/tmp/frames"),
+            (".", "."),
+            ("", "."),
+            ("../frames", "../frames"),
+        ] {
+            assert_eq!(
+                output_directory_without_current_directory_components(Path::new(
+                    spelled_output_directory
+                )),
+                PathBuf::from(output_directory),
+                "{spelled_output_directory:?}"
+            );
+        }
+    }
+
+    // Usage.
+
+    #[test]
+    fn an_id_or_a_channel_picks_the_form_with_the_channel_forms_defaults() {
+        assert_eq!(
+            surface_image_exchange_form(&exchange_arguments(Some("s#1"), None)).unwrap(),
+            SurfaceImageExchangeForm::OnePublishedSurfaceId {
+                published_surface_id: "s#1".to_owned()
+            }
+        );
+        assert_eq!(
+            surface_image_exchange_form(&exchange_arguments(None, Some("cam/frame"))).unwrap(),
+            SurfaceImageExchangeForm::SampledChannel {
+                channel: "cam/frame".to_owned(),
+                sampled_channel_exchange_bounds: sampling_bounds(1, 1),
+            }
+        );
+        let mut every_bound_named = exchange_arguments(None, Some("cam/frame"));
+        every_bound_named.requested_frame_count = Some(3);
+        every_bound_named.requested_every_nth_bag = Some(2);
+        every_bound_named.requested_surface_id_bag_field_name = Some("frame_id".to_owned());
+        assert_eq!(
+            surface_image_exchange_form(&every_bound_named).unwrap(),
+            SurfaceImageExchangeForm::SampledChannel {
+                channel: "cam/frame".to_owned(),
+                sampled_channel_exchange_bounds: SampledChannelExchangeBounds {
+                    wanted_image_count: 3,
+                    every_nth_bag: 2,
+                    surface_id_bag_field_name: "frame_id".to_owned(),
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn exchange_refuses_a_surface_id_and_a_channel_together() {
+        assert_eq!(
+            usage_refusal(&exchange_arguments(Some("s#1"), Some("cam/frame"))),
+            "`tatolab exchange` takes a surface id or `--channel`, not both. One id is one \
+             exchange; `--channel` samples ids off a channel."
+        );
+    }
+
+    #[test]
+    fn exchange_needs_a_surface_id_or_a_channel() {
+        for (published_surface_id, channel) in [(None, None), (Some(""), Some(""))] {
+            assert_eq!(
+                usage_refusal(&exchange_arguments(published_surface_id, channel)),
+                "`tatolab exchange` needs a surface id or `--channel`. Ids come from bags — \
+                 `tatolab tap <channel>` shows what one carries."
+            );
+        }
+    }
+
+    /// An empty id or channel counts as none given, and an empty `--field` as the default.
+    #[test]
+    fn an_empty_id_channel_or_field_counts_as_not_given() {
+        assert!(matches!(
+            surface_image_exchange_form(&exchange_arguments(Some("s#1"), Some(""))),
+            Ok(SurfaceImageExchangeForm::OnePublishedSurfaceId { .. })
+        ));
+        let mut empty_field = exchange_arguments(Some(""), Some("cam/frame"));
+        empty_field.requested_surface_id_bag_field_name = Some(String::new());
+        assert_eq!(
+            surface_image_exchange_form(&empty_field).unwrap(),
+            SurfaceImageExchangeForm::SampledChannel {
+                channel: "cam/frame".to_owned(),
+                sampled_channel_exchange_bounds: sampling_bounds(1, 1),
+            }
+        );
+    }
+
+    /// These sample a channel; a surface id already names one frame. Asking explicitly for the
+    /// value the channel form defaults to is still asking for the channel form.
+    #[test]
+    fn a_channel_form_flag_beside_a_surface_id_is_refused_by_name() {
+        let mut with_count = exchange_arguments(Some("s#1"), None);
+        with_count.requested_frame_count = Some(1);
+        let mut with_every = exchange_arguments(Some("s#1"), None);
+        with_every.requested_every_nth_bag = Some(2);
+        let mut with_field = exchange_arguments(Some("s#1"), None);
+        with_field.requested_surface_id_bag_field_name = Some(String::new());
+        let mut with_all_three = exchange_arguments(Some("s#1"), None);
+        with_all_three.requested_frame_count = Some(3);
+        with_all_three.requested_every_nth_bag = Some(2);
+        with_all_three.requested_surface_id_bag_field_name = Some("frame_id".to_owned());
+
+        for (channel_form_arguments, named_flags) in [
+            (with_count, "--count"),
+            (with_every, "--every"),
+            (with_field, "--field"),
+            (with_all_three, "--count, --every, --field"),
+        ] {
+            assert_eq!(
+                usage_refusal(&channel_form_arguments),
+                format!(
+                    "{named_flags} sample a channel, and a surface id names one frame already. \
+                     Use `--channel` instead of SURFACE_ID."
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn a_sample_bound_below_one_is_refused_by_name() {
+        for (sample_bound_flag, below_one) in [("--count", 0), ("--count", -1), ("--every", 0)] {
+            let mut below_one_bound = exchange_arguments(None, Some("cam/frame"));
+            if sample_bound_flag == "--count" {
+                below_one_bound.requested_frame_count = Some(below_one);
+            } else {
+                below_one_bound.requested_every_nth_bag = Some(below_one);
+            }
+
+            assert_eq!(
+                usage_refusal(&below_one_bound),
+                format!("`{sample_bound_flag}` must be at least 1.")
+            );
+        }
+    }
+
+    // Reading a tapped bag.
+
+    #[test]
+    fn a_tapped_bag_decodes_past_the_slack_its_slice_carries() {
+        assert_eq!(
+            surface_id_in_tapped_bag(
+                &bag_publishing_surface_id("camera/frame#7"),
+                FIXTURE_CHANNEL,
+                "surface_id"
+            ),
+            Ok(Some("camera/frame#7".to_owned()))
+        );
+    }
+
+    #[test]
+    fn bytes_too_short_to_hold_a_frame_header_are_refused() {
+        assert_eq!(
+            surface_id_in_tapped_bag(&[0u8; 8], FIXTURE_CHANNEL, "surface_id"),
+            Err(
+                "a bag from `cam/frame` could not be decoded: a tapped bag carries a 76-byte \
+                 frame header; got 8 bytes, which cannot hold one"
+                    .to_owned()
+            )
+        );
+    }
+
+    /// Decoding a truncated prefix would hand back a bag missing its later fields.
+    #[test]
+    fn a_bag_whose_header_declares_more_than_followed_is_refused_as_truncated() {
+        let whole_bag = framed_bag(
+            &msgpack_named_map(&[
+                ("surface_id", "s#1".into()),
+                ("filler", "x".repeat(200).into()),
+            ]),
+            SLICE_HOLDS_ONLY_THE_BAG,
+        );
+        let declared_payload_byte_len = whole_bag.len() - FRAME_HEADER_SIZE;
+
+        assert_eq!(
+            surface_id_in_tapped_bag(
+                &whole_bag[..whole_bag.len() - 32],
+                FIXTURE_CHANNEL,
+                "surface_id"
+            ),
+            Err(format!(
+                "a bag from `cam/frame` could not be decoded: the tapped bag's header declares a \
+                 {declared_payload_byte_len}-byte payload but only {} bytes followed it — the \
+                 sample arrived truncated, and decoding it would invent a bag the channel never \
+                 carried",
+                declared_payload_byte_len - 32
+            ))
+        );
+    }
+
+    /// A one-entry map marker with no entry behind it.
+    #[test]
+    fn a_payload_that_is_not_msgpack_is_refused() {
+        let refused = surface_id_in_tapped_bag(
+            &framed_bag(&[0x81], SLICE_HOLDS_ONLY_THE_BAG),
+            FIXTURE_CHANNEL,
+            "surface_id",
+        )
+        .unwrap_err();
+
+        assert!(
+            refused.starts_with("a bag from `cam/frame` could not be decoded: "),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn a_bag_holding_no_string_in_the_field_is_missing_it() {
+        let bag_from_payload =
+            |bag_payload: &[u8]| framed_bag(bag_payload, SLICE_HOLDS_ONLY_THE_BAG);
+        let mut not_a_named_map = Vec::new();
+        rmpv::encode::write_value(&mut not_a_named_map, &rmpv::Value::from("s#1")).unwrap();
+
+        for bag_without_the_field in [
+            bag_publishing_no_surface_id(),
+            bag_publishing_surface_id_in_field("s#1", "rendered_surface"),
+            bag_from_payload(&msgpack_named_map(&[("surface_id", 7.into())])),
+            bag_from_payload(&msgpack_named_map(&[(
+                "surface_id",
+                rmpv::Value::Binary(b"s#1".to_vec()),
+            )])),
+            bag_from_payload(&not_a_named_map),
+        ] {
+            assert_eq!(
+                surface_id_in_tapped_bag(&bag_without_the_field, FIXTURE_CHANNEL, "surface_id"),
+                Ok(None)
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_field_reads_as_its_last_entry() {
+        let bag_repeating_the_field = framed_bag(
+            &msgpack_named_map(&[("surface_id", "s#1".into()), ("surface_id", "s#2".into())]),
+            SLICE_HOLDS_ONLY_THE_BAG,
+        );
+
+        assert_eq!(
+            surface_id_in_tapped_bag(&bag_repeating_the_field, FIXTURE_CHANNEL, "surface_id"),
+            Ok(Some("s#2".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_tap_result_carries_each_bags_bytes_cap_and_stated_size() {
+        let first_bag = bag_publishing_surface_id("s#1");
+        let second_bag = bag_publishing_surface_id("s#2");
+
+        let tapped_bags = tapped_channel_bag_frames(
+            &tap_result_text_capping_bags(&[first_bag.clone(), second_bag.clone()], &[1], true),
+            FIXTURE_CHANNEL,
+        )
+        .unwrap();
+
+        assert_eq!(
+            tapped_bags,
+            [
+                TappedChannelBagFrame {
+                    whole_bag_byte_len: Some(first_bag.len().into()),
+                    framed_bag_bytes: first_bag,
+                    preview_was_capped: false,
+                },
+                TappedChannelBagFrame {
+                    framed_bag_bytes: second_bag,
+                    preview_was_capped: true,
+                    whole_bag_byte_len: Some(CAPPED_BAG_STATED_BYTE_LEN.into()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tapped_bags_cap_is_any_set_flag_and_its_size_only_an_integer() {
+        let tapped_bags = tapped_channel_bag_frames(
+            &json!({"bags": [
+                {"hex_preview": "", "hex_truncated": 1, "byte_len": 9000.0},
+                {"hex_preview": "", "hex_truncated": "", "byte_len": "9000"},
+                {"hex_preview": "", "hex_truncated": null},
+                {"hex_preview": ""},
+            ]})
+            .to_string(),
+            FIXTURE_CHANNEL,
+        )
+        .unwrap();
+
+        assert_eq!(
+            tapped_bags
+                .iter()
+                .map(|tapped_bag| (
+                    tapped_bag.preview_was_capped,
+                    tapped_bag.whole_bag_byte_len.clone()
+                ))
+                .collect::<Vec<_>>(),
+            [(true, None), (false, None), (false, None), (false, None)]
+        );
+        for (json_value, truthy) in [
+            (json!(true), true),
+            (json!(false), false),
+            (json!(0), false),
+            (json!(0.5), true),
+            (json!("yes"), true),
+            (json!([]), false),
+            (json!({"a": 1}), true),
+        ] {
+            assert_eq!(json_value_is_truthy(&json_value), truthy, "{json_value}");
+        }
+    }
+
+    #[test]
+    fn a_tap_result_that_carries_no_readable_bags_is_refused_naming_the_channel() {
+        for (tap_tool_result_text, refusal) in [
+            (
+                "not json",
+                "tap of `cam/frame` returned a non-JSON result: not json",
+            ),
+            (
+                r#"{"received": 0}"#,
+                r#"tap of `cam/frame` returned no `bags` array: {"received": 0}"#,
+            ),
+            (
+                r#"{"bags": [{"byte_len": 5}]}"#,
+                r#"tap of `cam/frame` returned a bag with no hex preview: {"byte_len":5}"#,
+            ),
+            (
+                r#"{"bags": [{"hex_preview": "0g"}]}"#,
+                "tap of `cam/frame` returned a bag whose hex preview does not decode: \
+                 non-hexadecimal number found at position 1",
+            ),
+        ] {
+            assert_eq!(
+                tapped_channel_bag_frames(tap_tool_result_text, FIXTURE_CHANNEL),
+                Err(refusal.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn a_hex_preview_decodes_with_whitespace_between_bytes_and_refuses_half_a_byte() {
+        assert_eq!(
+            bytes_of_a_hex_preview("0aFF 10\n7f"),
+            Ok(vec![0x0a, 0xff, 0x10, 0x7f])
+        );
+        assert_eq!(
+            bytes_of_a_hex_preview("abc"),
+            Err("non-hexadecimal number found at position 3".to_owned())
+        );
+        assert_eq!(
+            bytes_of_a_hex_preview("a b"),
+            Err("non-hexadecimal number found at position 1".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_capped_bag_is_named_with_its_size_or_as_larger_than_the_preview() {
+        assert_eq!(
+            capped_bag_stop_reason("cam/frame", Some(&9000.into())),
+            "a bag the sample selected on `cam/frame` is 9000 bytes, past the prefix `tap` \
+             previews, so its surface id cannot be read from here. Exchange an id from this \
+             channel directly: `tatolab exchange <surface-id> --out <dir>`."
+        );
+        assert!(capped_bag_stop_reason("cam/frame", None).starts_with(
+            "a bag the sample selected on `cam/frame` is larger than, past the prefix `tap` \
+                 previews"
+        ));
+    }
+
+    // The channel form.
+
+    #[test]
+    fn the_channel_form_taps_then_exchanges_each_sampled_id() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text(&[
+                bag_publishing_surface_id("s#1"),
+                bag_publishing_surface_id("s#2"),
+            ])],
+            [("s#1", image_answer("one")), ("s#2", image_answer("two"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(2, 1),
+        );
+
+        assert_eq!(
+            report,
+            SampledChannelExchangeReport {
+                written_image_paths: vec![
+                    output_directory.path().join("0000-s_1.png"),
+                    output_directory.path().join("0001-s_2.png"),
+                ],
+                retried_recycled_surface_ids: Vec::new(),
+                bags_missing_the_surface_id_field: 0,
+                bags_examined: 2,
+                tap_rounds: 1,
+                stopped_early_because: None,
+            }
+        );
+        assert_eq!(
+            written_image_contents(&report),
+            [png_bytes_for("one"), png_bytes_for("two")]
+        );
+        let recorded_tool_calls = stub_local_api_server.recorded_tool_calls();
+        assert_eq!(recorded_tool_calls.len(), 1);
+        assert_eq!(recorded_tool_calls[0].tool_name, "tap");
+        assert_eq!(
+            recorded_tool_calls[0].tool_arguments,
+            json!({"channel": "cam/frame", "count": 2})
+        );
+        assert_eq!(
+            stub_local_api_server.recorded_image_request_paths(),
+            ["/api/surfaces/s%231/image", "/api/surfaces/s%232/image"]
+        );
+    }
+
+    /// `tap` keeps its contract: it is asked for bags alone, never a field to read.
+    #[test]
+    fn the_field_override_reads_the_key_the_caller_named_and_tap_is_never_asked_to_read_a_bag() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text(&[bag_publishing_surface_id_in_field(
+                "s#9",
+                "rendered_surface",
+            )])],
+            [("s#9", image_answer("nine"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &SampledChannelExchangeBounds {
+                surface_id_bag_field_name: "rendered_surface".to_owned(),
+                ..sampling_bounds(1, 1)
+            },
+        );
+
+        assert_eq!(written_image_contents(&report), [png_bytes_for("nine")]);
+        assert_eq!(
+            stub_local_api_server.recorded_tool_calls()[0].tool_arguments,
+            json!({"channel": "cam/frame", "count": 1})
+        );
+    }
+
+    /// The run recovers and says which id it gave up on, so a sample never quietly becomes a
+    /// different frame.
+    #[test]
+    fn a_recycled_frame_is_retried_against_a_newer_bag_and_reported() {
+        let stub_local_api_server = stub_tapping(
+            &[
+                tap_result_text(&[bag_publishing_surface_id("stale#1")]),
+                tap_result_text(&[bag_publishing_surface_id("fresh#2")]),
+            ],
+            [
+                ("stale#1", recycled_frame_answer()),
+                ("fresh#2", image_answer("fresh")),
+            ],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(1, 1),
+        );
+
+        assert_eq!(written_image_contents(&report), [png_bytes_for("fresh")]);
+        assert_eq!(report.retried_recycled_surface_ids, ["stale#1"]);
+        assert_eq!(report.tap_rounds, 2);
+        assert_eq!(report.stopped_early_because, None);
+    }
+
+    #[test]
+    fn a_channel_whose_frames_always_recycle_gives_up_after_the_round_cap() {
+        let stub_local_api_server = StubLocalApiServer::serve(StubLocalApiScript {
+            fixed_tool_answer: Some(StubToolAnswer::tool_result(&tap_result_text(&[
+                bag_publishing_surface_id("stale#1"),
+            ]))),
+            surface_image_answers: surface_image_answers_by_id([(
+                "stale#1",
+                recycled_frame_answer(),
+            )]),
+            ..StubLocalApiScript::default()
+        });
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(1, 1),
+        );
+
+        assert_eq!(report.tap_rounds, MAX_TAP_ROUNDS_PER_SAMPLE_RUN);
+        assert_eq!(report.retried_recycled_surface_ids, ["stale#1"; 8]);
+        assert!(report.written_image_paths.is_empty());
+        assert_eq!(report.stopped_early_because, None);
+    }
+
+    #[test]
+    fn a_bag_without_the_named_field_is_counted_rather_than_fatal() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text(&[
+                bag_publishing_no_surface_id(),
+                bag_publishing_surface_id("s#1"),
+            ])],
+            [("s#1", image_answer("one"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(1, 1),
+        );
+
+        assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
+        assert_eq!(report.bags_missing_the_surface_id_field, 1);
+    }
+
+    #[test]
+    fn every_nth_bag_selects_the_stride_and_asks_for_enough_bags_to_fill_it() {
+        let labels = ["a", "b", "c", "d", "e", "f"];
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text(&labels.map(|label| {
+                bag_publishing_surface_id(&format!("s#{label}"))
+            }))],
+            labels.map(|label| (format!("s#{label}"), image_answer(label))),
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(2, 3),
+        );
+
+        assert_eq!(
+            written_image_contents(&report),
+            [png_bytes_for("a"), png_bytes_for("d")]
+        );
+        assert_eq!(
+            stub_local_api_server.recorded_tool_calls()[0].tool_arguments["count"],
+            6
+        );
+    }
+
+    /// A stride restarted per round would exchange `a` then `c`, the first bag of each round.
+    #[test]
+    fn the_stride_runs_across_tap_rounds_on_one_client_rather_than_restarting() {
+        let stub_local_api_server = stub_tapping(
+            &[
+                tap_result_text(
+                    &["a", "b"].map(|label| bag_publishing_surface_id(&format!("s#{label}"))),
+                ),
+                tap_result_text(
+                    &["c", "d"].map(|label| bag_publishing_surface_id(&format!("s#{label}"))),
+                ),
+            ],
+            ["a", "b", "c", "d"].map(|label| (format!("s#{label}"), image_answer(label))),
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(2, 3),
+        );
+
+        assert_eq!(
+            written_image_contents(&report),
+            [png_bytes_for("a"), png_bytes_for("d")],
+            "the stride restarted at each tap round"
+        );
+        assert_eq!(report.tap_rounds, 2);
+        assert_eq!(report.bags_examined, 4);
+        assert_eq!(
+            stub_local_api_server
+                .recorded_tool_calls()
+                .iter()
+                .map(|recorded_tool_call| recorded_tool_call.tool_arguments["count"].clone())
+                .collect::<Vec<_>>(),
+            [json!(6), json!(3)]
+        );
+    }
+
+    /// The one frame that landed is still named, and the run says it fell short.
+    #[test]
+    fn a_short_sample_reports_what_landed_over_every_round_it_spent() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text(&[bag_publishing_surface_id("s#1")])],
+            [("s#1", image_answer("one"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(3, 1),
+        );
+
+        assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
+        assert_eq!(report.tap_rounds, MAX_TAP_ROUNDS_PER_SAMPLE_RUN);
+        assert_eq!(report.stopped_early_because, None);
+        assert!(
+            render_sampled_channel_exchange_report(FIXTURE_CHANNEL, &report, 3)
+                .starts_with("exchanged 1 of 3 requested frames from `cam/frame`")
+        );
+    }
+
+    #[test]
+    fn a_refusal_that_cannot_be_retried_stops_the_run() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text(&[bag_publishing_surface_id("s#1")])],
+            [(
+                "s#1",
+                StubSurfaceImageAnswer::refusal(501, "no conversion arm"),
+            )],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(1, 1),
+        );
+
+        assert!(report.written_image_paths.is_empty());
+        assert_eq!(report.tap_rounds, 1);
+        assert_eq!(
+            report.stopped_early_because.as_deref(),
+            Some("exchange of surface `s#1` answered 501: no conversion arm")
+        );
+    }
+
+    /// Every PNG on disk is a PNG that was named, the stop reported beside the frames.
+    #[test]
+    fn frames_that_landed_before_a_fatal_stop_are_still_reported() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text(&[
+                bag_publishing_surface_id("s#1"),
+                bag_publishing_surface_id("s#2"),
+            ])],
+            [
+                ("s#1", image_answer("one")),
+                (
+                    "s#2",
+                    StubSurfaceImageAnswer::refusal(404, "no such surface"),
+                ),
+            ],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(2, 1),
+        );
+
+        assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
+        assert_eq!(
+            report.stopped_early_because.as_deref(),
+            Some("exchange of surface `s#2` answered 404: no such surface")
+        );
+        assert_eq!(png_files_in(output_directory.path()), 1);
+    }
+
+    /// A preview cut short with no cap flagged still decodes to a refusal naming the truncation,
+    /// never a bag missing its later fields.
+    #[test]
+    fn a_bag_the_tap_truncated_stops_the_run_by_name() {
+        let whole_bag = framed_bag(
+            &msgpack_named_map(&[
+                ("surface_id", "s#1".into()),
+                ("filler", "x".repeat(200).into()),
+            ]),
+            SLICE_HOLDS_ONLY_THE_BAG,
+        );
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text(&[
+                whole_bag[..whole_bag.len() - 32].to_vec()
+            ])],
+            Vec::<(String, StubSurfaceImageAnswer)>::new(),
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(1, 1),
+        );
+
+        let stop_reason = report.stopped_early_because.unwrap();
+        assert!(stop_reason.contains("truncated"), "{stop_reason}");
+    }
+
+    /// Counting a capped bag as one with no surface id would blame the channel for the tool's own
+    /// limit, and retrying it would never converge; the id form still reaches its frame.
+    #[test]
+    fn a_bag_past_the_taps_preview_cap_stops_the_run_and_names_the_size() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text_capping_bags(
+                &[bag_publishing_surface_id("s#1")],
+                &[0],
+                true,
+            )],
+            [("s#1", image_answer("one"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(1, 1),
+        );
+
+        assert_eq!(
+            report.stopped_early_because,
+            Some(capped_bag_stop_reason(FIXTURE_CHANNEL, Some(&9000.into())))
+        );
+        assert!(
+            stub_local_api_server
+                .recorded_image_request_paths()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_capped_bag_with_no_stated_size_is_still_diagnosed_as_capped() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text_capping_bags(
+                &[bag_publishing_surface_id("s#1")],
+                &[0],
+                false,
+            )],
+            [("s#1", image_answer("one"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(1, 1),
+        );
+
+        assert_eq!(
+            report.stopped_early_because,
+            Some(capped_bag_stop_reason(FIXTURE_CHANNEL, None))
+        );
+    }
+
+    /// Bag 0 is selected and publishes no id, so the loop must reach the capped bag 1 and pass it
+    /// by for the run to finish on bag 2.
+    #[test]
+    fn the_stride_steps_over_an_oversized_bag_rather_than_dying_on_it() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text_capping_bags(
+                &[
+                    bag_publishing_no_surface_id(),
+                    bag_publishing_surface_id("s#2"),
+                    bag_publishing_surface_id("s#3"),
+                ],
+                &[1],
+                true,
+            )],
+            [("s#3", image_answer("three"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(1, 2),
+        );
+
+        assert_eq!(
+            report.stopped_early_because, None,
+            "a capped bag the stride skipped ended a run that never needed it"
+        );
+        assert_eq!(written_image_contents(&report), [png_bytes_for("three")]);
+        assert_eq!(report.bags_missing_the_surface_id_field, 1);
+    }
+
+    #[test]
+    fn a_bag_the_stride_skips_cannot_kill_the_run_by_being_oversized() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text_capping_bags(
+                &[
+                    bag_publishing_surface_id("s#1"),
+                    bag_publishing_surface_id("s#2"),
+                ],
+                &[1],
+                true,
+            )],
+            [("s#1", image_answer("one"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(1, 2),
+        );
+
+        assert_eq!(report.stopped_early_because, None);
+        assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
+    }
+
+    /// Failing the whole tap round on bag 1 would throw away bag 0's frame, already exchanged.
+    #[test]
+    fn an_oversized_bag_does_not_discard_the_readable_bags_beside_it() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text_capping_bags(
+                &[
+                    bag_publishing_surface_id("s#1"),
+                    bag_publishing_surface_id("s#2"),
+                ],
+                &[1],
+                true,
+            )],
+            [("s#1", image_answer("one"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(2, 1),
+        );
+
+        assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
+        let stop_reason = report.stopped_early_because.unwrap();
+        assert!(stop_reason.contains("9000 bytes"), "{stop_reason}");
+    }
+
+    /// The second frame's file name is already a directory, so its write fails after the first
+    /// frame landed.
+    #[test]
+    fn a_write_that_fails_still_names_the_frames_that_landed() {
+        let stub_local_api_server = stub_tapping(
+            &[tap_result_text(&[
+                bag_publishing_surface_id("s#1"),
+                bag_publishing_surface_id("s#2"),
+            ])],
+            [("s#1", image_answer("one")), ("s#2", image_answer("two"))],
+        );
+        let output_directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(output_directory.path().join("0001-s_2.png")).unwrap();
+
+        let report = sample_the_stub_channel(
+            &stub_local_api_server.local_api_socket_path,
+            output_directory.path(),
+            &sampling_bounds(2, 1),
+        );
+
+        assert_eq!(written_image_contents(&report), [png_bytes_for("one")]);
+        let stop_reason = report.stopped_early_because.unwrap();
+        assert!(
+            stop_reason.starts_with(&format!(
+                "could not write into `{}`: ",
+                output_directory.path().display()
+            )),
+            "{stop_reason}"
+        );
+    }
+
+    #[test]
+    fn a_tap_the_runtime_fails_or_refuses_stops_the_run_in_its_first_round() {
+        let failing_stub_local_api_server =
+            StubLocalApiServer::serve_answering_every_tool_call_with(StubToolAnswer::tool_failure(
+                "no such channel",
+            ));
+        let refusing_stub_local_api_server = StubLocalApiServer::serve(StubLocalApiScript {
+            refuse_every_tool_call_with: Some("channel must name a port".to_owned()),
+            ..StubLocalApiScript::default()
+        });
+        let output_directory = tempfile::tempdir().unwrap();
+
+        for (stub_local_api_server, stop_reason) in [
+            (
+                &failing_stub_local_api_server,
+                "tap failed: no such channel",
+            ),
+            (
+                &refusing_stub_local_api_server,
+                "tap failed: channel must name a port (-32602)",
+            ),
+        ] {
+            let report = sample_the_stub_channel(
+                &stub_local_api_server.local_api_socket_path,
+                output_directory.path(),
+                &sampling_bounds(1, 1),
+            );
+
+            assert_eq!(report.tap_rounds, 1);
+            assert_eq!(report.stopped_early_because.as_deref(), Some(stop_reason));
+        }
+    }
+
+    #[test]
+    fn a_tap_nothing_answers_stops_the_run_in_its_first_round() {
+        let output_directory = tempfile::tempdir().unwrap();
+
+        let report = sample_the_stub_channel(
+            Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH),
+            output_directory.path(),
+            &sampling_bounds(1, 1),
+        );
+
+        assert_eq!(report.tap_rounds, 1);
+        let stop_reason = report.stopped_early_because.unwrap();
+        assert!(
+            stop_reason.starts_with(&format!(
+                "no runtime answers MCP at {NOTHING_LISTENS_LOCAL_API_SOCKET_PATH} ("
+            )),
+            "{stop_reason}"
+        );
+    }
+
+    // The report.
+
+    #[test]
+    fn the_report_names_every_count_in_the_plural() {
+        let report = SampledChannelExchangeReport {
+            written_image_paths: vec![PathBuf::from("frames/0000-s_1.png")],
+            retried_recycled_surface_ids: vec!["s#2".to_owned(), "s#3".to_owned()],
+            bags_missing_the_surface_id_field: 4,
+            bags_examined: 9,
+            tap_rounds: 3,
+            stopped_early_because: Some("exchange of surface `s#4` answered 501".to_owned()),
+        };
+
+        assert_eq!(
+            render_sampled_channel_exchange_report("cam/frame", &report, 3),
+            "exchanged 1 of 3 requested frames from `cam/frame` (9 bags examined over 3 tap \
+             rounds)\n\
+             retried 2 recycled frames against newer bags: s#2, s#3\n\
+             4 bags carried no surface id in the named field — name the right one with \
+             `--field`\n\
+             error: exchange of surface `s#4` answered 501\n"
+        );
+    }
+
+    #[test]
+    fn the_report_names_a_count_of_one_in_the_singular_and_leaves_out_what_did_not_happen() {
+        let retried_and_missing_one = SampledChannelExchangeReport {
+            retried_recycled_surface_ids: vec!["s#2".to_owned()],
+            bags_missing_the_surface_id_field: 1,
+            bags_examined: 1,
+            tap_rounds: 1,
+            ..SampledChannelExchangeReport::default()
+        };
+
+        assert_eq!(
+            render_sampled_channel_exchange_report("cam/frame", &retried_and_missing_one, 1),
+            "exchanged 0 of 1 requested frames from `cam/frame` (1 bags examined over 1 tap \
+             round)\n\
+             retried 1 recycled frame against newer bags: s#2\n\
+             1 bag carried no surface id in the named field — name the right one with \
+             `--field`\n"
+        );
+        assert_eq!(
+            render_sampled_channel_exchange_report(
+                "cam/frame",
+                &SampledChannelExchangeReport {
+                    written_image_paths: vec![PathBuf::from("frames/0000-s_1.png")],
+                    bags_examined: 1,
+                    tap_rounds: 1,
+                    ..SampledChannelExchangeReport::default()
+                },
+                1
+            ),
+            "exchanged 1 of 1 requested frames from `cam/frame` (1 bags examined over 1 tap \
+             round)\n"
+        );
+    }
+}

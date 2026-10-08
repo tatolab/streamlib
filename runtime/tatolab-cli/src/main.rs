@@ -19,6 +19,7 @@ mod runtime_log_files_reader;
 mod runtime_logs_verb;
 mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
+mod surface_image_exchange;
 mod virtual_camera_loopback_permission_grant;
 
 #[cfg(test)]
@@ -135,6 +136,16 @@ enum TatolabVerb {
         #[command(flatten)]
         runtime_target: RuntimeTargetArguments,
     },
+    /// Exchange published surface ids for PNG files on disk.
+    #[command(
+        long_about = "With SURFACE_ID, exchanges that one id. With --channel, taps the channel, \
+                      reads a surface id out of each sampled bag, and exchanges it — one warm \
+                      process, no window in the graph and no display server in the path. Writes \
+                      exact full-resolution PNGs into --out and prints their paths on stdout, one \
+                      per line — those paths are this run's frames, and --out is not cleared, so \
+                      read them rather than listing the directory."
+    )]
+    Exchange(surface_image_exchange::SurfaceImageExchangeArguments),
     /// Read a runtime's JSONL log file, or a running runtime's event stream.
     #[command(
         long_about = "With RUNTIME_ID, renders that runtime's on-disk JSONL log exactly as the \
@@ -239,6 +250,11 @@ fn main() -> ExitCode {
                 requested_max_bag_bytes,
             ),
         ),
+        TatolabVerb::Exchange(surface_image_exchange_arguments) => {
+            surface_image_exchange::run_surface_image_exchange_verb(
+                &surface_image_exchange_arguments,
+            )
+        }
         TatolabVerb::Logs(logs_arguments) => runtime_logs_verb::run_runtime_logs_verb(logs_arguments),
         TatolabVerb::EnableVirtualCamera {
             print_grant_without_installing: true,
