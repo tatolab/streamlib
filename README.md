@@ -100,7 +100,7 @@ on PyPI:
 uv add tatolab-stream
 ```
 
-`tatolab new` writes a `pyproject.toml` that depends on `tatolab-stream` and `numpy>=2.1`, so
+`tatolab new` writes a `pyproject.toml` that depends on `tatolab-stream>=0.41` and `numpy>=2.1`, so
 `uv sync` is the whole setup. Nothing is generated, compiled or downloaded at run time.
 
 ## Quickstart

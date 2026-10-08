@@ -197,9 +197,12 @@ def test_the_scaffold_pins_the_python_version_the_plan_names():
 
 
 def test_the_scaffold_depends_on_tatolab_stream_and_numpy_only():
-    assert 'dependencies = ["tatolab-stream", "numpy>=2.1"]\n' in template_text(
+    assert 'dependencies = ["tatolab-stream>=0.41", "numpy>=2.1"]\n' in template_text(
         "pyproject.toml"
-    ), "the pixel effect needs no GPU package of the user's own, and no runtime enters"
+    ), (
+        "the pixel effect needs no GPU package of the user's own, no runtime enters, and "
+        "the floor keeps PyPI's 0.0.0 tatolab-stream placeholder out of the resolve"
+    )
 
 
 def test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index():

@@ -151,6 +151,10 @@ fn new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header() {
 
     let pyproject_toml = fs::read_to_string(project_directory.join("pyproject.toml")).unwrap();
     assert!(pyproject_toml.contains("name = \"my-probe-app\""));
+    assert!(
+        pyproject_toml.contains("dependencies = [\"tatolab-stream>=0.41\", \"numpy>=2.1\"]"),
+        "the written project floors tatolab-stream above PyPI's 0.0.0 placeholder: {pyproject_toml}"
+    );
     assert_eq!(
         pyproject_toml,
         scaffold_template_text("pyproject.toml").replace(

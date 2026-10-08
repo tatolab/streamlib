@@ -2,4 +2,4 @@
 name = "tatolab-stream-project"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["tatolab-stream", "numpy>=2.1"]
+dependencies = ["tatolab-stream>=0.41", "numpy>=2.1"]
