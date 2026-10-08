@@ -11,6 +11,8 @@
 pub(crate) mod compiler;
 #[cfg(test)]
 mod engine_build_id_composition;
+#[cfg(test)]
+mod engine_build_id_composition_tests;
 pub(crate) mod logging;
 pub(crate) mod observability;
 pub(crate) mod runtime_hooks;
