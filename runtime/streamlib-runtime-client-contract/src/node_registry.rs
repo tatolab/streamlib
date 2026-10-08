@@ -630,18 +630,17 @@ mod tests {
         });
     }
 
-    /// A released engine from before the TCP listener went writes schema 3 with
-    /// the URL key beside the socket path, and an app pinned to it still runs.
+    /// A released engine can write a key this reader has no field for, and an
+    /// app pinned to that engine still runs.
     #[test]
-    fn a_schema_three_entry_still_carrying_the_retired_url_key_is_read() {
+    fn an_entry_carrying_a_key_this_reader_does_not_read_is_still_read() {
         with_isolated_registry_directory(|registry_directory| {
-            let entry = sample_entry("Rcarries-url");
+            let entry = sample_entry("Rcarries-an-unread-key");
             let mut entry_json = serde_json::to_value(&entry).unwrap();
-            // Joined at run time so the retired key's own text does not survive here.
-            entry_json[["control", "url"].join("_")] = "http://127.0.0.1:9000".into();
+            entry_json["a_key_this_reader_does_not_read"] = "any value".into();
             write_entry_file(
                 registry_directory,
-                "Rcarries-url.json",
+                "Rcarries-an-unread-key.json",
                 &serde_json::to_vec(&entry_json).unwrap(),
             );
 
