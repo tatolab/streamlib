@@ -1853,6 +1853,20 @@ sys.exit(0)
         );
     }
 
+    /// The bootstrap sits in the lent runtime package wherever the runtime
+    /// unit's layout puts that package.
+    #[test]
+    fn the_bootstrap_sits_in_the_lent_runtime_package_the_layout_declares() {
+        let lent_runtime_package_prefix = format!(
+            "{}/",
+            streamlib_consumer_rhi::runtime_unit_layout::LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_LEND
+        );
+        let bootstrap_file_name = PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY
+            .strip_prefix(&lent_runtime_package_prefix)
+            .expect("the bootstrap path starts with the lent runtime package");
+        assert!(!bootstrap_file_name.contains('/'));
+    }
+
     /// The class the child imports, and the identifiers it reports itself by,
     /// travel in the environment. `STREAMLIB_ENTRYPOINT` *is* the import path
     /// the type was described under.

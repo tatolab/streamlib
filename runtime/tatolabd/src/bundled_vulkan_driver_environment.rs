@@ -4,7 +4,7 @@
 //! Naming the Vulkan driver the lend carries on macOS to the Vulkan loader.
 //!
 //! A stock Mac has no Vulkan driver, so the lend carries MoltenVK and its ICD
-//! manifest in `tatolab/runtime/_vulkan_driver/`; nothing else does, so on
+//! manifest in its bundled Vulkan driver directory; nothing else does, so on
 //! every other floor this changes nothing. The same rule as
 //! `tatolab/runtime/_bundled_vulkan_driver.py`, which a processor interpreter
 //! runs again on the environment it inherits — so the manifest is named by its
@@ -12,10 +12,9 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-
-/// The bundled ICD manifest, relative to the lend.
-const BUNDLED_ICD_MANIFEST_RELATIVE_TO_THE_LEND: &str =
-    "tatolab/runtime/_vulkan_driver/MoltenVK_icd.json";
+use streamlib::sdk::processor_interpreter::{
+    BUNDLED_ICD_MANIFEST_FILE_NAME, bundled_vulkan_driver_directory_in_the_lend,
+};
 
 /// Either one replaces the loader's driver search outright; a user who set one
 /// has chosen their drivers, and adding the bundled one would override that.
@@ -35,7 +34,7 @@ pub(crate) fn vk_add_driver_files_naming_the_bundled_icd_manifest(
     environment_variable: impl Fn(&str) -> Option<OsString>,
 ) -> Option<OsString> {
     let bundled_icd_manifest =
-        processor_interpreter_lend_directory.join(BUNDLED_ICD_MANIFEST_RELATIVE_TO_THE_LEND);
+        bundled_icd_manifest_in_the_lend(processor_interpreter_lend_directory);
     if !bundled_icd_manifest.is_file() {
         return None;
     }
@@ -65,6 +64,11 @@ pub(crate) fn vk_add_driver_files_naming_the_bundled_icd_manifest(
     .ok()
 }
 
+/// The ICD manifest the lend at `lend_directory` carries on macOS.
+fn bundled_icd_manifest_in_the_lend(lend_directory: &Path) -> PathBuf {
+    bundled_vulkan_driver_directory_in_the_lend(lend_directory).join(BUNDLED_ICD_MANIFEST_FILE_NAME)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,7 +76,7 @@ mod tests {
 
     fn a_lend_carrying_the_bundled_icd_manifest() -> tempfile::TempDir {
         let lend = tempfile::TempDir::new().unwrap();
-        let manifest = lend.path().join(BUNDLED_ICD_MANIFEST_RELATIVE_TO_THE_LEND);
+        let manifest = bundled_icd_manifest_in_the_lend(lend.path());
         std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
         std::fs::write(&manifest, "{}").unwrap();
         lend
@@ -131,7 +135,7 @@ mod tests {
     #[test]
     fn the_manifest_is_appended_once_after_those_already_added() {
         let lend = a_lend_carrying_the_bundled_icd_manifest();
-        let bundled_icd_manifest = lend.path().join(BUNDLED_ICD_MANIFEST_RELATIVE_TO_THE_LEND);
+        let bundled_icd_manifest = bundled_icd_manifest_in_the_lend(lend.path());
 
         let named_alone = vk_add_driver_files_naming_the_bundled_icd_manifest(
             lend.path(),

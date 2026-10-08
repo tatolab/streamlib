@@ -5,22 +5,20 @@
 
 """The compile entry `tatolab run` and `tatolab dev` run in the project's own interpreter.
 
-`python -m tatolab.stream._project_stream_compile_entry --verb {run,dev} [TARGET]
-[-f FILE] [--dir DIR] [--name NAME]`, with the anchor directory as the working
-directory; `--dir` is only how the caller's command spelled it. On success stdout
-carries exactly one JSON object, `{"stream_graph": ..., "project_directory": ...}`,
-and the exit code is 0. A refusal prints `error: <message>` to stderr and exits 1;
-an app or compile failure prints the app's own traceback to stderr and exits 1; an
-app's deliberate `SystemExit` keeps its code, so exit 0 with nothing on stdout is an
-app that chose to exit, and there is no stream to start.
+`tatolab` starts it as `<venv python> -I -m tatolab.stream._project_stream_compile_entry
+--verb {run,dev} [TARGET] [-f FILE] [--dir DIR] [--name NAME]`, with the anchor
+directory as the working directory; `--dir` is only how the caller's command spelled
+it. On success stdout carries exactly one JSON object,
+`{"stream_graph": ..., "project_directory": ...}`, and the exit code is 0. A refusal
+prints `error: <message>` to stderr and exits 1; an app or compile failure prints the
+app's own traceback to stderr and exits 1; an app's deliberate `SystemExit` keeps its
+code, so exit 0 with nothing on stdout is an app that chose to exit, and there is no
+stream to start.
 
-Under `-m` the working directory leads `sys.path` while this module and
-`tatolab.stream` import, so a project module named like a standard-library one
-they import (`json.py` at the anchor) replaces it. Starting the entry with that
-directory dropped first avoids it, on every Python this package supports:
-`python -c "import sys; getattr(sys.flags, 'safe_path', False) or sys.path.pop(0);
-import runpy; runpy.run_module('tatolab.stream._project_stream_compile_entry',
-run_name='__main__', alter_sys=True)" --verb ...`.
+`-I` keeps the working directory off `sys.path` while this module and
+`tatolab.stream` import, so a project module named like a standard-library one they
+import (`json.py` at the anchor) cannot replace it; it also ignores every `PYTHON*`
+variable and the user's site-packages, so the venv alone decides what imports.
 """
 
 from __future__ import annotations
@@ -121,7 +119,7 @@ def print_app_failure(entry_described: str, app_failure: BaseException) -> None:
 def build_argument_parser() -> argparse.ArgumentParser:
     """The compile entry's arguments: the verb `tatolab` was given and its target flags."""
     parser = argparse.ArgumentParser(
-        prog="python -m tatolab.stream._project_stream_compile_entry",
+        prog="python -I -m tatolab.stream._project_stream_compile_entry",
         description=(
             f"Compile the stream `tatolab run` / `tatolab dev` names, in the project's own "
             f"interpreter, with the anchor directory as the working directory. Executes "
@@ -195,17 +193,6 @@ def _write_the_compiled_document(
         compiled_document_stdout.write(
             (json.dumps(compiled_document, allow_nan=False) + "\n").encode("utf-8")
         )
-
-
-def _drop_the_working_directory_python_m_put_on_the_import_path() -> None:
-    """`-m` leads `sys.path` with the working directory; `python stream.py` would not.
-
-    Left there, a file entry in a subdirectory could import modules from the anchor
-    that the stream's processor interpreters, started in the entry's own
-    directory, cannot.
-    """
-    if sys.path and sys.path[0] in ("", os.getcwd()):
-        del sys.path[0]
 
 
 def _print_the_cross_floor_warning_block(anchor_directory: Path) -> None:
@@ -284,7 +271,6 @@ def compile_the_requested_stream(
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Compile the requested stream and write its document to stdout; return the exit code."""
     arguments = build_argument_parser().parse_args(argv)
-    _drop_the_working_directory_python_m_put_on_the_import_path()
 
     compiled_document_stdout_descriptor = _carry_every_later_stdout_write_to_stderr()
     try:

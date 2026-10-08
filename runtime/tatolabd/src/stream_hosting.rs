@@ -72,19 +72,36 @@ pub(crate) fn host_the_stream_until_shutdown(
         tracing::error!("{run_refusal}");
     }
 
-    match (tear_the_engine_down(engine), run_outcome) {
-        (EngineTeardownOutcome::Dropped, Ok(())) => ExitCode::SUCCESS,
-        // Written again once the engine is gone, because under
-        // `STREAMLIB_QUIET` no log mirror carried it to standard error.
-        (EngineTeardownOutcome::Dropped, Err(run_refusal)) => {
-            write_refusal_to_standard_error(&run_refusal)
-        }
-        (
-            EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(description)
-            | EngineTeardownOutcome::StillReferenced(description),
-            _,
-        ) => write_refusal_to_standard_error(&description),
+    let engine_teardown_outcome = tear_the_engine_down(engine);
+    let mut exit_code = ExitCode::SUCCESS;
+    for refusal in
+        refusals_written_once_the_engine_is_torn_down(run_outcome, engine_teardown_outcome)
+    {
+        exit_code = write_refusal_to_standard_error(&refusal);
     }
+    exit_code
+}
+
+/// What `tatolabd` writes to standard error once the teardown is over, in
+/// order: the run's own refusal, then what the teardown left behind. Empty
+/// for a clean exit.
+///
+/// The run's refusal is written again even though it was logged, because
+/// under `STREAMLIB_QUIET` no log mirror carried it to standard error.
+fn refusals_written_once_the_engine_is_torn_down(
+    run_outcome: Result<(), String>,
+    engine_teardown_outcome: EngineTeardownOutcome,
+) -> Vec<String> {
+    let mut refusals = Vec::new();
+    if let Err(run_refusal) = run_outcome {
+        refusals.push(run_refusal);
+    }
+    match engine_teardown_outcome {
+        EngineTeardownOutcome::Dropped => {}
+        EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(description)
+        | EngineTeardownOutcome::StillReferenced(description) => refusals.push(description),
+    }
+    refusals
 }
 
 /// Log the load's success under the stream name and node count the engine's
@@ -159,5 +176,64 @@ fn tear_the_engine_down(engine: Arc<Runner>) -> EngineTeardownOutcome {
                     .to_owned(),
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_clean_run_and_a_dropped_engine_write_nothing() {
+        assert!(
+            refusals_written_once_the_engine_is_torn_down(Ok(()), EngineTeardownOutcome::Dropped)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_refused_run_whose_engine_dropped_writes_the_run_refusal() {
+        assert_eq!(
+            refusals_written_once_the_engine_is_torn_down(
+                Err("the stream did not run: refused".to_owned()),
+                EngineTeardownOutcome::Dropped,
+            ),
+            ["the stream did not run: refused"]
+        );
+    }
+
+    #[test]
+    fn an_engine_left_alive_after_a_refused_run_writes_the_run_refusal_then_the_teardown() {
+        for (engine_teardown_outcome, teardown_description) in [
+            (
+                EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(
+                    "a processor thread was abandoned".to_owned(),
+                ),
+                "a processor thread was abandoned",
+            ),
+            (
+                EngineTeardownOutcome::StillReferenced("a live reference was left".to_owned()),
+                "a live reference was left",
+            ),
+        ] {
+            assert_eq!(
+                refusals_written_once_the_engine_is_torn_down(
+                    Err("the stream did not run: refused".to_owned()),
+                    engine_teardown_outcome,
+                ),
+                ["the stream did not run: refused", teardown_description]
+            );
+        }
+    }
+
+    #[test]
+    fn an_engine_left_alive_after_a_clean_run_writes_the_teardown() {
+        assert_eq!(
+            refusals_written_once_the_engine_is_torn_down(
+                Ok(()),
+                EngineTeardownOutcome::StillReferenced("a live reference was left".to_owned()),
+            ),
+            ["a live reference was left"]
+        );
     }
 }

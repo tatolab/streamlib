@@ -11,31 +11,34 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use streamlib::sdk::processor_interpreter::processor_interpreter_bootstrap_path;
+use streamlib::sdk::processor_interpreter::{
+    BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, lend_directory_in_the_runtime_unit,
+    processor_interpreter_bootstrap_path,
+};
 
 /// A temporary runtime unit: `bin/tatolabd`, and the lend beside it unless the
 /// test asked for none.
 pub struct TemporaryRuntimeUnit {
-    _runtime_unit_root: tempfile::TempDir,
+    runtime_unit_root: tempfile::TempDir,
     pub tatolabd: PathBuf,
 }
 
 impl TemporaryRuntimeUnit {
-    /// `bin/tatolabd` beside `lib/tatolab/lend/` holding the bootstrap.
+    /// `bin/tatolabd` beside the lend, holding the bootstrap.
     pub fn with_its_lend() -> Self {
         let runtime_unit = Self::without_a_lend();
-        let bootstrap = processor_interpreter_bootstrap_path(
-            &runtime_unit
-                .tatolabd
-                .parent()
-                .and_then(Path::parent)
-                .expect("bin/ has a parent")
-                .join("lib/tatolab/lend"),
-        );
+        let bootstrap = processor_interpreter_bootstrap_path(&lend_directory_in_the_runtime_unit(
+            runtime_unit.runtime_unit_root(),
+        ));
         std::fs::create_dir_all(bootstrap.parent().expect("the bootstrap has a directory"))
             .expect("the lend is created");
         std::fs::write(&bootstrap, "").expect("the bootstrap is written");
         runtime_unit
+    }
+
+    /// The directory holding `bin/` and the lend.
+    pub fn runtime_unit_root(&self) -> &Path {
+        self.runtime_unit_root.path()
     }
 
     /// `bin/tatolabd` and nothing beside it.
@@ -47,7 +50,9 @@ impl TemporaryRuntimeUnit {
             .prefix("tatolabd-runtime-unit-")
             .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
             .expect("a temporary runtime unit");
-        let bin_directory = runtime_unit_root.path().join("bin");
+        let bin_directory = runtime_unit_root
+            .path()
+            .join(BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT);
         std::fs::create_dir_all(&bin_directory).expect("bin/ is created");
         let tatolabd = bin_directory.join("tatolabd");
         let built_tatolabd = Path::new(env!("CARGO_BIN_EXE_tatolabd"));
@@ -55,7 +60,7 @@ impl TemporaryRuntimeUnit {
             std::fs::copy(built_tatolabd, &tatolabd).expect("tatolabd is copied into bin/");
         }
         Self {
-            _runtime_unit_root: runtime_unit_root,
+            runtime_unit_root,
             tatolabd,
         }
     }
