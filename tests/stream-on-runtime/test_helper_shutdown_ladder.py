@@ -15,7 +15,6 @@ only visible to a parent.
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import signal
 import sys
@@ -45,6 +44,7 @@ from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHol
 from runtime_process_under_test import (
     ENGINE_STARTED_LOG_LINE,
     STREAM_LOADED_LOG_LINE_PATTERN,
+    STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT,
     RuntimeProcessUnderTest,
     registry_entry_paths_in,
 )
@@ -67,11 +67,15 @@ HELPER_OUTLIVING_A_KILLED_RUNTIME_BUDGET_SECONDS = 10.0
 # How long `tatolabd` may take to be reaped once its output has ended.
 CLEAN_EXIT_BUDGET_AFTER_OUTPUT_ENDS_SECONDS = 10.0
 
+# How long `tatolabd` may take to exit after a Ctrl-C while a survivor it
+# started sleeps on: far under the survivor's thirty seconds, so a teardown
+# that waits on the survivor's hold of a helper's output cannot pass.
+EXIT_BUDGET_WHILE_A_SURVIVOR_SLEEPS_SECONDS = 10.0
+
+REGISTRY_POLL_INTERVAL_SECONDS = 0.01
+
 #: How long the describing interpreter of a load given up to an interrupt may outlive it.
 DESCRIBING_INTERPRETER_OUTLIVING_AN_INTERRUPTED_LOAD_BUDGET_SECONDS = 5.0
-
-#: `tatolabd`'s line when an interrupt ended the load before the engine started.
-STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT = "so the stream was never started"
 
 
 @stream
@@ -316,11 +320,16 @@ def test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit(
     try:
         tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE)
         waiter.start()
+        interrupted_at = time.monotonic()
         tatolabd.interrupt()
         output_ended_at = tatolabd.await_end_of_output()
         waiter.join(timeout=CLEAN_EXIT_BUDGET_AFTER_OUTPUT_ENDS_SECONDS)
 
         assert exited_at, f"tatolabd never exited:\n{tatolabd.recent_stderr()}"
+        assert exited_at[0] - interrupted_at < EXIT_BUDGET_WHILE_A_SURVIVOR_SLEEPS_SECONDS, (
+            f"tatolabd took {exited_at[0] - interrupted_at:.1f}s to exit after the interrupt — "
+            f"its teardown waited on the survivor:\n{tatolabd.recent_stderr()}"
+        )
         assert tatolabd.process.returncode == 0, (
             f"tatolabd exited with {tatolabd.process.returncode}:\n{tatolabd.recent_stderr()}"
         )
@@ -369,6 +378,20 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
         project_directory=held_node_module.project_directory,
         extra_environment=environment_reaching_no_vulkan_driver(tmp_path),
     )
+    registry_entries_ever_seen: "set[Path]" = set()
+
+    def record_every_registry_entry_until_tatolabd_exits() -> None:
+        while True:
+            exited = tatolabd.process.poll() is not None
+            registry_entries_ever_seen.update(
+                registry_entry_paths_in(private_runtime_directories.streamlib_runtime_directory)
+            )
+            if exited:
+                return
+            time.sleep(REGISTRY_POLL_INTERVAL_SECONDS)
+
+    registry_watcher = threading.Thread(target=record_every_registry_entry_until_tatolabd_exits, daemon=True)
+    registry_watcher.start()
     assert held_node_module.wait_until_the_load_reaches_the_import(), (
         f"the load never reached the describe:\n{tatolabd.recent_stderr()}"
     )
@@ -376,6 +399,7 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
     assert describing_interpreter_process_id is not None
     tatolabd.interrupt()
     exit_status = tatolabd.await_exit(timeout=15)
+    registry_watcher.join(timeout=5)
     stderr_text = tatolabd.stderr_text
 
     assert exit_status == 0, tatolabd.recent_stderr()
@@ -385,12 +409,11 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
         f"the load reported the stream loaded after the interrupt:\n{tatolabd.recent_stderr()}"
     )
     assert ENGINE_STARTED_LOG_LINE not in stderr_text, tatolabd.recent_stderr()
-    registry_entries_naming_this_tatolabd = [
-        entry_path
-        for entry_path in registry_entry_paths_in(private_runtime_directories.streamlib_runtime_directory)
-        if json.loads(entry_path.read_text(encoding="utf-8")).get("pid") == tatolabd.pid
-    ]
-    assert registry_entries_naming_this_tatolabd == [], registry_entries_naming_this_tatolabd
+    assert not registry_watcher.is_alive()
+    # The runtime directory is this test's own, so any entry in it at any moment is this tatolabd's.
+    assert registry_entries_ever_seen == set(), (
+        f"tatolabd published {sorted(registry_entries_ever_seen)} while the load was being given up"
+    )
     assert helper_process_ids_started_in(stderr_text) == [], tatolabd.recent_stderr()
     assert a_process_is_gone_within(
         describing_interpreter_process_id,

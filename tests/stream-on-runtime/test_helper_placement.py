@@ -37,6 +37,7 @@ from helper_placement_processors import (
 )
 from helper_process_observation import (
     a_process_is_gone_within,
+    assert_runs_in_a_process_of_its_own_beneath,
     helper_process_ids_started_in,
     helper_process_is_still_alive,
 )
@@ -207,11 +208,13 @@ def test_adding_a_processor_loads_nothing_into_the_app(start_tatolabd: StartTato
 def test_a_bag_is_produced_in_a_process_that_is_not_the_apps(start_tatolabd: StartTatolabd):
     """The pid rides in the bag, so the claim is about where `process` ran —
     not about what the engine logged it was going to do."""
-    tatolabd = run_until_marker_then_interrupt(
-        start_tatolabd, only_labelled_source_into_sink, "SINK_PID"
-    )
-    sink_report = tatolabd.marker_payloads("SINK_PID")[0]
+    tatolabd = start_tatolabd(only_labelled_source_into_sink)
+    sink_report = tatolabd.await_marker("SINK_PID")
     sink_pid, upstream_pid = sink_report["sink_pid"], sink_report["upstream_pid"]
+    assert_runs_in_a_process_of_its_own_beneath(upstream_pid, tatolabd.pid)
+    assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
 
     assert upstream_pid != tatolabd.pid, (
         f"the source produced its bag in tatolabd's own process ({tatolabd.pid})"
@@ -230,10 +233,12 @@ def test_two_instances_of_one_class_get_two_processes(start_tatolabd: StartTatol
     # Awaited twice without naming a label: the two instances report in
     # whichever order they finish booting.
     tatolabd.await_marker("SOURCE_PID", occurrence=2)
+    reported_pids = {report["pid"] for report in tatolabd.marker_payloads("SOURCE_PID")}
+    for reported_pid in reported_pids:
+        assert_runs_in_a_process_of_its_own_beneath(reported_pid, tatolabd.pid)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
-    reported_pids = {report["pid"] for report in tatolabd.marker_payloads("SOURCE_PID")}
     assert len(reported_pids) == 2, (
         f"two instances of one class reported {reported_pids} — expected two distinct pids:\n"
         f"{tatolabd.recent_stderr()}"
@@ -255,10 +260,11 @@ def test_a_native_builtin_stays_in_the_app_process(start_tatolabd: StartTatolabd
     the runtime process". Native built-ins do, by design — their per-frame path
     never enters an interpreter.
     """
-    tatolabd = run_until_marker_then_interrupt(
-        start_tatolabd, native_test_pattern_into_python_video_sink, "VIDEO_SINK_PID"
-    )
-    sink_pid = tatolabd.marker_payloads("VIDEO_SINK_PID")[0]["pid"]
+    tatolabd = start_tatolabd(native_test_pattern_into_python_video_sink)
+    sink_pid = tatolabd.await_marker("VIDEO_SINK_PID")["pid"]
+    assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
 
     assert helper_pids == [sink_pid], (

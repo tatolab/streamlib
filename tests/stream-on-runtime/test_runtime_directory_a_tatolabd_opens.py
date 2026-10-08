@@ -22,7 +22,7 @@ import pytest
 
 from conftest import PrivateRuntimeDirectories, environment_overlaid_with, environment_reaching_no_vulkan_driver
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
-from runtime_process_under_test import RuntimeProcessUnderTest
+from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT, RuntimeProcessUnderTest
 from runtime_unit_under_test import SUITE_VENV_INTERPRETER, RuntimeUnitUnderTest
 
 PER_USER_FALLBACK = Path("/tmp") / f"streamlib-{os.getuid()}"
@@ -95,7 +95,8 @@ def test_the_reader_resolves_the_directory_a_runtime_opened_its_domain_in(
     new_node_details = sorted(iceoryx2_node_details_in(resolved) - node_details_before)
     new_sockets = sorted(surface_sockets_in(resolved) - sockets_before)
     tatolabd.interrupt()
-    tatolabd.await_exit()
+    assert tatolabd.await_exit() == 0, tatolabd.recent_stderr()
+    assert STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT in tatolabd.stderr_text, tatolabd.recent_stderr()
     report = json.dumps(
         {
             "resolved_by_the_reader": str(resolved),

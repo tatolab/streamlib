@@ -47,6 +47,9 @@ ENGINE_GRACEFUL_STOP_LOG_LINE = "[stop] Graceful shutdown complete"
 #: The engine's line once every processor has started.
 ENGINE_STARTED_LOG_LINE = "[start] Runtime started"
 
+#: `tatolabd`'s line when an interrupt ended the load before the engine started.
+STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT = "so the stream was never started"
+
 #: The line `tatolabd` logs once the graph loaded, before the engine starts.
 STREAM_LOADED_LOG_LINE_PATTERN = re.compile(
     r"the stream(?: `(?P<stream_name>[^`]+)`)? loaded with (?P<stream_node_count>\d+) nodes"
