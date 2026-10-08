@@ -44,8 +44,10 @@ macos-deployment-target = "15.0"
 [tool.pyright]
 include = ["python", "tests"]
 # The package is checked from source, not from an install, so `tests/` needs the
-# package root on the search path.
-extraPaths = ["python"]
+# package root on the search path. Its helper-side tests import `tatolab.runtime`,
+# which no venv of a package holds — they borrow it from the runtime unit's lend —
+# so pyright reads it from the engine's own source and stub in this checkout.
+extraPaths = ["python", "../../sdk/streamlib-python-wheel/python"]
 # Checked at the version floor rather than whatever interpreter the venv happens
 # to be — `requires-python` is the promise.
 pythonVersion = "3.10"

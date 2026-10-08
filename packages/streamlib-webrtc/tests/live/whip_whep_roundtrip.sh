@@ -24,9 +24,15 @@
 #           signal identity across a network hop wants a looping source the
 #           engine does not have, and is `/verify-audio`'s shape.
 #
+# The stream (`whip_whep_roundtrip_stream.py`) runs on the runtime unit with
+# `tatolab run`, compiled in this package's own `.venv` — `tatolab-stream` and a
+# current `maturin develop` of this wheel, and no engine. The runtime unit is
+# `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else the checkout's `target/tatolab-runtime`
+# (`cargo xtask build-runtime`); the observation verbs come from its lend.
+#
 # CREDENTIALS. Cloudflare Stream carries the stream key as a path segment, so
 # each URL is itself a credential. Both are read from the environment, passed to
-# the node through the environment (never argv, which `/proc` publishes), and
+# the stream through the environment (never argv, which `/proc` publishes), and
 # never printed, logged, or written into the output directory. `streamlib graph`
 # renders every processor's config, so this script reads the graph in a pipe and
 # never persists it.
@@ -84,14 +90,25 @@ for tool in cargo python3 v4l2-ctl; do
     command -v "$tool" >/dev/null || cannot_run "missing: $tool"
 done
 compgen -G "/dev/dri/renderD*" >/dev/null \
-    || cannot_run "no DRM render node, so no GPU-backed Runtime can start here"
+    || cannot_run "no DRM render node, so no GPU-backed runtime can start here"
 [ -f "$BASELINE_TSV" ] || fail "no vivid baseline at $BASELINE_TSV"
 
+RUNTIME_UNIT_DIRECTORY="${STREAMLIB_RUNTIME_UNIT_DIRECTORY:-$REPO_ROOT/target/tatolab-runtime}"
+TATOLAB_EXECUTABLE="$RUNTIME_UNIT_DIRECTORY/bin/tatolab"
+RUNTIME_UNIT_LEND_DIRECTORY="$RUNTIME_UNIT_DIRECTORY/lib/tatolab/lend"
+[ -x "$TATOLAB_EXECUTABLE" ] && [ -x "$RUNTIME_UNIT_DIRECTORY/bin/tatolabd" ] \
+    && [ -d "$RUNTIME_UNIT_LEND_DIRECTORY/tatolab/runtime" ] || cannot_run \
+    "no runtime unit at $RUNTIME_UNIT_DIRECTORY — build it with \`cargo xtask build-runtime\`"
+
 VENV_PYTHON="$PACKAGE_DIR/.venv/bin/python"
-STREAMLIB_CLI="$PACKAGE_DIR/.venv/bin/streamlib"
 [ -x "$VENV_PYTHON" ] || cannot_run \
-    "no venv at $PACKAGE_DIR/.venv — create it and \`maturin develop\` this wheel into it"
-[ -x "$STREAMLIB_CLI" ] || cannot_run "the venv has no streamlib CLI; install the engine wheel into it"
+    "no venv at $PACKAGE_DIR/.venv — create it with tatolab-stream and \`maturin develop\` this wheel into it"
+
+# The verbs of the Python `streamlib` CLI, from the lend, until the native CLI
+# carries them.
+streamlib_observation_verb() {
+    PYTHONPATH="$RUNTIME_UNIT_LEND_DIRECTORY" "$VENV_PYTHON" -m tatolab.runtime.cli "$@"
+}
 
 # This arm scores whatever `_native.so` that venv holds, so a stale extension
 # would be measured and reported as a PASS for code that is not in the tree.
@@ -101,7 +118,7 @@ from tatolab.webrtc import WhepPlayer, WhipPublisher
 _ = (tatolab.stream.H264Decoder, WhepPlayer, WhipPublisher)
 ' 2>&1)"; then
     say "$IMPORT_FAILURE" >&2
-    cannot_run "the venv cannot import this wheel beside the engine. Rebuild with \`maturin develop\` — this arm measures the extension, not the tree."
+    cannot_run "the venv cannot import this wheel beside tatolab-stream. Rebuild with \`maturin develop\` — this arm measures the extension, not the tree."
 fi
 
 # ── The credentials, from the environment and never from the tree ────
@@ -153,6 +170,7 @@ stop_node() {
     if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
         # SIGTERM so the graph tears down the way a real stop does; a killed
         # node would hide a hung teardown — and a WHIP DELETE is part of it.
+        # `timeout` passes it on, and `tatolab run` forwards it to `tatolabd`.
         kill -TERM "$NODE_PID" 2>/dev/null || true
         for _ in $(seq 1 50); do
             kill -0 "$NODE_PID" 2>/dev/null || break
@@ -231,12 +249,16 @@ fi
 
 # ── Run ──────────────────────────────────────────────────────────────
 say "Publishing over WHIP and playing back over WHEP..."
+# The camera is named rather than left to enumeration, so a rig carrying both a
+# virtual and a real one never publishes the wrong one.
 DISPLAY="${DISPLAY:-:0}" \
+STREAMLIB_CAMERA_DEVICE="$VIVID_DEVICE" \
+STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$AUDIO_CAPTURE_DEVICE" \
 RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
     timeout --kill-after=5 "$RUN_SECONDS" \
-        "$VENV_PYTHON" "$SCRIPT_DIR/whip_whep_roundtrip_node.py" \
-            --camera "$VIVID_DEVICE" \
-            ${AUDIO_CAPTURE_DEVICE:+--audio-capture-device "$AUDIO_CAPTURE_DEVICE"} \
+        "$TATOLAB_EXECUTABLE" run --dir "$PACKAGE_DIR" \
+            --runtime-name whip-whep-roundtrip-node \
+            tests/live/whip_whep_roundtrip_stream.py \
         > "$LOG_FILE" 2>&1 &
 NODE_PID=$!
 
@@ -247,10 +269,11 @@ NODE_ANSWERED=0
 for _ in $(seq 1 120); do
     kill -0 "$NODE_PID" 2>/dev/null || break
     if [ -z "$RUNTIME_ID" ]; then
-        RUNTIME_ID="$("$VENV_PYTHON" "$ENGINE_FIXTURES/runtime_id_of_launched_node.py" "$NODE_PID" 2>/dev/null)" \
+        RUNTIME_ID="$(PYTHONPATH="$RUNTIME_UNIT_LEND_DIRECTORY" "$VENV_PYTHON" \
+            "$ENGINE_FIXTURES/runtime_id_of_launched_node.py" "$NODE_PID" 2>/dev/null)" \
             || RUNTIME_ID=""
     fi
-    if [ -n "$RUNTIME_ID" ] && "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+    if [ -n "$RUNTIME_ID" ] && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
         NODE_ANSWERED=1
         break
     fi
@@ -264,7 +287,7 @@ say "Runtime id:        $RUNTIME_ID"
 # the live graph, in a pipe: the graph renders every node's config, and this
 # graph's config holds both endpoint URLs.
 channel_of() {
-    "$STREAMLIB_CLI" graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+    streamlib_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 wanted_node_name, wanted_port = sys.argv[1], sys.argv[2]
@@ -296,7 +319,7 @@ say "Waiting for the first decoded frame (deadline ${MEDIA_DEADLINE_SECONDS}s)..
 # reports a channel that has produced nothing as ready, and the run then spends
 # the exchange budget before the far side has connected.
 tapped_bag_count() {
-    "$STREAMLIB_CLI" tap "$1" --count 1 --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+    streamlib_observation_verb tap "$1" --count 1 --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 try:
     print(json.load(sys.stdin).get("received", 0))
@@ -319,7 +342,7 @@ if [ "$FIRST_FRAME_SEEN" -ne 1 ]; then
 fi
 
 # ── The video arm: the decode-back ───────────────────────────────────
-if ! "$STREAMLIB_CLI" exchange \
+if ! streamlib_observation_verb exchange \
         --channel "$DECODED_VIDEO_CHANNEL" \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \
@@ -359,7 +382,7 @@ if [ -n "$ENCODED_AUDIO_CHANNEL" ]; then
 fi
 if [ "${PUBLISHED_AUDIO_BAGS:-0}" -eq 0 ] 2>/dev/null; then
     AUDIO_VERDICT="cannot run — this rig's capture device published no Opus packets, so nothing was sent to measure coming back"
-elif PYTHON="$VENV_PYTHON" "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
+elif "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
         --node "$RUNTIME_ID" --port audio --count 8 \
         > "$OUTPUT_DIR/audio_channel.json" 2> "$OUTPUT_DIR/audio_channel.log"; then
     AUDIO_VERDICT="pass"

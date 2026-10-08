@@ -4,19 +4,30 @@
 """The two processors as a graph sees them.
 
 `stream_builder.add` with no adapter and no engine change is the whole claim of the
-extension model, so it is what these check — each stream's graph taken by
-`Runtime.load` on a real `Runtime`, which needs no device to load one.
+extension model, so it is what these check — each stream compiled here and loaded
+by a real `tatolabd` from the runtime unit, which needs no device to load one. The
+load is the subject: on a machine with no GPU the start that follows it fails, and
+these accept that.
+
+The runtime unit is `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else the checkout's
+`target/tatolab-runtime` that `cargo xtask build-runtime` lays out. The helper-side
+tests below import `tatolab.runtime` from its lend, on `PYTHONPATH`.
 """
 
+import json
 import os
+import re
+import signal
+import subprocess
 import sys
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-import tatolab.runtime
 from tatolab.webrtc import WhepPlayer, WhepPlayerConfig, WhipPublisher
 from tatolab.webrtc.processors import (
     FIRST_RECONNECT_DELAY_SECONDS,
@@ -93,30 +104,97 @@ def a_publish_and_play_round_trip(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(player.output("encoded_video"), decoder.input("encoded_video"))
 
 
-def node_names_loaded_into(
-    runtime: tatolab.runtime.Runtime, stream_function: "Callable[[StreamBuilder], None]"
-) -> "list[str]":
-    """Load `stream_function`'s graph into `runtime`, and name the nodes it holds.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+RUNTIME_UNIT_DIRECTORY = Path(
+    os.environ.get("STREAMLIB_RUNTIME_UNIT_DIRECTORY")
+    or REPOSITORY_ROOT / "target" / "tatolab-runtime"
+)
+TATOLABD_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolabd"
 
-    `Runtime.load` never suffixes a name, so the compiled names are the names
-    the engine holds.
+#: The line `tatolabd` logs once the engine has loaded a stream's graph.
+STREAM_LOADED_LINE = re.compile(r"the stream (?:`[^`]*` )?loaded with (\d+) nodes")
+
+#: Covers starting each Python node's interpreter to describe it, on a cold runner.
+LOAD_DEADLINE_SECONDS = 60.0
+STOP_DEADLINE_SECONDS = 30.0
+
+
+def _tatolabd_executable() -> Path:
+    if not os.access(TATOLABD_EXECUTABLE, os.X_OK):
+        pytest.fail(
+            f"no tatolabd at {TATOLABD_EXECUTABLE} — build the runtime unit with "
+            "`cargo xtask build-runtime`, or name one with STREAMLIB_RUNTIME_UNIT_DIRECTORY"
+        )
+    return TATOLABD_EXECUTABLE
+
+
+def node_names_loaded_by_tatolabd(
+    stream_function: "Callable[[StreamBuilder], None]", working_directory: Path
+) -> "list[str]":
+    """Compile `stream_function`, have `tatolabd` load it, and name the nodes it holds.
+
+    The engine loads the compiled names unsuffixed, so they are the names it
+    holds. Fails naming `tatolabd`'s own refusal when the load is refused.
     """
     graph = compile_stream_to_graph(stream_function)
-    runtime.load(
-        graph,
-        project_directory=Path(__file__).resolve().parent,
-        interpreter=sys.executable,
+    stream_graph_file = working_directory / "stream_graph.json"
+    stream_graph_file.write_text(json.dumps(graph))
+
+    tatolabd = subprocess.Popen(
+        [
+            str(_tatolabd_executable()),
+            "--stream-graph",
+            str(stream_graph_file),
+            "--project",
+            str(Path(__file__).resolve().parent),
+            "--interpreter",
+            sys.executable,
+        ],
+        cwd=working_directory,
+        env={**os.environ, "RUST_LOG": "warn,tatolabd=info"},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
     )
+    standard_error_lines: "list[str]" = []
+
+    def drain_standard_error() -> None:
+        assert tatolabd.stderr is not None
+        for standard_error_line in tatolabd.stderr:
+            standard_error_lines.append(standard_error_line)
+
+    standard_error_drain = threading.Thread(target=drain_standard_error, daemon=True)
+    standard_error_drain.start()
+
+    loaded_node_count = None
+    load_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
+    while loaded_node_count is None and time.monotonic() < load_deadline:
+        for standard_error_line in list(standard_error_lines):
+            loaded_line = STREAM_LOADED_LINE.search(standard_error_line)
+            if loaded_line:
+                loaded_node_count = int(loaded_line.group(1))
+                break
+        if loaded_node_count is None and tatolabd.poll() is not None:
+            standard_error_drain.join(timeout=STOP_DEADLINE_SECONDS)
+            break
+        time.sleep(0.05)
+
+    if tatolabd.poll() is None:
+        tatolabd.send_signal(signal.SIGINT)
+        try:
+            tatolabd.wait(timeout=STOP_DEADLINE_SECONDS)
+        except subprocess.TimeoutExpired:
+            tatolabd.kill()
+            tatolabd.wait()
+    standard_error_drain.join(timeout=STOP_DEADLINE_SECONDS)
+
+    if loaded_node_count is None:
+        pytest.fail(
+            "tatolabd did not load the stream:\n" + "".join(standard_error_lines[-40:])
+        )
+    assert loaded_node_count == len(graph["nodes"])
     return [loaded_node["name"] for loaded_node in graph["nodes"]]
-
-
-@pytest.fixture
-def runtime():
-    runtime = tatolab.runtime.Runtime()
-    try:
-        yield runtime
-    finally:
-        runtime.shutdown()
 
 
 @pytest.mark.parametrize(
@@ -124,38 +202,26 @@ def runtime():
     [(the_whip_publisher_alone, WhipPublisher), (the_whep_player_alone, WhepPlayer)],
 )
 def test_an_installed_extensions_processor_is_added_like_any_other(
-    runtime, stream_function, processor_class
+    tmp_path, stream_function, processor_class
 ):
-    assert node_names_loaded_into(runtime, stream_function) == [
+    assert node_names_loaded_by_tatolabd(stream_function, tmp_path) == [
         processor_class.__name__.lower()
     ]
 
 
-def test_the_publisher_wires_to_both_encoders_without_an_adapter(runtime):
+def test_the_publisher_wires_to_both_encoders_without_an_adapter(tmp_path):
     """One fan-in port takes both encoders, which is what makes a WHIP session
     with video and audio a matter of wiring rather than of config."""
-    runtime.load(
-        compile_stream_to_graph(the_publisher_fed_by_both_encoders),
-        project_directory=Path(__file__).resolve().parent,
-        interpreter=sys.executable,
-    )
+    node_names_loaded_by_tatolabd(the_publisher_fed_by_both_encoders, tmp_path)
 
 
-def test_the_player_wires_to_both_decoders_without_an_adapter(runtime):
-    runtime.load(
-        compile_stream_to_graph(the_player_feeding_both_decoders),
-        project_directory=Path(__file__).resolve().parent,
-        interpreter=sys.executable,
-    )
+def test_the_player_wires_to_both_decoders_without_an_adapter(tmp_path):
+    node_names_loaded_by_tatolabd(the_player_feeding_both_decoders, tmp_path)
 
 
-def test_a_publish_and_play_round_trip_composes_as_published(runtime):
+def test_a_publish_and_play_round_trip_composes_as_published(tmp_path):
     """The shape the live proof drives: encode, publish, play back, decode."""
-    runtime.load(
-        compile_stream_to_graph(a_publish_and_play_round_trip),
-        project_directory=Path(__file__).resolve().parent,
-        interpreter=sys.executable,
-    )
+    node_names_loaded_by_tatolabd(a_publish_and_play_round_trip, tmp_path)
 
 
 def test_each_codec_names_the_track_it_belongs_on():
@@ -432,10 +498,18 @@ class RecordingWhepSession:
 
 @pytest.fixture
 def scripted_whep_session(monkeypatch):
-    """Point `WhepPlayer` at the fake, and reset its class-level script."""
+    """Point `WhepPlayer` at the fake, and reset its class-level script.
+
+    The player logs as it connects and backs off, and `log` reaches a sink only
+    in the interpreter the runtime starts for a node, so each level is kept in a
+    list here instead.
+    """
     RecordingWhepSession.constructed = []
     RecordingWhepSession.connect_outcomes = []
     monkeypatch.setattr(_native, "WhepSession", RecordingWhepSession)
+    kept_log_records: "list[str]" = []
+    for log_level in ("debug", "info", "warn", "error"):
+        monkeypatch.setattr(log, log_level, kept_log_records.append)
     return RecordingWhepSession
 
 
