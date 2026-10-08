@@ -129,7 +129,7 @@ enum TatolabVerb {
                       returns a partial sample rather than hanging."
     )]
     Tap {
-        /// The output port's address, <runtime_name>/<node>/<port>, as `graph` names them: its
+        /// The output port's address, `<runtime_name>/<node>/<port>`, as `graph` names them: its
         /// top-level runtime_name and a node's name.
         channel: String,
         /// Bags to collect before returning (default: a small sample).

@@ -54,7 +54,7 @@ pub(crate) struct SurfaceImageExchangeArguments {
     #[arg(long = "out", value_name = "DIR")]
     pub(crate) output_directory: OsString,
     /// Sample this channel instead of naming one id: an output port's address,
-    /// <runtime_name>/<node>/<port>.
+    /// `<runtime_name>/<node>/<port>`.
     #[arg(long = "channel", value_name = "CHANNEL")]
     pub(crate) channel: Option<String>,
     /// (--channel only) Frames to exchange before returning. Default 1.
