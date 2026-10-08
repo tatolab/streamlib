@@ -16,7 +16,8 @@ const COMPILE_ENTRY_MODULE: &str = "tatolab.stream._project_stream_compile_entry
 
 /// A fake `tatolabd`: records its argv, the two engine variables, its cwd, its process group and
 /// a copy of its graph file under `<control>/tatolabd_runs/<pid>/`, logs each INT/TERM/HUP, and
-/// exits after `tatolabd_signals_before_exit` signals (default 1) with `tatolabd_exit_code`.
+/// exits `tatolabd_exit_delay_seconds` after `tatolabd_signals_before_exit` signals (default 1)
+/// with `tatolabd_exit_code`.
 const FAKE_TATOLABD_SCRIPT: &str = r#"#!/bin/sh
 control_directory='@CONTROL@'
 run_directory="$control_directory/tatolabd_runs/$$"
@@ -52,6 +53,7 @@ if [ -f "$control_directory/tatolabd_exits_on_its_own" ]; then
 fi
 signals_before_exit=$(cat "$control_directory/tatolabd_signals_before_exit" 2>/dev/null || echo 1)
 while [ "$received_signal_count" -lt "$signals_before_exit" ]; do sleep 0.02; done
+if [ -f "$control_directory/tatolabd_exit_delay_seconds" ]; then sleep "$(cat "$control_directory/tatolabd_exit_delay_seconds")"; fi
 exit_code=$(cat "$control_directory/tatolabd_exit_code" 2>/dev/null || echo 0)
 printf '%s' "$exit_code" > "$run_directory/exit_code"
 exit "$exit_code"
@@ -341,6 +343,10 @@ impl AttachedTatolabdTestbed {
             &format!("tatolab's stderr to say {expected_text:?}"),
             || self.tatolab_stderr().contains(expected_text),
         );
+    }
+
+    fn clear_control(&self, control_name: &str) {
+        let _ = fs::remove_file(self.control_directory().join(control_name));
     }
 
     fn edit_project_file(&self, path_in_project: &str, new_contents: &str) {
@@ -702,4 +708,141 @@ fn dev_ignores_edits_under_venvs_caches_and_dot_directories() {
 
     running_tatolab.send_signal(libc::SIGINT);
     assert_eq!(running_tatolab.wait_for_exit().code(), Some(0));
+}
+
+#[test]
+fn dev_reports_a_failed_teardown_and_folds_a_newer_graph_into_the_pending_restart() {
+    let testbed = AttachedTatolabdTestbed::new();
+    let mut running_tatolab = testbed.start_tatolab(&testbed.project_directory(), &["dev"]);
+    let first_tatolabd_process_id = testbed.wait_for_tatolabd_start_count(1)[0].process_id;
+
+    testbed.set_control("tatolabd_exit_delay_seconds", "2.5");
+    testbed.set_control("tatolabd_exit_code", "124");
+    testbed.set_compile_document(&json!({"stream": "probe", "nodes": [{"name": "second"}]}));
+    testbed.edit_project_file("stream.py", "# stream v2\n");
+    testbed.wait_for_tatolab_stderr_to_contain("tatolab dev: restarting the stream");
+
+    let newest_stream_graph = json!({"stream": "probe", "nodes": [{"name": "third"}]});
+    testbed.set_compile_document(&newest_stream_graph);
+    testbed.edit_project_file("stream.py", "# stream v3, a longer edit\n");
+    wait_until("the third compile", || {
+        testbed.compile_invocations().len() >= 3
+    });
+    let tatolabd_runs = testbed.wait_for_tatolabd_start_count(2);
+    testbed.clear_control("tatolabd_exit_delay_seconds");
+    testbed.clear_control("tatolabd_exit_code");
+
+    assert_eq!(
+        testbed.tatolabd_run(first_tatolabd_process_id).signals,
+        ["INT"]
+    );
+    assert_eq!(tatolabd_runs[1].stream_graph, newest_stream_graph);
+    assert_eq!(testbed.compile_invocations().len(), 3);
+    assert!(
+        testbed
+            .tatolab_stderr()
+            .contains("tatolab dev: the previous stream exited with exit code 124"),
+        "{}",
+        testbed.tatolab_stderr()
+    );
+    assert_eq!(
+        testbed
+            .tatolab_stderr()
+            .matches("tatolab dev: restarting the stream")
+            .count(),
+        1
+    );
+
+    running_tatolab.send_signal(libc::SIGINT);
+    assert_eq!(running_tatolab.wait_for_exit().code(), Some(0));
+    assert_eq!(testbed.started_tatolabd_process_ids().len(), 2);
+}
+
+#[test]
+fn dev_queues_exactly_one_recompile_for_an_edit_during_a_compile() {
+    let testbed = AttachedTatolabdTestbed::new();
+    let mut running_tatolab = testbed.start_tatolab(&testbed.project_directory(), &["dev"]);
+    let first_tatolabd_process_id = testbed.wait_for_tatolabd_start_count(1)[0].process_id;
+
+    testbed.set_control("compile_delay_seconds", "1.5");
+    let edited_stream_graph = json!({"stream": "probe", "nodes": [{"name": "edited"}]});
+    testbed.set_compile_document(&edited_stream_graph);
+    testbed.edit_project_file("stream.py", "# stream v2\n");
+    wait_until("the recompile to start", || {
+        testbed.compile_invocations().len() >= 2
+    });
+    testbed.edit_project_file("nodes/brightness_meter.py", "# edited during the compile\n");
+    testbed.wait_for_tatolab_stderr_to_contain("tatolab dev: another edit — recompiling");
+    let tatolabd_runs = testbed.wait_for_tatolabd_start_count(2);
+
+    assert_eq!(testbed.compile_invocations().len(), 3);
+    assert_eq!(
+        testbed.tatolabd_run(first_tatolabd_process_id).signals,
+        ["INT"]
+    );
+    assert_eq!(tatolabd_runs[1].stream_graph, edited_stream_graph);
+
+    running_tatolab.send_signal(libc::SIGINT);
+    assert_eq!(running_tatolab.wait_for_exit().code(), Some(0));
+    assert_eq!(testbed.compile_invocations().len(), 3);
+    assert_eq!(testbed.started_tatolabd_process_ids().len(), 2);
+}
+
+#[test]
+fn dev_sends_one_interrupt_when_the_user_interrupts_a_restart() {
+    let testbed = AttachedTatolabdTestbed::new();
+    let mut running_tatolab = testbed.start_tatolab(&testbed.project_directory(), &["dev"]);
+    let first_tatolabd_process_id = testbed.wait_for_tatolabd_start_count(1)[0].process_id;
+
+    testbed.set_control("tatolabd_exit_delay_seconds", "1");
+    testbed.edit_project_file("stream.py", "# stream v2\n");
+    testbed.wait_for_tatolab_stderr_to_contain("tatolab dev: restarting the stream");
+    running_tatolab.send_signal(libc::SIGINT);
+
+    assert_eq!(running_tatolab.wait_for_exit().code(), Some(0));
+    assert_eq!(
+        testbed.tatolabd_run(first_tatolabd_process_id).signals,
+        ["INT"]
+    );
+    assert_eq!(testbed.started_tatolabd_process_ids().len(), 1);
+}
+
+#[test]
+fn dev_waits_for_an_edit_when_the_first_compile_fails() {
+    let testbed = AttachedTatolabdTestbed::new();
+    testbed.set_control("compile_exit_code", "1");
+    testbed.set_control(
+        "compile_stderr",
+        "error: no stream.py in the probe project\n",
+    );
+    let mut running_tatolab = testbed.start_tatolab(&testbed.project_directory(), &["dev"]);
+    testbed.wait_for_tatolab_stderr_to_contain(
+        "tatolab dev: no stream is running — fix the error and save again",
+    );
+    assert!(running_tatolab.is_still_running());
+    assert!(testbed.started_tatolabd_process_ids().is_empty());
+
+    testbed.clear_control("compile_exit_code");
+    testbed.clear_control("compile_stderr");
+    testbed.edit_project_file("stream.py", "# stream v2, fixed\n");
+    let tatolabd_runs = testbed.wait_for_tatolabd_start_count(1);
+    assert_eq!(testbed.compile_invocations().len(), 2);
+
+    running_tatolab.send_signal(libc::SIGINT);
+    assert_eq!(running_tatolab.wait_for_exit().code(), Some(0));
+    assert_eq!(
+        testbed.tatolabd_run(tatolabd_runs[0].process_id).signals,
+        ["INT"]
+    );
+}
+
+#[test]
+fn dev_ends_with_a_usage_error_from_the_first_compile() {
+    let testbed = AttachedTatolabdTestbed::new();
+    testbed.set_control("compile_exit_code", "2");
+    testbed.set_control("compile_stderr", "usage: the probe compile entry\n");
+    let (exit_status, tatolab_stderr) = testbed.run_tatolab_to_exit(&["dev"]);
+    assert_eq!(exit_status.code(), Some(2));
+    assert_eq!(tatolab_stderr, "usage: the probe compile entry\n");
+    assert!(testbed.started_tatolabd_process_ids().is_empty());
 }

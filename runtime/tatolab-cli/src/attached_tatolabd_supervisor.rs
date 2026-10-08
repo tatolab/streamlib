@@ -26,6 +26,9 @@ const APP_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_APP_DIRECTORY";
 /// The engine variable naming the runtime.
 const RUNTIME_NAME_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_NAME";
 
+/// The compile entry's exit code for an argparse usage error.
+const COMPILE_ENTRY_USAGE_ERROR_EXIT_CODE: u8 = 2;
+
 /// How long the supervisor waits for an event before polling its children's exits.
 const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -435,13 +438,21 @@ pub fn launch_stream_on_attached_tatolabd(
     loop {
         match supervisor_event_receiver.recv_timeout(CHILD_EXIT_POLL_INTERVAL) {
             Ok(StreamLaunchSupervisorEvent::ForwardedSignalDelivered(delivered_signal)) => {
+                let restart_interrupt_already_sent =
+                    compiled_stream_awaiting_restart.take().is_some();
+                let first_user_stop_signal = user_stop_signal.is_none();
                 user_stop_signal.get_or_insert(delivered_signal);
-                compiled_stream_awaiting_restart = None;
                 recompile_requested_during_compile = false;
                 if let Some(abandoned_compile) = stream_compile_in_flight.take() {
                     abandon_stream_compile(abandoned_compile);
                 }
+                // The restart's SIGINT already began the graceful teardown; forwarding the user's
+                // first SIGINT too would advance tatolabd's ladder to a forced teardown.
+                let interrupt_already_delivered = restart_interrupt_already_sent
+                    && first_user_stop_signal
+                    && delivered_signal == libc::SIGINT;
                 match &attached_tatolabd {
+                    Some(_) if interrupt_already_delivered => {}
                     Some(running_tatolabd) => send_signal_to_process(
                         running_tatolabd.tatolabd_child.id(),
                         delivered_signal,
@@ -516,7 +527,11 @@ pub fn launch_stream_on_attached_tatolabd(
                         }
                     },
                     StreamCompileOutcome::Failed { compile_exit_code } => {
-                        if stream_launch_verb == StreamLaunchVerb::Run || this_was_the_first_compile
+                        // Exit 2 on the first compile is a usage error in the flags, which no
+                        // edit can fix.
+                        if stream_launch_verb == StreamLaunchVerb::Run
+                            || (this_was_the_first_compile
+                                && compile_exit_code == COMPILE_ENTRY_USAGE_ERROR_EXIT_CODE)
                         {
                             return Err(TatolabCommandFailure::already_reported(compile_exit_code));
                         }
@@ -554,6 +569,12 @@ pub fn launch_stream_on_attached_tatolabd(
             }
             match compiled_stream_awaiting_restart.take() {
                 Some(compiled_stream) => {
+                    if !tatolabd_exit_status.success() {
+                        eprintln!(
+                            "tatolab dev: the previous stream exited with {}",
+                            described_exit(tatolabd_exit_status)
+                        );
+                    }
                     attached_tatolabd = Some(start_attached_tatolabd(
                         &stream_launch_environment,
                         compiled_stream,
