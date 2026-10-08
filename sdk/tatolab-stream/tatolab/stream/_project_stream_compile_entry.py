@@ -119,7 +119,7 @@ def print_app_failure(entry_described: str, app_failure: BaseException) -> None:
 def build_argument_parser() -> argparse.ArgumentParser:
     """The compile entry's arguments: the verb `tatolab` was given and its target flags."""
     parser = argparse.ArgumentParser(
-        prog="python -m tatolab.stream._project_stream_compile_entry",
+        prog="python -I -m tatolab.stream._project_stream_compile_entry",
         description=(
             f"Compile the stream `tatolab run` / `tatolab dev` names, in the project's own "
             f"interpreter, with the anchor directory as the working directory. Executes "
@@ -193,17 +193,6 @@ def _write_the_compiled_document(
         compiled_document_stdout.write(
             (json.dumps(compiled_document, allow_nan=False) + "\n").encode("utf-8")
         )
-
-
-def _drop_the_working_directory_python_m_put_on_the_import_path() -> None:
-    """`-m` leads `sys.path` with the working directory; `python stream.py` would not.
-
-    Left there, a file entry in a subdirectory could import modules from the anchor
-    that the stream's processor interpreters, started in the entry's own
-    directory, cannot.
-    """
-    if sys.path and sys.path[0] in ("", os.getcwd()):
-        del sys.path[0]
 
 
 def _print_the_cross_floor_warning_block(anchor_directory: Path) -> None:
@@ -282,7 +271,6 @@ def compile_the_requested_stream(
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Compile the requested stream and write its document to stdout; return the exit code."""
     arguments = build_argument_parser().parse_args(argv)
-    _drop_the_working_directory_python_m_put_on_the_import_path()
 
     compiled_document_stdout_descriptor = _carry_every_later_stdout_write_to_stderr()
     try:
