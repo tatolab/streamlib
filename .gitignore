@@ -42,6 +42,8 @@ Thumbs.db
 # uv
 .uv/
 uv.lock
+# The integration suite's CI job syncs it with `uv sync --locked`.
+!tests/stream-on-runtime/uv.lock
 
 __internal__/
 

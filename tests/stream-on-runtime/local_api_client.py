@@ -24,6 +24,7 @@ from typing import Any, TypeVar
 import httpx2
 from mcp.client.client import Client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.exceptions import MCPError
 from mcp.types import TextContent
 
 #: The MCP endpoint; it fills `Host`, and the socket path is the address.
@@ -44,6 +45,18 @@ McpAnswer = TypeVar("McpAnswer")
 
 class LocalApiRefusedTheRequest(Exception):
     """A local API route answered with a status other than 200."""
+
+
+def mcp_error_raised_in(raised: BaseException) -> MCPError:
+    """The protocol error an MCP client raised, out of any exception group anyio wrapped it in."""
+    if isinstance(raised, MCPError):
+        return raised
+    for inner in getattr(raised, "exceptions", ()):
+        try:
+            return mcp_error_raised_in(inner)
+        except AssertionError:
+            continue
+    raise AssertionError(f"no protocol error in {raised!r}")
 
 
 class _HttpConnectionOverUnixSocket(http.client.HTTPConnection):
@@ -123,6 +136,23 @@ class LocalApiClient:
         stated = result.content[0]
         assert isinstance(stated, TextContent), result.content
         return json.loads(stated.text)
+
+    def call_tool_refusal(self, tool_name: str, arguments: "dict[str, Any] | None" = None) -> str:
+        """MCP `tools/call` that must fail; returns why, and a success raises.
+
+        The reason is the protocol error's message when the server refused the
+        request, else the text of the tool error it answered with.
+        """
+        try:
+            result = self.answer_over_mcp(
+                lambda client: client.call_tool(tool_name, arguments or {})
+            )
+        except Exception as raised:
+            return str(mcp_error_raised_in(raised))
+        assert result.is_error is True, f"`{tool_name}` succeeded: {result.content}"
+        return "\n".join(
+            content.text for content in result.content if isinstance(content, TextContent)
+        )
 
     def await_every_node_running(
         self,

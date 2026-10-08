@@ -19,6 +19,9 @@ dependencies = [
     "mcp==2.3.0",
     # A fixture stream's node takes a model as its config class.
     "pydantic>=2.0",
+    # Lints and format-checks the project `tatolab new` writes, at the version
+    # the stream suite checks the templates with.
+    "ruff==0.16.9",
 ]
 
 [dependency-groups]
