@@ -45,6 +45,13 @@ const MACOS_BUNDLED_VULKAN_DRIVER_FILE_NAMES: &[&str] = &[
     "MoltenVK_icd.json",
 ];
 
+/// What the engine's build script reads its nonce from when a runtime unit's
+/// build hands it one (`engine_build_id_composition.rs`): the unit compiles the
+/// engine twice, into the lend's `_engine` and into `tatolabd`, and a helper
+/// refuses a parent whose build id differs from the engine it imported.
+const RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE: &str =
+    "STREAMLIB_RUNTIME_UNIT_ENGINE_BUILD_NONCE";
+
 /// The package every lend exists to carry.
 const LENT_RUNTIME_PACKAGE_PREFIX: &str = "tatolab/runtime/";
 
@@ -87,11 +94,13 @@ pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Res
         None
     };
 
+    let runtime_unit_engine_build_nonce = mint_runtime_unit_engine_build_nonce()?;
     build_runtime_unit_wheel(
         &maturin_project_directory,
         &wheel_directory,
         build_profile,
         macos_deployment_target.as_deref(),
+        &runtime_unit_engine_build_nonce,
     )?;
     let runtime_unit_wheel = the_one_wheel_in(&wheel_directory)?;
     replace_lend_directory_with_wheel_contents(&runtime_unit_wheel, &lend_directory)?;
@@ -105,7 +114,11 @@ pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Res
     );
 
     let bin_directory = workspace_root.join(RUNTIME_UNIT_BIN_DIRECTORY_RELATIVE_TO_WORKSPACE);
-    let built_binaries = build_runtime_unit_binaries(workspace_root, build_profile)?;
+    let built_binaries = build_runtime_unit_binaries(
+        workspace_root,
+        build_profile,
+        &runtime_unit_engine_build_nonce,
+    )?;
     replace_runtime_unit_binaries_in(&bin_directory, &built_binaries)?;
     tracing::info!(
         "build-runtime: tatolabd and tatolab placed in {}",
@@ -121,15 +134,34 @@ pub struct BuiltRuntimeUnitBinary {
     pub built_executable: PathBuf,
 }
 
+/// 128 bits from the operating system's random source, as the 32 lowercase hex
+/// digits the engine's build script accepts as a nonce.
+fn mint_runtime_unit_engine_build_nonce() -> Result<String> {
+    use std::io::Read;
+    let mut nonce_bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut random_source| random_source.read_exact(&mut nonce_bytes))
+        .context("reading /dev/urandom for the runtime unit's engine build nonce")?;
+    Ok(nonce_bytes
+        .iter()
+        .map(|nonce_byte| format!("{nonce_byte:02x}"))
+        .collect())
+}
+
 fn build_runtime_unit_binaries(
     workspace_root: &Path,
     build_profile: RuntimeUnitBuildProfile,
+    runtime_unit_engine_build_nonce: &str,
 ) -> Result<Vec<BuiltRuntimeUnitBinary>> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut cargo_build = std::process::Command::new(cargo);
     cargo_build
         .args(["build", "--message-format=json-render-diagnostics"])
         .current_dir(workspace_root)
+        .env(
+            RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE,
+            runtime_unit_engine_build_nonce,
+        )
         .stderr(std::process::Stdio::inherit());
     for (package, _) in RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS {
         cargo_build.args(["-p", package]);
@@ -267,6 +299,7 @@ fn build_runtime_unit_wheel(
     wheel_directory: &Path,
     build_profile: RuntimeUnitBuildProfile,
     macos_deployment_target: Option<&str>,
+    runtime_unit_engine_build_nonce: &str,
 ) -> Result<()> {
     if wheel_directory.exists() {
         std::fs::remove_dir_all(wheel_directory)
@@ -277,7 +310,11 @@ fn build_runtime_unit_wheel(
     maturin_build
         .args([PINNED_MATURIN_REQUIREMENT_FOR_UVX, "build", "--out"])
         .arg(wheel_directory)
-        .current_dir(maturin_project_directory);
+        .current_dir(maturin_project_directory)
+        .env(
+            RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE,
+            runtime_unit_engine_build_nonce,
+        );
     if build_profile == RuntimeUnitBuildProfile::Release {
         maturin_build.arg("--release");
     }
