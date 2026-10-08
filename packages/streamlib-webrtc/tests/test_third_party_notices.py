@@ -32,7 +32,7 @@ import pytest
 # cannot be satisfied by a substring of some other crate's.
 SAMPLED_DEPENDENCY_NAMES = ("webrtc", "rtp", "sdp", "hyper", "rustls", "pyo3")
 
-DISTRIBUTION_NAME = "streamlib-webrtc"
+DISTRIBUTION_NAME = "tatolab-webrtc"
 NOTICES_LICENSE_FILE_NAME = "THIRD-PARTY-NOTICES.md"
 BUSL_LICENSE_FILE_NAME = "LICENSE"
 

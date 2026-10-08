@@ -113,9 +113,9 @@ jobs:
       # wheel carrying anything beside `tatolab/runtime/` and its `.dist-info` —
       # a `tatolab/__init__.py` through the namespace gate. Debug, like the
       # develop build above, and with the same `VIRTUAL_ENV`, so it is
-      # incremental over it. An extension wheel depends on `streamlib` as a
-      # binary, so its lane installs this wheel rather than building the engine
-      # a second time.
+      # incremental over it. An extension wheel's in-process engine tests
+      # need the runtime, so its lane installs this wheel rather than building
+      # the engine a second time.
       - name: Build the runtime unit and lay out its lend
         env:
           VIRTUAL_ENV: ${{ github.workspace }}/sdk/streamlib-python-wheel/.venv
@@ -226,7 +226,7 @@ jobs:
       matrix:
         include:
           - extension: streamlib-webrtc
-            native_module: streamlib_webrtc._native
+            native_module: tatolab.webrtc._native
 
     steps:
       - uses: actions/checkout@v4
@@ -343,7 +343,7 @@ jobs:
       matrix:
         include:
           - extension: streamlib-webrtc
-            native_module: streamlib_webrtc._native
+            native_module: tatolab.webrtc._native
 
     steps:
       - uses: actions/checkout@v4

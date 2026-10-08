@@ -289,7 +289,7 @@ type ToolCallAnswer = Result<CallToolResult, String>;
 #[tool_router]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "Export the current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, the capability extensions loaded in this process, and this runtime's name (`runtime_name`), the first part of every tap channel."
+        description = "Export the current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, and this runtime's name (`runtime_name`), the first part of every tap channel."
     )]
     async fn graph(&self) -> ToolCallAnswer {
         let graph = self
@@ -2456,7 +2456,6 @@ pub(crate) mod tests {
                 "components": {}
             }],
             "exposed": [],
-            "extensions": [],
             "runtime_name": "rig-desk-a1b2"
         })
     }

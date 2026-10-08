@@ -1,2 +1,0 @@
-[streamlib.extensions]
-blocking_extension = streamlib_blocking_extension:load

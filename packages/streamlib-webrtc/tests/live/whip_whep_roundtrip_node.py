@@ -31,7 +31,7 @@ from pathlib import Path
 
 import tatolab.runtime
 import tatolab.stream
-from streamlib_webrtc import WhepPlayer, WhipPublisher
+from tatolab.webrtc import WhepPlayer, WhipPublisher
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
 #: Stated rather than left to the encoder's default, because the baseline this

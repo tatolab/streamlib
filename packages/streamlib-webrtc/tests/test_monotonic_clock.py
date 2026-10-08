@@ -11,7 +11,7 @@ reading on the wrong clock lands off by every second of that sleep.
 
 import tatolab.stream
 
-from streamlib_webrtc import _native
+from tatolab.webrtc import _native
 
 
 def test_a_stamp_this_wheel_takes_lands_between_two_engine_readings():

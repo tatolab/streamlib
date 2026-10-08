@@ -21,15 +21,9 @@ from ._bundled_vulkan_driver import point_the_vulkan_loader_at_the_bundled_drive
 # Before `_engine` loads, so no Vulkan instance can predate the driver search.
 point_the_vulkan_loader_at_the_bundled_driver(os.environ)
 
-from ._capability_extensions import (
-    load_installed_capability_extensions_once_per_process,
-)
-from ._engine import CapabilityExtensionHost as CapabilityExtensionHost
-from ._engine import capability_extension_host_for_the_app_process
 from ._engine import Runtime as _NativeRuntime
 
 __all__ = [
-    "CapabilityExtensionHost",
     "Runtime",
 ]
 
@@ -57,13 +51,7 @@ class Runtime(_NativeRuntime):
         # `_engine.pyi`'s move together.
         del runtime_name
         super().__init__()
-        # Registered before the hooks run, not after: a hook that raises leaves
-        # a constructed engine behind whose threads still need joining, and the
-        # `atexit` teardown below only reaches a Runtime it knows about.
         _live_runtimes.add(self)
-        load_installed_capability_extensions_once_per_process(
-            capability_extension_host_for_the_app_process
-        )
 
 
 @atexit.register

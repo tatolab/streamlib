@@ -25,11 +25,9 @@ use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
     ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent,
 };
-use crate::core::json_schema::LoadedCapabilityExtensionOutput;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
-use crate::core::runtime::LoadedCapabilityExtensionRegistry;
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
@@ -1172,14 +1170,9 @@ impl Runner {
 
     /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
     pub fn to_json(&self) -> Result<serde_json::Value> {
-        let extensions: Vec<_> = LoadedCapabilityExtensionRegistry::of_this_process()
-            .registered()
-            .into_iter()
-            .map(LoadedCapabilityExtensionOutput::from)
-            .collect();
         let runtime_name = self.runtime_name.as_str().to_string();
         self.compiler.scope(|graph, _tx| {
-            serde_json::to_value(graph.to_graph_response(extensions, runtime_name))
+            serde_json::to_value(graph.to_graph_response(runtime_name))
                 .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
         })
     }
@@ -1461,40 +1454,6 @@ mod tests {
             after, before,
             "Runner::new() must not register any processors — the engine \
              substrate ships empty (issue #793). Delta: {before} → {after}."
-        );
-    }
-
-    /// `graph`'s third key answers about the process, not about which runtime
-    /// asked: the extension hooks run once per process, so a runtime built
-    /// after them reports what they registered just as the first one does.
-    ///
-    /// The registry is a process-global like `PROCESSOR_REGISTRY` above, so
-    /// this asserts membership rather than the whole list.
-    #[test]
-    #[serial]
-    fn to_json_renders_every_capability_this_process_registered() {
-        LoadedCapabilityExtensionRegistry::of_this_process()
-            .register(crate::core::runtime::LoadedCapabilityExtension {
-                name: "a-capability-only-this-test-registers".to_string(),
-                version: "3.1.4".to_string(),
-                distribution: "streamlib-test-only".to_string(),
-            })
-            .expect("the capability registers");
-
-        let runtime = Runner::new().expect("Runner::new");
-        let rendered = runtime.to_json().expect("the graph serializes");
-
-        assert!(
-            rendered["extensions"]
-                .as_array()
-                .expect("extensions is always an array")
-                .contains(&serde_json::json!({
-                    "name": "a-capability-only-this-test-registers",
-                    "version": "3.1.4",
-                    "distribution": "streamlib-test-only",
-                })),
-            "to_json must render what the process registered, got: {}",
-            rendered["extensions"]
         );
     }
 

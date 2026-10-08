@@ -20,7 +20,7 @@ use crate::handlers::processor_catalog_of_this_process;
 /// Every node type the node can add, with its config schema and ports.
 pub(crate) const NODE_CATALOG_RESOURCE_URI: &str = "streamlib://node-catalog";
 
-/// The node's running graph: nodes, links, states, metrics, extensions.
+/// The node's running graph: nodes, links, states, metrics.
 pub(crate) const LIVE_GRAPH_RESOURCE_URI: &str = "streamlib://graph";
 
 const JSON_RESOURCE_MIME_TYPE: &str = "application/json";
@@ -34,7 +34,7 @@ pub(crate) fn resources_list_result() -> ListResourcesResult {
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
         Resource::new(LIVE_GRAPH_RESOURCE_URI, "graph")
             .with_title("Live graph")
-            .with_description("The node's running graph as the `graph` tool returns it: nodes by name with their types, ports, config and state, links with their state, the ports it exposes, and the capability extensions loaded.")
+            .with_description("The node's running graph as the `graph` tool returns it: nodes by name with their types, ports, config and state, links with their state, and the ports it exposes.")
             .with_mime_type(JSON_RESOURCE_MIME_TYPE),
     ])
 }

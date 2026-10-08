@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 pub(crate) mod address_chunk;
-mod capability_extensions;
 mod end_the_process_at_once;
 mod engine_teardown_watchdog;
 mod graph_change_listener;
@@ -29,7 +28,6 @@ pub use crate::core::compiler::{
 };
 pub use crate::core::signals::ScopedShutdownSignalOwnership;
 pub use address_chunk::what_one_address_chunk_may_be;
-pub use capability_extensions::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
 pub(crate) use end_the_process_at_once::{
     kill_every_helper_process_group_and_end_the_process_at_once, park_forever,
     park_forever_if_the_process_is_ending_at_once,

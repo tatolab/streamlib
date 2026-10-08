@@ -54,10 +54,7 @@ impl WhipWhepSignallingClient {
         protocol: &'static str,
     ) -> Result<Self> {
         // Building the HTTPS connector reads rustls's default crypto provider
-        // and *panics* inside rustls if nothing installed one. `load(host)`
-        // installs it before any processor module is imported, so this is
-        // already done in every real process — but a panic crossing into
-        // Python is a worse failure than the idempotent call that prevents it.
+        // and *panics* inside rustls if nothing installed one.
         crate::transport_stack::bring_up()?;
         refuse_a_bearer_token_over_plaintext(&endpoint_url, bearer_token.as_deref(), protocol)?;
 
