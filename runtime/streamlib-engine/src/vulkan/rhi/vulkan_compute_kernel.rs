@@ -31,7 +31,7 @@ use crate::core::rhi::{
     refuse_a_descriptor_set_other_than_set_0,
 };
 use crate::core::{Error, Result};
-use streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::{
+use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
 
@@ -1522,9 +1522,9 @@ fn pipeline_cache_dir() -> Option<PathBuf> {
     // Co-located under the streamlib home (`<STREAMLIB_HOME>/.streamlib/cache/`),
     // NOT the XDG cache dir — every built/cached artifact lives under the
     // streamlib working tree per the home contract. See
-    // `streamlib_runtime_on_disk_contract::streamlib_home`.
+    // `streamlib_runtime_client_contract::streamlib_home`.
     Some(
-        streamlib_runtime_on_disk_contract::streamlib_home::get_streamlib_data_dir()
+        streamlib_runtime_client_contract::streamlib_home::get_streamlib_data_dir()
             .join("cache")
             .join("pipeline-cache"),
     )

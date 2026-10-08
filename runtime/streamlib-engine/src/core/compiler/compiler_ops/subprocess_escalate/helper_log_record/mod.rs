@@ -9,7 +9,7 @@ mod tests;
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use streamlib_runtime_on_disk_contract::runtime_log_event::{LogLevel, Source};
+use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
 
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,

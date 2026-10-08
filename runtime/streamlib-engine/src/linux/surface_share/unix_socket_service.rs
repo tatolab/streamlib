@@ -37,7 +37,7 @@ use crate::core::context::surface_share_wire_verbs::{
     VK_IMAGE_SAMPLES_DEFAULT, VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT,
     VK_IMAGE_USAGE_DEFAULT,
 };
-use streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::{
+use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
 

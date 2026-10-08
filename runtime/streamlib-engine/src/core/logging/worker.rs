@@ -14,10 +14,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{RecvTimeoutError, Sender, bounded};
 use crossbeam_queue::ArrayQueue;
-use streamlib_runtime_on_disk_contract::runtime_log_event::{
+use streamlib_runtime_client_contract::runtime_log_event::{
     LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source,
 };
-use streamlib_runtime_on_disk_contract::runtime_log_event_pretty_rendering::format_event_pretty;
+use streamlib_runtime_client_contract::runtime_log_event_pretty_rendering::format_event_pretty;
 
 use crate::core::logging::config::ResolvedTunables;
 use crate::core::logging::record::LogRecord;

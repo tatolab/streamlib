@@ -3819,8 +3819,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and the `local_api_socket_path` a client dials; a reader refuses an entry of an earlier
   schema by name. Owner, 2026-09-14. [control-plane-one-surface; local-transport-hardening
   — SHIPPED #2261; runtime-mesh — SHIPPED #2282; local-api — SHIPPED #2660, #2663]
-  <!-- verify: cargo test -p streamlib-runtime-on-disk-contract streamlib_runtime_directory -->
-  <!-- verify: cargo test -p streamlib-runtime-on-disk-contract a_fallback_that_does_not_exist_yet_is_resolved_for_a_reader_without_being_created -->
+  <!-- verify: cargo test -p streamlib-runtime-client-contract streamlib_runtime_directory -->
+  <!-- verify: cargo test -p streamlib-runtime-client-contract a_fallback_that_does_not_exist_yet_is_resolved_for_a_reader_without_being_created -->
   <!-- verify: cargo test -p tatolab-cli --bin tatolab a_schema_two_entry_is_refused_by_its_version_and_never_pruned -->
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
   bags verbatim, trading completeness for guaranteed non-interference; graph and health

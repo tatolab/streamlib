@@ -31,7 +31,7 @@ use crate::core::logging::init::the_engines_configured_tracing_filter;
 use crate::core::logging::layer::JsonlSinkLayer;
 use crate::core::logging::record::LogRecord;
 use crate::core::logging::worker::WorkerSignal;
-use streamlib_runtime_on_disk_contract::runtime_log_event::LogLevel;
+use streamlib_runtime_client_contract::runtime_log_event::LogLevel;
 
 /// How many engine records a helper holds for its parent before the oldest
 /// are dropped.

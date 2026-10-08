@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use streamlib_runtime_on_disk_contract::runtime_log_event::{LogLevel, Source};
+use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
 
 /// Record pushed onto the drain channel. Owned strings.
 #[derive(Debug, Clone)]

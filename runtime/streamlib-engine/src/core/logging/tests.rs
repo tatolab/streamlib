@@ -10,10 +10,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serial_test::serial;
-use streamlib_runtime_on_disk_contract::runtime_log_event::{
+use streamlib_runtime_client_contract::runtime_log_event::{
     LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source,
 };
-use streamlib_runtime_on_disk_contract::runtime_log_file_paths::log_dir;
+use streamlib_runtime_client_contract::runtime_log_file_paths::log_dir;
 use tempfile::TempDir;
 
 use crate::core::logging::{

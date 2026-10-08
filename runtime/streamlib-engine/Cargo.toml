@@ -69,7 +69,7 @@ streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.41.0" }
 # What a running runtime leaves on disk for its clients — STREAMLIB_HOME, the
 # runtime directory, the node registry and the JSONL runtime log — defined once
 # for the engine that writes it and the engine-free CLI that reads it.
-streamlib-runtime-on-disk-contract = { path = "../streamlib-runtime-on-disk-contract", version = "0.41.0" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.41.0" }
 
 # Consumer-side carve-out — owns the format primitives
 # (TextureFormat / TextureUsages / PixelFormat), the trait machinery

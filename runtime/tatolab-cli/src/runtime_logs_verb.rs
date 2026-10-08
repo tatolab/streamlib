@@ -13,8 +13,8 @@ use std::time::Duration;
 use chrono::{DateTime, Datelike};
 use clap::Args;
 use clap::builder::PossibleValue;
-use streamlib_runtime_on_disk_contract::runtime_log_event::{LogLevel, Source};
-use streamlib_runtime_on_disk_contract::runtime_log_file_paths::{
+use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
+use streamlib_runtime_client_contract::runtime_log_file_paths::{
     RuntimeLogInstanceOnDisk, log_dir, newest_runtime_log_instance_in_directory,
     runtime_log_instances_in_directory,
 };

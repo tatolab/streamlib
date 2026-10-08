@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use streamlib_runtime_on_disk_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
+use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
 use super::RuntimeName;
 use super::RuntimeOperations;
@@ -282,7 +282,7 @@ impl Runner {
 
         // Get STREAMLIB_HOME and run init hooks (once per process)
         let streamlib_home =
-            streamlib_runtime_on_disk_contract::streamlib_home::get_streamlib_home();
+            streamlib_runtime_client_contract::streamlib_home::get_streamlib_home();
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
         crate::core::runtime_hooks::run_init_hooks(&streamlib_home)?;
 
@@ -1933,7 +1933,7 @@ mod tests {
             let runtime = result.expect("a runtime starts with XDG_RUNTIME_DIR unset");
             let fallback = std::path::PathBuf::from(format!(
                 "/tmp/streamlib-{}",
-                streamlib_runtime_on_disk_contract::streamlib_runtime_directory::current_process_uid()
+                streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid()
             ));
             assert!(
                 runtime.surface_socket_path().starts_with(&fallback),
@@ -2163,9 +2163,9 @@ mod tests {
                     std::env::set_var("STREAMLIB_RUNTIME_ID", &pinned_id);
                 }
 
-                streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+                streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
                     &xdg.join("streamlib"),
-                    streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+                    streamlib_runtime_client_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
                 )
                 .expect("create runtime directory");
                 let stale_path = xdg

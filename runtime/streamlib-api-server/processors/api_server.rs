@@ -11,7 +11,7 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::runtime::RuntimeOperations;
-use streamlib_runtime_on_disk_contract::node_registry::{
+use streamlib_runtime_client_contract::node_registry::{
     NodeRegistryEntry, remove_entry, write_entry,
 };
 

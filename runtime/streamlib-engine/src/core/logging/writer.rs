@@ -9,10 +9,10 @@ use std::io::{self, Write};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
-use streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::{
+use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
-use streamlib_runtime_on_disk_contract::runtime_log_file_paths::{
+use streamlib_runtime_client_contract::runtime_log_file_paths::{
     replacement_runtime_log_segment_path, rotated_runtime_log_segment_path,
     rotated_runtime_log_segment_sequences_on_disk,
 };

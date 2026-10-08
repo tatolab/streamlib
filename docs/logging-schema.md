@@ -5,7 +5,7 @@ StreamLib runtime. Every line of every segment under
 `<STREAMLIB_HOME>/.streamlib/logs/` (see [Files and rotation](#files-and-rotation))
 is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — `tatolab logs`,
 which renders each record with the runtime's own `format_event_pretty` from the
-`streamlib-runtime-on-disk-contract` crate, and any tool that reads a runtime's
+`streamlib-runtime-client-contract` crate, and any tool that reads a runtime's
 segments — depend on this shape.
 
 > ~~polyglot SDKs, the future orchestrator~~ — Superseded 2026-09-14: the Python
@@ -91,7 +91,7 @@ it, and reopens the active name. `tatolab logs --follow` does this.
 > ~~`"deno"` as a `source` value, `host_ts` as a host monotonic timestamp and the
 > authoritative sort key across the merged stream, `console.log` / `"logging"` /
 > `"stdout"` / `"stderr"` channels~~ — Superseded 2026-09-14: `Source` is `Rust` \|
-> `Python` (`runtime/streamlib-runtime-on-disk-contract/src/runtime_log_event.rs`), `host_ts` is
+> `Python` (`runtime/streamlib-runtime-client-contract/src/runtime_log_event.rs`), `host_ts` is
 > `SystemTime::now()`, and both capture paths tag only `fd1` / `fd2`.
 
 ## Ordering
@@ -198,7 +198,7 @@ Parses cleanly via:
 
 ```rust
 let line = r#"{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","source":"rust","level":"info","message":"hi","target":"test","intercepted":false}"#;
-let event: streamlib_runtime_on_disk_contract::runtime_log_event::RuntimeLogEvent = serde_json::from_str(line).unwrap();
+let event: streamlib_runtime_client_contract::runtime_log_event::RuntimeLogEvent = serde_json::from_str(line).unwrap();
 assert_eq!(event.runtime_id, "Rabc123");
 ```
 
@@ -219,6 +219,6 @@ See parent issue #430's "AI Agent Notes" for the framing around why
 this schema is deliberately minimal (no OTLP spans, no SQLite, no
 nested tracing context).
 
-[rs]: ../runtime/streamlib-runtime-on-disk-contract/src/runtime_log_event.rs
+[rs]: ../runtime/streamlib-runtime-client-contract/src/runtime_log_event.rs
 [rs_id]: ../runtime/streamlib-engine/src/core/runtime/runtime_unique_id.rs
 [rs_config]: ../runtime/streamlib-engine/src/core/logging/config.rs

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serial_test::serial;
-use streamlib_runtime_on_disk_contract::runtime_log_event::{LogLevel, RuntimeLogEvent, Source};
+use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, RuntimeLogEvent, Source};
 use tempfile::TempDir;
 
 use super::log_record_from_wire;

@@ -19,7 +19,7 @@ members = [
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux and macOS; GL arm Linux)
     "sdk/streamlib-python-wheel", # `tatolab.runtime` — the processor-interpreter bindings (`_engine`) and bootstrap a runtime unit lends; hosts no engine
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
-    "runtime/streamlib-runtime-on-disk-contract", # engine-free: what a running runtime leaves on disk for its clients — STREAMLIB_HOME, the runtime directory, the node registry, the JSONL runtime log
+    "runtime/streamlib-runtime-client-contract", # engine-free: the contract a running runtime offers the clients on its machine — STREAMLIB_HOME, the runtime directory, the node registry, the JSONL runtime log
     "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into `tatolabd`
     "runtime/tatolabd", # `tatolabd` — the runtime process: hosts one stream in the foreground, engine and built-ins, no Python in its process
     "runtime/tatolab-cli", # `tatolab` — the native CLI, linking no engine: `new`; `run`/`dev`, which compile in the project's venv and start `tatolabd` attached; `nodes`, `graph`, `tap`, `exchange`, `logs` and `mcp`, which observe running runtimes through their local API sockets and their log files; `enable-virtual-camera`

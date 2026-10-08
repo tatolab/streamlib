@@ -99,7 +99,7 @@ streamlib = { path = "../streamlib-sdk", version = "0.41.0", features = ["test-s
 # The bag wire format a cast test pins its bytes against.
 rmp-serde = { workspace = true }
 # The test surface-share service's socket directory, created at an explicit mode.
-streamlib-runtime-on-disk-contract = { path = "../../runtime/streamlib-runtime-on-disk-contract", version = "0.41.0" }
+streamlib-runtime-client-contract = { path = "../../runtime/streamlib-runtime-client-contract", version = "0.41.0" }
 
 [lints]
 workspace = true

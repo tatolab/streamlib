@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use streamlib_runtime_on_disk_contract::node_registry::NodeRegistryEntry;
+use streamlib_runtime_client_contract::node_registry::NodeRegistryEntry;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::TatolabCommandFailure;

@@ -24,9 +24,9 @@ fn run_git_or_panic(directory: &Path, arguments: &[&str]) -> String {
 }
 
 fn write_manifest(crate_directory: &Path, manifest: &str) {
-    streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+    streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
         crate_directory,
-        streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        streamlib_runtime_client_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
     )
     .unwrap();
     std::fs::write(crate_directory.join("Cargo.toml"), manifest).unwrap();
@@ -75,9 +75,9 @@ fn a_checkout_names_the_commit_it_has_out() {
         ],
     );
     let nested_directory = checkout.path().join("runtime/streamlib-engine");
-    streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+    streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
         &nested_directory,
-        streamlib_runtime_on_disk_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        streamlib_runtime_client_contract::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
     )
     .unwrap();
 

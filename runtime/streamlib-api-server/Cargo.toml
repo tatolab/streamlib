@@ -28,7 +28,7 @@ path = "src/bin/generate_openapi.rs"
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.41.0" }
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.41.0" }
 # The node registry this processor publishes its control endpoint into.
-streamlib-runtime-on-disk-contract = { path = "../streamlib-runtime-on-disk-contract", version = "0.41.0" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.41.0" }
 
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"

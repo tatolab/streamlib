@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 [package]
-name = "streamlib-runtime-on-disk-contract"
-description = "The on-disk contract between a running StreamLib runtime and its clients: STREAMLIB_HOME, the runtime directory, the node registry, and the JSONL runtime log"
+name = "streamlib-runtime-client-contract"
+description = "The contract a running StreamLib runtime offers the clients on its machine: the files it leaves on disk and the names its local API speaks"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -11,7 +11,7 @@ license-file.workspace = true
 repository.workspace = true
 
 [lib]
-name = "streamlib_runtime_on_disk_contract"
+name = "streamlib_runtime_client_contract"
 path = "src/lib.rs"
 
 [dependencies]

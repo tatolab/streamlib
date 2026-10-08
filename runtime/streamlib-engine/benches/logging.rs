@@ -36,7 +36,7 @@ use streamlib_engine::core::runtime::RuntimeUniqueId;
 use streamlib_engine::logging::{
     LoggingTunables, StreamlibLoggingConfig, StreamlibLoggingGuard, init_for_tests,
 };
-use streamlib_runtime_on_disk_contract::runtime_log_event::{LogLevel, RuntimeLogEvent};
+use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, RuntimeLogEvent};
 
 fn install_pathway(tmp: &TempDir, runtime_id: &str) -> StreamlibLoggingGuard {
     unsafe {

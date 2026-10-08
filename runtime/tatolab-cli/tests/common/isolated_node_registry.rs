@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use streamlib_runtime_on_disk_contract::node_registry::{
+use streamlib_runtime_client_contract::node_registry::{
     NODE_REGISTRY_SCHEMA_VERSION, NodeRegistryEntry, write_entry,
 };
 

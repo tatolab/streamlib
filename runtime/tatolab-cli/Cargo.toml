@@ -25,7 +25,7 @@ tempfile = { workspace = true }
 # Signal mask, sigwait, kill and the parent-death signal: the attached `tatolabd`'s lifecycle.
 libc = { workspace = true }
 # What a running runtime leaves on disk: the runtime directory and the node registry it is found in.
-streamlib-runtime-on-disk-contract = { path = "../streamlib-runtime-on-disk-contract", version = "0.41.0" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.41.0" }
 # The MCP client of a runtime's local API: the official SDK's, over the local API socket.
 rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket"] }
 # One current-thread runtime per client or request, driving it to completion; `mcp` copies its

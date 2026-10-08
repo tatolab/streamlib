@@ -349,13 +349,13 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             ],
         ),
         (
-            "runtime on-disk contract tests (home, runtime directory, node registry, JSONL log)",
+            "runtime client contract tests (home, runtime directory, node registry, JSONL log)",
             "cargo",
             &[
                 "test",
                 "--locked",
                 "-p",
-                "streamlib-runtime-on-disk-contract",
+                "streamlib-runtime-client-contract",
             ],
         ),
         (

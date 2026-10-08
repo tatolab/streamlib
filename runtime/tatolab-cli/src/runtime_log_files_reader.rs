@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::de::IgnoredAny;
-use streamlib_runtime_on_disk_contract::runtime_log_event::{LogLevel, RuntimeLogEvent, Source};
-use streamlib_runtime_on_disk_contract::runtime_log_event_pretty_rendering::format_event_pretty;
-use streamlib_runtime_on_disk_contract::runtime_log_file_paths::{
+use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, RuntimeLogEvent, Source};
+use streamlib_runtime_client_contract::runtime_log_event_pretty_rendering::format_event_pretty;
+use streamlib_runtime_client_contract::runtime_log_file_paths::{
     RuntimeLogInstanceOnDisk, newest_runtime_log_instance_in_directory,
     rotated_runtime_log_segment_path, rotated_runtime_log_segment_sequences_on_disk,
 };
@@ -611,7 +611,7 @@ mod tests {
     use std::cell::RefCell;
 
     use serde_json::{Value, json};
-    use streamlib_runtime_on_disk_contract::runtime_log_file_paths::runtime_log_instances_in_directory;
+    use streamlib_runtime_client_contract::runtime_log_file_paths::runtime_log_instances_in_directory;
 
     use super::*;
 

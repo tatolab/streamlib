@@ -10,10 +10,10 @@
 
 use std::path::{Path, PathBuf};
 
-use streamlib_runtime_on_disk_contract::node_registry::{
+use streamlib_runtime_client_contract::node_registry::{
     NodeRegistryEntry, NodeRegistryError, remove_scanned_entry_file, scan_entries,
 };
-use streamlib_runtime_on_disk_contract::streamlib_runtime_directory::{
+use streamlib_runtime_client_contract::streamlib_runtime_directory::{
     StreamlibRuntimeDirectory, StreamlibRuntimeDirectoryRefusal,
 };
 
@@ -261,7 +261,7 @@ pub(crate) fn select_live_runtime_on_this_machine(
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use streamlib_runtime_on_disk_contract::node_registry::NODE_REGISTRY_SCHEMA_VERSION;
+    use streamlib_runtime_client_contract::node_registry::NODE_REGISTRY_SCHEMA_VERSION;
 
     use super::*;
     use crate::isolated_node_registry::{

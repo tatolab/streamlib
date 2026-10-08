@@ -132,7 +132,7 @@ jobs:
           # the runtime directory and its trust check for the runtime and for a
           # reader, the node registry, and the JSONL log's paths, schema and
           # pretty rendering.
-          cargo test --locked -p streamlib-runtime-on-disk-contract
+          cargo test --locked -p streamlib-runtime-client-contract
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # A `graph` document loads back as the same graph, and a node's name
           # is cast, suffixed when defaulted and refused when typed twice. A
@@ -869,7 +869,7 @@ jobs:
           cargo test --locked -p streamlib -p streamlib-macros \
             -p streamlib-processor-schema -p streamlib-ipc-types \
             -p streamlib-error --lib
-          cargo test --locked -p streamlib-runtime-on-disk-contract
+          cargo test --locked -p streamlib-runtime-client-contract
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           cargo test --locked -p streamlib-media-builtins --lib
           # Where a golden names a built-in macOS compiles out, the load is

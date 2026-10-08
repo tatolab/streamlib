@@ -6,7 +6,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use streamlib_runtime_on_disk_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
+use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
 use super::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
