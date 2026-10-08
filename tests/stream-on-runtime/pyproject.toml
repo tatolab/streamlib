@@ -17,6 +17,9 @@ dependencies = [
     # The official MCP Python SDK, whose streamable-HTTP client drives a
     # node's local API over its Unix socket.
     "mcp==2.3.0",
+    # Lints and format-checks the project `tatolab new` writes, at the version
+    # the stream suite checks the templates with.
+    "ruff==0.16.9",
 ]
 
 [dependency-groups]
