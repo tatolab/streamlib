@@ -6,7 +6,7 @@
 A probe builds its own scene — a bottom-level structure over triangle
 geometry, a top-level one placing it — and its own kernel in `setup()` where
 the capability is Full, then traces into a storage image it acquired. Every
-probe runs in its own helper process and reports one `MARKER:PROBE_RESULT`
+probe runs in a processor interpreter of its own and reports one `MARKER:PROBE_RESULT`
 JSON line.
 
 What is worth breaking a build over is that a Python processor can trace at

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Probes for the engine's surface-to-surface copy, from a helper process.
+"""Probes for the engine's surface-to-surface copy, from a processor interpreter.
 
 A frame lands in a kernel's input texture through the engine: no array
 library takes part in the landing. numpy appears here only to check the

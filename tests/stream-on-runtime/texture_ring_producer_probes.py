@@ -4,11 +4,11 @@
 """A Python processor that *produces* texture-backed frames, and one that reads them.
 
 Every other GPU probe in this suite consumes frames a native block produced.
-These two close the other direction: a helper-placed Python source allocates
-its own output ring, writes pixels into a slot from its child interpreter, and
+These two close the other direction: a Python source in a processor interpreter
+allocates its own output ring, writes pixels into a slot from that interpreter, and
 publishes the slot's surface id — which another process resolves and reads.
 
-Both report over the same `MARKER:PROBE_RESULT` child-to-parent log forwarding
+Both report over the same `MARKER:PROBE_RESULT` lines on `tatolabd`'s stderr
 the other probes use, tagged with `probe` because a scenario runs two of them.
 """
 

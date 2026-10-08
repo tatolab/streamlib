@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Probes for `ModelInputTensorKernel`, from a helper process.
+"""Probes for `ModelInputTensorKernel`, from a processor interpreter.
 
 Each applies kernels to one test-pattern frame and compares every tensor with
 the same model input made by a torch reference on the CPU: bilinear resize,

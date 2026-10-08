@@ -35,11 +35,17 @@ pytestmark = pytest.mark.requires_gpu
 
 
 def run_scenario(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario: str, awaited_reports: int
+    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    scenario: str,
+    awaited_reports: int,
+    extra_environment: "dict[str, str] | None" = None,
 ) -> dict:
     """Run one scenario to completion, and return its reports by probe name;
     skip when the producer found no torch device to hand the tensor to."""
-    tatolabd = start_tatolabd(tensor_storage_buffer_streams.STREAM_BY_SCENARIO[scenario])
+    tatolabd = start_tatolabd(
+        tensor_storage_buffer_streams.STREAM_BY_SCENARIO[scenario],
+        extra_environment=extra_environment,
+    )
     for report_number in range(awaited_reports):
         report = tatolabd.await_marker("PROBE_RESULT", occurrence=report_number + 1)
         if isinstance(report, dict) and (
@@ -62,6 +68,16 @@ def run_scenario(
             )
         reports_by_probe.setdefault(report["probe"], []).append(report)
     return reports_by_probe
+
+
+def environment_reaching_the_window_server() -> "dict[str, str]":
+    """A relative `WAYLAND_DISPLAY` made absolute, because tatolabd's private
+    `XDG_RUNTIME_DIR` does not hold the compositor's socket."""
+    wayland_display = os.environ.get("WAYLAND_DISPLAY")
+    session_runtime_directory = os.environ.get("XDG_RUNTIME_DIR")
+    if not wayland_display or os.path.isabs(wayland_display) or not session_runtime_directory:
+        return {}
+    return {"WAYLAND_DISPLAY": os.path.join(session_runtime_directory, wayland_display)}
 
 
 def slot_of(surface_id: str) -> str:
@@ -188,6 +204,7 @@ def test_a_tensor_acquired_after_a_window_opens_round_trips(start_tatolabd):
         start_tatolabd,
         "a_tensor_acquired_after_a_window_opens_round_trips",
         POOL_ROTATION_DEPTH + 1,
+        extra_environment=environment_reaching_the_window_server(),
     )
     for read in reports["PublishedTensorReadingSink"]:
         assert read["values_equal"], read

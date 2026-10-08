@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Probes for `GlslPixelEffect`, from a helper process.
+"""Probes for `GlslPixelEffect`, from a processor interpreter.
 
 numpy appears here only to check the pixels afterwards, the way a test would.
 """

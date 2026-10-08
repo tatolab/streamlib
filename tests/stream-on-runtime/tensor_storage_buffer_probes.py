@@ -4,7 +4,7 @@
 """A Python processor that writes a tensor storage buffer through torch, and
 processors that resolve it downstream and read it through torch.
 
-Each reports over the `MARKER:PROBE_RESULT` child-to-parent log forwarding the
+Each reports over the `MARKER:PROBE_RESULT` lines on `tatolabd`'s stderr the
 other GPU probes use, tagged with `probe` because a scenario runs two of them.
 """
 

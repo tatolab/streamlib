@@ -4,8 +4,8 @@
 """Probes for named-binding graphics draws, from where a kernel really runs.
 
 A kernel is an object: built in `setup()` where the capability is Full, drawn
-per frame in `process()`. Every probe runs in its own helper process and
-reports one `MARKER:PROBE_RESULT` JSON line.
+per frame in `process()`. Every probe runs in a processor interpreter of
+its own and reports one `MARKER:PROBE_RESULT` JSON line.
 
 What is worth breaking a build over is that a Python processor can render a
 pass — a fullscreen triangle sampling an acquired texture into an acquired

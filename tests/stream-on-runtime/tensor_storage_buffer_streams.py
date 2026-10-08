@@ -97,7 +97,7 @@ def a_tensor_acquired_after_a_window_opens_round_trips(stream_builder: StreamBui
 
 @stream
 def a_kernel_binds_a_tensor_by_surface_id(stream_builder: StreamBuilder) -> None:
-    """One helper, no link: the probe acquires its tensors and reports from
+    """One processor interpreter, no link: the probe acquires its tensors and reports from
     `setup`."""
     stream_builder.add(TensorStorageBufferKernelBindingProbe)
 

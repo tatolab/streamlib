@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A model's input tensor is prepared on the GPU from a helper process, and
-matches a torch reference of the same parameters for every fit, layout and
+"""A model's input tensor is prepared on the GPU from a processor interpreter
+beneath `tatolabd`, and matches a torch reference of the same parameters for every fit, layout and
 dtype.
 
 Every probe runs in a processor interpreter fed by a native `TestPatternSource`,

@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A pixel effect written as one GLSL function runs on the GPU from a helper
-process, and the compiler and the engine copy refuse at the user's own line.
+"""A pixel effect written as one GLSL function runs on the GPU from a processor
+interpreter beneath `tatolabd`, and the compiler and the engine copy refuse at the user's own line.
 
 Every probe runs in a processor interpreter fed by a native `TestPatternSource`,
 and reports one `MARKER:PROBE_RESULT` JSON line; each test starts the

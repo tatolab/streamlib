@@ -151,7 +151,7 @@ def test_the_same_schedule_with_no_claim_recycles_the_first_frame(
 def test_the_pixels_a_python_source_writes_are_read_by_another_process(
     start_tatolabd,
 ):
-    """The producer writes in its own child interpreter; the consumer resolves
+    """The producer writes in a processor interpreter of its own; the consumer resolves
     the published id in a second one and sees those bytes.
 
     That the resolve succeeds at all is half the assertion: the slot is
