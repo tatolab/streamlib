@@ -92,6 +92,7 @@ struct FakeTatolabdRun {
     process_group_id: u32,
     process_id: u32,
     stream_graph: Value,
+    stream_graph_text: String,
     signals: Vec<String>,
     exit_code: Option<String>,
 }
@@ -243,6 +244,14 @@ impl AttachedTatolabdTestbed {
         self.set_control("compile_document.json", &compile_document.to_string());
     }
 
+    fn set_compile_document_text(&self, stream_graph_text: &str) {
+        let compile_document_text = format!(
+            r#"{{"stream_graph": {stream_graph_text}, "project_directory": {}}}"#,
+            json!(self.compiled_project_directory())
+        );
+        self.set_control("compile_document.json", &compile_document_text);
+    }
+
     fn start_tatolab(
         &self,
         working_directory: &Path,
@@ -318,6 +327,7 @@ impl AttachedTatolabdTestbed {
             process_group_id: read_run_file("pgid").parse().unwrap(),
             process_id,
             stream_graph: serde_json::from_str(&read_run_file("graph.json")).unwrap(),
+            stream_graph_text: read_run_file("graph.json"),
             signals: read_run_file("signals")
                 .lines()
                 .map(str::to_owned)
@@ -465,6 +475,20 @@ fn run_compiles_in_the_venv_and_hands_tatolabd_the_graph_project_and_interpreter
         !Path::new(&tatolabd_run.argv[1]).exists(),
         "the graph file outlived tatolab"
     );
+}
+
+#[test]
+fn run_hands_tatolabd_the_compiled_graph_byte_for_byte() {
+    let testbed = AttachedTatolabdTestbed::new();
+    let stream_graph_text = r#"{"stream": "probe", "nodes": [{"name": "a", "config": {"wider_than_u64": 18446744073709551616, "tenth": 0.1}}], "links": []}"#;
+    testbed.set_compile_document_text(stream_graph_text);
+    let mut running_tatolab = testbed.start_tatolab(&testbed.project_directory(), &["run"]);
+    let tatolabd_runs = testbed.wait_for_tatolabd_start_count(1);
+
+    assert_eq!(tatolabd_runs[0].stream_graph_text, stream_graph_text);
+
+    running_tatolab.send_signal(libc::SIGINT);
+    assert_eq!(running_tatolab.wait_for_exit().code(), Some(0));
 }
 
 /// A fake `tatolabd` in Python, which, unlike the shell, starts with the signal mask its parent

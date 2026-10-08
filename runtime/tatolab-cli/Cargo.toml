@@ -17,8 +17,9 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-# The compile entry's JSON document in, the stream graph file out.
-serde_json = { workspace = true }
+# The compile entry's JSON document in; its stream graph copied byte-for-byte to the graph file.
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 # The stream graph file `tatolabd` reads, deleted when it exits.
 tempfile = { workspace = true }
 # Signal mask, sigwait, kill and the parent-death signal: the attached `tatolabd`'s lifecycle.

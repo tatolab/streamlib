@@ -342,29 +342,32 @@ fn abandon_stream_compile(mut stream_compile_in_flight: StreamCompileInFlight) {
     let _ = stream_compile_in_flight.compile_child.wait();
 }
 
+/// The document the compile entry prints on stdout.
+#[derive(serde::Deserialize)]
+struct ProjectStreamCompileDocument {
+    // Raw, so the graph reaches `tatolabd` byte for byte: a round trip through `Value` would turn
+    // an integer wider than 64 bits into a float and could move a float by an ULP.
+    stream_graph: Box<serde_json::value::RawValue>,
+    project_directory: PathBuf,
+}
+
 fn compiled_stream_from_compile_document(compile_stdout: &[u8]) -> Result<CompiledStream, String> {
-    let compile_document: serde_json::Value = serde_json::from_slice(compile_stdout)
-        .map_err(|parse_failure| format!("its stdout is not one JSON document: {parse_failure}"))?;
-    let stream_graph = compile_document
-        .get("stream_graph")
-        .ok_or("its document has no `stream_graph`")?;
-    let compiled_project_directory = compile_document
-        .get("project_directory")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("its document has no `project_directory` string")?;
+    let compile_document: ProjectStreamCompileDocument = serde_json::from_slice(compile_stdout)
+        .map_err(|parse_failure| {
+            format!("its stdout is not the compile document: {parse_failure}")
+        })?;
     let mut stream_graph_file = tempfile::Builder::new()
         .prefix("tatolab-stream-graph-")
         .suffix(".json")
         .tempfile()
         .map_err(|io_failure| format!("cannot create the stream graph file: {io_failure}"))?;
-    serde_json::to_writer(&mut stream_graph_file, stream_graph)
-        .map_err(|write_failure| format!("cannot write the stream graph file: {write_failure}"))?;
     stream_graph_file
-        .flush()
+        .write_all(compile_document.stream_graph.get().as_bytes())
+        .and_then(|()| stream_graph_file.flush())
         .map_err(|io_failure| format!("cannot write the stream graph file: {io_failure}"))?;
     Ok(CompiledStream {
         stream_graph_file,
-        compiled_project_directory: PathBuf::from(compiled_project_directory),
+        compiled_project_directory: compile_document.project_directory,
     })
 }
 

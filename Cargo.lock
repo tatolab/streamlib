@@ -4839,6 +4839,7 @@ version = "0.40.0"
 dependencies = [
  "clap",
  "libc",
+ "serde",
  "serde_json",
  "tempfile",
 ]
