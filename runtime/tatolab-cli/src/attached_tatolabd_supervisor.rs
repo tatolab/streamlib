@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::forwarded_signal_listener::{
     block_forwarded_signals_and_listen, unblock_forwarded_signals_in_the_child,
@@ -34,9 +34,16 @@ const COMPILE_ENTRY_USAGE_ERROR_EXIT_CODE: u8 = 2;
 /// How long the supervisor waits for an event before polling its children's exits.
 const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
+/// How long a `tatolabd` left running by an early exit has to stop on SIGTERM before it is killed.
+///
+/// Covers the engine's shutdown ladder for a helper — 1 s for a callback to return, 5 s of
+/// `teardown()`, 0.5 s to leave, 0.5 s for its group on SIGTERM, 1 s to reap — plus the engine's
+/// own stop, so a `tatolabd` that is tearing down is never cut short mid-ladder.
+const ABANDONED_TATOLABD_TERMINATION_GRACE: Duration = Duration::from_secs(10);
+
 /// Which verb launched the stream: `dev` adds the restart on edit.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum StreamLaunchVerb {
+pub(crate) enum StreamLaunchVerb {
     /// `tatolab run`.
     Run,
     /// `tatolab dev`.
@@ -86,11 +93,56 @@ struct AttachedTatolabd {
     _stream_graph_file: tempfile::NamedTempFile,
 }
 
+// An early return must never leave `tatolabd` holding the GPU and camera: macOS has no
+// parent-death signal to end it.
+impl Drop for AttachedTatolabd {
+    fn drop(&mut self) {
+        if !matches!(self.tatolabd_child.try_wait(), Ok(None)) {
+            return;
+        }
+        send_signal_to_process(self.tatolabd_child.id(), libc::SIGTERM);
+        let termination_requested_at = Instant::now();
+        while termination_requested_at.elapsed() < ABANDONED_TATOLABD_TERMINATION_GRACE {
+            if !matches!(self.tatolabd_child.try_wait(), Ok(None)) {
+                return;
+            }
+            std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+        }
+        eprintln!(
+            "tatolab: tatolabd did not stop within {} s of SIGTERM — killing it",
+            ABANDONED_TATOLABD_TERMINATION_GRACE.as_secs()
+        );
+        let _ = self.tatolabd_child.kill();
+        let _ = self.tatolabd_child.wait();
+    }
+}
+
+/// How a child process ended, read once from its [`ExitStatus`].
+enum ChildProcessEnding {
+    ExitedWithCode(i32),
+    KilledBySignal(libc::c_int),
+    Unknown,
+}
+
+impl ChildProcessEnding {
+    fn of(exit_status: ExitStatus) -> Self {
+        match (exit_status.code(), exit_status.signal()) {
+            (Some(exit_code), _) => ChildProcessEnding::ExitedWithCode(exit_code),
+            (None, Some(terminating_signal)) => {
+                ChildProcessEnding::KilledBySignal(terminating_signal)
+            }
+            (None, None) => ChildProcessEnding::Unknown,
+        }
+    }
+}
+
 fn exit_code_for(exit_status: ExitStatus) -> u8 {
-    match (exit_status.code(), exit_status.signal()) {
-        (Some(exit_code), _) => (exit_code & 0xff) as u8,
-        (None, Some(terminating_signal)) => (128 + terminating_signal).min(255) as u8,
-        (None, None) => 1,
+    match ChildProcessEnding::of(exit_status) {
+        ChildProcessEnding::ExitedWithCode(exit_code) => (exit_code & 0xff) as u8,
+        ChildProcessEnding::KilledBySignal(terminating_signal) => {
+            exit_code_for_signal(terminating_signal)
+        }
+        ChildProcessEnding::Unknown => 1,
     }
 }
 
@@ -99,16 +151,26 @@ fn exit_code_for_signal(delivered_signal: libc::c_int) -> u8 {
 }
 
 fn described_exit(exit_status: ExitStatus) -> String {
-    match (exit_status.code(), exit_status.signal()) {
-        (Some(exit_code), _) => format!("exit code {exit_code}"),
-        (None, Some(terminating_signal)) => format!("signal {terminating_signal}"),
-        (None, None) => "an unknown status".to_owned(),
+    match ChildProcessEnding::of(exit_status) {
+        ChildProcessEnding::ExitedWithCode(exit_code) => format!("exit code {exit_code}"),
+        ChildProcessEnding::KilledBySignal(terminating_signal) => {
+            format!("signal {terminating_signal}")
+        }
+        ChildProcessEnding::Unknown => "an unknown status".to_owned(),
     }
 }
 
-fn send_signal_to_process(process_id: u32, forwarded_signal: libc::c_int) {
-    unsafe {
-        libc::kill(process_id as libc::pid_t, forwarded_signal);
+fn send_signal_to_process(process_id: u32, sent_signal: libc::c_int) {
+    // SAFETY: `kill` reads no memory; the pid is a child this process has not yet reaped.
+    if unsafe { libc::kill(process_id as libc::pid_t, sent_signal) } == 0 {
+        return;
+    }
+    let kill_failure = std::io::Error::last_os_error();
+    // ESRCH: the process is already gone, so nothing is left for the signal to stop.
+    if kill_failure.raw_os_error() != Some(libc::ESRCH) {
+        eprintln!(
+            "tatolab: cannot send signal {sent_signal} to process {process_id}: {kill_failure}"
+        );
     }
 }
 
@@ -386,6 +448,7 @@ fn start_attached_tatolabd(
 #[cfg(target_os = "linux")]
 fn end_tatolabd_when_tatolab_dies(tatolabd_command: &mut Command) {
     let tatolab_process_id = std::process::id() as libc::pid_t;
+    // SAFETY: the closure only calls `prctl` and `getppid`, both async-signal-safe after fork.
     unsafe {
         tatolabd_command.pre_exec(move || {
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
@@ -404,9 +467,265 @@ fn end_tatolabd_when_tatolab_dies(tatolabd_command: &mut Command) {
 #[cfg(not(target_os = "linux"))]
 fn end_tatolabd_when_tatolab_dies(_tatolabd_command: &mut Command) {}
 
+/// What the supervisor does after handling one event.
+enum AttachedStreamSupervisorNextStep {
+    KeepSupervising,
+    ExitTatolabWith(u8),
+}
+
+/// The state `run` and `dev` supervise one stream's compiles and its attached `tatolabd` with.
+struct AttachedStreamSupervisor {
+    stream_launch_verb: StreamLaunchVerb,
+    stream_launch_environment: StreamLaunchEnvironment,
+    stream_compile_in_flight: Option<StreamCompileInFlight>,
+    first_compile_pending: bool,
+    recompile_requested_during_compile: bool,
+    attached_tatolabd: Option<AttachedTatolabd>,
+    // Some once `tatolabd` has been sent SIGINT to make way for this newer stream.
+    compiled_stream_awaiting_restart: Option<CompiledStream>,
+    user_stop_signal: Option<libc::c_int>,
+}
+
+impl AttachedStreamSupervisor {
+    fn start_first_compile(
+        stream_launch_verb: StreamLaunchVerb,
+        stream_launch_environment: StreamLaunchEnvironment,
+    ) -> Result<Self, TatolabCommandFailure> {
+        let first_stream_compile =
+            start_stream_compile(&stream_launch_environment, stream_launch_verb)?;
+        Ok(Self {
+            stream_launch_verb,
+            stream_launch_environment,
+            stream_compile_in_flight: Some(first_stream_compile),
+            first_compile_pending: true,
+            recompile_requested_during_compile: false,
+            attached_tatolabd: None,
+            compiled_stream_awaiting_restart: None,
+            user_stop_signal: None,
+        })
+    }
+
+    fn start_next_compile(&mut self) -> Result<(), TatolabCommandFailure> {
+        self.stream_compile_in_flight = Some(start_stream_compile(
+            &self.stream_launch_environment,
+            self.stream_launch_verb,
+        )?);
+        Ok(())
+    }
+
+    fn start_attached_tatolabd_on(
+        &mut self,
+        compiled_stream: CompiledStream,
+    ) -> Result<(), TatolabCommandFailure> {
+        self.attached_tatolabd = Some(start_attached_tatolabd(
+            &self.stream_launch_environment,
+            compiled_stream,
+        )?);
+        Ok(())
+    }
+
+    fn on_forwarded_signal(
+        &mut self,
+        delivered_signal: libc::c_int,
+    ) -> AttachedStreamSupervisorNextStep {
+        let restart_interrupt_already_sent = self.compiled_stream_awaiting_restart.take().is_some();
+        let first_user_stop_signal = self.user_stop_signal.is_none();
+        self.user_stop_signal.get_or_insert(delivered_signal);
+        self.recompile_requested_during_compile = false;
+        if let Some(abandoned_compile) = self.stream_compile_in_flight.take() {
+            abandon_stream_compile(abandoned_compile);
+        }
+        // The restart's SIGINT already began the graceful teardown; forwarding the user's first
+        // SIGINT too would advance tatolabd's ladder to a forced teardown.
+        let interrupt_already_delivered = restart_interrupt_already_sent
+            && first_user_stop_signal
+            && delivered_signal == libc::SIGINT;
+        match &self.attached_tatolabd {
+            Some(_) if interrupt_already_delivered => {}
+            Some(running_tatolabd) => {
+                send_signal_to_process(running_tatolabd.tatolabd_child.id(), delivered_signal)
+            }
+            None => {
+                return AttachedStreamSupervisorNextStep::ExitTatolabWith(exit_code_for_signal(
+                    delivered_signal,
+                ));
+            }
+        }
+        AttachedStreamSupervisorNextStep::KeepSupervising
+    }
+
+    fn on_project_sources_changed(
+        &mut self,
+    ) -> Result<AttachedStreamSupervisorNextStep, TatolabCommandFailure> {
+        if self.user_stop_signal.is_some() {
+            return Ok(AttachedStreamSupervisorNextStep::KeepSupervising);
+        }
+        if self.stream_compile_in_flight.is_some() {
+            self.recompile_requested_during_compile = true;
+        } else {
+            eprintln!("tatolab dev: an edit — recompiling");
+            self.start_next_compile()?;
+        }
+        Ok(AttachedStreamSupervisorNextStep::KeepSupervising)
+    }
+
+    fn take_exited_compile(
+        &mut self,
+    ) -> Result<Option<(StreamCompileInFlight, ExitStatus)>, TatolabCommandFailure> {
+        let Some(running_compile) = self.stream_compile_in_flight.as_mut() else {
+            return Ok(None);
+        };
+        let compile_exit_status =
+            running_compile
+                .compile_child
+                .try_wait()
+                .map_err(|io_failure| {
+                    TatolabCommandFailure::refused(format!(
+                        "cannot wait for the compile: {io_failure}"
+                    ))
+                })?;
+        Ok(compile_exit_status.and_then(|compile_exit_status| {
+            self.stream_compile_in_flight
+                .take()
+                .map(|finished_compile| (finished_compile, compile_exit_status))
+        }))
+    }
+
+    fn on_compile_exited(
+        &mut self,
+        finished_compile: StreamCompileInFlight,
+        compile_exit_status: ExitStatus,
+    ) -> Result<AttachedStreamSupervisorNextStep, TatolabCommandFailure> {
+        let stream_compile_outcome = finish_stream_compile(
+            finished_compile,
+            compile_exit_status,
+            &self.stream_launch_environment,
+        );
+        let this_was_the_first_compile = std::mem::take(&mut self.first_compile_pending);
+        if self.recompile_requested_during_compile {
+            self.recompile_requested_during_compile = false;
+            eprintln!("tatolab dev: another edit — recompiling");
+            self.start_next_compile()?;
+            self.first_compile_pending = this_was_the_first_compile;
+            return Ok(AttachedStreamSupervisorNextStep::KeepSupervising);
+        }
+        match stream_compile_outcome {
+            StreamCompileOutcome::Compiled(compiled_stream) => match &self.attached_tatolabd {
+                Some(running_tatolabd) => {
+                    if self.compiled_stream_awaiting_restart.is_none() {
+                        eprintln!("tatolab dev: restarting the stream");
+                        send_signal_to_process(running_tatolabd.tatolabd_child.id(), libc::SIGINT);
+                    }
+                    self.compiled_stream_awaiting_restart = Some(compiled_stream);
+                }
+                None => self.start_attached_tatolabd_on(compiled_stream)?,
+            },
+            StreamCompileOutcome::Failed { compile_exit_code } => {
+                // Exit 2 on the first compile is a usage error in the flags, which no edit can fix.
+                if self.stream_launch_verb == StreamLaunchVerb::Run
+                    || (this_was_the_first_compile
+                        && compile_exit_code == COMPILE_ENTRY_USAGE_ERROR_EXIT_CODE)
+                {
+                    return Err(TatolabCommandFailure::already_reported(compile_exit_code));
+                }
+                if self.attached_tatolabd.is_some() {
+                    eprintln!(
+                        "tatolab dev: kept the running stream — fix the error and save again"
+                    );
+                } else {
+                    eprintln!("tatolab dev: no stream is running — fix the error and save again");
+                }
+            }
+        }
+        Ok(AttachedStreamSupervisorNextStep::KeepSupervising)
+    }
+
+    fn take_exited_tatolabd(&mut self) -> Result<Option<ExitStatus>, TatolabCommandFailure> {
+        let Some(running_tatolabd) = self.attached_tatolabd.as_mut() else {
+            return Ok(None);
+        };
+        let tatolabd_exit_status =
+            running_tatolabd
+                .tatolabd_child
+                .try_wait()
+                .map_err(|io_failure| {
+                    TatolabCommandFailure::refused(format!(
+                        "cannot wait for tatolabd: {io_failure}"
+                    ))
+                })?;
+        if tatolabd_exit_status.is_some() {
+            self.attached_tatolabd = None;
+        }
+        Ok(tatolabd_exit_status)
+    }
+
+    fn on_tatolabd_exited(
+        &mut self,
+        tatolabd_exit_status: ExitStatus,
+    ) -> Result<AttachedStreamSupervisorNextStep, TatolabCommandFailure> {
+        if self.user_stop_signal.is_some() || self.stream_launch_verb == StreamLaunchVerb::Run {
+            return Ok(AttachedStreamSupervisorNextStep::ExitTatolabWith(
+                exit_code_for(tatolabd_exit_status),
+            ));
+        }
+        match self.compiled_stream_awaiting_restart.take() {
+            Some(compiled_stream) => {
+                if !tatolabd_exit_status.success() {
+                    eprintln!(
+                        "tatolab dev: the previous stream exited with {}",
+                        described_exit(tatolabd_exit_status)
+                    );
+                }
+                self.start_attached_tatolabd_on(compiled_stream)?;
+            }
+            None => eprintln!(
+                "tatolab dev: tatolabd exited with {} — waiting for the next edit",
+                described_exit(tatolabd_exit_status)
+            ),
+        }
+        Ok(AttachedStreamSupervisorNextStep::KeepSupervising)
+    }
+
+    fn supervise_until_exit(
+        mut self,
+        supervisor_event_receiver: mpsc::Receiver<StreamLaunchSupervisorEvent>,
+    ) -> Result<u8, TatolabCommandFailure> {
+        loop {
+            let event_next_step =
+                match supervisor_event_receiver.recv_timeout(CHILD_EXIT_POLL_INTERVAL) {
+                    Ok(StreamLaunchSupervisorEvent::ForwardedSignalDelivered(delivered_signal)) => {
+                        self.on_forwarded_signal(delivered_signal)
+                    }
+                    Ok(StreamLaunchSupervisorEvent::ProjectSourcesChanged) => {
+                        self.on_project_sources_changed()?
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                    | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        AttachedStreamSupervisorNextStep::KeepSupervising
+                    }
+                };
+            if let AttachedStreamSupervisorNextStep::ExitTatolabWith(exit_code) = event_next_step {
+                return Ok(exit_code);
+            }
+            if let Some((finished_compile, compile_exit_status)) = self.take_exited_compile()?
+                && let AttachedStreamSupervisorNextStep::ExitTatolabWith(exit_code) =
+                    self.on_compile_exited(finished_compile, compile_exit_status)?
+            {
+                return Ok(exit_code);
+            }
+            if let Some(tatolabd_exit_status) = self.take_exited_tatolabd()?
+                && let AttachedStreamSupervisorNextStep::ExitTatolabWith(exit_code) =
+                    self.on_tatolabd_exited(tatolabd_exit_status)?
+            {
+                return Ok(exit_code);
+            }
+        }
+    }
+}
+
 /// `tatolab run` and `tatolab dev`: compile in the project's venv, then host the stream on an
 /// attached `tatolabd`, forwarding the user's signals to it; `dev` recompiles and restarts on edit.
-pub fn launch_stream_on_attached_tatolabd(
+pub(crate) fn launch_stream_on_attached_tatolabd(
     stream_launch_verb: StreamLaunchVerb,
     stream_launch_arguments: &StreamLaunchArguments,
 ) -> Result<u8, TatolabCommandFailure> {
@@ -438,167 +757,6 @@ pub fn launch_stream_on_attached_tatolabd(
         })?;
     }
 
-    let mut stream_compile_in_flight = Some(start_stream_compile(
-        &stream_launch_environment,
-        stream_launch_verb,
-    )?);
-    let mut first_compile_pending = true;
-    let mut recompile_requested_during_compile = false;
-    let mut attached_tatolabd: Option<AttachedTatolabd> = None;
-    // Some once `tatolabd` has been sent SIGINT to make way for this newer stream.
-    let mut compiled_stream_awaiting_restart: Option<CompiledStream> = None;
-    let mut user_stop_signal: Option<libc::c_int> = None;
-
-    loop {
-        match supervisor_event_receiver.recv_timeout(CHILD_EXIT_POLL_INTERVAL) {
-            Ok(StreamLaunchSupervisorEvent::ForwardedSignalDelivered(delivered_signal)) => {
-                let restart_interrupt_already_sent =
-                    compiled_stream_awaiting_restart.take().is_some();
-                let first_user_stop_signal = user_stop_signal.is_none();
-                user_stop_signal.get_or_insert(delivered_signal);
-                recompile_requested_during_compile = false;
-                if let Some(abandoned_compile) = stream_compile_in_flight.take() {
-                    abandon_stream_compile(abandoned_compile);
-                }
-                // The restart's SIGINT already began the graceful teardown; forwarding the user's
-                // first SIGINT too would advance tatolabd's ladder to a forced teardown.
-                let interrupt_already_delivered = restart_interrupt_already_sent
-                    && first_user_stop_signal
-                    && delivered_signal == libc::SIGINT;
-                match &attached_tatolabd {
-                    Some(_) if interrupt_already_delivered => {}
-                    Some(running_tatolabd) => send_signal_to_process(
-                        running_tatolabd.tatolabd_child.id(),
-                        delivered_signal,
-                    ),
-                    None => return Ok(exit_code_for_signal(delivered_signal)),
-                }
-            }
-            Ok(StreamLaunchSupervisorEvent::ProjectSourcesChanged) => {
-                if user_stop_signal.is_none() {
-                    if stream_compile_in_flight.is_some() {
-                        recompile_requested_during_compile = true;
-                    } else {
-                        eprintln!("tatolab dev: an edit — recompiling");
-                        stream_compile_in_flight = Some(start_stream_compile(
-                            &stream_launch_environment,
-                            stream_launch_verb,
-                        )?);
-                    }
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
-        }
-
-        let finished_compile_exit_status = match stream_compile_in_flight.as_mut() {
-            Some(running_compile) => {
-                running_compile
-                    .compile_child
-                    .try_wait()
-                    .map_err(|io_failure| {
-                        TatolabCommandFailure::refused(format!(
-                            "cannot wait for the compile: {io_failure}"
-                        ))
-                    })?
-            }
-            None => None,
-        };
-        if let Some(compile_exit_status) = finished_compile_exit_status
-            && let Some(finished_compile) = stream_compile_in_flight.take()
-        {
-            let stream_compile_outcome = finish_stream_compile(
-                finished_compile,
-                compile_exit_status,
-                &stream_launch_environment,
-            );
-            let this_was_the_first_compile = std::mem::take(&mut first_compile_pending);
-            if recompile_requested_during_compile {
-                recompile_requested_during_compile = false;
-                eprintln!("tatolab dev: another edit — recompiling");
-                stream_compile_in_flight = Some(start_stream_compile(
-                    &stream_launch_environment,
-                    stream_launch_verb,
-                )?);
-                first_compile_pending = this_was_the_first_compile;
-            } else {
-                match stream_compile_outcome {
-                    StreamCompileOutcome::Compiled(compiled_stream) => match &attached_tatolabd {
-                        Some(running_tatolabd) => {
-                            if compiled_stream_awaiting_restart.is_none() {
-                                eprintln!("tatolab dev: restarting the stream");
-                                send_signal_to_process(
-                                    running_tatolabd.tatolabd_child.id(),
-                                    libc::SIGINT,
-                                );
-                            }
-                            compiled_stream_awaiting_restart = Some(compiled_stream);
-                        }
-                        None => {
-                            attached_tatolabd = Some(start_attached_tatolabd(
-                                &stream_launch_environment,
-                                compiled_stream,
-                            )?);
-                        }
-                    },
-                    StreamCompileOutcome::Failed { compile_exit_code } => {
-                        // Exit 2 on the first compile is a usage error in the flags, which no
-                        // edit can fix.
-                        if stream_launch_verb == StreamLaunchVerb::Run
-                            || (this_was_the_first_compile
-                                && compile_exit_code == COMPILE_ENTRY_USAGE_ERROR_EXIT_CODE)
-                        {
-                            return Err(TatolabCommandFailure::already_reported(compile_exit_code));
-                        }
-                        if attached_tatolabd.is_some() {
-                            eprintln!(
-                                "tatolab dev: kept the running stream — fix the error and save again"
-                            );
-                        } else {
-                            eprintln!(
-                                "tatolab dev: no stream is running — fix the error and save again"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        let tatolabd_exit_status = match attached_tatolabd.as_mut() {
-            Some(running_tatolabd) => {
-                running_tatolabd
-                    .tatolabd_child
-                    .try_wait()
-                    .map_err(|io_failure| {
-                        TatolabCommandFailure::refused(format!(
-                            "cannot wait for tatolabd: {io_failure}"
-                        ))
-                    })?
-            }
-            None => None,
-        };
-        if let Some(tatolabd_exit_status) = tatolabd_exit_status {
-            attached_tatolabd = None;
-            if user_stop_signal.is_some() || stream_launch_verb == StreamLaunchVerb::Run {
-                return Ok(exit_code_for(tatolabd_exit_status));
-            }
-            match compiled_stream_awaiting_restart.take() {
-                Some(compiled_stream) => {
-                    if !tatolabd_exit_status.success() {
-                        eprintln!(
-                            "tatolab dev: the previous stream exited with {}",
-                            described_exit(tatolabd_exit_status)
-                        );
-                    }
-                    attached_tatolabd = Some(start_attached_tatolabd(
-                        &stream_launch_environment,
-                        compiled_stream,
-                    )?);
-                }
-                None => eprintln!(
-                    "tatolab dev: tatolabd exited with {} — waiting for the next edit",
-                    described_exit(tatolabd_exit_status)
-                ),
-            }
-        }
-    }
+    AttachedStreamSupervisor::start_first_compile(stream_launch_verb, stream_launch_environment)?
+        .supervise_until_exit(supervisor_event_receiver)
 }

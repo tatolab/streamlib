@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 /// How often `dev` rescans the project for an edit.
-pub const PROJECT_SOURCE_SCAN_INTERVAL: Duration = Duration::from_millis(250);
+pub(crate) const PROJECT_SOURCE_SCAN_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Each watched file's modification time and size, keyed by path.
 type ProjectSourceSnapshot = BTreeMap<PathBuf, (Option<SystemTime>, u64)>;
@@ -57,7 +57,7 @@ fn scan_project_sources(project_anchor_directory: &Path) -> ProjectSourceSnapsho
 /// Scan `project_anchor_directory` now, then call `on_project_sources_changed` from a polling
 /// thread each time an edit settles: two consecutive scans agree on a state the last one
 /// reported differs from. The thread ends when the callback returns `false`.
-pub fn watch_project_sources(
+pub(crate) fn watch_project_sources(
     project_anchor_directory: PathBuf,
     on_project_sources_changed: impl Fn() -> bool + Send + 'static,
 ) -> std::io::Result<()> {
