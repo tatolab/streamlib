@@ -85,6 +85,7 @@ fn help_lists_exactly_the_served_verbs() {
             "graph",
             "tap",
             "exchange",
+            "mcp",
             "logs",
             "enable-virtual-camera"
         ],

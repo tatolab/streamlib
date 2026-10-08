@@ -3,14 +3,16 @@
 
 //! `tatolab`: `new` writes a stream project; `run` and `dev` compile a stream in its project's
 //! venv and start `tatolabd` attached; `nodes` lists the runtimes running on this machine, and
-//! `graph` and `tap` read one through its local API socket; `enable-virtual-camera` grants this
-//! machine's users the virtual camera's loopback device, once.
+//! `graph`, `tap`, `exchange`, `logs` and `mcp` reach one through its local API socket — `logs`
+//! also reads a runtime's JSONL log files; `enable-virtual-camera` grants this machine's users the
+//! virtual camera's loopback device, once.
 
 // stdout and stderr are this binary's output channel to the user, as they are xtask's.
 #![allow(clippy::disallowed_macros)]
 
 mod attached_tatolabd_supervisor;
 mod forwarded_signal_listener;
+mod local_api_mcp_stdio_pipe;
 mod local_api_mcp_tool_client;
 mod local_api_runtime_selection;
 mod local_api_unix_socket_http_client;
@@ -146,6 +148,14 @@ enum TatolabVerb {
                       read them rather than listing the directory."
     )]
     Exchange(surface_image_exchange::SurfaceImageExchangeArguments),
+    /// Connect an MCP host to a running runtime over this command's stdin and stdout.
+    #[command(
+        long_about = "For an MCP host to launch: `claude mcp add tatolab -- tatolab mcp`, or `ssh \
+                      <machine> tatolab mcp` for a runtime on another machine. Copies bytes \
+                      between stdio and the runtime's MCP server, through its local API socket, \
+                      without reading them."
+    )]
+    Mcp(RuntimeTargetArguments),
     /// Read a runtime's JSONL log file, or a running runtime's event stream.
     #[command(
         long_about = "With RUNTIME_ID, renders that runtime's on-disk JSONL log exactly as the \
@@ -253,6 +263,11 @@ fn main() -> ExitCode {
         TatolabVerb::Exchange(surface_image_exchange_arguments) => {
             surface_image_exchange::run_surface_image_exchange_verb(
                 &surface_image_exchange_arguments,
+            )
+        }
+        TatolabVerb::Mcp(runtime_target) => {
+            local_api_mcp_stdio_pipe::pipe_stdio_to_the_selected_runtimes_mcp_server(
+                runtime_target.requested_runtime_name_or_id.as_deref(),
             )
         }
         TatolabVerb::Logs(logs_arguments) => runtime_logs_verb::run_runtime_logs_verb(logs_arguments),

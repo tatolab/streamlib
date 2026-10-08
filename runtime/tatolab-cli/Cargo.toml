@@ -3,7 +3,7 @@
 
 [package]
 name = "tatolab-cli"
-description = "The `tatolab` CLI: `new` writes a stream project; `run` and `dev` compile a stream in its project's venv and start `tatolabd` attached; `nodes` lists the runtimes running on this machine, and `graph` and `tap` read one through its local API socket; `enable-virtual-camera` grants this machine's users the virtual camera's loopback device, once."
+description = "The `tatolab` CLI: `new` writes a stream project; `run` and `dev` compile a stream in its project's venv and start `tatolabd` attached; `nodes` lists the runtimes running on this machine, and `graph`, `tap`, `exchange`, `logs` and `mcp` reach one through its local API socket — `logs` also reads a runtime's JSONL log files; `enable-virtual-camera` grants this machine's users the virtual camera's loopback device, once."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -28,8 +28,9 @@ libc = { workspace = true }
 streamlib-runtime-on-disk-contract = { path = "../streamlib-runtime-on-disk-contract", version = "0.41.0" }
 # The MCP client of a runtime's local API: the official SDK's, over the local API socket.
 rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket"] }
-# One current-thread runtime per client or request, driving it to completion.
-tokio = { version = "1.48.0", features = ["rt", "time", "net"] }
+# One current-thread runtime per client or request, driving it to completion; `mcp` copies its
+# stdio to and from the local API socket on one.
+tokio = { version = "1.48.0", features = ["rt", "time", "net", "io-std", "io-util", "macros"] }
 # Plain HTTP/1.1 over the local API socket, for the routes reached without MCP.
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
@@ -43,7 +44,8 @@ chrono = { version = "0.4.45", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 # The stub local API the observation verbs are driven against: the official MCP SDK's server,
-# mounted on axum beside a stub of the surface-image route.
-rmcp = { version = "3.5.1", features = ["server", "transport-streamable-http-server"] }
+# mounted on axum beside a stub of the surface-image route and served over `/mcp/stdio`'s
+# upgraded stream; its client drives `tatolab mcp` as a child process over the child's stdio.
+rmcp = { version = "3.5.1", features = ["server", "transport-streamable-http-server", "transport-async-rw", "transport-child-process"] }
 axum = { workspace = true }
-tokio = { version = "1.48.0", features = ["rt", "time", "net", "sync"] }
+tokio = { version = "1.48.0", features = ["rt", "time", "net", "sync", "process"] }
