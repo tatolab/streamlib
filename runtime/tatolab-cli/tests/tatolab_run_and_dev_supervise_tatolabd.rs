@@ -60,7 +60,8 @@ exit "$exit_code"
 "#;
 
 /// A fake venv interpreter: answers the `tatolab.stream` probe and emulates the compile entry,
-/// logging each compile's cwd and arguments to `<control>/compile_invocations`.
+/// logging each compile's cwd and arguments to `<control>/compile_invocations` and its pid to
+/// `<control>/compile_process_ids`.
 const FAKE_PROJECT_PYTHON_SCRIPT: &str = r#"#!/bin/sh
 control_directory='@CONTROL@'
 if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then
@@ -72,6 +73,7 @@ fi
   for argument in "$@"; do printf '%s\n' "$argument"; done
   printf '%s\n' '--end-of-invocation--'
 } >> "$control_directory/compile_invocations"
+printf '%s\n' "$$" >> "$control_directory/compile_process_ids"
 if [ -f "$control_directory/compile_delay_seconds" ]; then sleep "$(cat "$control_directory/compile_delay_seconds")"; fi
 if [ -f "$control_directory/compile_stderr" ]; then cat "$control_directory/compile_stderr" >&2; fi
 exit_code=$(cat "$control_directory/compile_exit_code" 2>/dev/null || echo 0)
@@ -302,6 +304,14 @@ impl AttachedTatolabdTestbed {
             }
         }
         compile_invocations
+    }
+
+    fn compile_process_ids(&self) -> Vec<u32> {
+        fs::read_to_string(self.control_directory().join("compile_process_ids"))
+            .unwrap_or_default()
+            .lines()
+            .map(|process_id_line| process_id_line.parse().unwrap())
+            .collect()
     }
 
     fn started_tatolabd_process_ids(&self) -> Vec<u32> {
@@ -999,6 +1009,38 @@ fn dev_terminates_its_tatolabd_when_a_failed_recompile_spawn_ends_it_early() {
     // SAFETY: `kill` with signal 0 reads no memory and delivers nothing.
     let probe_result = unsafe { libc::kill(tatolabd_process_id as libc::pid_t, 0) };
     assert_eq!(probe_result, -1, "tatolabd outlived tatolab");
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+}
+
+#[test]
+fn dev_ends_the_compile_in_flight_when_a_failed_restart_ends_it_early() {
+    let testbed = AttachedTatolabdTestbed::new();
+    let mut running_tatolab = testbed.start_tatolab(&testbed.project_directory(), &["dev"]);
+    testbed.wait_for_tatolabd_start_count(1);
+
+    testbed.set_control("tatolabd_exit_delay_seconds", "3");
+    testbed.edit_project_file("stream.py", "# stream v2\n");
+    testbed.wait_for_tatolab_stderr_to_contain("tatolab dev: restarting the stream");
+    fs::remove_file(testbed.bin_directory().join("tatolabd")).unwrap();
+    testbed.set_control("compile_delay_seconds", "30");
+    testbed.edit_project_file("stream.py", "# stream v3\n");
+    wait_until("the third compile to start", || {
+        testbed.compile_process_ids().len() >= 3
+    });
+    let compile_in_flight_process_id = testbed.compile_process_ids()[2];
+
+    assert_eq!(running_tatolab.wait_for_exit().code(), Some(1));
+    assert!(
+        testbed.tatolab_stderr().contains("error: cannot start "),
+        "{}",
+        testbed.tatolab_stderr()
+    );
+    // SAFETY: `kill` with signal 0 reads no memory and delivers nothing.
+    let probe_result = unsafe { libc::kill(compile_in_flight_process_id as libc::pid_t, 0) };
+    assert_eq!(probe_result, -1, "the compile in flight outlived tatolab");
     assert_eq!(
         std::io::Error::last_os_error().raw_os_error(),
         Some(libc::ESRCH)
