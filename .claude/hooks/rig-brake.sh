@@ -104,7 +104,7 @@ AWK
 stripped="$(printf '%s\n' "$cmd" | awk "$STRIP_HEREDOC_BODIES")"
 
 # A line led by a text tool carries a launch as an argument, never as a launch:
-# `git commit -m "… streamlib run …"`, `sed 's|streamlib run|…|' README.md`.
+# `git commit -m "… tatolab run …"`, `sed 's|tatolab run|…|' README.md`.
 ENV_ASSIGN="([A-Za-z_][A-Za-z0-9_]*=(\"[^\"]*\"|'[^']*'|[^[:space:]]*)[[:space:]]+)*"
 TEXT_TOOL_LINE="^[[:space:]]*${ENV_ASSIGN}(git|gh|sed|grep|rg|awk|perl|python3?|node|echo|printf|cat|jq|diff|rev|tee)([[:space:]]|$)"
 candidates="$(printf '%s\n' "$stripped" | grep -Ev -- "$TEXT_TOOL_LINE")"
@@ -119,7 +119,7 @@ segments="$(printf '%s\n' "$candidates" \
 # unparsed strings, so a launch inside one is not seen.
 WRAPPER="(nohup|timeout|env|stdbuf|xvfb-run|uv|poetry)"
 COMMAND_POSITION="(^|[;&|(])[[:space:]]*${ENV_ASSIGN}(${WRAPPER}([[:space:]]+[^[:space:]]+)*[[:space:]]+)*"
-STREAMLIB_LAUNCH_KEY="${COMMAND_POSITION}([[:alnum:]_./-]*/)?streamlib[[:space:]]+(run|dev)([[:space:]]|$)"
+TATOLAB_LAUNCH_KEY="${COMMAND_POSITION}([[:alnum:]_./-]*/)?tatolab[[:space:]]+(run|dev)([[:space:]]|$)"
 CARGO_RUN_KEY="${COMMAND_POSITION}cargo[[:space:]]+run([[:space:]]|$)"
 E2E_WRAPPER="(nohup|timeout|env|stdbuf|bash|sh|source|\\.)"
 E2E_SCRIPT_KEY="(^|[;&|(])[[:space:]]*${ENV_ASSIGN}(${E2E_WRAPPER}([[:space:]]+[^[:space:]]+)*[[:space:]]+)*([[:alnum:]_./-]*/)?tests/fixtures/e2e_[[:alnum:]_./-]*\\.sh([[:space:]]|$)"
@@ -147,12 +147,12 @@ fi
 # `--help` prints and exits, and examples/* are not workspace members so a `-p`
 # spelling of `cargo run` never reaches one.
 launch_lines="$(printf '%s\n' "$candidates" \
-  | grep -Ev -- 'streamlib[[:space:]]+(run|dev)([[:space:]]+[^[:space:]]+)*[[:space:]]+(--help|-h)([[:space:]]|$)' \
+  | grep -Ev -- 'tatolab[[:space:]]+(run|dev)([[:space:]]+[^[:space:]]+)*[[:space:]]+(--help|-h)([[:space:]]|$)' \
   | grep -Ev -- 'cargo[[:space:]]+run([[:space:]]+[^[:space:]]+)*[[:space:]]+((-p|--package)([[:space:]]|=)|(--help|-h)([[:space:]]|$))')"
 if names_an_example \
-   && printf '%s\n' "$launch_lines" | grep -Eq -- "${STREAMLIB_LAUNCH_KEY}|${CARGO_RUN_KEY}"; then
+   && printf '%s\n' "$launch_lines" | grep -Eq -- "${TATOLAB_LAUNCH_KEY}|${CARGO_RUN_KEY}"; then
   note_rule example_launch
-  remember_match "$launch_lines" 'streamlib[[:space:]]+(run|dev)|cargo[[:space:]]+run'
+  remember_match "$launch_lines" 'tatolab[[:space:]]+(run|dev)|cargo[[:space:]]+run'
 fi
 
 e2e_lines="$(printf '%s\n' "$candidates" \
@@ -252,7 +252,7 @@ if [ "$outcome" = ask ]; then
 fi
 
 system_message="${config_problems}rig-brake: ${first_rule} noted, not a prompt. Silence it: ${HELPER} rule ${first_rule} off  or  ${HELPER} allow '${suggested_glob}'"
-context="rig-brake note, advisory only, nothing was blocked: this command matched rule ${rules_text}. It drives the rig. That is fine when the owner asked for this eval. In an unattended or sandboxed firing it dies at exit 144, so park it for /verify-live instead. Control-plane reads (streamlib nodes, graph, tap, logs, exchange) never trigger this note. Owner preferences: ${preferences:-none recorded}. The owner can silence this for good with \`${HELPER} rule ${first_rule} off\` or \`${HELPER} allow '${suggested_glob}'\`; offer that if they say the command is fine, and never add an exception yourself."
+context="rig-brake note, advisory only, nothing was blocked: this command matched rule ${rules_text}. It drives the rig. That is fine when the owner asked for this eval. In an unattended or sandboxed firing it dies at exit 144, so park it for /verify-live instead. Control-plane reads (tatolab nodes, graph, tap, logs, exchange) never trigger this note. Owner preferences: ${preferences:-none recorded}. The owner can silence this for good with \`${HELPER} rule ${first_rule} off\` or \`${HELPER} allow '${suggested_glob}'\`; offer that if they say the command is fine, and never add an exception yourself."
 jq -n --arg message "$system_message" --arg context "$context" \
   '{systemMessage: $message, hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $context}}'
 exit 0
