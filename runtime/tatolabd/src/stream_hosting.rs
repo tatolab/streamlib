@@ -11,6 +11,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use streamlib::engine_internal::core::app_directory::record_the_app_entry_directory_the_language_host_captured;
+use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
+use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads, Runner,
@@ -60,6 +62,7 @@ pub(crate) fn host_the_stream_until_shutdown(
             &stream_graph,
             Some(stream_environment),
             |loaded_engine| {
+                log_that_the_stream_loaded(&stream_graph);
                 register_api_server_control_plane_processor_on_runtime(
                     loaded_engine,
                     ApiServerControlPlaneHostConfig::default(),
@@ -83,6 +86,23 @@ pub(crate) fn host_the_stream_until_shutdown(
             | EngineTeardownOutcome::StillReferenced(description),
             _,
         ) => write_refusal_to_standard_error(&description),
+    }
+}
+
+/// Log the load's success under the stream's name as the engine cast it, so a
+/// reader of the log can tell a stream that loaded but failed to start from one
+/// the load refused.
+fn log_that_the_stream_loaded(stream_graph: &GraphSnapshot) {
+    let stream_node_count = stream_graph.nodes.len();
+    match stream_graph
+        .stream
+        .as_deref()
+        .and_then(|stream_name| cast_exposed_name_to_url_safe(stream_name).ok())
+    {
+        Some(cast_stream_name) => {
+            tracing::info!("the stream `{cast_stream_name}` loaded with {stream_node_count} nodes")
+        }
+        None => tracing::info!("the stream loaded with {stream_node_count} nodes"),
     }
 }
 
