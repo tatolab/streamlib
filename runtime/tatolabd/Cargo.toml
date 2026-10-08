@@ -1,0 +1,18 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "tatolabd"
+description = "The runtime process: hosts one stream in the foreground — the engine, its built-ins and the local API — with no Python in its process."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "tatolabd"
+path = "src/main.rs"
+
+[dependencies]

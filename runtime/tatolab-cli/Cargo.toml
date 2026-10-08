@@ -1,0 +1,18 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "tatolab-cli"
+description = "The `tatolab` CLI: `new` writes a stream project; `run` and `dev` compile a stream in its project's venv and start `tatolabd` attached."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "tatolab"
+path = "src/main.rs"
+
+[dependencies]
