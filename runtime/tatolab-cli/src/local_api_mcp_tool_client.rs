@@ -275,7 +275,8 @@ fn first_text_block_of_tool_result(
 }
 
 /// Whether a runtime on `local_api_socket_path` answers MCP at all: answering `server/discover`,
-/// or refusing it in the protocol's own words, is alive.
+/// or refusing it in the protocol's own words, is alive. A connection that cannot open is no
+/// answer, since a probe has nobody to report it to.
 pub(crate) fn local_api_answers_mcp(local_api_socket_path: &Path) -> bool {
     let Ok(mut local_api_connection) =
         LocalApiConnection::open(local_api_socket_path, LOCAL_API_LIVENESS_ROUND_TRIP_TIMEOUT)
@@ -296,12 +297,7 @@ pub(crate) fn call_one_local_api_tool(
     tool_arguments: serde_json::Map<String, serde_json::Value>,
 ) -> Result<String, LocalApiMcpToolClientFailure> {
     let mut local_api_connection =
-        LocalApiConnection::open(local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)
-            .map_err(|runtime_start_failure| {
-                LocalApiMcpToolClientFailure::local_api_unreachable(format!(
-                    "could not start the MCP client's runtime: {runtime_start_failure}"
-                ))
-            })?;
+        LocalApiConnection::open(local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)?;
     local_api_connection
         .call_tool(tool_name, tool_arguments)
         .map_err(|call_failure| {

@@ -261,13 +261,7 @@ pub(crate) fn run_surface_image_exchange_verb(
     let mut local_api_connection = LocalApiConnection::open(
         &selected_runtime.local_api_socket_path,
         OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
-    )
-    .map_err(|runtime_start_failure| {
-        TatolabCommandFailure::refused(format!(
-            "cannot start the runtime that drives the local API connection: \
-             {runtime_start_failure}"
-        ))
-    })?;
+    )?;
     match exchange_form {
         SurfaceImageExchangeForm::OnePublishedSurfaceId {
             published_surface_id,

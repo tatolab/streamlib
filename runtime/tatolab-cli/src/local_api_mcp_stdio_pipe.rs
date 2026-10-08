@@ -16,7 +16,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::TatolabCommandFailure;
-use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
+use crate::local_api_connection::tokio_runtime_for_a_local_api_connection;
 use crate::local_api_runtime_selection::{
     LocalApiRuntimeSelectionFailure, select_live_runtime_in_node_registry,
     this_users_node_registry_directory,
@@ -27,6 +27,9 @@ use crate::local_api_unix_socket_http_client::{
 
 /// The most bytes one read takes from stdin or from the socket.
 const MCP_STDIO_PIPE_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Bounds the wait for a runtime's `101` to the `/mcp/stdio` upgrade.
+const MCP_STDIO_UPGRADE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The refusal when no runtime on this machine answers, `--node` or not.
 const NO_LIVE_RUNTIME_FOR_THE_MCP_VERB_REFUSAL: &str = "no runtime is live on this machine \
@@ -82,7 +85,7 @@ pub(crate) fn pipe_stdio_to_the_selected_runtimes_mcp_server(
         requested_runtime_name_or_id,
         tokio::io::stdin(),
         tokio::io::stdout(),
-        OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+        MCP_STDIO_UPGRADE_TIMEOUT,
     )
 }
 
@@ -128,15 +131,16 @@ fn pipe_mcp_host_io_to_the_runtimes_mcp_server(
         "runtime `{}` ({})",
         selected_runtime.runtime_name, selected_runtime.runtime_id
     );
-    let pipe_tokio_runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|runtime_start_failure| {
-            TatolabCommandFailure::refused(format!(
-                "{runtime_named_for_stderr} did not open its MCP stream: could not start the \
-                 pipe's runtime: {runtime_start_failure}"
-            ))
-        })?;
+    let mcp_stream_not_opened = |why_not_opened: &dyn std::fmt::Display| {
+        TatolabCommandFailure::refused(format!(
+            "{runtime_named_for_stderr} did not open its MCP stream: {why_not_opened}"
+        ))
+    };
+    let pipe_tokio_runtime = tokio_runtime_for_a_local_api_connection().map_err(
+        |local_api_connection_open_failure| {
+            mcp_stream_not_opened(&local_api_connection_open_failure)
+        },
+    )?;
     let pipe_outcome: Result<McpStdioPipeEnding, TatolabCommandFailure> = pipe_tokio_runtime
         .block_on(async {
             let upgraded_mcp_stdio_stream = match tokio::time::timeout(
@@ -146,16 +150,10 @@ fn pipe_mcp_host_io_to_the_runtimes_mcp_server(
             .await
             {
                 Ok(Ok(upgraded_mcp_stdio_stream)) => upgraded_mcp_stdio_stream,
-                Ok(Err(upgrade_failure)) => {
-                    return Err(TatolabCommandFailure::refused(format!(
-                        "{runtime_named_for_stderr} did not open its MCP stream: \
-                         {upgrade_failure}"
-                    )));
-                }
+                Ok(Err(upgrade_failure)) => return Err(mcp_stream_not_opened(&upgrade_failure)),
                 Err(_elapsed) => {
-                    return Err(TatolabCommandFailure::refused(format!(
-                        "{runtime_named_for_stderr} did not open its MCP stream: it did not \
-                         answer within {mcp_stdio_upgrade_timeout:?}"
+                    return Err(mcp_stream_not_opened(&format_args!(
+                        "it did not answer within {mcp_stdio_upgrade_timeout:?}"
                     )));
                 }
             };
@@ -383,7 +381,7 @@ mod tests {
             requested_runtime_name_or_id,
             mcp_host_input,
             mcp_host_output,
-            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+            MCP_STDIO_UPGRADE_TIMEOUT,
         )
     }
 

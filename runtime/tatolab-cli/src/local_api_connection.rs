@@ -8,10 +8,39 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::TatolabCommandFailure;
 use crate::local_api_mcp_tool_client::{LocalApiMcpToolClient, LocalApiMcpToolClientFailure};
 use crate::local_api_unix_socket_http_client::{
     LocalApiHttpConnection, LocalApiHttpRequestFailure, LocalApiHttpResponse,
 };
+
+/// The tokio runtime that drives a local API connection would not start.
+#[derive(Debug, thiserror::Error)]
+#[error("cannot start the tokio runtime that drives the local API connection: {0}")]
+pub(crate) struct LocalApiConnectionOpenFailure(#[source] pub(crate) io::Error);
+
+impl From<LocalApiConnectionOpenFailure> for TatolabCommandFailure {
+    fn from(local_api_connection_open_failure: LocalApiConnectionOpenFailure) -> Self {
+        TatolabCommandFailure::refused(local_api_connection_open_failure.to_string())
+    }
+}
+
+impl From<LocalApiConnectionOpenFailure> for LocalApiMcpToolClientFailure {
+    fn from(local_api_connection_open_failure: LocalApiConnectionOpenFailure) -> Self {
+        LocalApiMcpToolClientFailure::local_api_unreachable(
+            local_api_connection_open_failure.to_string(),
+        )
+    }
+}
+
+/// The current-thread tokio runtime a local API connection is driven on.
+pub(crate) fn tokio_runtime_for_a_local_api_connection()
+-> Result<tokio::runtime::Runtime, LocalApiConnectionOpenFailure> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(LocalApiConnectionOpenFailure)
+}
 
 /// A runtime's local API as one verb run reaches it; closes the MCP client when dropped.
 pub(crate) struct LocalApiConnection {
@@ -28,11 +57,9 @@ impl LocalApiConnection {
     pub(crate) fn open(
         local_api_socket_path: &Path,
         request_timeout: Duration,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, LocalApiConnectionOpenFailure> {
         Ok(Self {
-            local_api_tokio_runtime: tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?,
+            local_api_tokio_runtime: tokio_runtime_for_a_local_api_connection()?,
             local_api_socket_path: local_api_socket_path.to_path_buf(),
             request_timeout,
             connected_mcp_client: None,
@@ -107,5 +134,32 @@ fn local_api_mcp_tool_client_connected_on_first_use<'connection>(
                 LocalApiMcpToolClient::connect(local_api_socket_path, request_timeout),
             )?),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::local_api_mcp_tool_client::LocalApiMcpToolClientFailureKind;
+
+    #[test]
+    fn a_tokio_runtime_that_will_not_start_reads_the_same_wherever_it_is_reported() {
+        let tokio_runtime_start_failure =
+            || LocalApiConnectionOpenFailure(io::Error::other("no threads left"));
+        let open_failure_wording =
+            "cannot start the tokio runtime that drives the local API connection: no threads left";
+
+        let command_failure = TatolabCommandFailure::from(tokio_runtime_start_failure());
+        let mcp_client_failure = LocalApiMcpToolClientFailure::from(tokio_runtime_start_failure());
+
+        assert_eq!(
+            TatolabCommandFailure::refusal_message_of::<()>(Err(command_failure)),
+            open_failure_wording
+        );
+        assert_eq!(mcp_client_failure.to_string(), open_failure_wording);
+        assert_eq!(
+            mcp_client_failure.kind,
+            LocalApiMcpToolClientFailureKind::LocalApiUnreachable
+        );
     }
 }
