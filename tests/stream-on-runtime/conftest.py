@@ -14,7 +14,7 @@ Fixtures, each documented where it is defined:
 - `load_stream_graph_on_tatolabd` — the GPU-free load: start, end at the GPU, report the load.
 - `make_tatolab_project` — a project directory whose `.venv` is the suite venv.
 - `run_tatolab` / `start_tatolab` — `tatolab` to completion, or started.
-- `run_observation_verb` — a Python observation verb, with the lend on `PYTHONPATH`.
+- `run_tatolab_observation_verb` — a `tatolab` observation verb against this test's runtimes.
 - `held_node_module` — a node module in a project of its own whose describe parks the load.
 """
 
@@ -48,7 +48,7 @@ from runtime_unit_under_test import (
     SUITE_VENV_PREFIX,
     RuntimeUnitUnderTest,
     locate_the_runtime_unit,
-    run_observation_verb_with_the_lend,
+    run_tatolab_observation_verb_in_environment,
 )
 
 #: Set to 1 to run the tests an `awaiting_macos_parity` mark would not run on
@@ -528,18 +528,17 @@ def run_tatolab(
 
 
 @pytest.fixture
-def run_observation_verb(
+def run_tatolab_observation_verb(
     runtime_unit: RuntimeUnitUnderTest, private_runtime_directories: PrivateRuntimeDirectories
 ) -> "Callable[..., subprocess.CompletedProcess[str]]":
-    """Run a Python observation verb (`nodes`, `graph`, `tap`, `logs`, ...) against this test's runtimes.
+    """Run a `tatolab` observation verb (`nodes`, `graph`, `tap`, `logs`, ...) against this test's runtimes.
 
-    `run_observation_verb(*verb_arguments, timeout=60.0)`: the suite venv's
-    interpreter runs `-m tatolab.runtime.cli` with the lend leading `PYTHONPATH`,
-    in this test's runtime directory.
+    `run_tatolab_observation_verb(*verb_arguments, timeout=60.0)`: the runtime
+    unit's `bin/tatolab`, in this test's runtime directory, to completion.
     """
 
     def run(*verb_arguments: str, **keyword_arguments: Any) -> "subprocess.CompletedProcess[str]":
-        return run_observation_verb_with_the_lend(
+        return run_tatolab_observation_verb_in_environment(
             runtime_unit,
             private_runtime_directories.environment,
             *verb_arguments,

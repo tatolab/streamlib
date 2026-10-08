@@ -3,7 +3,7 @@
 
 """Writes what a microphone captured to a WAV, for the signal analysis to read.
 
-The tap cannot serve this: `streamlib tap` collects inside a bounded 500 ms
+The tap cannot serve this: `tatolab tap` collects inside a bounded 500 ms
 window (`TAP_SAMPLE_WINDOW`), which is a fifth of the known signal. That bound
 is right for an observation verb and wrong for a measurement, so the
 measurement is taken inside the graph instead — this is a consumer like any

@@ -150,8 +150,8 @@ if [ "$INJECT_BUG" = "range-swap" ]; then
     exit 1
 fi
 
-# Both arms read the live graph and exchange frames through the observation
-# verbs the lend carries; the python arm also compiles its stream in the
+# Both arms read the live graph and exchange frames through the runtime unit's
+# `tatolab` observation verbs; the python arm also compiles its stream in the
 # fixture venv.
 require_the_runtime_unit
 require_the_fixture_venv
@@ -298,7 +298,7 @@ for _ in $(seq 1 60); do
     if [ -z "$RUNTIME_ID" ]; then
         RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$RIG_PID")" || RUNTIME_ID=""
     fi
-    if [ -n "$RUNTIME_ID" ] && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+    if [ -n "$RUNTIME_ID" ] && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
         NODE_ANSWERED=1
         break
     fi
@@ -313,7 +313,7 @@ fi
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
-DECODED_CHANNEL="$(streamlib_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+DECODED_CHANNEL="$(tatolab_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -329,7 +329,7 @@ print(graph["runtime_name"] + "/" + decoder["name"] + "/video")
 }
 echo "[vivid-color] Decoded channel:   $DECODED_CHANNEL"
 
-if ! streamlib_observation_verb exchange \
+if ! tatolab_observation_verb exchange \
         --channel "$DECODED_CHANNEL" \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \

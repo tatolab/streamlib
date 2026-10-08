@@ -37,8 +37,8 @@
 #                own baseline for that codec; there is no recording baseline.
 #
 # The record phase runs on the runtime unit and the replay phase is the Rust
-# rig; both are read through the observation verbs the lend carries (see
-# fixture_runtime_unit.sh).
+# rig; both are read through the runtime unit's `tatolab` observation verbs
+# (see fixture_runtime_unit.sh).
 #
 # Environment overrides:
 #   VIVID_TEST_PATTERN     — vivid test_pattern index (default 7 = "100% Red"),
@@ -247,7 +247,7 @@ wait_for_the_launched_node() {
         if [ -z "$RUNTIME_ID" ]; then
             RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$1")" || RUNTIME_ID=""
         fi
-        if [ -n "$RUNTIME_ID" ] && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        if [ -n "$RUNTIME_ID" ] && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.5
@@ -446,7 +446,7 @@ fi
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
-DECODED_CHANNEL="$(streamlib_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+DECODED_CHANNEL="$(tatolab_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -462,7 +462,7 @@ print(graph["runtime_name"] + "/" + decoder["name"] + "/video")
 }
 echo "[recording] Decoded channel:   $DECODED_CHANNEL"
 
-if ! streamlib_observation_verb exchange \
+if ! tatolab_observation_verb exchange \
         --channel "$DECODED_CHANNEL" \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \

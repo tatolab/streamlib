@@ -95,8 +95,8 @@ case "$CODEC" in
         ;;
 esac
 
-# The rig is read through the observation verbs the runtime unit's lend carries
-# (see fixture_runtime_unit.sh).
+# The rig is read through the runtime unit's `tatolab` observation verbs (see
+# fixture_runtime_unit.sh).
 require_the_runtime_unit
 require_the_fixture_venv
 
@@ -137,7 +137,7 @@ mkdir -p "$DECODED_DIR" "$ARMS_DIR" "$SCORED_REFERENCES_DIR"
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
 decoded_channel_of_running_rig() {
-    streamlib_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+    tatolab_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -233,7 +233,7 @@ wait_for_the_launched_node() {
         if [ -z "$RUNTIME_ID" ]; then
             RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$1")" || RUNTIME_ID=""
         fi
-        if [ -n "$RUNTIME_ID" ] && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        if [ -n "$RUNTIME_ID" ] && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
             return 0
         fi
         sleep 0.5
@@ -279,7 +279,7 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
     echo "[psnr]     decoded channel: $decoded_channel"
 
     exchange_log="$arm_dir/exchange.log"
-    if ! streamlib_observation_verb exchange \
+    if ! tatolab_observation_verb exchange \
             --channel "$decoded_channel" \
             --out "$arm_dir/exchanged" \
             --count "$SAMPLES_PER_REFERENCE" \

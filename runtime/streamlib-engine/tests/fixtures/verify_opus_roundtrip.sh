@@ -98,7 +98,7 @@ for _ in $(seq 60); do
         RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$NODE_PID")" || RUNTIME_ID=""
     fi
     if [ -n "$RUNTIME_ID" ] \
-        && streamlib_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
+        && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
         NODE_ANSWERED=1
         break
     fi
