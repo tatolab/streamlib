@@ -23,6 +23,3 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 # Signal mask, sigwait, kill and the parent-death signal: the attached `tatolabd`'s lifecycle.
 libc = { workspace = true }
-
-[lints]
-workspace = true
