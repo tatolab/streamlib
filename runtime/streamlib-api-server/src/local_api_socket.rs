@@ -17,17 +17,37 @@ use tokio_util::sync::CancellationToken;
 /// Owner read-write only: the socket's file mode is what keeps every other user out.
 pub const LOCAL_API_SOCKET_FILE_MODE: u32 = 0o600;
 
-/// The local API's listener, bound and not yet served.
+/// The local API's socket file, removed when this drops.
 #[derive(Debug)]
-pub struct LocalApiSocketBoundAndNotYetServed {
-    local_api_listener: std::os::unix::net::UnixListener,
+struct LocalApiSocketFileRemovedOnDrop {
     local_api_socket_path: PathBuf,
+}
+
+impl Drop for LocalApiSocketFileRemovedOnDrop {
+    fn drop(&mut self) {
+        // Logged, not raised: the next bind at the path clears a stale file anyway.
+        if let Err(error) = remove_local_api_socket_file(&self.local_api_socket_path) {
+            tracing::warn!(
+                %error,
+                "failed to remove the local API socket {}",
+                self.local_api_socket_path.display()
+            );
+        }
+    }
+}
+
+/// The local API's listener, bound and not yet served. Dropping it closes the
+/// listener and removes the socket file.
+#[derive(Debug)]
+pub(crate) struct LocalApiSocketBoundAndNotYetServed {
+    local_api_listener: std::os::unix::net::UnixListener,
+    local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
 }
 
 /// Bind the local API's listener at `local_api_socket_path`, refusing a path a
 /// live runtime answers on, replacing a stale file, and leaving the socket at
 /// [`LOCAL_API_SOCKET_FILE_MODE`].
-pub fn bind_local_api_socket(
+pub(crate) fn bind_local_api_socket(
     local_api_socket_path: &Path,
 ) -> Result<LocalApiSocketBoundAndNotYetServed> {
     let cleared = clear_unix_socket_path_for_bind(local_api_socket_path)
@@ -58,14 +78,16 @@ pub fn bind_local_api_socket(
     })?;
     Ok(LocalApiSocketBoundAndNotYetServed {
         local_api_listener,
-        local_api_socket_path: local_api_socket_path.to_path_buf(),
+        local_api_socket_file: LocalApiSocketFileRemovedOnDrop {
+            local_api_socket_path: local_api_socket_path.to_path_buf(),
+        },
     })
 }
 
 impl LocalApiSocketBoundAndNotYetServed {
     /// Where the listener is bound.
-    pub fn local_api_socket_path(&self) -> &Path {
-        &self.local_api_socket_path
+    pub(crate) fn local_api_socket_path(&self) -> &Path {
+        &self.local_api_socket_file.local_api_socket_path
     }
 
     /// Serve the router `build_control_plane_router` builds on this listener
@@ -74,15 +96,16 @@ impl LocalApiSocketBoundAndNotYetServed {
     /// The builder is handed the token the server cancels as it stops, so
     /// whatever the router holds open can end before the graceful shutdown
     /// waits on it.
-    pub fn serve_router(
+    pub(crate) fn serve_router(
         self,
         build_control_plane_router: impl FnOnce(CancellationToken) -> axum::Router,
         tokio_handle: &tokio::runtime::Handle,
     ) -> Result<RunningLocalApiSocketServer> {
         let Self {
             local_api_listener,
-            local_api_socket_path,
+            local_api_socket_file,
         } = self;
+        let local_api_socket_path = &local_api_socket_file.local_api_socket_path;
         let adopt_failure = |failure: std::io::Error| {
             Error::Runtime(format!(
                 "Failed to serve the local API socket {}: {failure}",
@@ -104,7 +127,7 @@ impl LocalApiSocketBoundAndNotYetServed {
         ));
         Ok(RunningLocalApiSocketServer {
             local_api_stopping_token,
-            local_api_socket_path,
+            local_api_socket_file,
         })
     }
 }
@@ -113,22 +136,15 @@ impl LocalApiSocketBoundAndNotYetServed {
 /// the socket file.
 #[must_use = "dropping this stops the local API server"]
 #[derive(Debug)]
-pub struct RunningLocalApiSocketServer {
+pub(crate) struct RunningLocalApiSocketServer {
     local_api_stopping_token: CancellationToken,
-    local_api_socket_path: PathBuf,
+    local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
 }
 
 impl Drop for RunningLocalApiSocketServer {
     fn drop(&mut self) {
+        // The socket file goes after this, as its field drops.
         self.local_api_stopping_token.cancel();
-        // Logged, not raised: the next bind at the path clears a stale file anyway.
-        if let Err(error) = remove_local_api_socket_file(&self.local_api_socket_path) {
-            tracing::warn!(
-                %error,
-                "failed to remove the local API socket {} on stop",
-                self.local_api_socket_path.display()
-            );
-        }
     }
 }
 
@@ -328,6 +344,18 @@ mod tests {
                 .to_ascii_lowercase()
                 .contains("content-type: text/plain")
         );
+    }
+
+    #[test]
+    fn dropping_a_socket_bound_and_never_served_removes_its_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let local_api_socket_path = directory.path().join("local-api-Rneverserved.sock");
+        let bound = bind_local_api_socket(&local_api_socket_path).unwrap();
+        assert!(local_api_socket_path.exists());
+
+        drop(bound);
+
+        assert!(!local_api_socket_path.exists());
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! `tatolab nodes` can find.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -62,12 +63,6 @@ pub fn register_api_server_control_plane_processor_on_runtime(
             .runtime_directory()
             .local_api_socket_path(runtime.runtime_id()),
     )?;
-    LOCAL_API_SOCKETS_BOUND_BY_THEIR_HOST.lock().insert(
-        local_api_socket_bound_by_this_host
-            .local_api_socket_path()
-            .to_path_buf(),
-        local_api_socket_bound_by_this_host,
-    );
 
     // A host, not a loadable plugin: the type is statically linked into the
     // caller and registered on the shared registry rather than dlopen'd.
@@ -89,7 +84,28 @@ pub fn register_api_server_control_plane_processor_on_runtime(
         api_server_config,
     ))?;
 
-    Ok(())
+    hand_the_bound_local_api_socket_to_its_processor(local_api_socket_bound_by_this_host)
+}
+
+/// Leave `local_api_socket_bound_by_this_host` for the `ApiServer` processor
+/// serving it to take, refusing a path that already holds one.
+fn hand_the_bound_local_api_socket_to_its_processor(
+    local_api_socket_bound_by_this_host: LocalApiSocketBoundAndNotYetServed,
+) -> Result<()> {
+    match LOCAL_API_SOCKETS_BOUND_BY_THEIR_HOST.lock().entry(
+        local_api_socket_bound_by_this_host
+            .local_api_socket_path()
+            .to_path_buf(),
+    ) {
+        Entry::Occupied(occupied) => Err(Error::Runtime(format!(
+            "ApiServer: a local API socket bound at {} is already waiting for its processor",
+            occupied.key().display()
+        ))),
+        Entry::Vacant(vacant) => {
+            vacant.insert(local_api_socket_bound_by_this_host);
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -114,10 +130,10 @@ mod tests {
     fn a_socket_its_host_bound_is_taken_once() {
         let socket_directory = tempfile::tempdir().unwrap();
         let local_api_socket_path = socket_directory.path().join("local-api-Rtakenonce.sock");
-        LOCAL_API_SOCKETS_BOUND_BY_THEIR_HOST.lock().insert(
-            local_api_socket_path.clone(),
+        hand_the_bound_local_api_socket_to_its_processor(
             bind_local_api_socket(&local_api_socket_path).unwrap(),
-        );
+        )
+        .unwrap();
 
         let taken = take_the_local_api_socket_its_host_bound(&local_api_socket_path).unwrap();
 
