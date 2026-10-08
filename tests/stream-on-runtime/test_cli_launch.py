@@ -37,6 +37,7 @@ import pytest
 
 from conftest import PrivateRuntimeDirectories, StartedRuntimeProcesses
 from runtime_process_under_test import (
+    ENGINE_GRACEFUL_STOP_LOG_LINE,
     ENGINE_STARTED_LOG_LINE,
     RuntimeProcessUnderTest,
     registry_entry_paths_in,
@@ -135,6 +136,8 @@ DEV_KEPT_THE_RUNNING_STREAM = "tatolab dev: kept the running stream"
 # What `dev` says when the first compile fails and nothing is running.
 DEV_NO_STREAM_IS_RUNNING = "tatolab dev: no stream is running"
 DEV_RESTARTING_THE_STREAM = "tatolab dev: restarting the stream"
+# What `dev` says when a stream it stopped for a restart did not exit 0.
+DEV_PREVIOUS_STREAM_EXITED_BADLY = "tatolab dev: the previous stream exited with"
 
 # Run in a processor-interpreter-free Python with the lend on `PYTHONPATH`: the
 # lend's own registry reader resolves the runtime directory exactly as the
@@ -1011,6 +1014,27 @@ def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
     )
 
     tatolab.await_marker("EDITED_EFFECT", timeout=NODE_READY_TIMEOUT_SECONDS)
+    assert DEV_PREVIOUS_STREAM_EXITED_BADLY not in tatolab.stderr_text, (
+        "a bad save must not take the running node down: the stream that survived "
+        f"it exited unclean on the restart; standard error ended:\n{tatolab.recent_stderr()}"
+    )
+    tatolab.await_stderr_containing(
+        ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS, occurrence=2
+    )
+    stderr_lines = list(tatolab.stderr_lines)
+    engine_started_line_indices = [
+        line_index
+        for line_index, stderr_line in enumerate(stderr_lines)
+        if ENGINE_STARTED_LOG_LINE in stderr_line
+    ]
+    lines_before_the_second_stream_started = stderr_lines[: engine_started_line_indices[1]]
+    assert any(
+        ENGINE_GRACEFUL_STOP_LOG_LINE in stderr_line
+        for stderr_line in lines_before_the_second_stream_started
+    ), (
+        "the stream that survived the bad save did not shut down gracefully before "
+        "the restart started the edited one"
+    )
     tatolabd_pid_after_the_good_save = tatolab.registry_entry()["pid"]
     assert tatolabd_pid_after_the_good_save != tatolabd_pid_before_the_bad_save, (
         "a good save restarts the stream on a tatolabd of its own"
