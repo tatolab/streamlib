@@ -13,7 +13,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 use crate::core::logging::{
-    LoggingTunables, StreamlibLoggingConfig,
+    LoggingTunables, PrettyLogMirrorStandardStream, StreamlibLoggingConfig,
     event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source},
     init::init_for_tests,
     paths::{log_dir, runtime_log_path},
@@ -154,7 +154,7 @@ fn time_triggered_flush_writes_without_size_trigger() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -262,7 +262,7 @@ fn panic_hook_best_effort_flush() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -308,7 +308,7 @@ fn hot_path_is_not_blocked_on_io() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -366,7 +366,7 @@ fn rust_println_captured_via_fd_redirect() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -414,7 +414,7 @@ fn rust_c_printf_via_libc_captured() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -464,7 +464,7 @@ fn intercept_stdio_off_in_tests() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables::default(),
@@ -510,7 +510,7 @@ fn intercepted_fd2_uses_channel_fd2() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -562,7 +562,7 @@ fn no_redirect_loop_when_mirror_enabled() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: true,
+        pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardOutput),
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -612,7 +612,7 @@ fn reader_thread_shuts_down_on_runtime_drop() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -848,7 +848,7 @@ fn burst_surfaces_dropped_counter_record() {
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -933,7 +933,7 @@ fn a_runtime_logging_past_its_rotation_threshold_keeps_every_retained_record_who
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {

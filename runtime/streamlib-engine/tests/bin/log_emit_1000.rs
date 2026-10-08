@@ -61,7 +61,7 @@ fn main() {
     let config = StreamlibLoggingConfig {
         service_name: "log_emit_1000".into(),
         runtime_id: Some(runtime_id),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {

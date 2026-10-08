@@ -7,7 +7,7 @@
 //! See `docs/logging-schema.md` for the JSONL schema (the durable
 //! interface contract) and `CLAUDE.md` for the engine-model framing.
 
-pub use config::{LoggingTunables, StreamlibLoggingConfig};
+pub use config::{LoggingTunables, PrettyLogMirrorStandardStream, StreamlibLoggingConfig};
 pub use event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source};
 pub use helper_process_engine_log_capture::{
     EngineLogRecordForTheParentProcess, EngineLogRecordsDrainedForTheParentProcess,

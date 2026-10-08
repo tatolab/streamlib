@@ -179,15 +179,40 @@ pub struct Runner {
         Arc<super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecord>,
 }
 
+/// What a host chooses as it constructs a [`Runner`].
+#[derive(Debug, Clone, Default)]
+pub struct RunnerConstructionOptions {
+    /// The runtime's name; else `STREAMLIB_RUNTIME_NAME`, else
+    /// `<host name>-<app directory name>-<id>`.
+    pub runtime_name: Option<String>,
+    /// The standard stream the runtime's pretty log mirror writes to, when
+    /// this runtime is the first in its process to install logging.
+    pub pretty_log_mirror_stream: crate::core::logging::PrettyLogMirrorStandardStream,
+}
+
 impl Runner {
     /// Build a runtime named from `STREAMLIB_RUNTIME_NAME` or the default.
     pub fn new() -> Result<Arc<Self>> {
-        Self::new_with_runtime_name(None)
+        Self::new_with_construction_options(RunnerConstructionOptions::default())
     }
 
     /// Build a runtime named `runtime_name`, else from `STREAMLIB_RUNTIME_NAME`,
     /// else `<host name>-<app directory name>-<id>`.
     pub fn new_with_runtime_name(runtime_name: Option<String>) -> Result<Arc<Self>> {
+        Self::new_with_construction_options(RunnerConstructionOptions {
+            runtime_name,
+            ..RunnerConstructionOptions::default()
+        })
+    }
+
+    /// Build a runtime as `construction_options` choose.
+    pub fn new_with_construction_options(
+        construction_options: RunnerConstructionOptions,
+    ) -> Result<Arc<Self>> {
+        let RunnerConstructionOptions {
+            runtime_name,
+            pretty_log_mirror_stream,
+        } = construction_options;
         // Cap per-thread timer slack at 1 ns on the calling thread before
         // spawning any worker. Linux defaults to 50 µs grouping for
         // `epoll_wait` / `nanosleep` / `futex` relative timeouts; new
@@ -236,17 +261,20 @@ impl Runner {
 
         // Stand up the runtime's unified logging pathway: `tracing` →
         // bounded lossy channel → drain worker → line-buffered pretty
-        // stdout + batched JSONL file at
+        // mirror + batched JSONL file at
         // `<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl`.
         // See `docs/logging-schema.md` for the schema (the durable
         // interface contract) and `streamlib::sdk::logging` for the
         // implementation.
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         let _logging_guard =
-            crate::core::logging::init(crate::core::logging::StreamlibLoggingConfig::for_runtime(
-                format!("runtime:{}", runtime_id),
-                Arc::clone(&runtime_id),
-            ))
+            crate::core::logging::init(crate::core::logging::StreamlibLoggingConfig {
+                pretty_log_mirror_stream: Some(pretty_log_mirror_stream),
+                ..crate::core::logging::StreamlibLoggingConfig::for_runtime(
+                    format!("runtime:{}", runtime_id),
+                    Arc::clone(&runtime_id),
+                )
+            })
             .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
         let runtime_name = Arc::new(
             resolved_runtime_name
@@ -1210,13 +1238,13 @@ impl Runner {
     /// link connected by name, the exposures recorded on their nodes, and the
     /// stream's name recorded on the graph.
     ///
-    /// A host interrupt of an earlier load is forgotten and `stream_environment`
-    /// recorded first. Every `type` the graph names that is neither a built-in
-    /// nor registered in Rust is then described in one start of the stream's
-    /// own interpreter and registered, so a load with no environment refuses
-    /// such a type by name. A node name already in
-    /// the graph is refused rather than suffixed — a loaded graph's names are
-    /// already resolved.
+    /// A graph holding no node is refused first, naming the stream. A host
+    /// interrupt of an earlier load is then forgotten and `stream_environment`
+    /// recorded. Every `type` the graph names that is neither a built-in nor
+    /// registered in Rust is then described in one start of the stream's own
+    /// interpreter and registered, so a load with no environment refuses such a
+    /// type by name. A node name already in the graph is refused rather than
+    /// suffixed — a loaded graph's names are already resolved.
     pub fn load_graph_snapshot(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
@@ -1228,6 +1256,17 @@ impl Runner {
             ExposedOutputPortsComponent, GraphNodeWithComponents, cast_exposed_name_to_url_safe,
         };
 
+        if graph.nodes.is_empty() {
+            let what_holds_no_node = match &graph.stream {
+                Some(stream_name) => format!("the stream `{stream_name}`"),
+                None => "the graph".to_owned(),
+            };
+            return Err(Error::GraphError(format!(
+                "{what_holds_no_node} holds no node — a stream whose function adds nothing \
+                 compiles to an empty graph, and there is nothing to run. Add a node with \
+                 `stream_builder.add(...)`"
+            )));
+        }
         self.processor_interpreter_launch_record
             .forget_the_interrupt_of_an_earlier_load();
         self.processor_interpreter_launch_record

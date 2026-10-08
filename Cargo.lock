@@ -4834,6 +4834,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
 
 [[package]]
+name = "tatolab-cli"
+version = "0.40.0"
+
+[[package]]
 name = "tatolab-vulkanalia"
 version = "0.35.0"
 dependencies = [
@@ -4861,6 +4865,20 @@ dependencies = [
  "cc",
  "doxygen-rs",
  "tatolab-vulkanalia",
+]
+
+[[package]]
+name = "tatolabd"
+version = "0.40.0"
+dependencies = [
+ "clap",
+ "libc",
+ "serde_json",
+ "streamlib",
+ "streamlib-api-server",
+ "streamlib-media-builtins",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

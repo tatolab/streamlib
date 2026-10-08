@@ -181,6 +181,36 @@ fn a_loaded_name_already_in_the_graph_is_refused_rather_than_suffixed() {
     }
 }
 
+/// A stream whose function adds nothing compiles to an empty graph, and the
+/// runtime refuses it by name rather than running nothing.
+#[test]
+#[serial]
+fn a_graph_holding_no_node_is_refused_naming_the_stream_and_the_fix() {
+    let runtime = Runner::new().unwrap();
+
+    let refusal = runtime
+        .load_graph_snapshot(
+            &the_spec_in(serde_json::json!({"stream": "main", "nodes": []})),
+            None,
+        )
+        .expect_err("an empty graph is refused")
+        .to_string();
+    assert!(
+        refusal.contains("the stream `main` holds no node"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("stream_builder.add("), "{refusal}");
+
+    let unnamed_refusal = runtime
+        .load_graph_snapshot(&the_spec_in(serde_json::json!({"nodes": []})), None)
+        .expect_err("an empty graph is refused")
+        .to_string();
+    assert!(
+        unnamed_refusal.contains("the graph holds no node"),
+        "{unnamed_refusal}"
+    );
+}
+
 #[test]
 #[serial]
 fn an_exposure_naming_an_input_port_is_refused_naming_the_outputs() {

@@ -41,7 +41,7 @@ pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-pub use runtime::Runner;
+pub use runtime::{Runner, RunnerConstructionOptions};
 pub use runtime_name::RuntimeName;
 #[cfg(test)]
 pub(crate) use runtime_shutdown_request::RuntimeShutdownEscalationClearedOnDrop;
