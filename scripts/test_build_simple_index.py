@@ -301,6 +301,20 @@ class ReleasingEveryProjectThisRepoPublishes(unittest.TestCase):
 
         for directory_name, distribution_name in extension_package_directory_names():
             package_path = f"packages/{directory_name}"
+            for manifest_name, version_table in (
+                ("Cargo.toml", "package"),
+                ("pyproject.toml", "project"),
+            ):
+                manifest = tomllib.loads(
+                    (REPOSITORY_ROOT / package_path / manifest_name).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(
+                    manifest[version_table]["version"],
+                    seeded["."],
+                    f"{distribution_name} {manifest_name}",
+                )
             self.assertNotIn(package_path, configured, distribution_name)
             self.assertNotIn(package_path, seeded, distribution_name)
             self.assertIn(
