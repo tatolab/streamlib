@@ -204,8 +204,11 @@ impl LocalApiHttpConnection {
         let local_api_socket_path = self.local_api_socket_path.as_path();
         let kept_request_sender = self.kept_request_sender.take();
         let answered = tokio::time::timeout(timeout, async {
-            let mut request_sender =
-                ready_request_sender(local_api_socket_path, kept_request_sender).await?;
+            let mut request_sender = local_api_request_sender_ready_for_a_request(
+                local_api_socket_path,
+                kept_request_sender,
+            )
+            .await?;
             let (response_head, response_body) = send_request_on_the_local_api_connection(
                 local_api_socket_path,
                 &mut request_sender,
@@ -247,7 +250,7 @@ impl LocalApiHttpConnection {
 
 /// `kept_request_sender` once its connection can take a request, or a freshly opened one when
 /// there is none or the runtime closed it.
-async fn ready_request_sender(
+async fn local_api_request_sender_ready_for_a_request(
     local_api_socket_path: &Path,
     kept_request_sender: Option<SendRequest<LocalApiHttpRequestBody>>,
 ) -> Result<SendRequest<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
