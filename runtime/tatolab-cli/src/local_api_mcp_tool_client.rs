@@ -30,46 +30,58 @@ pub(crate) const LOCAL_API_LIVENESS_ROUND_TRIP_TIMEOUT: Duration = Duration::fro
 /// and can take a moment to.
 pub(crate) const OBSERVATION_VERB_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Why an MCP request to a runtime's local API came back without a result.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LocalApiMcpToolClientFailure {
+/// What an MCP request to a runtime's local API came back with instead of a result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalApiMcpToolClientFailureKind {
     /// Nothing answered MCP on the socket, or the answer did not come in time.
-    LocalApiUnreachable { failure_description: String },
+    LocalApiUnreachable,
     /// The runtime answered and refused: a JSON-RPC error, no protocol revision in common, or an
     /// answer that was not the request's result.
-    RequestRefusedByTheRuntime { failure_description: String },
+    RequestRefusedByTheRuntime,
     /// The tool ran and reported a failure, or answered with no text.
-    ToolCallFailed { failure_description: String },
+    ToolCallFailed,
+}
+
+/// Why an MCP request to a runtime's local API came back without a result.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{failure_description}")]
+pub(crate) struct LocalApiMcpToolClientFailure {
+    /// What came back instead of a result.
+    pub(crate) kind: LocalApiMcpToolClientFailureKind,
+    /// The failure as the verb reports it.
+    pub(crate) failure_description: String,
 }
 
 impl LocalApiMcpToolClientFailure {
-    /// Whether the runtime answered, refusing or failing the call, rather than nothing answering.
-    pub(crate) fn the_runtime_answered(&self) -> bool {
-        !matches!(self, Self::LocalApiUnreachable { .. })
-    }
-
-    fn failure_description(&self) -> &str {
-        match self {
-            Self::LocalApiUnreachable {
-                failure_description,
-            }
-            | Self::RequestRefusedByTheRuntime {
-                failure_description,
-            }
-            | Self::ToolCallFailed {
-                failure_description,
-            } => failure_description,
+    /// Nothing answered MCP on the socket, or not in time.
+    pub(crate) fn local_api_unreachable(failure_description: String) -> Self {
+        Self {
+            kind: LocalApiMcpToolClientFailureKind::LocalApiUnreachable,
+            failure_description,
         }
     }
-}
 
-impl std::fmt::Display for LocalApiMcpToolClientFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.failure_description())
+    /// The runtime answered and refused the request.
+    pub(crate) fn request_refused_by_the_runtime(failure_description: String) -> Self {
+        Self {
+            kind: LocalApiMcpToolClientFailureKind::RequestRefusedByTheRuntime,
+            failure_description,
+        }
+    }
+
+    /// The tool ran and failed, or answered with no text.
+    pub(crate) fn tool_call_failed(failure_description: String) -> Self {
+        Self {
+            kind: LocalApiMcpToolClientFailureKind::ToolCallFailed,
+            failure_description,
+        }
+    }
+
+    /// Whether the runtime answered, refusing or failing the call, rather than nothing answering.
+    pub(crate) fn the_runtime_answered(&self) -> bool {
+        self.kind != LocalApiMcpToolClientFailureKind::LocalApiUnreachable
     }
 }
-
-impl std::error::Error for LocalApiMcpToolClientFailure {}
 
 impl From<LocalApiMcpToolClientFailure> for TatolabCommandFailure {
     fn from(local_api_mcp_tool_client_failure: LocalApiMcpToolClientFailure) -> Self {
@@ -94,23 +106,19 @@ impl LocalApiMcpToolClient {
     ) -> Result<Self, LocalApiMcpToolClientFailure> {
         let local_api_socket_path_text = local_api_socket_path.display().to_string();
         let socket_path_to_dial = socket_path_to_dial(local_api_socket_path).ok_or_else(|| {
-            LocalApiMcpToolClientFailure::LocalApiUnreachable {
-                failure_description: format!(
-                    "no runtime answers MCP at {local_api_socket_path_text} (not a socket path \
+            LocalApiMcpToolClientFailure::local_api_unreachable(format!(
+                "no runtime answers MCP at {local_api_socket_path_text} (not a socket path \
                      this client can dial)"
-                ),
-            }
+            ))
         })?;
         let client_tokio_runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .map_err(
-                |runtime_start_failure| LocalApiMcpToolClientFailure::LocalApiUnreachable {
-                    failure_description: format!(
-                        "could not start the MCP client's runtime: {runtime_start_failure}"
-                    ),
-                },
-            )?;
+            .map_err(|runtime_start_failure| {
+                LocalApiMcpToolClientFailure::local_api_unreachable(format!(
+                    "could not start the MCP client's runtime: {runtime_start_failure}"
+                ))
+            })?;
         let local_api_mcp_uri =
             format!("http://{LOCAL_API_MCP_URI_AUTHORITY}{MCP_STREAMABLE_HTTP_ROUTE_PATH}");
         let connected = client_tokio_runtime.block_on(async {
@@ -134,40 +142,40 @@ impl LocalApiMcpToolClient {
         let connected_mcp_client = match connected {
             Ok(Ok(connected_mcp_client)) => connected_mcp_client,
             Ok(Err(ClientInitializeError::JsonRpcError(refusal))) => {
-                return Err(LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-                    failure_description: format!(
+                return Err(
+                    LocalApiMcpToolClientFailure::request_refused_by_the_runtime(format!(
                         "the runtime at {local_api_socket_path_text} refused `server/discover`: \
                          {} ({})",
                         refusal.message, refusal.code.0
-                    ),
-                });
+                    )),
+                );
             }
             Ok(Err(ClientInitializeError::NoCompatibleProtocolVersion {
                 server_supported,
                 ..
             })) => {
-                return Err(LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-                    failure_description: format!(
+                return Err(
+                    LocalApiMcpToolClientFailure::request_refused_by_the_runtime(format!(
                         "the runtime at {local_api_socket_path_text} serves {server_supported:?}, \
                          not {}",
                         ProtocolVersion::LATEST
-                    ),
-                });
+                    )),
+                );
             }
             Ok(Err(connect_failure)) => {
-                return Err(LocalApiMcpToolClientFailure::LocalApiUnreachable {
-                    failure_description: format!(
+                return Err(LocalApiMcpToolClientFailure::local_api_unreachable(
+                    format!(
                         "no runtime answers MCP at {local_api_socket_path_text} ({connect_failure})"
                     ),
-                });
+                ));
             }
             Err(_elapsed) => {
-                return Err(LocalApiMcpToolClientFailure::LocalApiUnreachable {
-                    failure_description: format!(
+                return Err(LocalApiMcpToolClientFailure::local_api_unreachable(
+                    format!(
                         "no runtime answered MCP at {local_api_socket_path_text} within \
                          {request_timeout:?}"
                     ),
-                });
+                ));
             }
         };
         Ok(Self {
@@ -185,9 +193,9 @@ impl LocalApiMcpToolClient {
         tool_arguments: serde_json::Map<String, serde_json::Value>,
     ) -> Result<String, LocalApiMcpToolClientFailure> {
         let Some(connected_mcp_client) = self.connected_mcp_client.as_ref() else {
-            return Err(LocalApiMcpToolClientFailure::LocalApiUnreachable {
-                failure_description: "this MCP client is closed".to_owned(),
-            });
+            return Err(LocalApiMcpToolClientFailure::local_api_unreachable(
+                "this MCP client is closed".to_owned(),
+            ));
         };
         let request =
             CallToolRequestParams::new(tool_name.to_owned()).with_arguments(tool_arguments);
@@ -203,13 +211,13 @@ impl LocalApiMcpToolClient {
             Ok(Err(service_failure)) => {
                 Err(self.failure_for_a_tool_call_without_a_result(tool_name, service_failure))
             }
-            Err(_elapsed) => Err(LocalApiMcpToolClientFailure::LocalApiUnreachable {
-                failure_description: format!(
+            Err(_elapsed) => Err(LocalApiMcpToolClientFailure::local_api_unreachable(
+                format!(
                     "`{tool_name}` to the runtime at {} did not answer within {:?}",
                     self.local_api_socket_path.display(),
                     self.request_timeout
                 ),
-            }),
+            )),
         }
     }
 
@@ -237,25 +245,22 @@ impl LocalApiMcpToolClient {
     ) -> LocalApiMcpToolClientFailure {
         match service_failure {
             ServiceError::McpError(refusal) => {
-                LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-                    failure_description: format!("{} ({})", refusal.message, refusal.code.0),
-                }
+                LocalApiMcpToolClientFailure::request_refused_by_the_runtime(format!(
+                    "{} ({})",
+                    refusal.message, refusal.code.0
+                ))
             }
             ServiceError::UnexpectedResponse => {
-                LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-                    failure_description: format!(
-                        "the runtime at {} answered `{tool_name}` with something other than its \
+                LocalApiMcpToolClientFailure::request_refused_by_the_runtime(format!(
+                    "the runtime at {} answered `{tool_name}` with something other than its \
                          result",
-                        self.local_api_socket_path.display()
-                    ),
-                }
-            }
-            other_failure => LocalApiMcpToolClientFailure::LocalApiUnreachable {
-                failure_description: format!(
-                    "`{tool_name}` to the runtime at {} failed: {other_failure}",
                     self.local_api_socket_path.display()
-                ),
-            },
+                ))
+            }
+            other_failure => LocalApiMcpToolClientFailure::local_api_unreachable(format!(
+                "`{tool_name}` to the runtime at {} failed: {other_failure}",
+                self.local_api_socket_path.display()
+            )),
         }
     }
 }
@@ -290,15 +295,13 @@ fn first_text_block_of_tool_result(
             });
     match (tool_reported_a_failure, first_text) {
         (false, Some(first_text)) => Ok(first_text),
-        (true, failure_text) => Err(LocalApiMcpToolClientFailure::ToolCallFailed {
-            failure_description: format!(
-                "{tool_name} failed: {}",
-                failure_text.as_deref().unwrap_or("no detail given")
-            ),
-        }),
-        (false, None) => Err(LocalApiMcpToolClientFailure::ToolCallFailed {
-            failure_description: format!("{tool_name} returned no text content"),
-        }),
+        (true, failure_text) => Err(LocalApiMcpToolClientFailure::tool_call_failed(format!(
+            "{tool_name} failed: {}",
+            failure_text.as_deref().unwrap_or("no detail given")
+        ))),
+        (false, None) => Err(LocalApiMcpToolClientFailure::tool_call_failed(format!(
+            "{tool_name} returned no text content"
+        ))),
     }
 }
 
@@ -341,14 +344,13 @@ pub(crate) fn tool_call_failure_worded_as_an_observation_verb_reports_it(
     tool_name: &str,
     call_failure: LocalApiMcpToolClientFailure,
 ) -> LocalApiMcpToolClientFailure {
-    match call_failure {
-        LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-            failure_description,
-        } => LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-            failure_description: format!("{tool_name} failed: {failure_description}"),
-        },
-        unreachable_or_tool_failure => unreachable_or_tool_failure,
+    if call_failure.kind != LocalApiMcpToolClientFailureKind::RequestRefusedByTheRuntime {
+        return call_failure;
     }
+    LocalApiMcpToolClientFailure::request_refused_by_the_runtime(format!(
+        "{tool_name} failed: {}",
+        call_failure.failure_description
+    ))
 }
 
 #[cfg(test)]
@@ -491,9 +493,9 @@ mod tests {
 
         assert_eq!(
             tool_failure,
-            LocalApiMcpToolClientFailure::ToolCallFailed {
-                failure_description: "tap failed: no such channel".to_owned()
-            }
+            LocalApiMcpToolClientFailure::tool_call_failed(
+                "tap failed: no such channel".to_owned()
+            )
         );
         assert!(tool_failure.the_runtime_answered());
     }
@@ -514,9 +516,9 @@ mod tests {
 
         assert_eq!(
             refusal,
-            LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-                failure_description: "nope failed: no tool named `nope` (-32602)".to_owned()
-            }
+            LocalApiMcpToolClientFailure::request_refused_by_the_runtime(
+                "nope failed: no tool named `nope` (-32602)".to_owned()
+            )
         );
         assert!(refusal.the_runtime_answered());
     }
@@ -530,12 +532,9 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(
-            matches!(
-                unreachable,
-                LocalApiMcpToolClientFailure::LocalApiUnreachable { .. }
-            ),
-            "{unreachable:?}"
+        assert_eq!(
+            unreachable.kind,
+            LocalApiMcpToolClientFailureKind::LocalApiUnreachable
         );
         assert!(!unreachable.the_runtime_answered());
         let unreachable_message = unreachable.to_string();
@@ -551,15 +550,15 @@ mod tests {
     fn a_tool_result_with_no_text_is_a_failure_and_a_failure_with_no_text_says_so() {
         assert_eq!(
             first_text_block_of_tool_result("graph", CallToolResult::success(Vec::new())),
-            Err(LocalApiMcpToolClientFailure::ToolCallFailed {
-                failure_description: "graph returned no text content".to_owned()
-            })
+            Err(LocalApiMcpToolClientFailure::tool_call_failed(
+                "graph returned no text content".to_owned()
+            ))
         );
         assert_eq!(
             first_text_block_of_tool_result("graph", CallToolResult::error(Vec::new())),
-            Err(LocalApiMcpToolClientFailure::ToolCallFailed {
-                failure_description: "graph failed: no detail given".to_owned()
-            })
+            Err(LocalApiMcpToolClientFailure::tool_call_failed(
+                "graph failed: no detail given".to_owned()
+            ))
         );
     }
 
@@ -567,22 +566,18 @@ mod tests {
     fn a_runtime_that_refuses_in_the_protocols_own_words_answered_and_one_that_is_silent_did_not() {
         let failure_description = String::new();
         assert!(
-            LocalApiMcpToolClientFailure::RequestRefusedByTheRuntime {
-                failure_description: failure_description.clone()
-            }
+            LocalApiMcpToolClientFailure::request_refused_by_the_runtime(
+                failure_description.clone()
+            )
             .the_runtime_answered()
         );
         assert!(
-            LocalApiMcpToolClientFailure::ToolCallFailed {
-                failure_description: failure_description.clone()
-            }
-            .the_runtime_answered()
+            LocalApiMcpToolClientFailure::tool_call_failed(failure_description.clone())
+                .the_runtime_answered()
         );
         assert!(
-            !LocalApiMcpToolClientFailure::LocalApiUnreachable {
-                failure_description
-            }
-            .the_runtime_answered()
+            !LocalApiMcpToolClientFailure::local_api_unreachable(failure_description)
+                .the_runtime_answered()
         );
     }
 }

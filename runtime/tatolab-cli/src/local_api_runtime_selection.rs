@@ -31,72 +31,48 @@ pub(crate) struct LivenessCheckedNodeRegistryEntry {
 }
 
 /// Why no runtime could be picked for a verb to drive.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum LocalApiRuntimeSelectionFailure {
     /// The runtime directory could not be trusted, in the engine's own words.
-    RuntimeDirectoryRefused(StreamlibRuntimeDirectoryRefusal),
+    #[error(transparent)]
+    RuntimeDirectoryRefused(#[from] StreamlibRuntimeDirectoryRefusal),
     /// The registry directory itself could not be read.
-    NodeRegistryUnreadable(NodeRegistryError),
+    #[error(transparent)]
+    NodeRegistryUnreadable(#[from] NodeRegistryError),
     /// No runtime on this machine answers, `--node` or not.
+    #[error("no running runtime found on this machine.\nStart one with `tatolab run`.")]
     NoRunningRuntime,
     /// `--node` named no live runtime by name or by runtime_id.
+    #[error(
+        "no live runtime named `{requested_runtime_name_or_id}`, and none with that \
+         runtime_id.{}",
+        live_runtimes_listing(.live_runtimes)
+    )]
     RequestedRuntimeMatchesNoLiveRuntime {
         requested_runtime_name_or_id: String,
         live_runtimes: Vec<NodeRegistryEntry>,
     },
     /// `--node` named more than one live runtime, which nothing makes unique.
+    #[error(
+        "{} live runtimes answer to `{requested_runtime_name_or_id}` — pick one by runtime_id \
+         with `--node <runtime_id>`.{}",
+        .matching_live_runtimes.len(),
+        live_runtimes_listing(.matching_live_runtimes)
+    )]
     RequestedRuntimeMatchesSeveralLiveRuntimes {
         requested_runtime_name_or_id: String,
         matching_live_runtimes: Vec<NodeRegistryEntry>,
     },
     /// More than one runtime is live and `--node` picked none.
+    #[error(
+        "{} live runtimes — pick one with `--node <runtime name or id>`.{}",
+        .live_runtimes.len(),
+        live_runtimes_listing(.live_runtimes)
+    )]
     SeveralLiveRuntimesAndNoneRequested {
         live_runtimes: Vec<NodeRegistryEntry>,
     },
 }
-
-impl std::fmt::Display for LocalApiRuntimeSelectionFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::RuntimeDirectoryRefused(runtime_directory_refusal) => {
-                write!(formatter, "{runtime_directory_refusal}")
-            }
-            Self::NodeRegistryUnreadable(node_registry_failure) => {
-                write!(formatter, "{node_registry_failure}")
-            }
-            Self::NoRunningRuntime => formatter.write_str(
-                "no running runtime found on this machine.\nStart one with `tatolab run`.",
-            ),
-            Self::RequestedRuntimeMatchesNoLiveRuntime {
-                requested_runtime_name_or_id,
-                live_runtimes,
-            } => write!(
-                formatter,
-                "no live runtime named `{requested_runtime_name_or_id}`, and none with that \
-                 runtime_id.{}",
-                live_runtimes_listing(live_runtimes)
-            ),
-            Self::RequestedRuntimeMatchesSeveralLiveRuntimes {
-                requested_runtime_name_or_id,
-                matching_live_runtimes,
-            } => write!(
-                formatter,
-                "{} live runtimes answer to `{requested_runtime_name_or_id}` — pick one by \
-                 runtime_id with `--node <runtime_id>`.{}",
-                matching_live_runtimes.len(),
-                live_runtimes_listing(matching_live_runtimes)
-            ),
-            Self::SeveralLiveRuntimesAndNoneRequested { live_runtimes } => write!(
-                formatter,
-                "{} live runtimes — pick one with `--node <runtime name or id>`.{}",
-                live_runtimes.len(),
-                live_runtimes_listing(live_runtimes)
-            ),
-        }
-    }
-}
-
-impl std::error::Error for LocalApiRuntimeSelectionFailure {}
 
 impl From<LocalApiRuntimeSelectionFailure> for TatolabCommandFailure {
     fn from(runtime_selection_failure: LocalApiRuntimeSelectionFailure) -> Self {
@@ -127,9 +103,10 @@ fn live_runtimes_listing(live_runtimes: &[NodeRegistryEntry]) -> String {
 /// creating nothing.
 pub(crate) fn this_users_node_registry_directory()
 -> Result<PathBuf, LocalApiRuntimeSelectionFailure> {
-    StreamlibRuntimeDirectory::resolve_for_a_reader_without_creating()
-        .map(|runtime_directory| runtime_directory.node_registry_directory())
-        .map_err(LocalApiRuntimeSelectionFailure::RuntimeDirectoryRefused)
+    Ok(
+        StreamlibRuntimeDirectory::resolve_for_a_reader_without_creating()?
+            .node_registry_directory(),
+    )
 }
 
 /// Whether a process with `pid` exists. `kill(pid, 0)` delivers no signal; `EPERM` is a process
@@ -150,8 +127,7 @@ pub(crate) fn host_process_exists(pid: u32) -> bool {
 pub(crate) fn scan_liveness_check_and_prune_node_registry(
     node_registry_directory: &Path,
 ) -> Result<Vec<LivenessCheckedNodeRegistryEntry>, LocalApiRuntimeSelectionFailure> {
-    let scanned_entries = scan_entries(node_registry_directory)
-        .map_err(LocalApiRuntimeSelectionFailure::NodeRegistryUnreadable)?;
+    let scanned_entries = scan_entries(node_registry_directory)?;
     let mut liveness_checked_entries = Vec::with_capacity(scanned_entries.len());
     for scanned_entry in scanned_entries {
         let local_api_answers =

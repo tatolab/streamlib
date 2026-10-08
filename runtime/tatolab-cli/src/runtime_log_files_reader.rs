@@ -6,7 +6,6 @@
 //! following, carried on across every rotation and into a restart's newer instance.
 
 use std::collections::VecDeque;
-use std::fmt;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::fs::MetadataExt;
@@ -76,11 +75,13 @@ impl RuntimeLogRecordFilters {
 }
 
 /// A runtime log segment that could not be opened or read, for a reason other than being gone.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("cannot read the runtime log segment {}: {read_failure}", .segment_path.display())]
 pub(crate) struct RuntimeLogSegmentReadFailure {
     /// The segment, or the active name, the read failed on.
     pub(crate) segment_path: PathBuf,
     /// What the operating system answered.
+    #[source]
     pub(crate) read_failure: io::Error,
 }
 
@@ -92,19 +93,6 @@ impl RuntimeLogSegmentReadFailure {
         }
     }
 }
-
-impl fmt::Display for RuntimeLogSegmentReadFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "cannot read the runtime log segment {}: {}",
-            self.segment_path.display(),
-            self.read_failure
-        )
-    }
-}
-
-impl std::error::Error for RuntimeLogSegmentReadFailure {}
 
 /// One JSONL line as a record, or `None` — with a warning on `warning_output` — when it is not
 /// one. A truncated or foreign line is skipped rather than ending the read.

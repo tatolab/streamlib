@@ -34,53 +34,52 @@ pub(crate) struct LocalApiHttpResponse {
     pub(crate) body: Bytes,
 }
 
+/// What kept a request over the local API socket from being answered.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum LocalApiTransportFailure {
+    /// The socket could not be connected.
+    #[error(transparent)]
+    SocketConnectFailed(std::io::Error),
+    /// The HTTP/1.1 exchange over the connected socket failed.
+    #[error(transparent)]
+    HttpExchangeFailed(hyper::Error),
+    /// No whole answer came within the bound.
+    #[error("no answer within {0:?}")]
+    NoAnswerWithin(Duration),
+    /// The runtime driving the request could not be started.
+    #[error("could not start the request's runtime: {0}")]
+    RequestRuntimeNotStarted(#[source] std::io::Error),
+}
+
 /// Why a request over the local API socket got no answer.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum LocalApiHttpRequestFailure {
     /// The request named a target that is not a valid origin-form URI.
+    #[error("`{request_target}` is not a request target the local API can be sent: {uri_failure}")]
     RequestTargetIsNotAUri {
         request_target: String,
-        uri_failure: String,
+        #[source]
+        uri_failure: hyper::http::Error,
     },
     /// Nothing answered HTTP on the socket, or the answer did not come in time.
+    #[error(
+        "no control plane reachable at {} ({transport_failure})",
+        .local_api_socket_path.display()
+    )]
     LocalApiUnreachable {
         local_api_socket_path: PathBuf,
-        transport_failure: String,
+        #[source]
+        transport_failure: LocalApiTransportFailure,
     },
 }
-
-impl std::fmt::Display for LocalApiHttpRequestFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::RequestTargetIsNotAUri {
-                request_target,
-                uri_failure,
-            } => write!(
-                formatter,
-                "`{request_target}` is not a request target the local API can be sent: \
-                 {uri_failure}"
-            ),
-            Self::LocalApiUnreachable {
-                local_api_socket_path,
-                transport_failure,
-            } => write!(
-                formatter,
-                "no control plane reachable at {} ({transport_failure})",
-                local_api_socket_path.display()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for LocalApiHttpRequestFailure {}
 
 fn local_api_unreachable(
     local_api_socket_path: &Path,
-    transport_failure: impl std::fmt::Display,
+    transport_failure: LocalApiTransportFailure,
 ) -> LocalApiHttpRequestFailure {
     LocalApiHttpRequestFailure::LocalApiUnreachable {
         local_api_socket_path: local_api_socket_path.to_path_buf(),
-        transport_failure: transport_failure.to_string(),
+        transport_failure,
     }
 }
 
@@ -106,19 +105,32 @@ pub(crate) async fn send_request_over_the_local_api_socket(
 ) -> Result<Response<Incoming>, LocalApiHttpRequestFailure> {
     let local_api_stream = tokio::net::UnixStream::connect(local_api_socket_path)
         .await
-        .map_err(|connect_failure| local_api_unreachable(local_api_socket_path, connect_failure))?;
+        .map_err(|connect_failure| {
+            local_api_unreachable(
+                local_api_socket_path,
+                LocalApiTransportFailure::SocketConnectFailed(connect_failure),
+            )
+        })?;
     let (mut request_sender, local_api_connection) =
         hyper::client::conn::http1::handshake(TokioIo::new(local_api_stream))
             .await
             .map_err(|handshake_failure| {
-                local_api_unreachable(local_api_socket_path, handshake_failure)
+                local_api_unreachable(
+                    local_api_socket_path,
+                    LocalApiTransportFailure::HttpExchangeFailed(handshake_failure),
+                )
             })?;
     // Served until the exchange completes, or until a `101` hands the stream to its upgrade.
     tokio::spawn(local_api_connection.with_upgrades());
     request_sender
         .send_request(request)
         .await
-        .map_err(|send_failure| local_api_unreachable(local_api_socket_path, send_failure))
+        .map_err(|send_failure| {
+            local_api_unreachable(
+                local_api_socket_path,
+                LocalApiTransportFailure::HttpExchangeFailed(send_failure),
+            )
+        })
 }
 
 /// A runtime's MCP stream once its `101` is in: the local API socket itself, and the bytes the
@@ -132,34 +144,27 @@ pub(crate) struct UpgradedLocalApiMcpStdioStream {
 }
 
 /// Why the `/mcp/stdio` upgrade handed over no stream.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum LocalApiMcpStdioUpgradeFailure {
     /// The upgrade request got no answer.
-    RequestUnanswered(LocalApiHttpRequestFailure),
+    #[error(transparent)]
+    RequestUnanswered(#[from] LocalApiHttpRequestFailure),
     /// The runtime answered with a status other than `101`.
+    #[error("it answered `{answered_status_line}`")]
     Refused { answered_status_line: String },
-    /// The runtime answered `101`, and the connection was never handed over.
-    ConnectionNeverHandedOver { upgrade_failure: String },
+    /// The runtime answered `101`, and hyper never handed the connection over.
+    #[error("it answered `101` and never handed over the connection ({upgrade_failure})")]
+    ConnectionNeverHandedOver {
+        #[source]
+        upgrade_failure: hyper::Error,
+    },
+    /// The runtime answered `101`, and hyper handed back something other than the socket.
+    #[error(
+        "it answered `101` and never handed over the connection (hyper handed back an IO other \
+         than the local API socket)"
+    )]
+    UpgradedOverAnotherIo,
 }
-
-impl std::fmt::Display for LocalApiMcpStdioUpgradeFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::RequestUnanswered(request_failure) => {
-                write!(formatter, "{request_failure}")
-            }
-            Self::Refused {
-                answered_status_line,
-            } => write!(formatter, "it answered `{answered_status_line}`"),
-            Self::ConnectionNeverHandedOver { upgrade_failure } => write!(
-                formatter,
-                "it answered `101` and never handed over the connection ({upgrade_failure})"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for LocalApiMcpStdioUpgradeFailure {}
 
 /// The status line `response` arrived with: its version, code and reason phrase.
 fn response_status_line<ResponseBody>(response: &Response<ResponseBody>) -> String {
@@ -190,18 +195,14 @@ pub(crate) async fn upgrade_local_api_connection_to_mcp_stdio(
         .header(CONNECTION, "Upgrade")
         .header(UPGRADE, MCP_STDIO_UPGRADE_PROTOCOL_TOKEN)
         .body(LocalApiHttpRequestBody::new(Bytes::new()))
-        .map_err(|uri_failure| {
-            LocalApiMcpStdioUpgradeFailure::RequestUnanswered(
-                LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
-                    request_target: MCP_STDIO_UPGRADE_REQUEST_TARGET.to_owned(),
-                    uri_failure: uri_failure.to_string(),
-                },
-            )
-        })?;
+        .map_err(
+            |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
+                request_target: MCP_STDIO_UPGRADE_REQUEST_TARGET.to_owned(),
+                uri_failure,
+            },
+        )?;
     let mut upgrade_response =
-        send_request_over_the_local_api_socket(local_api_socket_path, upgrade_request)
-            .await
-            .map_err(LocalApiMcpStdioUpgradeFailure::RequestUnanswered)?;
+        send_request_over_the_local_api_socket(local_api_socket_path, upgrade_request).await?;
     if upgrade_response.status() != StatusCode::SWITCHING_PROTOCOLS {
         return Err(LocalApiMcpStdioUpgradeFailure::Refused {
             answered_status_line: response_status_line(&upgrade_response),
@@ -211,17 +212,12 @@ pub(crate) async fn upgrade_local_api_connection_to_mcp_stdio(
         hyper::upgrade::on(&mut upgrade_response)
             .await
             .map_err(|upgrade_failure| {
-                LocalApiMcpStdioUpgradeFailure::ConnectionNeverHandedOver {
-                    upgrade_failure: upgrade_failure.to_string(),
-                }
+                LocalApiMcpStdioUpgradeFailure::ConnectionNeverHandedOver { upgrade_failure }
             })?;
     let upgraded_connection_parts = upgraded_connection
         .downcast::<TokioIo<tokio::net::UnixStream>>()
         .map_err(|_upgraded_over_another_io| {
-            LocalApiMcpStdioUpgradeFailure::ConnectionNeverHandedOver {
-                upgrade_failure: "hyper handed back an IO other than the local API socket"
-                    .to_owned(),
-            }
+            LocalApiMcpStdioUpgradeFailure::UpgradedOverAnotherIo
         })?;
     Ok(UpgradedLocalApiMcpStdioStream {
         local_api_stream: upgraded_connection_parts.io.into_inner(),
@@ -241,7 +237,7 @@ pub(crate) fn get_whole_response_over_the_local_api_socket(
         .map_err(
             |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
                 request_target: origin_form_request_target.to_owned(),
-                uri_failure: uri_failure.to_string(),
+                uri_failure,
             },
         )?;
     let request_tokio_runtime = tokio::runtime::Builder::new_current_thread()
@@ -250,7 +246,7 @@ pub(crate) fn get_whole_response_over_the_local_api_socket(
         .map_err(|runtime_start_failure| {
             local_api_unreachable(
                 local_api_socket_path,
-                format!("could not start the request's runtime: {runtime_start_failure}"),
+                LocalApiTransportFailure::RequestRuntimeNotStarted(runtime_start_failure),
             )
         })?;
     request_tokio_runtime.block_on(async {
@@ -261,7 +257,12 @@ pub(crate) fn get_whole_response_over_the_local_api_socket(
             let whole_body = response_body
                 .collect()
                 .await
-                .map_err(|body_failure| local_api_unreachable(local_api_socket_path, body_failure))?
+                .map_err(|body_failure| {
+                    local_api_unreachable(
+                        local_api_socket_path,
+                        LocalApiTransportFailure::HttpExchangeFailed(body_failure),
+                    )
+                })?
                 .to_bytes();
             Ok(LocalApiHttpResponse {
                 status: response_head.status,
@@ -273,7 +274,7 @@ pub(crate) fn get_whole_response_over_the_local_api_socket(
         .map_err(|_elapsed| {
             local_api_unreachable(
                 local_api_socket_path,
-                format!("no answer within {timeout:?}"),
+                LocalApiTransportFailure::NoAnswerWithin(timeout),
             )
         })?
     })

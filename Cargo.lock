@@ -4882,6 +4882,7 @@ dependencies = [
  "streamlib-ipc-types",
  "streamlib-runtime-client-contract",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
 ]
 

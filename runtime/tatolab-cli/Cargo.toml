@@ -24,6 +24,8 @@ serde_json = { workspace = true, features = ["raw_value"] }
 tempfile = { workspace = true }
 # Signal mask, sigwait, kill and the parent-death signal: the attached `tatolabd`'s lifecycle.
 libc = { workspace = true }
+# The CLI's failure types, each carrying the failure it came from as its source.
+thiserror = { workspace = true }
 # The contract a running runtime offers its clients: the runtime directory and the node registry
 # it is found in, its log files, and the wire names and tap result shape its local API speaks.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.41.0" }

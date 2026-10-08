@@ -114,19 +114,27 @@ pub(crate) struct ExchangedSurfaceImage {
 }
 
 /// Why an exchange wrote no image.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum SurfaceImageExchangeFailure {
     /// The exchange request got no answer.
-    LocalApiRequestFailed(LocalApiHttpRequestFailure),
+    #[error(transparent)]
+    LocalApiRequestFailed(#[from] LocalApiHttpRequestFailure),
     /// The runtime answered and refused, with the status it used and the reason it gave.
+    #[error(
+        "exchange of surface `{published_surface_id}` answered {}{}",
+        .http_status.as_u16(),
+        refusal_detail_after_a_colon(.refusal_detail)
+    )]
     RefusedByTheRuntime {
         published_surface_id: String,
         http_status: StatusCode,
         refusal_detail: String,
     },
     /// The image came back and could not be written into the output directory.
+    #[error("could not write into `{}`: {write_failure}", .output_directory.display())]
     OutputDirectoryNotWritable {
         output_directory: PathBuf,
+        #[source]
         write_failure: std::io::Error,
     },
 }
@@ -143,40 +151,14 @@ impl SurfaceImageExchangeFailure {
     }
 }
 
-impl std::fmt::Display for SurfaceImageExchangeFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LocalApiRequestFailed(local_api_request_failure) => {
-                write!(formatter, "{local_api_request_failure}")
-            }
-            Self::RefusedByTheRuntime {
-                published_surface_id,
-                http_status,
-                refusal_detail,
-            } => {
-                write!(
-                    formatter,
-                    "exchange of surface `{published_surface_id}` answered {}",
-                    http_status.as_u16()
-                )?;
-                if !refusal_detail.is_empty() {
-                    write!(formatter, ": {refusal_detail}")?;
-                }
-                Ok(())
-            }
-            Self::OutputDirectoryNotWritable {
-                output_directory,
-                write_failure,
-            } => write!(
-                formatter,
-                "could not write into `{}`: {write_failure}",
-                output_directory.display()
-            ),
-        }
+/// `: <refusal_detail>`, or nothing when the runtime gave no reason.
+fn refusal_detail_after_a_colon(refusal_detail: &str) -> String {
+    if refusal_detail.is_empty() {
+        String::new()
+    } else {
+        format!(": {refusal_detail}")
     }
 }
-
-impl std::error::Error for SurfaceImageExchangeFailure {}
 
 impl From<SurfaceImageExchangeFailure> for TatolabCommandFailure {
     fn from(surface_image_exchange_failure: SurfaceImageExchangeFailure) -> Self {
@@ -213,25 +195,14 @@ struct TappedChannelBagFrame {
 }
 
 /// Why a tapped bag's bytes do not decode to a msgpack value.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum TappedChannelBagDecodeFailure {
     /// The bytes hold no whole frame payload.
-    FramePayloadRefused(TappedFramePayloadRefusal),
+    #[error(transparent)]
+    FramePayloadRefused(#[from] TappedFramePayloadRefusal),
     /// The payload is not msgpack.
-    PayloadIsNotMsgpack(rmpv::decode::Error),
-}
-
-impl std::fmt::Display for TappedChannelBagDecodeFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::FramePayloadRefused(frame_payload_refusal) => {
-                write!(formatter, "{frame_payload_refusal}")
-            }
-            Self::PayloadIsNotMsgpack(msgpack_decode_failure) => {
-                write!(formatter, "{msgpack_decode_failure}")
-            }
-        }
-    }
+    #[error(transparent)]
+    PayloadIsNotMsgpack(#[from] rmpv::decode::Error),
 }
 
 /// `tatolab exchange`: check the usage, pick the runtime, and exchange.
@@ -427,8 +398,7 @@ pub(crate) fn fetch_surface_image_png_bytes(
         local_api_socket_path,
         &surface_image_exchange_route_path_for_surface_id(published_surface_id),
         SURFACE_IMAGE_EXCHANGE_REQUEST_TIMEOUT,
-    )
-    .map_err(SurfaceImageExchangeFailure::LocalApiRequestFailed)?;
+    )?;
     if !answered.status.is_success() {
         return Err(SurfaceImageExchangeFailure::RefusedByTheRuntime {
             published_surface_id: published_surface_id.to_owned(),
@@ -736,10 +706,8 @@ fn surface_id_in_tapped_bag(
 fn decode_tapped_channel_bag_frame(
     framed_bag_bytes: &[u8],
 ) -> Result<rmpv::Value, TappedChannelBagDecodeFailure> {
-    let mut bag_payload = FrameHeader::payload_of_a_tapped_frame(framed_bag_bytes)
-        .map_err(TappedChannelBagDecodeFailure::FramePayloadRefused)?;
-    rmpv::decode::read_value(&mut bag_payload)
-        .map_err(TappedChannelBagDecodeFailure::PayloadIsNotMsgpack)
+    let mut bag_payload = FrameHeader::payload_of_a_tapped_frame(framed_bag_bytes)?;
+    Ok(rmpv::decode::read_value(&mut bag_payload)?)
 }
 
 /// What a channel-form run says on stderr beside the paths on stdout: what it exchanged, what it
