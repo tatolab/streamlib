@@ -218,6 +218,19 @@ def environment_reaching_no_vulkan_driver(directory: Path) -> "dict[str, str]":
     return {variable: no_such_driver_file for variable in VULKAN_LOADER_DRIVER_FILE_VARIABLES}
 
 
+def environment_overlaid_with(
+    environment: "dict[str, str]", extra_environment: "dict[str, str | None] | None"
+) -> "dict[str, str]":
+    """`environment` with `extra_environment` laid over it; a `None` value removes the variable."""
+    overlaid = dict(environment)
+    for name, value in (extra_environment or {}).items():
+        if value is None:
+            overlaid.pop(name, None)
+        else:
+            overlaid[name] = value
+    return overlaid
+
+
 def stream_graph_text_of(stream_or_graph: StreamOrGraph, stream_name: "str | None") -> str:
     """The graph file's text: a `@stream` compiled here, a graph dict as JSON, or text verbatim."""
     # Imported here so a venv missing `tatolab.stream` reaches the session guard's message.
@@ -272,6 +285,8 @@ def start_tatolabd(
       as JSON), or a `str` written to the graph file verbatim;
     - `project_directory` and `interpreter` are passed as given — a relative
       one is read from `working_directory` — and may be `bytes`;
+    - `extra_environment` is laid over this test's environment, and a `None`
+      value removes that variable;
     - `working_directory` defaults to a fresh directory of the test's own, so
       nothing a node imports can come from the runtime's working directory.
     """
@@ -283,7 +298,7 @@ def start_tatolabd(
         stream_name: "str | None" = None,
         project_directory: "str | bytes | Path" = STREAM_ON_RUNTIME_SUITE_DIRECTORY,
         interpreter: "str | bytes | Path" = SUITE_VENV_INTERPRETER,
-        extra_environment: "dict[str, str] | None" = None,
+        extra_environment: "dict[str, str | None] | None" = None,
         working_directory: "Path | None" = None,
     ) -> RuntimeProcessUnderTest:
         nonlocal start_count
@@ -311,7 +326,9 @@ def start_tatolabd(
             bufsize=1,
             start_new_session=True,
             cwd=working_directory,
-            env={**private_runtime_directories.environment, **(extra_environment or {})},
+            env=environment_overlaid_with(
+                private_runtime_directories.environment, extra_environment
+            ),
         )
         started_tatolabd = RuntimeProcessUnderTest(
             process,
@@ -427,7 +444,7 @@ def start_tatolab(
     def start(
         *arguments: "str | Path",
         working_directory: Path,
-        extra_environment: "dict[str, str] | None" = None,
+        extra_environment: "dict[str, str | None] | None" = None,
     ) -> RuntimeProcessUnderTest:
         command = [str(runtime_unit.tatolab_executable), *map(str, arguments)]
         process = subprocess.Popen(
@@ -440,7 +457,9 @@ def start_tatolab(
             bufsize=1,
             start_new_session=True,
             cwd=working_directory,
-            env={**private_runtime_directories.environment, **(extra_environment or {})},
+            env=environment_overlaid_with(
+                private_runtime_directories.environment, extra_environment
+            ),
         )
         started_tatolab = RuntimeProcessUnderTest(
             process,
@@ -468,7 +487,7 @@ def run_tatolab(
     def run(
         *arguments: "str | Path",
         working_directory: Path,
-        extra_environment: "dict[str, str] | None" = None,
+        extra_environment: "dict[str, str | None] | None" = None,
         timeout: float = TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS,
     ) -> "subprocess.CompletedProcess[str]":
         started_tatolab = start_tatolab(
