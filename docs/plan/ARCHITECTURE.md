@@ -1282,11 +1282,14 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-api-server the_instructions_and_every_wiring_prompt_say_what_pending_and_error_mean -->
 - **DECIDED** — A helper refuses to start unless the engine it imported is its parent's
   build. The build id is the crate version, the git sha — `unknown` where the build has no
-  `.git` — and a nonce minted per build by the engine's build script, compiled into
-  `_engine.abi3.so`. The parent passes its own in the helper's environment; the helper
-  compares before it opens any channel or socket, and on a mismatch writes a refusal naming
-  both ids to raw stderr and exits, so the parent reports that processor's start as refused
-  and names the helper's stderr. An absent id is a refusal too, never a silent pass.
+  `.git` — and a per-build nonce, compiled into `_engine.abi3.so` and `tatolabd`:
+  `cargo xtask build-runtime` mints one and hands it to both compiles of a runtime unit (the
+  lend's `_engine` and `tatolabd`) through `STREAMLIB_RUNTIME_UNIT_ENGINE_BUILD_NONCE`; any
+  other build's engine build script mints its own. The parent passes its own in the helper's
+  environment; the helper compares before it opens any channel or socket, and on a mismatch
+  writes a refusal naming both ids to raw stderr and exits, so the parent reports that
+  processor's start as refused and names the helper's stderr. An absent id is a refusal too,
+  never a silent pass.
   Rejected: a hand-bumped subprocess protocol version beside the build id — it never caught a
   helper built against a different iceoryx2 patch or a stale wheel on the helper's `sys.path`
   (local-transport-hardening, 2026-09-14).
