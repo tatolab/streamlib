@@ -3,9 +3,10 @@
 
 """A node module whose import, in the interpreter describing it, parks the load until released.
 
-The module connects back over a Unix socket and waits for one byte, bounded so
-a test that never releases it fails the describe rather than hanging. While it
-is parked, `tatolabd` is mid-load: alive, its graph not yet loaded.
+The module connects back over a Unix socket, sends the describing
+interpreter's pid, and waits for one byte, bounded so a test that never
+releases it fails the describe rather than hanging. While it is parked,
+`tatolabd` is mid-load: alive, its graph not yet loaded.
 """
 
 from __future__ import annotations
@@ -37,11 +38,15 @@ class NodeModuleWhoseDescribeHoldsTheLoad:
         self._listener.listen(1)
         self._listener.settimeout(HELD_DESCRIBE_DEADLINE_SECONDS)
         self._describing_interpreter_connection: "socket.socket | None" = None
+        #: The pid of the interpreter whose describe reached the import, once it has.
+        self.describing_interpreter_process_id: "int | None" = None
         (project_directory / f"{held_module_name}.py").write_text(
+            "import os\n"
             "import socket\n"
             "_held_load = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
             f"_held_load.settimeout({HELD_DESCRIBE_DEADLINE_SECONDS})\n"
             f"_held_load.connect({str(rendezvous_socket_path)!r})\n"
+            "_held_load.sendall(f'{os.getpid()}\\n'.encode())\n"
             "_held_load.recv(1)\n"
             "_held_load.close()\n" + DESCRIBED_NODE_SOURCE.read_text()
         )
@@ -50,6 +55,9 @@ class NodeModuleWhoseDescribeHoldsTheLoad:
         """Whether the describing interpreter reached the import within the deadline."""
         try:
             self._describing_interpreter_connection, _ = self._listener.accept()
+            self._describing_interpreter_connection.settimeout(HELD_DESCRIBE_DEADLINE_SECONDS)
+            with self._describing_interpreter_connection.makefile("rb") as pid_line_reader:
+                self.describing_interpreter_process_id = int(pid_line_reader.readline())
         except TimeoutError:
             return False
         return True

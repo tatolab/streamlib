@@ -38,6 +38,7 @@ import pytest
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
 from runtime_process_under_test import (
     DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS,
+    ENGINE_STARTED_LOG_LINE,
     STREAM_LOADED_LOG_LINE_PATTERN,
     RuntimeProcessUnderTest,
 )
@@ -72,11 +73,14 @@ ENGINE_VARIABLES_NOT_INHERITED = (
 #: directory, and `sun_path` holds 108 bytes. pytest's own `tmp_path` overruns it.
 SHORT_TEMPORARY_DIRECTORY = Path("/tmp")
 
-#: The Vulkan loader's own variables naming the only driver files to load. A
-#: path that does not exist leaves the loader no driver, so `tatolabd` loads
-#: the graph and is then refused at the GPU, before any device opens. They also
-#: keep `tatolabd` from naming its bundled driver on macOS.
-VULKAN_LOADER_DRIVER_FILE_VARIABLES = ("VK_DRIVER_FILES", "VK_ICD_FILENAMES")
+#: The Vulkan loader's own variables naming the driver files to load. Pointed
+#: at a path that does not exist, they leave the loader no driver, so
+#: `tatolabd` loads the graph and is then refused at the GPU, before any device
+#: opens. They also keep `tatolabd` from naming its bundled driver on macOS.
+VULKAN_LOADER_DRIVER_FILE_VARIABLES = ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "VK_ADD_DRIVER_FILES")
+
+#: The engine's refusal when the Vulkan loader finds no driver, on every platform.
+NO_VULKAN_DRIVER_REFUSAL = "No usable Vulkan driver (ICD) was found"
 
 TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS = 120.0
 
@@ -345,7 +349,10 @@ def load_stream_graph_on_tatolabd(
 
     Takes `start_tatolabd`'s arguments. Needs no device: a graph the load
     refuses ends with that refusal; one it loads logs its load line and is then
-    refused at the GPU, before any device opens.
+    refused at the GPU, before any device opens. A loaded graph whose run ended
+    any other way — the engine started, or a refusal other than the missing
+    driver — fails the test, so a driver override that did not take cannot
+    start a stream's devices unseen.
     """
 
     def load(stream_or_graph: StreamOrGraph, **start_arguments: Any) -> StreamGraphLoadOutcome:
@@ -359,11 +366,21 @@ def load_stream_graph_on_tatolabd(
         exit_status = started_tatolabd.await_exit(timeout=DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS)
         stderr_text = started_tatolabd.stderr_text
         load_line = STREAM_LOADED_LOG_LINE_PATTERN.search(stderr_text)
+        refusal = started_tatolabd.refusal()
+        if load_line is not None:
+            assert ENGINE_STARTED_LOG_LINE not in stderr_text, (
+                f"the engine started a stream that was to end at the GPU:\n"
+                f"{started_tatolabd.recent_stderr()}"
+            )
+            assert refusal is not None and NO_VULKAN_DRIVER_REFUSAL in refusal, (
+                f"a loaded stream was to be refused for the missing Vulkan driver; it ended "
+                f"{exit_status}:\n{started_tatolabd.recent_stderr()}"
+            )
         return StreamGraphLoadOutcome(
             loaded=load_line is not None,
             loaded_stream_name=load_line.group("stream_name") if load_line else None,
             loaded_node_count=int(load_line.group("stream_node_count")) if load_line else None,
-            refusal=started_tatolabd.refusal(),
+            refusal=refusal,
             exit_status=exit_status,
             stderr_text=stderr_text,
         )
@@ -392,35 +409,6 @@ def make_tatolab_project(tmp_path: Path) -> "Callable[..., Path]":
         return project_directory
 
     return make
-
-
-@pytest.fixture
-def run_tatolab(
-    runtime_unit: RuntimeUnitUnderTest, private_runtime_directories: PrivateRuntimeDirectories
-) -> "Callable[..., subprocess.CompletedProcess[str]]":
-    """Run `tatolab <arguments...>` to completion; returns the completed process, output captured.
-
-    `run_tatolab(*arguments, working_directory, extra_environment=None, timeout=120.0)`.
-    """
-
-    def run(
-        *arguments: "str | Path",
-        working_directory: Path,
-        extra_environment: "dict[str, str] | None" = None,
-        timeout: float = TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS,
-    ) -> "subprocess.CompletedProcess[str]":
-        return subprocess.run(
-            [str(runtime_unit.tatolab_executable), *map(str, arguments)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            start_new_session=True,
-            cwd=working_directory,
-            env={**private_runtime_directories.environment, **(extra_environment or {})},
-        )
-
-    return run
 
 
 @pytest.fixture
@@ -464,6 +452,37 @@ def start_tatolab(
         return started_tatolab
 
     return start
+
+
+@pytest.fixture
+def run_tatolab(
+    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+) -> "Callable[..., subprocess.CompletedProcess[str]]":
+    """Run `tatolab <arguments...>` to completion; returns the completed process, output captured.
+
+    `run_tatolab(*arguments, working_directory, extra_environment=None, timeout=120.0)`.
+    Started through `start_tatolab`, so a run that outlives `timeout` fails the
+    test and the `tatolabd` it started is killed with it.
+    """
+
+    def run(
+        *arguments: "str | Path",
+        working_directory: Path,
+        extra_environment: "dict[str, str] | None" = None,
+        timeout: float = TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS,
+    ) -> "subprocess.CompletedProcess[str]":
+        started_tatolab = start_tatolab(
+            *arguments, working_directory=working_directory, extra_environment=extra_environment
+        )
+        exit_status = started_tatolab.await_exit(timeout=timeout)
+        return subprocess.CompletedProcess(
+            args=started_tatolab.process.args,
+            returncode=exit_status,
+            stdout=started_tatolab.stdout_text,
+            stderr=started_tatolab.stderr_text,
+        )
+
+    return run
 
 
 @pytest.fixture

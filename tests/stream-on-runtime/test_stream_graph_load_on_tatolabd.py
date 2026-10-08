@@ -17,6 +17,7 @@ suite venv, which holds `tatolab-stream` and nothing of the runtime.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import sys
 import time
@@ -26,7 +27,7 @@ from typing import Any
 
 import pytest
 
-from conftest import StreamGraphLoadOutcome
+from conftest import StreamGraphLoadOutcome, environment_reaching_no_vulkan_driver
 from node_module_whose_describe_holds_the_load import (
     HELD_DESCRIBE_DEADLINE_SECONDS,
     NodeModuleWhoseDescribeHoldsTheLoad,
@@ -253,6 +254,48 @@ def test_nan_and_infinity_in_a_graph_files_config_are_refused_as_not_json(
     assert "the graph does not parse" in refusal
 
 
+def test_a_graph_file_holding_a_list_rather_than_a_graph_is_refused_naming_the_file(
+    load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd,
+):
+    load_outcome = load_stream_graph_on_tatolabd('[{"name": "x", "type": "y"}]')
+
+    refusal = refused_naming(load_outcome)
+    assert re.search(r"--stream-graph \S+\.json " + re.escape(GRAPH_FILE_IS_NOT_A_GRAPH), refusal)
+    assert "the graph does not parse" in refusal
+
+
+def test_a_lone_surrogate_escape_in_a_graph_file_is_refused_naming_it(
+    load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd,
+):
+    load_outcome = load_stream_graph_on_tatolabd(
+        '{"nodes": [{"name": "displaywindow", "type": "%s", "config": {"title": "\\udc80"}}]}'
+        % DisplayWindow.type
+    )
+
+    refusal = refused_naming(load_outcome)
+    assert GRAPH_FILE_IS_NOT_A_GRAPH in refusal
+    assert "lone leading surrogate" in refusal
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a graph file's integer wider than 64 bits parses as a float rather than "
+    "being refused; the engine's graph parse does not yet refuse it",
+)
+def test_a_config_integer_wider_than_64_bits_in_a_graph_file_is_refused_naming_it(
+    load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd,
+):
+    """The builder refuses one before a file is written; a graph file written
+    any other way must not reach a node carrying a different number."""
+    load_outcome = load_stream_graph_on_tatolabd(
+        '{"nodes": [{"name": "openconfigsink", "type": "%s", "config": {"value": %d}}]}'
+        % (OPEN_CONFIG_SINK_TYPE, 2**64)
+    )
+
+    refusal = refused_naming(load_outcome)
+    assert str(2**64) in refusal
+
+
 def test_a_python_node_type_the_process_never_imported_loads_by_describing_it(
     load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd,
 ):
@@ -397,8 +440,9 @@ def test_a_graph_that_does_not_parse_is_refused_with_the_engines_text(
             "no_such_module_for_runtime_load:NoSuchNode",
             "No module named 'no_such_module_for_runtime_load'",
         ),
+        (f"{DESCRIBED_NODE_MODULE}:NoSuchNode", "has no attribute 'NoSuchNode'"),
     ],
-    ids=["native-path", "python-path"],
+    ids=["native-path", "python-path", "python-module-without-the-class"],
 )
 def test_a_graph_naming_an_unknown_type_is_refused(
     load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd, unknown_type: str, engine_refusal: str
@@ -453,6 +497,7 @@ def test_a_link_end_naming_a_runtime_is_refused_by_load_naming_it(
 def test_a_ctrl_c_during_a_loads_describe_ends_tatolabd_at_once(
     start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
     held_node_module: NodeModuleWhoseDescribeHoldsTheLoad,
+    tmp_path: Path,
 ):
     """The describe leads its own process group, so a terminal's Ctrl-C reaches
     only `tatolabd`; the load still has to give it up rather than wait the
@@ -460,6 +505,7 @@ def test_a_ctrl_c_during_a_loads_describe_ends_tatolabd_at_once(
     tatolabd = start_tatolabd(
         {"nodes": [{"name": "held", "type": f"{held_node_module.name}:LoadedFrameRelay", "config": {}}]},
         project_directory=held_node_module.project_directory,
+        extra_environment=environment_reaching_no_vulkan_driver(tmp_path),
     )
     assert held_node_module.wait_until_the_load_reaches_the_import(), (
         f"the load never reached the describe:\n{tatolabd.recent_stderr()}"

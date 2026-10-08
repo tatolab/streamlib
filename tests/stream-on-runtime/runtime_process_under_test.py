@@ -61,6 +61,17 @@ REGISTRY_POLL_INTERVAL_SECONDS = 0.05
 
 READER_THREAD_JOIN_TIMEOUT_SECONDS = 5.0
 
+#: The ` key=value` fields the pretty log mirror appends to a record's message.
+TRAILING_LOG_RECORD_FIELDS_PATTERN = re.compile(
+    r"(?:^|\s+)[A-Za-z_]\w*=\S*(?:\s+[A-Za-z_]\w*=\S*)*\s*$"
+)
+
+#: What an observer of standard error returns until it has seen what it waits for.
+NOT_YET_SEEN = object()
+
+#: What `MarkerLineParser.payload_of` returns for a line without its marker.
+NOT_A_MARKER_LINE = object()
+
 
 class RuntimeProcessUnderTest:
     """One started `tatolabd` or `tatolab`, its output pumped and its waits bounded."""
@@ -136,27 +147,40 @@ class RuntimeProcessUnderTest:
             f"{stderr_text[-RECENT_OUTPUT_CHARACTERS:]}"
         )
 
-    def _await_stderr_lines_satisfying(
+    def _await_stderr_line_satisfying(
         self,
-        stderr_lines_satisfy: "Callable[[list[str]], Any]",
+        observe_stderr_line: "Callable[[str], Any]",
         awaited_description: str,
         timeout: float,
     ) -> Any:
+        """Feed each line of standard error, from the first, to `observe_stderr_line`
+        until it returns anything but `NOT_YET_SEEN`, and return that.
+
+        Each line is observed once and outside the lock, so a wait on a chatty
+        run never holds up the reader threads appending to it.
+        """
         deadline = time.monotonic() + timeout
-        with self._output_arrived:
-            while True:
-                satisfied = stderr_lines_satisfy(self.stderr_lines)
-                if satisfied:
-                    return satisfied
-                if self._stderr_ended:
-                    break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise AssertionError(
-                        f"`{self.command_description}` did not write {awaited_description} "
-                        f"within {timeout}s; standard error:\n{self.recent_stderr()}"
-                    )
-                self._output_arrived.wait(min(remaining, 0.5))
+        observed_line_count = 0
+        while True:
+            with self._output_arrived:
+                unobserved_lines = self.stderr_lines[observed_line_count:]
+                stderr_ended = self._stderr_ended
+            observed_line_count += len(unobserved_lines)
+            for line in unobserved_lines:
+                observed = observe_stderr_line(line)
+                if observed is not NOT_YET_SEEN:
+                    return observed
+            if stderr_ended:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise AssertionError(
+                    f"`{self.command_description}` did not write {awaited_description} "
+                    f"within {timeout}s; standard error:\n{self.recent_stderr()}"
+                )
+            with self._output_arrived:
+                if len(self.stderr_lines) == observed_line_count and not self._stderr_ended:
+                    self._output_arrived.wait(min(remaining, 0.5))
         raise AssertionError(
             f"`{self.command_description}` ended its standard error before "
             f"{awaited_description} (exit status {self.process.poll()}); standard error:\n"
@@ -175,23 +199,33 @@ class RuntimeProcessUnderTest:
         Lines are counted from the start of the process, so the order two awaits
         are made in implies no order of the lines they wait for.
         """
+        matching_line_count = 0
 
-        def the_awaited_line(stderr_lines: "list[str]") -> "str | None":
-            matching_lines = [line for line in stderr_lines if awaited_text in line]
-            return matching_lines[occurrence - 1] if len(matching_lines) >= occurrence else None
+        def observe(line: str) -> Any:
+            nonlocal matching_line_count
+            if awaited_text not in line:
+                return NOT_YET_SEEN
+            matching_line_count += 1
+            return line if matching_line_count == occurrence else NOT_YET_SEEN
 
-        return self._await_stderr_lines_satisfying(
-            the_awaited_line, f"`{awaited_text}` (occurrence {occurrence})", timeout
+        return self._await_stderr_line_satisfying(
+            observe, f"`{awaited_text}` (occurrence {occurrence})", timeout
         )
 
     def marker_payloads(self, marker_name: str) -> "list[Any]":
         """The payload of each `MARKER:<marker_name>` line so far, in order.
 
         A payload is the JSON value following the marker's name, or `None` for a
-        marker carrying none.
+        marker carrying none; see `MarkerLineParser`.
         """
+        marker_line_parser = MarkerLineParser(marker_name)
         with self._output_arrived:
-            return _marker_payloads_in(self.stderr_lines, marker_name)
+            stderr_lines = list(self.stderr_lines)
+        return [
+            payload
+            for payload in map(marker_line_parser.payload_of, stderr_lines)
+            if payload is not NOT_A_MARKER_LINE
+        ]
 
     def await_marker(
         self,
@@ -201,32 +235,39 @@ class RuntimeProcessUnderTest:
         occurrence: int = 1,
     ) -> Any:
         """Wait for the `occurrence`-th `MARKER:<marker_name>`, and return its payload."""
+        marker_line_parser = MarkerLineParser(marker_name)
+        marker_line_count = 0
 
-        def the_awaited_payload(stderr_lines: "list[str]") -> "list[Any] | None":
-            payloads = _marker_payloads_in(stderr_lines, marker_name)
-            return [payloads[occurrence - 1]] if len(payloads) >= occurrence else None
+        def observe(line: str) -> Any:
+            nonlocal marker_line_count
+            payload = marker_line_parser.payload_of(line)
+            if payload is NOT_A_MARKER_LINE:
+                return NOT_YET_SEEN
+            marker_line_count += 1
+            return payload if marker_line_count == occurrence else NOT_YET_SEEN
 
-        (payload,) = self._await_stderr_lines_satisfying(
-            the_awaited_payload, f"{MARKER_PREFIX}{marker_name} (occurrence {occurrence})", timeout
+        return self._await_stderr_line_satisfying(
+            observe, f"{MARKER_PREFIX}{marker_name} (occurrence {occurrence})", timeout
         )
-        return payload
 
     def await_every_marker(
         self, *marker_names: str, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS
     ) -> "dict[str, Any]":
         """Wait until each named marker has been seen, in any order; return each one's first payload."""
+        marker_line_parsers = [MarkerLineParser(marker_name) for marker_name in marker_names]
+        first_payloads: "dict[str, Any]" = {}
 
-        def every_first_payload(stderr_lines: "list[str]") -> "dict[str, Any] | None":
-            first_payloads = {}
-            for marker_name in marker_names:
-                payloads = _marker_payloads_in(stderr_lines, marker_name)
-                if not payloads:
-                    return None
-                first_payloads[marker_name] = payloads[0]
-            return first_payloads
+        def observe(line: str) -> Any:
+            for marker_line_parser in marker_line_parsers:
+                if marker_line_parser.marker_name in first_payloads:
+                    continue
+                payload = marker_line_parser.payload_of(line)
+                if payload is not NOT_A_MARKER_LINE:
+                    first_payloads[marker_line_parser.marker_name] = payload
+            return first_payloads if len(first_payloads) == len(marker_names) else NOT_YET_SEEN
 
-        return self._await_stderr_lines_satisfying(
-            every_first_payload, f"every one of {sorted(marker_names)}", timeout
+        return self._await_stderr_line_satisfying(
+            observe, f"every one of {sorted(marker_names)}", timeout
         )
 
     def await_stream_loaded(
@@ -234,14 +275,11 @@ class RuntimeProcessUnderTest:
     ) -> "re.Match[str]":
         """Wait for `tatolabd`'s load line; its groups are `stream_name` and `stream_node_count`."""
 
-        def the_load_line(stderr_lines: "list[str]") -> "re.Match[str] | None":
-            for line in stderr_lines:
-                loaded = STREAM_LOADED_LOG_LINE_PATTERN.search(line)
-                if loaded is not None:
-                    return loaded
-            return None
+        def observe(line: str) -> Any:
+            loaded = STREAM_LOADED_LOG_LINE_PATTERN.search(line)
+            return NOT_YET_SEEN if loaded is None else loaded
 
-        return self._await_stderr_lines_satisfying(the_load_line, "the stream's load line", timeout)
+        return self._await_stderr_line_satisfying(observe, "the stream's load line", timeout)
 
     def send_signal(self, signal_number: int) -> None:
         """Signal the started process itself."""
@@ -372,23 +410,36 @@ class RuntimeProcessUnderTest:
                     pass
 
 
-def _marker_payloads_in(stderr_lines: "list[str]", marker_name: str) -> "list[Any]":
-    marker_pattern = re.compile(re.escape(MARKER_PREFIX + marker_name) + r"(?=\s|$)")
-    payloads = []
-    for line in stderr_lines:
-        marker = marker_pattern.search(line)
+class MarkerLineParser:
+    """Reads the payload off a `MARKER:<marker_name>` log line.
+
+    The marker is matched anywhere in the line, with whitespace or the line's
+    end after its name. The pretty log mirror ends a record with its structured
+    fields — ` processor_id=<id>`, ` pipeline_id=<id>`, an attribute's
+    ` key=value` — so the payload is the JSON value after the name, decoded up
+    to where it ends; `None` when only those fields follow; or, when what
+    follows is not JSON, that text with the trailing fields removed.
+    """
+
+    def __init__(self, marker_name: str) -> None:
+        self.marker_name = marker_name
+        self._marker_pattern = re.compile(re.escape(MARKER_PREFIX + marker_name) + r"(?=\s|$)")
+        self._json_decoder = json.JSONDecoder()
+
+    def payload_of(self, line: str) -> Any:
+        """The marker's payload, or `NOT_A_MARKER_LINE` when the line carries no such marker."""
+        marker = self._marker_pattern.search(line)
         if marker is None:
-            continue
-        after_the_name = line[marker.end() :].lstrip(" ")
-        if not after_the_name.strip():
-            payloads.append(None)
-            continue
+            return NOT_A_MARKER_LINE
+        after_the_name = line[marker.end() :].strip()
+        without_the_record_fields = TRAILING_LOG_RECORD_FIELDS_PATTERN.sub("", after_the_name)
+        if not without_the_record_fields:
+            return None
         try:
-            payload, _ = json.JSONDecoder().raw_decode(after_the_name)
+            payload, _ = self._json_decoder.raw_decode(after_the_name)
         except json.JSONDecodeError:
-            payload = after_the_name.rstrip("\n")
-        payloads.append(payload)
-    return payloads
+            return without_the_record_fields
+        return payload
 
 
 def registry_entry_paths_in(streamlib_runtime_directory: Path) -> "list[Path]":

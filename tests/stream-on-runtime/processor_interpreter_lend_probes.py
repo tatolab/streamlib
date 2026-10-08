@@ -9,6 +9,7 @@ standard library at module scope.
 """
 
 import json
+import os
 import sys
 
 from tatolab.stream import log, node
@@ -36,6 +37,7 @@ class ReportsItsInterpreterSource:
                 + json.dumps(
                     {
                         "processor_interpreter": sys.executable,
+                        "processor_interpreter_process_id": os.getpid(),
                         "lent_runtime_file": tatolab.runtime.__file__,
                     }
                 )

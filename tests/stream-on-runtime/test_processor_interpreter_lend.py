@@ -8,7 +8,8 @@ started from it borrows the runtime through the runtime unit's lend, and
 `tatolabd` learns each node's ports by describing it there. What a load refuses
 — a module that raises, an unstamped class, an interpreter that cannot load
 the lent runtime — ends at the load, so only the running stream needs a GPU.
-`tatolabd` itself is native: no Python is mapped into its process.
+`tatolabd` itself is native: every processor interpreter, describing or
+running, is a process beneath it, and no Python is mapped into its own.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import StreamGraphLoadOutcome
+from conftest import StreamGraphLoadOutcome, environment_reaching_no_vulkan_driver
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
 from processor_interpreter_lend_probes import (
     CountsBagsFromUpstreamSink,
@@ -93,6 +94,29 @@ def images_mapped_into(process_id: int) -> "list[str]":
         check=True,
     )
     return [line[1:] for line in listed.stdout.splitlines() if line.startswith("n")]
+
+
+def parent_process_id_of(process_id: int) -> int:
+    listed = subprocess.run(
+        ["ps", "-o", "ppid=", "-p", str(process_id)], capture_output=True, text=True, check=True
+    )
+    return int(listed.stdout.strip())
+
+
+def assert_runs_in_a_process_of_its_own_beneath(
+    processor_interpreter_process_id: int, tatolabd_process_id: int
+) -> None:
+    """The interpreter is not `tatolabd`, and `tatolabd` is its ancestor."""
+    assert processor_interpreter_process_id != tatolabd_process_id, (
+        "the processor interpreter runs inside tatolabd's own process"
+    )
+    ancestor_process_id = processor_interpreter_process_id
+    while ancestor_process_id not in (tatolabd_process_id, 0, 1):
+        ancestor_process_id = parent_process_id_of(ancestor_process_id)
+    assert ancestor_process_id == tatolabd_process_id, (
+        f"processor interpreter {processor_interpreter_process_id} does not descend from "
+        f"tatolabd {tatolabd_process_id}"
+    )
 
 
 def assert_no_python_is_mapped_into(process_id: int) -> None:
@@ -307,17 +331,24 @@ def test_a_relative_project_directory_and_interpreter_name_what_they_name_from_t
 def test_tatolabd_maps_no_python_while_a_processor_interpreter_describes_a_node_type(
     start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
     held_node_module: NodeModuleWhoseDescribeHoldsTheLoad,
+    tmp_path: Path,
 ):
-    """Describe runs in a processor interpreter of its own; `tatolabd`, mid-load
-    with that interpreter parked at the node module's import, has no Python in it."""
+    """Describe runs in a processor interpreter of its own, beneath `tatolabd`;
+    `tatolabd`, mid-load with that interpreter parked at the node module's
+    import, has no Python in it."""
     tatolabd = start_tatolabd(
         graph_naming_one_node_of_type(f"{held_node_module.name}:LoadedFrameRelay"),
         project_directory=held_node_module.project_directory,
+        extra_environment=environment_reaching_no_vulkan_driver(tmp_path),
     )
     assert held_node_module.wait_until_the_load_reaches_the_import(), (
         f"the load never reached the describe:\n{tatolabd.recent_stderr()}"
     )
     try:
+        assert held_node_module.describing_interpreter_process_id is not None
+        assert_runs_in_a_process_of_its_own_beneath(
+            held_node_module.describing_interpreter_process_id, tatolabd.pid
+        )
         assert_no_python_is_mapped_into(tatolabd.pid)
     finally:
         tatolabd.interrupt()
@@ -334,6 +365,9 @@ def test_a_node_runs_in_a_processor_interpreter_started_from_a_venv_holding_only
 ):
     tatolabd = start_tatolabd(interpreter_reporting_source_into_counting_sink)
     reported = tatolabd.await_every_marker("PROCESSOR_INTERPRETER", "BAGS_PROCESSED")
+    assert_runs_in_a_process_of_its_own_beneath(
+        reported["PROCESSOR_INTERPRETER"]["processor_interpreter_process_id"], tatolabd.pid
+    )
     assert_no_python_is_mapped_into(tatolabd.pid)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()

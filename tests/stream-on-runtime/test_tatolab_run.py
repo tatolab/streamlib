@@ -17,13 +17,19 @@ import os
 import re
 import socket
 import stat
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from conftest import PrivateRuntimeDirectories
-from runtime_process_under_test import RuntimeProcessUnderTest, registry_entry_paths_in
+from runtime_process_under_test import (
+    ENGINE_STARTED_LOG_LINE,
+    RuntimeProcessUnderTest,
+    registry_entry_paths_in,
+)
+from tatolab.stream import TestPatternSource
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -62,6 +68,8 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     tatolab = start_tatolab("run", working_directory=app_directory)
     registry_entry_path = tatolab.registry_entry_path()
     entry = tatolab.registry_entry()
+    running_graph = tatolab.local_api_client().await_every_node_running()
+    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE)
 
     assert entry["pid"] != tatolab.pid, "the entry names tatolabd, not the tatolab that started it"
     assert entry["pid"] in tatolab.hosting_tatolabd_process_ids()
@@ -71,6 +79,10 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
         streamlib_runtime_directory / f"local-api-{entry['runtime_id']}.sock"
     ), f"the local API socket sits in the runtime directory; got {local_api_socket_path}"
     assert_only_its_owner_can_open(local_api_socket_path)
+    assert running_graph["stream"] == "main"
+    assert [node["type"] for node in running_graph["nodes"]].count(TestPatternSource.type) == 1, (
+        running_graph["nodes"]
+    )
     # The engine replaces every character an address chunk may not carry,
     # so a host whose own name carries one is compared against the same
     # substitution rather than against the raw `gethostname`.
@@ -84,7 +96,13 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
         f"`tatolab run` must exit cleanly on SIGINT; standard error:\n{tatolab.recent_stderr()}"
     )
-    assert registry_entry_path not in registry_entry_paths_in(streamlib_runtime_directory), (
-        "clean teardown must remove the node-registry entry"
-    )
+    if sys.platform == "linux":
+        assert registry_entry_paths_in(streamlib_runtime_directory) == [], (
+            "clean teardown must leave this test's private registry empty"
+        )
+    else:
+        # The runtime directory is shared with every runtime on the machine.
+        assert registry_entry_path not in registry_entry_paths_in(streamlib_runtime_directory), (
+            "clean teardown must remove the node-registry entry"
+        )
     assert not local_api_socket_path.exists(), "clean teardown must remove the local API socket"
