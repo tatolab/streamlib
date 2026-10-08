@@ -107,8 +107,9 @@ sdk/streamlib-python-wheel/         PyO3 crate → tatolab/runtime/: processor-i
 runtime/tatolabd/                   bin tatolabd — the runtime process
 runtime/tatolab-cli/                bin tatolab — the CLI
 runtime/streamlib-runtime-client-contract/
-                                    engine-free: the runtime directory, node registry, JSONL log files and
-                                      local API wire names the runtime and tatolab share (owner, 2026-10-08)
+                                    engine-free: what the runtime and tatolab share — the runtime
+                                      directory, node registry and JSONL log files (owner, 2026-10-08),
+                                      and the local API's wire names
 runtime/streamlib-engine/src/core/compiler/compiler_ops/
                                     processor-interpreter spawn and describe, beside subprocess_bridge.rs
 tests/stream-on-runtime/            the integration suite
@@ -250,13 +251,17 @@ target/tatolab-runtime/             bin/tatolabd, bin/tatolab, lib/tatolab/lend/
   `docs/plan/diagrams/system.mmd`'s media node — built-ins reach Python as classes generated
   into `tatolab/stream/_built_in_nodes.py` from their descriptors (#2587), not as native marker
   classes, and a built-in's `type` is `tatolab.stream:<Class>` as built.
-- §Packages' built-in criterion (`:248-260`) — a built-in ships in `tatolabd`, never in a pip
-  distribution, so its "ships inside the wheel" and "`pip install streamlib` alone" name the
-  runtime instead.
+- §Packages' built-in criterion (`:248-260`) — a built-in's native half ships in `tatolabd`,
+  never in a pip distribution (its generated class rides in `tatolab-stream`), so its "ships
+  inside the wheel" and "`pip install streamlib` alone" name the runtime instead.
 - §Packages' extension-wheel entry, "published through the same simple index the wheel uses,
   which becomes multi-project to carry it" (`:323-324`), and §Consumers' "publish through the
   same GitHub-hosted PEP 503 index the wheel uses (PyPI after the rename)" (`:654-655`) — the
   release publishes to PyPI and the simple index is deleted (owner, 2026-10-08).
+- §Packages' cross-floor-check entry, "It runs inside `streamlib dev` and `streamlib run`"
+  (`:530`), and §Consumers' "start from the `streamlib new` scaffold" (`:659`) and "the
+  `streamlib new` scaffold is the hello" (`:702`) — `tatolab dev`, `tatolab run` and
+  `tatolab new`.
 - §Media I/O's virtual-camera entry, "`streamlib enable-virtual-camera` refuses by name"
   (`:1893-1894`) — `tatolab enable-virtual-camera`, which refuses off Linux by name.
 - §Networking's extension-wheels CI entry, "the release workflow builds and attaches each wheel

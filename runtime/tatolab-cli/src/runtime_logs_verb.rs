@@ -572,8 +572,12 @@ mod tests {
         RuntimeLogInstanceOnDisk {
             runtime_id: runtime_id.to_owned(),
             started_at_millis_digits: started_at_millis_digits.to_owned(),
-            active_segment_path: log_directory
-                .join(format!("{runtime_id}-{started_at_millis_digits}.jsonl")),
+            active_segment_path: log_directory.join(
+                streamlib_runtime_client_contract::runtime_log_file_paths::active_runtime_log_segment_file_name(
+                    runtime_id,
+                    started_at_millis_digits,
+                ),
+            ),
             total_segment_bytes,
         }
     }

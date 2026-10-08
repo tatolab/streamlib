@@ -330,7 +330,7 @@ fn current_process_hint() -> String {
 
 #[cfg(test)]
 mod tests {
-    //! Registry write / scan / read / remove / prune-shape and the
+    //! Registry write / scan / remove / prune-shape and the
     //! `schema_version` round-trip, each against its own tempdir registry.
 
     use super::*;

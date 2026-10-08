@@ -1932,7 +1932,8 @@ mod tests {
             let runtime = result.expect("a runtime starts with XDG_RUNTIME_DIR unset");
             let fallback = std::path::PathBuf::from(format!(
                 "/tmp/streamlib-{}",
-                streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid()
+                streamlib_runtime_client_contract::streamlib_runtime_directory::current_process_uid(
+                )
             ));
             assert!(
                 runtime.surface_socket_path().starts_with(&fallback),

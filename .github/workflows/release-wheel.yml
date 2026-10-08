@@ -101,15 +101,15 @@ jobs:
             fi
           done
 
-      # `tatolab new` writes the scaffold. The native CLI links no engine, so no
-      # Vulkan or shader compiler, but it reads a tapped bag's frame through
-      # streamlib-ipc-types, which builds iceoryx2, and iceoryx2's bindgen needs
-      # libclang. `timeout-minutes` is the native backstop the composite action
-      # cannot declare for itself; `check-bounded-apt-install` fails the build if
-      # it goes missing.
+      # `tatolab new` writes the scaffold.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # The native CLI links no engine, so no Vulkan or shader compiler, but it
+      # reads a tapped bag's frame through streamlib-ipc-types, which builds
+      # iceoryx2, and iceoryx2's bindgen needs libclang. `timeout-minutes` is the
+      # native backstop the composite action cannot declare for itself;
+      # `check-bounded-apt-install` fails the build if it goes missing.
       - name: Install libclang for iceoryx2's bindgen
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies

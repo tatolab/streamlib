@@ -201,16 +201,15 @@ fn executable_search_path_from(path_variable: Option<OsString>) -> OsString {
     path_variable.unwrap_or_else(|| OsString::from(DEFAULT_EXECUTABLE_SEARCH_PATH))
 }
 
-/// The first executable file named `executable_name` in `search_path`'s directories; an empty
-/// search path holds none, rather than naming the working directory.
+/// The first executable file named `executable_name` in `search_path`'s absolute directories.
+/// An empty or relative entry names the working directory, which never supplies a privilege
+/// helper, so it is skipped and the resolved path is always absolute.
 fn find_executable_on_search_path(
     executable_name: &str,
     search_path: &std::ffi::OsStr,
 ) -> Option<PathBuf> {
-    if search_path.is_empty() {
-        return None;
-    }
     std::env::split_paths(search_path)
+        .filter(|path_directory| path_directory.is_absolute())
         .map(|path_directory| path_directory.join(executable_name))
         .find(|candidate_executable| {
             fs::metadata(candidate_executable).is_ok_and(|candidate_metadata| {
@@ -839,6 +838,38 @@ mod tests {
 
     /// The helper runs from the file its lookup found, not by its name again: the stand-in sits in
     /// a directory this process's PATH does not hold.
+    #[test]
+    fn a_relative_or_empty_search_path_entry_never_resolves_a_helper() {
+        let relative_entry_reaching_slash_bin = format!(
+            "{}bin",
+            "../".repeat(
+                std::path::Path::new(".")
+                    .canonicalize()
+                    .unwrap()
+                    .components()
+                    .count()
+                    + 1
+            )
+        );
+        assert!(
+            std::path::Path::new(&relative_entry_reaching_slash_bin)
+                .join("sh")
+                .is_file(),
+            "the relative entry must reach /bin/sh for this test to mean anything"
+        );
+        assert_eq!(
+            find_executable_on_search_path(
+                "sh",
+                std::ffi::OsStr::new(&format!(":{relative_entry_reaching_slash_bin}"))
+            ),
+            None
+        );
+        assert_eq!(
+            find_executable_on_search_path("sh", std::ffi::OsStr::new("/bin")),
+            Some(std::path::PathBuf::from("/bin/sh"))
+        );
+    }
+
     #[test]
     fn the_helper_runs_from_the_path_its_lookup_resolved() {
         let scratch_directory = tempfile::tempdir().unwrap();

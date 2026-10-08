@@ -193,29 +193,51 @@ impl LocalApiHttpConnection {
         origin_form_request_target: &str,
         timeout: Duration,
     ) -> Result<LocalApiHttpResponse, LocalApiHttpRequestFailure> {
-        let get_request = local_api_request_builder(Method::GET, origin_form_request_target)
-            .body(LocalApiHttpRequestBody::new(Bytes::new()))
-            .map_err(
-                |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
-                    request_target: origin_form_request_target.to_owned(),
-                    uri_failure,
-                },
-            )?;
+        let get_request_to_the_target = || {
+            local_api_request_builder(Method::GET, origin_form_request_target)
+                .body(LocalApiHttpRequestBody::new(Bytes::new()))
+                .map_err(
+                    |uri_failure| LocalApiHttpRequestFailure::RequestTargetIsNotAUri {
+                        request_target: origin_form_request_target.to_owned(),
+                        uri_failure,
+                    },
+                )
+        };
+        let get_request = get_request_to_the_target()?;
         let local_api_socket_path = self.local_api_socket_path.as_path();
         let kept_request_sender = self.kept_request_sender.take();
         let answered = tokio::time::timeout(timeout, async {
-            let mut request_sender = local_api_request_sender_ready_for_a_request(
-                local_api_socket_path,
-                kept_request_sender,
-            )
-            .await?;
-            let (response_head, response_body) = send_request_on_the_local_api_connection(
+            let (mut request_sender, request_sender_was_kept) =
+                local_api_request_sender_ready_for_a_request(
+                    local_api_socket_path,
+                    kept_request_sender,
+                )
+                .await?;
+            let response = match send_request_on_the_local_api_connection(
                 local_api_socket_path,
                 &mut request_sender,
                 get_request,
             )
-            .await?
-            .into_parts();
+            .await
+            {
+                // A kept connection can be closed by the runtime between two requests yet still
+                // read as ready, since nothing drove it in between; a GET is idempotent, so it
+                // goes again on a fresh connection.
+                Err(LocalApiHttpRequestFailure::ConnectionClosedBeforeAnswering { .. })
+                    if request_sender_was_kept =>
+                {
+                    request_sender =
+                        open_ready_local_api_http1_connection(local_api_socket_path).await?;
+                    send_request_on_the_local_api_connection(
+                        local_api_socket_path,
+                        &mut request_sender,
+                        get_request_to_the_target()?,
+                    )
+                    .await?
+                }
+                sent => sent?,
+            };
+            let (response_head, response_body) = response.into_parts();
             let whole_body = response_body
                 .collect()
                 .await
@@ -249,16 +271,26 @@ impl LocalApiHttpConnection {
 }
 
 /// `kept_request_sender` once its connection can take a request, or a freshly opened one when
-/// there is none or the runtime closed it.
+/// there is none or the runtime closed it; `true` beside it when it is the kept one.
 async fn local_api_request_sender_ready_for_a_request(
     local_api_socket_path: &Path,
     kept_request_sender: Option<SendRequest<LocalApiHttpRequestBody>>,
-) -> Result<SendRequest<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
+) -> Result<(SendRequest<LocalApiHttpRequestBody>, bool), LocalApiHttpRequestFailure> {
     if let Some(mut kept_request_sender) = kept_request_sender
         && kept_request_sender.ready().await.is_ok()
     {
-        return Ok(kept_request_sender);
+        return Ok((kept_request_sender, true));
     }
+    Ok((
+        open_ready_local_api_http1_connection(local_api_socket_path).await?,
+        false,
+    ))
+}
+
+/// A freshly opened connection to the local API, once it can take a request.
+async fn open_ready_local_api_http1_connection(
+    local_api_socket_path: &Path,
+) -> Result<SendRequest<LocalApiHttpRequestBody>, LocalApiHttpRequestFailure> {
     let mut opened_request_sender = open_local_api_http1_connection(local_api_socket_path).await?;
     opened_request_sender
         .ready()
@@ -435,6 +467,66 @@ mod tests {
             3
         );
         assert_eq!(stub_local_api_server.image_request_connection_count(), 1);
+    }
+
+    #[test]
+    fn a_get_on_a_kept_connection_the_runtime_closed_goes_again_on_a_fresh_one() {
+        let local_api_socket_directory = tempfile::Builder::new()
+            .prefix("tl-http-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let local_api_socket_path = local_api_socket_directory.path().join("local-api.sock");
+        let local_api_listener =
+            std::os::unix::net::UnixListener::bind(&local_api_socket_path).unwrap();
+        let playing_the_runtime = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let read_one_request_head =
+                |runtime_connection: &mut std::os::unix::net::UnixStream| {
+                    let mut received = Vec::new();
+                    let mut one_byte = [0_u8; 1];
+                    while !received.ends_with(b"\r\n\r\n") {
+                        if runtime_connection.read(&mut one_byte).unwrap() == 0 {
+                            break;
+                        }
+                        received.push(one_byte[0]);
+                    }
+                };
+            let (mut first_connection, _) = local_api_listener.accept().unwrap();
+            read_one_request_head(&mut first_connection);
+            first_connection
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\none")
+                .unwrap();
+            read_one_request_head(&mut first_connection);
+            drop(first_connection);
+            let (mut second_connection, _) = local_api_listener.accept().unwrap();
+            read_one_request_head(&mut second_connection);
+            second_connection
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\ntwo")
+                .unwrap();
+        });
+        let mut local_api_http_connection =
+            LocalApiHttpConnection::to_local_api_socket(&local_api_socket_path);
+
+        let answered_bodies: Vec<Bytes> = a_tokio_runtime_for_the_test().block_on(async {
+            let mut answered_bodies = Vec::new();
+            for request_target in [
+                "/api/surfaces/slot%231/image",
+                "/api/surfaces/slot%232/image",
+            ] {
+                answered_bodies.push(
+                    local_api_http_connection
+                        .get_whole_response(request_target, EXCHANGE_TEST_TIMEOUT)
+                        .await
+                        .unwrap()
+                        .body,
+                );
+            }
+            answered_bodies
+        });
+        playing_the_runtime.join().unwrap();
+
+        assert_eq!(answered_bodies[0].as_ref(), b"one");
+        assert_eq!(answered_bodies[1].as_ref(), b"two");
     }
 
     #[test]
