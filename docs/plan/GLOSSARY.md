@@ -3,16 +3,9 @@
 The shared language. Terms only — zero implementation detail. Maintained by the
 `glossary` skill inside plan-editing sessions; project-specific terms only.
 
-**The wheel**: the single distributed artifact for Python — Python API + CLI + engine
-in one PyO3 package. _Avoid_: "the binary" (pre-pivot), "the SDK" (that is its API
-surface). _Amended 2026-09-30 by the one-runtime-per-machine pivot: it becomes two
-distributions, a pure-Python stream package and a native runtime package; until the rename,
-"the wheel" names what ships today. Named 2026-10-01: the stream package is the `tatolab-stream`
-distribution (`tatolab.stream`), the runtime package is `tatolab.runtime`, lent by `tatolabd`._
-
 **Stream package** _(crosses)_: `tatolab-stream`, the pure-Python distribution a stream's
 venv installs — everything a stream module imports; a stream compiles with no runtime
-present. _Avoid_: "the SDK", "the wheel" (what ships today).
+present. _Avoid_: "the SDK", "the wheel".
 
 **Runtime portion** _(engine)_: `tatolab.runtime`, the engine's native part — ships only with
 the runtime, never through pip. _Avoid_: "the runtime package" on a user surface (users never
@@ -42,35 +35,27 @@ also brings a capability.
 expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 "module" (pre-pivot module-system terms).
 
-**Built-in**: a first-party native processor shipped inside the wheel (camera, display,
-audio, the seven codec blocks, the virtual camera) — instantiated and configured from
-Python; its per-frame path never enters the interpreter. Since the 2026-09-04
-extension-model pivot, not the default home for a first-party capability: a new built-in
-must meet the criterion in §Packages & extension model — a deadline the interpreter hop cannot
-meet, an engine-only primitive, or an OS-facing device the wheel must present to other
-applications, and a named consumer. _Avoid_: "built-in" for an optional capability (that is an
-**extension wheel**). _Amended by package-split-and-lend: built-ins ship inside the runtime,
-never on pip, and `tatolab.stream` carries a class generated for each. Amended by
-built-in-node-type: a built-in's type is that class's import path (`tatolab.stream:CameraSource`),
-never where its native code lives._
+**Built-in**: a first-party native processor shipped inside the runtime, never on pip (camera,
+display, audio, the seven codec blocks, the virtual camera) — added and configured from
+Python through the class `tatolab.stream` carries generated for it, its type that class's import
+path (`tatolab.stream:CameraSource`), never where its native code lives; its per-frame path
+never enters an interpreter. Since the 2026-09-04 extension-model pivot, not the default home
+for a first-party capability: a new built-in must meet the criterion in §Packages & extension
+model — a deadline the interpreter hop cannot meet, an engine-only primitive, or an OS-facing
+device the runtime must present to other applications, and a named consumer. _Avoid_:
+"built-in" for an optional capability (that is an **extension wheel**).
 
-**Extension wheel**: a separate PyPI package — Rust inside for speed, a Python processor as
-the binding — that depends on the `streamlib` wheel as a binary and never builds it from
-source. First-party optional capabilities and third-party native code both ship this way.
-_Avoid_: "plugin" (pre-pivot ABI), "integration package" (retired), "built-in" (inside the
-wheel). _Amended by tatolab-names and package-split-and-lend: `tatolab-<name>` importing as
-`tatolab.<name>`, depending on `tatolab-stream`; its nodes run in processor interpreters where
-`tatolab.runtime` is lent._
+**Extension wheel**: a separate PyPI package — Rust inside for speed, a Python node as the
+binding — that depends on `tatolab-stream` and never on the runtime; a first-party one is
+`tatolab-<name>` importing as `tatolab.<name>`, and its nodes run in processor interpreters
+where `tatolab.runtime` is lent. First-party optional capabilities and third-party native
+code both ship this way. _Avoid_: "plugin" (pre-pivot ABI), "integration package" (retired),
+"built-in" (inside the runtime).
 
 **Processor extension**: an extension wheel's Python processor class whose per-frame work
-runs in native code the same wheel carries and which it calls directly; `stream.add(TheClass)`
-is its registration and it runs in its own processor interpreter like any Python node.
-
-**Support hook**: the one callable a capability extension exports (`load(host)`) that the
-engine runs once in every process taking an engine role. _Avoid_: "plugin init",
-"entry point" for the callable (that is how it is declared, not what it is). _Deleted by
-package-split-and-lend (its decision 2): no package extends the engine; the entry retires when
-that change ships._
+runs in native code the same wheel carries and which it calls directly;
+`stream_builder.add(TheClass)` adds it and it runs in its own processor interpreter like any
+Python node.
 
 **Edge I/O processor**: a source or sink processor that ingests or egresses an
 external-world stream at a runtime boundary — WebRTC, raw UDP. Not how machines share
@@ -111,17 +96,8 @@ has one form, `moq`. _Avoid_: "format" (a pixel format), "transport".
 **Relay** _(crosses)_: a separate program a machine joins so its public ports have an internet
 address. Never the runtime. _Avoid_: "gateway", "tower", "router".
 
-**Capability extension**: an extension wheel's support code — declared by a standard entry
-point in its `pyproject.toml` that pip records and the engine runs once at startup, like
-loading a driver — which may bring up a device or network stack, or introduce an
-engine-grade capability the engine does not provide (graphics processing, a transport, a
-device class; the Unreal-module shape). Sandboxed so two packages cannot unsafely alter
-engine features; extends rather than rewrites. _Avoid_: "plugin" unqualified. _Deleted by
-package-split-and-lend (its decision 2): a package sets itself up where its nodes run, and an
-engine-grade capability enters as a built-in; the entry retires when that change ships._
-
 **Codec block**: one of the seven codec built-ins that shipped — encoder, decoder, or
-muxer inside the wheel (`H264Encoder`, `Mp4Sink`, ...), configured like any built-in; its
+muxer inside the runtime (`H264Encoder`, `Mp4Sink`, ...), configured like any built-in; its
 per-frame path never enters an interpreter. The next codec follows the built-in criterion
 and is not a codec block by default. _Avoid_: "codec processor" (user-authored shape),
 "codec plugin" (pre-pivot).
@@ -131,14 +107,13 @@ old directory mined for logic only and deleted in the same PR. _Avoid_: "upgrade
 "port" (both imply editing the old form in place).
 
 **Placement**: settled, not an axis — every Python processor runs in its own helper
-process (own interpreter, own GIL), spawned by the engine as an exec of
-`sys.executable` from the app's venv. There is no second placement and no choice:
+process (own interpreter, own GIL), spawned by the engine as an exec of the stream's own
+venv interpreter, with the runtime's lend directory first on `PYTHONPATH`. There is no second
+placement and no choice:
 in-process hosting of a Python processor does not exist. Native built-ins running in
 the app process ("app-process" code) are not a placement decision. _Avoid_:
 "in-process placement", "both placements", "placement policy", "placement heuristic",
 "transparent move".
-_Amended by package-split-and-lend: the exec is the stream's own venv interpreter, with the
-runtime's lend directory first on `PYTHONPATH`._
 
 **App-process**: the process that runs the entry file, the engine, the control plane,
 and the native built-ins — and hosts no Python processor. Use this word for the
@@ -330,9 +305,9 @@ by name. _Avoid_: "target", "backend" (a floor is the promise, not the driver).
 to one floor and the portable spelling for it. _Avoid_: "portability check" (that word
 belongs to the **portability gate**).
 
-**Portability gate**: the test that the wheel's native extension links nothing the host
-may not supply. _Avoid_: using it for code that runs on only one floor — that is the
-**cross-floor check**.
+**Portability gate**: the test that a native binary Tatolab ships — the runtime portion's
+`_engine`, an extension's module — links nothing the host may not supply. _Avoid_: using it
+for code that runs on only one floor — that is the **cross-floor check**.
 
 Retired by the 2026-08-03 schema-free-ports decision (see
 `docs/decisions/schema-free-ports.md`): **Schema**, **SchemaIdent**, **Schema
@@ -366,3 +341,10 @@ read each other's public ports directly; **Stream map** — not built, exposure 
 what the runtime enforces; **Relay** as a role of the runtime — a relay is a separate program.
 Entries that still use these words are facts about the shipped tree until the removal change
 ships.
+
+Retired by the 2026-10-02 package split (see `docs/decisions/package-split-and-lend.md`):
+**The wheel** — say **stream package** for `tatolab-stream` and **runtime portion** for
+`tatolab.runtime`; older entries that still say "the wheel" mean the runtime portion and the
+PyO3 crate it is built from. **Capability extension** and **Support hook** — no package
+extends the engine: a package sets itself up where its nodes run, and an engine-grade
+capability enters as a **built-in**.
