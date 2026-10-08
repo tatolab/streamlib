@@ -112,7 +112,8 @@ jobs:
       # `lib/tatolab/lend/`. It refuses a wheel carrying anything beside
       # `tatolab/runtime/` and its `.dist-info` — a `tatolab/__init__.py`
       # through the namespace gate. Debug, like the develop build above, and
-      # with the same `VIRTUAL_ENV`, so it is incremental over it.
+      # with the same `VIRTUAL_ENV`. It mints the engine build nonce both its
+      # compiles share, so it recompiles the engine and everything above it.
       - name: Build the runtime unit
         env:
           VIRTUAL_ENV: ${{ github.workspace }}/sdk/streamlib-python-wheel/.venv

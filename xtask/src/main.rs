@@ -1270,10 +1270,10 @@ enum Commands {
     /// `_engine`. The one build of the runtime unit for developers, CI and the
     /// installer; it installs and publishes nothing.
     ///
-    /// Debug by default: the profile `maturin develop` builds, so on a
-    /// developer machine or a CI job that already ran it this is an
-    /// incremental link rather than a second engine build. `--release` builds
-    /// what a release ships.
+    /// Debug by default, the profile `maturin develop` builds; `--release`
+    /// builds what a release ships. Each run mints the engine build nonce its
+    /// two compiles share, so it recompiles the engine and everything above
+    /// it, and the next plain `cargo build` recompiles them again.
     BuildRuntime {
         /// Build with optimizations, as a release is built.
         #[arg(long)]
