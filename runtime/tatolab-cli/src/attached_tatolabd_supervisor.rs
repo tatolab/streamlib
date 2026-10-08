@@ -84,7 +84,18 @@ enum StreamCompileOutcome {
 
 struct StreamCompileInFlight {
     compile_child: Child,
-    compile_stdout_collector: JoinHandle<std::io::Result<Vec<u8>>>,
+    // Taken by `finish_stream_compile` once the compile has exited.
+    compile_stdout_collector: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
+}
+
+// An early return must never leave a compile running unreaped. The collector is left to end on
+// its own rather than joined: a process the compile started can hold its stdout open past the
+// compile's death, and joining would block `tatolab` on it.
+impl Drop for StreamCompileInFlight {
+    fn drop(&mut self) {
+        let _ = self.compile_child.kill();
+        let _ = self.compile_child.wait();
+    }
 }
 
 struct AttachedTatolabd {
@@ -333,47 +344,48 @@ fn start_stream_compile(
         })?;
     Ok(StreamCompileInFlight {
         compile_child,
-        compile_stdout_collector,
+        compile_stdout_collector: Some(compile_stdout_collector),
     })
 }
 
-fn abandon_stream_compile(mut stream_compile_in_flight: StreamCompileInFlight) {
-    let _ = stream_compile_in_flight.compile_child.kill();
-    let _ = stream_compile_in_flight.compile_child.wait();
+/// The document the compile entry prints on stdout.
+#[derive(serde::Deserialize)]
+struct ProjectStreamCompileDocument {
+    // Raw, so the graph reaches `tatolabd` byte for byte: a round trip through `Value` would turn
+    // an integer wider than 64 bits into a float and could move a float by an ULP.
+    stream_graph: Box<serde_json::value::RawValue>,
+    project_directory: PathBuf,
 }
 
 fn compiled_stream_from_compile_document(compile_stdout: &[u8]) -> Result<CompiledStream, String> {
-    let compile_document: serde_json::Value = serde_json::from_slice(compile_stdout)
-        .map_err(|parse_failure| format!("its stdout is not one JSON document: {parse_failure}"))?;
-    let stream_graph = compile_document
-        .get("stream_graph")
-        .ok_or("its document has no `stream_graph`")?;
-    let compiled_project_directory = compile_document
-        .get("project_directory")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("its document has no `project_directory` string")?;
+    let compile_document: ProjectStreamCompileDocument = serde_json::from_slice(compile_stdout)
+        .map_err(|parse_failure| {
+            format!("its stdout is not the compile document: {parse_failure}")
+        })?;
     let mut stream_graph_file = tempfile::Builder::new()
         .prefix("tatolab-stream-graph-")
         .suffix(".json")
         .tempfile()
         .map_err(|io_failure| format!("cannot create the stream graph file: {io_failure}"))?;
-    serde_json::to_writer(&mut stream_graph_file, stream_graph)
-        .map_err(|write_failure| format!("cannot write the stream graph file: {write_failure}"))?;
     stream_graph_file
-        .flush()
+        .write_all(compile_document.stream_graph.get().as_bytes())
+        .and_then(|()| stream_graph_file.flush())
         .map_err(|io_failure| format!("cannot write the stream graph file: {io_failure}"))?;
     Ok(CompiledStream {
         stream_graph_file,
-        compiled_project_directory: PathBuf::from(compiled_project_directory),
+        compiled_project_directory: compile_document.project_directory,
     })
 }
 
 fn finish_stream_compile(
-    stream_compile_in_flight: StreamCompileInFlight,
+    mut stream_compile_in_flight: StreamCompileInFlight,
     compile_exit_status: ExitStatus,
     stream_launch_environment: &StreamLaunchEnvironment,
 ) -> StreamCompileOutcome {
-    let collected_compile_stdout = stream_compile_in_flight.compile_stdout_collector.join();
+    let collected_compile_stdout = stream_compile_in_flight
+        .compile_stdout_collector
+        .take()
+        .map(JoinHandle::join);
     if !compile_exit_status.success() {
         return StreamCompileOutcome::Failed {
             compile_exit_code: exit_code_for(compile_exit_status),
@@ -381,14 +393,14 @@ fn finish_stream_compile(
     }
     let compiled_stream = match collected_compile_stdout {
         // An app that exits 0 on purpose while it compiles leaves no document: a clean stop.
-        Ok(Ok(compile_stdout)) if compile_stdout.trim_ascii().is_empty() => {
+        Some(Ok(Ok(compile_stdout))) if compile_stdout.trim_ascii().is_empty() => {
             return StreamCompileOutcome::Failed {
                 compile_exit_code: 0,
             };
         }
-        Ok(Ok(compile_stdout)) => compiled_stream_from_compile_document(&compile_stdout),
-        Ok(Err(io_failure)) => Err(format!("its stdout could not be read: {io_failure}")),
-        Err(_) => Err("its stdout could not be read".to_owned()),
+        Some(Ok(Ok(compile_stdout))) => compiled_stream_from_compile_document(&compile_stdout),
+        Some(Ok(Err(io_failure))) => Err(format!("its stdout could not be read: {io_failure}")),
+        Some(Err(_)) | None => Err("its stdout could not be read".to_owned()),
     };
     match compiled_stream {
         Ok(compiled_stream) => StreamCompileOutcome::Compiled(compiled_stream),
@@ -532,9 +544,7 @@ impl AttachedStreamSupervisor {
         let first_user_stop_signal = self.user_stop_signal.is_none();
         self.user_stop_signal.get_or_insert(delivered_signal);
         self.recompile_requested_during_compile = false;
-        if let Some(abandoned_compile) = self.stream_compile_in_flight.take() {
-            abandon_stream_compile(abandoned_compile);
-        }
+        self.stream_compile_in_flight = None;
         // The restart's SIGINT already began the graceful teardown; forwarding the user's first
         // SIGINT too would advance tatolabd's ladder to a forced teardown.
         let interrupt_already_delivered = restart_interrupt_already_sent
