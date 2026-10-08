@@ -151,8 +151,7 @@ impl std::fmt::Display for Graph {
 }
 
 impl Graph {
-    /// Render this graph as the `/api/graph` payload, carrying the runtime's
-    /// `runtime_name` alongside it.
+    /// Render this graph as the `/api/graph` payload.
     pub(crate) fn to_graph_response(&self, runtime_name: String) -> GraphResponse {
         let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
         GraphResponse {

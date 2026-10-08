@@ -45,7 +45,7 @@ pub(crate) fn transport_runtime() -> Result<&'static Runtime> {
         .get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(TRANSPORT_RUNTIME_WORKER_THREADS)
-                .thread_name("streamlib-webrtc")
+                .thread_name("tatolab-webrtc")
                 .enable_all()
                 .build()
                 .map_err(|failure| failure.to_string())
@@ -61,12 +61,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bringing_the_stack_up_twice_installs_a_provider_and_keeps_one_runtime() {
+    fn bringing_the_stack_up_twice_leaves_a_provider_installed_and_one_runtime() {
         bring_up().expect("the first bring-up succeeds");
-        let first_runtime: *const Runtime = transport_runtime().expect("the runtime is up");
+        let first_runtime = transport_runtime().expect("the runtime is up");
 
         bring_up().expect("a second bring-up is not an error");
-        let second_runtime: *const Runtime = transport_runtime().expect("the runtime is up");
+        let second_runtime = transport_runtime().expect("the runtime is up");
 
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());
         assert!(std::ptr::eq(first_runtime, second_runtime));

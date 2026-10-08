@@ -1015,9 +1015,15 @@ mod graph_response_top_level_key_rendering_tests {
         assert_eq!(keys, ["nodes", "links", "exposed", "runtime_name"]);
 
         let schema = serde_json::to_value(schemars::schema_for!(GraphResponse)).unwrap();
-        assert!(
-            schema["properties"].get("extensions").is_none(),
-            "the GraphResponse schema declares no extensions property: {schema}"
+        let mut declared: Vec<&String> = schema["properties"]
+            .as_object()
+            .expect("the GraphResponse schema declares its properties")
+            .keys()
+            .collect();
+        declared.sort();
+        assert_eq!(
+            declared,
+            ["exposed", "links", "nodes", "runtime_name", "stream"]
         );
     }
 
