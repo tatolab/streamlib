@@ -32,8 +32,10 @@ def point_the_vulkan_loader_at_the_bundled_driver(
 ) -> None:
     """Add the bundled ICD manifest to `VK_ADD_DRIVER_FILES`, once.
 
-    Idempotent, because a helper process inherits the app's environment and
-    then imports this package itself.
+    `tatolabd` names the manifest before any processor interpreter starts; this
+    covers any other importer of the lent package. Idempotent, so a processor
+    interpreter importing it under `tatolabd`'s environment names it twice to
+    no effect.
     """
     bundled_icd_manifest = bundled_vulkan_driver_directory / BUNDLED_ICD_MANIFEST_FILE_NAME
     if not bundled_icd_manifest.is_file():
