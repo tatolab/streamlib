@@ -4,7 +4,7 @@
 //! `tatolab`: `new` writes a stream project; `run` and `dev` compile a stream in its project's
 //! venv and start `tatolabd` attached.
 
-// stdout and stderr are this binary's user interface, not a log.
+// stdout and stderr are this binary's output channel to the user, as they are xtask's.
 #![allow(clippy::disallowed_macros)]
 
 mod attached_tatolabd_supervisor;
@@ -20,16 +20,16 @@ use clap::{Args, Parser, Subcommand};
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
 #[derive(Debug)]
-pub struct TatolabCommandFailure {
+pub(crate) struct TatolabCommandFailure {
     /// What went wrong, printed after `error: `; `None` when the failing step already said why.
-    pub message_for_the_user: Option<String>,
+    pub(crate) message_for_the_user: Option<String>,
     /// The code `tatolab` exits with.
-    pub exit_code: u8,
+    pub(crate) exit_code: u8,
 }
 
 impl TatolabCommandFailure {
     /// A refusal: `error: <message>`, exit 1.
-    pub fn refused(message_for_the_user: String) -> Self {
+    pub(crate) fn refused(message_for_the_user: String) -> Self {
         Self {
             message_for_the_user: Some(message_for_the_user),
             exit_code: 1,
@@ -37,7 +37,7 @@ impl TatolabCommandFailure {
     }
 
     /// An exit whose reason a child process already reported.
-    pub fn already_reported(exit_code: u8) -> Self {
+    pub(crate) fn already_reported(exit_code: u8) -> Self {
         Self {
             message_for_the_user: None,
             exit_code,
@@ -81,24 +81,24 @@ enum TatolabVerb {
 
 /// The flags `run` and `dev` share; all but `--runtime-name` go to the compile entry verbatim.
 #[derive(Args)]
-pub struct StreamLaunchArguments {
+pub(crate) struct StreamLaunchArguments {
     /// The stream to load: `<file>.py[:<function>]` or `<module>:<function>` (default: the sole
     /// @stream in stream.py).
     #[arg(value_name = "TARGET")]
-    pub requested_stream_target: Option<OsString>,
+    pub(crate) requested_stream_target: Option<OsString>,
     /// Entry file to launch, overriding the stream.py convention; not with TARGET.
     #[arg(short = 'f', long = "file", value_name = "FILE")]
-    pub requested_entry_file: Option<OsString>,
+    pub(crate) requested_entry_file: Option<OsString>,
     /// Project root to resolve the entry file or TARGET against (default: CWD, no walk-up).
     #[arg(long = "dir", value_name = "DIR")]
-    pub requested_anchor_directory: Option<OsString>,
+    pub(crate) requested_anchor_directory: Option<OsString>,
     /// Load the stream under this name instead of its function's.
     #[arg(long = "name", value_name = "NAME")]
-    pub requested_stream_name: Option<OsString>,
+    pub(crate) requested_stream_name: Option<OsString>,
     /// Name this runtime's tap channels begin with (else STREAMLIB_RUNTIME_NAME, else the
     /// engine's default).
     #[arg(long = "runtime-name", value_name = "NAME")]
-    pub requested_runtime_name: Option<OsString>,
+    pub(crate) requested_runtime_name: Option<OsString>,
 }
 
 fn main() -> ExitCode {
@@ -107,8 +107,18 @@ fn main() -> ExitCode {
         TatolabVerb::New {
             directory,
             test_pattern,
-        } => scaffold_new_stream_project::scaffold_new_stream_project(&directory, test_pattern)
-            .map(|()| 0),
+        } => {
+            let scaffolded_stream_source = if test_pattern {
+                scaffold_new_stream_project::ScaffoldedStreamSource::TestPattern
+            } else {
+                scaffold_new_stream_project::ScaffoldedStreamSource::Camera
+            };
+            scaffold_new_stream_project::scaffold_new_stream_project(
+                &directory,
+                scaffolded_stream_source,
+            )
+            .map(|()| 0)
+        }
         TatolabVerb::Run(stream_launch_arguments) => {
             attached_tatolabd_supervisor::launch_stream_on_attached_tatolabd(
                 attached_tatolabd_supervisor::StreamLaunchVerb::Run,

@@ -35,107 +35,60 @@ const PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER: &str = "name = \"streamlib-a
 /// The distribution name a directory whose name casts to nothing is given.
 const FALLBACK_DISTRIBUTION_NAME: &str = "streamlib-app";
 
-const fn text_starts_with(text: &str, prefix: &str) -> bool {
-    let text_bytes = text.as_bytes();
-    let prefix_bytes = prefix.as_bytes();
-    if prefix_bytes.len() > text_bytes.len() {
-        return false;
-    }
-    let mut byte_index = 0;
-    while byte_index < prefix_bytes.len() {
-        if text_bytes[byte_index] != prefix_bytes[byte_index] {
-            return false;
-        }
-        byte_index += 1;
-    }
-    true
+/// The source the scaffolded stream's pipeline starts from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScaffoldedStreamSource {
+    /// The built-in camera source.
+    Camera,
+    /// The built-in test pattern, for a machine with no capture device.
+    TestPattern,
 }
 
-const fn text_contains(text: &str, needle: &str) -> bool {
-    let text_bytes = text.as_bytes();
-    let needle_bytes = needle.as_bytes();
-    if needle_bytes.len() > text_bytes.len() {
-        return false;
-    }
-    let mut start_index = 0;
-    while start_index + needle_bytes.len() <= text_bytes.len() {
-        let mut matched_length = 0;
-        while matched_length < needle_bytes.len()
-            && text_bytes[start_index + matched_length] == needle_bytes[matched_length]
-        {
-            matched_length += 1;
+impl ScaffoldedStreamSource {
+    fn source_class_name(self) -> &'static str {
+        match self {
+            ScaffoldedStreamSource::Camera => "CameraSource",
+            ScaffoldedStreamSource::TestPattern => "TestPatternSource",
         }
-        if matched_length == needle_bytes.len() {
-            return true;
-        }
-        start_index += 1;
     }
-    false
-}
 
-// A template that loses its header or a placeholder fails the build, never a user's `new`.
-const _: () = {
-    assert!(text_starts_with(
-        STREAM_PY_TEMPLATE,
-        SCAFFOLD_TEMPLATE_LICENSE_HEADER
-    ));
-    assert!(text_starts_with(
-        NODES_INIT_PY_TEMPLATE,
-        SCAFFOLD_TEMPLATE_LICENSE_HEADER
-    ));
-    assert!(text_starts_with(
-        INVERTING_EFFECT_PY_TEMPLATE,
-        SCAFFOLD_TEMPLATE_LICENSE_HEADER
-    ));
-    assert!(text_starts_with(
-        BRIGHTNESS_METER_PY_TEMPLATE,
-        SCAFFOLD_TEMPLATE_LICENSE_HEADER
-    ));
-    assert!(text_contains(
-        STREAM_PY_TEMPLATE,
-        STREAM_PY_DOCSTRING_OPENER_PLACEHOLDER
-    ));
-    assert!(text_contains(
-        STREAM_PY_TEMPLATE,
-        STREAM_PY_IMPORT_LINE_PLACEHOLDER
-    ));
-    assert!(text_contains(
-        STREAM_PY_TEMPLATE,
-        STREAM_PY_FUNCTION_DOCSTRING_PLACEHOLDER
-    ));
-    assert!(text_contains(
-        STREAM_PY_TEMPLATE,
-        STREAM_PY_SOURCE_ADD_PLACEHOLDER
-    ));
-    assert!(text_contains(
-        PYPROJECT_TOML_TEMPLATE,
-        PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER
-    ));
-};
+    fn source_description(self) -> &'static str {
+        match self {
+            ScaffoldedStreamSource::Camera => "camera",
+            ScaffoldedStreamSource::TestPattern => "test pattern",
+        }
+    }
+
+    fn source_description_capitalized(self) -> &'static str {
+        match self {
+            ScaffoldedStreamSource::Camera => "Camera",
+            ScaffoldedStreamSource::TestPattern => "Test pattern",
+        }
+    }
+}
 
 /// One file `new` writes: its path inside the project and its rendered contents.
-pub struct ScaffoldedProjectFile {
+pub(crate) struct ScaffoldedProjectFile {
     /// The path relative to the project directory.
-    pub path_in_project: &'static str,
+    pub(crate) path_in_project: &'static str,
     /// The file's contents.
-    pub rendered_contents: String,
+    pub(crate) rendered_contents: String,
 }
 
 fn without_license_header(python_template: &'static str) -> &'static str {
-    &python_template[SCAFFOLD_TEMPLATE_LICENSE_HEADER.len()..]
+    python_template
+        .strip_prefix(SCAFFOLD_TEMPLATE_LICENSE_HEADER)
+        .unwrap_or(python_template)
 }
 
 /// Every file `new` writes, in write order, rendered from the embedded templates.
-pub fn render_scaffold_template_files(
+pub(crate) fn render_scaffold_template_files(
     distribution_name: &str,
-    use_test_pattern_source: bool,
+    scaffolded_stream_source: ScaffoldedStreamSource,
 ) -> Vec<ScaffoldedProjectFile> {
-    let (source_class_name, source_description, source_description_capitalized) =
-        if use_test_pattern_source {
-            ("TestPatternSource", "test pattern", "Test pattern")
-        } else {
-            ("CameraSource", "camera", "Camera")
-        };
+    let source_class_name = scaffolded_stream_source.source_class_name();
+    let source_description = scaffolded_stream_source.source_description();
+    let source_description_capitalized = scaffolded_stream_source.source_description_capitalized();
     let mut tatolab_stream_import_names = [
         source_class_name,
         "DisplayWindow",
@@ -202,7 +155,7 @@ pub fn render_scaffold_template_files(
 }
 
 /// A PEP 503 name for the scaffolded project, from its directory name.
-pub fn python_distribution_name_for(directory_name: &str) -> String {
+pub(crate) fn python_distribution_name_for(directory_name: &str) -> String {
     let mut normalized = String::with_capacity(directory_name.len());
     let mut previous_character_was_replaced = false;
     for character in directory_name.chars() {
@@ -246,9 +199,9 @@ fn resolved_directory_name(target_directory: &Path) -> std::io::Result<String> {
 }
 
 /// `tatolab new`: write a working stream project into `target_directory`.
-pub fn scaffold_new_stream_project(
+pub(crate) fn scaffold_new_stream_project(
     target_directory: &Path,
-    use_test_pattern_source: bool,
+    scaffolded_stream_source: ScaffoldedStreamSource,
 ) -> Result<(), TatolabCommandFailure> {
     let directory_name = resolved_directory_name(target_directory).map_err(|io_failure| {
         TatolabCommandFailure::refused(format!(
@@ -258,7 +211,7 @@ pub fn scaffold_new_stream_project(
     })?;
     let scaffolded_files = render_scaffold_template_files(
         &python_distribution_name_for(&directory_name),
-        use_test_pattern_source,
+        scaffolded_stream_source,
     );
 
     // Checked before anything is written: a half-scaffolded directory is worse than a
@@ -312,6 +265,14 @@ pub fn scaffold_new_stream_project(
 mod tests {
     use super::*;
 
+    /// Every `.py` template, each opening with [`SCAFFOLD_TEMPLATE_LICENSE_HEADER`].
+    const EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES: [&str; 4] = [
+        STREAM_PY_TEMPLATE,
+        NODES_INIT_PY_TEMPLATE,
+        INVERTING_EFFECT_PY_TEMPLATE,
+        BRIGHTNESS_METER_PY_TEMPLATE,
+    ];
+
     #[test]
     fn distribution_name_matches_the_pep_503_normalization_new_has_always_used() {
         assert_eq!(python_distribution_name_for("My Cool App"), "my-cool-app");
@@ -329,10 +290,71 @@ mod tests {
     }
 
     #[test]
-    fn every_placeholder_is_substituted_in_both_variants() {
-        for use_test_pattern_source in [false, true] {
+    fn every_embedded_python_template_opens_with_the_license_header() {
+        for python_template in EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES {
+            assert!(
+                python_template.starts_with(SCAFFOLD_TEMPLATE_LICENSE_HEADER),
+                "a scaffold template lost its licence header:\n{python_template}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_python_file_in_the_scaffold_template_directory_is_an_embedded_template() {
+        let scaffold_template_directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../sdk/tatolab-stream/scaffold_template");
+        let mut pending_directories = vec![scaffold_template_directory];
+        let mut walked_python_template_count = 0;
+        while let Some(walked_directory) = pending_directories.pop() {
+            for directory_entry in fs::read_dir(&walked_directory).unwrap() {
+                let entry_path = directory_entry.unwrap().path();
+                if entry_path.is_dir() {
+                    pending_directories.push(entry_path);
+                } else if entry_path
+                    .extension()
+                    .is_some_and(|extension| extension == "py")
+                {
+                    let python_template_on_disk = fs::read_to_string(&entry_path).unwrap();
+                    assert!(
+                        EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES
+                            .contains(&python_template_on_disk.as_str()),
+                        "{} is not in EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES",
+                        entry_path.display()
+                    );
+                    walked_python_template_count += 1;
+                }
+            }
+        }
+        assert_eq!(
+            walked_python_template_count,
+            EMBEDDED_PYTHON_SCAFFOLD_TEMPLATES.len()
+        );
+    }
+
+    #[test]
+    fn every_placeholder_is_present_in_its_template() {
+        for stream_py_placeholder in [
+            STREAM_PY_DOCSTRING_OPENER_PLACEHOLDER,
+            STREAM_PY_IMPORT_LINE_PLACEHOLDER,
+            STREAM_PY_FUNCTION_DOCSTRING_PLACEHOLDER,
+            STREAM_PY_SOURCE_ADD_PLACEHOLDER,
+        ] {
+            assert!(
+                STREAM_PY_TEMPLATE.contains(stream_py_placeholder),
+                "stream.py lost the placeholder {stream_py_placeholder:?}"
+            );
+        }
+        assert!(PYPROJECT_TOML_TEMPLATE.contains(PYPROJECT_TOML_DISTRIBUTION_NAME_PLACEHOLDER));
+    }
+
+    #[test]
+    fn every_placeholder_is_substituted_for_both_sources() {
+        for scaffolded_stream_source in [
+            ScaffoldedStreamSource::Camera,
+            ScaffoldedStreamSource::TestPattern,
+        ] {
             let rendered_files =
-                render_scaffold_template_files("probe-app", use_test_pattern_source);
+                render_scaffold_template_files("probe-app", scaffolded_stream_source);
             for rendered_file in &rendered_files {
                 assert!(
                     !rendered_file
@@ -343,13 +365,14 @@ mod tests {
                 );
             }
             let rendered_stream_py = &rendered_files[0].rendered_contents;
+            let uses_test_pattern = scaffolded_stream_source == ScaffoldedStreamSource::TestPattern;
             assert_eq!(
                 rendered_stream_py.contains("TestPatternSource"),
-                use_test_pattern_source
+                uses_test_pattern
             );
             assert_eq!(
                 rendered_stream_py.contains("CameraSource"),
-                !use_test_pattern_source
+                !uses_test_pattern
             );
             assert!(
                 rendered_files[4]

@@ -117,6 +117,7 @@ impl RunningTatolab {
     }
 
     fn send_signal(&self, signal_to_send: libc::c_int) {
+        // SAFETY: `kill` reads no memory; the pid is this test's unreaped child.
         assert_eq!(unsafe { libc::kill(self.process_id(), signal_to_send) }, 0);
     }
 
@@ -453,6 +454,7 @@ fn run_compiles_in_the_venv_and_hands_tatolabd_the_graph_project_and_interpreter
     assert_eq!(tatolabd_run.process_group_id, tatolabd_run.process_id);
     assert_ne!(
         tatolabd_run.process_group_id,
+        // SAFETY: `getpgid` reads no memory; the pid is this test's unreaped child.
         unsafe { libc::getpgid(running_tatolab.process_id()) } as u32
     );
 
@@ -531,6 +533,7 @@ fn tatolab_resets_an_inherited_ignored_interrupt_and_terminate_and_keeps_an_inhe
         .stderr(tatolab_stderr)
         .env_remove("STREAMLIB_RUNTIME_NAME")
         .env_remove("STREAMLIB_APP_DIRECTORY");
+    // SAFETY: the closure only calls `signal`, which is async-signal-safe after fork.
     unsafe {
         tatolab_command.pre_exec(|| {
             for ignored_signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
@@ -946,4 +949,34 @@ fn dev_ends_with_a_usage_error_from_the_first_compile() {
     assert_eq!(exit_status.code(), Some(2));
     assert_eq!(tatolab_stderr, "usage: the probe compile entry\n");
     assert!(testbed.started_tatolabd_process_ids().is_empty());
+}
+
+#[test]
+fn dev_terminates_its_tatolabd_when_a_failed_recompile_spawn_ends_it_early() {
+    let testbed = AttachedTatolabdTestbed::new();
+    let mut running_tatolab = testbed.start_tatolab(&testbed.project_directory(), &["dev"]);
+    let tatolabd_process_id = testbed.wait_for_tatolabd_start_count(1)[0].process_id;
+
+    fs::remove_file(testbed.project_interpreter()).unwrap();
+    testbed.edit_project_file("stream.py", "# stream v2\n");
+
+    assert_eq!(running_tatolab.wait_for_exit().code(), Some(1));
+    assert!(
+        testbed.tatolab_stderr().contains(&format!(
+            "error: cannot run {}",
+            testbed.project_interpreter().display()
+        )),
+        "{}",
+        testbed.tatolab_stderr()
+    );
+    let tatolabd_run = testbed.tatolabd_run(tatolabd_process_id);
+    assert_eq!(tatolabd_run.signals, ["TERM"]);
+    assert!(tatolabd_run.exit_code.is_some());
+    // SAFETY: `kill` with signal 0 reads no memory and delivers nothing.
+    let probe_result = unsafe { libc::kill(tatolabd_process_id as libc::pid_t, 0) };
+    assert_eq!(probe_result, -1, "tatolabd outlived tatolab");
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
 }
