@@ -12,6 +12,7 @@ use crate::local_api_runtime_selection::{
     LivenessCheckedNodeRegistryEntry, scan_liveness_check_and_prune_node_registry,
     select_live_runtime_on_this_machine, this_users_node_registry_directory,
 };
+use crate::verb_standard_output::write_verb_standard_output;
 
 /// The local API tool `graph` drives.
 pub(crate) const GRAPH_TOOL_NAME: &str = "graph";
@@ -104,11 +105,10 @@ pub(crate) fn print_node_registry_listing() -> Result<u8, TatolabCommandFailure>
     let node_registry_directory = this_users_node_registry_directory()?;
     let liveness_checked_entries =
         scan_liveness_check_and_prune_node_registry(&node_registry_directory)?;
-    print!(
-        "{}",
-        render_node_registry_listing(&node_registry_directory, &liveness_checked_entries)
-    );
-    Ok(0)
+    write_verb_standard_output(&render_node_registry_listing(
+        &node_registry_directory,
+        &liveness_checked_entries,
+    ))
 }
 
 /// Pick the live runtime on this machine `requested_runtime_name_or_id` names, drive one tool on
@@ -124,8 +124,7 @@ pub(crate) fn print_local_api_tool_result_of_selected_runtime(
         tool_name,
         tool_arguments,
     )?;
-    println!("{tool_result_text}");
-    Ok(0)
+    write_verb_standard_output(&format!("{tool_result_text}\n"))
 }
 
 /// `tap`'s tool arguments: the channel, and each bound only when the caller named it, so the

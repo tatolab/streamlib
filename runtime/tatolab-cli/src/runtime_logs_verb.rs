@@ -27,6 +27,7 @@ use crate::runtime_log_files_reader::{
     RuntimeLogRecordFilters, RuntimeLogRecordsReader,
 };
 use crate::runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime;
+use crate::verb_standard_output::standard_output_closed_or_failed;
 use crate::{RuntimeTargetArguments, TatolabCommandFailure};
 
 /// The local API tool `logs --node` drives.
@@ -359,17 +360,6 @@ fn print_rendered_records_until_the_read_ends(
     }
     standard_output.flush()?;
     Ok(())
-}
-
-/// A reader that closed its end of the pipe has seen all it wanted, which ends the read
-/// quietly; any other failure to write is the verb's.
-fn standard_output_closed_or_failed(write_failure: io::Error) -> Result<u8, TatolabCommandFailure> {
-    if write_failure.kind() == io::ErrorKind::BrokenPipe {
-        return Ok(0);
-    }
-    Err(TatolabCommandFailure::refused(format!(
-        "cannot write to standard output: {write_failure}"
-    )))
 }
 
 /// Wait for `runtime_id`'s first log file, for `--follow` before the runtime starts; `None` when

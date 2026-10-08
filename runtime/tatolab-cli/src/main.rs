@@ -23,6 +23,7 @@ mod runtime_logs_verb;
 mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
 mod surface_image_exchange;
+mod verb_standard_output;
 mod virtual_camera_loopback_permission_grant;
 
 #[cfg(test)]

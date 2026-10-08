@@ -4,7 +4,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 /// Every program the grant could run; each stand-in only records that it ran.
 const PROGRAMS_THE_GRANT_COULD_RUN: [&str; 5] = ["pkexec", "sudo", "sh", "modprobe", "udevadm"];
@@ -95,6 +95,31 @@ fn print_writes_the_three_files_and_the_root_commands_and_runs_nothing() {
         recording_stand_in_path.programs_that_ran(),
         Vec::<&str>::new()
     );
+}
+
+/// A reader that closed its end of the pipe before the grant is written: the pipe is closed
+/// before the verb starts, so the write fails every run rather than racing a reader.
+#[test]
+fn print_into_a_pipe_whose_reader_closed_exits_zero_without_panicking() {
+    let recording_stand_in_path = RecordingStandInPath::new();
+    let (closed_pipe_reader, standard_output_pipe_writer) = std::io::pipe().unwrap();
+    drop(closed_pipe_reader);
+
+    let print_output = Command::new(env!("CARGO_BIN_EXE_tatolab"))
+        .args(["enable-virtual-camera", "--print"])
+        .env("PATH", recording_stand_in_path.stand_in_directory.path())
+        .stdout(standard_output_pipe_writer)
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
+
+    let standard_error = String::from_utf8(print_output.stderr).unwrap();
+    assert_eq!(
+        print_output.status.code(),
+        Some(0),
+        "stderr: {standard_error}"
+    );
+    assert!(!standard_error.contains("panicked"), "{standard_error}");
 }
 
 #[test]

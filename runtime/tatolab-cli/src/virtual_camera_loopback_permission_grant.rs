@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
 use crate::TatolabCommandFailure;
+use crate::verb_standard_output::write_verb_standard_output;
 
 /// The verb as a user types it.
 const ENABLE_VIRTUAL_CAMERA_VERB: &str = "tatolab enable-virtual-camera";
@@ -355,8 +356,7 @@ fn describe_privilege_escalation_helper_ending(helper_exit_status: ExitStatus) -
 /// `tatolab enable-virtual-camera --print`: write the grant files and the root commands to stdout
 /// for a hand install, reading nothing of the machine and changing nothing.
 pub(crate) fn print_virtual_camera_grant_for_hand_install() -> Result<u8, TatolabCommandFailure> {
-    print!("{}", render_virtual_camera_grant_for_hand_install());
-    Ok(0)
+    write_verb_standard_output(&render_virtual_camera_grant_for_hand_install())
 }
 
 /// `tatolab enable-virtual-camera`: install the loopback grant in one privileged step, then check
@@ -395,10 +395,10 @@ pub(crate) fn install_virtual_camera_grant_through_privilege_escalation_helper(
     let helper_executable_name = resolved_privilege_escalation_helper
         .privilege_escalation_helper
         .executable_name();
-    println!(
+    write_verb_standard_output(&format!(
         "Installing the virtual camera permission via {helper_executable_name} — this is the one \
-         privileged step, and it asks for your password."
-    );
+         privileged step, and it asks for your password.\n"
+    ))?;
     let helper_exit_status = (grant_target_machine.run_privileged_script_through_helper)(
         &resolved_privilege_escalation_helper,
         &virtual_camera_grant_privileged_script(),
@@ -432,12 +432,11 @@ pub(crate) fn install_virtual_camera_grant_through_privilege_escalation_helper(
             loopback_control_node_path.display()
         )));
     }
-    println!(
+    write_verb_standard_output(&format!(
         "Done: {} is writable by this user. A VirtualCameraSink now creates its own camera; \
-         re-running this command is harmless.",
+         re-running this command is harmless.\n",
         loopback_control_node_path.display()
-    );
-    Ok(0)
+    ))
 }
 
 #[cfg(test)]

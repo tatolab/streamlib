@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use crate::TatolabCommandFailure;
+use crate::verb_standard_output::write_verb_standard_output;
 
 /// The licence header each `.py` template opens with; the project `new` writes is the user's own.
 const SCAFFOLD_TEMPLATE_LICENSE_HEADER: &str =
@@ -250,14 +251,11 @@ pub(crate) fn scaffold_new_stream_project(
         )?;
     }
 
-    println!(
-        "Created a Tatolab stream project in `{}`.\n",
-        target_directory.display()
-    );
-    println!("Next:");
-    println!("    cd {}", target_directory.display());
-    println!("    uv sync");
-    println!("    tatolab dev");
+    write_verb_standard_output(&format!(
+        "Created a Tatolab stream project in `{target_directory}`.\n\nNext:\n    cd \
+         {target_directory}\n    uv sync\n    tatolab dev\n",
+        target_directory = target_directory.display()
+    ))?;
     Ok(())
 }
 

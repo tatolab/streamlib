@@ -32,6 +32,7 @@ use crate::local_api_mcp_tool_client::{
 use crate::local_api_runtime_selection::select_live_runtime_on_this_machine;
 use crate::local_api_unix_socket_http_client::LocalApiHttpRequestFailure;
 use crate::runtime_observation_verbs::{TAP_TOOL_NAME, tap_tool_arguments};
+use crate::verb_standard_output::write_verb_standard_output;
 use crate::{RuntimeTargetArguments, TatolabCommandFailure};
 
 /// The bag field the channel form reads a surface id from unless `--field` names another. The
@@ -275,8 +276,7 @@ pub(crate) fn run_surface_image_exchange_verb(
                 &published_surface_id,
                 &output_directory,
             )?;
-            println!("{}", written_image_path.display());
-            Ok(0)
+            write_verb_standard_output(&format!("{}\n", written_image_path.display()))
         }
         SurfaceImageExchangeForm::SampledChannel {
             channel,
@@ -288,9 +288,11 @@ pub(crate) fn run_surface_image_exchange_verb(
                 &output_directory,
                 &sampled_channel_exchange_bounds,
             );
+            let mut written_image_path_lines = String::new();
             for written_image_path in &sampled_channel_exchange_report.written_image_paths {
-                println!("{}", written_image_path.display());
+                let _ = writeln!(written_image_path_lines, "{}", written_image_path.display());
             }
+            write_verb_standard_output(&written_image_path_lines)?;
             eprint!(
                 "{}",
                 render_sampled_channel_exchange_report(
