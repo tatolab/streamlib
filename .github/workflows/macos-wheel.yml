@@ -149,7 +149,8 @@ jobs:
       # of the runtime, and streams on the `tatolabd` built above.
       - name: The suite's venv, from its lockfile
         working-directory: tests/stream-on-runtime
-        run: uv sync --locked
+        # --frozen: registry packages stay hash-pinned; the editable tatolab-stream's locked version is never read.
+        run: uv sync --frozen
 
       - name: Integration suite (GPU-free half)
         working-directory: tests/stream-on-runtime

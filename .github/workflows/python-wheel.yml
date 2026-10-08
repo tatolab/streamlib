@@ -251,7 +251,8 @@ jobs:
 
       - name: The suite's venv, from its lockfile
         working-directory: tests/stream-on-runtime
-        run: uv sync --locked
+        # --frozen: registry packages stay hash-pinned; the editable tatolab-stream's locked version is never read.
+        run: uv sync --frozen
 
       # The runner has no GPU, so the `requires_gpu` half runs on the rig.
       - name: Integration suite (GPU-free half)
