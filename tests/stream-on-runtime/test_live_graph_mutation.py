@@ -11,7 +11,7 @@ reports, the bags a `tap` collects, the marker the added processor logs from
 its own processor interpreter — because the failure this guards against is a
 call that answers success while nothing flows.
 
-Starting the engine initializes a GPU context, so the whole module needs a device.
+Starting the engine initializes a GPU context, so every test that starts one needs a device.
 """
 
 from __future__ import annotations
@@ -27,8 +27,6 @@ import pytest
 from local_api_client import LocalApiClient
 from runtime_process_under_test import ENGINE_STARTED_LOG_LINE, RuntimeProcessUnderTest
 from test_cli_launch import NODE_READY_TIMEOUT_SECONDS
-
-pytestmark = pytest.mark.requires_gpu
 
 # A processor interpreter's first frame is a cold spawn plus an import; anything
 # past this is a processor that never received traffic.
@@ -128,6 +126,26 @@ class LiveAddedEffect:
 DISPLAY_WINDOW_TYPE = "tatolab.stream:DisplayWindow"
 
 
+def test_the_live_added_effect_written_as_a_source_string_still_declares():
+    """`LiveAddedEffect` lives as a triple-quoted literal, so no import, no
+    linter and no AST sweep reaches it — running it here is the only way a bad
+    migration of it fails anywhere but on the rig."""
+    namespace: "dict[str, Any]" = {"__name__": LIVE_ADDED_EFFECT_MODULE}
+    # `dont_inherit`: compiled as the file it is written to, not under this
+    # module's `from __future__ import annotations`.
+    exec(
+        compile(LIVE_ADDED_EFFECT_SOURCE, "live_added_effect.py", "exec", dont_inherit=True),
+        namespace,
+    )
+
+    effect = namespace[LIVE_ADDED_EFFECT_CLASS]
+    assert effect.__tatolab_node_config_class__ is namespace["LiveAddedEffectConfig"]
+    assert effect.__tatolab_node_config_schema__["properties"]["marker"] == {
+        "type": "string",
+        "default": "LIVE_FRAME",
+    }
+
+
 def node_named(graph: dict, name: str) -> dict:
     """The one node carrying `name`, or a failure naming what is there."""
     matches = [node for node in graph["nodes"] if node["name"] == name]
@@ -203,6 +221,7 @@ def start_the_pattern_stream(
     return app_directory, tatolab, local_api
 
 
+@pytest.mark.requires_gpu
 @pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     make_tatolab_project: "Callable[..., Path]",
@@ -395,6 +414,7 @@ def seconds_taken_by(call: Callable[[], Returned]) -> "tuple[float, Returned]":
     return time.monotonic() - started, returned
 
 
+@pytest.mark.requires_gpu
 @pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     make_tatolab_project: "Callable[..., Path]",
@@ -461,6 +481,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab.recent_stderr()
 
 
+@pytest.mark.requires_gpu
 @pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     make_tatolab_project: "Callable[..., Path]",
