@@ -239,22 +239,17 @@ fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, Streaml
         _ => (None, None),
     };
 
-    let stdout_enabled = config.effective_stdout();
+    let pretty_log_mirror_stream = config.effective_pretty_log_mirror_stream();
 
     // Install fd redirects before spawning the worker so the dup'd
-    // real-stdout handle can be handed to the worker as its pretty-
+    // real standard stream can be handed to the worker as its pretty-
     // mirror sink. Reader threads are started AFTER the dispatch is
     // built so the intercepted events route through the right
     // subscriber.
     #[cfg(unix)]
-    let (pending_interceptor, real_stdout_file) = if config.intercept_stdio {
+    let (pending_interceptor, real_standard_streams) = if config.intercept_stdio {
         match stdio_interceptor::install_redirects() {
-            Ok((pending, files)) => {
-                // stderr mirror not wired today — dropping the file
-                // closes the dup'd fd cleanly.
-                drop(files.real_stderr);
-                (Some(pending), Some(files.real_stdout))
-            }
+            Ok((pending, files)) => (Some(pending), Some(files)),
             Err(e) => {
                 // Pre-init error path: interceptor failed before the subscriber exists.
                 #[allow(clippy::disallowed_macros)]
@@ -270,24 +265,29 @@ fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, Streaml
     } else {
         (None, None)
     };
-    #[cfg(not(unix))]
-    let real_stdout_file: Option<std::fs::File> = None;
 
-    // Mirror through the interceptor's dup'd real-stdout handle when there is
-    // one, so the mirror writes past the redirect instead of feeding the
-    // interception it would otherwise be captured by. With the mirror off, the
-    // handle is never claimed and drops here, closing the dup'd fd.
-    let stdout_sink: Option<Box<dyn std::io::Write + Send>> =
-        stdout_enabled.then(|| match real_stdout_file {
-            Some(file) => Box::new(file) as Box<dyn std::io::Write + Send>,
-            None => Box::new(std::io::stdout()),
+    // Mirror through the interceptor's dup'd real standard stream when there
+    // is one, so the mirror writes past the redirect instead of feeding the
+    // interception it would otherwise be captured by. The handle the mirror
+    // does not claim drops here, closing its dup'd fd.
+    let pretty_log_mirror_sink: Option<Box<dyn std::io::Write + Send>> = pretty_log_mirror_stream
+        .map(|pretty_log_mirror_stream| {
+            #[cfg(unix)]
+            if let Some(files) = real_standard_streams {
+                return Box::new(pretty_log_mirror_stream.pick(files.real_stdout, files.real_stderr))
+                    as Box<dyn std::io::Write + Send>;
+            }
+            pretty_log_mirror_stream.pick(
+                Box::new(std::io::stdout()) as Box<dyn std::io::Write + Send>,
+                Box::new(std::io::stderr()),
+            )
         });
 
     let worker = spawn_worker(WorkerConfig {
         runtime_id: config.runtime_id.clone(),
         source: Source::Rust,
         tunables,
-        stdout_sink,
+        pretty_log_mirror_sink,
         writer,
     });
 

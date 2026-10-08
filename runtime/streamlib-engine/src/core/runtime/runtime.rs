@@ -179,15 +179,40 @@ pub struct Runner {
         Arc<super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecord>,
 }
 
+/// What a host chooses as it constructs a [`Runner`].
+#[derive(Debug, Clone, Default)]
+pub struct RunnerConstructionOptions {
+    /// The runtime's name; else `STREAMLIB_RUNTIME_NAME`, else
+    /// `<host name>-<app directory name>-<id>`.
+    pub runtime_name: Option<String>,
+    /// The standard stream the runtime's pretty log mirror writes to, when
+    /// this runtime is the first in its process to install logging.
+    pub pretty_log_mirror_stream: crate::core::logging::PrettyLogMirrorStandardStream,
+}
+
 impl Runner {
     /// Build a runtime named from `STREAMLIB_RUNTIME_NAME` or the default.
     pub fn new() -> Result<Arc<Self>> {
-        Self::new_with_runtime_name(None)
+        Self::new_with_construction_options(RunnerConstructionOptions::default())
     }
 
     /// Build a runtime named `runtime_name`, else from `STREAMLIB_RUNTIME_NAME`,
     /// else `<host name>-<app directory name>-<id>`.
     pub fn new_with_runtime_name(runtime_name: Option<String>) -> Result<Arc<Self>> {
+        Self::new_with_construction_options(RunnerConstructionOptions {
+            runtime_name,
+            ..RunnerConstructionOptions::default()
+        })
+    }
+
+    /// Build a runtime as `construction_options` choose.
+    pub fn new_with_construction_options(
+        construction_options: RunnerConstructionOptions,
+    ) -> Result<Arc<Self>> {
+        let RunnerConstructionOptions {
+            runtime_name,
+            pretty_log_mirror_stream,
+        } = construction_options;
         // Cap per-thread timer slack at 1 ns on the calling thread before
         // spawning any worker. Linux defaults to 50 µs grouping for
         // `epoll_wait` / `nanosleep` / `futex` relative timeouts; new
@@ -236,17 +261,20 @@ impl Runner {
 
         // Stand up the runtime's unified logging pathway: `tracing` →
         // bounded lossy channel → drain worker → line-buffered pretty
-        // stdout + batched JSONL file at
+        // mirror + batched JSONL file at
         // `<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl`.
         // See `docs/logging-schema.md` for the schema (the durable
         // interface contract) and `streamlib::sdk::logging` for the
         // implementation.
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         let _logging_guard =
-            crate::core::logging::init(crate::core::logging::StreamlibLoggingConfig::for_runtime(
-                format!("runtime:{}", runtime_id),
-                Arc::clone(&runtime_id),
-            ))
+            crate::core::logging::init(crate::core::logging::StreamlibLoggingConfig {
+                pretty_log_mirror_stream: Some(pretty_log_mirror_stream),
+                ..crate::core::logging::StreamlibLoggingConfig::for_runtime(
+                    format!("runtime:{}", runtime_id),
+                    Arc::clone(&runtime_id),
+                )
+            })
             .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
         let runtime_name = Arc::new(
             resolved_runtime_name
@@ -981,14 +1009,105 @@ impl Runner {
     /// reaches the request funnel rather than whatever disposition was
     /// installed before.
     pub fn start_and_wait_for_shutdown(self: &Arc<Self>) -> Result<()> {
-        let run_outcome = {
-            let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
+        Self::run_owning_the_shutdown_signals(|| {
             self.start().and_then(|()| {
                 self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
             })
+        })
+    }
+
+    /// Own the shutdown signals, [`load_graph_snapshot`](Self::load_graph_snapshot),
+    /// run `prepare_the_loaded_runtime_before_start`, then start, block until
+    /// shutdown, and tear down — a stream host's whole run in one call.
+    ///
+    /// A shutdown requested while the graph loads interrupts every processor
+    /// interpreter describe the load is running, and the graph is never
+    /// started: that run ends without a refusal.
+    pub fn load_graph_snapshot_start_and_wait_for_shutdown(
+        self: &Arc<Self>,
+        graph: &crate::core::graph_snapshot::GraphSnapshot,
+        stream_environment: Option<super::StreamEnvironment>,
+        prepare_the_loaded_runtime_before_start: impl FnOnce(&Arc<Self>) -> Result<()>,
+    ) -> Result<()> {
+        Self::run_owning_the_shutdown_signals(|| {
+            match self
+                .load_graph_snapshot_unless_a_shutdown_is_requested(graph, stream_environment)?
+            {
+                GraphLoadObservingShutdownRequests::Loaded => {}
+                GraphLoadObservingShutdownRequests::AbandonedForAShutdownRequest => return Ok(()),
+            }
+            prepare_the_loaded_runtime_before_start(self)?;
+            self.start()?;
+            self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
+        })
+    }
+
+    /// Run `run` while owning the shutdown signals, then clear what this run's
+    /// interrupts escalated.
+    fn run_owning_the_shutdown_signals(run: impl FnOnce() -> Result<()>) -> Result<()> {
+        let run_outcome = {
+            let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
+            run()
         };
         Self::clear_the_shutdown_escalation_this_run_observed();
         run_outcome
+    }
+
+    /// Load `graph` on a thread of its own while this one watches for a
+    /// shutdown request, interrupting every describe once one is seen.
+    fn load_graph_snapshot_unless_a_shutdown_is_requested(
+        &self,
+        graph: &crate::core::graph_snapshot::GraphSnapshot,
+        stream_environment: Option<super::StreamEnvironment>,
+    ) -> Result<GraphLoadObservingShutdownRequests> {
+        use std::sync::mpsc::RecvTimeoutError;
+
+        use crate::core::runtime::{
+            RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, is_runtime_shutdown_requested,
+        };
+
+        if is_runtime_shutdown_requested() {
+            tracing::info!("a shutdown was requested before the graph loaded; it was never loaded");
+            return Ok(GraphLoadObservingShutdownRequests::AbandonedForAShutdownRequest);
+        }
+        let load_outcome = std::thread::scope(|scope| {
+            // Never sent on: the loading thread's end drops it, a panic included.
+            let (load_ended_sender, load_ended_receiver) = std::sync::mpsc::channel::<()>();
+            let loading = scope.spawn(move || {
+                let load_outcome = self.load_graph_snapshot(graph, stream_environment);
+                drop(load_ended_sender);
+                load_outcome
+            });
+            loop {
+                // Repeated, because the load forgets an interrupt that lands
+                // before it begins.
+                if is_runtime_shutdown_requested() {
+                    self.interrupt_every_processor_interpreter_describe();
+                }
+                if let Err(RecvTimeoutError::Disconnected) = load_ended_receiver
+                    .recv_timeout(RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL)
+                {
+                    break;
+                }
+            }
+            loading
+                .join()
+                .unwrap_or_else(|load_panic| std::panic::resume_unwind(load_panic))
+        });
+
+        if !is_runtime_shutdown_requested() {
+            return load_outcome.map(|()| GraphLoadObservingShutdownRequests::Loaded);
+        }
+        match load_outcome {
+            Ok(()) => tracing::info!(
+                "a shutdown was requested while the graph loaded, so the stream was never started"
+            ),
+            Err(interrupted_load) => tracing::info!(
+                "a shutdown was requested while the graph loaded, so the stream was never \
+                 started; the interrupted load reported: {interrupted_load}"
+            ),
+        }
+        Ok(GraphLoadObservingShutdownRequests::AbandonedForAShutdownRequest)
     }
 
     /// [`start`](Self::start) and block until a shutdown is requested, tearing
@@ -1036,14 +1155,9 @@ impl Runner {
     where
         F: FnMut(&Self) -> ControlFlow<()>,
     {
-        let wait_outcome = {
-            // Held only for the wait, so the dispositions are handed back once
-            // the teardown inside has run.
-            let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
-            self.wait_for_shutdown_observation_with(callback)
-        };
-        Self::clear_the_shutdown_escalation_this_run_observed();
-        wait_outcome
+        // Held only for the wait, so the dispositions are handed back once the
+        // teardown inside has run.
+        Self::run_owning_the_shutdown_signals(|| self.wait_for_shutdown_observation_with(callback))
     }
 
     /// The wait loop and the teardown after it, for callers that already own
@@ -1053,6 +1167,9 @@ impl Runner {
         F: FnMut(&Self) -> ControlFlow<()>,
     {
         self.block_until_shutdown_is_observed_with(callback)?;
+        let _watchdog = super::ArmedEngineTeardownWatchdog::arm(
+            "the engine stop the run loop began once a shutdown was requested",
+        );
         self.stop()
     }
 
@@ -1105,6 +1222,10 @@ impl Runner {
                 crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
                 &mut observe_the_shutdown_request_then_the_callback,
                 || {
+                    let _watchdog = super::ArmedEngineTeardownWatchdog::arm(
+                        "the engine stop the window event pump began once a shutdown was \
+                         requested",
+                    );
                     if let Err(e) = self.stop() {
                         tracing::error!("Failed to stop runtime during shutdown: {}", e);
                     }
@@ -1208,15 +1329,16 @@ impl Runner {
 
     /// Load `graph` into this runtime: each node added under its name, each
     /// link connected by name, the exposures recorded on their nodes, and the
-    /// stream's name recorded on the graph.
+    /// stream's name recorded on the graph in its URL-safe cast.
     ///
-    /// A host interrupt of an earlier load is forgotten and `stream_environment`
-    /// recorded first. Every `type` the graph names that is neither a built-in
-    /// nor registered in Rust is then described in one start of the stream's
-    /// own interpreter and registered, so a load with no environment refuses
-    /// such a type by name. A node name already in
-    /// the graph is refused rather than suffixed — a loaded graph's names are
-    /// already resolved.
+    /// A stream name casting to nothing, then a graph holding no node, are
+    /// refused first, naming the stream. A host
+    /// interrupt of an earlier load is then forgotten and `stream_environment`
+    /// recorded. Every `type` the graph names that is neither a built-in nor
+    /// registered in Rust is then described in one start of the stream's own
+    /// interpreter and registered, so a load with no environment refuses such a
+    /// type by name. A node name already in the graph is refused rather than
+    /// suffixed — a loaded graph's names are already resolved.
     pub fn load_graph_snapshot(
         &self,
         graph: &crate::core::graph_snapshot::GraphSnapshot,
@@ -1228,6 +1350,31 @@ impl Runner {
             ExposedOutputPortsComponent, GraphNodeWithComponents, cast_exposed_name_to_url_safe,
         };
 
+        let cast_stream_name = graph
+            .stream
+            .as_deref()
+            .map(|stream_name| {
+                cast_exposed_name_to_url_safe(stream_name)
+                    .map(|cast| cast.into_owned())
+                    .map_err(|casts_to_nothing| {
+                        Error::GraphError(format!(
+                            "cannot load the graph as the stream `{stream_name}`: \
+                             {casts_to_nothing}"
+                        ))
+                    })
+            })
+            .transpose()?;
+        if graph.nodes.is_empty() {
+            let what_holds_no_node = match &cast_stream_name {
+                Some(stream_name) => format!("the stream `{stream_name}`"),
+                None => "the graph".to_owned(),
+            };
+            return Err(Error::GraphError(format!(
+                "{what_holds_no_node} holds no node — a stream whose function adds nothing \
+                 compiles to an empty graph, and there is nothing to run. Add a node with \
+                 `stream_builder.add(...)`"
+            )));
+        }
         self.processor_interpreter_launch_record
             .forget_the_interrupt_of_an_earlier_load();
         self.processor_interpreter_launch_record
@@ -1278,8 +1425,8 @@ impl Runner {
                     ));
                 }
             }
-            if let Some(stream_name) = &graph.stream {
-                live_graph.set_loaded_stream_name(stream_name.clone());
+            if let Some(cast_stream_name) = cast_stream_name {
+                live_graph.set_loaded_stream_name(cast_stream_name);
             }
         });
 
@@ -1301,6 +1448,14 @@ impl Runner {
             Ok(())
         })
     }
+}
+
+/// How a load watched for shutdown requests ended.
+enum GraphLoadObservingShutdownRequests {
+    /// The graph loaded and no shutdown was requested.
+    Loaded,
+    /// A shutdown was requested before the load or while it ran.
+    AbandonedForAShutdownRequest,
 }
 
 /// Whether the run loop should stop: the `RuntimeShutdown` event was received,

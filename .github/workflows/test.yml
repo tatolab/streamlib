@@ -790,6 +790,10 @@ jobs:
           # MCP tool dispatch — the surface an agent and every programmatic
           # client drive the runtime through.
           cargo test --locked -p streamlib-api-server --lib
+          # The runtime process: its flags, each refusal by name, the lend found
+          # from its own executable. GPU-free; its signal-ladder tests sit
+          # behind `hardware-tests` and run on the rig.
+          cargo test --locked -p tatolabd
 
   # The lane whose absence is why the Apple tree rotted: every one of the other
   # jobs in this repo is `ubuntu-latest`, so `aarch64-apple-darwin` went roughly
@@ -872,6 +876,7 @@ jobs:
           cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
           cargo test --locked -p streamlib-consumer-rhi --lib
           cargo test --locked -p streamlib-api-server --lib
+          cargo test --locked -p tatolabd
           # `--test-threads=1` because two of these open iceoryx2 nodes in child
           # processes of this same binary and race each other when run in
           # parallel; serialised they pass, and the whole suite is about ninety

@@ -3,8 +3,8 @@
 
 //! Drain worker. Pops [`LogRecord`]s from a bounded MPMC queue, enriches
 //! them with `host_ts` / `runtime_id` / `source`, serializes to JSONL, and
-//! fans out to an optional line-buffered pretty stdout mirror and an
-//! optional batched JSONL writer.
+//! fans out to an optional line-buffered pretty mirror on a standard stream
+//! and an optional batched JSONL writer.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -62,9 +62,10 @@ pub(crate) struct WorkerConfig {
     pub tunables: ResolvedTunables,
     /// Pretty-mirror sink. `None` disables the mirror entirely. When
     /// the fd-level interceptor is active this MUST point at the
-    /// dup'd real-stdout handle, not at `std::io::stdout()`, otherwise
-    /// mirror output re-enters the pipe and recurses.
-    pub stdout_sink: Option<Box<dyn std::io::Write + Send>>,
+    /// dup'd real standard stream, not at `std::io::stdout()` or
+    /// `std::io::stderr()`, otherwise mirror output re-enters the pipe and
+    /// recurses.
+    pub pretty_log_mirror_sink: Option<Box<dyn std::io::Write + Send>>,
     pub writer: Option<JsonlBatchedWriter>,
 }
 
@@ -83,7 +84,7 @@ pub(crate) fn spawn(config: WorkerConfig) -> WorkerHandle {
 
     let queue_worker = Arc::clone(&queue);
     let dropped_worker = Arc::clone(&dropped);
-    let mut stdout_sink = config.stdout_sink;
+    let mut pretty_log_mirror_sink = config.pretty_log_mirror_sink;
     let tunables = config.tunables;
     let source = config.source;
     let mut writer = config.writer;
@@ -98,12 +99,12 @@ pub(crate) fn spawn(config: WorkerConfig) -> WorkerHandle {
                 runtime_id_str,
                 source,
                 tunables,
-                &mut stdout_sink,
+                &mut pretty_log_mirror_sink,
                 &mut writer,
             );
             // Final fsync happens inside run_worker on clean shutdown.
             drop(writer);
-            drop(stdout_sink);
+            drop(pretty_log_mirror_sink);
         })
         .expect("spawn drain worker thread");
 
@@ -123,7 +124,7 @@ fn run_worker(
     runtime_id: String,
     source: Source,
     tunables: ResolvedTunables,
-    stdout_sink: &mut Option<Box<dyn std::io::Write + Send>>,
+    pretty_log_mirror_sink: &mut Option<Box<dyn std::io::Write + Send>>,
     writer: &mut Option<JsonlBatchedWriter>,
 ) {
     let mut last_flush = Instant::now();
@@ -149,7 +150,7 @@ fn run_worker(
             &runtime_id,
             source,
             writer,
-            stdout_sink,
+            pretty_log_mirror_sink,
             &mut serialize_buf,
             &mut pretty_buf,
         );
@@ -194,7 +195,7 @@ fn run_worker(
                 &runtime_id,
                 source,
                 writer,
-                stdout_sink,
+                pretty_log_mirror_sink,
                 &mut serialize_buf,
                 &mut pretty_buf,
             );
@@ -225,7 +226,7 @@ fn run_worker(
                     &runtime_id,
                     source,
                     writer,
-                    stdout_sink,
+                    pretty_log_mirror_sink,
                     &mut serialize_buf,
                     &mut pretty_buf,
                 );
@@ -244,7 +245,7 @@ fn drain_queue(
     runtime_id: &str,
     source: Source,
     writer: &mut Option<JsonlBatchedWriter>,
-    stdout_sink: &mut Option<Box<dyn std::io::Write + Send>>,
+    pretty_log_mirror_sink: &mut Option<Box<dyn std::io::Write + Send>>,
     serialize_buf: &mut Vec<u8>,
     pretty_buf: &mut String,
 ) {
@@ -254,7 +255,7 @@ fn drain_queue(
             runtime_id,
             source,
             writer,
-            stdout_sink,
+            pretty_log_mirror_sink,
             serialize_buf,
             pretty_buf,
         );
@@ -267,7 +268,7 @@ fn write_one(
     runtime_id: &str,
     worker_source: Source,
     writer: &mut Option<JsonlBatchedWriter>,
-    stdout_sink: &mut Option<Box<dyn std::io::Write + Send>>,
+    pretty_log_mirror_sink: &mut Option<Box<dyn std::io::Write + Send>>,
     serialize_buf: &mut Vec<u8>,
     pretty_buf: &mut String,
 ) {
@@ -304,7 +305,7 @@ fn write_one(
         let _ = w.append_record(serialize_buf);
     }
 
-    if let Some(sink) = stdout_sink.as_mut() {
+    if let Some(sink) = pretty_log_mirror_sink.as_mut() {
         pretty_buf.clear();
         format_event_pretty(&event, pretty_buf);
         let _ = sink.write_all(pretty_buf.as_bytes());
@@ -314,7 +315,7 @@ fn write_one(
 }
 
 /// Format one [`RuntimeLogEvent`] in the human-readable layout used by the
-/// runtime's stdout mirror.
+/// runtime's pretty mirror.
 ///
 /// The wheel's `streamlib logs` renders replayed JSONL to match this byte for
 /// byte. It reimplements the layout in Python rather than calling this, so the

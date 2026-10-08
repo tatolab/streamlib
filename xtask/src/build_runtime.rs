@@ -6,7 +6,10 @@
 //! Builds the maturin project as a wheel, then lays the wheel's contents out as
 //! the lend — the directory holding `tatolab/runtime/` that a processor
 //! interpreter puts first on `PYTHONPATH`. The wheel is kept beside the lend
-//! because CI hands that same file to the jobs that install the engine.
+//! because CI hands that same file to the jobs that install the engine. Then
+//! builds `tatolabd` and `tatolab` and places them in `bin/`, beside `lib/`,
+//! the install prefix's own shape: `tatolabd` finds the lend at
+//! `../lib/tatolab/lend` from its own directory.
 
 use crate::check_no_tatolab_namespace_package_init::{
     RUNTIME_UNIT_LEND_DIRECTORY_RELATIVE_TO_WORKSPACE,
@@ -17,6 +20,14 @@ use std::path::{Path, PathBuf};
 
 /// Where the runtime unit's wheel is written, relative to the workspace.
 pub const RUNTIME_UNIT_WHEEL_DIRECTORY_RELATIVE_TO_WORKSPACE: &str = "target/tatolab-runtime/wheel";
+
+/// Where the runtime unit's two binaries are placed, relative to the workspace.
+pub const RUNTIME_UNIT_BIN_DIRECTORY_RELATIVE_TO_WORKSPACE: &str = "target/tatolab-runtime/bin";
+
+/// Each binary the runtime unit carries, as the cargo package that builds it
+/// and the binary target's name, which is also its file name in `bin/`.
+const RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS: [(&str, &str); 2] =
+    [("tatolabd", "tatolabd"), ("tatolab-cli", "tatolab")];
 
 /// The maturin project the runtime unit is built from.
 const RUNTIME_UNIT_MATURIN_PROJECT_RELATIVE_TO_WORKSPACE: &str = "sdk/streamlib-python-wheel";
@@ -87,12 +98,132 @@ pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Res
     if building_for_macos {
         ensure_lend_carries_macos_bundled_vulkan_driver(&lend_directory)?;
     }
-
     tracing::info!(
         "build-runtime: {} unpacked into the lend at {}",
         runtime_unit_wheel.display(),
         lend_directory.display()
     );
+
+    let bin_directory = workspace_root.join(RUNTIME_UNIT_BIN_DIRECTORY_RELATIVE_TO_WORKSPACE);
+    let built_binaries = build_runtime_unit_binaries(workspace_root, build_profile)?;
+    replace_runtime_unit_binaries_in(&bin_directory, &built_binaries)?;
+    tracing::info!(
+        "build-runtime: tatolabd and tatolab placed in {}",
+        bin_directory.display()
+    );
+    Ok(())
+}
+
+/// One binary cargo built, and the name it takes in `bin/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltRuntimeUnitBinary {
+    pub binary_target_name: String,
+    pub built_executable: PathBuf,
+}
+
+fn build_runtime_unit_binaries(
+    workspace_root: &Path,
+    build_profile: RuntimeUnitBuildProfile,
+) -> Result<Vec<BuiltRuntimeUnitBinary>> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut cargo_build = std::process::Command::new(cargo);
+    cargo_build
+        .args(["build", "--message-format=json-render-diagnostics"])
+        .current_dir(workspace_root)
+        .stderr(std::process::Stdio::inherit());
+    for (package, _) in RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS {
+        cargo_build.args(["-p", package]);
+    }
+    if build_profile == RuntimeUnitBuildProfile::Release {
+        cargo_build.arg("--release");
+    }
+
+    let cargo_build_output = cargo_build
+        .output()
+        .context("failed to run `cargo build` for tatolabd and tatolab")?;
+    anyhow::ensure!(
+        cargo_build_output.status.success(),
+        "`cargo build -p tatolabd -p tatolab-cli` failed ({})",
+        cargo_build_output.status
+    );
+    runtime_unit_binaries_from_cargo_build_messages(&String::from_utf8_lossy(
+        &cargo_build_output.stdout,
+    ))
+}
+
+/// Each runtime-unit binary's executable, read from the JSON messages
+/// `cargo build --message-format=json` writes, refusing a build that names
+/// one of them no executable.
+pub fn runtime_unit_binaries_from_cargo_build_messages(
+    cargo_build_messages: &str,
+) -> Result<Vec<BuiltRuntimeUnitBinary>> {
+    let mut built_binaries: Vec<BuiltRuntimeUnitBinary> = Vec::new();
+    for cargo_build_message in cargo_build_messages.lines() {
+        let Ok(cargo_build_message) =
+            serde_json::from_str::<serde_json::Value>(cargo_build_message)
+        else {
+            continue;
+        };
+        if cargo_build_message["reason"] != "compiler-artifact" {
+            continue;
+        }
+        let Some(built_executable) = cargo_build_message["executable"].as_str() else {
+            continue;
+        };
+        let binary_target_name = cargo_build_message["target"]["name"]
+            .as_str()
+            .unwrap_or_default();
+        if RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS
+            .iter()
+            .any(|(_, target)| *target == binary_target_name)
+        {
+            built_binaries.retain(|built| built.binary_target_name != binary_target_name);
+            built_binaries.push(BuiltRuntimeUnitBinary {
+                binary_target_name: binary_target_name.to_owned(),
+                built_executable: PathBuf::from(built_executable),
+            });
+        }
+    }
+    for (package, target) in RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS {
+        anyhow::ensure!(
+            built_binaries
+                .iter()
+                .any(|built| built.binary_target_name == target),
+            "`cargo build` named no executable for the `{target}` binary of `{package}`"
+        );
+    }
+    Ok(built_binaries)
+}
+
+/// Copy each built binary into `bin_directory` under its target name,
+/// replacing what is there. Copied, never linked: `tatolabd` finds the lend
+/// from its own canonical path.
+pub fn replace_runtime_unit_binaries_in(
+    bin_directory: &Path,
+    built_binaries: &[BuiltRuntimeUnitBinary],
+) -> Result<()> {
+    std::fs::create_dir_all(bin_directory)
+        .with_context(|| format!("creating {}", bin_directory.display()))?;
+    for BuiltRuntimeUnitBinary {
+        binary_target_name,
+        built_executable,
+    } in built_binaries
+    {
+        let placed_binary = bin_directory.join(binary_target_name);
+        // Removed first, so a running copy keeps its own file rather than
+        // having it rewritten under it.
+        if placed_binary.symlink_metadata().is_ok() {
+            std::fs::remove_file(&placed_binary)
+                .with_context(|| format!("removing {}", placed_binary.display()))?;
+        }
+        std::fs::copy(built_executable, &placed_binary).with_context(|| {
+            format!(
+                "copying {} to {}",
+                built_executable.display(),
+                placed_binary.display()
+            )
+        })?;
+    }
     Ok(())
 }
 
@@ -505,6 +636,101 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(two_wheels.contains("found 2"), "{two_wheels}");
+    }
+
+    fn a_compiler_artifact_message(target_name: &str, executable: Option<&str>) -> String {
+        serde_json::json!({
+            "reason": "compiler-artifact",
+            "target": {"name": target_name, "kind": ["bin"]},
+            "executable": executable,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn the_runtime_unit_binaries_are_read_from_cargos_build_messages() {
+        let cargo_build_messages = [
+            a_compiler_artifact_message("streamlib_engine", None),
+            r#"{"reason":"build-script-executed","package_id":"x"}"#.to_owned(),
+            a_compiler_artifact_message("tatolabd", Some("/target/debug/tatolabd")),
+            a_compiler_artifact_message("tatolab", Some("/target/debug/tatolab")),
+            a_compiler_artifact_message("generate_openapi", Some("/target/debug/generate_openapi")),
+            r#"{"reason":"build-finished","success":true}"#.to_owned(),
+        ]
+        .join("\n");
+
+        let built_binaries =
+            runtime_unit_binaries_from_cargo_build_messages(&cargo_build_messages).unwrap();
+
+        assert_eq!(
+            built_binaries,
+            vec![
+                BuiltRuntimeUnitBinary {
+                    binary_target_name: "tatolabd".to_owned(),
+                    built_executable: PathBuf::from("/target/debug/tatolabd"),
+                },
+                BuiltRuntimeUnitBinary {
+                    binary_target_name: "tatolab".to_owned(),
+                    built_executable: PathBuf::from("/target/debug/tatolab"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_build_naming_no_executable_for_a_runtime_unit_binary_is_refused_naming_it() {
+        let refusal = runtime_unit_binaries_from_cargo_build_messages(
+            &a_compiler_artifact_message("tatolabd", Some("/target/debug/tatolabd")),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            refusal.contains("`tatolab` binary of `tatolab-cli`"),
+            "{refusal}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_runtime_unit_binaries_replace_what_bin_holds_and_stay_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = tempfile::TempDir::new().unwrap();
+        let built_tatolabd = scratch.path().join("built-tatolabd");
+        std::fs::write(&built_tatolabd, "new tatolabd").unwrap();
+        std::fs::set_permissions(&built_tatolabd, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let bin_directory = scratch.path().join("tatolab-runtime/bin");
+        std::fs::create_dir_all(&bin_directory).unwrap();
+        std::fs::write(bin_directory.join("tatolabd"), "old tatolabd").unwrap();
+
+        replace_runtime_unit_binaries_in(
+            &bin_directory,
+            &[BuiltRuntimeUnitBinary {
+                binary_target_name: "tatolabd".to_owned(),
+                built_executable: built_tatolabd,
+            }],
+        )
+        .unwrap();
+
+        let placed_tatolabd = bin_directory.join("tatolabd");
+        assert_eq!(
+            std::fs::read_to_string(&placed_tatolabd).unwrap(),
+            "new tatolabd"
+        );
+        assert_eq!(
+            std::fs::metadata(&placed_tatolabd)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755
+        );
+        assert!(
+            !std::fs::symlink_metadata(&placed_tatolabd)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

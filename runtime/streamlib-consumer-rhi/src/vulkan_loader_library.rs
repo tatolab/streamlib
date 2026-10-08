@@ -16,9 +16,11 @@ use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 /// convention rather than as a StreamLib dial — there is no setting for which
 /// loader to use, and the order is fixed.
 ///
-/// The macOS wheel carries its own loader, which is what a stock machine opens;
-/// the Homebrew prefixes after it are developer-machine fallbacks, and a package
-/// manager must never appear in anything a user reads.
+/// The runtime unit carries its own loader, which is what a stock machine
+/// opens: beside the wheel's `_engine`, or in the lend a binary linking the
+/// engine finds relative to its own directory. The Homebrew prefixes after it
+/// are developer-machine fallbacks, and a package manager must never appear in
+/// anything a user reads.
 pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
     candidate_paths.extend(macos_vulkan_loader_library_candidate_paths());
@@ -32,14 +34,22 @@ pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString>
 #[cfg(target_os = "macos")]
 const BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME: &str = "_vulkan_driver";
 
+/// The `tatolab/runtime/` package in the lend, relative to the directory of a
+/// binary that links the engine: the runtime unit lays out `bin/` beside
+/// `lib/tatolab/lend/`, and `tatolabd` finds its lend by the same rule.
+#[cfg(target_os = "macos")]
+const LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_PARENT_OF_A_BINARY_DIRECTORY: &str =
+    "lib/tatolab/lend/tatolab/runtime";
+
 /// The loader's versioned soname — the bare name dyld searches for, and the one
 /// real file the wheel stages under [`BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME`].
 #[cfg(target_os = "macos")]
 const VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME: &str = "libvulkan.1.dylib";
 
 /// The macOS-only tail of the search list: the versioned soname, a LunarG SDK
-/// root if one is exported, the loader the wheel carries, and the two prefixes
-/// dyld does not search itself.
+/// root if one is exported, the loader the wheel carries, the loader the lend
+/// beside a binary's directory carries, and the two prefixes dyld does not
+/// search itself.
 #[cfg(target_os = "macos")]
 fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     let mut candidate_paths: Vec<std::ffi::OsString> =
@@ -50,20 +60,57 @@ fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
         sdk_library_path.push(LIBRARY);
         candidate_paths.push(sdk_library_path.into_os_string());
     }
-    if let Some(bundled_loader_path) = vulkan_loader_library_bundled_beside_this_image() {
-        candidate_paths.push(bundled_loader_path.into_os_string());
+    if let Some(directory_of_this_image) = directory_of_the_image_this_code_is_in() {
+        candidate_paths.push(
+            vulkan_loader_library_bundled_beside_the_image_in(&directory_of_this_image)
+                .into_os_string(),
+        );
+        if let Some(lent_loader_path) =
+            vulkan_loader_library_in_the_lend_beside_the_binary_directory(&directory_of_this_image)
+        {
+            candidate_paths.push(lent_loader_path.into_os_string());
+        }
     }
     candidate_paths.push("/opt/homebrew/lib/libvulkan.dylib".into());
     candidate_paths.push("/usr/local/lib/libvulkan.dylib".into());
     candidate_paths
 }
 
-/// The loader the wheel carries, beside the image this code was linked into.
+/// The loader the wheel carries, beside the image whose directory is
+/// `directory_of_the_image`.
 ///
 /// A path with a slash, so dlopen takes it verbatim and no `@rpath` or install
-/// name is consulted. `None` only if dyld cannot name the image.
+/// name is consulted.
 #[cfg(target_os = "macos")]
-fn vulkan_loader_library_bundled_beside_this_image() -> Option<std::path::PathBuf> {
+fn vulkan_loader_library_bundled_beside_the_image_in(
+    directory_of_the_image: &std::path::Path,
+) -> std::path::PathBuf {
+    directory_of_the_image
+        .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
+        .join(VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME)
+}
+
+/// The loader the lend carries, for an image in a runtime unit's `bin/`:
+/// `<directory_of_the_image>/../lib/tatolab/lend/tatolab/runtime/_vulkan_driver/`.
+/// `None` for an image at the filesystem root.
+#[cfg(target_os = "macos")]
+fn vulkan_loader_library_in_the_lend_beside_the_binary_directory(
+    directory_of_the_image: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    Some(
+        directory_of_the_image
+            .parent()?
+            .join(LENT_RUNTIME_PACKAGE_RELATIVE_TO_THE_PARENT_OF_A_BINARY_DIRECTORY)
+            .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
+            .join(VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME),
+    )
+}
+
+/// The directory of the image this code was linked into — the wheel's
+/// `_engine`, or a binary that links the engine statically. `None` only if
+/// dyld cannot name the image.
+#[cfg(target_os = "macos")]
+fn directory_of_the_image_this_code_is_in() -> Option<std::path::PathBuf> {
     use std::os::unix::ffi::OsStrExt;
 
     // SAFETY: `Dl_info` is plain C data; all-zero is a valid value to overwrite.
@@ -72,7 +119,7 @@ fn vulkan_loader_library_bundled_beside_this_image() -> Option<std::path::PathBu
     // it is handed, which outlives the call.
     let dladdr_named_the_image_containing_this_function = unsafe {
         libc::dladdr(
-            vulkan_loader_library_bundled_beside_this_image as *const libc::c_void,
+            directory_of_the_image_this_code_is_in as *const libc::c_void,
             &mut image_containing_this_function,
         )
     };
@@ -86,12 +133,7 @@ fn vulkan_loader_library_bundled_beside_this_image() -> Option<std::path::PathBu
     let image_path_bytes =
         unsafe { std::ffi::CStr::from_ptr(image_containing_this_function.dli_fname) }.to_bytes();
     let image_path = std::path::Path::new(std::ffi::OsStr::from_bytes(image_path_bytes));
-    Some(
-        image_path
-            .parent()?
-            .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
-            .join(VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME),
-    )
+    image_path.parent().map(std::path::Path::to_path_buf)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -209,8 +251,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn the_bundled_loader_is_looked_for_beside_the_image_this_code_is_in() {
-        let bundled_loader_path = vulkan_loader_library_bundled_beside_this_image()
+        let directory_of_this_image = directory_of_the_image_this_code_is_in()
             .expect("dyld names the image a function of this test binary is in");
+        let bundled_loader_path =
+            vulkan_loader_library_bundled_beside_the_image_in(&directory_of_this_image);
         let running_test_binary = std::env::current_exe().expect("the test binary has a path");
 
         assert_eq!(
@@ -226,6 +270,44 @@ mod tests {
                 .transpose()
                 .expect("exists"),
             "the loader must be looked for in the directory of the image this code is in"
+        );
+    }
+
+    /// A binary that links the engine statically, in a runtime unit's `bin/`,
+    /// finds the loader in the lend beside `bin/`, right after the one beside
+    /// the image itself — the same rule `tatolabd` finds its lend by.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_lent_loader_is_looked_for_in_the_lend_beside_the_binary_directory_of_this_image() {
+        let directory_of_this_image = directory_of_the_image_this_code_is_in()
+            .expect("dyld names the image a function of this test binary is in");
+        let lent_loader_path =
+            vulkan_loader_library_in_the_lend_beside_the_binary_directory(&directory_of_this_image)
+                .expect("the test binary's directory has a parent");
+
+        assert_eq!(
+            lent_loader_path,
+            directory_of_this_image
+                .parent()
+                .expect("the test binary's directory has a parent")
+                .join("lib/tatolab/lend/tatolab/runtime/_vulkan_driver/libvulkan.1.dylib"),
+        );
+
+        let candidate_paths: Vec<std::path::PathBuf> = vulkan_loader_library_candidate_paths()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let beside_the_image_position = candidate_paths
+            .iter()
+            .position(|path| {
+                *path == vulkan_loader_library_bundled_beside_the_image_in(&directory_of_this_image)
+            })
+            .unwrap_or_else(|| panic!("the loader beside the image is not searched"));
+        assert_eq!(
+            candidate_paths.get(beside_the_image_position + 1),
+            Some(&lent_loader_path),
+            "the lend's loader must come right after the one beside the image: \
+             {candidate_paths:?}"
         );
     }
 

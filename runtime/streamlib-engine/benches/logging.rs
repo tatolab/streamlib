@@ -48,7 +48,7 @@ fn install_pathway(tmp: &TempDir, runtime_id: &str) -> StreamlibLoggingGuard {
     let config = StreamlibLoggingConfig {
         service_name: "bench".into(),
         runtime_id: Some(runtime_id),
-        stdout: false,
+        pretty_log_mirror_stream: None,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -191,7 +191,7 @@ fn bench_burst_drops_surface(c: &mut Criterion) {
                 let config = StreamlibLoggingConfig {
                     service_name: "bench".into(),
                     runtime_id: Some(Arc::clone(&runtime_id)),
-                    stdout: false,
+                    pretty_log_mirror_stream: None,
                     jsonl: true,
                     intercept_stdio: false,
                     tunables: LoggingTunables {
