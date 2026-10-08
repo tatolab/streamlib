@@ -180,6 +180,17 @@ jobs:
           tatolab_pid=$!
           sleep 20
           kill -INT "$tatolab_pid"
+          stop_deadline=$((SECONDS + 30))
+          while kill -0 "$tatolab_pid" 2>/dev/null && [ "$SECONDS" -lt "$stop_deadline" ]; do
+            sleep 1
+          done
+          if kill -0 "$tatolab_pid" 2>/dev/null; then
+            pkill -KILL -P "$tatolab_pid" || true
+            kill -KILL "$tatolab_pid" || true
+            cat /tmp/scaffold-run.log
+            echo "::error::tatolab run did not stop within 30s of SIGINT"
+            exit 1
+          fi
           wait "$tatolab_pid" || true
           cat /tmp/scaffold-run.log
 

@@ -9,6 +9,14 @@ use std::process::Command;
 /// The signals `tatolab` forwards to its attached `tatolabd`, one for one.
 pub const FORWARDED_SIGNALS: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
 
+/// The forwarded signals whose inherited disposition is reset to the default before listening.
+///
+/// A non-interactive shell starts a background command with SIGINT ignored, and XNU discards an
+/// ignored signal at generation even while it is blocked, so `sigwait` would never see it. An
+/// inherited ignored SIGHUP is kept: it is how `nohup` reaches `tatolabd`.
+const FORWARDED_SIGNALS_RESET_TO_DEFAULT_DISPOSITION: [libc::c_int; 2] =
+    [libc::SIGINT, libc::SIGTERM];
+
 /// Block [`FORWARDED_SIGNALS`] in every thread and hand each delivery to `on_signal_delivered`
 /// from a dedicated `sigwait` thread.
 ///
@@ -24,6 +32,11 @@ pub fn block_forwarded_signals_and_listen(
     };
     if block_result != 0 {
         return Err(io::Error::from_raw_os_error(block_result));
+    }
+    for reset_signal in FORWARDED_SIGNALS_RESET_TO_DEFAULT_DISPOSITION {
+        if unsafe { libc::signal(reset_signal, libc::SIG_DFL) } == libc::SIG_ERR {
+            return Err(io::Error::last_os_error());
+        }
     }
     std::thread::Builder::new()
         .name("tatolab-forwarded-signal-listener".to_owned())
