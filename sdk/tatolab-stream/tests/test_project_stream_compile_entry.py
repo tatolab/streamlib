@@ -3,11 +3,9 @@
 
 """The compile entry `tatolab run` and `tatolab dev` run in the project's interpreter.
 
-Each test runs it as `tatolab` does: `python -m` in a child, with the anchor as the
-working directory, reading the one JSON document on stdout, the refusals and
-tracebacks on stderr, and the exit code. A few start it the way the entry's own
-docstring gives, with the working directory dropped from the import path first.
-Nothing here needs a runtime.
+Each test runs it as `tatolab` does: `python -I -m` in a child, with the anchor as
+the working directory, reading the one JSON document on stdout, the refusals and
+tracebacks on stderr, and the exit code. Nothing here needs a runtime.
 """
 
 import json
@@ -94,30 +92,15 @@ def write_app(directory: Path, file_name: str, source: str) -> Path:
     return entry_file
 
 
-# The compile entry started with the working directory dropped from `sys.path`
-# before anything but the built-in `sys` imports, as its module docstring spells it.
-COMPILE_ENTRY_STARTED_WITH_THE_WORKING_DIRECTORY_DROPPED = (
-    "import sys; getattr(sys.flags, 'safe_path', False) or sys.path.pop(0); "
-    f"import runpy; runpy.run_module({COMPILE_ENTRY_MODULE!r}, run_name='__main__', "
-    "alter_sys=True)"
-)
-
-
 def run_compile_entry(
     anchor_directory: Path,
     *arguments: str,
     verb: Optional[str] = "run",
-    started_with_the_working_directory_dropped: bool = False,
 ) -> "subprocess.CompletedProcess[str]":
     """The compile entry as `tatolab <verb>` starts it, in `anchor_directory`."""
     verb_arguments = ["--verb", verb] if verb is not None else []
-    compile_entry_start = (
-        ["-c", COMPILE_ENTRY_STARTED_WITH_THE_WORKING_DIRECTORY_DROPPED]
-        if started_with_the_working_directory_dropped
-        else ["-m", COMPILE_ENTRY_MODULE]
-    )
     return subprocess.run(
-        [sys.executable, *compile_entry_start, *verb_arguments, *arguments],
+        [sys.executable, "-I", "-m", COMPILE_ENTRY_MODULE, *verb_arguments, *arguments],
         cwd=anchor_directory,
         capture_output=True,
         text=True,
@@ -356,7 +339,7 @@ def test_the_entry_runs_as_main_with_its_own_directory_importable(anchor_directo
 
 def test_a_file_entry_in_a_subdirectory_cannot_import_from_the_anchor(anchor_directory: Path):
     """Its processor interpreters start in its own directory, so compiling must too —
-    `-m`'s working directory never stays on the path."""
+    the working directory is never on the path."""
     write_app(anchor_directory, "helpers.py", "HELPER = 1\n")
     write_app(
         anchor_directory,
@@ -1137,7 +1120,7 @@ def test_what_the_app_arranges_to_print_after_the_compile_never_follows_the_docu
 def test_a_project_module_named_like_one_the_entry_imports_cannot_replace_it(
     anchor_directory: Path,
 ):
-    """Started with the working directory dropped, the anchor's `json.py` never answers `json`."""
+    """The anchor's `json.py` never answers `json`: `-I` keeps the anchor off the path."""
     write_app(anchor_directory, "stream.py", MINIMAL_STREAM_SOURCE)
     write_app(
         anchor_directory,
@@ -1149,56 +1132,10 @@ def test_a_project_module_named_like_one_the_entry_imports_cannot_replace_it(
         "    return 'HIJACKED'\n",
     )
 
-    finished = run_compile_entry(
-        anchor_directory, started_with_the_working_directory_dropped=True
-    )
+    finished = run_compile_entry(anchor_directory)
 
     assert compiled_document(finished)["stream_graph"]["stream"] == "main"
     assert "the project json module was imported" not in finished.stdout + finished.stderr
-
-
-def test_started_with_the_working_directory_dropped_the_entry_still_imports_from_the_anchor(
-    anchor_directory: Path,
-):
-    write_app(anchor_directory, "helpers.py", "PATTERN_NODE_NAME = 'from-the-anchor'\n")
-    write_app(
-        anchor_directory,
-        "stream.py",
-        "from helpers import PATTERN_NODE_NAME\n"
-        "from tatolab.stream import StreamBuilder, TestPatternSource, stream\n"
-        "\n"
-        "\n"
-        "@stream\n"
-        "def main(stream_builder: StreamBuilder) -> None:\n"
-        "    stream_builder.add(TestPatternSource, name=PATTERN_NODE_NAME)\n",
-    )
-
-    finished = run_compile_entry(
-        anchor_directory, started_with_the_working_directory_dropped=True
-    )
-
-    document = compiled_document(finished)
-    assert document["stream_graph"]["nodes"][0]["name"] == "from-the-anchor"
-    assert document["project_directory"] == str(anchor_directory)
-
-
-def test_started_with_the_working_directory_dropped_the_traceback_starts_in_the_app(
-    anchor_directory: Path,
-):
-    write_app(anchor_directory, "stream.py", "raise ValueError('bad wiring')\n")
-
-    finished = run_compile_entry(
-        anchor_directory, started_with_the_working_directory_dropped=True
-    )
-
-    assert finished.returncode == 1
-    assert finished.stdout == ""
-    assert "runpy" not in finished.stderr, finished.stderr
-    assert "<string>" not in finished.stderr, finished.stderr
-    first_frame = finished.stderr.index("File ")
-    assert finished.stderr.startswith(
-        f'File "{anchor_directory / "stream.py"}", line 1, in <module>', first_frame
-    ), finished.stderr
 
 
 def containers_nested_in(json_value: Any) -> int:
@@ -1289,7 +1226,7 @@ def test_a_check_that_fails_is_reported_and_the_stream_still_compiles(anchor_dir
     )
 
     finished = subprocess.run(
-        [sys.executable, "-c", compile_entry_with_a_failing_check, "--verb", "run"],
+        [sys.executable, "-I", "-c", compile_entry_with_a_failing_check, "--verb", "run"],
         cwd=anchor_directory,
         capture_output=True,
         text=True,

@@ -5,22 +5,20 @@
 
 """The compile entry `tatolab run` and `tatolab dev` run in the project's own interpreter.
 
-`python -m tatolab.stream._project_stream_compile_entry --verb {run,dev} [TARGET]
-[-f FILE] [--dir DIR] [--name NAME]`, with the anchor directory as the working
-directory; `--dir` is only how the caller's command spelled it. On success stdout
-carries exactly one JSON object, `{"stream_graph": ..., "project_directory": ...}`,
-and the exit code is 0. A refusal prints `error: <message>` to stderr and exits 1;
-an app or compile failure prints the app's own traceback to stderr and exits 1; an
-app's deliberate `SystemExit` keeps its code, so exit 0 with nothing on stdout is an
-app that chose to exit, and there is no stream to start.
+`tatolab` starts it as `<venv python> -I -m tatolab.stream._project_stream_compile_entry
+--verb {run,dev} [TARGET] [-f FILE] [--dir DIR] [--name NAME]`, with the anchor
+directory as the working directory; `--dir` is only how the caller's command spelled
+it. On success stdout carries exactly one JSON object,
+`{"stream_graph": ..., "project_directory": ...}`, and the exit code is 0. A refusal
+prints `error: <message>` to stderr and exits 1; an app or compile failure prints the
+app's own traceback to stderr and exits 1; an app's deliberate `SystemExit` keeps its
+code, so exit 0 with nothing on stdout is an app that chose to exit, and there is no
+stream to start.
 
-Under `-m` the working directory leads `sys.path` while this module and
-`tatolab.stream` import, so a project module named like a standard-library one
-they import (`json.py` at the anchor) replaces it. Starting the entry with that
-directory dropped first avoids it, on every Python this package supports:
-`python -c "import sys; getattr(sys.flags, 'safe_path', False) or sys.path.pop(0);
-import runpy; runpy.run_module('tatolab.stream._project_stream_compile_entry',
-run_name='__main__', alter_sys=True)" --verb ...`.
+`-I` keeps the working directory off `sys.path` while this module and
+`tatolab.stream` import, so a project module named like a standard-library one they
+import (`json.py` at the anchor) cannot replace it; it also ignores every `PYTHON*`
+variable and the user's site-packages, so the venv alone decides what imports.
 """
 
 from __future__ import annotations
