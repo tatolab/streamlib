@@ -17,6 +17,7 @@ suite venv, which holds `tatolab-stream` and nothing of the runtime.
 from __future__ import annotations
 
 import errno
+import inspect
 import os
 import re
 import signal
@@ -37,37 +38,22 @@ from runtime_load_open_config_nodes import OpenConfigSink
 from runtime_load_served_graph_nodes import LoadedFrameSink
 from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT, RuntimeProcessUnderTest
 from tatolab.stream import (
-    CameraSource,
     DisplayWindow,
-    H264Decoder,
-    H264Encoder,
-    H265Decoder,
-    H265Encoder,
-    MicrophoneSource,
     Mp4Sink,
-    OpusDecoder,
-    OpusEncoder,
-    SpeakerSink,
     StreamBuilder,
     TestPatternSource,
     VirtualCameraSink,
+    _built_in_nodes,
     stream,
 )
+from tatolab.stream._built_in_node import BuiltInNode
 
-EVERY_BUILT_IN_NODE_CLASS: "list[type]" = [
-    TestPatternSource,
-    CameraSource,
-    DisplayWindow,
-    MicrophoneSource,
-    SpeakerSink,
-    H264Encoder,
-    H264Decoder,
-    H265Encoder,
-    H265Decoder,
-    OpusEncoder,
-    OpusDecoder,
-    Mp4Sink,
-    VirtualCameraSink,
+EVERY_BUILT_IN_NODE_CLASS: "list[type[BuiltInNode[Any]]]" = [
+    exported
+    for exported in vars(_built_in_nodes).values()
+    if inspect.isclass(exported)
+    and issubclass(exported, BuiltInNode)
+    and exported is not BuiltInNode
 ]
 
 # The native VirtualCameraSink is compiled on Linux only.
@@ -78,7 +64,7 @@ BUILT_IN_NODE_CLASSES_THIS_PLATFORM_COMPILES = [
 ]
 
 # A setting a built-in's config requires; every other built-in loads with `{}`.
-THE_CONFIG_A_BUILT_IN_CANNOT_LOAD_WITHOUT: "dict[type, dict[str, object]]" = {
+THE_CONFIG_A_BUILT_IN_CANNOT_LOAD_WITHOUT: "dict[type[BuiltInNode[Any]], dict[str, object]]" = {
     Mp4Sink: {"path": "recording.mp4"},
 }
 
