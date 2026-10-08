@@ -171,7 +171,8 @@ class PrivateRuntimeDirectories:
 
     On Linux `XDG_RUNTIME_DIR` is a short directory of this test's own, so the
     runtime directory — `<XDG_RUNTIME_DIR>/streamlib`, where the registry and
-    sockets live — is private. On macOS the runtime directory is fixed at
+    sockets live — is private; the user's PipeWire, PulseAudio and Wayland
+    sessions stay reachable through their own variables. On macOS the runtime directory is fixed at
     `/tmp/streamlib-<uid>`, shared with every runtime on the machine, so a run's
     registry entry is found by its `tatolabd`'s pid.
     """
@@ -180,6 +181,35 @@ class PrivateRuntimeDirectories:
     streamlib_runtime_directory: Path
     streamlib_home: Path
     environment: "dict[str, str]"
+
+
+def session_services_left_at_the_users_runtime_directory(
+    inherited_environment: "dict[str, str]",
+) -> "dict[str, str]":
+    """Variables that keep the user's PipeWire, PulseAudio and Wayland sessions reachable.
+
+    Each finds its socket under `XDG_RUNTIME_DIR` unless named on its own, so a
+    private `XDG_RUNTIME_DIR` would otherwise leave a stream's devices on the
+    null audio arm and refuse a PipeWire camera. A variable the shell already
+    set is kept as it is.
+    """
+    users_runtime_directory = inherited_environment.get("XDG_RUNTIME_DIR")
+    if not users_runtime_directory:
+        return {}
+    session_service_variables = {
+        "PIPEWIRE_RUNTIME_DIR": users_runtime_directory,
+        "PULSE_RUNTIME_PATH": str(Path(users_runtime_directory) / "pulse"),
+    }
+    wayland_display = inherited_environment.get("WAYLAND_DISPLAY")
+    if wayland_display and not Path(wayland_display).is_absolute():
+        session_service_variables["WAYLAND_DISPLAY"] = str(
+            Path(users_runtime_directory) / wayland_display
+        )
+    return {
+        name: value
+        for name, value in session_service_variables.items()
+        if name == "WAYLAND_DISPLAY" or name not in inherited_environment
+    }
 
 
 @pytest.fixture
@@ -199,6 +229,7 @@ def private_runtime_directories() -> "Iterator[PrivateRuntimeDirectories]":
         for name, value in os.environ.items()
         if name not in ENGINE_VARIABLES_NOT_INHERITED
     }
+    environment.update(session_services_left_at_the_users_runtime_directory(environment))
     environment["XDG_RUNTIME_DIR"] = str(xdg_runtime_directory)
     environment["STREAMLIB_HOME"] = str(streamlib_home)
     try:
