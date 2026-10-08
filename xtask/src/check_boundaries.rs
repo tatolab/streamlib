@@ -79,7 +79,7 @@ pub fn run(project_root: &Path) -> Result<()> {
     // Check 13 — the engine-free clients' closure holds no engine-carrying crate.
     let client_engine_chains = find_engine_free_client_engine_chains(&dependency_graph)?;
     for chain in &client_engine_chains {
-        eprintln!(
+        tracing::error!(
             "[{}] `{}` links `{}`: {}\n    {}",
             CHECK_CLIENT_LINKS_NO_ENGINE,
             chain.root_crate,
