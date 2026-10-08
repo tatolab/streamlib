@@ -44,7 +44,7 @@ Both ends of the through-engine loop stay StreamLib on every path:
   global tap of all output plus a shared aggregate device over it, holds both for the run, and
   `MicrophoneSource` inside `tatolabd` opens that aggregate by UID. Digital and silent, scored
   under the **unchanged strict thresholds**. Being global, the tap also hears anything else that
-  plays during the run. This is
+  plays during the run, so keep every other app silent until scoring completes. This is
   the one a session runs.
 - **`--path tap-audible`** — the same tap unmuted: the signal also plays out of the built-in
   speakers while the same strict numbers are taken. **Attended.**

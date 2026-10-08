@@ -13,7 +13,7 @@ Stops the node the same way you started it — by ending its process. There is d
 ```bash
 tatolab nodes
 ```
-Find the row for your `RUNTIME_NAME` (or `RUNTIME_ID`) and note its `PID` — the node's `tatolabd`, which the `tatolab run` / `tatolab dev` that launched the stream started attached. Confirm `ALIVE?` is `yes` before signaling.
+Find the row for your `RUNTIME_NAME` (or `RUNTIME_ID`) and note its `PID` — the node's `tatolabd`, which the `tatolab run` / `tatolab dev` that launched the stream started attached. `ALIVE?` `no` means only that the local API did not answer — a wedged `tatolabd` can still hold the camera and GPU. Before signaling such a row, confirm the pid is still this runtime's process and not a recycled one: `ps -o comm= -p <pid>` prints `tatolabd`, and its working directory (`readlink /proc/<pid>/cwd` on Linux, `lsof -a -d cwd -p <pid>` on macOS) is the project directory the `HINT` names. If either check fails, do not signal it.
 
 ### 2. Signal the process to stop cleanly
 Send `SIGTERM` (the default) so the runtime tears down gracefully and removes its own registry entry:
