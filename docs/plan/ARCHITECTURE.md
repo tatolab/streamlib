@@ -21,38 +21,43 @@ fact about the shipped tree until the change that removes them ships and folds i
 direction, and nothing new is built on it. Off a machine, the direction is §Networking's
 `[moq-on-the-tailnet]` entries.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting, authoring-names)
+## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph, runtime-hosting)
 <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
-  pip-installs streamlib (initially from this repo's releases; PyPI after the project
-  rename) into an ordinary uv-managed venv, runs `streamlib new` then `streamlib dev`,
-  sees their camera live in a window within a minute, and makes the pipeline theirs by
-  editing the scaffolded processor — zero ceremony: no manifest, no `main()`, no schema
-  wrangling, a fast edit loop. The zero-ceremony clauses bind both floors alike. Apple
-  Silicon is a supported floor, not a developer machine: CI gates it on every PR, its
-  `aarch64-apple-darwin` wheel is in the release closure, and a macOS-only regression
-  blocks a release as a Linux one does. macOS security prompts are part of the
-  experience and do not breach zero ceremony; needing an app bundle to obtain them
-  would. Every ticket traces to this sentence or does not exist.
+  with the Tatolab runtime on their machine, installs `tatolab-stream` from PyPI into an
+  ordinary uv-managed venv, runs `tatolab new` then `tatolab dev`, sees their camera live in
+  a window within a minute, and makes the pipeline theirs by editing the scaffolded node —
+  zero ceremony: no manifest, no `main()`, no schema wrangling, a fast edit loop. The
+  zero-ceremony clauses bind both floors alike. Apple Silicon is a supported floor, not a
+  developer machine: CI gates it on every PR, its runtime unit is proven in the release
+  closure, and a macOS-only regression blocks a release as a Linux one does. macOS
+  security prompts are part of the experience and do not breach zero ceremony; needing an
+  app bundle to obtain them would. Every ticket traces to this sentence or does not exist.
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
-  SHIPPED #2357, #2359, #2361, #2362; amended by one-runtime-per-machine: the package names, the stream vocabulary, "with an NVIDIA GPU" (accelerators are optional), and the install step — the runtime arrives from an installer that registers it as a per-user service, so the loop is install, then `new`, then `run`]
+  SHIPPED #2357, #2359, #2361, #2362; package-split-and-lend — SHIPPED #2673, #2693, #2697;
+  amended by one-runtime-per-machine: "with an NVIDIA GPU" (accelerators are optional), and
+  the install step — the runtime arrives from an installer that registers it as a per-user
+  service, so the loop is install, then `new`, then `run`]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
   <!-- verify: grep -n "The scaffolded stream runs on the driver the lend carries" .github/workflows/macos-wheel.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_mach_o_the_lend_carries_is_portable -->
-- **DECIDED** — Terms of the sentence: StreamLib is an importable Python library — one
-  PyPI wheel carrying the Python API, the CLI, and the Rust engine (PyO3, the
-  pydantic-core model); a StreamLib app is a normal Python codebase — one venv, one
-  Python version, ordinary PyPI dependencies, nothing dynamically downloaded;
-  `dev`/`run` load the sole `@stream` in `stream.py` by convention — `run <file>.py:<fn>`
-  or `run <module>:<fn>` loads one, `-f <file>` overrides the file, `--name` the stream's
-  name — and a directory holding an `app.py` but no `stream.py` is refused naming
-  `stream.py` and `-f`; nodes are
-  Python classes written in the project or imported from pip-installed packages, and
-  `stream.add` takes the class; the builder's API is `add`/`connect`/`expose`.
-  [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567, #2569; amended by authoring-names: the builder is `StreamBuilder`, held as `stream_builder`; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node` — stream-graph builds the authoring clauses]
+- **DECIDED** — Terms of the sentence: Tatolab is a pure-Python stream package,
+  `tatolab-stream` from PyPI, beside a native runtime — `tatolabd`, the `tatolab` CLI and
+  the `tatolab.runtime` portion processor interpreters borrow, one unit never shipped
+  through pip (§Packages, the package split and the lend); a stream is a normal Python
+  codebase — one venv, one Python version, ordinary PyPI dependencies, nothing dynamically
+  downloaded; `dev`/`run` load the sole `@stream` in `stream.py` by convention —
+  `run <file>.py:<fn>` or `run <module>:<fn>` loads one, `-f <file>` overrides the file,
+  `--name` the stream's name — and a directory holding an `app.py` but no `stream.py` is
+  refused naming `stream.py` and `-f`; nodes are Python classes written in the project or
+  imported from pip-installed packages, and `stream_builder.add` takes the class; the
+  builder is a `StreamBuilder`, its API `add`/`connect`/`expose`.
+  [importable-python-library — SHIPPED #1683, #1707, #1708; stream-graph — SHIPPED #2567,
+  #2569; package-split-and-lend — SHIPPED #2673, #2686, #2693; authoring-names — SHIPPED
+  #2682]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_project_stream_compile_entry.py::test_a_directory_holding_only_an_app_py_is_refused_naming_stream_py_and_the_file_flag -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
@@ -67,8 +72,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
-- **DECIDED** — The two floors are one product surface. A Python processor written
-  against the wheel's public surface runs on both; where it cannot is a short closed
+- **DECIDED** — The two floors are one product surface. A Python node written
+  against `tatolab.stream` runs on both; where it cannot is a short closed
   list that refuses by name before a frame flows — at load, or in `setup()`,
   naming the platform — never mid-frame: ray-tracing kernels (MoltenVK has no
   `VK_KHR_ray_tracing_pipeline`; each constructor refuses at `setup()` naming the absent
@@ -79,14 +84,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   handed is declared once in `tatolab.stream`, as Protocols and runtime-backed functions
   a conformance gate holds both binaries to member for member in CI, and the rest of the
   native module once in `_engine.pyi`, gated by `stubtest` against both binaries, so no
-  class or method exists on one floor and not the other; one Python suite runs on both
-  floors — its GPU-free half on both CI lanes, its `requires_gpu` half on each floor's
-  rig; and a test skipped off Linux carries `linux_only_capability(reason=…)`, whose
+  class or method exists on one floor and not the other; the three suites — stream,
+  runtime and integration (the entry below) — run on both floors, their GPU-free halves on
+  both CI lanes and their `requires_gpu` halves on each floor's rig; and a test skipped off
+  Linux carries `linux_only_capability(reason=…)`, whose
   reason `test_platform_markers.py` holds to the closed list plus one named group — a
   test whose body is itself a Linux mechanism (`XDG_RUNTIME_DIR`, v4l2loopback and udev,
   the boot-session file, X11/Wayland, SIGHUP and SIGINT hand-back). A test red on macOS
   for any other reason is a parity bug, never a skip.
-  [macos-capability-parity — SHIPPED #2400, #2403, #2405]
+  [macos-capability-parity — SHIPPED #2400, #2403, #2405; package-split-and-lend — SHIPPED
+  #2671, #2686]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_platform_markers.py -->
   <!-- verify: grep -n "mypy.stubtest tatolab.runtime._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py::test_the_engine_conforms_to_tatolab_stream_and_its_stub -->
@@ -94,22 +101,54 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_an_fd_shaped_raw_handle_refuses_by_name_off_linux -->
   <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
 - **DECIDED** — The scaffold models the pathway: pixels on the GPU, logic on the CPU, the
-  pixel view explicit. `streamlib new` writes two processors, each in its own module
+  pixel view explicit. `tatolab new` writes two nodes, each in its own module
   under `nodes/` — an `InvertingEffect` over `GlslPixelEffect` (one GLSL `effect`
   function) in the camera-to-window path, and a numpy `BrightnessMeter` on a fan-out of
   the effect's output that reads the frame through `frame.cpu()` and logs its mean once a
-  second, paced on `ctx.time` — with dependencies `streamlib`, `tatolab-stream` and
-  `numpy>=2.1`, nothing more, the same on both floors. The files render from template
-  files the wheel ships (`tatolab/runtime/_scaffold_template/`), each placeholder its
-  template's own default value so the templates stay importable and checkable; ruff runs
-  over every render, pyright over the template tree, and the cross-floor check gates the
-  output.
-  [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438; amended by stream-graph: the entry file and the nodes' directory re-spelled]
+  second, paced on `ctx.time` — with dependencies `tatolab-stream` and `numpy>=2.1`,
+  nothing more, the same on both floors. The files render from the template files in
+  `sdk/tatolab-stream/scaffold_template/`, which the `tatolab` CLI embeds, each
+  placeholder its template's own default value so the templates stay importable and
+  checkable; ruff runs over every render, pyright over the template tree, and the
+  cross-floor check gates the output.
+  [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438;
+  package-split-and-lend — SHIPPED #2693; amended by stream-graph: the entry file and the
+  nodes' directory re-spelled]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_depends_on_tatolab_stream_and_numpy_only -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help new_writes_the_camera_stream_project_with_dotfiles_and_no_licence_header -->
   <!-- verify: pytest tests/stream-on-runtime/test_tatolab_new.py::test_every_scaffolded_python_file_passes_ruff -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_binds_to_no_floor -->
+- **DECIDED** — `tatolabd --stream-graph <file> --project <dir> --interpreter <path>` hosts
+  one stream in the foreground: the engine and its built-ins, the graph loaded with its
+  environment (§Processor model), the local API on its socket, the engine's signal ladder,
+  its logs on stderr, and no Python in its process. `tatolab` is a native CLI beside it,
+  linking no engine. `run` and `dev` find `<project>/.venv/bin/python` — absent, they refuse
+  by name, pointing at `uv sync` — run `tatolab.stream`'s compile entry in it with the
+  project as the import root (the graph's JSON on stdout, cross-floor warnings on stderr, a
+  failed compile's traceback as the error), start `tatolabd` attached and forward Ctrl-C;
+  `dev` restarts it on an edit. `graph`, `tap`, `logs`, `nodes`, `exchange` and `mcp` speak
+  the local API, and `new` writes the embedded scaffold. Only `<project>/.venv/bin/python` is
+  taken; a relocated venv is refused by name until a need appears. Owner, 2026-10-02.
+  [package-split-and-lend — SHIPPED #2693, #2697; amended by runtime-hosting: one `tatolabd`
+  per machine hosts every stream, and `run` loads into the running one rather than starting
+  its own]
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_run_and_dev_supervise_tatolabd -->
+  <!-- verify: cargo test -p tatolabd --test tatolabd_refuses_by_name -->
+- **DECIDED** — The tests divide as the code does. The stream suite
+  (`sdk/tatolab-stream/tests`) is pure Python in a venv holding only `tatolab-stream` —
+  declarations, the builder and its name resolution, compile, the generated built-ins, the
+  data types, the cross-floor check, the scaffold templates — with runtime-backed objects as
+  test doubles of their Protocols; never a GPU, never the runtime. The runtime suite is Rust —
+  the engine crates, `tatolabd` and `tatolab` — fed graph data and native built-ins only, with
+  no Python node. The integration suite (`tests/stream-on-runtime/`) runs both on purpose: it
+  compiles a fixture stream, starts `tatolabd` and drives it over the local API — processor
+  interpreters, the lend, describe, escalate ops, pixel and device exchange, the CLI end to
+  end. The division is structural, not a lint: each CI job installs only what its suite may
+  touch, so a stream test reaching for the runtime fails to import. `requires_gpu` halves
+  stay rig-only. Testing a user's stream without a runtime is separate work. Owner,
+  2026-10-02. [package-split-and-lend — SHIPPED #2686, #2689, #2693]
+  <!-- verify: grep -n -e "stream-suite:" -e "integration-suite:" .github/workflows/python-wheel.yml -->
 - **DECIDED** — A stream is the unit a person writes and runs: today's app — a directory whose
   `stream.py` defines one or more streams, each a function decorated `@stream` that builds that
   stream's graph of nodes and links from the classes it imports (`@node`), plus `pyproject.toml`
@@ -168,15 +207,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   exposes devices stays long-running. Testing a stream without a full runtime is separate
   work, outside this pivot. Owner, 2026-10-01. [runtime-hosting; one-runtime-per-machine]
 - **DECIDED** — Several streams in one project or package: a stream is a decorated function,
-  `@stream def camera_rig(stream: Stream)`, and a file or a package may define as many as it
-  likes; the bare `setup(stream)` retires rather than living beside it, and a package may ship
+  `@stream def camera_rig(stream_builder: StreamBuilder)`, and a file or a package may define
+  as many as it likes; the bare `setup(stream)` retires rather than living beside it, and a
+  package may ship
   both runnable streams and composable nodes (owner, 2026-09-30). Decided as stream-graph
   decision 1 (owner, 2026-10-01): the name
   defaults to the function's and its docstring is the description an agent reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
   there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one. A
   package declaring its streams under an entry-point group is the packs OPEN's.
-  [one-runtime-per-machine; stream-graph — SHIPPED #2567; amended by authoring-names:
-  `@stream def camera_rig(stream_builder: StreamBuilder)`]
+  [one-runtime-per-machine; stream-graph — SHIPPED #2567; authoring-names — SHIPPED #2682]
 - **DECIDED** — Composition inside a stream is plain Python: a function that takes the builder,
   adds nodes, connects them and returns port references is a reusable fragment. The graph
   stays flat and addresses stay `<machine>/<stream>/<node>/<port>`; no group label and no nested
@@ -184,7 +223,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   streams, linking to another stream's port is the composition. Owner, 2026-10-01.
   [runtime-hosting; one-runtime-per-machine]
 
-## Packages & extension model — IN-FLIGHT (→ package-split-and-lend, authoring-names)
+## Packages & extension model — SHIPPED
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-08-package-split-and-lend.md -->
+<!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-07-authoring-names.md -->
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -197,70 +238,73 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — The plugin ABI is deleted: no dlopen'd processor cdylibs, no `repr(C)`
   vtable surface, and none of that ABI's load-time machinery — no dlopen load handshake, no
-  cdylib build fingerprints. The scope is the deleted ABI and nothing wider: a helper process
-  imports the one wheel and checks that the engine it imported is its parent's build, which
-  is the handshake §Processor model states, not an ABI surface returning. The extension paths are
+  cdylib build fingerprints. The scope is the deleted ABI and nothing wider: a processor
+  interpreter imports the lent `tatolab.runtime` and checks that it is its parent's build —
+  true by construction and kept as the backstop — which is the handshake §Processor model
+  states, not an ABI surface returning. The extension paths are
   Python packages and Rust source crates only — and an extension wheel is a Python
   package: Rust inside, loaded across the CPython ABI, never dlopen'd by the engine
   (extension-model, 2026-09-04).
   [importable-python-library; importable-python-library-ripout — SHIPPED #1715;
-  local-transport-hardening — SHIPPED #2262; amended by package-split-and-lend: a processor
-  interpreter imports the lent `tatolab.runtime` and checks it is its parent's build, true by
-  construction and kept as the backstop]
+  local-transport-hardening — SHIPPED #2262; package-split-and-lend — SHIPPED #2689]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — Third-party native code (closed-source included) ships as an ordinary
   Python package whose native internals expose capabilities to Python as handles —
   frames, FDs, exportable device allocations, buffers — wrapped by a Python
   processor. It never links the engine and never speaks streamlib internals; the
   CPython ABI is the only
-  binary boundary, and no process ever holds two streamlib engines — the app process
-  runs the one engine, and a helper process imports the same wheel as a processor
-  host, never as a second engine. Handles it exposes must be genuinely transferable
-  across a process boundary (an fd, an exportable allocation) — an
+  binary boundary, and no process ever holds two streamlib engines — the runtime process
+  runs the one engine, and a processor interpreter imports the lent `tatolab.runtime` as
+  its node's bindings, never as a second engine. Handles it exposes must be genuinely
+  transferable across a process boundary (an fd, an exportable allocation) — an
   address-space-local pointer is not a handle.
-  [importable-python-library — SHIPPED #1710, #1756, #1757; amended by one-runtime-per-machine: the runtime process runs the one engine, one per machine]
+  [importable-python-library — SHIPPED #1710, #1756, #1757; package-split-and-lend — SHIPPED
+  #2689, #2693; amended by one-runtime-per-machine: one runtime process per machine]
   <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py -->
 - **DECIDED** — First-party optional capabilities ship the same way third-party native
   code does: as separate PyPI extension wheels — Rust inside for speed, a Python
-  processor as the binding for any processor the wheel supplies — depending on the
-  `streamlib` wheel as a binary and never building it from source. Optional means an app can be complete without it. The engine
-  is not the home of every capability; it is the home of what belongs in core. Owner,
-  2026-09-04. [extension-model]
-- **DECIDED** — Two extension mechanisms, recorded as the current best understanding of
-  the shape and expected to flex during the align and implementation. A *processor
-  extension* is a Python processor class in a pip-installed package whose per-frame work
-  runs in native code the same wheel carries: `stream.add(TheClass)` adds it, as
-  for any Python processor; it runs in its own helper process under the one placement
-  rule; and it calls its own package's Rust directly — the engine does not call extension
-  code on the data path, and there is no processor-to-engine-to-wheel round trip. A
-  *capability extension* is support code: declared by a standard entry point in the
-  wheel's `pyproject.toml` that pip records at install and the engine reads through
-  `importlib.metadata` at startup — pip's registry, not a file scan — and run once, the
-  way a driver is loaded, so that the processors in the same wheel find what they need
-  already in place. It may bring up a device library or a network stack, and it may
-  introduce an engine-grade capability the engine does not itself provide — specialised
-  graphics processing, a transport, a device class — the Unreal-module shape. It registers
-  through a sandboxed door the engine offers, so two packages cannot unsafely alter engine
-  features, and it extends rather than rewrites engine pieces. Pure Python stays a
-  complete way to write a processor; this is an additional pathway. Both compile at
-  publish time with maturin, neither is dlopen'd by the engine, and the CPython ABI stays
-  the only binary boundary. [extension-model]
+  node as the binding for any node the wheel supplies — depending on `tatolab-stream` by a
+  minimum version and never on the runtime. Optional means a stream can be complete
+  without it. The engine is not the home of every capability; it is the home of what
+  belongs in core. Owner, 2026-09-04. [extension-model; package-split-and-lend — SHIPPED
+  #2691]
+- **DECIDED** — One extension mechanism, and no package extends the engine. A *processor
+  extension* is a Python node class in a pip-installed package whose per-frame work runs in
+  native code the same wheel carries: `stream_builder.add(TheClass)` adds it, as for any
+  Python node; it runs in its own processor interpreter under the one placement rule; and it
+  calls its own package's Rust directly — the engine does not call extension code on the
+  data path, and there is no node-to-engine-to-wheel round trip. The runtime is the host and
+  streams are its guests: one shared runtime serves every stream on the machine, and code
+  inside it could crash, read or send out every stream's data, so nothing a package carries
+  runs in the runtime process. A package does its own setup where its nodes run, at import or
+  on first use — `tatolab-webrtc` brings up its network runtime and TLS provider that way; a
+  node's lifecycle methods are unchanged; an outside program watches the local API. An
+  engine-grade capability — specialised graphics processing, a transport, a device class —
+  enters as a built-in under the criterion below. Pure Python stays a complete way to write a
+  node; this is an additional pathway. It compiles at publish time with maturin, is never
+  dlopen'd by the engine, and the CPython ABI stays the only binary boundary.
+  Rejected: a capability-extension hook — an entry point the runtime reads and runs in its
+  own process, or in an interpreter embedded in `tatolabd` for hooks alone — since a native
+  `tatolabd` runs no Python and a package inside the shared runtime reaches every stream
+  (owner, package-split-and-lend decision 2, 2026-10-02).
+  [extension-model; package-split-and-lend — SHIPPED #2691]
 - **DECIDED** — The criterion for a built-in, stated so that the next one is
-  contestable: a first-party capability ships inside the wheel only if (a) its per-frame
+  contestable: a first-party capability is a built-in — its native half in `tatolabd`, never
+  in a pip distribution, its generated class in `tatolab-stream` — only if (a) its per-frame
   path has a deadline the helper hop cannot meet — a vsync-paced present loop, a device
   audio callback — or (b) it needs an engine-only primitive the handle-shaped surface does
   not export, or (c) it presents an OS-facing device to the other applications on the
   machine — a virtual camera; a virtual microphone would be the same case — which
-  `pip install streamlib` alone must make available, with no further package to install;
+  installing the runtime alone must make available, with no further package to install;
   and in every case (d) a named consumer exists. Everything else is an
   extension. What an extension needs and the engine does not yet expose is engine work,
   done as engine code inside the extension's own change, rather than by the extension
   reaching past the surface. Codec sessions are not exported to Python; an extension that
   needs one brings that export as engine work. [extension-model; virtual-camera-sink —
-  SHIPPED #2196, #2197, #2198]
+  SHIPPED #2196, #2197, #2198; package-split-and-lend — SHIPPED #2684, #2697]
   <!-- verify: pytest tests/stream-on-runtime/test_virtual_camera_sink.py -->
-- **DECIDED** — The `streamlib` wheel exports its bag codec as two module-level functions
-  with stub entries: `encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes` and
+- **DECIDED** — The runtime exports its bag codec as two functions `tatolab.stream` declares
+  as runtime-backed: `encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes` and
   `decode_msgpack_bytes_to_python_object(msgpack_bytes: bytes) -> Any`. They are the
   existing `encode_bag_to_msgpack` and `decode_msgpack_to_python_object` made reachable,
   with exactly the codec's rules — a dict with string keys at every level, the eight value
@@ -272,75 +316,23 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   own transport needs the one codec, and a second one in the wheel would be the parallel
   abstraction the doctrine forbids. It is not a raw byte port — no link reads or writes
   bytes; the pair converts between a bag and bytes in the caller's own hands.
-  `docs/decisions/extension-model.md` records why. [moq-data-tracks — SHIPPED #2171]
+  `docs/decisions/extension-model.md` records why. [moq-data-tracks — SHIPPED #2171;
+  package-split-and-lend — SHIPPED #2686]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_bag_codec_export.py -->
-- **DECIDED** — The capability-extension mechanism, decided on the first real extension
-  and expected to move where implementation teaches otherwise. The entry-point group is
-  `streamlib.extensions`; an entry names one callable the wheel exports, `load(host)`.
-  The engine runs every installed hook once per process that takes an engine role: in
-  the app process when `Runtime()` is constructed, and in each helper after the wheel is
-  imported and the log channel is up but before the processor's module is imported — so
-  a failing hook is reportable through the normal channel, and a stack the hook brings
-  up exists in the process where `process()` runs. `host` is a small bounded object: it
-  says which role the process has, and it takes `register_capability(name, version)` — a
-  registry the wheel owns, because native processor registration is reachable only from
-  Rust that links the engine, which an extension by construction does not. Doors on
-  `host` grow only when an extension needs one, as engine code inside that extension's
-  change. A hook that raises fails the runtime's construction in the app process and
-  fails that processor's start by name in a helper — the posture the engine's own init
-  hooks already take — rather than skipping and logging, since an extension that half
-  loaded is worse than one that refused. Two wheels registering one capability name
-  refuse by name at startup. `graph` carries what loaded, as a third top-level key beside
-  `nodes` and `links`: one entry per capability with its name, version and distribution.
-  There is no per-app opt-out yet; the first app that needs one gets it as a one-line
-  addition. [extension-model; reopened by one-runtime-per-machine: how an external control client loads]
-- **DECIDED** — The support hook's contract, as built. A wheel declares
-  `[project.entry-points."streamlib.extensions"] <name> = "<module>:load"`; the engine
-  reads `importlib.metadata.entry_points(group="streamlib.extensions")` and calls each
-  `load(host)` once per process taking an engine role — from `Runtime.__init__` in the app
-  process, and from `_processor_interpreter_bootstrap.py` between the log sink's
-  installation and the processor class's import. `host` is `tatolab.runtime.CapabilityExtensionHost`, a `#[pyclass]` with a stub
-  entry: `role` (`"app"` or `"helper"`) and `register_capability(name, version)`. In the
-  app process a registration lands on the runtime and renders in `graph`; in a helper it is
-  recorded for the extension's own reads. A hook that raises fails `Runtime()` with the
-  distribution named; in a helper it fails that processor's start through the log channel
-  and the parent refuses the processor by name, inside the existing 60 s budget. A second
-  registration of one capability name refuses at the second hook, naming both
-  distributions. `GraphResponse` gains `extensions: [{name, version, distribution}]`, a
-  third top-level key, in the OpenAPI schema and the MCP `graph` tool alike. No opt-out.
-  Discovery and the loop are Python; the runtime-side registry and the `graph` key are the
-  one engine change. [networking-extension-wheels — SHIPPED #2149; reopened by one-runtime-per-machine: how an external control client loads]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_capability_extensions.py -->
-- **DECIDED** — The mechanism's own proof is GPU-free and CI-run: a test-only distribution
-  under the wheel's tests, installed into the venv, whose entry point registers a capability
-  and whose second variant raises — proving discovery, the app-process and helper call
-  sites, hard-fail by name, duplicate refusal, and the `graph` key, with no network and no
-  device. [networking-extension-wheels — SHIPPED #2149]
 - **DECIDED** — An extension wheel is built the way a third party would build one, which
   is the dogfooding the pivot exists for: a standalone maturin project under `packages/`
   with its own workspace root and lockfile — not a member of the engine workspace —
-  depending on the published `streamlib` wheel by version and on `pyo3`, and on no engine
-  crate; independently versioned and released; published through the same simple index
-  the wheel uses, which becomes multi-project to carry it. Distribution names take the
-  `streamlib-<capability>` form and imports `streamlib_<capability>`. Its gates are its
-  own CI lane — stubtest over its own `.pyi`, pyright, the portability gate — since the
-  engine workspace's gates do not walk a non-member. A Rust-side extension SDK is not
-  owed by the first two extensions, whose Rust handles bytes and no engine object; it
-  lands with the first extension that needs one. [extension-model; amended by tatolab-names:
-  `tatolab-<name>` importing as `tatolab.<name>`; amended by package-split-and-lend: an
-  extension depends on `tatolab-stream`, and its nodes run in processor interpreters where
-  `tatolab.runtime` is lent; while released from this repository an extension carries
-  Tatolab's one version number (§Distribution & versioning)]
-- **OPEN** — How an engine-grade capability an extension introduces — a specialised
-  graphics pass, a device class — is reached by processors and by the engine. Undecided
-  until an extension brings one: the first two register a name and bring up a network
-  stack, which is all the mechanism has to carry so far. [extension-model]
-- **OPEN** — Whether an extension's native code may ever be called in the app process
-  rather than in its helper — a Rust-implemented class reached through the CPython API
-  with the GIL released on entry. The placement rule stands unchanged: every Python
-  processor, extension or not, runs in its own helper process. This is the owner's ruling
-  to make and never a session's inference; until it is made there is no carve-out.
-  [extension-model]
+  depending on `tatolab-stream` by a minimum version and on `pyo3`, and on no engine crate;
+  its nodes run in processor interpreters, where `tatolab.runtime` is lent. While released
+  from this repository it carries Tatolab's one version and is published to PyPI beside
+  `tatolab-stream` (§Distribution & versioning). Distribution names take the
+  `tatolab-<name>` form and import as `tatolab.<name>`. Its gates are its own CI lane —
+  stubtest over its own `.pyi`, pyright, its crate's tests — since the engine workspace's
+  gates do not walk a non-member. A Rust-side extension SDK is not owed by the first
+  extension, whose Rust handles bytes and no engine object; it lands with the first
+  extension that needs one. [extension-model; tatolab-names; package-split-and-lend —
+  SHIPPED #2673, #2691, #2697]
+  <!-- verify: grep -n "tatolab-stream>=" packages/streamlib-webrtc/pyproject.toml -->
 - **DECIDED** — The engine's handle-shaped primitive surface is the public contract
   for native interop: DMA-BUF / OPAQUE_FD import and export on Linux and IOSurface export
   on macOS, the present target, texture rings, codec byte pumps, the audio clock, color
@@ -527,8 +519,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_a_copy_request_is_refused_at_both_doors -->
 - **DECIDED** — The cross-floor check reads a Python processor's source and its
   `pyproject.toml` for what binds it to one floor and names the file, line and portable
-  spelling of each. It runs inside `streamlib dev` and `streamlib run` as a warning that
-  never blocks a start, gates in CI the wheel's own Python and the scaffold's output, and
+  spelling of each. It runs inside `tatolab dev` and `tatolab run` as a warning that
+  never blocks a start, gates in CI the stream package's and the runtime's own Python and
+  the scaffold's output, and
   runs over `examples/` when a change ships; it is no CLI verb of its own. It reads
   source, not behaviour: a dynamic import or a dependency's own device choice is left to
   the same Python suite running on both floors. As built, `tatolab.stream._cross_floor_check`
@@ -543,11 +536,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   reported as allowed on its floor with the other floor's peer; and a `cupy*` or `mlx*`
   dependency with no `sys_platform`/`platform_system` marker. Nothing under a
   `sys.platform` guard is flagged, in either branch.
-  `launch_app_node` prints the block on stdout between resolving the entry file and
-  executing it — nothing when clean, a failure of the check itself reported, a start
+  The compile entry `tatolab` runs in the project's interpreter prints the block on stderr
+  before it compiles — nothing when clean, a failure of the check itself reported, a start
   never blocked; on Python 3.10 the dependency rule is skipped and the block says so. CI
-  gates the wheel's own Python and both scaffold variants on both lanes.
-  [portable-gpu-interop — SHIPPED #2421]
+  gates the stream package's and the runtime's own Python and both scaffold variants on
+  both lanes. [portable-gpu-interop — SHIPPED #2421; package-split-and-lend — SHIPPED #2693]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_cross_floor_check.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_cross_floor_check.py::test_the_stream_packages_own_python_binds_to_no_floor -->
@@ -557,8 +550,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   complete without one. [one-runtime-per-machine]
 - **DECIDED** — The package split and the lend. `tatolab-stream`, importing as
   `tatolab.stream`, is pure Python and is everything a stream module imports: `@stream`,
-  `@node`, `@input`, `@output`, the `Stream` builder and its references, the built-in node
-  classes with their config shapes, and the data types; a stream is written, type-checked and
+  `@node` with its `@node.input` and `@node.output`, the `StreamBuilder` and its references,
+  the built-in node classes with their config shapes, and the data types; a stream is
+  written, type-checked and
   compiled with no runtime installed. `tatolab.runtime` is the engine's native part — the
   engine, the bindings a node's calls go through while it runs, the processor-interpreter
   bootstrap, and on macOS the bundled Vulkan driver — and ships only with the runtime, never
@@ -573,12 +567,60 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the runtime loads what it understands and refuses by name anything in a graph it does not —
   a node type it lacks, a setting it does not know — and a newer runtime loads every graph an
   older stream recorded. Compiling happens in the project's interpreter, never in the
-  runtime process. Owner, 2026-10-02. [package-split-and-lend; one-runtime-per-machine; amended by
-  authoring-names: `@node.input`, `@node.output`, the `StreamBuilder`]
-- **OPEN** — How an external control client plugs in: an entry point with a role of its own
-  beside today's two, or another seam. What it hands the runtime beyond a relay address and a
-  credential is the sharing step's to decide (§Networking). Known (2026-10-04): no stream map,
-  router or peer identity exists to push. [one-runtime-per-machine; moq-on-the-tailnet]
+  runtime process. Owner, 2026-10-02. [one-runtime-per-machine; package-split-and-lend —
+  SHIPPED #2671, #2673, #2686, #2689, #2693, #2697; authoring-names — SHIPPED #2682]
+  <!-- verify: cargo run -p xtask -- check-no-tatolab-namespace-package-init -->
+- **DECIDED** — `tatolab-stream` as built. A pure build backend, `requires-python >=3.10`,
+  depending on what its own modules import and never on the runtime. A module belongs in it
+  exactly when a stream or node module imports it: the declarations (`@node`, `@stream`, the
+  `StreamBuilder`, the references, the compile entry), the config schema deriver, the data
+  types (`AudioBlock`, `EncodedAudioPacket`, `VideoFrame` and its colour types,
+  `EncodedVideoFrame`), the composable pieces (`ClaimedSurfacePixelAccess`,
+  `PixelAccessToOneClaimedSurface`, `GlslPixelEffect`, the `ModelInputTensor` family,
+  `NodeOutputTextureRing`), `clock`, `log`, and the cross-floor check the compile entry runs.
+  `@node` registers nothing — it writes the class's declaration stamps — and the proof is the
+  stream suite itself, run with no runtime on any path. [package-split-and-lend — SHIPPED
+  #2686]
+  <!-- verify: pytest sdk/tatolab-stream/tests -->
+- **DECIDED** — Built-in nodes reach Python as plain classes generated from the runtime: `cargo
+  xtask generate-built-in-node-classes` writes `tatolab/stream/_built_in_nodes.py` from each
+  built-in's descriptor and its config's JSON Schema — its `type`, its doc line, its ports and
+  a `TypedDict` of its config keys, so pyright checks `stream_builder.add(CameraSource,
+  config={"device_id": "/dev/video2"})` — and CI fails when a regeneration differs. One
+  declaration, the Rust one; no native marker class exists. [package-split-and-lend — SHIPPED
+  #2684]
+  <!-- verify: cargo run -p xtask -- generate-built-in-node-classes --check -->
+  <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py -->
+- **DECIDED** — What the runtime backs is declared once, in `tatolab.stream`: the contexts,
+  `LinkInputDataReader`, `LinkOutputDataWriter`, `NodeLinkDataAccess`, the `GpuContext`
+  capabilities, `GpuSurfaceHandle`, the kernels, `MonotonicTimer`, the texture exports,
+  `NodeOwnedWindow` and its events, the bag codec pair, `monotonic_now_ns`,
+  `gpu_limited_access_of_the_typed_read_in_progress`, and `start_monotonic_timer(interval_ns)`,
+  the one way a node starts a timer — `MonotonicTimer(n)` is gone, with no alias (owner,
+  2026-10-07). A class is a `typing.Protocol` carrying the native signatures; a function binds
+  the runtime's on first call and, with nothing lent, raises `RuntimeError` naming itself and
+  saying it runs in a processor interpreter. `_engine.pyi` covers only the bootstrap's private
+  surface, and a conformance gate holds every class a node is handed to its Protocol member
+  for member against the signatures pyo3 publishes. [package-split-and-lend — SHIPPED #2686]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py -->
+- **DECIDED** — `tatolab.runtime` and the lend directory, as built. `tatolab/runtime/` is a
+  regular package: `__init__.py` names the bundled ICD before `_engine` loads; `_engine`
+  (`module-name = "tatolab.runtime._engine"`) holds the bindings alone;
+  `_processor_interpreter_bootstrap.py` is the processor interpreter's entry; on macOS
+  `_vulkan_driver/` sits beside them. It holds no `Runtime`, no CLI, no test harness and no
+  control-plane client: the Python-hosted engine is deleted. maturin builds it as a wheel that
+  `cargo xtask build-runtime` unpacks into `target/tatolab-runtime/lib/tatolab/lend/`, beside
+  `bin/tatolabd` and `bin/tatolab` — the install prefix's own shape, built once for
+  developers, CI and later the installer, never installed into a venv and never published. A
+  gate fails any `tatolab/__init__.py` in the tree or in a built lend, and `dladdr` finds
+  `_vulkan_driver/` beside `_engine` unchanged. [package-split-and-lend — SHIPPED #2689,
+  #2693, #2697]
+  <!-- verify: cargo run -p xtask -- check-no-tatolab-namespace-package-init -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_bundled_vulkan_driver.py -->
+- **OPEN** — How an external control client plugs in. What it hands the runtime beyond a
+  relay address and a credential is the sharing step's to decide (§Networking). Known
+  (2026-10-04): no stream map, router or peer identity exists to push.
+  [one-runtime-per-machine; moq-on-the-tailnet]
 - **DECIDED** — The names, Tailscale-shaped. The runtime's program is `tatolabd`; the CLI is
   `tatolab`; the desktop app is Tatolab (`Tatolab.app`); the installer ships all three as one
   unit, and users still call the program "the runtime" (owner, 2026-10-02); the bare name `tatolab` is the
@@ -590,9 +632,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `tatolab-<name>` importing as `tatolab.<name>` (`tatolab-webrtc` → `tatolab.webrtc`). No
   distribution ships `tatolab/__init__.py`. A third party's pack uses its own name, never the
   `tatolab` namespace. Which built-ins, extensions and packs ship inside the app or through pip
-  is §Packages' packs OPEN. The extensions' entry-point group is `tatolab.extensions`, and the
-  Rust crate for writing streams is `tatolab-stream`. Owner, 2026-10-01. [tatolab-names;
-  one-runtime-per-machine]
+  is §Packages' packs OPEN. The Rust crate for writing streams is `tatolab-stream`. Owner,
+  2026-10-01. [tatolab-names; one-runtime-per-machine; package-split-and-lend — SHIPPED #2673,
+  #2691]
 - **DECIDED** — No public Python name Tatolab publishes says "processor". The move from
   `streamlib` to `tatolab.*` re-spells every one still standing, at once:
   `ProcessorOwnedWindow` → `NodeOwnedWindow`, `ProcessorOwnedWindowEvents` →
@@ -602,7 +644,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `acquire_storage_buffer_from_processor_output_pool` → `…_from_node_output_pool`, and the
   contexts' `processor_id` → `node_id`, the id `graph` renders on the node. A name an earlier
   change deletes is deleted, never renamed. The engine's Rust identifiers and the wire keep
-  "processor" until the rename step. Owner, 2026-10-02. [tatolab-names; package-split-and-lend]
+  "processor" until the rename step. Owner, 2026-10-02. [tatolab-names; package-split-and-lend
+  — SHIPPED #2673]
 - **DECIDED** — The authoring names, with no alias. The object a `@stream` function is handed is
   a `StreamBuilder`, and the scaffold, the docs and every refusal model the parameter as
   `stream_builder`: `@stream def main(stream_builder: StreamBuilder)`; the decorator keeps
@@ -610,10 +653,11 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `@node.input` and `@node.output` — attributes of the `@node` decorator, so a node module
   imports `node` alone for them and no name it imports shadows Python's builtin `input()`. A
   Rust node's attribute macro keeps `input(…)` / `output(…)`, already the same word, and a node
-  reference keeps `input(name)` / `output(name)`. They land in this milestone, ahead of the
-  stand-alone stream package. Rejected: `@incoming` / `@outgoing` for ports — vocabulary no
-  Python dataflow or media framework uses; `@input_port` / `@output_port` — a word the
-  declaring side alone would carry (owner, 2026-10-06). Owner, 2026-10-06. [authoring-names]
+  reference keeps `input(name)` / `output(name)`. Rejected: `@incoming` / `@outgoing` for
+  ports — vocabulary no Python dataflow or media framework uses; `@input_port` /
+  `@output_port` — a word the declaring side alone would carry (owner, 2026-10-06). Owner,
+  2026-10-06. [authoring-names — SHIPPED #2682]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-10-07-authoring-names.md -->
 - **OPEN** — Packs, a registry, and loading a stream from a source. Direction (review, not
   decided; the owner wants to distribute what they build and update the app separately): the
   unit of distribution is a pack — one ordinary Python distribution carrying nodes and streams,
@@ -629,8 +673,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   standard toolchain only — `pyproject.toml`, uv, a package index, git — never by machinery of
   streamlib's, which is what importable-python-library deleted. The runtime process imports
   nothing from a pack or a project; their code runs only in processor interpreters started from
-  that venv, and the one door into the runtime process — a capability extension's hook — opens
-  only to what the installer put beside the runtime. Undecided: the registry's owner and
+  that venv. Undecided: the registry's owner and
   standards, a manager UI, and what the app's own catalog does. [one-runtime-per-machine]
 
 ## Consumers — examples & packages — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
@@ -647,16 +690,17 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — `packages/` holds first-party extension wheels — the optional
   capabilities §Packages & extension model decides ship outside the wheel, with its
   built-in criterion deciding which side of the line a capability lands on. Each is an
-  ordinary pip-installable Python package depending on the streamlib wheel through its
-  public surface, never linking the engine.
+  ordinary pip-installable Python package depending on `tatolab-stream`, never linking the
+  engine.
   In-repo consumers (examples included) link a package locally as a Python path
   dependency — no publish loop stands between an example and the package it uses.
-  Externally, packages publish through the same GitHub-hosted PEP 503 index the wheel
-  uses (PyPI after the rename). `test-fixtures` remains as the tree's one
-  engine-adjacent Rust crate. [consumer-tree-disposition — SHIPPED #2052; extension-model]
+  Externally, packages publish to PyPI beside `tatolab-stream` (owner, 2026-10-08).
+  `test-fixtures` remains as the tree's one engine-adjacent Rust crate.
+  [consumer-tree-disposition — SHIPPED #2052; extension-model; package-split-and-lend —
+  SHIPPED #2697]
   <!-- verify: grep -n "packages/" Cargo.toml -->
 - **DECIDED** — Conversion is a from-scratch rewrite in the current idiom, never an
-  in-place upgrade: start from the `streamlib new` scaffold, mine the old directory for
+  in-place upgrade: start from the `tatolab new` scaffold, mine the old directory for
   its logic only, author against today's full surface (delivery profiles, window
   contracts, cast objects, kernels-as-objects), and delete the old directory in the same
   PR. Every pre-pivot consumer neither deleted nor held below is conversion backlog under
@@ -699,7 +743,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `examples/polyglot-manual-source`, `examples/camera-rust-plugin`,
   `examples/vulkan-video-roundtrip-cdylib-camera`, `examples/dynamic-reconfigure`,
   `examples/api-server`, `examples/api-server-demo`, `examples/runtime-graph-json-demo`,
-  `examples/hello-streamlib` (the `streamlib new` scaffold is the hello; `camera-display`
+  `examples/hello-streamlib` (the `tatolab new` scaffold is the hello; `camera-display`
   is the canonical minimal example), and `packages/audio`, `packages/camera`,
   `packages/display`, `packages/frame-tap`, plus the `packages/core` stub. A test owns its
   fixtures: CI reaching into `examples/` would make a consumer a contract source.
@@ -717,9 +761,6 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   pre-1.0: an extension wheel is an ordinary Python package on the ordinary index, and
   closed-source Rust processors for Rust apps are deliberately not a path — a
   closed-source vendor ships the Python package whose native internals expose handles.
-  What the extension-model pivot adds is not distribution but *registration*: the
-  capability extension's support hook, declared by a standard entry point pip records
-  and the engine runs once per process, which §Packages & extension model owns.
   [consumer-tree-disposition — SHIPPED; extension-model]
 - **DECIDED** — Lag-by-design ends for a converted consumer: when an engine change
   breaks one, the breakage is filed as tracked backlog at the consumer and never
@@ -731,7 +772,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ stream-graph, package-split-and-lend, runtime-hosting)
+## Processor model & scheduling — IN-FLIGHT (→ stream-graph, runtime-hosting)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -1030,7 +1071,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   configuration and refuses a non-empty one by name; reconfiguration calls
   `configure(config_class(**configuration))`. Construction is the only check — the wheel
   carries no validator, and how strict it is stays the author's choice of config class.
-  On the wire, `stream.add(cls, config={…})` carries a dict, the graph node stores its JSON, and
+  On the wire, `stream_builder.add(cls, config={…})` carries a dict, the graph node stores its JSON, and
   `ctx.config` is that mapping. [agent-readable-processor-catalog — SHIPPED #2226]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_node_config_class.py::test_a_keyword_parameter_is_refused_with_the_fix_named -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_construction.py::test_the_helper_constructs_the_processor_by_the_config_keyword -->
@@ -1066,8 +1107,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   shutdown wake (an `eventfd` on Linux, a close-on-exec pipe written once on macOS), so a bag
   or a shutdown wakes it on arrival. The 100 ms channel-poll loop survives only as the
   fallback for a platform with neither queue or a waiter whose setup failed, and a wake that
-  cannot be created leaves channel-only shutdown rather than a panic. `MonotonicTimer` runs on
-  both floors behind the unchanged Python surface: `timerfd` on Linux; on macOS a one-shot
+  cannot be created leaves channel-only shutdown rather than a panic. `MonotonicTimer`, which
+  a node starts with `start_monotonic_timer(interval_ns)`, runs on both floors: `timerfd` on
+  Linux; on macOS a one-shot
   kqueue `EVFILT_TIMER` with `NOTE_MACHTIME | NOTE_ABSOLUTE | NOTE_CRITICAL`, re-armed after
   each fire at the next absolute deadline, `first + k·interval` on `MediaClock`, converted to
   Mach ticks and rounded up so a deadline never fires early. `wait()` returns the deadlines
@@ -1087,20 +1129,20 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in -->
 - **DECIDED** — Helper-process placement is the only execution placement. Every Python
   processor runs in its own child process — its own interpreter, its own GIL — spawned
-  by the Rust engine as an exec of `sys.executable` from the app's venv: never fork
+  by the Rust engine as an exec of the stream's own venv interpreter with the runtime's
+  lend directory, which holds `tatolab/runtime/`, first on its `PYTHONPATH`: never fork
   (GPU contexts are fork-unsafe), never `multiprocessing` or a worker pool (the engine
   owns the child's lifecycle from its compiler ops and needs no GIL to manage it).
   In-process hosting of a Python processor does not exist — not as a default, a
   fallback, an optimisation, or an engine choice. Isolation, not latency, is the
   optimised axis: no processor may ever block, stall, or degrade another. Same user
   code, one venv, no per-processor environments, no placement surface of any kind.
-  Helper children import the wheel itself — one native artifact. Every processor class
+  A child imports the lent `tatolab.runtime`, never a copy in its venv — one native
+  artifact. Every processor class
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
-  placement. [helper-process-placement-only — SHIPPED #1714; amended by package-split-and-lend: the exec
-  is the stream's own venv interpreter with the runtime's lend directory, which holds
-  `tatolab/runtime/`, prepended to its `PYTHONPATH`, so a child imports the lent portion, not a wheel in its venv; per-stream
-  environments in one runtime process are runtime-hosting's]
+  placement. [helper-process-placement-only — SHIPPED #1714; package-split-and-lend —
+  SHIPPED #2689; amended by runtime-hosting: per-stream environments in one runtime process]
 - **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
   service above the transport does not change: its verbs, its per-slot-not-per-frame shape,
   the checkout lease and the retired-frame refusal are one platform-neutral core both arms
@@ -1235,8 +1277,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   is not owned there and no disposition is handed back — named platform differences in the
   test closed list, not gaps. **A helper never outlives its app on either floor.** On Linux
   the kernel ends it: the spawn host sets `PR_SET_PDEATHSIG` to `SIGKILL`. Darwin has no such
-  signal, so a macOS helper arms its own watch at boot, before capability extensions or its
-  processor's module load — kqueue `EVFILT_PROC` with `NOTE_EXIT` on the parent's pid,
+  signal, so a macOS helper arms its own watch at boot, before its processor's module
+  loads — kqueue `EVFILT_PROC` with `NOTE_EXIT` on the parent's pid,
   belt-and-braces with a dead-name notification on a boot-time connection to the
   surface-share service. Whichever fires first shuts the escalate socket, so the helper reads
   the end of its channel and runs the `stop` and `teardown()` the engine can no longer send,
@@ -1245,7 +1287,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   skipping the terminate rung because the teardown budget is already spent. A `SIGKILL`ed app
   therefore leaves no helper on either floor, and on macOS the helper's `teardown()` still
   runs. **A third interrupt exits 130 on both floors**: the run loop parks for good while the
-  process is being ended at once, so killing the helper groups can no longer let `run()`
+  process is being ended at once, so killing the helper groups can no longer let the run
   return inside the log-flush grace and exit 0.
   [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266; macos-platform-floor —
   SHIPPED #2357; macos-capability-parity — SHIPPED #2410; amended by one-runtime-per-machine:
@@ -1290,11 +1332,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   writes a refusal naming both ids to raw stderr and exits, so the parent reports that
   processor's start as refused and names the helper's stderr. An absent id is a refusal too,
   never a silent pass.
+  The lend gives a processor interpreter its runtime's own build by construction; the check
+  stays as the backstop.
   Rejected: a hand-bumped subprocess protocol version beside the build id — it never caught a
   helper built against a different iceoryx2 patch or a stale wheel on the helper's `sys.path`
   (local-transport-hardening, 2026-09-14).
-  [local-transport-hardening — SHIPPED #2262; amended by package-split-and-lend: the lend
-  gives both sides one build by construction, and this check stays as the backstop]
+  [local-transport-hardening — SHIPPED #2262; package-split-and-lend — SHIPPED #2689]
   <!-- verify: cargo test -p streamlib-engine --lib core::engine_build_id_composition -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_placement.py::test_a_helper_that_imported_another_engine_build_is_refused_naming_both_builds -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_a_helper_handed_no_engine_build_id_refuses_rather_than_passing -->
@@ -1305,11 +1348,12 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [importable-python-library — SHIPPED #1711]
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_bad_config_is_reported_without_a_launcher_traceback -->
 - **DECIDED** — A processor's identity is its class, named by its fully-qualified
-  import path (`my_app.filters:BlurProcessor` in Python, the type path in Rust) —
+  import path (`my_app.filters:BlurProcessor` in Python, the type path in Rust; a built-in
+  by its class's import path in `tatolab.stream`, the entry below) —
   derived mechanically, never authored, and the same string in the registry, in the
   control plane's type field, and for spawning the processor's helper process — which
   is how every Python processor runs. A processor defined in the entry file run as
-  `python <script>.py` identifies as `__main__:<Type>` and is a wiring error at `stream.add`,
+  `python <script>.py` identifies as `__main__:<Type>` and is a wiring error at `stream_builder.add`,
   with an error naming the fix (move the class to an importable module and import it
   from the entry file — one import line). The entry file itself may still run as
   `__main__`; only processor classes may not live there.
@@ -1322,8 +1366,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   assigns. The `FullAccessGrant` moat is a compile-time guarantee
   about who may mint an in-process `RuntimeContextFullAccess`, never a placement question.
   [processor-class-identity — SHIPPED #1837, #1839, #1840, #1841;
-  helper-process-placement-only — SHIPPED #1714; amended by built-in-node-type: a built-in is
-  named by its class's import path in `tatolab.stream`, never by its Rust type path]
+  helper-process-placement-only — SHIPPED #1714; built-in-node-type; package-split-and-lend —
+  SHIPPED #2684]
   <!-- verify: cargo test -p streamlib-engine --test processor_class_import_path_test -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_identity.py::test_the_launch_arrangement_never_changes_the_identity -->
   <!-- verify: pytest tests/stream-on-runtime/test_processor_identity.py::test_a_processor_declared_in_the_entry_file_is_refused -->
@@ -1337,11 +1381,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   runtime's built-ins, and any other is imported in the stream's own interpreter. A type
   changes only when its class's public name does — renaming or moving the runtime's crates
   and modules never changes one — and the first golden graph a runtime is held to already
-  carries it. Owner, 2026-10-02. [built-in-node-type; package-split-and-lend]
+  carries it. Owner, 2026-10-02. [built-in-node-type; package-split-and-lend — SHIPPED #2684]
+  <!-- verify: cargo test -p streamlib-media-builtins --test every_golden_graph_loads -->
 - **DECIDED** — `@node` registers nothing: it writes the class's declaration stamps and
-  returns the class. A Python node class reaches the node catalog when a graph that names
-  it loads, which registers its descriptor and its constructor together.
-  [agent-readable-processor-catalog — SHIPPED #2228; reopened by one-runtime-per-machine: declarations readable without an engine; amended by package-split-and-lend: `@node` registers nothing]
+  returns the class, so a declaration is readable with no engine anywhere. A Python node class
+  reaches the node catalog when a graph that names it loads — or a live `add_node` names it —
+  and the runtime describes it in the stream's interpreter, registering its descriptor and its
+  constructor together.
+  [agent-readable-processor-catalog — SHIPPED #2228; package-split-and-lend — SHIPPED #2686,
+  #2689]
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
   the class's short name and the engine disambiguates duplicates within one graph. It is
@@ -1383,6 +1431,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   "The function" is the graph it compiled to at its last load: a kept stream re-loads that
   recorded graph, and picking up a changed source is another `run -d` (§Product, how a
   stream is loaded and kept). [one-runtime-per-machine; stream-graph]
+- **DECIDED** — The runtime refuses by name what a graph holds that it does not understand,
+  at load and before a frame flows. Every built-in's config takes
+  `#[serde(deny_unknown_fields)]`, and the refusal names the node, its `type` and the setting;
+  a `type` the runtime lacks is refused naming it; a built-in absent on this floor is refused
+  naming the floor (`VirtualCameraSink` is refused at load, not at `stream_builder.add`); and
+  a graph key the loader neither reads as spec nor knows as one of `graph`'s live keys is
+  refused naming it, the live keys being skipped. A golden graph holding every key and every
+  built-in `type` is checked in and loads on every later build; a shape change adds a golden
+  beside it and never edits one. [package-split-and-lend — SHIPPED #2671]
+  <!-- verify: cargo test -p streamlib-media-builtins --test every_golden_graph_loads -->
 - **DECIDED** — A stream's environment is its project directory and that directory's venv
   interpreter. It is recorded beside the graph when the stream is loaded — never inside it, so
   the same graph loads from another checkout — and every processor interpreter of the stream
@@ -1391,7 +1449,27 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   processor interpreters inherit the runtime's own environment — and a stream reads its own
   settings from its project as any program does
   (runtime-hosting decision 4). Provisioning an environment is
-  the packs OPEN in §Packages. Owner, 2026-10-02. [package-split-and-lend; runtime-hosting]
+  the packs OPEN in §Packages. Owner, 2026-10-02. [package-split-and-lend — SHIPPED #2689,
+  #2693; runtime-hosting]
+- **DECIDED** — Spawn and describe live in the engine, beside `subprocess_bridge.rs`, and
+  run no Python in the runtime process. A loaded stream's environment is recorded as
+  `StreamEnvironment { project_directory, interpreter }`. A processor interpreter's command is
+  `<interpreter> <lend>/tatolab/runtime/_processor_interpreter_bootstrap.py`, run by path and
+  never `-m` or `-c`; `PYTHONPATH` is the lend directory, then the project directory;
+  `PYTHONHOME` is removed; the working directory is the project; the `STREAMLIB_*` variables
+  are unchanged. The bootstrap first drops its own directory from `sys.path`, then imports
+  `tatolab.runtime` — an interpreter that cannot load it (not CPython, below 3.10,
+  free-threaded, a foreign architecture) writes a refusal to raw stderr naming its path,
+  implementation, version, free-threading, architecture and the import error, and exits —
+  then checks the build id, then runs its node. `tatolabd` finds the lend relative to its own
+  executable, at `../lib/tatolab/lend`. Describe is the same command with `--describe <import
+  paths>`, run at load for every Python `type` a graph names and at a live `add_node` for one
+  not yet described; the bootstrap prints each declaration as JSON, and a type that will not
+  import or carries no stamp is refused by name, quoting the interpreter's stderr. It costs one
+  interpreter start per load and per live add of an undescribed type. [package-split-and-lend
+  — SHIPPED #2689]
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::processor_interpreter_describe -->
+  <!-- verify: pytest tests/stream-on-runtime/test_processor_interpreter_lend.py -->
 - **OPEN** — What the graph holds beyond nodes, links and exposures: a stream's needs.
   Direction (review, not decided): a camera, a microphone, a display, the accelerator, network
   exposure — derived from its nodes' declarations (built-ins carry theirs; a user node that
@@ -1876,13 +1954,14 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 ## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ runtime-hosting: Apple permissions through Tatolab.app; jpeg-after-the-robotics-cut)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
-  in the engine tree, statically linked into the wheel — pre-built named blocks
-  instantiated and configured from Python (`stream.add(CameraSource)`), whose per-frame
-  paths never enter the interpreter. Lag-by-design ends: built-ins ship inside the
-  wheel, current by construction. This names the shipped set, not a rule: a further
-  first-party capability is a built-in only under the criterion in §Packages & extension
-  model, and is otherwise an extension wheel.
-  [importable-python-library — SHIPPED #1709; extension-model]
+  in the engine tree, statically linked into `tatolabd` — pre-built named blocks added and
+  configured from Python (`stream_builder.add(CameraSource)`) through the classes generated
+  into `tatolab.stream`, whose per-frame paths never enter an interpreter. Lag-by-design
+  ends: built-ins ship inside the runtime, current by construction. This names the shipped
+  set, not a rule: a further first-party capability is a built-in only under the criterion
+  in §Packages & extension model, and is otherwise an extension wheel.
+  [importable-python-library — SHIPPED #1709; extension-model; package-split-and-lend —
+  SHIPPED #2684, #2693]
   <!-- verify: pytest tests/stream-on-runtime/test_native_builtin_blocks.py -->
   <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
@@ -1890,7 +1969,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   stated rather than deferred: a macOS virtual camera is a CoreMediaIO Camera Extension
   inside a bundled, entitled, notarised app, which the floor rules out under any
   justification, and the DAL plug-in stopped loading in macOS 14.1; on macOS the runtime
-  refuses a graph naming it at load, naming the platform, and `streamlib enable-virtual-camera`
+  refuses a graph naming it at load, naming the platform, and `tatolab enable-virtual-camera`
   refuses by name. As
   many instances as the graph adds — the display's rule. Each instance is one camera that exists only
   while its processor runs: created at `setup()`, removed at `teardown()`, a camera plugged
@@ -2058,8 +2137,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   acquire detail,
   plus the platform main-thread event loop where the OS demands it. On Linux the pump runs
   on its own thread; on Apple it is built on the process's first thread when the runtime
-  starts and driven there while `rt.run()` blocks with the GIL released (in the importable
-  arrangement that thread belongs to the user's script). A runtime started off the first
+  starts and driven there while `tatolabd` waits for the shutdown. A runtime started off the first
   thread, or a process whose first thread another `NSApplication` loop already drives, is
   refused a pump by name, and every caller gets the same answer. On Apple the present target
   is minted from a `CAMetalLayer` the pump adds as a sublayer of the window's content view at
@@ -2624,9 +2702,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/tatolab-stream/tests/test_node_declaration.py::test_the_device_matching_sentinel_is_refused_at_decoration -->
 - **DECIDED** — `MicrophoneSource` and `SpeakerSink` are the audio built-ins, beside
   camera and display: native built-ins in the engine tree, registered with the other
-  media built-ins and surfaced to Python as marker classes beside `CameraSource`,
+  media built-ins and reaching Python as classes generated into
+  `tatolab/stream/_built_in_nodes.py` from their descriptors, beside `CameraSource`,
   configured the one way a built-in is configured
-  (`stream.add(MicrophoneSource, config={"device_id": "..."})`). Both are `execution =
+  (`stream_builder.add(MicrophoneSource, config={"device_id": "..."})`). Both are `execution =
   manual`, the mode `CameraSource` uses for a device that paces itself, with
   `scheduling = realtime` — an audio device callback is the deadline that priority
   exists for. The declaration names that deadline; it does not apply a priority here,
@@ -2650,7 +2729,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   (capture prefers mono, playback prefers stereo) is the plainest case the window contract
   exists to fix. Conditioning and immediate cancel are a later rung.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1992;
-  audio-port-window-contract — SHIPPED #2034]
+  audio-port-window-contract — SHIPPED #2034; package-split-and-lend — SHIPPED #2684]
   <!-- verify: pytest tests/stream-on-runtime/test_microphone_source.py -->
   <!-- verify: pytest tests/stream-on-runtime/test_speaker_sink.py -->
   <!-- verify: pytest tests/stream-on-runtime/test_speaker_sink.py::test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured -->
@@ -2659,7 +2738,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — Codec blocks are native built-ins beside camera, display and the audio
   pair: `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder`,
   `OpusEncoder`, `OpusDecoder`, `Mp4Sink` — instantiated and configured the one way a
-  built-in is configured (`stream.add(H264Encoder)`), per-frame paths never entering an
+  built-in is configured (`stream_builder.add(H264Encoder)`), per-frame paths never entering an
   interpreter, serving Python and Rust apps alike. Video blocks are built on the video
   codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple. There is no JPEG
   block: `JpegDecoder` is retired unbuilt, the parked nvJPEG backend and its `libnvjpeg`
@@ -2810,19 +2889,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   fixed.
   [codec-blocks — SHIPPED #2084, #2085, #2086]
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
-- **DECIDED** — The four video blocks reach Python as marker classes beside
-  `CameraSource`, through the three touchpoints a native built-in owns and no fourth — a
-  processor extension owns none of them, being an ordinary Python processor class the
-  wheel never has to know about (extension-model) — : one entry in
-  `native_processor_marker_classes!` (a constructor-less `#[pyclass]` unit struct, a `type`
-  class attribute naming the processor's own minted import path, and the `add_class`
-  line), a re-export with its `__all__` entry, and a stub
-  entry gated by stubtest with no allowlist. Configured the
-  one way a built-in is configured — `stream.add(H265Encoder)`,
-  `stream.add(H264Encoder, config={"keyframe_interval_seconds": 2})` — and resolving on both
-  floors, since the codec seam made the blocks platform-free and they register
-  everywhere. The wheel links all four and registers them at import, so the blocks need no
-  engine registration. The stub docstring is where a
+- **DECIDED** — The four video blocks reach Python as classes generated into
+  `tatolab/stream/_built_in_nodes.py` from their descriptors, beside `CameraSource` — a processor
+  extension owns none of this, being an ordinary Python node class the runtime never has to
+  know about (extension-model). A block's `type` is `tatolab.stream:<Class>`. Configured the
+  one way a built-in is configured — `stream_builder.add(H265Encoder)`,
+  `stream_builder.add(H264Encoder, config={"keyframe_interval_seconds": 2})`, its keys
+  checked by pyright against the generated `TypedDict` — and resolving on both floors,
+  since the codec seam made the blocks platform-free and they register everywhere.
+  `tatolabd` links all four and registers them with the other built-ins. The Rust
+  descriptor's doc, carried into the generated class, is where a
   block's config keys and port names are written down, as it is for every built-in, and
   it states the engine's own behavior rather than an aspiration — the encoder's
   `width`/`height` guardrails that a mismatching frame wins against with a warning, its
@@ -2837,7 +2913,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   reaches a Python kernel through a DLPack landing copy and never by bare surface id,
   which is the camera's existing gap carried, not a new one.
   [python-codec-block-api — SHIPPED #2105; macos-capability-parity — SHIPPED #2413;
-  stream-graph — SHIPPED #2567]
+  stream-graph — SHIPPED #2567; package-split-and-lend — SHIPPED #2684, #2693]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
   <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest tests/stream-on-runtime/test_video_codec_blocks.py::test_node_name_defaults_to_the_type_name -->
@@ -2874,10 +2950,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   redirect, and the same tap, `exchange`, scoring and comparison after launch — over an
   engine-owned fixture stream, `codec_roundtrip_stream.py`, whose `@stream` adds four nodes,
   beside `audio_loopback_stream.py`, taking its codec and camera from environment variables
-  where the Rust rig takes arguments. Two refusals ride the arm rather than a note: `BASELINE_CAPTURE=1` is refused
-  on it, because a baseline written through the arm whose whole proof is locking to the
-  Rust rig's number leaves nothing to lock to; and a venv whose extension predates the
-  markers exits naming `maturin develop`, since a stale wheel would score the old code.
+  where the Rust rig takes arguments. One refusal rides the arm rather than a note:
+  `BASELINE_CAPTURE=1` is refused on it, because a baseline written through the arm whose
+  whole proof is locking to the Rust rig's number leaves nothing to lock to.
   Both codecs PASS through the arm, log gates at zero, clean exit. The reference-PNG rig
   gets no Python arm — nothing Python-specific sits on the colour path.
   [python-codec-block-api — SHIPPED #2107]
@@ -3071,10 +3146,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — `teardown()` closes the open fragment, held-back frames included, and owes
   nothing else. [opus-mp4-recording-rung — SHIPPED #2127]
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::the_checked_in_inspector_fixture_is_what_this_writer_produces -->
-- **DECIDED** — `OpusEncoder`, `OpusDecoder` and `Mp4Sink` reach Python through the three
-  touchpoints a native built-in owns and no fourth, and no Linux split — nothing here is
-  platform-bound, so they register unconditionally beside the audio built-ins. The stub
-  docstrings state the engine's own behavior rather than an aspiration: the encoder's
+- **DECIDED** — `OpusEncoder`, `OpusDecoder` and `Mp4Sink` reach Python as generated
+  classes like every built-in, with no Linux split — nothing here is platform-bound, so they
+  register unconditionally beside the audio built-ins. Their descriptors' docs, carried into
+  the generated classes, state the engine's own behavior rather than an aspiration: the encoder's
   window and first-block mint, its two config keys, the decoder's entry and gap rule, the
   sink's track-per-link rule, its `moov` wait, fragment rule and truncate-at-setup.
   `Mp4Sink` records on both floors: the SPS reader, RBSP bit reader and emulation-prevention
@@ -3082,7 +3157,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   `core/nal_unit_raw_byte_sequence_payload.rs`, re-exported through `streamlib::sdk`, so
   nothing it reads sits under the Vulkan Video tree.
   [opus-mp4-recording-rung — SHIPPED #2126, #2128; macos-capability-parity — SHIPPED #2414;
-  stream-graph — SHIPPED #2567]
+  stream-graph — SHIPPED #2567; package-split-and-lend — SHIPPED #2684]
   <!-- verify: pytest tests/stream-on-runtime/test_opus_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest tests/stream-on-runtime/test_mp4_sink.py::test_two_encoders_wire_into_the_one_input_without_an_adapter -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_built_in_node_classes.py::test_the_built_in_class_cannot_be_instantiated -->
@@ -3173,9 +3248,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   frame, surface or GPU: `WhipPublisher` consumes `EncodedVideoFrame` and
   `EncodedAudioPacket` bags downstream of `H264Encoder` and `OpusEncoder`; `WhepPlayer` emits
   the same bags upstream of `H264Decoder` and `OpusDecoder`. Audio is in scope from the first
-  rung. Both are ordinary processor extensions — `@processor` classes in the wheel calling the
-  wheel's own Rust — each in its own helper, on the tokio runtime the wheel's support hook
-  brought up. [extension-model; networking-extension-wheels — SHIPPED #2151]
+  rung. Both are ordinary processor extensions — `@node` classes in the wheel calling the
+  wheel's own Rust — each in its own processor interpreter, on the tokio runtime the wheel
+  brings up there on first use. [extension-model; networking-extension-wheels — SHIPPED
+  #2151; package-split-and-lend — SHIPPED #2691]
 - **DECIDED** — Many tracks follow the `Mp4Sink` shape: the publisher takes one track per
   inbound link and derives its session media description from them. The player exposes one
   output per track kind — `encoded_video` and `encoded_audio` — never one port per track:
@@ -3208,12 +3284,14 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
 - **DECIDED** — `packages/streamlib-webrtc/`: a standalone maturin project — own
   `Cargo.toml` (`[workspace]` root, `[lib] name = "_native"`, `crate-type = ["cdylib"]`,
   `pyo3` on `abi3-py310`, `webrtc 0.17`, `tokio`, `hyper` + `hyper-util` + `hyper-rustls`,
-  `rustls`, `bytes`; no engine crate), own lockfile, `pyproject.toml` depending on `streamlib`
-  by version, `python/streamlib_webrtc/` with `_native.pyi` and `py.typed`. `src/` carries the
-  WHIP and WHEP sessions (`whip_session.rs`, `whep_session.rs`, over `http_signalling.rs`) and
-  the RFC 6184 depacketiser `h264_rtp_depacketiser.rs` with its tests.
-  `extension.py:load` brings up the tokio runtime and the rustls provider once and
-  registers `webrtc`. [networking-extension-wheels — SHIPPED #2150]
+  `rustls`, `bytes`; no engine crate), own lockfile, `pyproject.toml` naming `tatolab-webrtc`
+  and depending on `tatolab-stream` by a minimum version, `python/tatolab/webrtc/` with
+  `_native.pyi` and `py.typed`. `src/` carries the WHIP and WHEP sessions (`whip_session.rs`,
+  `whep_session.rs`, over `http_signalling.rs`), the RFC 6184 depacketiser
+  `h264_rtp_depacketiser.rs` with its tests, and `transport_stack.rs`, which brings up the
+  tokio runtime and the rustls provider once, on first use, in whichever process the
+  sessions run in. [networking-extension-wheels — SHIPPED #2150; package-split-and-lend —
+  SHIPPED #2673, #2691]
 - **DECIDED** — `WhipPublisher`: `@processor`, one fan-in input `tracks` (`ordered`), the
   `Mp4Sink` shape — each inbound link is one RTP track, video or audio by the bag's
   `codec`, the session's SDP built from the links `inbound_link_names` reports at
@@ -3232,17 +3310,17 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   cannot be dialled again. A bag the engine refuses is the one failure not retried: it names
   its port and ends the thread, because reconnecting would spend an endpoint's session
   forever on a bag refused every time. [networking-extension-wheels — SHIPPED #2150]
-- **DECIDED** — `python-wheel.yml` carries an `extension-wheels` job over a matrix holding
-  `packages/streamlib-webrtc`: install the just-built `streamlib` wheel into the venv,
-  `maturin develop` the extension, `cargo test` its crate, `mypy.stubtest` over its
-  `_native`, pyright over its Python, pytest with `-m "not requires_gpu"`, and the
-  portability gate over its `.so`. `release-please-config.json` carries a package entry per
-  wheel (independent versions and tags); the release workflow builds and attaches each wheel
-  on its own tag; `build_simple_index.py` is multi-project — a set of published names, one
-  PEP 503 directory each, `streamlib-webrtc` the one extension among them — with its tests.
-  [networking-extension-wheels — SHIPPED #2152; amended by package-split-and-lend: one
-  version for everything released from this repository, in place of independent versions and
-  tags (§Distribution & versioning)]
+- **DECIDED** — `python-wheel.yml` carries an `extension-wheels` job, and an
+  `extension-wheels-macos` beside it, over a matrix holding `packages/streamlib-webrtc`:
+  unpack the runtime unit, build the extension into a venv holding `tatolab-stream`,
+  `cargo test` and clippy over its crate, `mypy.stubtest` over its `_native`, pyright over
+  its Python, and pytest with `-m "not requires_gpu"`, the portability gate over its `.so`
+  among them. `release-please-config.json` bumps the extension with everything else, one
+  version (§Distribution & versioning); the release builds `tatolab-webrtc` for manylinux
+  and Apple Silicon and uploads it to PyPI beside `tatolab-stream`, attaching nothing.
+  [networking-extension-wheels — SHIPPED #2152; package-split-and-lend — SHIPPED #2691,
+  #2697]
+  <!-- verify: grep -n "build-tatolab-webrtc-distribution:" .github/workflows/release-wheel.yml -->
 - **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by the wheel:
   the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
   cases), SDP offer construction and answer parsing, and the player's bag literal checked
@@ -3257,13 +3335,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
 - **DECIDED** — A runtime has a name, and a port is addressed `<runtime name>/<display name>/<port>`
   — the string `tap` spells a channel with. The name belongs to the runtime rather than to its
-  control plane and is a field of `Runner`, taken from `Runtime(runtime_name=…)` — keyword-only,
-  the constructor's only keyword, stub-gated, and what `run` / `dev`'s `--runtime-name` fills —
-  or `Runner::new_with_runtime_name` in Rust, else `STREAMLIB_RUNTIME_NAME`, else the default
+  control plane and is a field of `Runner`, taken from `Runner::new_with_runtime_name` in Rust,
+  else `STREAMLIB_RUNTIME_NAME` — which `run` / `dev`'s `--runtime-name` hands `tatolabd` —
+  else the default
   `<hostname>-<app directory name>-<id>`: every forbidden character replaced by `-`, the id four
   base-36 characters of an FNV-1a hash over the app directory's full path — the virtual camera's
-  own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else the wheel's captured entry directory
-  for a hand-run `python <script>.py`, else the working directory. A host that reports no name takes a
+  own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else `tatolabd`'s `--project`, else the
+  working directory. A host that reports no name takes a
   stand-in, said once. Each part of an address is one address chunk — non-empty, no `/`, `*`,
   `$`, `#` or `?`, not beginning with `@`, spaces and unicode legal — checked against the rule's
   own table, and an explicit runtime name that breaks it is refused at construction naming the
@@ -3275,14 +3353,16 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   naming both. `run` and `dev` take no other naming flag. `runtime_id` stays per-run — logs,
   the registry file, iceoryx2 names — and is never an address.
   [runtime-mesh — SHIPPED #2282, #2284; zenoh-and-moq-wheel-removal — SHIPPED #2643, #2645;
-  reopened by one-runtime-per-machine: whether addresses gain a stream level; amended by
-  runtime-hosting: the runtime name gives way to the machine name (the address entry below)]
+  package-split-and-lend — SHIPPED #2693; reopened by one-runtime-per-machine: whether
+  addresses gain a stream level; amended by runtime-hosting: the runtime name gives way to the
+  machine name (the address entry below)]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_given_one_runtime_name_both_construct -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_name.py -->
+  <!-- verify: cargo test -p tatolabd --test tatolabd_hosts_a_stream_on_the_gpu the_runtime_name_from_the_environment_reaches_the_local_apis_graph -->
+  <!-- verify: cargo test -p tatolabd --test tatolabd_refuses_by_name a_runtime_name_that_is_not_one_address_chunk_is_refused_naming_the_character -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_verb_targets_a_runtime_by_its_runtime_name -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_verb_given_a_name_two_live_runtimes_hold_is_refused_naming_both -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_retired_nodes_flag_is_a_usage_error -->
@@ -3357,8 +3437,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   any node of the stream may link to it, and nothing outside the stream may read it.
   **Private**: any other stream on the machine, and code on the machine, may read it.
   **Public**: private, plus a URL reachable off the machine, which other machines and tools
-  pull. `stream.expose(output)` makes an
-  output private and `stream.expose(output, Exposure.PUBLIC)` public; a level is an enum
+  pull. `stream_builder.expose(output)` makes an
+  output private and `stream_builder.expose(output, Exposure.PUBLIC)` public; a level is an enum
   member, never a string. The stream's function sets where its exposures start; `expose` at
   the CLI, the app or the local API changes them while the stream runs, the change applies at
   once — a reader the new level no longer allows is cut off — and neither the runtime nor the
@@ -3488,79 +3568,57 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   engine's QUIC listener needs a certificate it trusts, such as the tailnet's.
   [moq-on-the-tailnet]
 
-## Language SDKs & parity — IN-FLIGHT (→ package-split-and-lend)
+## Language SDKs & parity — SHIPPED
 <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py -->
 
-- **DECIDED** — Python is the sole focus runtime: the importable PyO3 wheel is the
-  primary authoring surface. TypeScript authoring is paused,
-  not rejected — a future TypeScript SDK follows this same importable-library model
-  (a native module a TypeScript app imports; Deno itself optional), aimed at the
-  hobbyist / video-creator audience when it is scheduled.
+- **DECIDED** — Python is the sole focus runtime: `tatolab-stream` is the primary authoring
+  surface. TypeScript authoring is paused, not rejected — a future TypeScript SDK follows
+  this same model (a stream package a TypeScript app imports, beside the one runtime; Deno
+  itself optional), aimed at the hobbyist / video-creator audience when it is scheduled.
   [importable-python-library — SHIPPED #1707, #1708; importable-python-library-ripout
-  — SHIPPED #1715]
+  — SHIPPED #1715; package-split-and-lend — SHIPPED #2686]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — The Python SDK carries a GIL-release contract: every native binding
   that can block releases the GIL around the blocking call, and pixels never cross
   into Python as Python-owned objects — frames travel as handles / surface ids, and
   pixel memory is reached only through explicitly exported views (DLPack, the CUDA
-  Array Interface, a mapped CPU buffer). The contract exists so a
-  blocking native binding never stalls the threads of its own interpreter — the app's
-  for the app-side bindings, the helper child's for a processor's. It is never a
+  Array Interface, a mapped CPU buffer). The contract exists so a blocking native binding
+  never stalls the other threads of its processor interpreter. It is never a
   co-tenancy remedy: no two Python processors share an interpreter.
   [importable-python-library — SHIPPED #1707, #1708; helper-process-placement-only —
-  SHIPPED #1714]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_the_gil_is_released_while_run_blocks -->
-- **DECIDED** — The wheel carries an interpreter-lifecycle contract: `rt.run()` owns
-  SIGINT while it blocks (Ctrl-C returns cleanly and restores CPython's handler), and
-  engine teardown strictly precedes interpreter finalization — all engine threads
-  joined, or abandoned and named, and every anchored thread state released before
-  `rt.run()` returns, with an `atexit`/context-manager guarantee on the exception path.
-  Proven against a hand-run `python <script>.py` harness.
-  [importable-python-library — SHIPPED #1707]
-- **DECIDED** — `rt.run()` owns SIGINT, SIGTERM and SIGHUP through the whole teardown,
-  engine drop included, and escalates on repeat: the first interrupt stops the graph
+  SHIPPED #1714; package-split-and-lend — SHIPPED #2693]
+- **DECIDED** — `tatolabd` owns SIGINT, SIGTERM and — on Linux — SIGHUP through the whole
+  teardown, engine drop included, and escalates on repeat: the first interrupt stops the graph
   gracefully; the second forces it — every helper's ladder skips to terminating its process
   group, and a native processor thread still inside its callback is abandoned; the third
   kills every helper's process group and exits with status 130 at once. A native processor
   thread that ignores shutdown past its budget is abandoned rather than joined: the engine
-  stays alive beneath it, and `run()` raises naming the processor. An engine-chosen watchdog
-  of about fifteen seconds ends a teardown hung anywhere else. The `run()` docstring states
-  the same.
-  Four readings the build settled. The watchdog arms when *any* engine teardown starts —
-  `run()`'s, `shutdown()`, context-manager exit, `atexit` — and on expiry logs what is still
-  running and ends the process with status 124, distinct from the third interrupt's 130; an
-  embedding host (Isaac Sim, a notebook) therefore loses its interpreter, accepted so that
-  nothing hangs the app. `run()` raises `RuntimeError` naming each abandoned processor by
-  display name and id — every other `run()` failure already raises that type, and the CLI
-  already reports it as a launch error — while a forced shutdown that abandoned nothing
-  returns normally. Abandoning is what keeps the engine alive: the thread holds the runner
-  and the engine is deliberately never dropped before process exit, so a thread that returns
-  late runs neither tokio shutdown, nor the fd restore, nor device wait-idle on its own
-  thread during interpreter finalization. And signal ownership stays scoped to `run()`:
-  a teardown outside it — `shutdown()` before a run, `Drop`, `atexit`, `__exit__` — owns no
-  signals, and the watchdog alone bounds it.
-  [shutdown-ladder; local-transport-hardening — SHIPPED #2266; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself]
+  stays alive beneath it, never dropped before the process exits, and `tatolabd` writes a
+  refusal naming each abandoned processor and exits non-zero, while a forced shutdown that
+  abandoned nothing exits zero. An engine-chosen watchdog of about fifteen seconds, armed
+  when the teardown starts, ends a teardown hung anywhere else: it logs what is still
+  running and ends the process with status 124, distinct from the third interrupt's 130.
+  [shutdown-ladder; local-transport-hardening — SHIPPED #2266; package-split-and-lend —
+  SHIPPED #2693; amended by one-runtime-per-machine: an installer-registered per-user service
+  starts the runtime, which never detaches itself]
   <!-- verify: cargo test -p tatolabd --test tatolabd_hosts_a_stream_on_the_gpu an_interrupt_stops_the_stream_cleanly_and_exits_zero -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sigint_is_handed_back_to_cpython -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::engine_teardown_watchdog -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_sighup_tears_the_graph_down_gracefully -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
-## Distribution & versioning — IN-FLIGHT (→ package-split-and-lend, runtime-hosting)
+## Distribution & versioning — IN-FLIGHT (→ runtime-hosting)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py -->
 
-- **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
-  (Python API + CLI + engine) and the `streamlib` crate for Rust apps. Initial
-  release channel is this repo's releases served through a static PEP 503 simple
-  index (`pip install streamlib --index-url …` — one stable incantation) — PyPI
-  publication waits for the project rename; the artifact is identical either way.
-  Positioning is "realtime engine, Python authoring" — the Rust engine is named as
-  material; never marketed as "a Python library" even though the shape is one.
-  [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; amended by
-  one-runtime-per-machine: two distributions, a stream package and a runtime package; amended
-  by tatolab-names: the crate is `tatolab-stream`; amended by package-split-and-lend: one
-  version for everything (the entry below)]
+- **DECIDED** — The release publishes `tatolab-stream` and the first-party extensions to
+  PyPI, where a stream's venv takes them like any other dependency, beside the `streamlib`
+  crate for Rust apps, all at one version (the entry below); it publishes no engine wheel and
+  attaches nothing. Positioning is "realtime engine, Python authoring" — the Rust engine is
+  named as material; never marketed as "a Python library". Owner, 2026-10-08.
+  [importable-python-library — SHIPPED #1691, #1692, #1694, #1711; package-split-and-lend —
+  SHIPPED #2697; amended by one-runtime-per-machine: the runtime package ships inside the
+  installer; amended by tatolab-names: the crate is `tatolab-stream`]
+  <!-- verify: grep -n "publish-to-pypi:" .github/workflows/release-wheel.yml -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_the_scaffold_takes_tatolab_stream_from_pypi_and_names_no_other_index -->
 - **DECIDED** — One version number for everything Tatolab releases from this repository:
   `tatolab-stream` on pip, the Rust `tatolab-stream` crate, the runtime unit the installer
@@ -3572,17 +3630,20 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   dependency of a stream: nothing in a stream, its `pyproject.toml` or its graph names a
   runtime version, and nothing compares versions to admit a stream. A runtime at least as new
   as a stream's `tatolab-stream` runs it; an older one refuses what it lacks by name, and the
-  refusal names the runtime's own version. Owner, 2026-10-02. [package-split-and-lend]
+  refusal names the runtime's own version. Owner, 2026-10-02. [package-split-and-lend —
+  SHIPPED #2671, #2691, #2697]
+  <!-- verify: grep -n "packages/streamlib-webrtc/pyproject.toml" release-please-config.json -->
 - **DECIDED** — Wheel portability model: what the host may supply is stated per platform,
   and nothing else is linked. On Linux, system libraries (Vulkan loader, window system,
   libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape.
-  On macOS a stock machine has no Vulkan driver, so the wheel carries one in
+  On macOS a stock machine has no Vulkan driver, so the lend carries one in
   `tatolab/runtime/_vulkan_driver/`: the Vulkan loader (built from source at the wheel's
   deployment target), MoltenVK and its unedited ICD manifest, and still links only
   `/usr/lib/` and `/System/`. Engine and helper alike dlopen that loader by absolute path,
   found beside the `_engine` image through `dladdr`, after the bare names and `VULKAN_SDK`
   and before the Homebrew prefixes, which are developer-machine fallbacks.
-  `tatolab/runtime/__init__.py` names the bundled manifest to the loader additively — through
+  `tatolabd`, and `tatolab/runtime/__init__.py` in a processor interpreter, name the bundled
+  manifest to the loader additively — through
   `VK_ADD_DRIVER_FILES`, before `_engine` loads, idempotently for a re-importing helper, and
   not at all when `VK_DRIVER_FILES` or `VK_ICD_FILENAMES` says the user chose their drivers —
   so a user's own driver stays discoverable. The MoltenVK carried is 1.4.1 or later: camera
@@ -3595,15 +3656,15 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   only (free-threaded builds wait for the stable ABI to exist for them). "Our code" includes
   vendored C/C++ we compile and link statically, not only our Rust: the wheel carries a C++
   GLSL shader compiler so a kernel author needs no system shader toolchain. The wheel's
-  adapter closure excludes skia. Helper processes import the wheel itself — one native
-  artifact, no separate helper cdylib. The portability proof parses ELF and Mach-O itself:
-  every Mach-O the installed wheel carries links only the system, carries
+  adapter closure excludes skia. Processor interpreters import the lent `tatolab.runtime` —
+  one native artifact, no separate helper cdylib. The portability proof parses ELF and
+  Mach-O itself: every Mach-O the lend carries links only the system, carries
   `LC_CODE_SIGNATURE` — verified by `codesign --verify --strict` where the host has it, since
   a byte rewritten after signing keeps the load command — and names in `LC_BUILD_VERSION` a
   macOS no newer than the wheel's tag. A binary it cannot parse, a fat binary, or a
   `.so`/`.dylib` that is neither format fails rather than skips.
   [importable-python-library — SHIPPED #1691, #1692; python-kernel-surface — SHIPPED #1775;
-  macos-platform-floor — SHIPPED #2362]
+  macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2689, #2693]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_every_mach_o_the_lend_carries_is_portable -->
@@ -3612,8 +3673,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py::test_a_binary_needing_a_newer_macos_than_the_tag_is_caught -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_bundled_vulkan_driver.py -->
   <!-- verify: cargo test -p streamlib-consumer-rhi --lib vulkan_loader_library -->
-- **DECIDED** — The macOS artifact is one `aarch64-apple-darwin` wheel at the same abi3
-  floor, released beside the manylinux one at the same version. Apple Silicon only: no
+- **DECIDED** — The macOS runtime unit is built for `aarch64-apple-darwin` at the same abi3
+  floor as the Linux one, at the same version. Apple Silicon only: no
   Intel wheel, no universal2, and Rosetta is not a supported path — not as a fallback, not
   as a courtesy (owner, 2026-09-19). It is built on a pinned `macos-15` runner, because the
   image decides the SDK. The deployment target is macOS 15.0, pinned once in
@@ -3626,12 +3687,13 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   post-link rewrite of a shipped binary — `lipo -thin` on MoltenVK — is re-signed ad hoc
   (`codesign -f -s -`) in the step that rewrites it, and signatures are verified in the
   built zip and again after install. The same workflow runs on every PR on a runner with no
-  Vulkan SDK: it builds the wheel, checks signatures, runs the portability, notices and
-  driver-search tests against the installed wheel, and runs the `--test-pattern` scaffold
-  for twenty seconds, which must open the carried loader, raise nothing from the effect and
-  show at least sixty frames. On release it attaches the wheel, and a failed macOS wheel
-  withholds the simple index exactly as the manylinux one does.
-  [macos-platform-floor — SHIPPED #2362]
+  Vulkan SDK: it builds the runtime unit, checks the signatures of every binary in the lend
+  and of `tatolabd` and `tatolab`, runs the portability, notices and driver-search tests
+  against the lend, and in a venv holding only `tatolab-stream` runs `tatolab new
+  --test-pattern` then `tatolab run` for twenty seconds, which must open the carried loader, raise
+  nothing from the effect and show at least sixty frames. On release a failed macOS proof of
+  the runtime unit withholds the PyPI upload, as a failed build of any distribution does.
+  [macos-platform-floor — SHIPPED #2362; package-split-and-lend — SHIPPED #2693, #2697]
   <!-- verify: grep -n 'macos-deployment-target = "15.0"' sdk/streamlib-python-wheel/pyproject.toml -->
   <!-- verify: grep -n "runs-on: macos-15" .github/workflows/macos-wheel.yml -->
   <!-- verify: grep -n "prove-the-runtime-unit-on-macos" .github/workflows/release-wheel.yml -->
@@ -3678,21 +3740,18 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   package and packs go through the package index; the runtime package ships inside the installer
   with the CLI and the desktop app, never through pip (owner, 2026-09-30). Known: maturin ships a native
   portion of a PEP 420 namespace beside a pure one, in wheels and editable installs alike, so no
-  custom module system is needed. [one-runtime-per-machine; package-split-and-lend]
+  custom module system is needed. [one-runtime-per-machine; package-split-and-lend — SHIPPED
+  #2673, #2697]
 
 ## Control plane & observability — IN-FLIGHT (→ stream-graph, runtime-hosting)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
-- **DECIDED** — The control plane carries no optional capability's routes natively. A
-  capability extension that needs an endpoint contributes it through the `host` door
-  (§Packages & extension model), served by the one control plane in the app process
-  under the same `RuntimeOperations`-shaped discipline — a handler sees what the app
-  process sees, the graph and what the extension registered, and no helper's private
-  state. `graph` carries an `extensions` key: what loaded, one entry per capability with its
-  name, version and distribution. The door's spelling is the first extension's to bring when
-  it needs one.
-  [extension-model; networking-extension-wheels — SHIPPED #2149, #2153]
-  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-05-networking-extension-wheels.md -->
+- **DECIDED** — The control plane carries no optional capability's routes, and no package
+  adds one: nothing a package carries runs in the runtime process (§Packages & extension
+  model). `graph` carries no `extensions` key.
+  [extension-model; networking-extension-wheels — SHIPPED #2149, #2153; package-split-and-lend
+  — SHIPPED #2691]
+  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::graph_response_top_level_key_rendering_tests::a_graph_renders_no_extensions_key_and_its_schema_declares_none -->
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
   hosted in-process by any runtime that enables it. The MCP tool set is the canonical
@@ -3706,10 +3765,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   source of truth and the edit loop `dev` — a dynamic graph an agent cannot add to is not
   worth having (owner, 2026-09-06). A mutation compiles inside the call, so the caller learns whether
   its change took rather than reading a `Running` node with nothing flowing. A Python
-  class is named by its import path — its descriptor registered when its decorator ran,
-  its constructor at this first add exactly as a load supplies it; the app process
-  imports the class, the processor runs in its own helper process — and a native
-  built-in by the path `graph` reports for one;
+  class is named by its import path — described in the stream's interpreter at this first
+  add, its descriptor and constructor registered exactly as a load registers them; the
+  runtime process never imports the class, and the processor runs in its own processor
+  interpreter — and a native built-in by the path `graph` reports for one;
   a link wired onto a running processor reaches it, and every channel is sized for a
   destination that connects later. `exchange` stays an observation verb because a read
   that costs the node a bounded copy is still a read. MCP is
@@ -3730,8 +3789,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [importable-python-library; mcp-served-with-the-node — SHIPPED #1712;
   agent-readable-processor-catalog — SHIPPED #2232;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; local-transport-hardening —
-  SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; amended by
-  moq-on-the-tailnet: `tap` and `exchange` leave the tool set at the sharing step]
+  SHIPPED #2263, #2265; local-api — SHIPPED #2660, #2665, #2667; package-split-and-lend —
+  SHIPPED #2689; amended by moq-on-the-tailnet: `tap` and `exchange` leave the tool set at the
+  sharing step]
   <!-- verify: cargo test -p streamlib-api-server the_upgraded_stream_serves_the_same_tools_and_resources_as_post_mcp -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest tests/stream-on-runtime/test_live_graph_mutation.py -->
@@ -3762,41 +3822,38 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_resolves_each_ends_node_by_its_cast_name -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_takes_a_link_id_alone -->
 - **DECIDED** — `graph` carries the runtime's name as a top-level key, `runtime_name`, beside
-  `nodes`, `links` and `extensions` — in the OpenAPI schema, the MCP tool, the generated schema
+  `nodes`, `links` and `exposed` — in the OpenAPI schema, the MCP tool, the generated schema
   and the prompt fixture — because `tap`'s channel is spelled from it and `tap` stays until the
-  sharing step. `streamlib nodes` prints the registry table alone. Every
+  sharing step. `tatolab nodes` prints the registry table alone. Every
   channel reserves one subscriber slot beyond its fixed cap, `tap`'s, and no other. The key
   goes with the runtime name at runtime hosting. [zenoh-and-moq-wheel-removal — SHIPPED #2643,
-  #2645]
-  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_runtime_name_rendering_tests::the_runtime_name_is_a_top_level_key_and_no_mesh_key_renders -->
+  #2645; package-split-and-lend — SHIPPED #2691, #2697]
+  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::graph_response_top_level_key_rendering_tests::the_runtime_name_is_a_top_level_key_and_no_mesh_key_renders -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_the_taps_reservation_and_refuses_past_it -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs nodes_prints_the_registry_table_alone -->
-- **DECIDED** — The api-server is engine-side infrastructure and relocates into the
-  `runtime/` tree: it is a host — statically linked, never dlopen'd. Its new host is
-  the wheel (and the `streamlib` crate for Rust apps); the relocation is a sequencing
-  prerequisite of the rip-out. [control-plane-one-surface]
-- **DECIDED** — The CLI ships inside the wheel and slims to `new` / `dev` / `run` (a
-  thin runner over the same engine the wheel exposes) plus the observation verbs
-  (`nodes` / `graph` / `tap` / `logs` / `exchange`), the `mcp` verb, and one machine-setup verb,
-  `enable-virtual-camera`, which installs the loopback permission the virtual camera's
-  loopback door needs behind the desktop's password prompt and touches no node.
-  `exchange` takes a surface id, or a
+- **DECIDED** — The api-server is engine-side infrastructure in the `runtime/` tree: it is
+  hosted — statically linked, never dlopen'd — by `tatolabd` (and by the `streamlib` crate
+  for Rust apps), and no wheel hosts it. [control-plane-one-surface; package-split-and-lend —
+  SHIPPED #2693]
+- **DECIDED** — The CLI is the native `tatolab`, shipped with the runtime and never in a
+  pip distribution, linking no engine: `new`, `run` and `dev` (starting `tatolabd`
+  attached) plus the observation verbs (`nodes` / `graph` / `tap` / `logs` / `exchange`),
+  the `mcp` verb, and one machine-setup verb, `enable-virtual-camera`, which installs the
+  loopback permission the virtual camera's loopback door needs behind the desktop's
+  password prompt and touches no node. `exchange` takes a surface id, or a
   channel: the channel form composes tap → decode → exchange client-side in one warm
   process — one connection, the exchange fired the moment the bag lands, `--count` and
   every-Nth sampling as client flags. It is the cold-spawn latency fix and the
   throttling surface in one, and it adds nothing to the engine: the CLI stays a pure
-  JSON-RPC client composing the same two operations any consumer composes. Python embeds
-  the engine in-process via
-  the wheel; the control plane exists to observe and drive *running* nodes, not to
-  embed.
+  client of the local API composing the same two operations any consumer composes; the
+  control plane exists to observe and drive *running* nodes, not to embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975;
-  virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667; amended by
-  one-runtime-per-machine: an installer-registered per-user service starts the runtime,
-  which never detaches itself; amended by tatolab-names and
-  package-split-and-lend: the CLI becomes the native `tatolab`, shipped with the runtime by the
-  installer and never in a pip wheel; amended by moq-on-the-tailnet: `tap` and `exchange` leave
-  the CLI at the sharing step]
+  virtual-camera-sink — SHIPPED #2196; local-api — SHIPPED #2667; tatolab-names;
+  package-split-and-lend — SHIPPED #2693, #2697; amended by one-runtime-per-machine: an
+  installer-registered per-user service starts the runtime, which never detaches itself, and
+  the installer ships the CLI; amended by moq-on-the-tailnet: `tap` and `exchange` leave the
+  CLI at the sharing step]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_new_and_help help_lists_exactly_the_served_verbs -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_exchange_verb the_channel_form_taps_then_exchanges_each_sampled_id -->
@@ -3810,7 +3867,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   as the runtime starts, before its first node, socket or registry write, and a failure
   refuses the start by name; every user takes the resolved directory. No StreamLib variable
   overrides it — a container or CI job sets `XDG_RUNTIME_DIR` — so a runtime starts anywhere
-  with nothing set, and the wheel's Python registry reader resolves identically. What a runtime *keeps* — logs, caches — stays under the project's
+  with nothing set, and `tatolab` resolves it through `streamlib-runtime-client-contract`, the
+  code the runtime resolves it with. What a runtime *keeps* — logs, caches — stays under the project's
   `.streamlib/`. Node discovery is the per-user on-disk registry inside that directory: one
   JSON file per live node, written only by runtimes hosting their local API, pruned only
   when both liveness signals (a `graph` round trip over the socket, process check) fail.
@@ -3818,7 +3876,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   the runtime rather than from the local API it hosts, which carries no name of its own,
   and the `local_api_socket_path` a client dials; a reader refuses an entry of an earlier
   schema by name. Owner, 2026-09-14. [control-plane-one-surface; local-transport-hardening
-  — SHIPPED #2261; runtime-mesh — SHIPPED #2282; local-api — SHIPPED #2660, #2663]
+  — SHIPPED #2261; runtime-mesh — SHIPPED #2282; local-api — SHIPPED #2660, #2663;
+  package-split-and-lend — SHIPPED #2697]
   <!-- verify: cargo test -p streamlib-runtime-client-contract streamlib_runtime_directory -->
   <!-- verify: cargo test -p streamlib-runtime-client-contract a_fallback_that_does_not_exist_yet_is_resolved_for_a_reader_without_being_created -->
   <!-- verify: cargo test -p tatolab-cli --bin tatolab a_schema_two_entry_is_refused_by_its_version_and_never_pruned -->
@@ -3937,7 +3996,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   and protocol revision stay the runtime's alone. Stdin closing half-closes the socket and
   the verb exits when the runtime closes its side; the runtime going away exits it non-zero
   with one stderr line naming the runtime; no live runtime at launch is a one-line refusal
-  naming `streamlib nodes`. Run over ssh — `ssh <machine> <cli> mcp` — it is how an agent
+  naming `tatolab nodes`. Run over ssh — `ssh <machine> <cli> mcp` — it is how an agent
   changes a stream on another machine. No network listener serves MCP. The runtime serves
   only the latest MCP revision `rmcp` speaks, 2026-07-28 (stateless: no `initialize`
   handshake and no session); a host that speaks only an earlier revision is refused with the
