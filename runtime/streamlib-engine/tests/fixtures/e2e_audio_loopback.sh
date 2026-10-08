@@ -24,10 +24,11 @@
 #
 #   tap-muted    (default) an IOProc plays into the built-in speakers and a
 #                private, muted Core Audio process tap of this fixture's own
-#                process carries it back through a private aggregate device —
-#                the tap the engine loopback reads, made the same way
-#                (`process_tap_loopback_without_the_engine.py`). Digital and
-#                silent, and scored as strictly as the null sink.
+#                process carries it back through a private aggregate device
+#                (`process_tap_loopback_without_the_engine.py`) — the engine
+#                loopback reads a shared global tap instead, made by the same
+#                helper, because its speaker plays inside `tatolabd`. Digital
+#                and silent, and scored as strictly as the null sink.
 #   tap-audible  the same tap unmuted, so the signal also plays out loud.
 #   acoustic     `afplay` out of the built-in speakers and `ffmpeg` in off the
 #                built-in microphone, pinned by name, through the air, scored

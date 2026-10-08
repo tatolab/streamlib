@@ -17,18 +17,15 @@
 # capture endpoint the session already routes: whatever is played into the sink
 # is readable from the monitor, which is the loopback the fixture needs.
 #
-# macOS has no null sink. Its peer is a private Core Audio process tap of the
-# process that plays, under a private aggregate device — visible only to the
-# process that created it. The engine's speaker plays inside `tatolabd`, which
-# makes no such tap, so there is no device for a fixture to name there: `check`
-# and `start` report it unavailable, and `stop` has nothing to destroy.
+# macOS has no null sink, so `check` and `start` report it unavailable there
+# and `stop` has nothing to destroy. The loopback fixture makes its own Core
+# Audio tap on macOS instead (verify_audio_loopback.sh).
 set -uo pipefail
 
 if [ "$(uname -s)" = Darwin ]; then
     case "${1:-}" in
         check|start)
-            echo "UNAVAILABLE: macOS has no null sink, and a private process tap of the speaker's" \
-                "output can be made only inside tatolabd, which makes none"
+            echo "UNAVAILABLE: macOS has no null sink"
             exit 1
             ;;
         stop)

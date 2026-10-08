@@ -55,8 +55,18 @@ NODE_PID=""
 # Installed before the node starts and idempotent — `kill` of an unset pid is
 # swallowed. A strand here costs a live engine holding a GPU context and an
 # iceoryx2 node, which contaminates every later run on the same rig; the
-# SIGTERM reaches `tatolab run`, which forwards it to `tatolabd`.
-trap 'kill "$NODE_PID" 2>/dev/null' EXIT
+# SIGTERM reaches `tatolab run`, which forwards it to `tatolabd`, and the wait
+# is bounded so a stop that hangs cannot hold the script open.
+stop_and_wait_for_the_stream() {
+    [ -n "$NODE_PID" ] || return 0
+    kill "$NODE_PID" 2>/dev/null || return 0
+    for _ in $(seq 60); do
+        kill -0 "$NODE_PID" 2>/dev/null || break
+        sleep 0.5
+    done
+    wait "$NODE_PID" 2>/dev/null
+}
+trap stop_and_wait_for_the_stream EXIT
 # Without this the shell survives its interrupted children and runs on to the
 # analysis, which can report PASS for a run the user aborted.
 trap 'exit 130' INT TERM

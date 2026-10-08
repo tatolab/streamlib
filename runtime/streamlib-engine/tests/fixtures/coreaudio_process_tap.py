@@ -11,10 +11,14 @@ Engine-free, and none of it needs pyobjc:
 - Turn this process's own output into a capture device: a private process tap
   of this process under a private aggregate device, opened by UID in this same
   process. It is the Mac's peer of a PipeWire null sink's monitor. A private
-  device is visible only to the process that created it — so it dies with that
+  device is visible only to the process that created it, so it dies with that
   process and, unlike the null sink, can never be stranded in the user's
-  session, and so no fixture process can make one for the native built-ins,
-  which run in `tatolabd`.
+  session.
+- Turn every process's output into a capture device another process can open:
+  a shared global tap under a shared aggregate device, held by this script
+  until it is signalled. This is how a fixture hands the native built-ins in
+  `tatolabd` a loopback, since a private device made outside `tatolabd` is
+  invisible to it.
 - Run an IOProc on a device, which is how the rig peer plays and records
   through that same tap with no StreamLib in the path.
 
@@ -31,6 +35,7 @@ a tap raises the System Audio Recording prompt the first time it is read.
 import ctypes
 import functools
 import os
+import signal
 import struct
 import sys
 from typing import NamedTuple, Optional
@@ -656,8 +661,10 @@ def why_a_tap_delivered_exact_zeros(
     )
 
 
-def aggregate_device_description(aggregate_device_uid, tap_uid, clock_device_uid):
-    """The private aggregate a tap is read through, as `AudioHardwareCreateAggregateDevice` takes it.
+def aggregate_device_description(
+    aggregate_device_uid, tap_uid, clock_device_uid, is_private=True
+):
+    """The aggregate a tap is read through, as `AudioHardwareCreateAggregateDevice` takes it.
 
     Clocked by the device the tapped audio plays to, so what the tap carries and
     what reads it share one clock and nothing drifts between them.
@@ -665,7 +672,7 @@ def aggregate_device_description(aggregate_device_uid, tap_uid, clock_device_uid
     return {
         AGGREGATE_DEVICE_NAME_KEY: f"StreamLib fixture tap {aggregate_device_uid}",
         AGGREGATE_DEVICE_UID_KEY: aggregate_device_uid,
-        AGGREGATE_DEVICE_IS_PRIVATE_KEY: 1,
+        AGGREGATE_DEVICE_IS_PRIVATE_KEY: 1 if is_private else 0,
         AGGREGATE_DEVICE_IS_STACKED_KEY: 0,
         AGGREGATE_DEVICE_MAIN_SUB_DEVICE_KEY: clock_device_uid,
         AGGREGATE_DEVICE_SUB_DEVICE_LIST_KEY: [{SUB_DEVICE_UID_KEY: clock_device_uid}],
@@ -744,22 +751,33 @@ class _CoreFoundationObjectsToRelease:
         return _python_string_from_cf_string(described) or ""
 
 
-class _PrivateProcessTapDescription:
-    """A `CATapDescription` of one process, alive for one `with` block.
+class _TapDescription:
+    """A `CATapDescription`, alive for one `with` block.
 
     Only an Objective-C object: nothing is created in the HAL until
-    `AudioHardwareCreateProcessTap` is handed it.
+    `AudioHardwareCreateProcessTap` is handed it. `initialiser_selector` takes
+    one NSArray of process objects: the processes tapped, or the processes a
+    global tap leaves out.
     """
 
-    def __init__(self, process_object_id: int, mute_behaviour: str, name: str) -> None:
-        self._process_object_id = process_object_id
+    def __init__(
+        self,
+        initialiser_selector: str,
+        process_object_ids: "list[int]",
+        is_private: bool,
+        mute_behaviour: str,
+        name: str,
+    ) -> None:
+        self._initialiser_selector = initialiser_selector
+        self._process_object_ids = process_object_ids
+        self._is_private = is_private
         self._mute_behaviour = TAP_MUTE_BEHAVIOURS[mute_behaviour]
         self._name = name
         self._description = None
         self._autorelease_pool = None
         self._core_foundation_objects = _CoreFoundationObjectsToRelease()
 
-    def __enter__(self) -> "_PrivateProcessTapDescription":
+    def __enter__(self) -> "_TapDescription":
         frameworks = _mac_frameworks()
         tap_description_class = frameworks.objective_c_class("CATapDescription")
         if not tap_description_class:
@@ -768,11 +786,11 @@ class _PrivateProcessTapDescription:
             )
         self._autorelease_pool = frameworks.objective_c_runtime.objc_autoreleasePoolPush()
         try:
-            processes = self._core_foundation_objects.value_from([self._process_object_id])
+            processes = self._core_foundation_objects.value_from(self._process_object_ids)
             allocated = frameworks.send_message(tap_description_class, "alloc")
             self._description = frameworks.send_message(
                 allocated,
-                "initStereoMixdownOfProcesses:",
+                self._initialiser_selector,
                 ctypes.c_void_p,
                 (ctypes.c_void_p,),
                 processes,
@@ -780,7 +798,7 @@ class _PrivateProcessTapDescription:
             if not self._description:
                 raise CoreAudioFixtureError("CATapDescription refused the process list")
             frameworks.send_message(
-                self._description, "setPrivate:", None, (ctypes.c_bool,), True
+                self._description, "setPrivate:", None, (ctypes.c_bool,), self._is_private
             )
             frameworks.send_message(
                 self._description,
@@ -835,6 +853,24 @@ class _PrivateProcessTapDescription:
         )
 
 
+class _PrivateProcessTapDescription(_TapDescription):
+    """A private stereo mixdown of one process's output."""
+
+    def __init__(self, process_object_id: int, mute_behaviour: str, name: str) -> None:
+        super().__init__(
+            "initStereoMixdownOfProcesses:", [process_object_id], True, mute_behaviour, name
+        )
+
+
+class _SharedGlobalTapDescription(_TapDescription):
+    """A stereo mixdown of every process's output, visible to every process."""
+
+    def __init__(self, mute_behaviour: str, name: str) -> None:
+        super().__init__(
+            "initStereoGlobalTapButExcludeProcesses:", [], False, mute_behaviour, name
+        )
+
+
 def _raise_on_failure(call_name: str, status: int) -> None:
     if status != 0:
         raise CoreAudioFixtureError(
@@ -842,14 +878,14 @@ def _raise_on_failure(call_name: str, status: int) -> None:
         )
 
 
-class PrivateCaptureDeviceTappingThisProcessesOutput:
-    """This process's own output, readable as a capture device only it can see.
+class _CaptureDeviceReadingATap:
+    """A tap and the aggregate device it is read through, made on entry and destroyed on exit.
 
     Enter it before the graph opens a device, so a muted tap is muting from the
-    first sample played rather than after an audible start. Leaving destroys
-    the aggregate and then the tap; a process that dies first takes both with
-    it, because both are private.
+    first sample played rather than after an audible start.
     """
+
+    _aggregate_device_is_private = True
 
     def __init__(
         self, aggregate_device_uid: str, mute_behaviour: str, clock_device_uid: str
@@ -866,17 +902,12 @@ class PrivateCaptureDeviceTappingThisProcessesOutput:
         self.tap_object_id = AUDIO_OBJECT_UNKNOWN
         self.aggregate_device_object_id = AUDIO_OBJECT_UNKNOWN
 
-    def __enter__(self) -> "PrivateCaptureDeviceTappingThisProcessesOutput":
+    def _tap_description(self) -> _TapDescription:
+        raise NotImplementedError
+
+    def __enter__(self) -> "_CaptureDeviceReadingATap":
         core_audio = _mac_frameworks().core_audio
-        this_process_object = process_object_of(os.getpid())
-        if this_process_object == AUDIO_OBJECT_UNKNOWN:
-            raise CoreAudioFixtureError(
-                f"the HAL has no process object for this process ({os.getpid()}), "
-                "so there is nothing to tap"
-            )
-        with _PrivateProcessTapDescription(
-            this_process_object, self.mute_behaviour, f"StreamLib fixture tap of {os.getpid()}"
-        ) as tap_description:
+        with self._tap_description() as tap_description:
             self.tap_uid = tap_description.tap_uid()
             tap_object_id = ctypes.c_uint32(AUDIO_OBJECT_UNKNOWN)
             _raise_on_failure(
@@ -890,7 +921,10 @@ class PrivateCaptureDeviceTappingThisProcessesOutput:
             with _CoreFoundationObjectsToRelease() as core_foundation_objects:
                 description = core_foundation_objects.value_from(
                     aggregate_device_description(
-                        self.aggregate_device_uid, self.tap_uid, self.clock_device_uid
+                        self.aggregate_device_uid,
+                        self.tap_uid,
+                        self.clock_device_uid,
+                        is_private=self._aggregate_device_is_private,
                     )
                 )
                 aggregate_device_object_id = ctypes.c_uint32(AUDIO_OBJECT_UNKNOWN)
@@ -938,6 +972,63 @@ class PrivateCaptureDeviceTappingThisProcessesOutput:
             f"aggregate_format={aggregate.nominal_sample_rate:.0f}Hz/"
             f"{aggregate.input_channels}ch-in"
         )
+
+
+class PrivateCaptureDeviceTappingThisProcessesOutput(_CaptureDeviceReadingATap):
+    """This process's own output, readable as a capture device only it can see.
+
+    A process that dies before leaving takes the tap and the aggregate with it,
+    because both are private.
+    """
+
+    def _tap_description(self) -> _TapDescription:
+        this_process_object = process_object_of(os.getpid())
+        if this_process_object == AUDIO_OBJECT_UNKNOWN:
+            raise CoreAudioFixtureError(
+                f"the HAL has no process object for this process ({os.getpid()}), "
+                "so there is nothing to tap"
+            )
+        return _PrivateProcessTapDescription(
+            this_process_object, self.mute_behaviour, f"StreamLib fixture tap of {os.getpid()}"
+        )
+
+
+class SharedCaptureDeviceTappingAllOutput(_CaptureDeviceReadingATap):
+    """Every process's output, readable as a capture device any process can open.
+
+    It hears whatever else plays while it exists, and muted it keeps all of it
+    off the hardware. Shared objects are not tied to this process, so leaving is
+    what destroys them.
+    """
+
+    _aggregate_device_is_private = False
+
+    def _tap_description(self) -> _TapDescription:
+        return _SharedGlobalTapDescription(
+            self.mute_behaviour, f"StreamLib fixture shared tap {self.aggregate_device_uid}"
+        )
+
+
+def hold_a_shared_tap_of_all_output(
+    aggregate_device_uid: str, mute_behaviour: str, clock_device_uid: str
+) -> int:
+    """Make the shared tap, say `READY <evidence>` on stdout, and hold it until signalled."""
+
+    def leave_on_signal(_signal_number, _frame) -> None:
+        raise SystemExit(0)
+
+    for stopping_signal in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(stopping_signal, leave_on_signal)
+    try:
+        with SharedCaptureDeviceTappingAllOutput(
+            aggregate_device_uid, mute_behaviour, clock_device_uid
+        ) as shared_capture_device:
+            print(f"READY {shared_capture_device.evidence()}", flush=True)
+            while True:
+                signal.pause()
+    except CoreAudioFixtureError as refusal:
+        print(f"ERROR: {refusal}", file=sys.stderr)
+        return 1
 
 
 class RunningAudioDeviceIOProc:
@@ -1044,6 +1135,12 @@ def main(argv) -> int:
             print(f"SKIP: {refusal}", file=sys.stderr)
             return 77
         return 0
+    if (
+        command == "hold-a-shared-tap-of-all-output"
+        and len(argv) == 5
+        and argv[3] in TAP_MUTE_BEHAVIOURS
+    ):
+        return hold_a_shared_tap_of_all_output(argv[2], argv[3], argv[4])
     if command == "explain-exact-zeros" and len(argv) == 3:
         status, reason = why_a_tap_delivered_exact_zeros(
             argv[2], system_audio_recording_authorization()
@@ -1054,7 +1151,8 @@ def main(argv) -> int:
         "Usage: coreaudio_process_tap.py devices | built-in-speaker-uid | "
         "built-in-microphone-uid | built-in-microphone-name | default-output-uid | "
         "system-audio-recording-authorization | authorize-a-tap | "
-        "explain-exact-zeros <authorization-before-the-run>",
+        "explain-exact-zeros <authorization-before-the-run> | "
+        "hold-a-shared-tap-of-all-output <aggregate-device-uid> muted|unmuted <clock-device-uid>",
         file=sys.stderr,
     )
     return 2

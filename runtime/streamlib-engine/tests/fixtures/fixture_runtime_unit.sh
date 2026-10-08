@@ -16,7 +16,9 @@
 # checkout, editable, and numpy, which the fixture nodes import; never the
 # runtime, which a processor interpreter borrows from the lend. It is made with
 # uv the first time a driver needs it; delete the directory to have it made
-# again.
+# again. To use a venv prepared elsewhere instead, name it with
+# STREAMLIB_FIXTURE_VENV: it is checked the same way and `<this directory>/.venv`
+# becomes a symlink to it, which stays in use until deleted.
 
 FIXTURE_DIRECTORY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURE_REPOSITORY_ROOT="$(cd "$FIXTURE_DIRECTORY/../../../.." && pwd)"
@@ -47,6 +49,19 @@ require_the_runtime_unit() {
 # Makes the fixture venv when it is absent, then exits 77 unless it can compile
 # a fixture stream, and 1 if it carries a runtime of its own.
 require_the_fixture_venv() {
+    if [ -n "${STREAMLIB_FIXTURE_VENV:-}" ]; then
+        local prepared_fixture_venv_directory
+        if ! prepared_fixture_venv_directory="$(cd "$STREAMLIB_FIXTURE_VENV" 2>/dev/null && pwd -P)"; then
+            echo "ERROR: STREAMLIB_FIXTURE_VENV names $STREAMLIB_FIXTURE_VENV, which is not a directory" >&2
+            exit 1
+        fi
+        if [ -e "$FIXTURE_VENV_DIRECTORY" ] && [ ! -L "$FIXTURE_VENV_DIRECTORY" ]; then
+            echo "ERROR: STREAMLIB_FIXTURE_VENV is set, but $FIXTURE_VENV_DIRECTORY is a venv of its" \
+                "own — delete it to run on $prepared_fixture_venv_directory" >&2
+            exit 1
+        fi
+        ln -sfn "$prepared_fixture_venv_directory" "$FIXTURE_VENV_DIRECTORY"
+    fi
     if [ ! -x "$FIXTURE_PYTHON" ]; then
         if ! command -v uv >/dev/null 2>&1; then
             echo "SKIP: no fixture venv at $FIXTURE_VENV_DIRECTORY, and no uv to make one" >&2
@@ -62,7 +77,7 @@ require_the_fixture_venv() {
     fi
     if ! "$FIXTURE_PYTHON" -c 'import numpy, tatolab.stream' >/dev/null 2>&1; then
         echo "SKIP: $FIXTURE_PYTHON cannot import tatolab.stream and numpy — delete" \
-            "$FIXTURE_VENV_DIRECTORY to have it made again" >&2
+            "$FIXTURE_VENV_DIRECTORY to have it made again, or fix the venv STREAMLIB_FIXTURE_VENV names" >&2
         exit 77
     fi
     if "$FIXTURE_PYTHON" -c '
