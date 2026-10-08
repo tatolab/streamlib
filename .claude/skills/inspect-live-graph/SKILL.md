@@ -16,7 +16,7 @@ streamlib graph --node <runtime name>
 # or, when exactly one node is live:
 streamlib graph
 ```
-The result is the `graph` MCP tool's JSON (pretty-printed): `stream` (once one is loaded), `nodes`, `links`, `exposed`, `extensions` and `runtime_name`.
+The result is the `graph` MCP tool's JSON (pretty-printed): `stream` (once one is loaded), `nodes`, `links`, `exposed` and `runtime_name`.
 
 ### 2. Read what you need out of it
 - **Node names** — each node's `name`, which instances the runtime actually stood up, and under which `type`. A name is cast to lowercase URL-safe (`name="Front Camera"` is `front-camera`; a defaulted `CameraSource` is `camerasource`, a second one `camerasource-2`).
