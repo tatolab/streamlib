@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use streamlib::engine_internal::core::app_directory::record_the_app_entry_directory_the_language_host_captured;
+use streamlib::engine_internal::core::app_directory::record_the_app_directory_the_runtime_host_was_given;
 use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads, Runner,
@@ -37,7 +37,7 @@ pub(crate) fn host_the_stream_until_shutdown(
 ) -> ExitCode {
     // So the runtime is named after the project rather than the directory
     // `tatolabd` was started from; `STREAMLIB_APP_DIRECTORY` still outranks it.
-    record_the_app_entry_directory_the_language_host_captured(
+    record_the_app_directory_the_runtime_host_was_given(
         stream_environment.project_directory.clone(),
     );
 

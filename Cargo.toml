@@ -7,7 +7,7 @@ members = [
     "sdk/streamlib-sdk",       # Public authoring API surface — customer apps depend on this (Cargo name `streamlib`)
     "runtime/streamlib-engine",    # Engine internals (RHI, IPC, surface-share, runtime executor) — private dep of the SDK
     "runtime/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing service: Unix socket (Linux), raw Mach (macOS)
-    "runtime/streamlib-media-builtins", # First-party media built-ins (test pattern, camera, display) — native blocks statically linked into the wheel
+    "runtime/streamlib-media-builtins", # First-party media built-ins (test pattern, camera, display) — native blocks statically linked into `tatolabd`
     "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between the engine and streamlib-macros
     "sdk/streamlib-macros",    # Procedural macros — owns the `#[processor]` authoring grammar
     "adapters/streamlib-surface-adapter", # Surface adapter contract shared by every adapter core
@@ -17,9 +17,9 @@ members = [
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux and macOS)
     "adapters/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux; absent on macOS, its dlpack module on both)
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux and macOS; GL arm Linux)
-    "sdk/streamlib-python-wheel", # The importable Python wheel — the app's CPython imports the engine and authors pipelines; every `@node` runs in its own helper process
+    "sdk/streamlib-python-wheel", # `tatolab.runtime` — the processor-interpreter bindings (`_engine`) and bootstrap a runtime unit lends, plus the observation-verb CLI until the native one; hosts no engine
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
-    "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into the wheel and the streamlib crate
+    "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into `tatolabd` and Rust hosts
     "runtime/tatolabd", # `tatolabd` — the runtime process: hosts one stream in the foreground, engine and built-ins, no Python in its process
     "runtime/tatolab-cli", # `tatolab` — the native CLI: `new`, and `run`/`dev`, which compile in the project's venv and start `tatolabd` attached
     "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md

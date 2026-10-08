@@ -8,7 +8,7 @@ keywords = ["api-server", "http", "websocket", "openapi", "streamlib"]
 categories = ["multimedia", "web-programming::http-server"]
 repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
-# Host-side control plane — statically linked into `streamlib-runtime`, not
+# Host-side control plane — statically linked into `tatolabd`, not
 # distributed through the registry. `publish = false` keeps it out of the
 # release closure (`compute_release_closure` requires a publishable crate).
 publish = false
