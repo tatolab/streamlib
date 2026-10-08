@@ -92,7 +92,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_backed_protocol_conformance.py::test_the_engine_conforms_to_tatolab_stream_and_its_stub -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_an_fd_shaped_raw_handle_refuses_by_name_off_linux -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
 - **DECIDED** — The scaffold models the pathway: pixels on the GPU, logic on the CPU, the
   pixel view explicit. `streamlib new` writes two processors, each in its own module
   under `nodes/` — an `InvertingEffect` over `GlslPixelEffect` (one GLSL `effect`
@@ -219,7 +219,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   across a process boundary (an fd, an exportable allocation) — an
   address-space-local pointer is not a handle.
   [importable-python-library — SHIPPED #1710, #1756, #1757; amended by one-runtime-per-machine: the runtime process runs the one engine, one per machine]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py -->
 - **DECIDED** — First-party optional capabilities ship the same way third-party native
   code does: as separate PyPI extension wheels — Rust inside for speed, a Python
   processor as the binding for any processor the wheel supplies — depending on the
@@ -362,9 +362,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   consumers); only their cross-DSO `-abi` halves die with the plugin ABI.
   [importable-python-library — SHIPPED #1710; surface-id-lifetime-contract — SHIPPED
   #1868; macos-capability-parity — SHIPPED #2404]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_pixel_exchange.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_graph_frame_reaches_torch_as_a_device_tensor -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_mlx_reads_a_graph_frame_over_its_own_bytes -->
+  <!-- verify: pytest tests/stream-on-runtime/test_pixel_exchange.py -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_a_graph_frame_reaches_torch_as_a_device_tensor -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_mlx_reads_a_graph_frame_over_its_own_bytes -->
 - **DECIDED** — Raw-handle export is public contract for both flavours, gated by
   the Full capability surface: a raw memory fd is minted only by
   `GpuContextFullAccess` — `export_dma_buf` for the DMA-BUF flavour,
@@ -411,10 +411,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   #2405]
   <!-- verify: cargo test -p streamlib-adapter-cuda --test opaque_fd_wheel_export_foreign_consumer a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels -->
   <!-- verify: cargo test -p streamlib-adapter-cuda --test opaque_fd_image_consumer_rhi_round_trip an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_texture_handle_round_trips_across_the_process_boundary -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_an_iosurface_port_is_looked_up_and_read_by_native_code_in_the_helper -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_each_iosurface_export_is_a_fresh_send_right_the_caller_owns_and_gives_back -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_a_texture_handle_round_trips_across_the_process_boundary -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_an_iosurface_port_is_looked_up_and_read_by_native_code_in_the_helper -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_each_iosurface_export_is_a_fresh_send_right_the_caller_owns_and_gives_back -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
 - **OPEN** — Zero-copy per-frame consumption by a foreign GPU stack: intended, do
   not build until designed. Direction: export a surface's slot set once at setup,
   name the current frame per-frame by surface id, signal the hand-off with an
@@ -523,8 +523,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   at every door — the surface handle's `__dlpack__` and the device-tensor scope — and
   `as_numpy()` rides the same host request, one mapping, not two copies.
   [portable-gpu-interop — SHIPPED #2404]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_the_host_side_stays_reachable_on_explicit_request -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_copy_request_is_refused_at_both_doors -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_the_host_side_stays_reachable_on_explicit_request -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_a_copy_request_is_refused_at_both_doors -->
 - **DECIDED** — The cross-floor check reads a Python processor's source and its
   `pyproject.toml` for what binds it to one floor and names the file, line and portable
   spelling of each. It runs inside `streamlib dev` and `streamlib run` as a warning that
@@ -1549,10 +1549,10 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [python-kernel-api; python-kernel-surface — SHIPPED #1778, #1779; macos-capability-parity
   — SHIPPED #2402, #2404]
   <!-- verify: cargo test -p streamlib-engine the_seam_refuses_to_publish_a_staging_no_frame_was_read_into -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_raise_inside_the_device_tensor_scope_follows_its_floors_publication_rule -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_texture_handle_round_trips_across_the_process_boundary -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_device_write_is_ordered_ahead_of_the_engines_next_gpu_read -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_the_device_tensor_strides_follow_the_surfaces_row_pitch -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_a_raise_inside_the_device_tensor_scope_follows_its_floors_publication_rule -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_a_texture_handle_round_trips_across_the_process_boundary -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_a_device_write_is_ordered_ahead_of_the_engines_next_gpu_read -->
+  <!-- verify: pytest tests/stream-on-runtime/test_device_exchange.py::test_the_device_tensor_strides_follow_the_surfaces_row_pitch -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests every_single_plane_format_takes_an_iosurface_backed_image -->
   <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_planar_format_is_refused_an_iosurface_backed_image_by_name -->
   <!-- verify: cargo test -p streamlib-consumer-rhi the_binding_takes_device_local_memory_that_is_not_host_visible -->
@@ -2122,9 +2122,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_over_the_escalate_wire -->
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_shows_named_surfaces -->
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_refused_without_a_display_server -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_owned_window.py::test_all_three_ways_of_naming_a_published_surface_reach_the_window -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_owned_window.py::test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_owned_window.py::test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar -->
+  <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_all_three_ways_of_naming_a_published_surface_reach_the_window -->
+  <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed -->
+  <!-- verify: pytest tests/stream-on-runtime/test_processor_owned_window.py::test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar -->
 - **DECIDED** — Camera → GPU transport: zero-copy import of the device's own memory when
   the driver takes it, transparent CPU upload otherwise, selected automatically — no
   configuration dial. Both arms land frames through one stage: the device's NV12 or YUYV
@@ -2188,7 +2188,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib now_lands_in_the_kernel_monotonic_domain -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_engine_media_clock -->
   <!-- verify: cargo test -p streamlib-python-wheel --lib python_logging::tests::a_wheel_stamp_and_an_engine_stamp_taken_back_to_back_differ_by_microseconds -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_capability_contexts.py::test_ctx_time_is_the_engine_media_clock_in_nanoseconds -->
+  <!-- verify: pytest tests/stream-on-runtime/test_capability_contexts.py::test_ctx_time_is_the_engine_media_clock_in_nanoseconds -->
   <!-- verify: cargo run -p xtask -- check-clock-usage -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-13-one-monotonic-clock.md -->
 - **DECIDED** — Audio backend: one chain per platform, probed once per process and logged

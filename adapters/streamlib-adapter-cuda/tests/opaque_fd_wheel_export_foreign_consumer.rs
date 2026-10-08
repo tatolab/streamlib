@@ -25,10 +25,11 @@
 //! built by `cargo xtask build-runtime`), whose processor interpreters start
 //! from that same venv.
 //!
-//! Test gating: Linux-only by construction; skips when the suite venv or
-//! the runtime unit is absent, and when Vulkan (or the OPAQUE_FD pools the
-//! local staging allocation needs) is unavailable — mirroring the
-//! sibling carve-out tests.
+//! Test gating: Linux-only by construction; skips when Vulkan (or the
+//! OPAQUE_FD pools the local staging allocation needs) is unavailable —
+//! mirroring the sibling carve-out tests. Once the device is proven, a
+//! missing suite venv or runtime unit, or a `tatolabd` that ends before the
+//! probe connects for any reason but a missing Vulkan driver, fails the test.
 
 #![cfg(target_os = "linux")]
 
@@ -67,6 +68,9 @@ const IMAGE_BYTES: u64 = (SURFACE_WIDTH_PIXELS as u64) * (SURFACE_HEIGHT_PIXELS 
 const OPAQUE_FD_EXPORT_HANDOFF_STREAM: &str = "opaque_fd_export_handoff_probe_alone";
 
 const RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_UNIT_DIRECTORY";
+
+/// The refusal `tatolabd` ends with when the loader finds no Vulkan driver at all.
+const TATOLABD_NO_VULKAN_DRIVER_REFUSAL: &str = "No usable Vulkan driver";
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -267,22 +271,6 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         .with_env_filter("streamlib=warn,streamlib_consumer_rhi=debug")
         .try_init();
 
-    let suite_venv_interpreter = stream_on_runtime_suite_directory().join(".venv/bin/python");
-    if !suite_venv_interpreter.exists() {
-        println!(
-            "wheel export handoff: no integration suite venv at {suite_venv_interpreter:?} \
-             (`uv sync` in tests/stream-on-runtime) — skipping"
-        );
-        return;
-    }
-    let tatolabd = runtime_unit_directory().join("bin/tatolabd");
-    if !tatolabd.exists() {
-        println!(
-            "wheel export handoff: no runtime unit's tatolabd at {tatolabd:?} \
-             (`cargo xtask build-runtime`) — skipping"
-        );
-        return;
-    }
     // The local staging allocation and the consumer import need the same
     // driver support the sibling carve-outs skip without.
     let host_device = match HostVulkanDevice::new() {
@@ -296,6 +284,19 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         println!("wheel export handoff: OPAQUE_FD HOST_VISIBLE buffer pool unavailable — skipping");
         return;
     }
+
+    let suite_venv_interpreter = stream_on_runtime_suite_directory().join(".venv/bin/python");
+    assert!(
+        suite_venv_interpreter.exists(),
+        "no integration suite venv at {suite_venv_interpreter:?}; run `uv sync` in \
+         tests/stream-on-runtime"
+    );
+    let tatolabd = runtime_unit_directory().join("bin/tatolabd");
+    assert!(
+        tatolabd.exists(),
+        "no runtime unit's tatolabd at {tatolabd:?}; run `cargo xtask build-runtime` \
+         (or point {RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE} at a built unit)"
+    );
 
     // Under the shared temporary directory, short: the runtime directory
     // under `XDG_RUNTIME_DIR` holds Unix sockets whose paths must fit `sun_path`.
@@ -362,15 +363,20 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
             Ok((stream, _)) => break stream,
             Err(would_block) if would_block.kind() == std::io::ErrorKind::WouldBlock => {
                 if let Some(exit) = hosting_tatolabd.exited() {
-                    // tatolabd ended before the probe exported — a GPU-less
-                    // box, not a contract failure. Mirror the driver-absence
-                    // skips, with both output tails so a real failure is legible.
-                    println!(
-                        "wheel export handoff: tatolabd exited {exit} before the probe \
-                         connected — skipping.\n{}",
+                    let stderr_tail = TatolabdHostingTheHandoffStream::capture_tail(
+                        &hosting_tatolabd.stderr_capture_path,
+                    );
+                    if stderr_tail.contains(TATOLABD_NO_VULKAN_DRIVER_REFUSAL) {
+                        println!(
+                            "wheel export handoff: tatolabd found no Vulkan driver — skipping.\n{}",
+                            hosting_tatolabd.diagnostic_tails()
+                        );
+                        return;
+                    }
+                    panic!(
+                        "tatolabd exited {exit} before the probe connected.\n{}",
                         hosting_tatolabd.diagnostic_tails()
                     );
-                    return;
                 }
                 assert!(
                     Instant::now() < accept_deadline,
