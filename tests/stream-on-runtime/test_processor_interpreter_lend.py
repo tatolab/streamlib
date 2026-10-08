@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from conftest import StreamGraphLoadOutcome, environment_reaching_no_vulkan_driver
+from helper_process_observation import assert_runs_in_a_process_of_its_own_beneath
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
 from processor_interpreter_lend_probes import (
     CountsBagsFromUpstreamSink,
@@ -94,29 +95,6 @@ def images_mapped_into(process_id: int) -> "list[str]":
         check=True,
     )
     return [line[1:] for line in listed.stdout.splitlines() if line.startswith("n")]
-
-
-def parent_process_id_of(process_id: int) -> int:
-    listed = subprocess.run(
-        ["ps", "-o", "ppid=", "-p", str(process_id)], capture_output=True, text=True, check=True
-    )
-    return int(listed.stdout.strip())
-
-
-def assert_runs_in_a_process_of_its_own_beneath(
-    processor_interpreter_process_id: int, tatolabd_process_id: int
-) -> None:
-    """The interpreter is not `tatolabd`, and `tatolabd` is its ancestor."""
-    assert processor_interpreter_process_id != tatolabd_process_id, (
-        "the processor interpreter runs inside tatolabd's own process"
-    )
-    ancestor_process_id = processor_interpreter_process_id
-    while ancestor_process_id not in (tatolabd_process_id, 0, 1):
-        ancestor_process_id = parent_process_id_of(ancestor_process_id)
-    assert ancestor_process_id == tatolabd_process_id, (
-        f"processor interpreter {processor_interpreter_process_id} does not descend from "
-        f"tatolabd {tatolabd_process_id}"
-    )
 
 
 def assert_no_python_is_mapped_into(process_id: int) -> None:

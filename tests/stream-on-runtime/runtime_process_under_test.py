@@ -47,6 +47,9 @@ ENGINE_GRACEFUL_STOP_LOG_LINE = "[stop] Graceful shutdown complete"
 #: The engine's line once every processor has started.
 ENGINE_STARTED_LOG_LINE = "[start] Runtime started"
 
+#: `tatolabd`'s line when an interrupt ended the load before the engine started.
+STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT = "so the stream was never started"
+
 #: The line `tatolabd` logs once the graph loaded, before the engine starts.
 STREAM_LOADED_LOG_LINE_PATTERN = re.compile(
     r"the stream(?: `(?P<stream_name>[^`]+)`)? loaded with (?P<stream_node_count>\d+) nodes"
@@ -97,6 +100,8 @@ class RuntimeProcessUnderTest:
         self._output_arrived = threading.Condition(threading.RLock())
         self._stdout_ended = False
         self._stderr_ended = False
+        #: When the last of standard output and standard error ended, monotonic.
+        self._output_ended_at: "float | None" = None
         self._reader_threads = [
             threading.Thread(
                 target=self._pump, args=(process.stdout, self.stdout_lines, "stdout"), daemon=True
@@ -118,6 +123,8 @@ class RuntimeProcessUnderTest:
                 self._stdout_ended = True
             else:
                 self._stderr_ended = True
+            if self._stdout_ended and self._stderr_ended:
+                self._output_ended_at = time.monotonic()
             self._output_arrived.notify_all()
 
     @property
@@ -308,6 +315,26 @@ class RuntimeProcessUnderTest:
         for reader_thread in self._reader_threads:
             reader_thread.join(READER_THREAD_JOIN_TIMEOUT_SECONDS)
         return exit_status
+
+    def await_end_of_output(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> float:
+        """Wait until both standard output and standard error have ended; return when, monotonic.
+
+        A pipe ends only once every process holding its write end has closed it,
+        so this is later than the process's own exit when something it started
+        still holds its output.
+        """
+        deadline = time.monotonic() + timeout
+        with self._output_arrived:
+            while self._output_ended_at is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AssertionError(
+                        f"the output of `{self.command_description}` did not end within "
+                        f"{timeout}s (exit status {self.process.poll()}); standard error:\n"
+                        f"{self.recent_stderr()}"
+                    )
+                self._output_arrived.wait(min(remaining, 0.5))
+            return self._output_ended_at
 
     def await_clean_exit(self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS) -> None:
         """Require exit status 0 and the engine's graceful-stop line."""

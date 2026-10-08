@@ -34,7 +34,7 @@ from node_module_whose_describe_holds_the_load import (
 )
 from runtime_load_open_config_nodes import OpenConfigSink
 from runtime_load_served_graph_nodes import LoadedFrameSink
-from runtime_process_under_test import RuntimeProcessUnderTest
+from runtime_process_under_test import STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT, RuntimeProcessUnderTest
 from tatolab.stream import (
     CameraSource,
     DisplayWindow,
@@ -516,7 +516,7 @@ def test_a_ctrl_c_during_a_loads_describe_ends_tatolabd_at_once(
     interrupt_honoured_within_seconds = time.monotonic() - interrupted_at
 
     assert exit_status == 0, tatolabd.recent_stderr()
-    assert "so the stream was never started" in tatolabd.stderr_text, tatolabd.recent_stderr()
+    assert STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT in tatolabd.stderr_text, tatolabd.recent_stderr()
     assert interrupt_honoured_within_seconds < HELD_DESCRIBE_DEADLINE_SECONDS / 2
 
 
