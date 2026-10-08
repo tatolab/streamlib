@@ -7,12 +7,10 @@
 //! `core::error`) and the engine-free authoring surface. Every variant
 //! is String / std / anyhow based plus the engine-free
 //! `ProcessorClassImportPath` and `ExposedNameCastsToNothingError` (from
-//! `streamlib-processor-schema`), with the engine-free
-//! `StreamlibRuntimeDirectoryRefusal` conversion and, on Linux, the
-//! `ConsumerRhiError` one.
+//! `streamlib-processor-schema`) and, on Linux, the engine-free
+//! `ConsumerRhiError` conversion.
 
 use streamlib_processor_schema::{ExposedNameCastsToNothingError, ProcessorClassImportPath};
-use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectoryRefusal;
 
 /// The StreamLib error type.
 #[derive(thiserror::Error, Debug)]
@@ -346,12 +344,6 @@ fn node_types_listed_for_a_refusal(node_types: &[ProcessorClassImportPath]) -> S
         .join(", ")
 }
 
-impl From<StreamlibRuntimeDirectoryRefusal> for Error {
-    fn from(runtime_directory_refusal: StreamlibRuntimeDirectoryRefusal) -> Self {
-        Error::Runtime(runtime_directory_refusal.to_string())
-    }
-}
-
 #[cfg(target_os = "linux")]
 impl From<streamlib_consumer_rhi::ConsumerRhiError> for Error {
     fn from(e: streamlib_consumer_rhi::ConsumerRhiError) -> Self {
@@ -431,21 +423,5 @@ mod tests {
         // Display is the same words, so a log and a frame never disagree.
         assert_eq!(PortDirection::Input.to_string(), "input");
         assert_eq!(PortDirection::Output.to_string(), "output");
-    }
-
-    #[test]
-    fn a_runtime_directory_refusal_is_a_runtime_error_in_its_own_words() {
-        let runtime_directory_refusal = StreamlibRuntimeDirectoryRefusal::CannotBeTrusted {
-            path: "/tmp/streamlib-1000".into(),
-            what_is_wrong: "it is a symlink".to_owned(),
-        };
-        let refusal_text = runtime_directory_refusal.to_string();
-
-        let converted = Error::from(runtime_directory_refusal);
-
-        assert!(
-            matches!(&converted, Error::Runtime(message) if *message == refusal_text),
-            "{converted:?}"
-        );
     }
 }

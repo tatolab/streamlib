@@ -4662,7 +4662,6 @@ dependencies = [
  "anyhow",
  "streamlib-consumer-rhi",
  "streamlib-processor-schema",
- "streamlib-runtime-client-contract",
  "thiserror 2.0.18",
 ]
 
