@@ -216,7 +216,7 @@ def a_config_holding_a_list_holding_itself() -> "dict[str, Any]":
     return {"overlay": {"labels": labels}}
 
 
-# `Runtime.load` takes a graph 128 containers deep, and the graph, its `nodes`
+# `tatolabd` loads a graph 128 containers deep, and the graph, its `nodes`
 # list and the node enclose every config.
 CONTAINERS_A_CONFIG_NESTS_AT_MOST_COUNTING_ITSELF = 125
 
@@ -714,7 +714,7 @@ def test_a_config_nested_one_past_what_a_graph_carries_is_refused_at_add_by_key_
     assert str(refusal.value) == (
         f"config nests too deep for a graph: `{deepest_key_path}` is a container 126 "
         f"deep counting `config` itself, and a config nests at most 125 — "
-        f"`Runtime.load` counts containers from the graph's root, and the graph, its "
+        f"`tatolabd` counts containers from the graph's root, and the graph, its "
         f"`nodes` list and the node enclose every config. Nest the data at most 125 "
         f"containers deep, or carry the deeper part as a `str`"
     )
