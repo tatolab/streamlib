@@ -81,6 +81,26 @@ the converted count.
   contents are excluded from the content search (`ship-change-removed-gate.sh:58`), so the path
   bullet is the proof.
 
+## MODIFIED: converted examples — wording that strays into the engine
+
+Under the new entry, three passages in stream examples lose their engine-internal wording. Each
+example otherwise stays exactly as it is.
+
+- `examples/raytracing-showcase/README.md:162-163`: delete the sentence "(A Rust processor in the
+  app process can escalate, at the cost of a device-idle wait per frame.)". It points readers at
+  the Rust app path. Native code reaches a stream inside a Python package (§Packages
+  `ARCHITECTURE.md:239-246`), and such a package runs in the node's own process under the same
+  boundary. No replacement sentence: per-frame acceleration-structure rebuilds would be an engine
+  capability for both languages, which the plan does not decide.
+- `examples/fisheye-object-detection/README.md:84-86`: "and a dispatch binding resolves it
+  through the surface-share service exactly as it resolves a texture from this process's own
+  ring" becomes "and a dispatch binds it exactly as it binds a texture from this node's own
+  ring". The following sentence, "Nothing is copied…", stays.
+- `examples/raytracing-showcase/processors/split_screen_compositor.py:292-295`: the comment
+  becomes "Both upstream ids name textures other nodes wrote, and a dispatch binds them as they
+  are, the same as this node's own." This third passage has the same surface-share wording as
+  the fisheye one.
+
 ## Tracker consequences, applied at /derive-tickets
 
 - #2615 drops its `examples/tokio-integration/src/main.rs` bullet. Its other examples are
@@ -88,7 +108,8 @@ the converted count.
 
 ## Slice
 
-One ticket: delete the directory, apply the §Consumers edits above, and fold this change.
+One ticket: delete the directory, apply the §Consumers edits and the three wording trims above,
+and fold this change.
 Nothing in it needs the rig.
 
 ## Assumptions stated, not asked
