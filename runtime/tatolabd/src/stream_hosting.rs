@@ -44,6 +44,7 @@ pub(crate) fn host_the_stream_until_shutdown(
     let engine = match Runner::new_with_construction_options(RunnerConstructionOptions {
         runtime_name: None,
         pretty_log_mirror_stream: PrettyLogMirrorStandardStream::StandardError,
+        runtime_own_log_directory: None,
     }) {
         Ok(engine) => engine,
         Err(construction_refusal) => {

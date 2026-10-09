@@ -4,7 +4,8 @@
 //! Drain worker. Pops [`LogRecord`]s from a bounded MPMC queue, stamps each
 //! with the `runtime_id` and `stream` its route names and its `source`, and
 //! fans it out to an optional line-buffered pretty mirror on a standard
-//! stream and to the JSONL file of the stream that emitted it.
+//! stream and to the JSONL file of the stream that emitted it — for a record
+//! no stream emitted, the runtime's own log while a runtime keeps one.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -49,6 +50,9 @@ pub(crate) struct DrainWorkerRecordQueue {
     /// The streams a full queue dropped records of since the worker last
     /// reported it; each counts its own.
     pub streams_whose_records_were_dropped: Arc<Mutex<Vec<Arc<LoadedStreamLogRoute>>>>,
+    /// The runtime's own log, written each record no stream emitted while a
+    /// runtime keeps one.
+    pub runtime_own_log_route: Arc<Mutex<Option<Arc<LoadedStreamLogRoute>>>>,
 }
 
 impl DrainWorkerRecordQueue {
@@ -59,6 +63,7 @@ impl DrainWorkerRecordQueue {
             doorbell,
             dropped: Arc::new(AtomicU64::new(0)),
             streams_whose_records_were_dropped: Arc::default(),
+            runtime_own_log_route: Arc::default(),
         }
     }
 
@@ -196,6 +201,8 @@ struct DrainWorkerOutputs<'worker> {
     stream_log_files_written: LoadedStreamLogFilesWrittenSinceTheirLastFlush,
     serialize_buf: Vec<u8>,
     pretty_buf: String,
+    /// The runtime's own log as the queue named it when this drain began.
+    runtime_own_log_route: Option<Arc<LoadedStreamLogRoute>>,
 }
 
 fn run_worker(
@@ -216,6 +223,7 @@ fn run_worker(
         stream_log_files_written: LoadedStreamLogFilesWrittenSinceTheirLastFlush::default(),
         serialize_buf: Vec::with_capacity(1024),
         pretty_buf: String::with_capacity(256),
+        runtime_own_log_route: None,
     };
 
     loop {
@@ -228,6 +236,9 @@ fn run_worker(
 
         let signal = doorbell.recv_timeout(timeout);
 
+        outputs
+            .runtime_own_log_route
+            .clone_from(&record_queue.runtime_own_log_route.lock());
         // Drain everything currently available.
         drain_queue(queue, &mut outputs);
 
@@ -341,7 +352,8 @@ fn write_one(record: &LogRecord, outputs: &mut DrainWorkerOutputs<'_>) {
     // worker's runtime (polyglot subprocess records). Tracing-sourced
     // records leave it `None` and inherit the worker's configured source.
     let source = record.source.unwrap_or(outputs.worker_source);
-    let route = record.loaded_stream_log_route.as_ref();
+    let stream_route = record.loaded_stream_log_route.as_ref();
+    let route = stream_route.or(outputs.runtime_own_log_route.as_ref());
 
     // Build a full JSONL event and serialize once.
     let event = RuntimeLogEvent {
@@ -350,7 +362,9 @@ fn write_one(record: &LogRecord, outputs: &mut DrainWorkerOutputs<'_>) {
         runtime_id: route
             .map(|route| route.runtime_id().to_string())
             .unwrap_or_default(),
-        stream: route.map(|route| route.stream_name().to_string()),
+        stream: stream_route
+            .and_then(|stream_route| stream_route.stream_name())
+            .map(str::to_string),
         source,
         level: record.level,
         message: record.message.clone(),

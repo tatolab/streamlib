@@ -43,10 +43,15 @@ stream that emitted it:
 - A routed record carries the stream's name in `stream` and its runtime's id in
   `runtime_id`, and is written to that stream's JSONL file and nowhere else, so
   one stream's records never land in another's file.
+- A stream's route also numbers each record it writes, from 1, and holds the
+  most recent 4096 in memory, which `LoadedStreamInThisRuntime::log_records_after`
+  pages through by sequence number. The number is not written to the file.
 - A record no stream emitted — the runtime's own, the runtime process's own
-  captured stdout / stderr, iceoryx2's — carries no `stream` and an empty
-  `runtime_id`, and reaches the pretty mirror only; no runtime-level JSONL file is
-  written.
+  captured stdout / stderr, iceoryx2's — carries no `stream`. When its runtime
+  keeps an own log (`RunnerConstructionOptions::runtime_own_log_directory`), the
+  record is written there, to `tatolabd-<started_at_millis>.jsonl`, carrying the
+  runtime's id, and rotates as a stream's log does; otherwise its `runtime_id` is
+  empty and it reaches the pretty mirror only.
 - Every record, routed or not, is mirrored to the pretty log stream (stderr under
   `tatolabd`, stdout for an engine a Rust app hosts), unless `STREAMLIB_QUIET` is
   set.
@@ -118,7 +123,7 @@ it, and reopens the active name. `tatolab logs --follow` does this.
 | --- | --- | --- | --- |
 | `schema_version` | integer | no | Bumped on breaking schema changes. |
 | `host_ts` | integer | no | Host wall-clock timestamp (nanoseconds since UNIX epoch). Stamped on the emitting thread for a Rust record, and at receipt for a record a helper process sends. Not monotonic — see [Ordering](#ordering). |
-| `runtime_id` | string | no | The id ([`RuntimeUniqueId`][rs_id]) of the runtime whose stream emitted the record. Every record in a stream's file carries it; it is empty only on a record no stream emitted, which reaches the pretty mirror and never a file. |
+| `runtime_id` | string | no | The id ([`RuntimeUniqueId`][rs_id]) of the runtime whose stream emitted the record. Every record in a stream's file and in the runtime's own log carries it; it is empty only on a record no stream emitted while its runtime keeps no own log. |
 | `stream` | string | yes (absent) | The URL-safe cast name of the loaded stream that emitted the record, as loaded — dots kept. Every record in a stream's file carries it. Absent on a record no stream emitted, and on records written before the field existed. |
 | `source` | enum | no | `"rust"` \| `"python"`, the [`Source`][rs] enum. Rust events come from the `tracing` pipeline — the runtime process's own, or a helper process's, captured there and relayed over the `{op:"log"}` escalate IPC; python events come from `tatolab.stream.log.*` in a helper process via that same IPC, or from a helper process's captured stdout / stderr. |
 | `level` | enum | no | `"trace"` \| `"debug"` \| `"info"` \| `"warn"` \| `"error"`. |
@@ -173,7 +178,8 @@ layers are:
    routes through the unified pathway tagged `intercepted: true` at
    `warn` level, with `channel` `fd1` or `fd2`. A helper's lines land in
    its stream's log; the runtime process's own cannot be told apart by
-   stream, so they reach the pretty mirror only.
+   stream, so they reach the pretty mirror, and the runtime's own log when
+   it keeps one.
 
 All three layers are intentional — clippy and the xtask lint keep
 first-party code honest at compile/CI time; the runtime interceptors

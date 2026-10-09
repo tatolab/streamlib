@@ -31,7 +31,7 @@ use crate::core::graph::{
     ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
-use crate::core::logging::LoadedStreamLogRoute;
+use crate::core::logging::{LoadedStreamLogRecordsPage, LoadedStreamLogRoute};
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, ProcessorEvent, RuntimeEvent, topics,
@@ -265,6 +265,12 @@ impl LoadedStreamInThisRuntime {
     /// Where the records this stream's threads emit go.
     pub fn log_route(&self) -> &Arc<LoadedStreamLogRoute> {
         &self.this_streams_identity_and_handles.log_route
+    }
+
+    /// This stream's log records numbered after `after`, at most `max_count`
+    /// of them, from the most recent its log route holds in memory.
+    pub fn log_records_after(&self, after: u64, max_count: usize) -> LoadedStreamLogRecordsPage {
+        self.log_route().log_records_after(after, max_count)
     }
 
     /// The runtime id, stream name and tag this stream publishes its events
