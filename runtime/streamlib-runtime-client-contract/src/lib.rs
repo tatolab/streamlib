@@ -11,12 +11,17 @@
 
 pub mod directory_at_an_explicit_mode;
 pub mod local_api_wire_contract;
+#[cfg(feature = "machine-directories-under-a-test-root")]
+pub mod machine_directories_test_root;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod machine_runtime_lock;
 pub mod node_registry;
 pub mod runtime_log_event;
 pub mod runtime_log_event_pretty_rendering;
 pub mod runtime_log_file_paths;
 pub mod streamlib_home;
 pub mod streamlib_runtime_directory;
+pub mod tatolab_state_directory;
 
 #[cfg(test)]
 mod test_support;

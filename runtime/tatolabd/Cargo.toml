@@ -19,11 +19,19 @@ path = "src/main.rs"
 # The tests that start the engine on a GPU, gated the engine's way:
 # `cargo test -p tatolabd --features hardware-tests` on the rig.
 hardware-tests = ["streamlib/hardware-tests"]
+# Test builds only, never a release: the machine runtime lock, the state directory and the runtime
+# directory all move under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
+machine-directories-under-a-test-root = [
+    "streamlib-runtime-client-contract/machine-directories-under-a-test-root",
+    "streamlib-api-server/machine-directories-under-a-test-root",
+]
 
 [dependencies]
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.43.1" }
 streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.43.1" }
 streamlib-api-server = { path = "../streamlib-api-server" }
+# The machine runtime lock and the state directory the runtime takes at start.
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.43.1" }
 clap = { version = "4.5", features = ["derive"] }
 tracing = { workspace = true }
 

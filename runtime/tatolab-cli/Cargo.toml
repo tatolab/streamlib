@@ -15,6 +15,13 @@ publish = false
 name = "tatolab"
 path = "src/main.rs"
 
+[features]
+# Test builds only, never a release: the runtime directory the CLI finds the runtime's socket in,
+# and the machine runtime lock it names the holder of, move under TATOLAB_TEST_MACHINE_ROOT.
+machine-directories-under-a-test-root = [
+    "streamlib-runtime-client-contract/machine-directories-under-a-test-root",
+]
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 # The compile entry's JSON document in; its stream graph copied byte-for-byte to the graph file.

@@ -5,6 +5,9 @@
 //! gone: the iceoryx2 domain, the surface-sharing socket, the local API socket and the node
 //! registry.
 
+// A test build resolves under its machine root; the real resolvers stay compiled for their tests.
+#![cfg_attr(feature = "machine-directories-under-a-test-root", allow(dead_code))]
+
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -40,6 +43,10 @@ pub enum StreamlibRuntimeDirectoryRefusal {
         path: PathBuf,
         what_is_wrong: String,
     },
+    /// This test build's machine root was refused.
+    #[cfg(feature = "machine-directories-under-a-test-root")]
+    #[error(transparent)]
+    TestMachineRoot(#[from] crate::machine_directories_test_root::TestMachineRootRefusal),
 }
 
 /// The one directory a runtime keeps its live files in, resolved for the runtime or for a reader.
@@ -51,6 +58,21 @@ pub struct StreamlibRuntimeDirectory {
 impl StreamlibRuntimeDirectory {
     /// Resolve this process's runtime directory, creating it and refusing one that fails the check.
     pub fn resolve() -> Result<Self, StreamlibRuntimeDirectoryRefusal> {
+        #[cfg(feature = "machine-directories-under-a-test-root")]
+        {
+            let path =
+                crate::machine_directories_test_root::TestMachineRoot::from_the_environment()?
+                    .runtime_directory();
+            create_directory_and_its_missing_parents_at_mode(&path, OWNER_ONLY_DIRECTORY_MODE)
+                .map_err(
+                    |source| StreamlibRuntimeDirectoryRefusal::CouldNotBeCreated {
+                        path: path.clone(),
+                        source,
+                    },
+                )?;
+            Ok(StreamlibRuntimeDirectory { path })
+        }
+        #[cfg(not(feature = "machine-directories-under-a-test-root"))]
         resolve_streamlib_runtime_directory_for_the_runtime(
             std::env::var_os("XDG_RUNTIME_DIR"),
             cfg!(target_os = "linux"),
@@ -63,6 +85,15 @@ impl StreamlibRuntimeDirectory {
     /// a shared-`/tmp` fallback that exists and fails the check.
     pub fn resolve_for_a_reader_without_creating() -> Result<Self, StreamlibRuntimeDirectoryRefusal>
     {
+        #[cfg(feature = "machine-directories-under-a-test-root")]
+        {
+            Ok(StreamlibRuntimeDirectory {
+                path: crate::machine_directories_test_root::TestMachineRoot::from_the_environment(
+                )?
+                .runtime_directory(),
+            })
+        }
+        #[cfg(not(feature = "machine-directories-under-a-test-root"))]
         resolve_streamlib_runtime_directory_for_a_reader_without_creating(
             std::env::var_os("XDG_RUNTIME_DIR"),
             cfg!(target_os = "linux"),
@@ -92,8 +123,13 @@ impl StreamlibRuntimeDirectory {
     }
 
     /// The Unix socket the runtime with `runtime_id` serves its local API on.
-    pub fn local_api_socket_path(&self, runtime_id: &str) -> PathBuf {
+    pub fn local_api_socket_path_for_runtime_id(&self, runtime_id: &str) -> PathBuf {
         self.path.join(format!("local-api-{runtime_id}.sock"))
+    }
+
+    /// The Unix socket the machine's runtime serves its local API on, at a fixed path.
+    pub fn local_api_socket_path(&self) -> PathBuf {
+        self.path.join("local-api.sock")
     }
 }
 
@@ -567,8 +603,12 @@ mod tests {
             PathBuf::from("/tmp/streamlib-1000/surface-share-Rabc.sock")
         );
         assert_eq!(
-            directory.local_api_socket_path("Rabc"),
+            directory.local_api_socket_path_for_runtime_id("Rabc"),
             PathBuf::from("/tmp/streamlib-1000/local-api-Rabc.sock")
+        );
+        assert_eq!(
+            directory.local_api_socket_path(),
+            PathBuf::from("/tmp/streamlib-1000/local-api.sock")
         );
     }
 }

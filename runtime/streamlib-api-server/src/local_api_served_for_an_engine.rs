@@ -35,7 +35,7 @@ pub fn serve_the_local_api_for_an_engine(
     let runtime_id = engine.runtime_id().to_string();
     let local_api_socket_path = engine
         .runtime_directory()
-        .local_api_socket_path(runtime_id.as_str());
+        .local_api_socket_path_for_runtime_id(runtime_id.as_str());
     let operations_on_the_loaded_streams =
         Arc::clone(engine) as Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>;
     let running_local_api_socket_server = bind_local_api_socket(&local_api_socket_path)?

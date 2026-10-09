@@ -307,7 +307,7 @@ async fn the_engines_local_api_is_served_at_its_socket_and_registered_until_let_
     let local_api_socket_path = loaded
         .engine
         .runtime_directory()
-        .local_api_socket_path(runtime_id.as_str());
+        .local_api_socket_path_for_runtime_id(runtime_id.as_str());
     let node_registry_entry_path = loaded
         .engine
         .runtime_directory()

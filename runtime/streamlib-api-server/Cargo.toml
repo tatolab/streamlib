@@ -24,6 +24,13 @@ crate-type = ["rlib"]
 name = "generate_openapi"
 path = "src/bin/generate_openapi.rs"
 
+[features]
+# Test builds only, never a release: the runtime directory the local API socket is bound in moves
+# under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
+machine-directories-under-a-test-root = [
+    "streamlib-runtime-client-contract/machine-directories-under-a-test-root",
+]
+
 [dependencies]
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.43.1" }
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.43.1" }

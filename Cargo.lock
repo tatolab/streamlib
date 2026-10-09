@@ -4928,6 +4928,7 @@ dependencies = [
  "streamlib",
  "streamlib-api-server",
  "streamlib-media-builtins",
+ "streamlib-runtime-client-contract",
  "tempfile",
  "tracing",
 ]

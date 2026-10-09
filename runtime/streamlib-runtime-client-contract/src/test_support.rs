@@ -23,13 +23,26 @@ pub(crate) fn rerun_this_test_in_a_child_process(
     environment_variable: &str,
     value: &std::ffi::OsStr,
 ) -> std::process::Output {
-    let child_process_output =
-        std::process::Command::new(std::env::current_exe().expect("the test binary's own path"))
-            .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
-            .env(environment_variable, value)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the test binary re-runs this test in a child process");
+    rerun_this_test_in_a_child_process_with_its_environment(test_path, |child_command| {
+        child_command.env(environment_variable, value);
+    })
+}
+
+/// Re-run the test at `test_path` in a child process of this test binary whose
+/// environment `prepare_the_child_environment` sets, and wait for it.
+pub(crate) fn rerun_this_test_in_a_child_process_with_its_environment(
+    test_path: &str,
+    prepare_the_child_environment: impl FnOnce(&mut std::process::Command),
+) -> std::process::Output {
+    let mut child_command =
+        std::process::Command::new(std::env::current_exe().expect("the test binary's own path"));
+    child_command
+        .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
+        .stdin(std::process::Stdio::null());
+    prepare_the_child_environment(&mut child_command);
+    let child_process_output = child_command
+        .output()
+        .expect("the test binary re-runs this test in a child process");
     // `--exact` on a name that matches nothing runs no test and exits 0, which
     // reads as a pass for a test that was renamed away.
     let child_standard_output = String::from_utf8_lossy(&child_process_output.stdout);
