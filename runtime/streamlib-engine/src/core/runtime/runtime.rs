@@ -781,19 +781,23 @@ impl Runner {
     }
 
     /// The loaded stream `stream_name` names once cast, refused naming the
-    /// streams that are loaded — a name that casts to nothing names none.
+    /// streams that are loaded — a name that casts to nothing is refused as
+    /// one that cannot name a stream.
     pub fn loaded_stream_named(&self, stream_name: &str) -> Result<Arc<LoadedStreamInThisRuntime>> {
+        let cast = cast_exposed_name_to_url_safe(stream_name).map_err(|casts_to_nothing| {
+            Error::NotFound(format!(
+                "cannot name a stream `{stream_name}`: {casts_to_nothing}. Loaded: {}",
+                self.loaded_stream_names_listed_for_a_refusal()
+            ))
+        })?;
         // Read under its own statement: the refusal lists the table, and the
         // table's lock is not reentrant.
-        let loaded = cast_exposed_name_to_url_safe(stream_name)
-            .ok()
-            .and_then(|cast| {
-                self.engine_resources_shared_by_every_stream
-                    .streams_loaded_in_this_runtime
-                    .lock()
-                    .get(cast.as_ref())
-                    .cloned()
-            });
+        let loaded = self
+            .engine_resources_shared_by_every_stream
+            .streams_loaded_in_this_runtime
+            .lock()
+            .get(cast.as_ref())
+            .cloned();
         loaded.ok_or_else(|| {
             Error::NotFound(format!(
                 "no stream named `{stream_name}` is loaded in this runtime. Loaded: {}",
@@ -2507,6 +2511,19 @@ mod tests {
             assert!(
                 refusal.contains("camera") && refusal.contains("microphone"),
                 "the refusal must name the loaded streams: {refusal}"
+            );
+        }
+        for name_that_casts_to_nothing in ["", ".."] {
+            let refusal = runner
+                .runtime_operations_of_the_stream_a_call_names(Some(name_that_casts_to_nothing))
+                .err()
+                .expect("a name that casts to nothing is refused")
+                .to_string();
+            assert!(
+                refusal.contains(&format!(
+                    "cannot name a stream `{name_that_casts_to_nothing}`"
+                )),
+                "the refusal must say the name cannot name a stream: {refusal}"
             );
         }
         assert!(

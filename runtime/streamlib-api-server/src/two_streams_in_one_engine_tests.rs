@@ -186,6 +186,12 @@ async fn a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
             refusal.contains("first") && refusal.contains("second"),
             "{refusal}"
         );
+        assert_eq!(
+            refusal.contains("cannot name a stream"),
+            stream_not_loaded != "third",
+            "only a name that casts to nothing is refused as one that cannot name a stream: \
+             {refusal}"
+        );
     }
     assert!(
         node_names_in(&loaded.first.to_json().unwrap()).contains(&"idle-in-first".to_string()),
