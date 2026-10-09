@@ -72,7 +72,10 @@ def test_tatolab_nodes_resolves_the_directory_a_runtime_opened_its_domain_in(
     node_details_before, sockets_before = iceoryx2_node_details_in(resolved), surface_sockets_in(resolved)
 
     tatolabd = start_tatolabd(
-        {"nodes": [{"name": "held", "type": f"{held_node_module.name}:LoadedFrameRelay", "config": {}}]},
+        {
+            "stream": "held",
+            "nodes": [{"name": "held", "type": f"{held_node_module.name}:LoadedFrameRelay", "config": {}}],
+        },
         project_directory=held_node_module.project_directory,
         extra_environment={
             **environment_reaching_no_vulkan_driver(tmp_path),

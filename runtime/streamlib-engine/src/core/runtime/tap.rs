@@ -167,17 +167,19 @@ pub(crate) fn start_channel_tap(
     let thread_signals = signals.clone();
     let forwarder_thread = std::thread::Builder::new()
         .name("streamlib-channel-tap".into())
-        .spawn(move || {
-            run_forwarder(
-                node,
-                thread_channel,
-                sizing,
-                count,
-                forward_tx,
-                ready_tx,
-                thread_signals,
-            );
-        })
+        .spawn(
+            crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+                run_forwarder(
+                    node,
+                    thread_channel,
+                    sizing,
+                    count,
+                    forward_tx,
+                    ready_tx,
+                    thread_signals,
+                );
+            }),
+        )
         .map_err(|e| Error::Runtime(format!("failed to spawn channel-tap thread: {e}")))?;
 
     // The forwarder reports its subscribe outcome once, before entering the

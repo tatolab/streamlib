@@ -8,7 +8,7 @@
 //! `nodes[].name` / `type` / `config`, `links[].source` / `target` and
 //! `exposed` — and nothing else, so `graph`'s own output reads into one with
 //! its live keys skipped, and any other key is refused by name. Loading one is
-//! [`Runner::load_graph_snapshot`](crate::core::runtime::Runner::load_graph_snapshot);
+//! [`Runner::load_stream_from_graph_snapshot`](crate::core::runtime::Runner::load_stream_from_graph_snapshot);
 //! there is no saver, because the render is the export.
 
 use std::collections::hash_map::Entry;
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal};
 use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
-use crate::core::processors::PROCESSOR_REGISTRY;
+use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
 
 /// A graph a runtime runs: its nodes by class import path, config and name,
@@ -165,19 +165,19 @@ impl GraphSnapshot {
             .map_err(|e| Error::GraphError(format!("the graph does not serialize: {e}")))
     }
 
-    /// Check the graph without loading it: every `type` one this runtime has
-    /// on this floor, every config one its type takes, names unique once cast,
-    /// every link end a port of the right direction on a node the graph holds,
-    /// and every exposure an output port a node has, named once.
-    pub fn validate(&self) -> Result<()> {
+    /// Check the graph without loading it: every `type` one the stream
+    /// resolves on this floor, every config one its type takes, names unique
+    /// once cast, every link end a port of the right direction on a node the
+    /// graph holds, and every exposure an output port a node has, named once.
+    pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
         let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
-            PROCESSOR_REGISTRY.refuse_a_node_this_runtime_cannot_add(
+            node_types.refuse_a_node_this_stream_cannot_add(
                 &node.name,
                 &node.processor_type,
                 &node.config,
             )?;
-            if PROCESSOR_REGISTRY.port_info(&node.processor_type).is_none() {
+            if node_types.port_info(&node.processor_type).is_none() {
                 return Err(Error::UnknownProcessorType {
                     ident: node.processor_type.clone(),
                 });
@@ -213,7 +213,9 @@ impl GraphSnapshot {
                         the_names_the_graph_holds()
                     )));
                 };
-                refuse_a_port_the_node_does_not_have(&end.node, node, &end.port, direction)?;
+                refuse_a_port_the_node_does_not_have(
+                    node_types, &end.node, node, &end.port, direction,
+                )?;
             }
         }
 
@@ -231,6 +233,7 @@ impl GraphSnapshot {
                 )));
             };
             refuse_a_port_the_node_does_not_have(
+                node_types,
                 &exposed.node,
                 node,
                 &exposed.port,
@@ -364,13 +367,14 @@ fn keys_listed_for_a_refusal(keys: &[&str]) -> String {
 /// Refuse `port` unless `node`'s type declares it in `direction`, listing the
 /// ports it does declare there.
 fn refuse_a_port_the_node_does_not_have(
+    node_types: &NodeTypesOneStreamResolves,
     node_name: &str,
     node: &GraphSnapshotNode,
     port: &str,
     direction: PortDirection,
 ) -> Result<()> {
     let port_cast = cast_exposed_name_to_url_safe(port)?;
-    let port_names: Vec<String> = PROCESSOR_REGISTRY
+    let port_names: Vec<String> = node_types
         .port_info(&node.processor_type)
         .map(|(inputs, outputs)| match direction {
             PortDirection::Input => inputs,
@@ -444,6 +448,7 @@ fn refuse_an_integer_literal_wider_than_64_bits(json: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::processors::PROCESSOR_REGISTRY;
 
     const A_CAMERA_CLASS: &str = "my_app.nodes:CameraNode";
 
@@ -558,7 +563,7 @@ mod tests {
         }))
         .unwrap();
 
-        match graph.validate() {
+        match graph.validate(&NodeTypesOneStreamResolves::new()) {
             Err(Error::NodeNameTaken { name, cast }) => {
                 assert_eq!(name, "frontcam");
                 assert_eq!(cast, "frontcam");
@@ -577,7 +582,10 @@ mod tests {
         }))
         .unwrap();
 
-        let refusal = graph.validate().unwrap_err().to_string();
+        let refusal = graph
+            .validate(&NodeTypesOneStreamResolves::new())
+            .unwrap_err()
+            .to_string();
 
         assert!(refusal.contains("`display`"), "{refusal}");
         assert!(refusal.contains("camera"), "{refusal}");
@@ -592,7 +600,10 @@ mod tests {
         }))
         .unwrap();
 
-        let refusal = graph.validate().unwrap_err().to_string();
+        let refusal = graph
+            .validate(&NodeTypesOneStreamResolves::new())
+            .unwrap_err()
+            .to_string();
 
         assert!(refusal.contains("holds no node `display`"), "{refusal}");
     }
@@ -607,7 +618,10 @@ mod tests {
         }))
         .unwrap();
 
-        let refusal = graph.validate().unwrap_err().to_string();
+        let refusal = graph
+            .validate(&NodeTypesOneStreamResolves::new())
+            .unwrap_err()
+            .to_string();
 
         assert!(refusal.contains("no output port `frames_in`"), "{refusal}");
         assert!(refusal.contains("video"), "{refusal}");
@@ -650,7 +664,7 @@ mod tests {
         }))
         .unwrap();
 
-        match graph.validate() {
+        match graph.validate(&NodeTypesOneStreamResolves::new()) {
             Err(Error::UnknownProcessorType { ident }) => {
                 assert_eq!(ident.as_str(), "my_app.nodes:NotARegisteredNode");
             }
@@ -667,7 +681,10 @@ mod tests {
         }))
         .unwrap();
 
-        let refusal = graph.validate().unwrap_err().to_string();
+        let refusal = graph
+            .validate(&NodeTypesOneStreamResolves::new())
+            .unwrap_err()
+            .to_string();
 
         assert_eq!(
             refusal,
@@ -689,7 +706,9 @@ mod tests {
         }))
         .unwrap();
 
-        let refusal = graph.validate().unwrap_err();
+        let refusal = graph
+            .validate(&NodeTypesOneStreamResolves::new())
+            .unwrap_err();
 
         assert!(
             matches!(&refusal, Error::BuiltInNodeTypeAbsentOnThisFloor { node_type, .. } if *node_type == compiled_out_here),
@@ -719,7 +738,7 @@ mod tests {
         }))
         .unwrap();
 
-        match graph.validate() {
+        match graph.validate(&NodeTypesOneStreamResolves::new()) {
             Err(Error::NodeConfigRefused {
                 node_name,
                 node_type,
@@ -746,7 +765,7 @@ mod tests {
         }))
         .unwrap();
 
-        graph.validate().unwrap();
+        graph.validate(&NodeTypesOneStreamResolves::new()).unwrap();
     }
 
     #[test]
@@ -887,11 +906,49 @@ mod tests {
         }
     }
 
+    /// A type described in the stream validates against the stream's own
+    /// ports; a stream that described nothing refuses it as unknown.
+    #[test]
+    fn a_type_described_in_the_stream_validates_against_that_streams_ports() {
+        let described_class = "graph_snapshot_tests.nodes:DescribedInTheStream";
+        let node_types = NodeTypesOneStreamResolves::new();
+        node_types
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                crate::core::descriptors::ProcessorDescriptor::new(
+                    crate::core::descriptors::ProcessorClassShortName::new("DescribedInTheStream")
+                        .unwrap(),
+                    ProcessorClassImportPath::new(described_class).unwrap(),
+                    "graph snapshot test",
+                )
+                .with_output(crate::core::descriptors::PortDescriptor::new(
+                    "video", "", false,
+                )),
+                Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+            )
+            .expect("the type is described into the stream");
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "described", "type": described_class}],
+            "exposed": [{"node": "described", "port": "video"}]
+        }))
+        .unwrap();
+
+        graph
+            .validate(&node_types)
+            .expect("the stream resolves the type it described");
+        assert!(
+            matches!(
+                graph.validate(&NodeTypesOneStreamResolves::new()),
+                Err(Error::UnknownProcessorType { .. })
+            ),
+            "a stream that described nothing resolved another stream's type"
+        );
+    }
+
     #[test]
     fn an_empty_graph_is_valid() {
         let graph = GraphSnapshot::from_json_str(r#"{"nodes": []}"#).unwrap();
 
-        assert!(graph.validate().is_ok());
+        assert!(graph.validate(&NodeTypesOneStreamResolves::new()).is_ok());
         assert!(graph.links.is_empty() && graph.exposed.is_empty());
     }
     #[test]

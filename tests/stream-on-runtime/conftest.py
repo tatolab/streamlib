@@ -373,9 +373,9 @@ class StreamGraphLoadOutcome:
 
     #: Whether `tatolabd` logged the stream loaded.
     loaded: bool
-    #: The stream's name as the engine cast it, when the graph named one.
+    #: The stream's name as the engine cast it.
     loaded_stream_name: "str | None"
-    #: How many of the stream's nodes loaded; the local API's is not counted.
+    #: How many of the stream's nodes loaded.
     loaded_node_count: "int | None"
     #: `tatolabd`'s refusal, from its final `tatolabd: <reason>` line on.
     refusal: "str | None"

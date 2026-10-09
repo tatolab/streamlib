@@ -4,12 +4,11 @@
 //! Tests for the escalate-IPC `{op:"log"}` variant (issue #442).
 //!
 //! These tests assert the full pipeline: wire parse → host dispatch →
-//! polyglot sink → drain worker → JSONL file. Each test runs with
-//! `#[serial]` and its own `TempDir`-scoped `XDG_STATE_HOME` so the
-//! JSONL writer writes to a path we can read back.
+//! polyglot sink → drain worker → the JSONL file of the stream whose route
+//! the pushing thread carries. Each test runs with `#[serial]` and its own
+//! `TempDir` project so the file is one we can read back.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 use serial_test::serial;
@@ -21,32 +20,23 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::Escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
 };
-use crate::core::logging::{
-    StreamlibLoggingConfig, StreamlibLoggingGuard, init_for_tests, push_polyglot_record,
+use crate::core::logging::one_stream_log_file_written_on_a_test_thread::{
+    OneStreamLogFileWrittenOnThisTestThread, read_every_record_of_a_jsonl_log,
 };
-use crate::core::runtime::RuntimeUniqueId;
+use crate::core::logging::{StreamlibLoggingConfig, push_polyglot_record};
 
-fn install_logging(runtime_tag: &str) -> (TempDir, StreamlibLoggingGuard) {
+/// A test pathway routing this thread's records — the relayed ones it pushes
+/// included — into one stream's log file under a temporary project.
+fn install_logging(runtime_id: &str) -> (TempDir, OneStreamLogFileWrittenOnThisTestThread) {
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
     unsafe {
-        std::env::set_var("XDG_STATE_HOME", tmp.path());
         // Capture debug+ so all the test levels surface.
         std::env::set_var("RUST_LOG", "debug");
         std::env::remove_var("STREAMLIB_QUIET");
     }
-    let runtime_id = Arc::new(RuntimeUniqueId::from(runtime_tag));
-    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
-    let guard = init_for_tests(config).unwrap();
-    (tmp, guard)
-}
-
-fn read_jsonl(path: &std::path::Path) -> Vec<RuntimeLogEvent> {
-    let contents = std::fs::read_to_string(path).unwrap_or_default();
-    contents
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str::<RuntimeLogEvent>(l).expect("valid JSONL"))
-        .collect()
+    let config = StreamlibLoggingConfig::for_runtime("test");
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
+    (tmp, logging)
 }
 
 fn dispatch_log(log: EscalateRequestLog) {
@@ -121,8 +111,8 @@ fn schema_round_trip() {
 #[test]
 #[serial]
 fn host_emits_jsonl_record_at_correct_level() {
-    let (_tmp, guard) = install_logging("RlogOpLv");
-    let path = guard.jsonl_path().unwrap().to_path_buf();
+    let (_tmp, logging) = install_logging("RlogOpLv");
+    let path = logging.jsonl_log_path();
 
     dispatch_log(sample_log(
         "42",
@@ -130,9 +120,9 @@ fn host_emits_jsonl_record_at_correct_level() {
         EscalateRequestLogLevel::Warn,
     ));
 
-    drop(guard);
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let record = events
         .iter()
         .find(|e| e.source == Source::Python && e.message == "record 42")
@@ -152,8 +142,8 @@ fn host_emits_jsonl_record_at_correct_level() {
 #[test]
 #[serial]
 fn a_captured_engine_record_lands_as_rust_with_its_own_target() {
-    let (_tmp, guard) = install_logging("RlogOpRs");
-    let path = guard.jsonl_path().unwrap().to_path_buf();
+    let (_tmp, logging) = install_logging("RlogOpRs");
+    let path = logging.jsonl_log_path();
 
     dispatch_log(EscalateRequestLog {
         source: EscalateRequestLogSource::Rust,
@@ -170,9 +160,9 @@ fn a_captured_engine_record_lands_as_rust_with_its_own_target() {
         attrs: HashMap::new(),
     });
 
-    drop(guard);
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let record = events
         .iter()
         .find(|e| e.message.starts_with("InputMailboxes:"))
@@ -208,17 +198,17 @@ fn a_record_naming_no_target_takes_its_sources_own() {
 #[test]
 #[serial]
 fn host_stamps_host_ts() {
-    let (_tmp, guard) = install_logging("RlogOpTs");
-    let path = guard.jsonl_path().unwrap().to_path_buf();
+    let (_tmp, logging) = install_logging("RlogOpTs");
+    let path = logging.jsonl_log_path();
 
     let ts = "2026-04-23T14:00:00Z";
     dispatch_log(sample_log("1", ts, EscalateRequestLogLevel::Info));
     std::thread::sleep(Duration::from_millis(2));
     dispatch_log(sample_log("2", ts, EscalateRequestLogLevel::Info));
 
-    drop(guard);
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let polyglot: Vec<_> = events
         .iter()
         .filter(|e| e.source == Source::Python)
@@ -238,8 +228,8 @@ fn host_stamps_host_ts() {
 #[test]
 #[serial]
 fn intercepted_flag_round_trip() {
-    let (_tmp, guard) = install_logging("RlogOpInt");
-    let path = guard.jsonl_path().unwrap().to_path_buf();
+    let (_tmp, logging) = install_logging("RlogOpInt");
+    let path = logging.jsonl_log_path();
 
     let mut log = sample_log("7", "2026-04-23T14:00:00Z", EscalateRequestLogLevel::Error);
     log.intercepted = true;
@@ -247,9 +237,9 @@ fn intercepted_flag_round_trip() {
     log.message = "fd1 capture".into();
     dispatch_log(log);
 
-    drop(guard);
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let record = events
         .iter()
         .find(|e| e.source == Source::Python && e.message == "fd1 capture")
@@ -265,8 +255,8 @@ fn intercepted_flag_round_trip() {
 #[test]
 #[serial]
 fn within_source_fifo_preserved() {
-    let (_tmp, guard) = install_logging("RlogOpFif");
-    let path = guard.jsonl_path().unwrap().to_path_buf();
+    let (_tmp, logging) = install_logging("RlogOpFif");
+    let path = logging.jsonl_log_path();
 
     for i in 0..1000 {
         dispatch_log(sample_log(
@@ -276,9 +266,9 @@ fn within_source_fifo_preserved() {
         ));
     }
 
-    drop(guard);
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let seqs: Vec<u64> = events
         .iter()
         .filter(|e| e.source == Source::Python)
@@ -304,8 +294,8 @@ fn within_source_fifo_preserved() {
 #[test]
 #[serial]
 fn cross_language_source_seq_monotonic_within_source() {
-    let (_tmp, guard) = install_logging("RxLang");
-    let path = guard.jsonl_path().unwrap().to_path_buf();
+    let (_tmp, logging) = install_logging("RxLang");
+    let path = logging.jsonl_log_path();
 
     // Round-robin emit Rust / Python. The subprocess
     // source carries a monotonic `source_seq`; Rust records do
@@ -337,9 +327,9 @@ fn cross_language_source_seq_monotonic_within_source() {
         std::thread::sleep(Duration::from_micros(50));
     }
 
-    drop(guard);
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
 
     let merged: Vec<&RuntimeLogEvent> = events
         .iter()

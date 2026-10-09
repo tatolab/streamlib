@@ -13,10 +13,10 @@
 //! of them notices if `process()` stops publishing what the convention
 //! states.
 //!
-//! Rig-tier by construction, not by choice: `App::new()` brings up a real
-//! `GpuContext`, the mint needs a Vulkan Video encode queue, and the source
-//! needs a `/dev/video*` capture device (vivid acceptable) — so CI compiles
-//! this binary and the rig runs it.
+//! Rig-tier by construction, not by choice: starting the `App`'s stream
+//! brings up a real `GpuContext`, the mint needs a Vulkan Video encode queue,
+//! and the source needs a `/dev/video*` capture device (vivid acceptable) —
+//! so CI compiles this binary and the rig runs it.
 
 use std::sync::{Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
@@ -147,7 +147,8 @@ fn h264_nal_unit_types(access_unit: &[u8]) -> Vec<u8> {
 fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
     ensure_every_processor_type_is_registered();
 
-    let app = App::new().expect("a runtime");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let app = App::new_in_project_directory(project_directory.path()).expect("a runtime");
     let camera = app
         .add(
             CameraSource::Processor::processor_class_import_path(),
@@ -174,9 +175,9 @@ fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
     app.connect((&encoder, "encoded_video"), (&collector, "encoded_video"))
         .expect("the encoder to the collector");
 
-    app.runner().start().expect("the graph starts");
+    app.stream().start().expect("the graph starts");
     let readiness = app
-        .runner()
+        .stream()
         .wait_until_every_processor_is_running(READINESS_TIMEOUT);
     let collecting_since = Instant::now();
     let enough_was_collected = loop {
@@ -198,7 +199,7 @@ fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    let stop_outcome = app.runner().stop();
+    let stop_outcome = app.stream().stop();
 
     // Readiness covers setup only — the camera opening its device and the
     // GPU bring-up. The lazy session mint happens in the first process()

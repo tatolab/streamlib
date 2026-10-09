@@ -50,10 +50,11 @@ fn windows_on_screen_titled(title: &str) -> usize {
 )]
 #[test]
 fn one_source_feeds_two_display_windows_at_once() {
-    let app = App::new().expect("runtime");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let app = App::new_in_project_directory(project_directory.path()).expect("runtime");
     add_one_source_fanned_out_to_two_display_windows(&app);
 
-    app.runner().start().expect("the graph starts");
+    app.stream().start().expect("the graph starts");
 
     // Both windows must be mapped before the harness window closes. Poll
     // rather than sleep a fixed warm-up: swapchain creation on a cold GPU is
@@ -72,7 +73,7 @@ fn one_source_feeds_two_display_windows_at_once() {
 
     // Hold the graph up so a capture can be taken against live windows.
     std::thread::sleep(harness_duration());
-    let stop_outcome = app.runner().stop();
+    let stop_outcome = app.stream().stop();
 
     assert_eq!(
         (first_seen, second_seen),

@@ -1,0 +1,405 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! Where the records one loaded stream emits go: the stream's name and its
+//! runtime's id, stamped on each record, and the stream's own JSONL file.
+//!
+//! A thread carries a route from the moment it is entered until the entry
+//! drops; the logging layer reads the route of the thread an event is emitted
+//! on. A record emitted where no route is entered reaches the pretty mirror
+//! only.
+
+use std::cell::RefCell;
+use std::future::Future;
+use std::marker::PhantomData;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use parking_lot::{Condvar, Mutex};
+use streamlib_runtime_client_contract::runtime_log_file_paths::loaded_stream_log_path;
+
+use crate::core::logging::layer::JsonlSinkLayer;
+use crate::core::logging::worker::DrainWorkerRecordQueue;
+use crate::core::logging::writer::JsonlBatchedWriter;
+
+/// How long closing a stream's JSONL file waits for the drain worker to write
+/// the stream's records queued before the close.
+const QUEUED_RECORDS_WRITTEN_BEFORE_A_STREAM_LOG_CLOSES_BUDGET: Duration = Duration::from_secs(2);
+
+/// How long closing a stream's JSONL file waits for the stream's readers of a
+/// helper's pipes to reach the end of what the helper wrote.
+const HELPER_PIPE_READERS_FINISHED_BEFORE_A_STREAM_LOG_CLOSES_BUDGET: Duration =
+    Duration::from_secs(2);
+
+thread_local! {
+    static LOADED_STREAM_LOG_ROUTE_OF_THIS_THREAD: RefCell<Option<Arc<LoadedStreamLogRoute>>> =
+        const { RefCell::new(None) };
+}
+
+/// Where the records one loaded stream emits go: its runtime's id and its
+/// name, stamped on every record, and its JSONL file under its project.
+pub struct LoadedStreamLogRoute {
+    runtime_id: String,
+    stream_name: String,
+    jsonl_log_file: Option<LoadedStreamJsonlLogFile>,
+    /// This stream's records a full queue dropped since the drain worker last
+    /// reported them.
+    records_dropped_from_a_full_queue: AtomicU64,
+    helper_pipe_readers_still_reading: Mutex<usize>,
+    a_helper_pipe_reader_finished: Condvar,
+}
+
+/// One loaded stream's JSONL file, and the queue whose drain worker writes it.
+struct LoadedStreamJsonlLogFile {
+    path: PathBuf,
+    writer_while_open: Mutex<Option<JsonlBatchedWriter>>,
+    record_queue_drained_into_it: DrainWorkerRecordQueue,
+}
+
+impl std::fmt::Debug for LoadedStreamLogRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadedStreamLogRoute")
+            .field("runtime_id", &self.runtime_id)
+            .field("stream_name", &self.stream_name)
+            .field("jsonl_log_path", &self.jsonl_log_path())
+            .finish()
+    }
+}
+
+impl LoadedStreamLogRoute {
+    /// The route of the stream `stream_name` of the runtime `runtime_id`, its
+    /// JSONL file opened under `project_directory`'s `.streamlib/logs/`.
+    ///
+    /// Opened through the logging pathway the calling thread's dispatcher
+    /// runs; with none of the engine's installed, or when the file cannot be
+    /// opened (said once, as a warning), the route stamps records and writes
+    /// no file.
+    pub fn open_in_project_directory(
+        runtime_id: &str,
+        stream_name: &str,
+        project_directory: &Path,
+    ) -> Arc<Self> {
+        let jsonl_log_file = tracing::dispatcher::get_default(|dispatch| {
+            dispatch
+                .downcast_ref::<JsonlSinkLayer>()
+                .and_then(JsonlSinkLayer::record_queue_that_writes_stream_log_files)
+        })
+        .and_then(|(record_queue_drained_into_it, tunables)| {
+            let started_at_millis = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|since_the_epoch| since_the_epoch.as_millis())
+                .unwrap_or(0);
+            let path = loaded_stream_log_path(
+                project_directory,
+                runtime_id,
+                stream_name,
+                started_at_millis,
+            );
+            match JsonlBatchedWriter::open(
+                &path,
+                tunables.batch_bytes,
+                tunables.fsync_on_every_batch,
+                tunables.segment_rotation,
+            ) {
+                Ok(writer) => Some(LoadedStreamJsonlLogFile {
+                    path,
+                    writer_while_open: Mutex::new(Some(writer)),
+                    record_queue_drained_into_it,
+                }),
+                Err(open_failure) => {
+                    tracing::warn!(
+                        "the stream `{stream_name}` writes no JSONL log: {} could not be opened: \
+                         {open_failure}",
+                        path.display()
+                    );
+                    None
+                }
+            }
+        });
+        Arc::new(Self {
+            runtime_id: runtime_id.to_string(),
+            stream_name: stream_name.to_string(),
+            jsonl_log_file,
+            records_dropped_from_a_full_queue: AtomicU64::new(0),
+            helper_pipe_readers_still_reading: Mutex::new(0),
+            a_helper_pipe_reader_finished: Condvar::new(),
+        })
+    }
+
+    /// The id of the runtime the stream is loaded in.
+    pub fn runtime_id(&self) -> &str {
+        &self.runtime_id
+    }
+
+    /// The stream's URL-safe cast name.
+    pub fn stream_name(&self) -> &str {
+        &self.stream_name
+    }
+
+    /// The stream's active JSONL segment, `None` when it writes none.
+    pub fn jsonl_log_path(&self) -> Option<&Path> {
+        self.jsonl_log_file
+            .as_ref()
+            .map(|jsonl_log_file| jsonl_log_file.path.as_path())
+    }
+
+    /// Route every record this thread emits to this stream until the returned
+    /// entry drops, when the route the thread carried before is back.
+    pub fn enter_on_this_thread(self: &Arc<Self>) -> LoadedStreamLogRouteEnteredOnThisThread {
+        let route_carried_before = LOADED_STREAM_LOG_ROUTE_OF_THIS_THREAD
+            .try_with(|route| route.borrow_mut().replace(Arc::clone(self)))
+            .ok()
+            .flatten();
+        LoadedStreamLogRouteEnteredOnThisThread {
+            route_carried_before,
+            entered_on_this_thread_only: PhantomData,
+        }
+    }
+
+    /// Run `work` with this route entered on the calling thread.
+    pub fn run_entered<R>(self: &Arc<Self>, work: impl FnOnce() -> R) -> R {
+        let _entered = self.enter_on_this_thread();
+        work()
+    }
+
+    /// Let every reader of this stream's helper pipes reach the end of what
+    /// the helper wrote, write every record of this stream queued before then,
+    /// then flush, `fdatasync` and close its JSONL file; a record this stream
+    /// emits later reaches the pretty mirror only. Idempotent.
+    pub fn close_the_jsonl_log_file(&self) {
+        let Some(jsonl_log_file) = &self.jsonl_log_file else {
+            return;
+        };
+        if jsonl_log_file.writer_while_open.lock().is_none() {
+            return;
+        }
+        let mut helper_pipe_readers_still_reading = self.helper_pipe_readers_still_reading.lock();
+        let readers_outlasted_the_budget = self
+            .a_helper_pipe_reader_finished
+            .wait_while_for(
+                &mut helper_pipe_readers_still_reading,
+                |still_reading| *still_reading > 0,
+                HELPER_PIPE_READERS_FINISHED_BEFORE_A_STREAM_LOG_CLOSES_BUDGET,
+            )
+            .timed_out();
+        let helper_pipe_readers_left_reading = *helper_pipe_readers_still_reading;
+        drop(helper_pipe_readers_still_reading);
+        if readers_outlasted_the_budget {
+            tracing::warn!(
+                "the stream `{}` closed its JSONL log while {helper_pipe_readers_left_reading} \
+                 reader(s) of its helpers' pipes had not reached their end; what they read \
+                 later reaches the pretty mirror only",
+                self.stream_name
+            );
+        }
+        if !jsonl_log_file
+            .record_queue_drained_into_it
+            .wait_until_every_queued_record_is_written(
+                QUEUED_RECORDS_WRITTEN_BEFORE_A_STREAM_LOG_CLOSES_BUDGET,
+            )
+        {
+            tracing::warn!(
+                "the stream `{}` closed its JSONL log before the drain worker wrote every record \
+                 queued for it; the rest reach the pretty mirror only",
+                self.stream_name
+            );
+        }
+        let writer = jsonl_log_file.writer_while_open.lock().take();
+        if let Some(mut writer) = writer
+            && let Err(sync_failure) = writer.flush_and_fsync()
+        {
+            tracing::warn!(
+                "the JSONL log of the stream `{}` at {} did not reach the disk whole: \
+                 {sync_failure}",
+                self.stream_name,
+                jsonl_log_file.path.display()
+            );
+        }
+    }
+
+    /// Count one of this stream's records dropped from a full queue; `true`
+    /// for the first since the count was last taken.
+    pub(crate) fn note_a_record_dropped_from_a_full_queue(&self) -> bool {
+        self.records_dropped_from_a_full_queue
+            .fetch_add(1, Ordering::Relaxed)
+            == 0
+    }
+
+    /// The records of this stream dropped from a full queue since the last
+    /// take, reset to none.
+    pub(crate) fn take_the_count_of_records_dropped(&self) -> u64 {
+        self.records_dropped_from_a_full_queue
+            .swap(0, Ordering::Relaxed)
+    }
+
+    /// Append one serialized record to the open file; `false` when the route
+    /// writes no file or it has closed.
+    pub(crate) fn append_serialized_record(&self, serialized_record: &[u8]) -> bool {
+        let Some(jsonl_log_file) = &self.jsonl_log_file else {
+            return false;
+        };
+        match jsonl_log_file.writer_while_open.lock().as_mut() {
+            Some(writer) => {
+                let _ = writer.append_record(serialized_record);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Hand the records the open file buffers to the OS.
+    pub(crate) fn flush_the_records_pending_in_the_jsonl_log_file(&self) {
+        if let Some(jsonl_log_file) = &self.jsonl_log_file
+            && let Some(writer) = jsonl_log_file.writer_while_open.lock().as_mut()
+        {
+            let _ = writer.flush_if_pending();
+        }
+    }
+
+    /// Hand the records the open file buffers to the OS and `fdatasync` it.
+    pub(crate) fn flush_and_fsync_the_jsonl_log_file(&self) {
+        if let Some(jsonl_log_file) = &self.jsonl_log_file
+            && let Some(writer) = jsonl_log_file.writer_while_open.lock().as_mut()
+        {
+            let _ = writer.flush_and_fsync();
+        }
+    }
+}
+
+impl Drop for LoadedStreamLogRoute {
+    /// Every queued record holds its route, so none is left to write once
+    /// the last route drops.
+    fn drop(&mut self) {
+        if let Some(jsonl_log_file) = &self.jsonl_log_file
+            && let Some(mut writer) = jsonl_log_file.writer_while_open.lock().take()
+        {
+            let _ = writer.flush_and_fsync();
+        }
+    }
+}
+
+/// A [`LoadedStreamLogRoute`] entered on one thread; dropping it restores the
+/// route the thread carried before.
+pub struct LoadedStreamLogRouteEnteredOnThisThread {
+    route_carried_before: Option<Arc<LoadedStreamLogRoute>>,
+    entered_on_this_thread_only: PhantomData<*const ()>,
+}
+
+impl Drop for LoadedStreamLogRouteEnteredOnThisThread {
+    fn drop(&mut self) {
+        let route_carried_before = self.route_carried_before.take();
+        let _ = LOADED_STREAM_LOG_ROUTE_OF_THIS_THREAD
+            .try_with(|route| *route.borrow_mut() = route_carried_before);
+    }
+}
+
+/// The route the calling thread carries, if any; none once the thread's
+/// locals are being torn down, so a record a destructor emits never panics.
+pub fn the_loaded_stream_log_route_of_this_thread() -> Option<Arc<LoadedStreamLogRoute>> {
+    LOADED_STREAM_LOG_ROUTE_OF_THIS_THREAD
+        .try_with(|route| route.borrow().clone())
+        .ok()
+        .flatten()
+}
+
+/// `work`, made to run in the route the calling thread carries now — for a
+/// thread or a blocking task this thread spawns on a stream's behalf.
+pub fn carrying_this_threads_loaded_stream_log_route<R>(
+    work: impl FnOnce() -> R,
+) -> impl FnOnce() -> R {
+    let route_of_the_spawning_thread = the_loaded_stream_log_route_of_this_thread();
+    move || {
+        run_in_the_loaded_stream_log_route_when_there_is_one(
+            route_of_the_spawning_thread.as_ref(),
+            work,
+        )
+    }
+}
+
+/// `work`, made to run in the route the calling thread carries now, that
+/// route's JSONL file kept open until `work` returns or its close's budget runs
+/// out — for a thread reading a helper's pipe to its end.
+pub(crate) fn carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe<R>(
+    work: impl FnOnce() -> R,
+) -> impl FnOnce() -> R {
+    let route_of_the_spawning_thread = the_loaded_stream_log_route_of_this_thread();
+    let reading_into_the_route = route_of_the_spawning_thread
+        .as_ref()
+        .map(LoadedStreamHelperPipeReaderStillReading::counted_against);
+    move || {
+        let _reading_into_the_route = reading_into_the_route;
+        run_in_the_loaded_stream_log_route_when_there_is_one(
+            route_of_the_spawning_thread.as_ref(),
+            work,
+        )
+    }
+}
+
+/// One reader of a stream's helper pipe the stream's log close waits for
+/// until it drops.
+struct LoadedStreamHelperPipeReaderStillReading {
+    route: Arc<LoadedStreamLogRoute>,
+}
+
+impl LoadedStreamHelperPipeReaderStillReading {
+    fn counted_against(route: &Arc<LoadedStreamLogRoute>) -> Self {
+        *route.helper_pipe_readers_still_reading.lock() += 1;
+        Self {
+            route: Arc::clone(route),
+        }
+    }
+}
+
+impl Drop for LoadedStreamHelperPipeReaderStillReading {
+    fn drop(&mut self) {
+        let mut helper_pipe_readers_still_reading =
+            self.route.helper_pipe_readers_still_reading.lock();
+        *helper_pipe_readers_still_reading -= 1;
+        if *helper_pipe_readers_still_reading == 0 {
+            self.route.a_helper_pipe_reader_finished.notify_all();
+        }
+    }
+}
+
+/// Run `work` with `route` entered when there is one — for a callback an OS
+/// queue runs on a thread the stream did not spawn.
+pub fn run_in_the_loaded_stream_log_route_when_there_is_one<R>(
+    route: Option<&Arc<LoadedStreamLogRoute>>,
+    work: impl FnOnce() -> R,
+) -> R {
+    match route {
+        Some(route) => route.run_entered(work),
+        None => work(),
+    }
+}
+
+/// `future`, polled in `route` on whichever thread polls it.
+pub(crate) fn polled_in_a_loaded_stream_log_route<F: Future>(
+    route: Arc<LoadedStreamLogRoute>,
+    future: F,
+) -> FuturePolledInALoadedStreamLogRoute<F> {
+    FuturePolledInALoadedStreamLogRoute { route, future }
+}
+
+pin_project_lite::pin_project! {
+    /// A future every poll of which runs with its stream's route entered.
+    pub(crate) struct FuturePolledInALoadedStreamLogRoute<F> {
+        route: Arc<LoadedStreamLogRoute>,
+        #[pin]
+        future: F,
+    }
+}
+
+impl<F: Future> Future for FuturePolledInALoadedStreamLogRoute<F> {
+    type Output = F::Output;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let _entered = this.route.enter_on_this_thread();
+        this.future.poll(context)
+    }
+}

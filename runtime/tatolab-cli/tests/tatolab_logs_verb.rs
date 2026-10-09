@@ -149,7 +149,7 @@ fn the_logs_help_names_both_modes_and_every_flag() {
     ]));
 
     for named in [
-        "[RUNTIME_ID]",
+        "[RUNTIME_ID-STREAM]",
         "exactly as the runtime mirrored it",
         "a running runtime's live event stream",
         "Omit with --list or --node",
@@ -210,8 +210,8 @@ fn a_runtime_with_no_log_file_is_refused_naming_list() {
     assert_eq!(
         standard_error_text(&refused),
         format!(
-            "error: no log file for runtime `Rnone` in {}.\nUse `tatolab logs --list` to see the \
-             runtimes that have one.\n",
+            "error: no stream log `Rnone` in {}.\nA runtime logs per loaded stream, as \
+             `<runtime_id>-<stream>`; `tatolab logs --list` names each one.\n",
             isolated_streamlib_home.runtime_log_directory().display()
         )
     );
@@ -231,7 +231,7 @@ fn list_prints_every_runtime_newest_started_first_summing_its_segments() {
     assert_eq!(
         standard_output_text(&listed),
         [
-            "RUNTIME_ID                STARTED_AT                SIZE\n",
+            "RUNTIME_ID-STREAM         STARTED_AT                SIZE\n",
             "camera-2                  2026-08-07T21:04:27Z      2.0 KiB\n",
             "Rolder                    2023-11-14T22:13:20Z      512 B\n",
         ]
@@ -353,7 +353,7 @@ fn follow_before_the_log_file_exists_waits_with_its_note_and_ctrl_c_ends_the_wai
         FollowingTatolab::spawn(isolated_streamlib_home.tatolab_command(&["logs", "Rlater", "-f"]));
     assert_eq!(
         following_tatolab.next_standard_error_line("the waiting note"),
-        "note: no log file yet for runtime 'Rlater', waiting in --follow mode..."
+        "note: no stream log 'Rlater' yet, waiting in --follow mode..."
     );
 
     isolated_streamlib_home.write_log_file("Rlater-1000.jsonl", &a_log_line_with_message("booted"));

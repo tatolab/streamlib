@@ -25,13 +25,12 @@
 //! as 1088 in the extent assertion below — which is the whole of the H.265
 //! CTU-crop contract, asserted rather than described.
 //!
-//! Rig-tier by construction, not by choice: `App::new()` brings up a real
-//! `GpuContext` and the sessions need a hardware encoder *and* decoder —
-//! Vulkan Video queues on Linux, VideoToolbox on macOS — so CI compiles these
-//! binaries and the rig runs them. The source
-//! is the test pattern rather than a camera on purpose: it needs no
-//! `/dev/video*` device, so what this asserts is the codec round trip and
-//! nothing else.
+//! Rig-tier by construction, not by choice: starting the `App`'s stream
+//! brings up a real `GpuContext` and the sessions need a hardware encoder
+//! *and* decoder — Vulkan Video queues on Linux, VideoToolbox on macOS — so
+//! CI compiles these binaries and the rig runs them. The source is the test
+//! pattern rather than a camera on purpose: it needs no `/dev/video*` device,
+//! so what this asserts is the codec round trip and nothing else.
 
 use std::sync::{Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
@@ -221,7 +220,8 @@ pub fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surfa
 ) {
     ensure_every_processor_type_is_registered();
 
-    let app = App::new().expect("a runtime");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let app = App::new_in_project_directory(project_directory.path()).expect("a runtime");
     let source = app
         .add(
             TestPatternSource::Processor::processor_class_import_path(),
@@ -270,9 +270,9 @@ pub fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surfa
     app.connect((&decoder, "video"), (&decoded_collector, "video"))
         .expect("the decoder to the collector");
 
-    app.runner().start().expect("the graph starts");
+    app.stream().start().expect("the graph starts");
     let readiness = app
-        .runner()
+        .stream()
         .wait_until_every_processor_is_running(READINESS_TIMEOUT);
 
     let collecting_since = Instant::now();
@@ -294,7 +294,7 @@ pub fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surfa
         }
         std::thread::sleep(Duration::from_millis(100));
     };
-    let stop_outcome = app.runner().stop();
+    let stop_outcome = app.stream().stop();
 
     // Readiness covers setup only — the GPU bring-up and the decoder's own
     // session mint. The encoder's mint is lazy and a failed one leaves it

@@ -1,13 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! [`App`] — thin authoring sugar over [`Runner`](crate::sdk::runtime::Runner).
+//! [`App`] — thin authoring sugar over a [`Runner`](crate::sdk::runtime::Runner)
+//! and the one stream it loads.
 //!
-//! Every method is a direct delegation to an existing `Runner` op; `App`
-//! adds no runtime state of its own and owns no graph capability the runtime
-//! doesn't. [`App::runner`] is the escape hatch back to the full `Runner`
-//! surface for anything the sugar doesn't cover.
+//! Every method is a direct delegation to an existing engine or stream op;
+//! `App` adds no runtime state of its own and owns no graph capability the
+//! runtime doesn't. [`App::runner`] and [`App::stream`] are the escape hatches
+//! for anything the sugar doesn't cover.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -16,7 +18,7 @@ use crate::sdk::descriptors::ProcessorClassImportPath;
 use crate::sdk::error::{Error, Result};
 use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
 use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec};
-use crate::sdk::runtime::Runner;
+use crate::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
 
 /// A `(processor, port)` endpoint for [`App::connect`]. The processor is
 /// referenced by the [`AddedProcessor`] an `add`/`add_local` call returned;
@@ -46,22 +48,44 @@ impl AddedProcessor {
     }
 }
 
-/// Thin authoring sugar over [`Runner`]: construct,
-/// add processors, connect ports, run.
+/// The name of the one stream an [`App`] loads.
+pub const THE_STREAM_NAME_AN_APP_LOADS: &str = "main";
+
+/// Thin authoring sugar over a [`Runner`] and one stream loaded in it:
+/// construct, add processors, connect ports, run.
 ///
-/// `App` is not a parallel runtime — it holds one `Runner` and forwards to it.
-/// Errors surface as the underlying engine [`Error`] variants unchanged. For
-/// any capability the sugar omits, drop to [`App::runner`].
+/// `App` is not a parallel runtime — it holds one `Runner` and the stream it
+/// loaded, and forwards to them. Errors surface as the underlying engine
+/// [`Error`] variants unchanged. For any capability the sugar omits, drop to
+/// [`App::runner`] or [`App::stream`].
 pub struct App {
     runner: Arc<Runner>,
+    stream: Arc<LoadedStreamInThisRuntime>,
 }
 
 impl App {
-    /// Build an `App` over a fresh [`Runner`].
+    /// Build an `App` over a fresh [`Runner`] holding one empty stream named
+    /// [`THE_STREAM_NAME_AN_APP_LOADS`] whose project directory is the current
+    /// directory.
     pub fn new() -> Result<Self> {
-        Ok(Self {
-            runner: Runner::new()?,
-        })
+        let project_directory = std::env::current_dir().map_err(|e| {
+            Error::Configuration(format!(
+                "an App's stream lives in the current directory, which cannot be read: {e}"
+            ))
+        })?;
+        Self::new_in_project_directory(project_directory)
+    }
+
+    /// Build an `App` over a fresh [`Runner`] holding one empty stream named
+    /// [`THE_STREAM_NAME_AN_APP_LOADS`] whose project directory is
+    /// `project_directory`.
+    pub fn new_in_project_directory(project_directory: impl Into<PathBuf>) -> Result<Self> {
+        let runner = Runner::new()?;
+        let stream = runner.load_an_empty_stream(
+            OptionsForLoadingOneStream::in_project_directory(project_directory)
+                .named(THE_STREAM_NAME_AN_APP_LOADS),
+        )?;
+        Ok(Self { runner, stream })
     }
 
     /// Add a processor by the import path of its class, configured from
@@ -96,7 +120,7 @@ impl App {
         P::Config: Config,
     {
         let config = to_config_value(config)?;
-        let processor_class_import_path = self.runner.add_local::<P>(config.clone())?;
+        let processor_class_import_path = self.stream.add_local::<P>(config.clone())?;
         self.add_spec(
             ProcessorSpec::new(processor_class_import_path, config),
             display_name,
@@ -111,22 +135,33 @@ impl App {
         from: AppPortEndpoint<'_>,
         to: AppPortEndpoint<'_>,
     ) -> Result<LinkUniqueId> {
-        self.runner.connect(
+        self.stream.connect(
             OutputLinkPortRef::new(from.0.processor_id(), from.1),
             InputLinkPortRef::new(to.0.processor_id(), to.1),
         )
     }
 
-    /// Start the graph, then block until a shutdown signal
-    /// ([`Runner::start_and_wait_for_shutdown`](crate::sdk::runtime::Runner)).
+    /// Own the machine's shutdown signals, start the stream, block until it
+    /// ends, then shut the engine down.
     pub fn run(&self) -> Result<()> {
-        self.runner.start_and_wait_for_shutdown()
+        let run_outcome = self.runner.run_owning_the_machine_shutdown_signals(|| {
+            self.stream.start()?;
+            self.runner.wait_until_the_stream_ends(&self.stream)
+        });
+        let shut_down_outcome = self.runner.shut_down();
+        run_outcome.and(shut_down_outcome)
     }
 
     /// The underlying [`Runner`] — the escape
     /// hatch for anything the sugar doesn't wrap.
     pub fn runner(&self) -> &Arc<Runner> {
         &self.runner
+    }
+
+    /// The stream this `App` loaded — the escape hatch for any graph
+    /// operation the sugar doesn't wrap.
+    pub fn stream(&self) -> &Arc<LoadedStreamInThisRuntime> {
+        &self.stream
     }
 
     /// Add `spec` under an optional requested display name.
@@ -136,7 +171,7 @@ impl App {
         requested_display_name: Option<&str>,
     ) -> Result<AddedProcessor> {
         spec.display_name = requested_display_name.map(str::to_string);
-        let added = self.runner.add_processor_reporting_its_name(spec)?;
+        let added = self.stream.add_processor_reporting_its_name(spec)?;
         Ok(AddedProcessor {
             processor_id: added.processor_id,
             display_name: added.name,

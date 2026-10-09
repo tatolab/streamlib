@@ -3,24 +3,26 @@
 
 use std::sync::Arc;
 
-use super::Runner;
+use std::path::{Path, PathBuf};
+
+use super::LoadedStreamInThisRuntime;
 use super::RuntimeStatus;
 use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecord;
+use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::TokioRuntimeVariant;
-use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent, node_names_listed_for_a_refusal,
 };
+use crate::core::logging::{
+    carrying_this_threads_loaded_stream_log_route, polled_in_a_loaded_stream_log_route,
+};
 use crate::core::processors::{ProcessorSpec, ProcessorState};
-use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
-use crate::core::runtime::ExchangedPublishedSurfaceFramePngImage;
+use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use crate::iceoryx2::ChannelName;
-use tracing::Instrument as _;
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -31,6 +33,15 @@ use tracing::Instrument as _;
 /// built ahead of `start()`, which commits the whole batch itself, and `None`
 /// on a processor's own execution thread, which never waits for a compile.
 type LiveCommitContext = Option<Arc<RuntimeContext>>;
+
+/// What every graph change on one stream works through: the stream's
+/// compiler, the context it compiles against right away, if any, and the
+/// stream whose topic it publishes on.
+struct LiveGraphChangeOnOneStream {
+    compiler: Arc<Compiler>,
+    live: LiveCommitContext,
+    stream: LoadedStreamIdentity,
+}
 
 thread_local! {
     /// Set on a processor's execution thread. A mutation issued from one must
@@ -59,13 +70,15 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
         return Ok(());
     };
     let compiler = Arc::clone(compiler);
-    tokio::task::spawn_blocking(move || compiler.commit(&runtime_ctx))
-        .await
-        .map_err(|join_failure| {
-            Error::Runtime(format!(
-                "the graph change's compile task did not finish: {join_failure}"
-            ))
-        })?
+    tokio::task::spawn_blocking(carrying_this_threads_loaded_stream_log_route(move || {
+        compiler.commit(&runtime_ctx)
+    }))
+    .await
+    .map_err(|join_failure| {
+        Error::Runtime(format!(
+            "the graph change's compile task did not finish: {join_failure}"
+        ))
+    })?
 }
 
 /// Core implementation for add_processor - takes owned Arcs for 'static lifetime.
@@ -75,38 +88,40 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
 /// name never has to ask a second time — and never races a concurrent removal
 /// into being told its own successful add does not exist.
 async fn add_processor_impl(
-    compiler: Arc<Compiler>,
-    live: LiveCommitContext,
-    processor_interpreter_launch_record: Arc<ProcessorInterpreterLaunchRecord>,
+    live_graph_change: LiveGraphChangeOnOneStream,
+    processor_interpreter_launch_record: Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
+    lend_directory: Option<PathBuf>,
     spec: ProcessorSpec,
 ) -> Result<NodeInTheGraph> {
+    let LiveGraphChangeOnOneStream {
+        compiler,
+        live,
+        stream,
+    } = live_graph_change;
     let emit_will_add = |id: &ProcessorUniqueId| {
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillAddProcessor {
-                processor_id: id.clone(),
-            }),
-        );
+        stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillAddProcessor {
+            processor_id: id.clone(),
+        });
     };
 
     let emit_did_add = |id: &ProcessorUniqueId| {
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidAddProcessor {
-                processor_id: id.clone(),
-            }),
-        );
+        stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidAddProcessor {
+            processor_id: id.clone(),
+        });
     };
 
-    // A type nobody registered yet is described in the stream's own
-    // interpreter, off the async worker: a describe runs for as long as the
-    // module's import does.
+    // A type this stream does not resolve yet is described in the stream's
+    // own interpreter, off the async worker: a describe runs for as long as
+    // the module's import does.
     if processor_interpreter_launch_record.a_live_add_must_describe(&spec.name) {
         let node_type = spec.name.clone();
         let launch_record = Arc::clone(&processor_interpreter_launch_record);
-        tokio::task::spawn_blocking(move || {
-            launch_record.describe_and_register_a_type_a_live_add_names(&node_type)
-        })
+        tokio::task::spawn_blocking(carrying_this_threads_loaded_stream_log_route(move || {
+            launch_record.describe_and_register_a_type_a_live_add_names(
+                &node_type,
+                lend_directory.as_deref(),
+            )
+        }))
         .await
         .map_err(|join_failure| {
             Error::Runtime(format!(
@@ -159,20 +174,21 @@ async fn add_processor_impl(
 
     commit_live_graph_change(&compiler, live).await?;
 
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
-    );
+    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
 
     Ok(added)
 }
 
 /// Core implementation for remove_processor - takes owned Arcs for 'static lifetime.
 async fn remove_processor_impl(
-    compiler: Arc<Compiler>,
-    live: LiveCommitContext,
+    live_graph_change: LiveGraphChangeOnOneStream,
     processor_id: ProcessorUniqueId,
 ) -> Result<()> {
+    let LiveGraphChangeOnOneStream {
+        compiler,
+        live,
+        stream,
+    } = live_graph_change;
     compiler.scope(|graph, tx| {
         if !graph.traversal().v(&processor_id).exists() {
             return Err(Error::ProcessorNotFound(processor_id.to_string()));
@@ -221,24 +237,13 @@ async fn remove_processor_impl(
         return removal_outcome;
     }
 
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillRemoveProcessor {
-            processor_id: processor_id.clone(),
-        }),
-    );
-
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRemoveProcessor {
-            processor_id: processor_id.clone(),
-        }),
-    );
-
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
-    );
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillRemoveProcessor {
+        processor_id: processor_id.clone(),
+    });
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidRemoveProcessor {
+        processor_id: processor_id.clone(),
+    });
+    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
 
     removal_outcome
 }
@@ -249,56 +254,47 @@ async fn remove_processor_impl(
 /// never warns — a mismatch surfaces as a decode failure at the consuming
 /// processor's read.
 #[tracing::instrument(
-    name = "runtime.connect",
-    skip(compiler, live),
+    name = "stream.connect",
+    skip(live_graph_change),
     fields(from = %from, to = %to),
 )]
 async fn connect_impl(
-    compiler: Arc<Compiler>,
-    live: LiveCommitContext,
+    live_graph_change: LiveGraphChangeOnOneStream,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
+    let LiveGraphChangeOnOneStream {
+        compiler,
+        live,
+        stream,
+    } = live_graph_change;
     let from = from.with_its_port_name_cast()?;
     let to = to.with_its_port_name_cast()?;
 
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
-            from: from.clone(),
-            to: to.clone(),
-        }),
-    );
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
+        from: from.clone(),
+        to: to.clone(),
+    });
 
     let link_id = apply_a_link(&compiler, from.clone(), to.clone())?;
 
     commit_live_graph_change(&compiler, live).await?;
 
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidConnect {
-            link_id: link_id.to_string(),
-            from,
-            to,
-        }),
-    );
-
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
-    );
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidConnect {
+        link_id: link_id.to_string(),
+        from,
+        to,
+    });
+    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
 
     Ok(link_id)
 }
 
-/// The node `node_name` names on this runtime once cast.
+/// The node `node_name` names in this stream once cast.
 ///
-/// Refused by name when this runtime holds no node by that name, listing the
+/// Refused by name when this stream holds no node by that name, listing the
 /// ones it does.
-fn the_node_this_runtime_names(
-    compiler: &Arc<Compiler>,
-    node_name: &str,
-) -> Result<NodeInTheGraph> {
+fn the_node_this_stream_names(compiler: &Arc<Compiler>, node_name: &str) -> Result<NodeInTheGraph> {
     compiler.scope(|graph, _tx| {
         if let Some(named) = graph.traversal().v_with_node_name(node_name).first() {
             return Ok(NodeInTheGraph {
@@ -308,7 +304,7 @@ fn the_node_this_runtime_names(
         }
         let every_node = graph.traversal().v(());
         Err(Error::ProcessorNotFound(format!(
-            "no node on this runtime is named {node_name:?}. This runtime holds: {}",
+            "no node in this stream is named {node_name:?}. This stream holds: {}",
             node_names_listed_for_a_refusal(
                 every_node.iter().map(|node| node.display_name.as_str())
             )
@@ -412,10 +408,14 @@ fn refuse_a_destination_this_graph_cannot_take(
 
 /// Core implementation for disconnect - takes owned Arcs for 'static lifetime.
 async fn disconnect_impl(
-    compiler: Arc<Compiler>,
-    live: LiveCommitContext,
+    live_graph_change: LiveGraphChangeOnOneStream,
     link_id: LinkUniqueId,
 ) -> Result<()> {
+    let LiveGraphChangeOnOneStream {
+        compiler,
+        live,
+        stream,
+    } = live_graph_change;
     let link_info = compiler.scope(|graph, tx| {
         let (from_value, to_value) = graph
             .traversal()
@@ -437,37 +437,26 @@ async fn disconnect_impl(
 
     commit_live_graph_change(&compiler, live).await?;
 
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillDisconnect {
-            link_id: link_id.to_string(),
-            from_port: link_info.0.to_string(),
-            to_port: link_info.1.to_string(),
-        }),
-    );
-
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidDisconnect {
-            link_id: link_id.to_string(),
-            from_port: link_info.0.to_string(),
-            to_port: link_info.1.to_string(),
-        }),
-    );
-
-    PUBSUB.publish(
-        topics::RUNTIME_GLOBAL,
-        &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
-    );
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillDisconnect {
+        link_id: link_id.to_string(),
+        from_port: link_info.0.to_string(),
+        to_port: link_info.1.to_string(),
+    });
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidDisconnect {
+        link_id: link_id.to_string(),
+        from_port: link_info.0.to_string(),
+        to_port: link_info.1.to_string(),
+    });
+    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
 
     Ok(())
 }
 
-impl Runner {
+impl LoadedStreamInThisRuntime {
     /// The context a graph mutation compiles against right away, or `None`
-    /// while the graph is still being built ahead of `start()` — and `None`
+    /// while the stream is still being built ahead of `start()` — and `None`
     /// from a processor's own execution thread, where the mutation is left to
-    /// the graph-change listener as every mutation was before inline commits.
+    /// the graph-change listener.
     fn live_commit_context(&self) -> LiveCommitContext {
         if !this_thread_may_commit_inline() {
             return None;
@@ -478,27 +467,69 @@ impl Runner {
         self.runtime_context.lock().clone()
     }
 
-    /// Add a processor and report the node it became: its id and its name — the
-    /// requested one cast, or the class's short name with any `-2` suffix.
-    pub fn add_processor_reporting_its_name(&self, spec: ProcessorSpec) -> Result<NodeInTheGraph> {
-        let live = self.live_commit_context();
-        let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
-        match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
-                let compiler = Arc::clone(&self.compiler);
-                rt.block_on(add_processor_impl(compiler, live, launch_record, spec))
-            }
+    /// A graph change on this stream, compiled right away when it may be.
+    fn live_graph_change(&self) -> LiveGraphChangeOnOneStream {
+        LiveGraphChangeOnOneStream {
+            compiler: Arc::clone(&self.compiler),
+            live: self.live_commit_context(),
+            stream: self.loaded_stream_identity().clone(),
+        }
+    }
+
+    fn tokio_runtime_variant(&self) -> &TokioRuntimeVariant {
+        &self
+            .engine_resources_shared_by_every_stream()
+            .tokio_runtime_variant
+    }
+
+    fn lend_directory(&self) -> Option<PathBuf> {
+        self.engine_resources_shared_by_every_stream()
+            .processor_interpreter_lend_directory
+            .get()
+            .map(Path::to_path_buf)
+    }
+
+    /// `operation`, polled with this stream's log route entered wherever it
+    /// runs.
+    fn in_this_streams_log_route<'operation, T>(
+        &self,
+        operation: impl std::future::Future<Output = Result<T>> + Send + 'operation,
+    ) -> BoxFuture<'operation, Result<T>> {
+        Box::pin(polled_in_a_loaded_stream_log_route(
+            Arc::clone(self.log_route()),
+            operation,
+        ))
+    }
+
+    /// Run `operation` to completion from synchronous code, whichever tokio
+    /// runtime the engine runs on, with this stream's log route entered.
+    fn block_on_the_engines_tokio_runtime<T: Send + 'static>(
+        &self,
+        operation: impl std::future::Future<Output = Result<T>> + Send + 'static,
+    ) -> Result<T> {
+        let operation = self.in_this_streams_log_route(operation);
+        match self.tokio_runtime_variant() {
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(operation),
             TokioRuntimeVariant::ExternalTokioHandle(handle) => {
-                let compiler = Arc::clone(&self.compiler);
                 let (tx, rx) = std::sync::mpsc::channel();
                 handle.spawn(async move {
-                    let result = add_processor_impl(compiler, live, launch_record, spec).await;
-                    let _ = tx.send(result);
+                    let _ = tx.send(operation.await);
                 });
                 rx.recv()
                     .map_err(|_| Error::Runtime("Task channel closed".into()))?
             }
         }
+    }
+
+    /// Add a processor and report the node it became: its id and its name — the
+    /// requested one cast, or the class's short name with any `-2` suffix.
+    pub fn add_processor_reporting_its_name(&self, spec: ProcessorSpec) -> Result<NodeInTheGraph> {
+        self.block_on_the_engines_tokio_runtime(add_processor_impl(
+            self.live_graph_change(),
+            Arc::clone(&self.processor_interpreter_launch_record),
+            self.lend_directory(),
+            spec,
+        ))
     }
 }
 
@@ -506,26 +537,25 @@ impl Runner {
 // RuntimeOperations Implementation
 // =============================================================================
 
-impl RuntimeOperations for Runner {
-    // =========================================================================
-    // Async Methods (delegate to _impl functions)
-    // =========================================================================
-
+impl RuntimeOperations for LoadedStreamInThisRuntime {
     fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<NodeInTheGraph>> {
-        let compiler = Arc::clone(&self.compiler);
-        let live = self.live_commit_context();
-        let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
-        Box::pin(add_processor_impl(compiler, live, launch_record, spec))
+        self.in_this_streams_log_route(add_processor_impl(
+            self.live_graph_change(),
+            Arc::clone(&self.processor_interpreter_launch_record),
+            self.lend_directory(),
+            spec,
+        ))
     }
 
     fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph> {
-        the_node_this_runtime_names(&self.compiler, node_name)
+        the_node_this_stream_names(&self.compiler, node_name)
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
-        let compiler = Arc::clone(&self.compiler);
-        let live = self.live_commit_context();
-        Box::pin(remove_processor_impl(compiler, live, processor_id))
+        self.in_this_streams_log_route(remove_processor_impl(
+            self.live_graph_change(),
+            processor_id,
+        ))
     }
 
     fn connect_async(
@@ -533,22 +563,18 @@ impl RuntimeOperations for Runner {
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-        let compiler = Arc::clone(&self.compiler);
-        let live = self.live_commit_context();
-        Box::pin(connect_impl(compiler, live, from, to))
+        self.in_this_streams_log_route(connect_impl(self.live_graph_change(), from, to))
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-        let compiler = Arc::clone(&self.compiler);
-        let live = self.live_commit_context();
-        Box::pin(disconnect_impl(compiler, live, link_id))
+        self.in_this_streams_log_route(disconnect_impl(self.live_graph_change(), link_id))
     }
 
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
-        Box::pin(async move { Runner::to_json(self) })
+        Box::pin(async move { LoadedStreamInThisRuntime::to_json(self) })
     }
 
-    #[tracing::instrument(name = "runtime.tap", skip(self), fields(channel = %channel, count = ?count))]
+    #[tracing::instrument(name = "stream.tap", skip(self), fields(channel = %channel, count = ?count))]
     fn tap_async(
         &self,
         channel: String,
@@ -558,8 +584,8 @@ impl RuntimeOperations for Runner {
         // it, and that source's iceoryx2 sizing, from the live graph BEFORE
         // spawning: the same derivation the compiler op used to open the
         // service, so the tap's publisher-free reopen requests identical,
-        // iceoryx2-verified parameters. A channel name carries a source's
-        // processor id, which is nothing a caller could be expected to spell.
+        // iceoryx2-verified parameters.
+        let iceoryx2_node = &self.engine_resources_shared_by_every_stream().iceoryx2_node;
         let resolved = self.compiler.scope(
             |graph, _tx| -> Result<(String, crate::iceoryx2::ChannelSizing)> {
                 let source = crate::core::compiler::compiler_ops::find_the_source_a_caller_named(
@@ -569,7 +595,7 @@ impl RuntimeOperations for Runner {
                 )?;
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
                     graph,
-                    &self.iceoryx2_node,
+                    iceoryx2_node,
                     &source,
                 )?;
                 let channel_service_name =
@@ -578,15 +604,15 @@ impl RuntimeOperations for Runner {
             },
         );
 
-        let node = self.iceoryx2_node.clone();
-        Box::pin(async move {
+        let node = iceoryx2_node.clone();
+        self.in_this_streams_log_route(async move {
             let (channel, sizing) = resolved?;
             // The reserved-slot subscriber is `!Send` and lives on a dedicated
             // OS thread; `start_channel_tap` blocks briefly for its subscribe
             // outcome, so it runs on a blocking pool, off the async worker.
-            tokio::task::spawn_blocking(move || {
+            tokio::task::spawn_blocking(carrying_this_threads_loaded_stream_log_route(move || {
                 crate::core::runtime::tap::start_channel_tap(node, channel, sizing, count)
-            })
+            }))
             .await
             .map_err(|join_error| {
                 Error::Runtime(format!(
@@ -596,146 +622,42 @@ impl RuntimeOperations for Runner {
         })
     }
 
-    fn exchange_published_surface_id_for_png_image_bytes_async(
-        &self,
-        published_surface_id: String,
-        downscale_long_edge_pixel_cap: Option<u32>,
-    ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>> {
-        // Duration is the only interesting thing about this operation, so the
-        // span is built here and entered by the async block rather than
-        // attached to this fn: an instrumented `-> BoxFuture` fn opens and
-        // closes its span while the future is *built*, covering none of the
-        // copy, the join or the encode.
-        let exchange_span = tracing::info_span!(
-            "runtime.exchange",
-            surface_id = %published_surface_id,
-            downscale_long_edge_pixel_cap = ?downscale_long_edge_pixel_cap,
-        );
-
-        // Read the context BEFORE spawning: a node that has not started has
-        // no pool to claim from and no device to convert on, and saying so
-        // here names the actual state rather than failing inside a resolve.
-        let gpu_context = self
-            .runtime_context
-            .lock()
-            .as_ref()
-            .map(|runtime_context| runtime_context.gpu.clone())
-            .ok_or_else(|| {
-                Error::Runtime(
-                    "the runtime has no GPU context, so no surface can be exchanged for an \
-                     image; start the runtime first"
-                        .into(),
-                )
-            });
-
-        Box::pin(
-            async move {
-                let gpu_context = gpu_context?;
-                // The copy blocks on the GPU and the encode on the CPU; both
-                // run off the async worker so a tap streaming on the same
-                // control plane keeps its cadence.
-                tokio::task::spawn_blocking(move || {
-                    exchange_published_surface_id_for_png_image_bytes(
-                        &gpu_context,
-                        &published_surface_id,
-                        downscale_long_edge_pixel_cap,
-                    )
-                })
-                .await
-                .map_err(|join_error| {
-                    Error::Runtime(format!(
-                        "surface-exchange task failed to join: {join_error}"
-                    ))
-                })?
-            }
-            .instrument(exchange_span),
-        )
-    }
-
-    // =========================================================================
-    // Sync Methods (variant-aware blocking strategy)
-    // =========================================================================
-
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
         self.add_processor_reporting_its_name(spec)
             .map(|added| added.processor_id)
     }
 
     fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
-        match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
-                rt.block_on(self.remove_processor_async(processor_id.clone()))
-            }
-            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
-                let compiler = Arc::clone(&self.compiler);
-                let live = self.live_commit_context();
-                let processor_id = processor_id.clone();
-                let (tx, rx) = std::sync::mpsc::channel();
-                handle.spawn(async move {
-                    let result = remove_processor_impl(compiler, live, processor_id).await;
-                    let _ = tx.send(result);
-                });
-                rx.recv()
-                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
-            }
-        }
+        self.block_on_the_engines_tokio_runtime(remove_processor_impl(
+            self.live_graph_change(),
+            processor_id.clone(),
+        ))
     }
 
     fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
-        match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(self.connect_async(from, to)),
-            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
-                let compiler = Arc::clone(&self.compiler);
-                let live = self.live_commit_context();
-                let (tx, rx) = std::sync::mpsc::channel();
-                handle.spawn(async move {
-                    let result = connect_impl(compiler, live, from, to).await;
-                    let _ = tx.send(result);
-                });
-                rx.recv()
-                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
-            }
-        }
+        self.block_on_the_engines_tokio_runtime(connect_impl(self.live_graph_change(), from, to))
     }
 
     fn this_runtimes_name(&self) -> &str {
-        self.runtime_name.as_str()
+        self.engine_resources_shared_by_every_stream()
+            .runtime_name
+            .as_str()
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
-        match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
-                rt.block_on(self.disconnect_async(link_id.clone()))
-            }
-            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
-                let compiler = Arc::clone(&self.compiler);
-                let live = self.live_commit_context();
-                let link_id = link_id.clone();
-                let (tx, rx) = std::sync::mpsc::channel();
-                handle.spawn(async move {
-                    let result = disconnect_impl(compiler, live, link_id).await;
-                    let _ = tx.send(result);
-                });
-                rx.recv()
-                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
-            }
-        }
+        self.block_on_the_engines_tokio_runtime(disconnect_impl(
+            self.live_graph_change(),
+            link_id.clone(),
+        ))
     }
 
-    // =========================================================================
-    // Lifecycle
-    // =========================================================================
-
-    fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
-        crate::core::runtime::request_runtime_shutdown(reason)
+    fn request_this_streams_shutdown(&self, reason: &str) -> Result<()> {
+        self.ask_for_this_streams_shutdown(reason);
+        Ok(())
     }
-
-    // =========================================================================
-    // Introspection
-    // =========================================================================
 
     fn to_json(&self) -> Result<serde_json::Value> {
-        Runner::to_json(self)
+        LoadedStreamInThisRuntime::to_json(self)
     }
 }
 
@@ -779,7 +701,8 @@ mod connect_wires_without_inspecting_a_port_tests {
     use parking_lot::Mutex;
 
     use super::{
-        connect_impl, disconnect_impl, remove_processor_impl, the_node_this_runtime_names,
+        LiveGraphChangeOnOneStream, connect_impl, disconnect_impl, remove_processor_impl,
+        the_node_this_stream_names,
     };
     use crate::core::compiler::{Compiler, PendingOperation};
     use crate::core::descriptors::ProcessorClassImportPath;
@@ -789,9 +712,27 @@ mod connect_wires_without_inspecting_a_port_tests {
         PendingDeletionComponent, ProcessorUniqueId,
     };
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
-    use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
+    use crate::core::pubsub::{Event, LoadedStreamIdentity, PUBSUB, RuntimeEvent};
     use crate::core::test_support::CapturedTracingWarnings;
     use crate::core::{Error, Result};
+
+    /// The stream every fixture compiler's events publish under.
+    fn the_fixtures_stream() -> LoadedStreamIdentity {
+        LoadedStreamIdentity {
+            runtime_id: "Rconnectsilence".to_string(),
+            stream_name: "main".to_string(),
+            stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
+        }
+    }
+
+    /// A graph change on a fixture compiler that is not started.
+    fn a_fixture_graph_change(compiler: Arc<Compiler>) -> LiveGraphChangeOnOneStream {
+        LiveGraphChangeOnOneStream {
+            compiler,
+            live: None,
+            stream: the_fixtures_stream(),
+        }
+    }
 
     const PRODUCER_TYPE: &str = "ConnectSilenceProducer";
     const CONSUMER_TYPE: &str = "ConnectSilenceConsumer";
@@ -878,7 +819,7 @@ mod connect_wires_without_inspecting_a_port_tests {
             tokio::runtime::Builder::new_current_thread()
                 .build()
                 .expect("current-thread runtime")
-                .block_on(connect_impl(compiler, None, from, to))
+                .block_on(connect_impl(a_fixture_graph_change(compiler), from, to))
         });
 
         result.expect("connect must wire any two ports — a link is pure plumbing");
@@ -903,12 +844,15 @@ mod connect_wires_without_inspecting_a_port_tests {
             .expect("current-thread runtime");
 
         let link_id = runtime
-            .block_on(connect_impl(Arc::clone(&compiler), None, from, to))
+            .block_on(connect_impl(
+                a_fixture_graph_change(Arc::clone(&compiler)),
+                from,
+                to,
+            ))
             .expect("the link is created");
         runtime
             .block_on(remove_processor_impl(
-                Arc::clone(&compiler),
-                None,
+                a_fixture_graph_change(Arc::clone(&compiler)),
                 consumer_id.clone(),
             ))
             .expect("the consumer is removed");
@@ -952,7 +896,11 @@ mod connect_wires_without_inspecting_a_port_tests {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("current-thread runtime")
-            .block_on(connect_impl(Arc::clone(compiler), None, from, to))
+            .block_on(connect_impl(
+                a_fixture_graph_change(Arc::clone(compiler)),
+                from,
+                to,
+            ))
     }
 
     /// The display name the graph gave one of the fixture's nodes.
@@ -976,7 +924,10 @@ mod connect_wires_without_inspecting_a_port_tests {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("current-thread runtime")
-            .block_on(disconnect_impl(Arc::clone(compiler), None, link_id))
+            .block_on(disconnect_impl(
+                a_fixture_graph_change(Arc::clone(compiler)),
+                link_id,
+            ))
     }
 
     /// A node name this runtime does not hold is refused by name, listing the
@@ -987,7 +938,7 @@ mod connect_wires_without_inspecting_a_port_tests {
         let (compiler, from, _to) = compiler_holding_a_producer_and_consumer_node();
         let displayed = the_display_name_the_graph_gave(&compiler, from.processor_id());
 
-        let refusal = the_node_this_runtime_names(&compiler, "NoSuchProcessor")
+        let refusal = the_node_this_stream_names(&compiler, "NoSuchProcessor")
             .expect_err("a node name this runtime does not hold is refused")
             .to_string();
 
@@ -1014,14 +965,16 @@ mod connect_wires_without_inspecting_a_port_tests {
         struct RecordingTheDisconnectEvents(Arc<Mutex<Vec<(String, String)>>>);
         impl EventListener for RecordingTheDisconnectEvents {
             fn on_event(&mut self, event: &Event) -> Result<()> {
-                if let Event::RuntimeGlobal(
-                    RuntimeEvent::RuntimeWillDisconnect {
-                        from_port, to_port, ..
-                    }
-                    | RuntimeEvent::RuntimeDidDisconnect {
-                        from_port, to_port, ..
-                    },
-                ) = event
+                if let Event::OfALoadedStream {
+                    event:
+                        RuntimeEvent::RuntimeWillDisconnect {
+                            from_port, to_port, ..
+                        }
+                        | RuntimeEvent::RuntimeDidDisconnect {
+                            from_port, to_port, ..
+                        },
+                    ..
+                } = event
                 {
                     self.0.lock().push((from_port.clone(), to_port.clone()));
                 }
@@ -1034,7 +987,10 @@ mod connect_wires_without_inspecting_a_port_tests {
             RecordingTheDisconnectEvents(Arc::clone(&announced)),
         ));
         PUBSUB
-            .subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))
+            .subscribe(
+                &topics::loaded_stream(&the_fixtures_stream()),
+                Arc::clone(&listener),
+            )
             .expect("subscribe establishes the subscriber");
 
         disconnect_on_this_thread(&compiler, link_id).expect("the link disconnects");

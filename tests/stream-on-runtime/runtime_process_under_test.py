@@ -41,18 +41,20 @@ DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS = 90.0
 
 MARKER_PREFIX = "MARKER:"
 
-#: The engine's last line of a graceful stop.
-ENGINE_GRACEFUL_STOP_LOG_LINE = "[stop] Graceful shutdown complete"
+#: The start of the engine's line once a stream's graceful stop has finished,
+#: before the stream's name.
+ENGINE_GRACEFUL_STOP_LOG_LINE = "[stop] The stream `"
 
-#: The engine's line once every processor has started.
-ENGINE_STARTED_LOG_LINE = "[start] Runtime started"
+#: The start of the engine's line once a stream has started, before the
+#: stream's name.
+ENGINE_STARTED_LOG_LINE = "[start] The stream `"
 
-#: `tatolabd`'s line when an interrupt ended the load before the engine started.
-STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT = "so the stream was never started"
+#: The engine's line when an interrupt ended the load before the stream started.
+STREAM_NEVER_STARTED_LOG_LINE_FRAGMENT = "a machine shutdown was requested while the stream"
 
 #: The line `tatolabd` logs once the graph loaded, before the engine starts.
 STREAM_LOADED_LOG_LINE_PATTERN = re.compile(
-    r"the stream(?: `(?P<stream_name>[^`]+)`)? loaded with (?P<stream_node_count>\d+) nodes"
+    r"the stream `(?P<stream_name>[^`]+)` loaded with (?P<stream_node_count>\d+) nodes"
 )
 
 #: How `tatolabd` ends every refusal: a final line on standard error.

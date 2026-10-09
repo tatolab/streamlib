@@ -177,7 +177,7 @@ pub(crate) fn release_every_surface_registered_by(
         return;
     }
     tracing::info!(
-        "[Surface share] releasing {} surface(s) registered by '{}' after its connection closed",
+        "[Surface share] releasing {} surface(s) registered by '{}'",
         surface_ids.len(),
         runtime_id,
     );

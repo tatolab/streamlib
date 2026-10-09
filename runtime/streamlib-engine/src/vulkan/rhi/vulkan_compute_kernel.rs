@@ -31,17 +31,13 @@ use crate::core::rhi::{
     refuse_a_descriptor_set_other_than_set_0,
 };
 use crate::core::{Error, Result};
-use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
-    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
-};
-
-/// Env var that overrides the default pipeline-cache directory. Used by tests
-/// and headless / CI scenarios that need a writable, isolated cache root.
-pub const PIPELINE_CACHE_DIR_ENV: &str = "STREAMLIB_PIPELINE_CACHE_DIR";
 
 use super::HostVulkanDevice;
 use super::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
-use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
+use super::vulkan_pipeline_cache_on_disk::{
+    PipelineCacheKernelKind, create_pipeline_cache_handle, persist_pipeline_cache,
+    pipeline_cache_file_path_keyed_by, read_cache_blob,
+};
 
 /// One compute kernel: shader pipeline + descriptor set + per-dispatch primitives.
 ///
@@ -121,7 +117,22 @@ impl VulkanComputeKernelInner {
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &ComputeKernelDescriptor<'_>,
     ) -> Result<Self> {
-        Self::new_inner(vulkan_device, descriptor, &[])
+        Self::new_caching_its_pipeline_in(vulkan_device, descriptor, None)
+    }
+
+    /// [`Self::new`], keeping the pipeline's on-disk cache in the stream's
+    /// `pipeline_cache_directory_of_its_stream` when one is given.
+    pub fn new_caching_its_pipeline_in(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &ComputeKernelDescriptor<'_>,
+        pipeline_cache_directory_of_its_stream: Option<&Path>,
+    ) -> Result<Self> {
+        Self::new_inner(
+            vulkan_device,
+            descriptor,
+            &[],
+            pipeline_cache_directory_of_its_stream,
+        )
     }
 
     /// Variant of [`Self::new`] that bakes one or more immutable
@@ -170,13 +181,14 @@ impl VulkanComputeKernelInner {
                 )));
             }
         }
-        Self::new_inner(vulkan_device, descriptor, immutable_samplers)
+        Self::new_inner(vulkan_device, descriptor, immutable_samplers, None)
     }
 
     fn new_inner(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &ComputeKernelDescriptor<'_>,
         immutable_samplers: &[(u32, vk::Sampler)],
+        pipeline_cache_directory_of_its_stream: Option<&Path>,
     ) -> Result<Self> {
         let queue = vulkan_device.queue();
         let queue_family_index = vulkan_device.queue_family_index();
@@ -236,6 +248,7 @@ impl VulkanComputeKernelInner {
             descriptor.spv,
             &entry_point,
             descriptor.label,
+            pipeline_cache_directory_of_its_stream,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -1011,6 +1024,21 @@ impl VulkanComputeKernel {
         Ok(Self::from_arc_into_raw(Arc::new(inner)))
     }
 
+    /// [`Self::new`], keeping the pipeline's on-disk cache in the stream's
+    /// `pipeline_cache_directory_of_its_stream` when one is given.
+    pub fn new_caching_its_pipeline_in(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &ComputeKernelDescriptor<'_>,
+        pipeline_cache_directory_of_its_stream: Option<&Path>,
+    ) -> Result<Self> {
+        let inner = VulkanComputeKernelInner::new_caching_its_pipeline_in(
+            vulkan_device,
+            descriptor,
+            pipeline_cache_directory_of_its_stream,
+        )?;
+        Ok(Self::from_arc_into_raw(Arc::new(inner)))
+    }
+
     /// Create from a SPIR-V descriptor and a list of immutable samplers
     /// to bake into the descriptor-set layout. Mirrors
     /// [`VulkanComputeKernelInner::new_with_immutable_samplers`].
@@ -1460,9 +1488,11 @@ fn create_compute_pipeline_with_cache(
     spv: &[u8],
     entry_point: &std::ffi::CStr,
     label: &str,
+    pipeline_cache_directory_of_its_stream: Option<&Path>,
 ) -> Result<vk::Pipeline> {
-    let cache_path = pipeline_cache_file_path(spv, entry_point);
-    let initial_data = cache_path.as_deref().and_then(read_cache_blob);
+    let cache_path =
+        pipeline_cache_file_path(spv, entry_point, pipeline_cache_directory_of_its_stream);
+    let initial_data = read_cache_blob(PipelineCacheKernelKind::Compute, &cache_path);
     tracing::debug!(
         label,
         cache_path = ?cache_path,
@@ -1474,7 +1504,12 @@ fn create_compute_pipeline_with_cache(
     // `Some(cache_handle)` if we successfully created a `VkPipelineCache` —
     // we need to destroy it before returning regardless of success/failure
     // of the pipeline build.
-    let pipeline_cache = create_pipeline_cache_handle(device, initial_data.as_deref(), label);
+    let pipeline_cache = create_pipeline_cache_handle(
+        PipelineCacheKernelKind::Compute,
+        device,
+        initial_data.as_deref(),
+        label,
+    );
 
     let cache_handle = pipeline_cache.unwrap_or(vk::PipelineCache::null());
 
@@ -1493,9 +1528,13 @@ fn create_compute_pipeline_with_cache(
     // Persist whatever the driver populated, even if one of the pipelines in
     // a hypothetical multi-pipeline batch failed (we only build one here).
     if pipeline_cache.is_some() {
-        if let Some(path) = cache_path.as_deref() {
-            persist_pipeline_cache(device, cache_handle, path, label);
-        }
+        persist_pipeline_cache(
+            PipelineCacheKernelKind::Compute,
+            device,
+            cache_handle,
+            &cache_path,
+            label,
+        );
         unsafe { device.destroy_pipeline_cache(cache_handle, None) };
     }
 
@@ -1507,38 +1546,17 @@ fn create_compute_pipeline_with_cache(
     Ok(pipelines.0[0])
 }
 
-/// Resolve the cache directory.
+/// The cache file path for a given SPIR-V blob and entry point.
 ///
-/// Order: `STREAMLIB_PIPELINE_CACHE_DIR` env override → `XDG_CACHE_HOME` (via
-/// `dirs::cache_dir()`) joined with `streamlib/pipeline-cache` → `None` if no
-/// cache root is resolvable. `None` disables caching for this kernel; the
-/// kernel still builds, just without `pInitialData`.
-fn pipeline_cache_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var(PIPELINE_CACHE_DIR_ENV) {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir));
-        }
-    }
-    // Co-located under the streamlib home (`<STREAMLIB_HOME>/.streamlib/cache/`),
-    // NOT the XDG cache dir — every built/cached artifact lives under the
-    // streamlib working tree per the home contract. See
-    // `streamlib_runtime_client_contract::streamlib_home`.
-    Some(
-        streamlib_runtime_client_contract::streamlib_home::get_streamlib_data_dir()
-            .join("cache")
-            .join("pipeline-cache"),
-    )
-}
-
-/// Compute the cache file path for a given SPIR-V blob, or `None` if no
-/// cache directory is resolvable.
-///
-/// File name is the SHA-256 of the SPIR-V bytes in lowercase hex with a
-/// `.bin` suffix. Two SPIR-V blobs that differ by any byte produce
+/// File name is the SHA-256 of the SPIR-V bytes and the entry point in
+/// lowercase hex with a `.bin` suffix. Two SPIR-V blobs that differ by any byte produce
 /// distinct file paths; identical blobs hit the same cache file across
 /// process restarts.
-fn pipeline_cache_file_path(spv: &[u8], entry_point: &CStr) -> Option<PathBuf> {
-    let dir = pipeline_cache_dir()?;
+fn pipeline_cache_file_path(
+    spv: &[u8],
+    entry_point: &CStr,
+    pipeline_cache_directory_of_its_stream: Option<&Path>,
+) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(spv);
     // One module can back several pipelines, one per entry point, and they are
@@ -1547,97 +1565,11 @@ fn pipeline_cache_file_path(spv: &[u8], entry_point: &CStr) -> Option<PathBuf> {
     // header and recompiles on a miss, but a cold recompile every alternate
     // run is not what a cache is for.
     hasher.update(entry_point.to_bytes());
-    let hash_hex = format!("{:x}", hasher.finalize());
-    Some(dir.join(format!("{hash_hex}.bin")))
-}
-
-fn read_cache_blob(path: &Path) -> Option<Vec<u8>> {
-    match std::fs::read(path) {
-        Ok(bytes) if !bytes.is_empty() => Some(bytes),
-        Ok(_) => None,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            tracing::warn!(
-                "pipeline cache: unreadable cache file at {}: {e}",
-                path.display()
-            );
-            None
-        }
-    }
-}
-
-fn create_pipeline_cache_handle(
-    device: &vulkanalia::Device,
-    initial_data: Option<&[u8]>,
-    label: &str,
-) -> Option<vk::PipelineCache> {
-    let mut info = vk::PipelineCacheCreateInfo::builder();
-    if let Some(data) = initial_data {
-        info = info.initial_data(data);
-        tracing::debug!(
-            "Compute kernel '{label}': loading pipeline cache (pInitialData {} bytes)",
-            data.len()
-        );
-    } else {
-        tracing::debug!("Compute kernel '{label}': pipeline cache cold (no pInitialData)");
-    }
-    let info = info.build();
-    match unsafe { device.create_pipeline_cache(&info, None) } {
-        Ok(handle) => Some(handle),
-        Err(e) => {
-            tracing::warn!(
-                "Compute kernel '{label}': vkCreatePipelineCache failed: {e} — falling back to null cache"
-            );
-            None
-        }
-    }
-}
-
-fn persist_pipeline_cache(
-    device: &vulkanalia::Device,
-    cache: vk::PipelineCache,
-    path: &Path,
-    label: &str,
-) {
-    let data = match unsafe { device.get_pipeline_cache_data(cache) } {
-        Ok(data) => data,
-        Err(e) => {
-            tracing::warn!("Compute kernel '{label}': vkGetPipelineCacheData failed: {e}");
-            return;
-        }
-    };
-    if data.is_empty() {
-        // Driver returned no data — nothing to persist.
-        return;
-    }
-    if let Err(e) = atomic_write_pipeline_cache(path, &data) {
-        tracing::warn!(
-            "Compute kernel '{label}': failed to persist pipeline cache to {}: {e}",
-            path.display()
-        );
-    } else {
-        tracing::debug!(
-            "Compute kernel '{label}': persisted pipeline cache ({} bytes) to {}",
-            data.len(),
-            path.display()
-        );
-    }
-}
-
-fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        create_directory_and_its_missing_parents_at_mode(parent, OWNER_ONLY_DIRECTORY_MODE)?;
-    }
-    // Same-directory temp file → POSIX rename is atomic on the same
-    // filesystem. The loser of a race just overwrites the winner, which is
-    // fine — both blobs are equally valid and the driver re-validates on
-    // next load.
-    let suffix = format!("tmp.{}", mint_machine_global_unique_name_suffix());
-    let mut tmp = path.to_path_buf();
-    tmp.set_extension(format!("bin.{suffix}"));
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    pipeline_cache_file_path_keyed_by(
+        PipelineCacheKernelKind::Compute,
+        &format!("{:x}", hasher.finalize()),
+        pipeline_cache_directory_of_its_stream,
+    )
 }
 
 fn create_descriptor_pool(
@@ -2190,6 +2122,12 @@ void main() {
     // would otherwise be UB.
 
     use serial_test::serial;
+    use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
+        OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+    };
+
+    use super::super::vulkan_pipeline_cache_on_disk::{PIPELINE_CACHE_DIR_ENV, pipeline_cache_dir};
+    use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
     fn unique_cache_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -2225,15 +2163,15 @@ void main() {
         let dir = unique_cache_dir("path-stability");
         with_pipeline_cache_dir(&dir, || {
             let main = c"main";
-            let p1 = pipeline_cache_file_path(blend_spv(1), main).expect("dir resolves");
-            let p2 = pipeline_cache_file_path(blend_spv(1), main).expect("dir resolves");
-            let p4 = pipeline_cache_file_path(blend_spv(4), main).expect("dir resolves");
+            let p1 = pipeline_cache_file_path(blend_spv(1), main, None);
+            let p2 = pipeline_cache_file_path(blend_spv(1), main, None);
+            let p4 = pipeline_cache_file_path(blend_spv(4), main, None);
             assert_eq!(p1, p2, "same SPIR-V must hash to same path");
             assert_ne!(p1, p4, "different SPIR-V must hash to different paths");
             // One module backs one pipeline per entry point, and they are not
             // interchangeable — sharing a file would have them overwrite each
             // other's blob.
-            let sharpen = pipeline_cache_file_path(blend_spv(1), c"sharpen").expect("dir resolves");
+            let sharpen = pipeline_cache_file_path(blend_spv(1), c"sharpen", None);
             assert_ne!(
                 p1, sharpen,
                 "two entry points over one module must not share a cache file"
@@ -2254,8 +2192,42 @@ void main() {
     fn env_override_takes_precedence_over_xdg_default() {
         let dir = unique_cache_dir("env-override");
         with_pipeline_cache_dir(&dir, || {
-            let resolved = pipeline_cache_dir().expect("env var resolves");
+            let resolved = pipeline_cache_dir(None);
             assert_eq!(resolved, dir);
+        });
+    }
+
+    #[test]
+    #[serial(streamlib_pipeline_cache_env)]
+    fn a_streams_kernel_caches_under_its_stream_unless_the_env_override_is_set() {
+        let stream_directory = unique_cache_dir("stream-directory");
+        let prev = std::env::var(PIPELINE_CACHE_DIR_ENV).ok();
+        // SAFETY: serialized via `#[serial(streamlib_pipeline_cache_env)]`.
+        unsafe { std::env::remove_var(PIPELINE_CACHE_DIR_ENV) };
+        let resolved_for_the_stream = pipeline_cache_dir(Some(&stream_directory));
+        let resolved_for_no_stream = pipeline_cache_dir(None);
+        // SAFETY: as above.
+        unsafe {
+            if let Some(v) = &prev {
+                std::env::set_var(PIPELINE_CACHE_DIR_ENV, v);
+            }
+        }
+        assert_eq!(resolved_for_the_stream, stream_directory);
+        assert_ne!(
+            resolved_for_no_stream, stream_directory,
+            "a kernel built for no stream cached under a stream's directory"
+        );
+
+        let override_directory = unique_cache_dir("override-over-stream");
+        with_pipeline_cache_dir(&override_directory, || {
+            assert_eq!(
+                pipeline_cache_dir(Some(&stream_directory)),
+                override_directory,
+                "the env override must win over the stream's directory"
+            );
+            let in_the_stream =
+                pipeline_cache_file_path(blend_spv(1), c"main", Some(&stream_directory));
+            assert!(in_the_stream.starts_with(&override_directory));
         });
     }
 
@@ -2271,20 +2243,14 @@ void main() {
         // above, so concurrent env-var reads/writes from sibling tests
         // are not possible.
         unsafe { std::env::set_var(PIPELINE_CACHE_DIR_ENV, "") };
-        let resolved = pipeline_cache_dir();
+        let resolved = pipeline_cache_dir(None);
         unsafe {
             match prev {
                 Some(v) => std::env::set_var(PIPELINE_CACHE_DIR_ENV, v),
                 None => std::env::remove_var(PIPELINE_CACHE_DIR_ENV),
             }
         }
-        // Either dirs::cache_dir() resolves on this host (and we get a
-        // non-empty path) or it doesn't (and we get None) — either way is
-        // valid; what's invalid is the env var producing the literal "".
-        if let Some(p) = resolved {
-            assert!(!p.as_os_str().is_empty());
-            assert_ne!(p, PathBuf::from(""));
-        }
+        assert!(!resolved.as_os_str().is_empty());
         let _ = dir; // keep the helper's tempdir name in scope
     }
 
@@ -2314,7 +2280,7 @@ void main() {
                 },
             )
             .expect("kernel creation");
-            let expected = pipeline_cache_file_path(blend_spv(1), c"main").expect("path");
+            let expected = pipeline_cache_file_path(blend_spv(1), c"main", None);
             assert!(
                 expected.exists(),
                 "cache file {} should exist after construction",
@@ -2358,7 +2324,7 @@ void main() {
                 )
                 .expect("first construction"),
             );
-            let cache_path = pipeline_cache_file_path(blend_spv(1), c"main").expect("path");
+            let cache_path = pipeline_cache_file_path(blend_spv(1), c"main", None);
             let warm_blob = std::fs::read(&cache_path).expect("warm read");
             assert!(
                 !warm_blob.is_empty(),
@@ -2399,7 +2365,7 @@ void main() {
         with_pipeline_cache_dir(&dir, || {
             create_directory_and_its_missing_parents_at_mode(&dir, OWNER_ONLY_DIRECTORY_MODE)
                 .expect("mkdir");
-            let cache_path = pipeline_cache_file_path(blend_spv(1), c"main").expect("path");
+            let cache_path = pipeline_cache_file_path(blend_spv(1), c"main", None);
             // Plant a header-invalid blob that the driver will reject.
             // 32 bytes of zeros has header_version=0 ≠ 1 — driver ignores
             // the data and treats the cache as empty.

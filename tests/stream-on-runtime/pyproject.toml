@@ -48,7 +48,7 @@ tatolab-stream = { path = "../../sdk/tatolab-stream", editable = true }
 pythonpath = ["."]
 testpaths = ["."]
 markers = [
-    # `Runner::start()` initializes a GPU context, and the engine's DMA-BUF
+    # A runtime's first stream start initializes a GPU context, and the engine's DMA-BUF
     # pool pre-warm needs a driver that can actually allocate exportable
     # device memory. A software rasterizer (lavapipe) cannot, so a GPU-less
     # runner deselects these with `-m "not requires_gpu"`.

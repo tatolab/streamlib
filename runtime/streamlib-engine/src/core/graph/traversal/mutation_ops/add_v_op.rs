@@ -9,7 +9,7 @@ use crate::core::graph::{
     EXPOSED_NAME_MAXIMUM_LENGTH, GraphNodeWithComponents, Link, ProcessorNode,
     ProcessorTraversalMut, StateComponent, TraversalSourceMut, cast_exposed_name_to_url_safe,
 };
-use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
+use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 
 impl<'a> TraversalSourceMut<'a> {
     /// Add a new processor node to the graph, named by `the_name_a_new_node_takes`.
@@ -31,16 +31,18 @@ impl<'a> TraversalSourceMut<'a> {
         // entry (subprocess-only descriptors register empty port lists), so
         // this resolves any registered type and misses only a
         // genuinely-unregistered one.
-        let resolved_ports = PROCESSOR_REGISTRY.port_info(&spec.name);
+        let node_types = self.node_types_this_stream_resolves;
+        let resolved_ports = node_types.port_info(&spec.name);
 
         let registry_miss = resolved_ports.is_none();
 
-        let name = the_name_a_new_node_takes(self.graph, spec.display_name.as_deref(), &spec.name)?;
-        PROCESSOR_REGISTRY.refuse_a_node_this_runtime_cannot_add(
-            &name,
+        let name = the_name_a_new_node_takes(
+            self.graph,
+            node_types,
+            spec.display_name.as_deref(),
             &spec.name,
-            &spec.config,
         )?;
+        node_types.refuse_a_node_this_stream_cannot_add(&name, &spec.name, &spec.config)?;
 
         if registry_miss {
             tracing::error!(
@@ -83,15 +85,18 @@ impl<'a> TraversalSourceMut<'a> {
 /// path. Splitting the path on `:` or `::` would re-derive the short name the
 /// identity grammar used to carry — the engine holds the path opaque, and a
 /// default name is not a reason to start parsing it.
-fn default_display_name_for(processor_class_import_path: &ProcessorClassImportPath) -> String {
-    PROCESSOR_REGISTRY
+fn default_display_name_for(
+    node_types: &NodeTypesOneStreamResolves,
+    processor_class_import_path: &ProcessorClassImportPath,
+) -> String {
+    node_types
         .default_display_name(processor_class_import_path)
         .unwrap_or_else(|| processor_class_import_path.as_str().to_string())
 }
 
 /// `requested_name` cast, or [`Error::NodeNameTaken`] when a node in `graph`
 /// already has that name — a name the author typed is an address.
-pub(crate) fn the_requested_node_name_unless_taken(
+fn the_requested_node_name_unless_taken(
     graph: &DiGraph<ProcessorNode, Link>,
     requested_name: &str,
 ) -> Result<String> {
@@ -115,6 +120,7 @@ pub(crate) fn the_requested_node_name_unless_taken(
 /// within [`EXPOSED_NAME_MAXIMUM_LENGTH`].
 pub(crate) fn the_name_a_new_node_takes(
     graph: &DiGraph<ProcessorNode, Link>,
+    node_types: &NodeTypesOneStreamResolves,
     requested_name: Option<&str>,
     processor_class_import_path: &ProcessorClassImportPath,
 ) -> Result<String> {
@@ -128,7 +134,7 @@ pub(crate) fn the_name_a_new_node_takes(
         return the_requested_node_name_unless_taken(graph, requested_name);
     }
 
-    let default_name = default_display_name_for(processor_class_import_path);
+    let default_name = default_display_name_for(node_types, processor_class_import_path);
     let cast = cast_exposed_name_to_url_safe(&default_name)?;
     if !is_taken(&cast) {
         return Ok(cast.into_owned());

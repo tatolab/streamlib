@@ -11,8 +11,11 @@
 //! [`push_polyglot_record`]: crate::core::logging::push_polyglot_record
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
+
+use crate::core::logging::loaded_stream_log_route::LoadedStreamLogRoute;
 
 /// Record pushed onto the drain channel. Owned strings.
 #[derive(Debug, Clone)]
@@ -38,4 +41,7 @@ pub(crate) struct LogRecord {
     /// Subprocess-monotonic sequence number. Escape hatch for recovering
     /// per-source order. `None` for local tracing records.
     pub source_seq: Option<u64>,
+    /// The route of the stream that emitted the record, read from the
+    /// emitting thread; `None` sends it to the pretty mirror only.
+    pub loaded_stream_log_route: Option<Arc<LoadedStreamLogRoute>>,
 }

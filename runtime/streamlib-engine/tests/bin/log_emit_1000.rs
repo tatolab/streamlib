@@ -15,10 +15,9 @@
 //! would land bytes in the pipeline under measurement.
 #![allow(clippy::disallowed_macros)]
 
-use std::sync::Arc;
-
-use streamlib_engine::core::runtime::RuntimeUniqueId;
-use streamlib_engine::logging::{LoggingTunables, StreamlibLoggingConfig, init_for_tests};
+use streamlib_engine::logging::{
+    LoadedStreamLogRoute, LoggingTunables, StreamlibLoggingConfig, init_for_tests,
+};
 
 fn raw_write_stdout(bytes: &[u8]) {
     unsafe {
@@ -52,17 +51,13 @@ fn main() {
         .expect("STREAMLIB_STRACE_JSONL must point at a temp dir");
 
     unsafe {
-        std::env::set_var("XDG_STATE_HOME", &jsonl_path);
         std::env::set_var("STREAMLIB_QUIET", "1");
         std::env::set_var("RUST_LOG", "info");
     }
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RstraceEmit"));
     let config = StreamlibLoggingConfig {
         service_name: "log_emit_1000".into(),
-        runtime_id: Some(runtime_id),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
             batch_ms: Some(100),
@@ -73,6 +68,9 @@ fn main() {
         },
     };
     let guard = init_for_tests(config).expect("install logging pathway");
+    // The burst lands in a stream's log, as a processor's records do.
+    let route = LoadedStreamLogRoute::open_in_project_directory("RstraceEmit", "main", &jsonl_path);
+    let entered = route.enter_on_this_thread();
 
     // Unbuffered sentinels straddle the 1000-event burst. Between these
     // two `write(1, ...)` calls on this tid, the test expects zero
@@ -92,5 +90,6 @@ fn main() {
 
     raw_write_stdout(b"BURST_END\n");
 
+    drop(entered);
     drop(guard);
 }

@@ -14,7 +14,7 @@ use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{OptionsForLoadingOneStream, Runner};
 use streamlib_media_builtins::register_media_builtin_processor_types;
 
 /// Each golden graph's SHA-256, pinned as it was added: a golden is never
@@ -87,6 +87,19 @@ fn without_the_nodes(
 /// A golden naming a built-in this floor compiles out is refused for it,
 /// naming the floor, and loads whole once those nodes are taken out — which is
 /// as much of it as this floor can run.
+/// Load `graph` as the one stream of a fresh engine, in a project directory of
+/// its own.
+fn load_on_a_fresh_engine(graph: &GraphSnapshot) -> streamlib::sdk::error::Result<()> {
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    Runner::new()
+        .expect("a runtime constructs")
+        .load_stream_from_graph_snapshot(
+            graph,
+            OptionsForLoadingOneStream::in_project_directory(project_directory.path()),
+        )
+        .map(drop)
+}
+
 #[test]
 fn every_golden_graph_loads_on_this_floor() {
     register_media_builtin_processor_types();
@@ -106,9 +119,7 @@ fn every_golden_graph_loads_on_this_floor() {
             .map(|node| node.name.clone())
             .collect();
 
-        let loaded = Runner::new()
-            .expect("a runtime constructs")
-            .load_graph_snapshot(&graph, None);
+        let loaded = load_on_a_fresh_engine(&graph);
 
         if node_names_compiled_out_here.is_empty() {
             loaded.unwrap_or_else(|refusal| panic!("{path:?} no longer loads: {refusal}"));
@@ -126,14 +137,9 @@ fn every_golden_graph_loads_on_this_floor() {
             &node_names_compiled_out_here,
         ))
         .expect("a golden without some of its nodes still reads");
-        Runner::new()
-            .expect("a runtime constructs")
-            .load_graph_snapshot(&the_rest, None)
-            .unwrap_or_else(|refusal| {
-                panic!(
-                    "{path:?} without {node_names_compiled_out_here:?} no longer loads: {refusal}"
-                )
-            });
+        load_on_a_fresh_engine(&the_rest).unwrap_or_else(|refusal| {
+            panic!("{path:?} without {node_names_compiled_out_here:?} no longer loads: {refusal}")
+        });
     }
 }
 

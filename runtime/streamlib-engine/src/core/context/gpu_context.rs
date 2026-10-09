@@ -728,6 +728,11 @@ pub(crate) enum StorageBufferAllocationFlavour {
     CrossesToAHelperProcess,
 }
 
+/// The refusal of a surface-share call made through a GPU context no surface
+/// store is connected to.
+const NO_SURFACE_STORE_IS_CONNECTED_TO_THIS_GPU_CONTEXT: &str = "no surface store is connected to this GPU context: a stream's view of the engine's GPU \
+     context holds one from the stream's start until its stop, so start the stream first";
+
 #[derive(Clone)]
 pub struct GpuContext {
     device: Arc<GpuDevice>,
@@ -736,9 +741,18 @@ pub struct GpuContext {
     /// The generation every lease-aware ring this context owns most recently
     /// minted per slot — pixel-buffer pools and processor output pools alike.
     lease_aware_pool_minted_frame_generations: Arc<LeaseAwarePoolMintedFrameGenerations>,
-    /// Surface store for cross-process GPU surface sharing (macOS only).
-    /// Set during runtime.start(), None before that.
+    /// Surface store for cross-process GPU surface sharing. Each loaded
+    /// stream's view holds a slot of its own, set as the stream starts and
+    /// cleared as it stops; the engine's own context holds the engine's.
     surface_store: Arc<Mutex<Option<SurfaceStore>>>,
+    /// The engine's own surface store, owned by the runtime id for the
+    /// engine's life and shared by every view: the pixel-buffer pools and the
+    /// export stagings — engine-wide state every stream reads — register
+    /// through it, so a stream's stop never takes their registrations.
+    engines_own_surface_store: Arc<std::sync::OnceLock<SurfaceStore>>,
+    /// Where kernels this view builds keep their on-disk pipeline caches: the
+    /// stream's, under its project. `None` on the engine's own context.
+    pipeline_cache_directory_of_its_stream: Option<Arc<std::path::Path>>,
     /// GPU blitter for efficient buffer-to-buffer copies with texture caching.
     blitter: Arc<dyn RhiBlitter>,
     /// Same-process texture cache — maps surface_id to a registration
@@ -888,6 +902,8 @@ impl GpuContext {
             device,
             texture_pool,
             surface_store: Arc::new(Mutex::new(None)),
+            engines_own_surface_store: Arc::default(),
+            pipeline_cache_directory_of_its_stream: None,
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
@@ -935,6 +951,8 @@ impl GpuContext {
             device,
             texture_pool,
             surface_store: Arc::new(Mutex::new(None)),
+            engines_own_surface_store: Arc::default(),
+            pipeline_cache_directory_of_its_stream: None,
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
@@ -1055,9 +1073,12 @@ impl GpuContext {
             format = ?format,
             "GpuContext::acquire_pixel_buffer"
         );
-        let surface_store = self.surface_store.lock().unwrap();
-        self.pixel_buffer_pool_manager
-            .acquire(width, height, format, surface_store.as_ref())
+        self.pixel_buffer_pool_manager.acquire(
+            width,
+            height,
+            format,
+            self.engines_own_surface_store.get(),
+        )
     }
 
     /// Get a pixel buffer by its published surface id.
@@ -1084,7 +1105,7 @@ impl GpuContext {
 
         let surface_store = self.surface_store.lock().unwrap();
         let store = surface_store.as_ref().ok_or_else(|| {
-            Error::Configuration("SurfaceStore not initialized. Call runtime.start() first.".into())
+            Error::Configuration(NO_SURFACE_STORE_IS_CONNECTED_TO_THIS_GPU_CONTEXT.into())
         })?;
 
         let buffer = store.lookup_buffer(surface_id)?;
@@ -1992,7 +2013,11 @@ impl GpuContext {
             "GpuContext::create_compute_kernel"
         );
         let vulkan_device = &self.device.inner;
-        crate::vulkan::rhi::VulkanComputeKernel::new(vulkan_device, descriptor)
+        crate::vulkan::rhi::VulkanComputeKernel::new_caching_its_pipeline_in(
+            vulkan_device,
+            descriptor,
+            self.pipeline_cache_directory_of_its_stream(),
+        )
     }
 
     /// Build an engine-owned command-buffer recorder bound to the
@@ -2294,7 +2319,11 @@ impl GpuContext {
             "GpuContext::create_graphics_kernel"
         );
         let vulkan_device = &self.device.inner;
-        crate::vulkan::rhi::VulkanGraphicsKernel::new(vulkan_device, descriptor)
+        crate::vulkan::rhi::VulkanGraphicsKernel::new_caching_its_pipeline_in(
+            vulkan_device,
+            descriptor,
+            self.pipeline_cache_directory_of_its_stream(),
+        )
     }
 
     /// Create a ray-tracing kernel from shader stages, shader-group
@@ -2821,18 +2850,61 @@ impl GpuContext {
     // Surface Store (Cross-Process GPU Surface Sharing)
     // =========================================================================
 
-    /// Set the surface store for cross-process GPU surface sharing.
-    ///
-    /// Called internally during runtime.start() to enable check_in/check_out.
-    pub(crate) fn set_surface_store(&self, store: SurfaceStore) {
-        *self.surface_store.lock().unwrap() = Some(store);
+    /// This context's view for one loaded stream: it shares the device and
+    /// every pool, cache and gate, and owns a surface-store slot holding
+    /// `surface_store` and the stream's pipeline-cache directory.
+    pub(crate) fn view_for_one_loaded_stream(
+        &self,
+        surface_store: Option<SurfaceStore>,
+        pipeline_cache_directory_of_the_stream: &std::path::Path,
+    ) -> Self {
+        Self {
+            surface_store: Arc::new(Mutex::new(surface_store)),
+            pipeline_cache_directory_of_its_stream: Some(Arc::from(
+                pipeline_cache_directory_of_the_stream,
+            )),
+            ..self.clone()
+        }
     }
 
-    /// Clear the surface store.
-    ///
-    /// Called internally during runtime.stop().
+    /// Where kernels this context builds keep their pipeline caches, when it is
+    /// a stream's view.
+    pub fn pipeline_cache_directory_of_its_stream(&self) -> Option<&std::path::Path> {
+        self.pipeline_cache_directory_of_its_stream.as_deref()
+    }
+
+    /// Install the engine's own surface store on this context — the engine's
+    /// — as both its surface store and the one the shared pools and export
+    /// stagings register through. Installed once; a second is refused.
+    pub(crate) fn install_the_engines_surface_store(&self, store: SurfaceStore) -> Result<()> {
+        self.engines_own_surface_store
+            .set(store.clone())
+            .map_err(|_| {
+                Error::GpuError(
+                    "the engine's own surface store is installed once, and it already was".into(),
+                )
+            })?;
+        *self
+            .surface_store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(store);
+        Ok(())
+    }
+
+    /// The engine's own surface store, `None` until the engine installs it.
+    pub(crate) fn engines_own_surface_store(&self) -> Option<&SurfaceStore> {
+        self.engines_own_surface_store.get()
+    }
+
+    /// Clear this view's surface store, closing its connection to the
+    /// surface-sharing service. Called as the stream whose view this is stops.
     pub(crate) fn clear_surface_store(&self) {
-        *self.surface_store.lock().unwrap() = None;
+        // A poisoned slot is still cleared: a stream's stop must not panic on
+        // a lock another thread's panic left behind.
+        *self
+            .surface_store
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     /// Get the surface store, if initialized.
@@ -3493,7 +3565,7 @@ impl GpuContext {
         let store = self.surface_store.lock().unwrap();
         let store = store.as_ref().ok_or_else(|| {
             crate::core::Error::Configuration(
-                "SurfaceStore not initialized. Call runtime.start() first.".into(),
+                NO_SURFACE_STORE_IS_CONNECTED_TO_THIS_GPU_CONTEXT.into(),
             )
         })?;
         store.check_in(pixel_buffer)
@@ -3509,7 +3581,7 @@ impl GpuContext {
         let store = self.surface_store.lock().unwrap();
         let store = store.as_ref().ok_or_else(|| {
             crate::core::Error::Configuration(
-                "SurfaceStore not initialized. Call runtime.start() first.".into(),
+                NO_SURFACE_STORE_IS_CONNECTED_TO_THIS_GPU_CONTEXT.into(),
             )
         })?;
         store.check_out(surface_id)
@@ -5776,11 +5848,12 @@ mod tests {
             return None;
         };
         let check_out_leases = Arc::new(crate::core::context::SurfaceCheckOutLeaseRegistry::new());
-        gpu.set_surface_store(SurfaceStore::new_reading_check_out_leases(
+        gpu.install_the_engines_surface_store(SurfaceStore::new_reading_check_out_leases(
             "the-pool-reads-this-lease-table-in-process".to_string(),
             "surface-check-out-lease-test-runtime".to_string(),
             Arc::clone(&check_out_leases),
-        ));
+        ))
+        .expect("the engine's surface store installs once");
         Some((gpu, check_out_leases))
     }
 

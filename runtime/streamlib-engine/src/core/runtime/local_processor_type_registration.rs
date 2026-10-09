@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! [`Runner::add_local`] — register an already-compiled `#[processor]` host
-//! type on the one processor registry, live, with no package on disk.
+//! [`LoadedStreamInThisRuntime::add_local`] — register an already-compiled
+//! `#[processor]` host type on the machine's processor registry, live, with no
+//! package on disk.
 //!
 //! The type registers under the class import path its own `#[processor]`
 //! descriptor carries. Nothing is minted: identity is derived from the type,
@@ -13,11 +14,12 @@ use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::processors::{Config, GeneratedProcessor, PROCESSOR_REGISTRY};
 
-use super::Runner;
+use super::LoadedStreamInThisRuntime;
 
-impl Runner {
-    /// Register host type `P` on the processor registry and return the class
-    /// import path [`Runner::add_processor`] names it by.
+impl LoadedStreamInThisRuntime {
+    /// Register host type `P` on the machine's processor registry and return
+    /// the class import path [`LoadedStreamInThisRuntime::add_processor`]
+    /// names it by.
     ///
     /// `config` is validated against `P::Config` before anything is
     /// registered, so a type whose config does not deserialize is refused
@@ -43,7 +45,7 @@ impl Runner {
 mod tests {
     use crate::core::error::Error;
     use crate::core::processors::ProcessorSpec;
-    use crate::core::runtime::Runner;
+    use crate::core::runtime::{OptionsForLoadingOneStream, Runner};
 
     /// The one setting [`AddLocalSourceTakingOneSetting`] takes.
     #[derive(
@@ -55,7 +57,9 @@ mod tests {
         pub frame_width: Option<u32>,
     }
 
-    /// A host type registered by [`Runner::add_local`] alone.
+    /// A host type registered by [`LoadedStreamInThisRuntime::add_local`] alone.
+    ///
+    /// [`LoadedStreamInThisRuntime::add_local`]: crate::core::runtime::LoadedStreamInThisRuntime::add_local
     #[crate::processor(
         execution = manual,
         config = crate::core::runtime::local_processor_type_registration::tests::AddLocalSourceTakingOneSettingConfig,
@@ -74,12 +78,19 @@ mod tests {
 
     #[test]
     fn a_type_added_locally_refuses_a_setting_its_config_does_not_take_at_add() {
-        let runtime = Runner::new().unwrap();
-        let source_type = runtime
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let runner = Runner::new().unwrap();
+        let stream = runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("main"),
+            )
+            .unwrap();
+        let source_type = stream
             .add_local::<AddLocalSourceTakingOneSetting::Processor>(serde_json::json!({}))
             .unwrap();
 
-        let refusal = runtime
+        let refusal = stream
             .add_processor(
                 ProcessorSpec::new(source_type.clone(), serde_json::json!({"frame_widht": 640}))
                     .with_display_name("front"),

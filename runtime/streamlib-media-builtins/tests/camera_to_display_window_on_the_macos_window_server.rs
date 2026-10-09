@@ -42,8 +42,8 @@ mod apple_camera_to_display {
     use streamlib::sdk::error::Result;
     use streamlib::sdk::media_clock::MediaClock;
     use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ReactiveProcessor};
-    use streamlib::sdk::runtime::{Runner, RuntimeStatus};
-    use streamlib::sdk::runtime_control::request_runtime_shutdown;
+    use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, RuntimeStatus};
+    use streamlib::sdk::runtime_control::request_the_shutdown_of_every_loaded_stream;
     use streamlib_media_builtins::{
         CameraSource, DisplayWindow, VideoFrame, register_media_builtin_processor_types,
     };
@@ -199,11 +199,14 @@ mod apple_camera_to_display {
 
     impl Drop for RequestTheShutdownThatEndsTheRunOnDrop {
         fn drop(&mut self) {
-            let _ = request_runtime_shutdown("the camera→display watcher is done");
+            let _ =
+                request_the_shutdown_of_every_loaded_stream("the camera→display watcher is done");
         }
     }
 
-    fn watch_the_camera_reach_the_window(runner: &Runner) -> std::result::Result<(), String> {
+    fn watch_the_camera_reach_the_window(
+        stream: &LoadedStreamInThisRuntime,
+    ) -> std::result::Result<(), String> {
         if !wait_until(WINDOW_MAPPED_DEADLINE, || {
             windows_on_screen_titled(WINDOW_TITLE) == 1
         }) {
@@ -231,10 +234,10 @@ mod apple_camera_to_display {
                     .len()
             ));
         }
-        if runner.status() != RuntimeStatus::Started {
+        if stream.status() != RuntimeStatus::Started {
             return Err(format!(
-                "the graph must still be running, but the runtime is {:?}",
-                runner.status()
+                "the graph must still be running, but the stream is {:?}",
+                stream.status()
             ));
         }
         Ok(())
@@ -246,7 +249,8 @@ mod apple_camera_to_display {
         register_media_builtin_processor_types();
         PROCESSOR_REGISTRY.register::<CameraFrameCollector::Processor>();
 
-        let app = App::new().expect("runtime");
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let app = App::new_in_project_directory(project_directory.path()).expect("runtime");
         let camera = app
             .add(
                 CameraSource::Processor::processor_class_import_path(),
@@ -273,12 +277,12 @@ mod apple_camera_to_display {
         app.connect((&camera, "video"), (&collector, "video"))
             .expect("camera to the collector");
 
-        let runner = Arc::clone(app.runner());
+        let stream = Arc::clone(app.stream());
         let watcher = std::thread::Builder::new()
             .name("camera-display-watcher".to_string())
             .spawn(move || {
                 let _ends_the_run_however_the_watch_ends = RequestTheShutdownThatEndsTheRunOnDrop;
-                watch_the_camera_reach_the_window(&runner)
+                watch_the_camera_reach_the_window(&stream)
             })
             .expect("spawn the watcher");
 

@@ -32,24 +32,41 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use tempfile::TempDir;
 use tracing::subscriber::{DefaultGuard, NoSubscriber};
 
-use streamlib_engine::core::runtime::RuntimeUniqueId;
 use streamlib_engine::logging::{
-    LoggingTunables, StreamlibLoggingConfig, StreamlibLoggingGuard, init_for_tests,
+    LoadedStreamLogRoute, LoadedStreamLogRouteEnteredOnThisThread, LoggingTunables,
+    StreamlibLoggingConfig, StreamlibLoggingGuard, init_for_tests,
 };
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, RuntimeLogEvent};
 
-fn install_pathway(tmp: &TempDir, runtime_id: &str) -> StreamlibLoggingGuard {
+/// A pathway on this thread, and the stream route the thread carries into
+/// one stream log under `tmp`; the fields drop in order, the route left
+/// before the pathway shuts down.
+type BenchPathwayWritingOneStreamLog = (
+    LoadedStreamLogRouteEnteredOnThisThread,
+    Arc<LoadedStreamLogRoute>,
+    StreamlibLoggingGuard,
+);
+
+/// Install `config`'s pathway on this thread and route the thread's records
+/// into the log of the stream `bench` of `runtime_id` under `tmp`.
+fn install_pathway_writing_one_stream_log(
+    config: StreamlibLoggingConfig,
+    tmp: &TempDir,
+    runtime_id: &str,
+) -> BenchPathwayWritingOneStreamLog {
+    let guard = init_for_tests(config).expect("install logging pathway");
+    let route = LoadedStreamLogRoute::open_in_project_directory(runtime_id, "bench", tmp.path());
+    (route.enter_on_this_thread(), route, guard)
+}
+
+fn install_pathway(tmp: &TempDir, runtime_id: &str) -> BenchPathwayWritingOneStreamLog {
     unsafe {
-        std::env::set_var("XDG_STATE_HOME", tmp.path());
         std::env::set_var("STREAMLIB_QUIET", "1");
         std::env::set_var("RUST_LOG", "info");
     }
-    let runtime_id = Arc::new(RuntimeUniqueId::from(runtime_id));
     let config = StreamlibLoggingConfig {
         service_name: "bench".into(),
-        runtime_id: Some(runtime_id),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
             batch_ms: Some(100),
@@ -59,7 +76,7 @@ fn install_pathway(tmp: &TempDir, runtime_id: &str) -> StreamlibLoggingGuard {
             ..LoggingTunables::default()
         },
     };
-    init_for_tests(config).expect("install logging pathway")
+    install_pathway_writing_one_stream_log(config, tmp, runtime_id)
 }
 
 /// `tracing::info!` with 4 structured fields against a live pathway.
@@ -181,18 +198,14 @@ fn bench_burst_drops_surface(c: &mut Criterion) {
             for _ in 0..iters {
                 let tmp = TempDir::new().expect("tempdir");
                 unsafe {
-                    std::env::set_var("XDG_STATE_HOME", tmp.path());
                     std::env::set_var("STREAMLIB_QUIET", "1");
                     std::env::set_var("RUST_LOG", "info");
                 }
                 // Tiny channel capacity forces the worker drain behind
                 // the hot path, exercising the drop-oldest counter.
-                let runtime_id = Arc::new(RuntimeUniqueId::from("RbenchBurst"));
                 let config = StreamlibLoggingConfig {
                     service_name: "bench".into(),
-                    runtime_id: Some(Arc::clone(&runtime_id)),
                     pretty_log_mirror_stream: None,
-                    jsonl: true,
                     intercept_stdio: false,
                     tunables: LoggingTunables {
                         batch_ms: Some(25),
@@ -202,7 +215,8 @@ fn bench_burst_drops_surface(c: &mut Criterion) {
                         ..LoggingTunables::default()
                     },
                 };
-                let guard = init_for_tests(config).expect("install");
+                let (entered, route, guard) =
+                    install_pathway_writing_one_stream_log(config, &tmp, "RbenchBurst");
 
                 const TOTAL_EVENTS: u64 = 10_000_000;
                 let deadline = Instant::now() + Duration::from_secs(1);
@@ -224,7 +238,8 @@ fn bench_burst_drops_surface(c: &mut Criterion) {
                 // Give the drain worker time to flush the
                 // synthetic `dropped=N` record.
                 std::thread::sleep(Duration::from_millis(300));
-                let path = guard.jsonl_path().unwrap().to_path_buf();
+                let path = route.jsonl_log_path().unwrap().to_path_buf();
+                drop(entered);
                 drop(guard);
 
                 let events = read_jsonl(&path);

@@ -17,6 +17,21 @@ use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 use streamlib_engine::core::{OutputPortMarker, Result, RuntimeContextFullAccess};
 
+/// An empty stream loaded into `runner`, its project in `project_directory`.
+fn an_empty_stream_loaded_into(
+    runner: &Runner,
+    project_directory: &std::path::Path,
+) -> std::sync::Arc<streamlib::sdk::runtime::LoadedStreamInThisRuntime> {
+    runner
+        .load_an_empty_stream(
+            streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
+                project_directory,
+            )
+            .named("main"),
+        )
+        .expect("an empty stream loads")
+}
+
 #[streamlib::sdk::processor(
     execution = manual,
     output("videoOut"),
@@ -80,22 +95,24 @@ fn connect_reaches_a_camel_case_rust_port_by_its_spelling_or_its_cast() {
     let sink = video_sink_registered();
 
     for port_spelling in ["videoOut", "videoout"] {
-        let runtime = Runner::new().unwrap();
-        let source_id = runtime
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let runner = Runner::new().unwrap();
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+        let source_id = stream
             .add_processor(ProcessorSpec::new(source.clone(), serde_json::json!({})))
             .unwrap();
-        let sink_id = runtime
+        let sink_id = stream
             .add_processor(ProcessorSpec::new(sink.clone(), serde_json::json!({})))
             .unwrap();
 
-        runtime
+        stream
             .connect(
                 OutputLinkPortRef::new(&source_id, port_spelling),
                 InputLinkPortRef::new(&sink_id, "video_in"),
             )
             .unwrap_or_else(|refusal| panic!("{port_spelling:?} names the port: {refusal}"));
 
-        let graph_document = runtime.to_json().expect("the graph renders");
+        let graph_document = stream.to_json().expect("the graph renders");
         assert_eq!(
             graph_document["links"][0]["source"]["port"], "videoout",
             "the link holds the cast whichever spelling connected it"

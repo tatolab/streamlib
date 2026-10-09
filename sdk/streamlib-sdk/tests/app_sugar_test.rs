@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `App` is thin sugar over `Runner`: a graph built through `App` must be
-//! byte-for-byte the graph built by the equivalent `Runner` calls (once the
+//! `App` is thin sugar over a `Runner` and the one stream it loads: a graph
+//! built through `App` must be byte-for-byte the graph built by the equivalent
+//! calls on a loaded stream (once the
 //! nondeterministic per-node ids are normalized away), every method must be a
 //! faithful pass-through that surfaces the runtime's own errors unchanged, and
 //! the `add_local` hello-world path must materialize a real node with no
@@ -21,7 +22,7 @@ use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::{Config, GeneratedProcessor, ManualProcessor, ProcessorSpec};
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
 
 // =============================================================================
 // Fixtures — in-crate `#[processor]` host types. No package, no build: the
@@ -55,11 +56,29 @@ manual_fixture!(MaterializeNode);
 manual_fixture!(IgnoredConnectNode);
 manual_fixture!(DisplayNamedNode);
 
+/// An engine with one empty stream loaded under the name an `App` gives its
+/// own, its project in `project_directory`.
+fn an_engine_loading_one_empty_stream(
+    project_directory: &std::path::Path,
+) -> (
+    std::sync::Arc<Runner>,
+    std::sync::Arc<LoadedStreamInThisRuntime>,
+) {
+    let runner = Runner::new().expect("runner runtime");
+    let stream = runner
+        .load_an_empty_stream(
+            OptionsForLoadingOneStream::in_project_directory(project_directory)
+                .named(streamlib::sdk::THE_STREAM_NAME_AN_APP_LOADS),
+        )
+        .expect("the empty stream loads");
+    (runner, stream)
+}
+
 /// Register a `#[processor]` host type on the processor registry and return
 /// the class import path that names it — what `App::add_local` builds
 /// internally, but without instantiating, so both an `App` graph and a
-/// `Runner` graph can reference the one registered type.
-fn register_session_reference<P>(registrar: &Runner) -> ProcessorClassImportPath
+/// loaded stream's graph can reference the one registered type.
+fn register_session_reference<P>(registrar: &LoadedStreamInThisRuntime) -> ProcessorClassImportPath
 where
     P: GeneratedProcessor + 'static,
     P::Config: Config,
@@ -80,19 +99,21 @@ fn normalize_ids(graph_json: &serde_json::Value, ids_in_build_order: &[String]) 
     text
 }
 
-/// A graph built via `App::add` and the equivalent graph built via
-/// `Runner::add_processor` produce the identical snapshot once the minted ids
+/// A graph built via `App::add` and the equivalent graph built via a loaded
+/// stream's `add_processor` produce the identical snapshot once the minted ids
 /// are normalized — the proof that `App::add` adds no graph shape of its own.
 #[test]
-fn app_add_matches_runner_add_processor_snapshot() {
-    let registrar = Runner::new().expect("registrar runtime");
+fn app_add_matches_the_streams_add_processor_snapshot() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let (_registrar_runner, registrar) =
+        an_engine_loading_one_empty_stream(project_directory.path());
     let alpha_ref = register_session_reference::<EquivAlpha::Processor>(&registrar);
     let beta_ref = register_session_reference::<EquivBeta::Processor>(&registrar);
 
     let config = serde_json::json!({});
 
     // App-built graph.
-    let app = App::new().expect("App::new");
+    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
     let app_alpha = app
         .add(alpha_ref.clone(), config.clone(), None)
         .expect("app add alpha");
@@ -100,55 +121,58 @@ fn app_add_matches_runner_add_processor_snapshot() {
         .add(beta_ref.clone(), config.clone(), None)
         .expect("app add beta");
     let app_snapshot = normalize_ids(
-        &app.runner().to_json().expect("app graph json"),
+        &app.stream().to_json().expect("app graph json"),
         &[
             app_alpha.processor_id().to_string(),
             app_beta.processor_id().to_string(),
         ],
     );
 
-    // Runner-built graph — the same operations, spelled out against `Runner`.
-    let runner = Runner::new().expect("runner runtime");
-    let runner_alpha = runner
+    // Stream-built graph — the same operations, spelled out against a loaded
+    // stream.
+    let (_runner, stream) = an_engine_loading_one_empty_stream(project_directory.path());
+    let stream_alpha = stream
         .add_processor(ProcessorSpec::new(alpha_ref, config.clone()))
-        .expect("runner add alpha");
-    let runner_beta = runner
+        .expect("stream add alpha");
+    let stream_beta = stream
         .add_processor(ProcessorSpec::new(beta_ref, config))
-        .expect("runner add beta");
-    let runner_snapshot = normalize_ids(
-        &runner.to_json().expect("runner graph json"),
-        &[runner_alpha.to_string(), runner_beta.to_string()],
+        .expect("stream add beta");
+    let stream_snapshot = normalize_ids(
+        &stream.to_json().expect("stream graph json"),
+        &[stream_alpha.to_string(), stream_beta.to_string()],
     );
 
     assert_eq!(
-        app_snapshot, runner_snapshot,
-        "App-built and Runner-built graphs must snapshot identically"
+        app_snapshot, stream_snapshot,
+        "App-built and stream-built graphs must snapshot identically"
     );
 }
 
-/// `App::connect` is a faithful pass-through of `Runner::connect`: on the same
-/// runner, with the same endpoints, the two calls return the identical error.
+/// `App::connect` is a faithful pass-through of its stream's `connect`: on
+/// the same stream, with the same endpoints, the two calls return the
+/// identical error.
 /// This holds regardless of what the runtime decides (it neither swallows nor
 /// rewraps the error), so it stays valid across the engine connect() fix.
 #[test]
-fn app_connect_is_a_faithful_passthrough_of_runner_connect() {
+fn app_connect_is_a_faithful_passthrough_of_the_streams_connect() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
     use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 
-    let app = App::new().expect("App::new");
+    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
     let node = app
         .add_local::<PassthroughNode::Processor>(serde_json::json!({}), None)
         .expect("add_local returns a connectable processor");
 
     let via_app = app.connect((&node, "no_such_out"), (&node, "no_such_in"));
-    let via_runner = app.runner().connect(
+    let via_stream = app.stream().connect(
         OutputLinkPortRef::new(node.processor_id(), "no_such_out"),
         InputLinkPortRef::new(node.processor_id(), "no_such_in"),
     );
 
     assert_eq!(
         format!("{:?}", via_app),
-        format!("{:?}", via_runner),
-        "App::connect must return exactly what Runner::connect returns"
+        format!("{:?}", via_stream),
+        "App::connect must return exactly what the stream's connect returns"
     );
 }
 
@@ -181,10 +205,11 @@ fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorClas
 /// derivation lowercases the uppercase-leading id) exercised through the sugar.
 #[test]
 fn app_connect_between_real_processors_on_valid_ports_returns_ok() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
     let source_ref = register_ported_type("AppConnectOkSource", "_unused_in", "video");
     let sink_ref = register_ported_type("AppConnectOkSink", "video_in", "_unused_out");
 
-    let app = App::new().expect("App::new");
+    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
     let source = app
         .add(source_ref, serde_json::json!({}), None)
         .expect("app add source");
@@ -211,13 +236,14 @@ fn app_connect_between_real_processors_on_valid_ports_returns_ok() {
 /// a [`ProcessorUniqueId`] that is a real, addressable node in the graph.
 #[test]
 fn add_local_hello_world_materializes_a_real_node() {
-    let app = App::new().expect("App::new");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
 
     let node = app
         .add_local::<MaterializeNode::Processor>(serde_json::json!({}), None)
         .expect("add_local materializes a node");
 
-    let graph_json = app.runner().to_json().expect("graph json");
+    let graph_json = app.stream().to_json().expect("graph json");
     let node_ids: Vec<&str> = graph_json["nodes"]
         .as_array()
         .expect("nodes array")
@@ -237,11 +263,12 @@ fn add_local_hello_world_materializes_a_real_node() {
 /// `to_config_value` error path.
 #[test]
 fn add_rejects_a_non_serializable_config() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
     // The config is encoded before the registry is ever consulted, so any
     // path works — the serialization error must fire first.
     let reference = ProcessorClassImportPath::new("app_sugar_test::Whatever").unwrap();
 
-    let app = App::new().expect("App::new");
+    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
     // A compound (tuple) map key cannot become a JSON object key — `to_value`
     // errors rather than coercing (unlike an integer key, which stringifies).
     let mut unserializable: HashMap<(i32, i32), i32> = HashMap::new();
@@ -259,9 +286,10 @@ fn add_rejects_a_non_serializable_config() {
 /// channel-name grammar.
 #[test]
 fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
     use streamlib::sdk::error::PortDirection;
 
-    let app = App::new().expect("App::new");
+    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
     let node = app
         .add_local::<IgnoredConnectNode::Processor>(serde_json::json!({}), None)
         .expect("add_local returns a connectable processor");
@@ -288,9 +316,10 @@ fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
 /// the handle rather than by asking the graph.
 #[test]
 fn the_handle_reports_the_display_name_the_engine_assigned() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
     let reference = register_ported_type("AppDisplayNameDefault", "_unused_in", "_unused_out");
 
-    let app = App::new().expect("App::new");
+    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
     let first = app
         .add(reference.clone(), serde_json::json!({}), None)
         .expect("app add first");
@@ -306,9 +335,10 @@ fn the_handle_reports_the_display_name_the_engine_assigned() {
 /// is refused by name rather than suffixed — a typed name is an address.
 #[test]
 fn a_requested_display_name_is_cast_and_a_duplicate_is_refused() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
     let reference = register_ported_type("AppDisplayNameRequested", "_unused_in", "_unused_out");
 
-    let app = App::new().expect("App::new");
+    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
     let first = app
         .add(
             reference.clone(),
@@ -332,7 +362,8 @@ fn a_requested_display_name_is_cast_and_a_duplicate_is_refused() {
 /// processor and read back what it got.
 #[test]
 fn add_local_reaches_the_display_name_surface_too() {
-    let app = App::new().expect("App::new");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let app = App::new_in_project_directory(project_directory.path()).expect("App::new");
 
     let node = app
         .add_local::<DisplayNamedNode::Processor>(serde_json::json!({}), Some("Blur"))

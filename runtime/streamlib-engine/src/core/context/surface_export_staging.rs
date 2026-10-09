@@ -483,7 +483,7 @@ impl GpuContext {
         if let Some(already_registered) = registration_id.as_ref() {
             return Ok((already_registered.clone(), pixel_format));
         }
-        let surface_store = self.surface_store().ok_or_else(|| {
+        let surface_store = self.engines_own_surface_store().ok_or_else(|| {
             Error::GpuError(
                 "this runtime has no surface-share service, so a surface export cannot reach \
                  another process"
@@ -530,7 +530,7 @@ impl GpuContext {
             .remove(crate::core::rhi::pool_slot_key_of_surface_id(surface_id));
         for staging in evicted.into_iter().flat_map(HashMap::into_values) {
             if let Some(shared_id) = staging.surface_share_registration_id.lock().take()
-                && let Some(surface_store) = self.surface_store()
+                && let Some(surface_store) = self.engines_own_surface_store()
             {
                 // Best-effort: the service also releases everything with the
                 // connection, so a failure here is deferred cleanup, not a leak

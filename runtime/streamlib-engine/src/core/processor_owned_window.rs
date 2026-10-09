@@ -581,12 +581,14 @@ impl WindowPresentLoopForOwningProcessor {
         let shared_with_the_owning_processor = Arc::clone(&shared_with_the_present_loop);
         let present_loop_thread = std::thread::Builder::new()
             .name("processor-owned-window".to_string())
-            .spawn(move || {
-                drive_the_present_loop_for_one_processor_owned_window(
-                    processor_owned_window,
-                    &shared_with_the_present_loop,
-                );
-            })
+            .spawn(
+                crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+                    drive_the_present_loop_for_one_processor_owned_window(
+                        processor_owned_window,
+                        &shared_with_the_present_loop,
+                    );
+                }),
+            )
             .map_err(|e| {
                 Error::Runtime(format!(
                     "could not spawn a present thread for the window titled \

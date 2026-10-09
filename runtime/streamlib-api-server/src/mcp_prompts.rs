@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The MCP prompts a node serves: recipes an agent follows with the tools the
-//! node already serves, rendered against the live graph and the node catalog
-//! at the moment one is requested.
+//! node already serves, rendered against the sole loaded stream's live graph
+//! and node catalog at the moment one is requested. With none or several
+//! streams loaded, a prompt says which are instead.
 //!
 //! A prompt is text, never a mutation path — every step it lists is a call to
 //! a served tool, so the tool set stays the whole of the control vocabulary.
@@ -17,7 +18,7 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{prompt, prompt_router};
 use serde::Deserialize;
 use serde_json::json;
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
+use streamlib::sdk::descriptors::{ProcessorClassImportPath, ProcessorDescriptor};
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
     FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE,
@@ -27,10 +28,14 @@ use streamlib::sdk::json_schema::{
     GraphResponse, PortDescriptorOutput, PortInfoOutput, ProcessorDescriptorOutput,
     ProcessorNodeOutput,
 };
-use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 
 use crate::mcp::LocalApiMcpServerHandler;
-use crate::mcp_resources::exported_live_graph_json;
+use crate::mcp_resources::{
+    TheStreamsPartOrTheLoadedStreams, exported_live_graph_json,
+    the_node_catalog_of_the_stream_or_the_loaded_streams,
+    the_sole_loaded_streams_operations_or_the_loaded_streams,
+    which_streams_are_loaded_in_place_of_the_sole_one,
+};
 
 /// The import path `VirtualCameraSink` registers under, which the virtual
 /// camera recipe looks up in the catalog. This crate does not link the media
@@ -111,9 +116,13 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(arguments): Parameters<InsertNodeBetweenLinkedNodesPromptArguments>,
     ) -> Result<GetPromptResult, McpError> {
-        let live_graph = self.live_graph().await?;
-        let recipe = insert_node_between_linked_nodes_recipe(&live_graph, &arguments)?;
-        Ok(recipe.prompt_result(INSERT_NODE_BETWEEN_LINKED_NODES_PROMPT_DESCRIPTION))
+        self.render_a_recipe_against_the_sole_stream(
+            INSERT_NODE_BETWEEN_LINKED_NODES_PROMPT_DESCRIPTION,
+            |live_graph, node_catalog| {
+                insert_node_between_linked_nodes_recipe(live_graph, node_catalog, &arguments)
+            },
+        )
+        .await
     }
 
     #[prompt(
@@ -124,9 +133,13 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(arguments): Parameters<FanOutputToAnotherConsumerPromptArguments>,
     ) -> Result<GetPromptResult, McpError> {
-        let live_graph = self.live_graph().await?;
-        let recipe = fan_output_to_another_consumer_recipe(&live_graph, &arguments)?;
-        Ok(recipe.prompt_result(FAN_OUTPUT_TO_ANOTHER_CONSUMER_PROMPT_DESCRIPTION))
+        self.render_a_recipe_against_the_sole_stream(
+            FAN_OUTPUT_TO_ANOTHER_CONSUMER_PROMPT_DESCRIPTION,
+            |live_graph, node_catalog| {
+                fan_output_to_another_consumer_recipe(live_graph, node_catalog, &arguments)
+            },
+        )
+        .await
     }
 
     #[prompt(
@@ -137,9 +150,13 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(arguments): Parameters<ShowChannelOnVirtualCameraPromptArguments>,
     ) -> Result<GetPromptResult, McpError> {
-        let live_graph = self.live_graph().await?;
-        let recipe = show_channel_on_virtual_camera_recipe(&live_graph, &arguments)?;
-        Ok(recipe.prompt_result(SHOW_CHANNEL_ON_VIRTUAL_CAMERA_PROMPT_DESCRIPTION))
+        self.render_a_recipe_against_the_sole_stream(
+            SHOW_CHANNEL_ON_VIRTUAL_CAMERA_PROMPT_DESCRIPTION,
+            |live_graph, node_catalog| {
+                show_channel_on_virtual_camera_recipe(live_graph, node_catalog, &arguments)
+            },
+        )
+        .await
     }
 
     #[prompt(
@@ -150,18 +167,69 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(arguments): Parameters<LookAtWhatAChannelCarriesPromptArguments>,
     ) -> Result<GetPromptResult, McpError> {
-        let live_graph = self.live_graph().await?;
-        let recipe = look_at_what_a_channel_carries_recipe(&live_graph, &arguments)?;
-        Ok(recipe.prompt_result(LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION))
+        self.render_a_recipe_against_the_sole_stream(
+            LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION,
+            |live_graph, _| look_at_what_a_channel_carries_recipe(live_graph, &arguments),
+        )
+        .await
     }
 }
 
 impl LocalApiMcpServerHandler {
-    /// The node's graph as it is now, which every recipe is rendered against.
-    async fn live_graph(&self) -> Result<GraphResponse, McpError> {
-        serde_json::from_value(exported_live_graph_json(&self.runtime).await?)
-            .map_err(|e| McpError::internal_error(format!("graph export did not parse: {e}"), None))
+    /// `recipe_for` rendered against the sole loaded stream's graph and the
+    /// node catalog of that same stream as they are now — or, when the lookup
+    /// is refused, the text that says which streams are loaded — as the
+    /// prompt `description` names.
+    async fn render_a_recipe_against_the_sole_stream(
+        &self,
+        description: &str,
+        recipe_for: impl FnOnce(&GraphResponse, &[ProcessorDescriptor]) -> Result<GraphRecipe, McpError>,
+    ) -> Result<GetPromptResult, McpError> {
+        let operations_on_the_loaded_streams = &self.operations_on_the_loaded_streams;
+        let stream_operations = match the_sole_loaded_streams_operations_or_the_loaded_streams(
+            operations_on_the_loaded_streams,
+        )? {
+            TheStreamsPartOrTheLoadedStreams::TheStreamsPart(stream_operations) => {
+                stream_operations
+            }
+            TheStreamsPartOrTheLoadedStreams::TheLoadedStreams(loaded_stream_names) => {
+                return Ok(which_streams_are_loaded_prompt_result(
+                    &loaded_stream_names,
+                    description,
+                ));
+            }
+        };
+        let live_graph: GraphResponse = serde_json::from_value(
+            exported_live_graph_json(&stream_operations).await?,
+        )
+        .map_err(|e| McpError::internal_error(format!("graph export did not parse: {e}"), None))?;
+        let node_catalog = match the_node_catalog_of_the_stream_or_the_loaded_streams(
+            operations_on_the_loaded_streams,
+            live_graph.stream.as_deref(),
+        )? {
+            TheStreamsPartOrTheLoadedStreams::TheStreamsPart(node_catalog) => node_catalog,
+            TheStreamsPartOrTheLoadedStreams::TheLoadedStreams(loaded_stream_names) => {
+                return Ok(which_streams_are_loaded_prompt_result(
+                    &loaded_stream_names,
+                    description,
+                ));
+            }
+        };
+        Ok(recipe_for(&live_graph, &node_catalog)?.prompt_result(description))
     }
+}
+
+/// The prompt that says which streams are loaded in place of a recipe.
+fn which_streams_are_loaded_prompt_result(
+    loaded_stream_names: &[String],
+    description: &str,
+) -> GetPromptResult {
+    GraphRecipe {
+        introduction_text: which_streams_are_loaded_in_place_of_the_sole_one(loaded_stream_names),
+        steps: Vec::new(),
+        closing_note: None,
+    }
+    .prompt_result(description)
 }
 
 /// One numbered step of a recipe: the served tool it calls and what to pass.
@@ -190,6 +258,9 @@ impl GraphRecipe {
 
     /// The text an agent follows. Each step is its own line, `N. `tool` — …`.
     fn rendered_text(&self) -> String {
+        if self.steps.is_empty() {
+            return self.introduction_text.clone();
+        }
         let mut text = format!(
             "{}\n\nSteps — each calls one tool this node serves:\n",
             self.introduction_text
@@ -281,13 +352,17 @@ fn sole_input_port(entry: &ProcessorDescriptorOutput) -> Option<&PortDescriptorO
     }
 }
 
-/// The catalog entry for one import path, or `None` when nothing is
-/// registered under it — a string that is not an import path included.
-fn catalog_entry_for(processor_type: &str) -> Option<ProcessorDescriptorOutput> {
+/// The stream's catalog entry for one import path, or `None` when the stream
+/// resolves nothing under it — a string that is not an import path included.
+fn catalog_entry_for(
+    node_catalog: &[ProcessorDescriptor],
+    processor_type: &str,
+) -> Option<ProcessorDescriptorOutput> {
     let processor_class_import_path = ProcessorClassImportPath::new(processor_type).ok()?;
-    PROCESSOR_REGISTRY
-        .descriptor(&processor_class_import_path)
-        .map(|descriptor| ProcessorDescriptorOutput::from(&descriptor))
+    node_catalog
+        .iter()
+        .find(|descriptor| descriptor.processor_class_import_path == processor_class_import_path)
+        .map(ProcessorDescriptorOutput::from)
 }
 
 fn catalog_entry_json_block(entry: &ProcessorDescriptorOutput) -> Result<String, McpError> {
@@ -336,6 +411,7 @@ fn find_the_added_node_step(port_directions: &str) -> GraphRecipeStep {
 
 fn insert_node_between_linked_nodes_recipe(
     graph: &GraphResponse,
+    node_catalog: &[ProcessorDescriptor],
     arguments: &InsertNodeBetweenLinkedNodesPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
     let link_id = arguments.link_id.as_str();
@@ -357,7 +433,7 @@ fn insert_node_between_linked_nodes_recipe(
     let source_name = source.name.as_str();
     let target_name = target.name.as_str();
 
-    let inserted_type_entry = catalog_entry_for(node_type);
+    let inserted_type_entry = catalog_entry_for(node_catalog, node_type);
     let target_port_takes_one_inbound_link =
         input_port_of(target, target_port).is_some_and(|port| port.audio_window.is_some());
 
@@ -431,13 +507,14 @@ fn insert_node_between_linked_nodes_recipe(
 
 fn fan_output_to_another_consumer_recipe(
     graph: &GraphResponse,
+    node_catalog: &[ProcessorDescriptor],
     arguments: &FanOutputToAnotherConsumerPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
     let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
     let from_port = arguments.from_port.as_str();
     let node_type = arguments.node_type.as_str();
     let source_name = source.name.as_str();
-    let consumer_type_entry = catalog_entry_for(node_type);
+    let consumer_type_entry = catalog_entry_for(node_catalog, node_type);
 
     Ok(GraphRecipe {
         introduction_text: format!(
@@ -473,18 +550,25 @@ fn fan_output_to_another_consumer_recipe(
 
 fn show_channel_on_virtual_camera_recipe(
     graph: &GraphResponse,
+    node_catalog: &[ProcessorDescriptor],
     arguments: &ShowChannelOnVirtualCameraPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
     let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
     let from_port = arguments.from_port.as_str();
     let camera_name = arguments.camera_name.as_deref();
-    let virtual_camera_sink = catalog_entry_for(VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH)
-        .ok_or_else(|| {
-            McpError::invalid_params(format!(
+    let virtual_camera_sink = catalog_entry_for(
+        node_catalog,
+        VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
+    )
+    .ok_or_else(|| {
+        McpError::invalid_params(
+            format!(
                 "this node's catalog has no `{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}`: \
                  the virtual camera is a Linux built-in"
-            ), None)
-        })?;
+            ),
+            None,
+        )
+    })?;
     let video_input = sole_input_port(&virtual_camera_sink).ok_or_else(|| {
         McpError::internal_error(
             format!(

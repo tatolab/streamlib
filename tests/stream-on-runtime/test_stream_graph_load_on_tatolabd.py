@@ -92,9 +92,10 @@ SERVED_GRAPH_RUNTIME_NAME = f"runtime-load-served-graph-{os.getpid()}"
 LoadStreamGraphOnTatolabd = Callable[..., StreamGraphLoadOutcome]
 
 
-def pattern_to_window_graph(*, stream_name: "str | None" = None) -> "dict[str, Any]":
+def pattern_to_window_graph(*, stream_name: str = "pattern-to-window") -> "dict[str, Any]":
     """A test pattern into a window, exposing the pattern's output."""
-    graph: "dict[str, Any]" = {
+    return {
+        "stream": stream_name,
         "nodes": [
             {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
             {
@@ -111,9 +112,6 @@ def pattern_to_window_graph(*, stream_name: "str | None" = None) -> "dict[str, A
         ],
         "exposed": [{"node": "testpatternsource", "port": "video"}],
     }
-    if stream_name is not None:
-        graph["stream"] = stream_name
-    return graph
 
 
 def config_nesting_containers_deep(containers_counting_the_config: int) -> "dict[str, Any]":
@@ -164,6 +162,7 @@ def test_a_graph_naming_every_compiled_built_in_by_its_type_loads(
 ):
     load_outcome = load_stream_graph_on_tatolabd(
         {
+            "stream": "every-built-in",
             "nodes": [
                 {
                     "name": built_in_node_class.__name__,
@@ -338,10 +337,11 @@ def test_a_project_directory_whose_name_is_not_utf8_is_accepted(
 
     load_outcome = load_stream_graph_on_tatolabd(
         {
+            "stream": "relayed",
             "nodes": [
                 {"name": "testpatternsource", "type": TestPatternSource.type, "config": {}},
                 {"name": "loadedframerelay", "type": DESCRIBED_NODE_TYPE, "config": {}},
-            ]
+            ],
         },
         project_directory=project_directory_not_utf8,
     )
@@ -357,6 +357,16 @@ def test_an_empty_graph_is_refused_by_name(load_stream_graph_on_tatolabd: LoadSt
 
     assert "the stream `main` holds no node" in refusal
     assert "stream_builder.add(" in refusal
+
+
+def test_a_graph_naming_no_stream_is_refused(load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd):
+    """A runtime's streams are told apart by name, so a graph has to carry one."""
+    graph = pattern_to_window_graph()
+    del graph["stream"]
+
+    refusal = refused_naming(load_stream_graph_on_tatolabd(graph))
+
+    assert "the graph names no stream" in refusal
 
 
 def test_a_stream_name_casting_to_nothing_is_refused_naming_it(
@@ -386,7 +396,7 @@ def test_a_virtual_camera_sink_loads_on_linux_and_is_refused_at_load_naming_the_
     load_stream_graph_on_tatolabd: LoadStreamGraphOnTatolabd,
 ):
     load_outcome = load_stream_graph_on_tatolabd(
-        {"nodes": [{"name": "camera", "type": VirtualCameraSink.type, "config": {}}]}
+        {"stream": "camera", "nodes": [{"name": "camera", "type": VirtualCameraSink.type, "config": {}}]}
     )
     if sys.platform.startswith("linux"):
         assert loaded_with(load_outcome) == 1
@@ -403,7 +413,10 @@ def test_a_setting_a_built_in_does_not_take_is_refused_at_load_naming_the_node_a
 ):
     refusal = refused_naming(
         load_stream_graph_on_tatolabd(
-            {"nodes": [{"name": "pattern", "type": TestPatternSource.type, "config": {"widht": 640}}]}
+            {
+                "stream": "pattern",
+                "nodes": [{"name": "pattern", "type": TestPatternSource.type, "config": {"widht": 640}}],
+            }
         )
     )
 
@@ -437,7 +450,7 @@ def test_a_graph_naming_an_unknown_type_is_refused(
 ):
     refusal = refused_naming(
         load_stream_graph_on_tatolabd(
-            {"nodes": [{"name": "unknown", "type": unknown_type, "config": {}}]}
+            {"stream": "unknown", "nodes": [{"name": "unknown", "type": unknown_type, "config": {}}]}
         )
     )
 
@@ -491,7 +504,10 @@ def test_a_ctrl_c_during_a_loads_describe_ends_tatolabd_at_once(
     only `tatolabd`; the load still has to give it up rather than wait the
     describe's bound out, and a stream never started is a clean exit."""
     tatolabd = start_tatolabd(
-        {"nodes": [{"name": "held", "type": f"{held_node_module.name}:LoadedFrameRelay", "config": {}}]},
+        {
+            "stream": "held",
+            "nodes": [{"name": "held", "type": f"{held_node_module.name}:LoadedFrameRelay", "config": {}}],
+        },
         project_directory=held_node_module.project_directory,
         extra_environment=environment_reaching_no_vulkan_driver(tmp_path),
     )

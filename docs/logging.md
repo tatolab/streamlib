@@ -11,10 +11,13 @@ keep everyone on the same path.
 | Rust        | `tracing::{trace,debug,info,warn,error}!` |
 | Python SDK  | `tatolab.stream.log.{trace,debug,info,warn,error}(message, **attrs)` |
 
-The Python SDK and the Rust host produce the same unified JSONL
-stream on disk (`<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at_millis>.jsonl`,
-rotated by size — see `docs/logging-schema.md` §Files and rotation) and mirror to stdout. The host handler (escalate IPC `{op:"log"}`)
-forwards helper-process records to the subscriber that owns the file.
+The Python SDK and the Rust host produce the same unified JSONL log, one per
+loaded stream, in the stream's project
+(`<project>/.streamlib/logs/<runtime_id>-<stream>-<started_at_millis>.jsonl`,
+rotated by size — see `docs/logging-schema.md` §Routing and §Files and rotation),
+and mirror every record to the pretty log stream. The host handler (escalate IPC
+`{op:"log"}`) forwards a helper process's records into the log of the stream the
+helper belongs to.
 
 `tracing` is the one way in a helper process too: the helper captures the
 engine's records — iceoryx2's own among them, through the log bridge — into a

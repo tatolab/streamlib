@@ -103,8 +103,14 @@ pub struct RuntimeLogEvent {
     /// they share a unit and are different quantities.
     pub host_ts: u64,
 
-    /// The runtime's `RuntimeUniqueId`, verbatim.
+    /// The `RuntimeUniqueId` of the runtime whose stream emitted the record, verbatim; empty
+    /// for a record no stream emitted, which reaches only the pretty mirror.
     pub runtime_id: String,
+
+    /// The URL-safe cast name of the loaded stream that emitted the record. `None` for a
+    /// record no stream emitted.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub stream: Option<String>,
 
     /// Language / origin of the record.
     pub source: Source,
@@ -172,6 +178,7 @@ mod tests {
             schema_version: SCHEMA_VERSION,
             host_ts: 1_700_000_000_000_000_000,
             runtime_id: "Rabc".into(),
+            stream: Some("main".into()),
             source: Source::Rust,
             level: LogLevel::Info,
             message: "hi".into(),
@@ -189,6 +196,7 @@ mod tests {
         let back: RuntimeLogEvent = serde_json::from_str(&line).unwrap();
         assert_eq!(back.schema_version, SCHEMA_VERSION);
         assert_eq!(back.runtime_id, "Rabc");
+        assert_eq!(back.stream.as_deref(), Some("main"));
         assert_eq!(back.source, Source::Rust);
         assert_eq!(back.message, "hi");
     }
@@ -245,10 +253,11 @@ mod tests {
     /// implementation have drifted — fix one or the other.
     #[test]
     fn docs_example_line_parses() {
-        let line = r#"{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;
+        let line = r#"{"schema_version":1,"host_ts":1700000000000000000,"runtime_id":"Rabc123","stream":"main","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;
         let ev: RuntimeLogEvent = serde_json::from_str(line).expect("docs example must parse");
         assert_eq!(ev.schema_version, SCHEMA_VERSION);
         assert_eq!(ev.runtime_id, "Rabc123");
+        assert_eq!(ev.stream.as_deref(), Some("main"));
         assert_eq!(ev.source, Source::Rust);
         assert_eq!(ev.level, LogLevel::Info);
         assert_eq!(ev.pipeline_id.as_deref(), Some("pl-42"));
@@ -258,6 +267,20 @@ mod tests {
         assert_eq!(
             ev.attrs.get("device"),
             Some(&serde_json::Value::String("/dev/video0".into()))
+        );
+    }
+
+    /// `stream` is additive: a record written before it existed still parses, as
+    /// one no stream emitted.
+    #[test]
+    fn a_record_carrying_no_stream_parses_as_one_no_stream_emitted() {
+        let line = r#"{"schema_version":1,"host_ts":1,"runtime_id":"Rabc","source":"rust","level":"info","message":"m","target":"t","intercepted":false}"#;
+        let ev: RuntimeLogEvent =
+            serde_json::from_str(line).expect("a record without a stream parses");
+        assert_eq!(ev.stream, None);
+        assert!(
+            !serde_json::to_string(&ev).unwrap().contains("\"stream\""),
+            "a record no stream emitted carries no stream key"
         );
     }
 }

@@ -8,4 +8,7 @@ mod events;
 mod integration_tests;
 
 pub use bus::{PUBSUB, PubSub};
-pub use events::{Event, EventListener, ProcessorEvent, RuntimeEvent, topics};
+pub use events::{
+    Event, EventListener, KeyboardMouseOrWindowInputEvent, LoadedStreamIdentity, ProcessorEvent,
+    RuntimeEvent, topics,
+};

@@ -23,7 +23,7 @@ use crate::core::graph::{
     ProcessorReadyBarrierComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
     ThreadHandleComponent,
 };
-use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstanceFactory, ProcessorState};
+use crate::core::processors::ProcessorState;
 
 /// Spawn a processor thread.
 ///
@@ -34,10 +34,9 @@ use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstanceFactory, Proc
 /// 4. Wait for CONTINUE via barrier (wiring happens here)
 /// 5. Call setup (no locks held - safe to call runtime ops)
 /// 6. Run processor loop
-#[tracing::instrument(name = "compiler.spawn_processor", skip(graph_arc, factory, runtime_ctx), fields(processor_id = processor_id.as_ref()))]
+#[tracing::instrument(name = "compiler.spawn_processor", skip(graph_arc, runtime_ctx), fields(processor_id = processor_id.as_ref()))]
 pub(crate) fn spawn_processor(
     graph_arc: Arc<RwLock<Graph>>,
-    factory: &ProcessorInstanceFactory,
     runtime_ctx: &Arc<RuntimeContext>,
     processor_id: impl AsRef<str>,
 ) -> Result<()> {
@@ -67,7 +66,7 @@ pub(crate) fn spawn_processor(
             .map(|n| n.processor_type().clone());
         proc_type
             .as_ref()
-            .and_then(|ident| PROCESSOR_REGISTRY.descriptor(ident))
+            .and_then(|ident| graph.node_types_this_stream_resolves().descriptor(ident))
             .map(|d| d.runtime.clone())
             .unwrap_or(ProcessorRuntime::Rust)
     };
@@ -103,7 +102,7 @@ pub(crate) fn spawn_processor(
         let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
             Error::ProcessorNotFound(format!("Processor '{}' not found", proc_id_clone))
         })?;
-        scheduling_strategy_for_processor(node)
+        scheduling_strategy_for_processor(graph.node_types_this_stream_resolves(), node)
     };
 
     // Names the authoring language, not a placement. What the engine spawns
@@ -125,7 +124,6 @@ pub(crate) fn spawn_processor(
         SchedulingStrategy::DedicatedThread { priority } => {
             spawn_dedicated_thread(
                 graph_arc,
-                factory,
                 runtime_ctx,
                 proc_id_clone,
                 priority,
@@ -140,7 +138,6 @@ pub(crate) fn spawn_processor(
 
 fn spawn_dedicated_thread(
     graph_arc: Arc<RwLock<Graph>>,
-    factory: &ProcessorInstanceFactory,
     runtime_ctx: &Arc<RuntimeContext>,
     processor_id: ProcessorUniqueId,
     priority: crate::core::execution::ThreadPriority,
@@ -161,7 +158,9 @@ fn spawn_dedicated_thread(
         })?;
         let processor_type = node.processor_type().clone();
         (
-            ProcessorInstanceWithItsOutOfProcessLinkWiring::from(factory.create(node)?),
+            ProcessorInstanceWithItsOutOfProcessLinkWiring::from(
+                graph.node_types_this_stream_resolves().create(node)?,
+            ),
             processor_type,
         )
     };
@@ -192,6 +191,9 @@ fn spawn_dedicated_thread(
     let thread = std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
         .spawn(move || {
+            let _entered_the_streams_log_route = runtime_ctx_clone
+                .this_streams_log_route()
+                .enter_on_this_thread();
             let current_thread = std::thread::current();
             let thread_id = current_thread.id();
             crate::core::runtime::mark_this_thread_as_a_processor_execution_thread();

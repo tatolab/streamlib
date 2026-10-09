@@ -12,6 +12,11 @@
 //! ([`crate::mcp_prompts`]). `rmcp` owns the protocol; this module owns only
 //! what the node says through it.
 //!
+//! The runtime may load several streams. Every tool that reads or changes one
+//! stream's graph takes an optional `stream`; absent names the only loaded
+//! stream, and a call that cannot be resolved is refused naming the loaded
+//! streams. `exchange` and `shutdown` name no stream.
+//!
 //! A mutation tool answers when the engine accepted the change into its graph;
 //! the wiring itself commits on the engine's own compile task, whose failure
 //! `graph` and `logs` show rather than this call.
@@ -52,8 +57,11 @@ use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::{ExchangedPublishedSurfaceFramePngImage, RuntimeOperations};
+use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB};
+use streamlib::sdk::runtime::{
+    ExchangedPublishedSurfaceFramePngImage, OperationsOnTheStreamsLoadedInThisRuntime,
+    RuntimeOperations,
+};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     TapToolResult, TapToolResultBag, surface_image_exchange_route_path_for_surface_id,
 };
@@ -69,7 +77,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib runtime control plane for one running node. Observe it with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports on this node. The resource `streamlib://node-catalog` lists every type `add_node` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.";
+const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib runtime control plane for one running node, which may load several streams. Every tool that reads or changes a stream's graph — `graph`, `tap`, `logs`, `add_node`, `remove_node`, `connect` and `disconnect` — takes an optional `stream` naming one: omit it while the node loads one stream, and a call that omits it while several are loaded is refused naming them. `exchange` and `shutdown` name no stream: a surface id is unique on the machine, and `shutdown` asks every loaded stream to shut down. Observe a stream with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names. The resource `streamlib://node-catalog` lists every type `add_node` can take with its config schema and ports, and `streamlib://graph` is the live graph; both render the sole loaded stream, and say which streams are loaded when there are several. The prompts are step-by-step recipes over these tools: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.";
 
 /// Bounded sample sizes for the streaming-tool → request/response bridge when
 /// the caller does not pin its own `count`.
@@ -127,11 +135,14 @@ const LOGS_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 /// [`LOGS_SAMPLE_WINDOW`].
 const TAP_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 
+/// What every tool's `stream` argument says.
+const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream this call is about, by the name `graph` reports as `stream`. Omit it while the node loads one stream; omitting it while several are loaded is refused naming them.";
+
 /// The node's MCP server handler: its tools, resources and prompts over the
-/// node's [`RuntimeOperations`].
+/// streams the node's runtime loads.
 #[derive(Clone)]
 pub(crate) struct LocalApiMcpServerHandler {
-    pub(crate) runtime: Arc<dyn RuntimeOperations>,
+    pub(crate) operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     local_api_stopping_token: CancellationToken,
     tool_router: Arc<ToolRouter<Self>>,
     prompt_router: Arc<PromptRouter<Self>>,
@@ -142,15 +153,27 @@ impl LocalApiMcpServerHandler {
     /// final result, so the server's graceful shutdown never waits on a host
     /// that holds one open.
     pub(crate) fn new(
-        runtime: Arc<dyn RuntimeOperations>,
+        operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
         local_api_stopping_token: CancellationToken,
     ) -> Self {
         Self {
-            runtime,
+            operations_on_the_loaded_streams,
             local_api_stopping_token,
             tool_router: Arc::new(Self::tool_router()),
             prompt_router: Arc::new(Self::prompt_router()),
         }
+    }
+
+    /// The operations on the stream a `tool` call names, or the refusal —
+    /// naming the loaded streams — its caller reads.
+    fn the_stream_a_tool_call_names(
+        &self,
+        tool: &str,
+        stream: Option<&str>,
+    ) -> Result<Arc<dyn RuntimeOperations>, String> {
+        self.operations_on_the_loaded_streams
+            .runtime_operations_of_the_stream_a_call_names(stream)
+            .map_err(|refusal| format!("{tool} failed: {refusal}"))
     }
 }
 
@@ -180,7 +203,17 @@ pub(crate) fn local_api_mcp_streamable_http_service(
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
+struct GraphToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+#[serde(deny_unknown_fields)]
 struct TapToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Option<String>,
     #[schemars(
         description = "The output port's address, `<runtime_name>/<node>/<port>`, under this node's own runtime name (the top-level `runtime_name` in `graph`). A port is tappable once a link carries from it."
     )]
@@ -201,6 +234,8 @@ struct TapToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct LogsToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Option<String>,
     #[schemars(
         range(min = 1),
         description = "Max events to collect before returning. Defaults to a small sample."
@@ -237,6 +272,8 @@ struct ShutdownToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct AddNodeToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Option<String>,
     #[serde(rename = "type")]
     #[schemars(
         description = "The node's class import path, e.g. `nodes.grayscale_effect:GrayscaleEffect`."
@@ -256,6 +293,8 @@ struct AddNodeToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct RemoveNodeToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Option<String>,
     #[schemars(description = "A node's name, as `graph` or `add_node` reported it.")]
     name: String,
 }
@@ -264,6 +303,8 @@ struct RemoveNodeToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct ConnectToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Option<String>,
     #[schemars(description = "The source node's name.")]
     from_node: String,
     #[schemars(description = "The source's output port name.")]
@@ -278,6 +319,8 @@ struct ConnectToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct DisconnectToolArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: Option<String>,
     #[schemars(description = "A link id `graph` or `connect` reported.")]
     link_id: String,
 }
@@ -292,11 +335,14 @@ type ToolCallAnswer = Result<CallToolResult, String>;
 #[tool_router]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "Export the current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, and this runtime's name (`runtime_name`), the first part of every tap channel."
+        description = "Export one loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, and this runtime's name (`runtime_name`), the first part of every tap channel."
     )]
-    async fn graph(&self) -> ToolCallAnswer {
+    async fn graph(
+        &self,
+        Parameters(GraphToolArguments { stream }): Parameters<GraphToolArguments>,
+    ) -> ToolCallAnswer {
         let graph = self
-            .runtime
+            .the_stream_a_tool_call_names("graph", stream.as_deref())?
             .to_json_async()
             .await
             .map_err(|e| format!("graph export failed: {e}"))?;
@@ -309,6 +355,7 @@ impl LocalApiMcpServerHandler {
     async fn tap(
         &self,
         Parameters(TapToolArguments {
+            stream,
             channel,
             count,
             max_bag_bytes,
@@ -318,7 +365,7 @@ impl LocalApiMcpServerHandler {
         let max_bag_bytes = bounded_tap_bag_bytes(max_bag_bytes);
 
         let mut subscription = self
-            .runtime
+            .the_stream_a_tool_call_names("tap", stream.as_deref())?
             .tap_async(channel.clone(), Some(sample))
             .await
             .map_err(|e| format!("tap attach failed: {e}"))?;
@@ -370,20 +417,24 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Collect a bounded sample of the runtime event stream (all topics) within a short monotonic window."
+        description = "Collect a bounded sample of the events one loaded stream publishes on its own topic — its graph changes, its lifecycle and its shutdown — within a short monotonic window."
     )]
     async fn logs(
         &self,
-        Parameters(LogsToolArguments { count }): Parameters<LogsToolArguments>,
+        Parameters(LogsToolArguments { stream, count }): Parameters<LogsToolArguments>,
     ) -> ToolCallAnswer {
         let sample = bounded_sample_count(count, DEFAULT_LOGS_SAMPLE_COUNT);
+        let stream_event_topic = self
+            .operations_on_the_loaded_streams
+            .event_topic_of_the_stream_a_call_names(stream.as_deref())
+            .map_err(|refusal| format!("logs failed: {refusal}"))?;
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
         let listener: Arc<Mutex<dyn EventListener>> =
             Arc::new(Mutex::new(McpEventForwarder { tx }));
         // Without a subscriber the sample would be an honest-looking zero.
         PUBSUB
-            .subscribe(topics::ALL, Arc::clone(&listener))
+            .subscribe(&stream_event_topic, Arc::clone(&listener))
             .map_err(|subscribe_error| format!("logs subscription: {subscribe_error}"))?;
 
         let mut events: Vec<Value> = Vec::with_capacity(sample);
@@ -423,7 +474,7 @@ impl LocalApiMcpServerHandler {
             .clamp(1, EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP);
 
         let exchanged = self
-            .runtime
+            .operations_on_the_loaded_streams
             .exchange_published_surface_id_for_png_image_bytes_async(
                 surface_id.clone(),
                 Some(long_edge_pixel_cap),
@@ -438,15 +489,15 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Ask the runtime to shut down. This is a request observed by whoever owns the run loop, which then runs a normal teardown — not an immediate kill. Idempotent: requesting twice is not an error. Returns as soon as the request is accepted; teardown is not awaited."
+        description = "Ask every stream the runtime loads to shut down, as a first interrupt does: each runs a normal teardown — not an immediate kill. Idempotent: requesting twice is not an error. Returns as soon as the request is accepted; teardown is not awaited."
     )]
     fn shutdown(
         &self,
         Parameters(ShutdownToolArguments { reason }): Parameters<ShutdownToolArguments>,
     ) -> ToolCallAnswer {
         let reason = reason.unwrap_or_default();
-        self.runtime
-            .request_runtime_shutdown(&reason)
+        self.operations_on_the_loaded_streams
+            .request_the_shutdown_of_every_loaded_stream(&reason)
             .map_err(|e| format!("shutdown request failed: {e}"))?;
         Ok(json_text_tool_result(&json!({
             "status": crate::state::RUNTIME_SHUTDOWN_REQUESTED_STATUS,
@@ -461,6 +512,8 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(arguments): Parameters<AddNodeToolArguments>,
     ) -> ToolCallAnswer {
+        let stream_operations =
+            self.the_stream_a_tool_call_names("add_node", arguments.stream.as_deref())?;
         let processor_class_import_path =
             ProcessorClassImportPath::new(&arguments.processor_class_import_path)
                 .map_err(|e| format!("add_node `type`: {e}"))?;
@@ -469,8 +522,7 @@ impl LocalApiMcpServerHandler {
         let mut spec = ProcessorSpec::new(processor_class_import_path, config);
         spec.display_name = arguments.name;
 
-        let added = self
-            .runtime
+        let added = stream_operations
             .add_processor_async(spec)
             .await
             .map_err(|e| format!("add_node failed: {e}"))?;
@@ -482,13 +534,14 @@ impl LocalApiMcpServerHandler {
     )]
     async fn remove_node(
         &self,
-        Parameters(RemoveNodeToolArguments { name }): Parameters<RemoveNodeToolArguments>,
+        Parameters(RemoveNodeToolArguments { stream, name }): Parameters<RemoveNodeToolArguments>,
     ) -> ToolCallAnswer {
-        let node = self
-            .runtime
+        let stream_operations =
+            self.the_stream_a_tool_call_names("remove_node", stream.as_deref())?;
+        let node = stream_operations
             .the_node_named(&name)
             .map_err(|e| format!("remove_node failed: {e}"))?;
-        self.runtime
+        stream_operations
             .remove_processor_async(node.processor_id)
             .await
             .map_err(|e| format!("remove_node failed: {e}"))?;
@@ -496,29 +549,29 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Link an output port to an input port on this node, and answer the new link's `link_id`. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs`."
+        description = "Link an output port to an input port in one loaded stream, and answer the new link's `link_id`. Each end is a node's name and a port name — the names `graph` lists for each node and under its `outputs` and `inputs`."
     )]
     async fn connect(
         &self,
         Parameters(arguments): Parameters<ConnectToolArguments>,
     ) -> ToolCallAnswer {
-        let from = self
-            .runtime
+        let stream_operations =
+            self.the_stream_a_tool_call_names("connect", arguments.stream.as_deref())?;
+        let from = stream_operations
             .the_node_named(&arguments.from_node)
             .map(|node| OutputLinkPortRef::new(node.processor_id, arguments.from_port))
             .map_err(|e| format!("connect failed: {e}"))?;
-        let to = self
-            .runtime
+        let to = stream_operations
             .the_node_named(&arguments.to_node)
             .map(|node| InputLinkPortRef::new(node.processor_id, arguments.to_port))
             .map_err(|e| format!("connect failed: {e}"))?;
 
-        let link_id = self
-            .runtime
+        let link_id = stream_operations
             .connect_async(from, to)
             .await
             .map_err(|e| format!("connect failed: {e}"))?;
-        let how_the_graph_reads_it = how_the_graph_reads_one_link(&self.runtime, &link_id).await;
+        let how_the_graph_reads_it =
+            how_the_graph_reads_one_link(&stream_operations, &link_id).await;
         Ok(json_text_tool_result(&json!({
             "link_id": link_id.as_str(),
             "state": how_the_graph_reads_it.state,
@@ -526,13 +579,15 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Remove a link from a running graph by the id `graph` or `connect` reported."
+        description = "Remove a link from one loaded stream's running graph by the id `graph` or `connect` reported."
     )]
     async fn disconnect(
         &self,
-        Parameters(DisconnectToolArguments { link_id }): Parameters<DisconnectToolArguments>,
+        Parameters(DisconnectToolArguments { stream, link_id }): Parameters<
+            DisconnectToolArguments,
+        >,
     ) -> ToolCallAnswer {
-        self.runtime
+        self.the_stream_a_tool_call_names("disconnect", stream.as_deref())?
             .disconnect_async(LinkUniqueId::from(link_id.as_str()))
             .await
             .map_err(|e| format!("disconnect failed: {e}"))?;
@@ -591,7 +646,7 @@ impl ServerHandler for LocalApiMcpServerHandler {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
-        crate::mcp_resources::read_resource(&self.runtime, &request.uri)
+        crate::mcp_resources::read_resource(&self.operations_on_the_loaded_streams, &request.uri)
             .await
             .map(Into::into)
     }
@@ -614,16 +669,16 @@ struct HowTheGraphReadsOneLink {
 /// A render that fails leaves the state unknown rather than failing a connect
 /// that already took.
 async fn how_the_graph_reads_one_link(
-    runtime: &Arc<dyn RuntimeOperations>,
+    stream_operations: &Arc<dyn RuntimeOperations>,
     link_id: &LinkUniqueId,
 ) -> HowTheGraphReadsOneLink {
-    let graph = match runtime.to_json_async().await {
+    let graph = match stream_operations.to_json_async().await {
         Ok(graph) => graph,
         Err(unreadable) => {
             // Swallowing this would leave the caller a null state with nothing
             // to act on, and the operator nothing to re-derive it from.
             tracing::warn!(
-                "a link was connected and this node's own graph could not be read to say what \
+                "a link was connected and its stream's graph could not be read to say what \
                  state it is in: {unreadable}"
             );
             return HowTheGraphReadsOneLink::default();
@@ -740,8 +795,8 @@ fn hex_encode(bytes: &[u8]) -> String {
     String::from_utf8(hex).expect("a hex-digit table only ever yields ASCII")
 }
 
-/// Forwards runtime events into the `logs` tool's bounded collection channel,
-/// mirroring the REST WebSocket event forwarder.
+/// Forwards one stream's events into the `logs` tool's bounded collection
+/// channel, mirroring the REST WebSocket event forwarder.
 struct McpEventForwarder {
     tx: tokio::sync::mpsc::UnboundedSender<Event>,
 }
@@ -758,8 +813,9 @@ pub(crate) mod tests {
     //! MCP wire tests: an `rmcp` client drives the real `/mcp` endpoint that
     //! [`crate::handlers::build_router`] wires in, served on a real local API
     //! socket, through discovery, the tool catalog, and each tool through to
-    //! the runtime. The router is the real one; only the `RuntimeOperations`
-    //! backend is a stub, so the MCP → runtime seam is what's under test.
+    //! the runtime. The router is the real one; only the backend is a stub — a
+    //! runtime loading one stream, the stub's own `RuntimeOperations` — so the
+    //! MCP → runtime seam is what's under test.
     //!
     //! The catalog assertions are two-sided on purpose — what is advertised,
     //! and what must never be again.
@@ -782,7 +838,9 @@ pub(crate) mod tests {
     use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
     use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
     use streamlib::sdk::error::{Error, Result};
-    use streamlib::sdk::runtime::{BoxFuture, RuntimeOperations, TapSubscription};
+    use streamlib::sdk::runtime::{
+        BoxFuture, OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, TapSubscription,
+    };
     use streamlib_runtime_client_contract::local_api_wire_contract::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE;
 
     use super::*;
@@ -807,6 +865,7 @@ pub(crate) mod tests {
     /// Every graph-mutating op records what it was handed and answers a fixed
     /// id, so a mutation tool's test asserts the op it reached and the
     /// arguments it carried.
+    #[derive(Clone)]
     pub(crate) struct ControlPlaneMcpDispatchStubRuntime {
         exported_graph: Arc<Mutex<Value>>,
         tap_plan: Option<StubTapPlan>,
@@ -898,17 +957,14 @@ pub(crate) mod tests {
             })
         }
         crate::control_plane_stub_support::graph_mutation_ops_record_the_call!();
-        crate::control_plane_stub_support::surface_exchange_op_answers_the_stub!();
-        fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
-            self.recorded_shutdown_reasons
-                .lock()
-                .push(reason.to_string());
-            Ok(())
-        }
         fn to_json(&self) -> Result<Value> {
             Ok(json!({}))
         }
     }
+
+    crate::control_plane_stub_support::a_stub_runtime_loading_this_stub_as_its_only_stream!(
+        ControlPlaneMcpDispatchStubRuntime
+    );
 
     /// The control vocabulary. This is the whole of it —
     /// `tools/list` is asserted equal to this, not merely a superset.
@@ -965,7 +1021,7 @@ pub(crate) mod tests {
     /// An `rmcp` client at the latest revision, connected to the real router
     /// over `runtime`.
     async fn connected_mcp_client(
-        runtime: Arc<dyn RuntimeOperations>,
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     ) -> (LocalApiServedOnAFreshSocket, RunningService<RoleClient, ()>) {
         let served = LocalApiServedOnAFreshSocket::over(runtime);
         let client = ()
@@ -983,7 +1039,7 @@ pub(crate) mod tests {
     /// One `tools/call`: the result as it crossed the wire, or the protocol
     /// error that refused it.
     async fn tool_call_outcome(
-        runtime: Arc<dyn RuntimeOperations>,
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
         tool_name: &str,
         arguments: Value,
     ) -> std::result::Result<Value, McpError> {
@@ -1005,7 +1061,7 @@ pub(crate) mod tests {
     }
 
     /// The JSON a successful tool result states in its first text block.
-    fn first_text_block_json(tool_result: &Value) -> Value {
+    pub(crate) fn first_text_block_json(tool_result: &Value) -> Value {
         assert_eq!(tool_result["isError"], false, "{tool_result}");
         serde_json::from_str(
             tool_result["content"][0]["text"]
@@ -1015,8 +1071,8 @@ pub(crate) mod tests {
         .expect("the text block is JSON")
     }
 
-    async fn tool_call_result(
-        runtime: Arc<dyn RuntimeOperations>,
+    pub(crate) async fn tool_call_result(
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
         tool_name: &str,
         arguments: Value,
     ) -> Value {
@@ -1026,7 +1082,7 @@ pub(crate) mod tests {
     }
 
     async fn tool_call_refusal(
-        runtime: Arc<dyn RuntimeOperations>,
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
         tool_name: &str,
         arguments: Value,
     ) -> McpError {
@@ -1036,7 +1092,9 @@ pub(crate) mod tests {
         }
     }
 
-    async fn listed_tools(runtime: Arc<dyn RuntimeOperations>) -> Vec<Value> {
+    async fn listed_tools(
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    ) -> Vec<Value> {
         let (_served, client) = connected_mcp_client(runtime).await;
         client
             .list_all_tools()
@@ -1386,10 +1444,19 @@ pub(crate) mod tests {
         streamlib::sdk::processors::PROCESSOR_REGISTRY
             .register::<AddNodeTestSourceTakingOneSetting::Processor>();
         let source_type = AddNodeTestSourceTakingOneSetting::processor_class_import_path();
+        let project_directory = tempfile::tempdir().expect("a project directory");
         let runtime = streamlib::sdk::runtime::Runner::new().unwrap();
+        let stream = runtime
+            .load_an_empty_stream(
+                streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
+                    project_directory.path(),
+                )
+                .named("main"),
+            )
+            .unwrap();
 
         let body = tool_call_result(
-            Arc::clone(&runtime) as Arc<dyn RuntimeOperations>,
+            Arc::clone(&runtime) as Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
             "add_node",
             json!({
                 "type": source_type.as_str(),
@@ -1404,7 +1471,7 @@ pub(crate) mod tests {
         assert!(text.contains("node `front`"), "{text}");
         assert!(text.contains(source_type.as_str()), "{text}");
         assert!(text.contains("`frame_widht`"), "{text}");
-        let graph = runtime.to_json().unwrap();
+        let graph = stream.to_json().unwrap();
         assert_eq!(
             graph["nodes"],
             json!([]),
@@ -2074,13 +2141,18 @@ pub(crate) mod tests {
     }
 
     /// Mental-revert: a bus that drops publishes until a runtime initializes
-    /// it returns this sample empty.
+    /// it, or a `logs` that subscribes anywhere but the stream's own topic,
+    /// returns this sample empty.
     #[tokio::test]
     async fn tools_call_logs_samples_events_published_on_the_process_wide_bus() {
-        let topic = "tools-call-logs-sampled-topic";
+        let topic = crate::control_plane_stub_support::STUB_STREAM_EVENT_TOPIC.to_string();
+        let publisher_topic = topic.clone();
         let publisher = tokio::spawn(async move {
             loop {
-                PUBSUB.publish(topic, &Event::custom(topic, json!({ "sampled": true })));
+                PUBSUB.publish(
+                    &publisher_topic,
+                    &Event::custom(publisher_topic.clone(), json!({ "sampled": true })),
+                );
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         });
@@ -2120,7 +2192,7 @@ pub(crate) mod tests {
         assert_eq!(
             *recorded_shutdowns.lock(),
             vec!["agent asked".to_string()],
-            "the tool must reach `request_runtime_shutdown` with the caller's reason"
+            "the tool must reach the shutdown of every loaded stream with the caller's reason"
         );
     }
 
@@ -2410,13 +2482,51 @@ pub(crate) mod tests {
             .map(String::as_str)
             .collect();
         argument_names.sort_unstable();
-        assert_eq!(argument_names, ["channel", "count", "max_bag_bytes"]);
+        assert_eq!(
+            argument_names,
+            ["channel", "count", "max_bag_bytes", "stream"]
+        );
         assert_eq!(
             tap["inputSchema"]["required"],
             json!(["channel"]),
             "every argument beyond the channel stays optional, so the ordinary \
              call is still `tap <channel>`"
         );
+    }
+
+    /// Every tool that acts on one stream advertises the optional `stream`
+    /// argument an agent names it with.
+    #[tokio::test]
+    async fn every_tool_acting_on_one_stream_advertises_an_optional_stream_argument() {
+        let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
+        for tool_name in [
+            "graph",
+            "tap",
+            "logs",
+            "add_node",
+            "remove_node",
+            "connect",
+            "disconnect",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == tool_name)
+                .unwrap_or_else(|| panic!("the `{tool_name}` tool is listed"));
+            assert!(
+                tool["inputSchema"]["properties"]["stream"].is_object(),
+                "`{tool_name}` must advertise `stream`: {}",
+                tool["inputSchema"]
+            );
+            let required = tool["inputSchema"]["required"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                !required.contains(&json!("stream")),
+                "`{tool_name}` must keep `stream` optional: {}",
+                tool["inputSchema"]
+            );
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -2432,7 +2542,7 @@ pub(crate) mod tests {
     /// graph export takes, so the prompts parse what a real node answers.
     fn two_linked_nodes_graph() -> Value {
         json!({
-            "stream": "desk-preview",
+            "stream": crate::control_plane_stub_support::STUB_STREAM_NAME,
             "nodes": [
                 {
                     "id": "PatternSourceId",
@@ -2576,23 +2686,29 @@ pub(crate) mod tests {
         });
     }
 
-    async fn listed_resources_result(runtime: Arc<dyn RuntimeOperations>) -> Value {
+    async fn listed_resources_result(
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    ) -> Value {
         let (_served, client) = connected_mcp_client(runtime).await;
         wire_outcome(client.list_resources(None).await).unwrap()
     }
 
-    async fn listed_resource_templates_result(runtime: Arc<dyn RuntimeOperations>) -> Value {
+    async fn listed_resource_templates_result(
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    ) -> Value {
         let (_served, client) = connected_mcp_client(runtime).await;
         wire_outcome(client.list_resource_templates(None).await).unwrap()
     }
 
-    async fn listed_prompts_result(runtime: Arc<dyn RuntimeOperations>) -> Value {
+    async fn listed_prompts_result(
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    ) -> Value {
         let (_served, client) = connected_mcp_client(runtime).await;
         wire_outcome(client.list_prompts(None).await).unwrap()
     }
 
     async fn resource_read_outcome(
-        runtime: Arc<dyn RuntimeOperations>,
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
         uri: &str,
     ) -> std::result::Result<Value, McpError> {
         let (_served, client) = connected_mcp_client(runtime).await;
@@ -2604,7 +2720,7 @@ pub(crate) mod tests {
     }
 
     async fn prompt_outcome(
-        runtime: Arc<dyn RuntimeOperations>,
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
         prompt_name: &str,
         arguments: Value,
     ) -> std::result::Result<Value, McpError> {
@@ -2614,7 +2730,10 @@ pub(crate) mod tests {
         wire_outcome(client.get_prompt(request).await)
     }
 
-    async fn resource_document(runtime: Arc<dyn RuntimeOperations>, uri: &str) -> Value {
+    pub(crate) async fn resource_document(
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+        uri: &str,
+    ) -> Value {
         let result = resource_read_outcome(runtime, uri)
             .await
             .unwrap_or_else(|refusal| panic!("reading `{uri}` was refused: {refusal:?}"));
@@ -2626,8 +2745,8 @@ pub(crate) mod tests {
             .expect("the document is JSON")
     }
 
-    async fn prompt_text(
-        runtime: Arc<dyn RuntimeOperations>,
+    pub(crate) async fn prompt_text(
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
         prompt_name: &str,
         arguments: Value,
     ) -> String {

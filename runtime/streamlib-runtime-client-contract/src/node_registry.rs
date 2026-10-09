@@ -1,15 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! On-disk discovery registry for ApiServer-hosting runtimes.
+//! On-disk discovery registry for runtimes serving a local API.
 //!
-//! A runtime that hosts the api-server's `ApiServerProcessor` writes one JSON entry
-//! per runtime into `<runtime directory>/nodes/<runtime_id>.json` once its
-//! local API socket binds, and removes it on clean teardown. The runtime directory
+//! A host serving a runtime's local API writes one JSON entry per runtime into
+//! `<runtime directory>/nodes/<runtime_id>.json` once its local API socket is
+//! served, and removes it when it stops serving. The runtime directory
 //! is the one the engine resolved and checked as the runtime started
 //! ([`crate::streamlib_runtime_directory::StreamlibRuntimeDirectory::node_registry_directory`]).
 //! A CLI discovers live control planes by scanning that directory. Entry existence
-//! is tied to the control endpoint existing: a runtime without an ApiServer never appears.
+//! is tied to the control endpoint existing: a runtime without a local API never appears.
 //!
 //! The file body is the wire contract between the writing runtime and any
 //! reader — the native `tatolab nodes` reads it through this module;
@@ -32,7 +32,7 @@ const ENTRY_FILE_NAME_SUFFIX: &str = ".json";
 /// entry whose `schema_version` it does not recognize.
 pub const NODE_REGISTRY_SCHEMA_VERSION: u32 = 3;
 
-/// One discovery entry: a running ApiServer-hosting runtime's control endpoint.
+/// One discovery entry: a running runtime's local API endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeRegistryEntry {
     /// Wire-format version of this entry ([`NODE_REGISTRY_SCHEMA_VERSION`]).

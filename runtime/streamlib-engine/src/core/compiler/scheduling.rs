@@ -10,7 +10,7 @@
 
 use crate::core::execution::ThreadPriority;
 use crate::core::graph::ProcessorNode;
-use crate::core::processors::PROCESSOR_REGISTRY;
+use crate::core::processors::NodeTypesOneStreamResolves;
 
 /// How a processor should be scheduled at runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,8 +34,11 @@ impl SchedulingStrategy {
 /// `priority` off its registered [`ProcessorDescriptor`] (defaults to
 /// [`ThreadPriority::Normal`] when the processor isn't registered or has
 /// no `scheduling:` block declared).
-pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> SchedulingStrategy {
-    let priority = PROCESSOR_REGISTRY
+pub(crate) fn scheduling_strategy_for_processor(
+    node_types: &NodeTypesOneStreamResolves,
+    node: &ProcessorNode,
+) -> SchedulingStrategy {
+    let priority = node_types
         .descriptor(&node.processor_type)
         .map(|d| d.scheduling.priority)
         .unwrap_or(ThreadPriority::Normal);
@@ -49,6 +52,8 @@ mod tests {
     use crate::core::descriptors::{
         ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorScheduling,
     };
+    use crate::core::error::Error;
+    use crate::core::processors::PROCESSOR_REGISTRY;
 
     /// Build a class import path that is **deliberately neutral** — no segment
     /// of it, module included, is one of the substrings the pre-#722 heuristic
@@ -78,7 +83,34 @@ mod tests {
             .expect("fixture descriptor registers cleanly");
 
         let node = ProcessorNode::new(path, "fixture-node", None, vec![], vec![]);
-        match scheduling_strategy_for_processor(&node) {
+        match scheduling_strategy_for_processor(&NodeTypesOneStreamResolves::new(), &node) {
+            SchedulingStrategy::DedicatedThread { priority } => {
+                assert_eq!(priority, ThreadPriority::RealTime);
+            }
+        }
+    }
+
+    #[test]
+    fn strategy_reads_priority_from_a_type_described_in_the_stream() {
+        let path = class_import_path("Gizmotron");
+        let descriptor = ProcessorDescriptor::new(
+            ProcessorClassShortName::new("Gizmotron").unwrap(),
+            path.clone(),
+            "fixture",
+        )
+        .with_scheduling(ProcessorScheduling {
+            priority: ThreadPriority::RealTime,
+        });
+        let node_types = NodeTypesOneStreamResolves::new();
+        node_types
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                descriptor,
+                Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+            )
+            .expect("fixture descriptor registers cleanly");
+
+        let node = ProcessorNode::new(path, "fixture-node", None, vec![], vec![]);
+        match scheduling_strategy_for_processor(&node_types, &node) {
             SchedulingStrategy::DedicatedThread { priority } => {
                 assert_eq!(priority, ThreadPriority::RealTime);
             }
@@ -94,7 +126,7 @@ mod tests {
             vec![],
             vec![],
         );
-        match scheduling_strategy_for_processor(&node) {
+        match scheduling_strategy_for_processor(&NodeTypesOneStreamResolves::new(), &node) {
             SchedulingStrategy::DedicatedThread { priority } => {
                 assert_eq!(priority, ThreadPriority::Normal);
             }

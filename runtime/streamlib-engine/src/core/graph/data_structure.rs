@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::sync::Arc;
 use std::time::Instant;
 
-use crate::core::error::Result;
+use crate::core::processors::NodeTypesOneStreamResolves;
 
 use super::edges::Link;
 use super::nodes::ProcessorNode;
@@ -37,6 +38,9 @@ pub struct Graph {
     /// The name of the stream this graph was loaded as, until then `None`.
     loaded_stream_name: Option<String>,
 
+    /// The node types this graph's stream resolves.
+    node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
+
     /// When the graph was last compiled.
     compiled_at: Option<Instant>,
 
@@ -51,14 +55,27 @@ impl Default for Graph {
 }
 
 impl Graph {
-    /// Create a new empty Graph.
+    /// Create a new empty Graph that resolves the natively compiled node types alone.
     pub fn new() -> Self {
+        Self::new_resolving_node_types_through(Arc::new(NodeTypesOneStreamResolves::new()))
+    }
+
+    /// Create a new empty Graph that resolves node types through its stream's lookup.
+    pub fn new_resolving_node_types_through(
+        node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
+    ) -> Self {
         Self {
             digraph: DiGraph::new(),
             loaded_stream_name: None,
+            node_types_this_stream_resolves,
             compiled_at: None,
             state: GraphState::Idle,
         }
+    }
+
+    /// The node types this graph's stream resolves.
+    pub fn node_types_this_stream_resolves(&self) -> &Arc<NodeTypesOneStreamResolves> {
+        &self.node_types_this_stream_resolves
     }
 
     // =========================================================================
@@ -72,7 +89,7 @@ impl Graph {
 
     /// Start a mutable traversal on the graph.
     pub fn traversal_mut(&mut self) -> TraversalSourceMut<'_> {
-        TraversalSourceMut::new(&mut self.digraph)
+        TraversalSourceMut::new(&mut self.digraph, &self.node_types_this_stream_resolves)
     }
 
     // =========================================================================
@@ -87,14 +104,6 @@ impl Graph {
     /// Set the graph state.
     pub fn set_state(&mut self, state: GraphState) {
         self.state = state;
-    }
-
-    /// `requested_name` cast, refused by name when a node already has it.
-    pub(crate) fn the_requested_node_name_unless_taken(
-        &self,
-        requested_name: &str,
-    ) -> Result<String> {
-        super::traversal::the_requested_node_name_unless_taken(&self.digraph, requested_name)
     }
 
     /// The name of the stream this graph was loaded as, if it was loaded as one.

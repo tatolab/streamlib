@@ -365,7 +365,10 @@ fn a_local_api_socket_a_live_process_holds_is_refused_naming_it_before_the_engin
         )),
         "{refusal}"
     );
-    assert!(!refusal.contains("Starting runtime"), "{refusal}");
+    assert!(
+        !refusal.contains("[start] Starting the stream"),
+        "{refusal}"
+    );
     assert!(held_local_api_socket_path.exists());
     std::fs::remove_file(&held_local_api_socket_path).unwrap();
 }
@@ -478,7 +481,7 @@ fn an_interrupt_while_the_graph_loads_ends_the_describe_and_exits_zero() {
     assert_eq!(exit_status.code(), Some(0), "{standard_error}");
     assert!(spawned.standard_output().is_empty());
     assert!(
-        standard_error.contains("so the stream was never started"),
+        standard_error.contains("a machine shutdown was requested while the stream"),
         "{standard_error}"
     );
     // SAFETY: `kill` reads only its two integer arguments.

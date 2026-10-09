@@ -26,7 +26,8 @@
 //!    `attrs` rather than their proper columns.
 //!
 //! Both producers (tracing layer + this sink) converge on the same
-//! [`LogRecord`] queue; the worker handles drain, serialization, and
+//! [`LogRecord`] queue, each record stamped with the stream route of the
+//! thread that produced it; the worker handles drain, serialization, and
 //! fan-out identically. Only the producer boundary differs.
 //!
 //! Design decision recorded in issue #442, PR that landed the
@@ -35,78 +36,23 @@
 //! [`RuntimeLogEvent`]: streamlib_runtime_client_contract::runtime_log_event::RuntimeLogEvent
 //! [`JsonlSinkLayer`]: crate::core::logging::layer::JsonlSinkLayer
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
-
-use crossbeam_channel::Sender;
-use crossbeam_queue::ArrayQueue;
-
+use crate::core::logging::layer::JsonlSinkLayer;
 use crate::core::logging::record::LogRecord;
-use crate::core::logging::worker::{WorkerHandle, WorkerSignal};
 
-/// Handle onto the drain worker's queue. Clone-friendly; pushing is
-/// lock-free up to the bounded-queue capacity (drop-oldest beyond that).
-pub(crate) struct PolyglotLogSink {
-    queue: Arc<ArrayQueue<LogRecord>>,
-    doorbell: Sender<WorkerSignal>,
-    dropped: Arc<AtomicU64>,
-}
-
-impl PolyglotLogSink {
-    pub(crate) fn from_worker(handle: &WorkerHandle) -> Self {
-        Self {
-            queue: Arc::clone(&handle.queue),
-            doorbell: handle.doorbell.clone(),
-            dropped: Arc::clone(&handle.dropped),
-        }
-    }
-
-    /// Enqueue a polyglot-origin record. Drop-oldest when the queue is
-    /// full; the lost record is counted into the shared dropped counter
-    /// so the worker can surface a synthetic `dropped=N` record.
-    pub(crate) fn push(&self, record: LogRecord) {
-        if self.queue.force_push(record).is_some() {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
-        }
-        let _ = self.doorbell.try_send(WorkerSignal::Record);
-    }
-}
-
-/// Process-wide sink. Installed by [`crate::core::logging::init`] when it
-/// spawns the drain worker, cleared when the guard drops. Tests that use
-/// `init_for_tests` reinstall a fresh sink per test (guarded by
-/// `#[serial]`).
-static GLOBAL: RwLock<Option<Arc<PolyglotLogSink>>> = RwLock::new(None);
-
-pub(crate) fn install(sink: Arc<PolyglotLogSink>) {
-    *GLOBAL.write().expect("polyglot sink lock poisoned") = Some(sink);
-}
-
-pub(crate) fn uninstall() {
-    *GLOBAL.write().expect("polyglot sink lock poisoned") = None;
-}
-
-/// Ask the drain worker to flush what it holds, without waiting for it.
+/// Enqueue a polyglot-origin record into the unified pathway, stamped with
+/// the stream route of the calling thread — the bridge thread of the helper
+/// that sent it.
 ///
-/// For a path that is about to `_exit`, where no guard will ever drop.
-///
-/// Never blocks and never panics: its callers are the paths that must not.
-pub(crate) fn request_a_best_effort_flush() {
-    let Ok(installed_sink) = GLOBAL.try_read() else {
-        return;
-    };
-    if let Some(sink) = installed_sink.as_ref() {
-        let _ = sink.doorbell.try_send(WorkerSignal::Flush);
-    }
-}
-
-/// Enqueue a polyglot-origin record into the unified JSONL pipeline.
-///
-/// Silently no-ops when no logging runtime is installed — matches the
-/// behaviour of `tracing::*!()` calls made before `init()` runs.
+/// Reaches the pathway the calling thread's dispatcher runs; silently
+/// no-ops when that is none of the engine's — matching `tracing::*!()`
+/// calls made before the pathway is installed.
 pub(crate) fn push_polyglot_record(record: LogRecord) {
-    let guard = GLOBAL.read().expect("polyglot sink lock poisoned");
-    if let Some(sink) = guard.as_ref() {
-        sink.push(record);
-    }
+    let mut record_to_push = Some(record);
+    tracing::dispatcher::get_default(|dispatch| {
+        if let Some(layer) = dispatch.downcast_ref::<JsonlSinkLayer>()
+            && let Some(record) = record_to_push.take()
+        {
+            layer.enqueue_in_this_threads_route(record);
+        }
+    });
 }

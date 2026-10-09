@@ -16,7 +16,7 @@ use super::processor_interpreter_shutdown_ladder::{
     kill_the_process_group_and_reap_its_leader, wait_for_a_child_to_become_collectable_within,
 };
 use super::processor_interpreter_spawn_host::{
-    HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE,
+    HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE, LoadedStreamAHelperProcessBelongsTo,
     PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE,
     PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
     SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
@@ -29,7 +29,7 @@ use super::python_processor_declaration::PythonProcessorDeclaration;
 use super::subprocess_bridge::ESCALATE_FD_ENV;
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
-use crate::core::processors::{DynGeneratedProcessor, PROCESSOR_REGISTRY};
+use crate::core::processors::{DynGeneratedProcessor, NodeTypesOneStreamResolves};
 use crate::core::runtime::StreamEnvironment;
 use crate::iceoryx2::{
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, spawn_outside_every_iceoryx2_listener_bind,
@@ -134,15 +134,19 @@ pub(crate) fn processor_interpreter_describe_command(
 }
 
 /// Describe `import_paths` in one start of the stream's interpreter and
-/// register each with a constructor that starts its processor interpreter in
-/// `stream_environment`, replacing whatever an earlier describe registered.
+/// register each into `node_types_of_the_stream` with a constructor that
+/// starts its processor interpreter in `stream_environment`, replacing
+/// whatever an earlier describe into that stream registered.
 ///
-/// `is_interrupted_by_the_host` reporting true at any point refuses them,
-/// killing a describe already started.
+/// The describe's process group is registered under the stream's tag, and the
+/// stream's shutdown, or `is_interrupted_by_the_host` reporting true, at any
+/// point refuses them, killing a describe already started.
 pub(crate) fn describe_and_register_node_types_in_a_processor_interpreter(
+    node_types_of_the_stream: &NodeTypesOneStreamResolves,
     import_paths: &[ProcessorClassImportPath],
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
+    the_stream_the_describe_belongs_to: &LoadedStreamAHelperProcessBelongsTo,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<()> {
     if import_paths.is_empty() {
@@ -153,19 +157,27 @@ pub(crate) fn describe_and_register_node_types_in_a_processor_interpreter(
         stream_environment,
         lend_directory,
         PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
-        crate::core::runtime::is_runtime_shutdown_requested,
+        the_stream_the_describe_belongs_to,
         is_interrupted_by_the_host,
     )?;
     for declaration in declarations {
-        register_the_described_node_type(declaration, stream_environment, lend_directory)?;
+        register_the_described_node_type(
+            node_types_of_the_stream,
+            declaration,
+            stream_environment,
+            lend_directory,
+            the_stream_the_describe_belongs_to,
+        )?;
     }
     Ok(())
 }
 
 fn register_the_described_node_type(
+    node_types_of_the_stream: &NodeTypesOneStreamResolves,
     declaration: PythonProcessorDeclaration,
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
+    the_stream_its_helpers_belong_to: &LoadedStreamAHelperProcessBelongsTo,
 ) -> Result<()> {
     let PythonProcessorDeclaration {
         descriptor,
@@ -175,7 +187,8 @@ fn register_the_described_node_type(
     let descriptor_for_constructor = descriptor.clone();
     let stream_environment = stream_environment.clone();
     let lend_directory = Arc::new(lend_directory.to_path_buf());
-    PROCESSOR_REGISTRY.register_a_type_described_in_a_processor_interpreter(
+    let the_stream_its_helpers_belong_to = the_stream_its_helpers_belong_to.clone();
+    node_types_of_the_stream.register_a_type_described_in_this_streams_processor_interpreter(
         descriptor,
         Box::new(move |node| {
             Ok(Box::new(spawn_host_for_processor_node(
@@ -185,21 +198,22 @@ fn register_the_described_node_type(
                 node,
                 &stream_environment,
                 &lend_directory,
+                the_stream_its_helpers_belong_to.clone(),
             )) as Box<dyn DynGeneratedProcessor + Send>)
         }),
     )
 }
 
 /// Describe `import_paths` in one start of the stream's interpreter, bounded
-/// by `describe_bound` and cut short by a shutdown `is_shutdown_requested`
-/// reports during it or by `is_interrupted_by_the_host` reporting true,
-/// returning their declarations in the order asked.
+/// by `describe_bound` and cut short by the shutdown of the stream it belongs
+/// to or by `is_interrupted_by_the_host` reporting true, returning their
+/// declarations in the order asked.
 pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     import_paths: &[ProcessorClassImportPath],
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
     describe_bound: Duration,
-    is_shutdown_requested: fn() -> bool,
+    the_stream_the_describe_belongs_to: &LoadedStreamAHelperProcessBelongsTo,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> Result<Vec<PythonProcessorDeclaration>> {
     let refuse_every_requested_type = |refusal: String| Error::NodeTypesNotDescribed {
@@ -225,7 +239,10 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
             ))
         })?;
     // `pre_exec` made the describe the leader of a group whose id is its pid.
-    if !crate::core::runtime::register_a_helper_process_group(child.id() as i32) {
+    if !crate::core::runtime::register_a_helper_process_group(
+        child.id() as i32,
+        the_stream_the_describe_belongs_to.stream_tag,
+    ) {
         tracing::warn!(
             "the describe's process group could not be registered, so a third interrupt will not \
              kill it; the describe still ends itself when the app exits"
@@ -247,7 +264,11 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     let describe_exit = wait_for_the_describe_to_exit(
         &child,
         describe_bound,
-        is_shutdown_requested,
+        &|| {
+            the_stream_the_describe_belongs_to
+                .shutdown_escalation
+                .is_requested()
+        },
         is_interrupted_by_the_host,
     );
     // Killed whether or not the leader already exited: nothing a describe
@@ -274,7 +295,7 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
         }
         DescribeExitAwaited::ShutdownRequested => {
             return Err(refuse_every_requested_type(format!(
-                "shutdown began while the stream's interpreter `{interpreter}` was still \
+                "the stream's shutdown began while its interpreter `{interpreter}` was still \
                  describing them, and it was killed. {quoted_standard_error}"
             )));
         }
@@ -387,19 +408,14 @@ enum DescribeExitAwaited {
     InterruptedByTheHost,
 }
 
-/// Wait up to `describe_bound` for the describe to exit, leaving it unreaped.
-///
-/// Only a shutdown requested *during* the wait cuts it short: the escalation is
-/// process-global and taken only when a run ends, so one already raised belongs
-/// to a run that has not taken it yet. A host interrupt cuts it short whenever
-/// it is read.
+/// Wait up to `describe_bound` for the describe to exit, leaving it unreaped,
+/// cut short whenever its stream's shutdown or a host interrupt is read.
 fn wait_for_the_describe_to_exit(
     child: &Child,
     describe_bound: Duration,
-    is_shutdown_requested: fn() -> bool,
+    is_its_streams_shutdown_requested: &dyn Fn() -> bool,
     is_interrupted_by_the_host: &dyn Fn() -> bool,
 ) -> DescribeExitAwaited {
-    let shutdown_was_already_requested = is_shutdown_requested();
     let deadline = Instant::now() + describe_bound;
     loop {
         let observation_slice = deadline
@@ -408,7 +424,7 @@ fn wait_for_the_describe_to_exit(
         if wait_for_a_child_to_become_collectable_within(child, observation_slice) {
             return DescribeExitAwaited::Exited;
         }
-        if !shutdown_was_already_requested && is_shutdown_requested() {
+        if is_its_streams_shutdown_requested() {
             return DescribeExitAwaited::ShutdownRequested;
         }
         if is_interrupted_by_the_host() {
@@ -441,6 +457,14 @@ mod tests {
     use std::path::PathBuf;
 
     const GOOD_TYPE: &str = "my_app.filters:BlurProcessor";
+
+    fn a_stream_whose_shutdown_is_not_requested() -> LoadedStreamAHelperProcessBelongsTo {
+        LoadedStreamAHelperProcessBelongsTo {
+            stream_tag: crate::core::runtime::LoadedStreamTag::next_in_this_process()
+                .expect("a fresh stream tag"),
+            shutdown_escalation: crate::core::runtime::ShutdownEscalationOfOneStream::default(),
+        }
+    }
 
     fn import_path(path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(path).expect("the test path names a class")
@@ -476,14 +500,18 @@ mod tests {
             import_paths: &[&str],
             describe_bound: Duration,
         ) -> Result<Vec<PythonProcessorDeclaration>> {
-            self.describe_reading_a_shutdown_from(import_paths, describe_bound, || false)
+            self.describe_in_the_stream(
+                import_paths,
+                describe_bound,
+                &a_stream_whose_shutdown_is_not_requested(),
+            )
         }
 
-        fn describe_reading_a_shutdown_from(
+        fn describe_in_the_stream(
             &self,
             import_paths: &[&str],
             describe_bound: Duration,
-            is_shutdown_requested: fn() -> bool,
+            the_stream_the_describe_belongs_to: &LoadedStreamAHelperProcessBelongsTo,
         ) -> Result<Vec<PythonProcessorDeclaration>> {
             let import_paths: Vec<_> = import_paths.iter().map(|path| import_path(path)).collect();
             describe_node_types_in_a_processor_interpreter_within(
@@ -491,7 +519,7 @@ mod tests {
                 &self.stream_environment,
                 Path::new("/opt/tatolab/lib/tatolab/lend"),
                 describe_bound,
-                is_shutdown_requested,
+                the_stream_the_describe_belongs_to,
                 &|| false,
             )
         }
@@ -810,26 +838,24 @@ mod tests {
         }
     }
 
-    /// How many times the shutdown predicate of the test below has been read.
-    static SHUTDOWN_READS_OF_THE_INTERRUPTED_DESCRIBE: std::sync::atomic::AtomicUsize =
-        std::sync::atomic::AtomicUsize::new(0);
-
-    /// Reports no shutdown when the describe starts and one at every read after.
-    fn shutdown_requested_once_the_describe_has_started() -> bool {
-        SHUTDOWN_READS_OF_THE_INTERRUPTED_DESCRIBE.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-            > 0
-    }
-
     #[test]
     #[serial]
     fn a_shutdown_requested_during_a_describe_kills_it_and_refuses_every_type_saying_so() {
         let stub = StubProcessorInterpreter::running("sleep 30 &\nwait");
+        let the_stream = a_stream_whose_shutdown_is_not_requested();
+        let shutdown_requested_once_the_describe_has_started = {
+            let shutdown_escalation = the_stream.shutdown_escalation.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                shutdown_escalation.raise_to_graceful();
+            })
+        };
         let started = Instant::now();
 
-        let refusal = match stub.describe_reading_a_shutdown_from(
+        let refusal = match stub.describe_in_the_stream(
             &[GOOD_TYPE],
             PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
-            shutdown_requested_once_the_describe_has_started,
+            &the_stream,
         ) {
             Err(Error::NodeTypesNotDescribed {
                 node_types,
@@ -842,6 +868,9 @@ mod tests {
             Ok(_) => panic!("a describe interrupted by shutdown was accepted"),
         };
 
+        shutdown_requested_once_the_describe_has_started
+            .join()
+            .expect("the requesting thread returns");
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "the describe held shutdown for its whole bound"
@@ -861,7 +890,7 @@ mod tests {
             &stub.stream_environment,
             Path::new("/opt/tatolab/lib/tatolab/lend"),
             PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
-            || false,
+            &a_stream_whose_shutdown_is_not_requested(),
             &|| started.elapsed() >= interrupted_after,
         ) {
             Err(Error::NodeTypesNotDescribed {
@@ -895,7 +924,7 @@ mod tests {
             },
             Path::new("/opt/tatolab/lib/tatolab/lend"),
             PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
-            || false,
+            &a_stream_whose_shutdown_is_not_requested(),
             &|| false,
         );
 

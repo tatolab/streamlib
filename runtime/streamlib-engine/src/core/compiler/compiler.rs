@@ -22,8 +22,8 @@ use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, Link, LinkState, LinkStateComponent,
     OutOfProcessLinkWireRepliesComponent, ProcessorReadyBarrierHandle, ProcessorUniqueId,
 };
-use crate::core::processors::PROCESSOR_REGISTRY;
-use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
+use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::pubsub::RuntimeEvent;
 
 /// Compiles graph changes into running processor state.
 pub struct Compiler {
@@ -46,10 +46,19 @@ impl Default for Compiler {
 }
 
 impl Compiler {
-    /// Create a new compiler.
+    /// Create a new compiler whose graph resolves the natively compiled node types alone.
     pub fn new() -> Self {
+        Self::new_resolving_node_types_through(Arc::new(NodeTypesOneStreamResolves::new()))
+    }
+
+    /// Create a new compiler whose graph resolves node types through its stream's lookup.
+    pub fn new_resolving_node_types_through(
+        node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
+    ) -> Self {
         Self {
-            graph: Arc::new(RwLock::new(Graph::new())),
+            graph: Arc::new(RwLock::new(Graph::new_resolving_node_types_through(
+                node_types_this_stream_resolves,
+            ))),
             transaction: Arc::new(Mutex::new(Vec::new())),
             one_commit_at_a_time: Mutex::new(()),
             abandoned_processor_threads: Mutex::new(Vec::new()),
@@ -133,6 +142,7 @@ impl Compiler {
         use crate::core::graph::{PendingDeletionComponent, ProcessorInstanceComponent};
 
         let mut result = CompileResult::default();
+        let the_stream_the_compile_belongs_to = runtime_ctx.loaded_stream_identity();
         // =====================================================================
         // 1. Validate and categorize operations
         // =====================================================================
@@ -233,10 +243,8 @@ impl Compiler {
         );
 
         // Publish compile start event
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::CompilerWillCompile),
-        );
+        the_stream_the_compile_belongs_to
+            .publish_on_this_streams_topic(RuntimeEvent::CompilerWillCompile);
 
         // =====================================================================
         // 2. Handle removals FIRST (before adding new processors)
@@ -261,13 +269,12 @@ impl Compiler {
                         let from_port = link.from_port().to_string();
                         let to_port = link.to_port().to_string();
 
-                        PUBSUB.publish(
-                            topics::RUNTIME_GLOBAL,
-                            &Event::RuntimeGlobal(RuntimeEvent::CompilerWillUnwireLink {
+                        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+                            RuntimeEvent::CompilerWillUnwireLink {
                                 link_id: link_id.to_string(),
                                 from_port: from_port.clone(),
                                 to_port: to_port.clone(),
-                            }),
+                            },
                         );
 
                         tracing::info!("[CLOSE SERVICE] {}", link_id);
@@ -277,13 +284,12 @@ impl Compiler {
                             tracing::warn!("Failed to close service {}: {}", link_id, e);
                         }
 
-                        PUBSUB.publish(
-                            topics::RUNTIME_GLOBAL,
-                            &Event::RuntimeGlobal(RuntimeEvent::CompilerDidUnwireLink {
+                        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+                            RuntimeEvent::CompilerDidUnwireLink {
                                 link_id: link_id.to_string(),
                                 from_port,
                                 to_port,
-                            }),
+                            },
                         );
 
                         result.links_unwired += 1;
@@ -300,9 +306,11 @@ impl Compiler {
                 let abandoned_by_this_removal =
                     remove_processors_signalling_every_thread_before_joining_any(
                         &graph_arc,
+                        the_stream_the_compile_belongs_to,
                         &plan.processors_to_remove,
                         ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
-                        crate::core::runtime::is_runtime_shutdown_forced,
+                        || runtime_ctx.this_streams_shutdown_escalation().is_forced(),
+                        runtime_ctx.this_streams_teardown_progress_note(),
                         abandoned_processor_threads,
                     )?;
                 result.processors_removed += plan.processors_to_remove.len();
@@ -326,12 +334,11 @@ impl Compiler {
 
                 let processor_type = node.processor_type.clone();
 
-                PUBSUB.publish(
-                    topics::RUNTIME_GLOBAL,
-                    &Event::RuntimeGlobal(RuntimeEvent::CompilerWillCreateProcessor {
+                the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+                    RuntimeEvent::CompilerWillCreateProcessor {
                         processor_id: proc_id.clone(),
                         processor_type: processor_type.clone(),
-                    }),
+                    },
                 );
 
                 tracing::info!("[{}] Preparing {}", CompilePhase::Prepare, proc_id);
@@ -339,12 +346,11 @@ impl Compiler {
                 let barrier_handle = super::compiler_ops::prepare_processor(&mut graph, proc_id)?;
                 barrier_handles.push((proc_id.clone(), barrier_handle));
 
-                PUBSUB.publish(
-                    topics::RUNTIME_GLOBAL,
-                    &Event::RuntimeGlobal(RuntimeEvent::CompilerDidCreateProcessor {
+                the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+                    RuntimeEvent::CompilerDidCreateProcessor {
                         processor_id: proc_id.clone(),
                         processor_type,
-                    }),
+                    },
                 );
 
                 result.processors_created += 1;
@@ -359,12 +365,7 @@ impl Compiler {
             tracing::debug!("[{}] Starting", CompilePhase::Spawn);
             for proc_id in &plan.processors_to_add {
                 tracing::info!("[{}] Spawning {}", CompilePhase::Spawn, proc_id);
-                super::compiler_ops::spawn_processor(
-                    Arc::clone(&graph_arc),
-                    &PROCESSOR_REGISTRY,
-                    runtime_ctx,
-                    proc_id,
-                )?;
+                super::compiler_ops::spawn_processor(Arc::clone(&graph_arc), runtime_ctx, proc_id)?;
             }
             tracing::debug!("[{}] Completed", CompilePhase::Spawn);
         }
@@ -393,13 +394,12 @@ impl Compiler {
                     (link.from_port().to_string(), link.to_port().to_string())
                 };
 
-                PUBSUB.publish(
-                    topics::RUNTIME_GLOBAL,
-                    &Event::RuntimeGlobal(RuntimeEvent::CompilerWillWireLink {
+                the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+                    RuntimeEvent::CompilerWillWireLink {
                         link_id: link_id.to_string(),
                         from_port: from_port.clone(),
                         to_port: to_port.clone(),
-                    }),
+                    },
                 );
 
                 tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
@@ -410,13 +410,12 @@ impl Compiler {
                     runtime_ctx.iceoryx2_node(),
                 )?;
 
-                PUBSUB.publish(
-                    topics::RUNTIME_GLOBAL,
-                    &Event::RuntimeGlobal(RuntimeEvent::CompilerDidWireLink {
+                the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+                    RuntimeEvent::CompilerDidWireLink {
                         link_id: link_id.to_string(),
                         from_port,
                         to_port,
-                    }),
+                    },
                 );
 
                 result.links_wired += 1;
@@ -446,11 +445,10 @@ impl Compiler {
                 ProcessorConfigUpdateOutcome::TakenAndRecordedOnTheNode => {
                     tracing::info!("[CONFIG] Updated config for {}", proc_id);
                     result.configs_updated += 1;
-                    PUBSUB.publish(
-                        topics::RUNTIME_GLOBAL,
-                        &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigDidChange {
+                    the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+                        RuntimeEvent::ProcessorConfigDidChange {
                             processor_id: proc_id,
-                        }),
+                        },
                     );
                 }
                 ProcessorConfigUpdateOutcome::ProcessorNoLongerInTheGraph => {}
@@ -460,10 +458,8 @@ impl Compiler {
         // Mark the graph as compiled
         graph_arc.write().mark_compiled();
 
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::CompilerDidCompile),
-        );
+        the_stream_the_compile_belongs_to
+            .publish_on_this_streams_topic(RuntimeEvent::CompilerDidCompile);
         tracing::info!("Compile complete: {}", result);
 
         if !abandoned_in_this_compile.is_empty() {

@@ -57,6 +57,11 @@ use crate::core::context::{
     VideoCaptureStreamFormat, VideoDeviceBackend, VideoDeviceStreamRequest,
     refusal_for_a_named_camera_that_is_not_attached,
 };
+use crate::core::logging::{
+    LoadedStreamLogRoute, carrying_this_threads_loaded_stream_log_route,
+    run_in_the_loaded_stream_log_route_when_there_is_one,
+    the_loaded_stream_log_route_of_this_thread,
+};
 use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
 use crate::core::{Error, Result};
@@ -556,6 +561,8 @@ impl AvFoundationCaptureSessionControl {
             gpu_context: self.gpu_context.clone(),
             capture_instant_resolver: Arc::clone(&self.capture_instant_resolver),
             capture_progress: Mutex::new(AvFoundationCaptureProgress::default()),
+            loaded_stream_log_route_of_the_starting_thread:
+                the_loaded_stream_log_route_of_this_thread(),
         });
         let sample_buffer_queue = DispatchQueue::new(
             &format!(
@@ -576,23 +583,24 @@ impl AvFoundationCaptureSessionControl {
             camera_name: self.opened_device.name.clone(),
         };
         let configured_session_slot = Arc::clone(&configured_session);
-        self.session_control_queue.exec_async(move || {
-            match session_request.configure_and_start() {
-                Ok(configured) => *configured_session_slot.lock() = configured,
-                Err(start_error) => {
-                    tracing::error!(
-                        camera = %session_request.camera_name,
-                        error = %start_error,
-                        "AVFoundation camera: capture could not start"
-                    );
-                    session_request
-                        .failure_recorder
-                        .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(
-                            start_error.to_string(),
-                        ));
-                }
-            }
-        });
+        self.session_control_queue
+            .exec_async(carrying_this_threads_loaded_stream_log_route(
+                move || match session_request.configure_and_start() {
+                    Ok(configured) => *configured_session_slot.lock() = configured,
+                    Err(start_error) => {
+                        tracing::error!(
+                            camera = %session_request.camera_name,
+                            error = %start_error,
+                            "AVFoundation camera: capture could not start"
+                        );
+                        session_request
+                            .failure_recorder
+                            .record_the_failure_that_ended_the_stream(
+                                DeviceStreamFailureReason::of(start_error.to_string()),
+                            );
+                    }
+                },
+            ));
 
         self.running_delivery = Some(AvFoundationRunningDelivery {
             frame_delivery,
@@ -780,6 +788,8 @@ fn observe_the_ways_a_session_ends(
     let observe = |name: &NSNotificationName, object: &AnyObject, what_happened: &'static str| {
         let failure_recorder = failure_recorder.clone();
         let camera_name = camera_name.to_owned();
+        let loaded_stream_log_route_of_the_observing_thread =
+            the_loaded_stream_log_route_of_this_thread();
         let on_notification = block2::RcBlock::new(move |notification: NonNull<NSNotification>| {
             // SAFETY: NSNotificationCenter hands the block a live notification.
             let notification = unsafe { notification.as_ref() };
@@ -787,7 +797,16 @@ fn observe_the_ways_a_session_ends(
                 .userInfo()
                 .map(|user_info| user_info.description().to_string())
                 .unwrap_or_default();
-            tracing::error!(camera = %camera_name, %detail, "AVFoundation camera: {what_happened}");
+            run_in_the_loaded_stream_log_route_when_there_is_one(
+                loaded_stream_log_route_of_the_observing_thread.as_ref(),
+                || {
+                    tracing::error!(
+                        camera = %camera_name,
+                        %detail,
+                        "AVFoundation camera: {what_happened}"
+                    );
+                },
+            );
             failure_recorder.record_the_failure_that_ended_the_stream(
                 DeviceStreamFailureReason::of(format!("{what_happened} {detail}")),
             );
@@ -917,12 +936,22 @@ struct AvFoundationFrameDelivery {
     gpu_context: GpuContextLimitedAccess,
     capture_instant_resolver: Arc<VideoCaptureInstantResolver>,
     capture_progress: Mutex<AvFoundationCaptureProgress>,
+    /// The route of the thread that started the delivery, which each frame's
+    /// delivery runs in.
+    loaded_stream_log_route_of_the_starting_thread: Option<Arc<LoadedStreamLogRoute>>,
 }
 
 impl AvFoundationFrameDelivery {
     /// Land one sample buffer in a pooled pixel buffer and hand it off. Runs
     /// on the session's serial sample-buffer queue.
     fn deliver(&self, sample_buffer: &CMSampleBuffer) {
+        run_in_the_loaded_stream_log_route_when_there_is_one(
+            self.loaded_stream_log_route_of_the_starting_thread.as_ref(),
+            || self.deliver_in_the_starting_threads_log_route(sample_buffer),
+        );
+    }
+
+    fn deliver_in_the_starting_threads_log_route(&self, sample_buffer: &CMSampleBuffer) {
         let dequeued_at_ns = MediaClock::now().as_nanos() as i64;
         if !self.is_delivering.load(Ordering::Acquire) {
             return;

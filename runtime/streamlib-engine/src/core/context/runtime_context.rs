@@ -12,8 +12,30 @@ use super::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
-use crate::core::runtime::{RuntimeName, RuntimeOperations, RuntimeUniqueId};
+use crate::core::logging::LoadedStreamLogRoute;
+use crate::core::pubsub::LoadedStreamIdentity;
+use crate::core::runtime::{
+    LoadedStreamTag, RuntimeName, RuntimeOperations, RuntimeUniqueId,
+    ShutdownEscalationOfOneStream, TeardownProgressNoteOfOneStream,
+};
 use crate::iceoryx2::Iceoryx2Node;
+
+/// The loaded stream a [`RuntimeContext`] serves: its identity, its project
+/// directory, its own shutdown escalation, its teardown's progress note and
+/// its log route.
+#[derive(Debug)]
+pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
+    /// The runtime id, cast name and tag the stream's events carry.
+    pub(crate) identity: LoadedStreamIdentity,
+    /// The directory the stream's project lives in.
+    pub(crate) project_directory: Arc<std::path::Path>,
+    /// How far the stream's own shutdown has gone.
+    pub(crate) shutdown_escalation: ShutdownEscalationOfOneStream,
+    /// What the stream's teardown is waiting on, read by its watchdog.
+    pub(crate) teardown_progress_note: TeardownProgressNoteOfOneStream,
+    /// Where the records the stream's threads emit go.
+    pub(crate) log_route: Arc<LoadedStreamLogRoute>,
+}
 
 #[derive(Clone)]
 pub struct RuntimeContext {
@@ -61,10 +83,12 @@ pub struct RuntimeContext {
     #[cfg(target_os = "macos")]
     surface_share_mach_service_rendezvous:
         crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
+    /// The loaded stream this context serves.
+    loaded_stream: Arc<LoadedStreamARuntimeContextBelongsTo>,
 }
 
 impl RuntimeContext {
-    pub fn new(
+    pub(crate) fn new(
         gpu: GpuContext,
         time: Arc<TimeContext>,
         runtime_id: Arc<RuntimeUniqueId>,
@@ -77,6 +101,7 @@ impl RuntimeContext {
         #[cfg(target_os = "linux")] surface_socket_path: std::path::PathBuf,
         #[cfg(target_os = "macos")]
         surface_share_mach_service_rendezvous: crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
+        loaded_stream: Arc<LoadedStreamARuntimeContextBelongsTo>,
     ) -> Self {
         Self {
             gpu,
@@ -95,6 +120,7 @@ impl RuntimeContext {
             surface_socket_path,
             #[cfg(target_os = "macos")]
             surface_share_mach_service_rendezvous,
+            loaded_stream,
         }
     }
 
@@ -143,6 +169,41 @@ impl RuntimeContext {
     /// The runtime directory this runtime resolved as it started.
     pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
         &self.runtime_directory
+    }
+
+    /// The URL-safe cast name of the stream this context serves.
+    pub fn stream_name(&self) -> &str {
+        &self.loaded_stream.identity.stream_name
+    }
+
+    /// The project directory of the stream this context serves.
+    pub fn stream_project_directory(&self) -> &std::path::Path {
+        &self.loaded_stream.project_directory
+    }
+
+    /// The process-unique tag of the stream this context serves.
+    pub fn stream_tag(&self) -> LoadedStreamTag {
+        self.loaded_stream.identity.stream_tag
+    }
+
+    /// The runtime id and stream name this context's stream publishes its events under.
+    pub fn loaded_stream_identity(&self) -> &LoadedStreamIdentity {
+        &self.loaded_stream.identity
+    }
+
+    /// How far the shutdown of the stream this context serves has gone.
+    pub fn this_streams_shutdown_escalation(&self) -> &ShutdownEscalationOfOneStream {
+        &self.loaded_stream.shutdown_escalation
+    }
+
+    /// What the teardown of the stream this context serves is waiting on.
+    pub fn this_streams_teardown_progress_note(&self) -> &TeardownProgressNoteOfOneStream {
+        &self.loaded_stream.teardown_progress_note
+    }
+
+    /// Where the records the threads of the stream this context serves emit go.
+    pub fn this_streams_log_route(&self) -> &Arc<LoadedStreamLogRoute> {
+        &self.loaded_stream.log_route
     }
 
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocess
@@ -233,6 +294,7 @@ impl RuntimeContext {
             surface_share_mach_service_rendezvous: self
                 .surface_share_mach_service_rendezvous
                 .clone(),
+            loaded_stream: Arc::clone(&self.loaded_stream),
         }
     }
 
@@ -257,6 +319,7 @@ impl RuntimeContext {
             surface_share_mach_service_rendezvous: self
                 .surface_share_mach_service_rendezvous
                 .clone(),
+            loaded_stream: Arc::clone(&self.loaded_stream),
         }
     }
 
@@ -771,11 +834,9 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().audio_clock()
     }
 
-    /// Host-owned runtime operations. Implements [`RuntimeOperations`]
-    /// so existing call sites
-    /// (`ctx.runtime().add_processor_async(...).await`) keep working.
-    /// Returns a direct `Arc::clone` of the Runner-backed ops; the
-    /// clone is stash-safe past `Runner::stop()`.
+    /// The operations on the stream this processor runs in
+    /// (`ctx.runtime().add_processor_async(...).await`). The `Arc` is
+    /// stash-safe past the stream's stop.
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
         self.host_base().runtime()
     }
@@ -825,6 +886,16 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// a control plane publishes and what a port address begins with.
     pub fn runtime_name(&self) -> &RuntimeName {
         self.host_base().runtime_name()
+    }
+
+    /// The URL-safe cast name of the stream this processor runs in.
+    pub fn stream_name(&self) -> &str {
+        self.host_base().stream_name()
+    }
+
+    /// The project directory of the stream this processor runs in.
+    pub fn stream_project_directory(&self) -> &std::path::Path {
+        self.host_base().stream_project_directory()
     }
 }
 
@@ -885,6 +956,16 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     }
 
     // ------------ Engine-internal host accessors ------------
+
+    /// The URL-safe cast name of the stream this processor runs in.
+    pub fn stream_name(&self) -> &str {
+        self.host_base().stream_name()
+    }
+
+    /// The project directory of the stream this processor runs in.
+    pub fn stream_project_directory(&self) -> &std::path::Path {
+        self.host_base().stream_project_directory()
+    }
 
     /// See [`RuntimeContextFullAccess::host_base`].
     pub(crate) fn host_base(&self) -> &RuntimeContext {

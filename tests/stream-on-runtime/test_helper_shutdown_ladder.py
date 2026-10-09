@@ -374,7 +374,10 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
     behind, the describing one included.
     """
     tatolabd = start_tatolabd(
-        {"nodes": [{"name": "held", "type": f"{held_node_module.name}:LoadedFrameRelay", "config": {}}]},
+        {
+            "stream": "held",
+            "nodes": [{"name": "held", "type": f"{held_node_module.name}:LoadedFrameRelay", "config": {}}],
+        },
         project_directory=held_node_module.project_directory,
         extra_environment=environment_reaching_no_vulkan_driver(tmp_path),
     )

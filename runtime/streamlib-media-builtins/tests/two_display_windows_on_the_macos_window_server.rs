@@ -42,8 +42,8 @@ mod apple_window_server {
         kCGNullWindowID, kCGWindowName, kCGWindowOwnerPID,
     };
     use streamlib::sdk::App;
-    use streamlib::sdk::runtime::{Runner, RuntimeStatus};
-    use streamlib::sdk::runtime_control::request_runtime_shutdown;
+    use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, RuntimeStatus};
+    use streamlib::sdk::runtime_control::request_the_shutdown_of_every_loaded_stream;
     use streamlib::sdk::window_event_pump::process_wide_window_event_pump;
 
     use crate::two_display_windows_harness::{
@@ -119,7 +119,8 @@ mod apple_window_server {
 
     impl Drop for RequestTheShutdownThatEndsTheRunOnDrop {
         fn drop(&mut self) {
-            let _ = request_runtime_shutdown("the window-server watcher is done");
+            let _ =
+                request_the_shutdown_of_every_loaded_stream("the window-server watcher is done");
         }
     }
 
@@ -166,7 +167,9 @@ mod apple_window_server {
     }
 
     /// What the watcher saw, checked on the first thread once the run returns.
-    fn watch_the_window_server_while_the_graph_runs(runner: &Runner) -> Result<(), String> {
+    fn watch_the_window_server_while_the_graph_runs(
+        stream: &LoadedStreamInThisRuntime,
+    ) -> Result<(), String> {
         if !wait_until(WINDOWS_MAPPED_DEADLINE, || {
             windows_on_screen_titled(FIRST_WINDOW_TITLE) > 0
                 && windows_on_screen_titled(SECOND_WINDOW_TITLE) > 0
@@ -201,10 +204,10 @@ mod apple_window_server {
         if windows_on_screen_titled(SECOND_WINDOW_TITLE) != 1 {
             return Err("closing one window took its neighbour down with it".into());
         }
-        if runner.status() != RuntimeStatus::Started {
+        if stream.status() != RuntimeStatus::Started {
             return Err(format!(
-                "closing one window must leave the graph running, but the runtime is {:?}",
-                runner.status()
+                "closing one window must leave the graph running, but the stream is {:?}",
+                stream.status()
             ));
         }
         Ok(())
@@ -218,15 +221,16 @@ mod apple_window_server {
             "cannot run: the screen is locked, so the window server cannot say what is on \
              screen — unlock the session and rerun"
         );
-        let app = App::new().expect("runtime");
+        let project_directory = tempfile::tempdir().expect("a project directory");
+        let app = App::new_in_project_directory(project_directory.path()).expect("runtime");
         add_one_source_fanned_out_to_two_display_windows(&app);
 
-        let runner = Arc::clone(app.runner());
+        let stream = Arc::clone(app.stream());
         let watcher = std::thread::Builder::new()
             .name("window-server-watcher".to_string())
             .spawn(move || {
                 let _ends_the_run_however_the_watch_ends = RequestTheShutdownThatEndsTheRunOnDrop;
-                watch_the_window_server_while_the_graph_runs(&runner)
+                watch_the_window_server_while_the_graph_runs(&stream)
             })
             .expect("spawn the watcher");
 

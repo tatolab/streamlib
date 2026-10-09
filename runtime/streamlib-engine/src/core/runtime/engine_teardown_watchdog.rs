@@ -1,45 +1,109 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The watchdog that ends a teardown hung anywhere the shutdown ladder does not
-//! reach.
+//! The watchdogs that bound a teardown hung anywhere the shutdown ladder does
+//! not reach: one per loaded stream's teardown, and one over the engine's own.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Language SDKs: an engine-chosen watchdog of about
-//! fifteen seconds ends a teardown hung anywhere else. It is armed when a
-//! teardown starts and disarmed when that teardown is over; on expiry it logs
-//! what the teardown was still waiting on and ends the process with status 124.
-//! Whatever the process hosts ends with it — the change file accepts that so
-//! nothing hangs the app.
+//! `docs/plan/ARCHITECTURE.md` §Language SDKs and §Processor model, "Failure
+//! isolation": an engine-chosen watchdog of about fifteen seconds ends a
+//! teardown hung anywhere else. A stream's watchdog, on expiry, kills that
+//! stream's helper process groups, abandons its threads and unloads it,
+//! leaving every other stream running; the engine's own ends the process with
+//! status 124. Past an engine-chosen bound of abandoned threads in one
+//! process, the runtime ends with status 124 as well.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
-/// How long a teardown has before the watchdog ends the process.
+/// How long a teardown has before its watchdog fires.
 ///
 /// Engine-chosen and not authorable. It sits above every bounded wait the
 /// teardown itself runs — a helper's whole ladder, a native thread's join
 /// budget, tokio's shutdown — so it fires only on a hang none of them bound.
-const ENGINE_TEARDOWN_WATCHDOG_BUDGET: Duration = Duration::from_secs(15);
+pub(crate) const ENGINE_TEARDOWN_WATCHDOG_BUDGET: Duration = Duration::from_secs(15);
 
 /// The status the watchdog ends the process with: `timeout(1)`'s, and distinct
 /// from the third interrupt's 130.
 pub const EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED: i32 = 124;
 
-/// How long the watchdog waits for the note of what the teardown is waiting on.
+/// How many threads one process may abandon — processor threads past their
+/// join budget and stream teardowns past their watchdog — before the runtime
+/// ends. Engine-chosen: each one holds the engine alive beneath it.
+const THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS: usize = 32;
+
+/// How long a watchdog waits for the note of what its teardown is waiting on.
 /// The thread holding it may be the one that is stuck.
 const PROGRESS_NOTE_READ_BUDGET: Duration = Duration::from_millis(100);
 
-/// What the teardown in progress is waiting on, in words, for the watchdog to
+/// Every thread this process has abandoned, counted as each is abandoned.
+static THREADS_ABANDONED_IN_THIS_PROCESS: AtomicUsize = AtomicUsize::new(0);
+
+/// What the engine's own teardown is waiting on, in words, for its watchdog to
 /// report if it fires.
 static WHAT_THE_ENGINE_TEARDOWN_IS_WAITING_ON: parking_lot::Mutex<String> =
     parking_lot::Mutex::new(String::new());
 
-/// Record what the teardown in progress is waiting on now.
+/// Record what the engine's own teardown is waiting on now.
 pub fn note_what_the_engine_teardown_is_waiting_on(what: impl Into<String>) {
     *WHAT_THE_ENGINE_TEARDOWN_IS_WAITING_ON.lock() = what.into();
 }
 
-/// A watchdog armed over one teardown. Dropping it disarms it.
+/// Count `abandoned_thread_count` threads `whose` teardown abandoned into the
+/// process-wide total, ending the runtime with status 124 once it passes the
+/// engine's bound.
+pub(crate) fn count_threads_abandoned_in_this_process(abandoned_thread_count: usize, whose: &str) {
+    if abandoned_thread_count == 0 {
+        return;
+    }
+    let abandoned_so_far = THREADS_ABANDONED_IN_THIS_PROCESS
+        .fetch_add(abandoned_thread_count, Ordering::SeqCst)
+        + abandoned_thread_count;
+    if abandoned_so_far > THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS {
+        tracing::error!(
+            "{whose} abandoned {abandoned_thread_count} more thread(s), so this process has \
+             abandoned {abandoned_so_far}, past the engine's bound of \
+             {THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS}. Ending the process with \
+             status {EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED}."
+        );
+        crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
+            EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
+        );
+    }
+}
+
+/// What one loaded stream's teardown is waiting on, in words, for that
+/// stream's watchdog to report if it fires.
+#[derive(Debug, Clone, Default)]
+pub struct TeardownProgressNoteOfOneStream {
+    what_the_teardown_is_waiting_on: Arc<parking_lot::Mutex<String>>,
+}
+
+impl TeardownProgressNoteOfOneStream {
+    /// Record what this stream's teardown is waiting on now.
+    pub fn note_what_the_teardown_is_waiting_on(&self, what: impl Into<String>) {
+        *self.what_the_teardown_is_waiting_on.lock() = what.into();
+    }
+
+    fn read_without_waiting_on_a_stuck_holder(&self) -> String {
+        read_a_progress_note_without_waiting_on_a_stuck_holder(
+            &self.what_the_teardown_is_waiting_on,
+        )
+    }
+}
+
+fn read_a_progress_note_without_waiting_on_a_stuck_holder(
+    note: &parking_lot::Mutex<String>,
+) -> String {
+    note.try_lock_for(PROGRESS_NOTE_READ_BUDGET)
+        .map(|note| note.clone())
+        .unwrap_or_else(|| {
+            "a note held by a thread that is itself stuck, so it could not be read".to_string()
+        })
+}
+
+/// A watchdog armed over the engine's own teardown. Dropping it disarms it.
 #[must_use = "the watchdog is disarmed the moment this is dropped"]
 pub struct ArmedEngineTeardownWatchdog {
     _disarmed_when_dropped: Option<Sender<()>>,
@@ -53,45 +117,87 @@ impl ArmedEngineTeardownWatchdog {
 
     fn arm_with_budget(teardown_name: &str, budget: Duration) -> Self {
         note_what_the_engine_teardown_is_waiting_on("nothing it has noted yet");
-        let (disarm_sender, disarm_receiver) = std::sync::mpsc::channel::<()>();
         let teardown_name = teardown_name.to_string();
-        let watching = std::thread::Builder::new()
-            .name("engine-teardown-watchdog".to_string())
-            .spawn(move || watch_the_teardown(&teardown_name, budget, disarm_receiver));
-        match watching {
-            Ok(_detached) => Self {
-                _disarmed_when_dropped: Some(disarm_sender),
-            },
-            Err(spawn_failure) => {
-                tracing::warn!(
-                    "the engine teardown watchdog could not start, so nothing bounds this \
-                     teardown beyond its own budgets: {spawn_failure}"
-                );
-                Self {
-                    _disarmed_when_dropped: None,
-                }
-            }
+        Self {
+            _disarmed_when_dropped: spawn_a_watchdog_thread(
+                "engine-teardown-watchdog",
+                budget,
+                move || {
+                    let waiting_on = read_a_progress_note_without_waiting_on_a_stuck_holder(
+                        &WHAT_THE_ENGINE_TEARDOWN_IS_WAITING_ON,
+                    );
+                    tracing::error!(
+                        "{}",
+                        the_watchdogs_expiry_message(&teardown_name, budget, &waiting_on)
+                    );
+                    crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
+                        EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
+                    );
+                },
+            ),
         }
     }
 }
 
-fn watch_the_teardown(teardown_name: &str, budget: Duration, disarmed: Receiver<()>) {
+/// A watchdog armed over one loaded stream's teardown. Dropping it disarms it.
+#[must_use = "the watchdog is disarmed the moment this is dropped"]
+pub(crate) struct ArmedTeardownWatchdogOfOneStream {
+    _disarmed_when_dropped: Option<Sender<()>>,
+}
+
+impl ArmedTeardownWatchdogOfOneStream {
+    /// Arm `stream_name`'s watchdog for `budget`; on expiry it hands
+    /// `abandon_the_stream` what the stream's teardown was still waiting on.
+    pub(crate) fn arm(
+        stream_name: &str,
+        budget: Duration,
+        teardown_progress_note: TeardownProgressNoteOfOneStream,
+        abandon_the_stream: impl FnOnce(String) + Send + 'static,
+    ) -> Self {
+        teardown_progress_note.note_what_the_teardown_is_waiting_on("nothing it has noted yet");
+        Self {
+            _disarmed_when_dropped: spawn_a_watchdog_thread(
+                &format!("stream-watchdog-{stream_name}"),
+                budget,
+                move || {
+                    abandon_the_stream(
+                        teardown_progress_note.read_without_waiting_on_a_stuck_holder(),
+                    )
+                },
+            ),
+        }
+    }
+}
+
+/// Start a thread that runs `on_expiry` unless the returned sender drops
+/// within `budget`. `None` when the thread could not start, which leaves the
+/// teardown bounded by its own budgets alone.
+fn spawn_a_watchdog_thread(
+    thread_name: &str,
+    budget: Duration,
+    on_expiry: impl FnOnce() + Send + 'static,
+) -> Option<Sender<()>> {
+    let (disarm_sender, disarm_receiver) = std::sync::mpsc::channel::<()>();
+    let watching = std::thread::Builder::new()
+        .name(thread_name.to_string())
+        .spawn(move || watch_the_teardown(budget, disarm_receiver, on_expiry));
+    match watching {
+        Ok(_detached) => Some(disarm_sender),
+        Err(spawn_failure) => {
+            tracing::warn!(
+                "the watchdog `{thread_name}` could not start, so nothing bounds this teardown \
+                 beyond its own budgets: {spawn_failure}"
+            );
+            None
+        }
+    }
+}
+
+fn watch_the_teardown(budget: Duration, disarmed: Receiver<()>, on_expiry: impl FnOnce()) {
     // The sender is never sent on: its drop disconnects the channel, which is
     // the disarm, and only a timeout means the teardown outlived the budget.
     if let Err(RecvTimeoutError::Timeout) = disarmed.recv_timeout(budget) {
-        let waiting_on = WHAT_THE_ENGINE_TEARDOWN_IS_WAITING_ON
-            .try_lock_for(PROGRESS_NOTE_READ_BUDGET)
-            .map(|note| note.clone())
-            .unwrap_or_else(|| {
-                "a note held by a thread that is itself stuck, so it could not be read".to_string()
-            });
-        tracing::error!(
-            "{}",
-            the_watchdogs_expiry_message(teardown_name, budget, &waiting_on)
-        );
-        crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
-            EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
-        );
+        on_expiry();
     }
 }
 
@@ -139,7 +245,9 @@ mod tests {
             std::fs::write(&record_path, stand_in_helper.id().to_string())
                 .expect("the record is written");
             assert!(crate::core::runtime::register_a_helper_process_group(
-                stand_in_helper.id() as i32
+                stand_in_helper.id() as i32,
+                crate::core::runtime::LoadedStreamTag::next_in_this_process()
+                    .expect("a fresh stream tag")
             ));
             let _armed = ArmedEngineTeardownWatchdog::arm_with_budget(
                 "the test's teardown",
@@ -229,5 +337,68 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("124"), "{message}");
+    }
+
+    /// Crossing the process-wide bound of abandoned threads ends the runtime
+    /// with 124 and takes every helper's process group with it.
+    #[test]
+    fn abandoning_threads_past_the_engines_bound_ends_the_process() {
+        if let Some(record_path) = std::env::var_os(WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE)
+        {
+            log_straight_to_standard_error();
+            let stand_in_helper =
+                crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
+            std::fs::write(&record_path, stand_in_helper.id().to_string())
+                .expect("the record is written");
+            assert!(crate::core::runtime::register_a_helper_process_group(
+                stand_in_helper.id() as i32,
+                crate::core::runtime::LoadedStreamTag::next_in_this_process()
+                    .expect("a fresh stream tag")
+            ));
+            count_threads_abandoned_in_this_process(
+                THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS,
+                "the stream `at-the-bound`",
+            );
+            count_threads_abandoned_in_this_process(1, "the stream `past-the-bound`");
+            std::thread::sleep(Duration::from_secs(30));
+            panic!("abandoning threads past the engine's bound did not end the process");
+        }
+
+        let record = crate::core::test_support::a_temporary_directory_at_owner_only_mode()
+            .expect("a temporary directory");
+        let record_path = record.path().join("helper-process-group");
+        let child = rerun_this_test_in_a_child_process(
+            "core::runtime::engine_teardown_watchdog::tests::abandoning_threads_past_the_engines_bound_ends_the_process",
+            WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE,
+            record_path.as_os_str(),
+        );
+        let stderr = String::from_utf8_lossy(&child.stderr);
+
+        assert_eq!(
+            child.status.code(),
+            Some(EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED),
+            "abandoning threads past the bound did not end the process with 124: {}\n{stderr}",
+            child.status,
+        );
+        assert!(
+            stderr.contains("the stream `past-the-bound`"),
+            "the end did not name whose abandoned thread crossed the bound:\n{stderr}"
+        );
+        assert!(
+            !stderr.contains("the stream `at-the-bound`"),
+            "the process ended at the bound rather than past it:\n{stderr}"
+        );
+        let helper_process_group: libc::pid_t = std::fs::read_to_string(&record_path)
+            .expect("the child recorded its helper's process group")
+            .trim()
+            .parse()
+            .expect("the record is a process group id");
+        assert!(
+            crate::core::test_support::a_process_group_is_gone_within(
+                helper_process_group,
+                Duration::from_secs(5)
+            ),
+            "a helper's process group outlived the end past the abandoned-thread bound"
+        );
     }
 }

@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 
 use tracing::Dispatch;
 
+use crate::core::logging::loaded_stream_log_route::carrying_this_threads_loaded_stream_log_route;
+
 /// How long dropping the interceptor waits for its reader threads to see end of
 /// file.
 ///
@@ -34,11 +36,8 @@ pub(crate) struct StdioInterceptor {
     fd2_reader: Option<JoinHandle<()>>,
 }
 
-/// Fd-redirect installed without reader threads yet. Installed first so
-/// the pretty-mirror sink (a [`File`] over the dup'd real stdout) can
-/// be handed to the worker BEFORE the `tracing::Dispatch` — which
-/// wraps the worker's queue — exists. Readers are then started with
-/// [`StdioInterceptorPending::start_readers`] once the dispatch is
+/// Fd-redirect installed without reader threads yet; readers start with
+/// [`StdioInterceptorPending::start_readers`] once a `tracing::Dispatch` is
 /// built.
 pub(crate) struct StdioInterceptorPending {
     saved_stdout: OwnedFd,
@@ -57,21 +56,23 @@ pub(crate) struct StdioInterceptorFiles {
     pub real_stderr: File,
 }
 
-/// Install the fd-level redirects. `dup` fds 1/2 for (a) the mirror
-/// sink and (b) later restoration, create pipes, and `dup2` the pipe
-/// write ends onto fds 1/2. Reader threads are NOT spawned yet —
-/// call [`StdioInterceptorPending::start_readers`] once a
-/// `tracing::Dispatch` is available.
-pub(crate) fn install_redirects()
--> std::io::Result<(StdioInterceptorPending, StdioInterceptorFiles)> {
-    // Dup fd 1 twice: one copy becomes the pretty-mirror sink, one is
-    // stashed for restoration in Drop. Same for fd 2. MUST happen
-    // BEFORE the dup2 redirects below — otherwise the "real" handles
-    // would end up pointing at the pipe write ends, and the
-    // pretty-mirror would recurse into the interceptor.
-    let mirror_stdout = dup_fd(libc::STDOUT_FILENO)?;
+/// Copies of the real fds 1/2 for the pretty mirror, taken before any
+/// redirect so they keep pointing past every interception installed later.
+pub(crate) fn duplicate_the_real_standard_streams_for_the_pretty_mirror()
+-> std::io::Result<StdioInterceptorFiles> {
+    Ok(StdioInterceptorFiles {
+        real_stdout: owned_fd_to_file(dup_fd(libc::STDOUT_FILENO)?),
+        real_stderr: owned_fd_to_file(dup_fd(libc::STDERR_FILENO)?),
+    })
+}
+
+/// Install the fd-level redirects. `dup` fds 1/2 for later restoration,
+/// create pipes, and `dup2` the pipe write ends onto fds 1/2. Reader threads
+/// are NOT spawned yet — call [`StdioInterceptorPending::start_readers`].
+pub(crate) fn install_redirects() -> std::io::Result<StdioInterceptorPending> {
+    // MUST happen BEFORE the dup2 redirects below, or restoring would point
+    // fds 1/2 back at the pipes.
     let saved_stdout = dup_fd(libc::STDOUT_FILENO)?;
-    let mirror_stderr = dup_fd(libc::STDERR_FILENO)?;
     let saved_stderr = dup_fd(libc::STDERR_FILENO)?;
 
     let (fd1_read, fd1_write) = make_pipe()?;
@@ -86,24 +87,19 @@ pub(crate) fn install_redirects()
     drop(fd1_write);
     drop(fd2_write);
 
-    let pending = StdioInterceptorPending {
+    Ok(StdioInterceptorPending {
         saved_stdout,
         saved_stderr,
         fd1_read,
         fd2_read,
-    };
-    let files = StdioInterceptorFiles {
-        real_stdout: owned_fd_to_file(mirror_stdout),
-        real_stderr: owned_fd_to_file(mirror_stderr),
-    };
-    Ok((pending, files))
+    })
 }
 
 impl StdioInterceptorPending {
     /// Start reader threads for the pipes. `dispatch` is cloned into
     /// each thread and installed as its thread-local subscriber so
     /// `tracing::warn!` events route through the owning logging
-    /// pathway (works for both global `init` and thread-local
+    /// pathway (works for both the process pathway and thread-local
     /// `init_for_tests`).
     pub(crate) fn start_readers(self, dispatch: Dispatch) -> StdioInterceptor {
         let fd1_reader = spawn_reader(self.fd1_read, "fd1", dispatch.clone());
@@ -162,10 +158,12 @@ fn join_intercept_readers_within(
     still_reading.len()
 }
 
+/// A reader carrying the stream route of the thread that starts it, so an
+/// interception started in no stream's route reaches the pretty mirror only.
 fn spawn_reader(pipe_read: OwnedFd, channel: &'static str, dispatch: Dispatch) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name(format!("streamlib-logging-intercept-{channel}"))
-        .spawn(move || {
+        .spawn(carrying_this_threads_loaded_stream_log_route(move || {
             let _scope = tracing::dispatcher::set_default(&dispatch);
             let file = owned_fd_to_file(pipe_read);
             let mut reader = BufReader::new(file);
@@ -193,7 +191,7 @@ fn spawn_reader(pipe_read: OwnedFd, channel: &'static str, dispatch: Dispatch) -
                     Err(_) => break,
                 }
             }
-        })
+        }))
         .expect("spawn stdio interceptor reader thread")
 }
 

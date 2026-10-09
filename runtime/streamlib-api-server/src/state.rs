@@ -5,21 +5,29 @@
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use streamlib::sdk::runtime::RuntimeOperations;
+use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use utoipa::OpenApi;
 
 /// Shared HTTP handler state.
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub runtime: Arc<dyn RuntimeOperations>,
+    pub operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     pub openapi: utoipa::openapi::OpenApi,
+}
+
+/// The `stream` query parameter a route reading one stream takes.
+#[derive(Deserialize)]
+pub(crate) struct StreamSelectionQuery {
+    /// The loaded stream the call names; absent names the only loaded one.
+    pub stream: Option<String>,
 }
 
 // ============================================================================
 // Request/Response Types with OpenAPI Schema
 // ============================================================================
 
-/// Body of `POST /api/runtime/shutdown`: ask the runtime to stop.
+/// Body of `POST /api/runtime/shutdown`: ask every stream the runtime loads to
+/// shut down.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(crate) struct RuntimeShutdownRequest {
     /// Human-readable attribution logged with the request. Omit for
@@ -33,7 +41,7 @@ pub(crate) struct RuntimeShutdownRequest {
 pub(crate) const RUNTIME_SHUTDOWN_REQUESTED_STATUS: &str = "RuntimeShutdownRequested";
 
 /// Body returned alongside `202 Accepted` by `POST /api/runtime/shutdown`; the
-/// request was handed to the runtime's shutdown funnel and teardown is not
+/// request was handed to the machine's shutdown request and teardown is not
 /// awaited.
 #[derive(Serialize, utoipa::ToSchema)]
 pub(crate) struct RuntimeShutdownAcceptedResponse {
@@ -59,13 +67,13 @@ pub(crate) struct ErrorResponse {
     info(
         title = "StreamLib Runtime API",
         version = "0.1.0",
-        description = "Observation API for a running StreamLib node: its processor graph, its registry, its channels, and its event stream. A node's graph is defined by its code, so this API does not mutate it.",
+        description = "Observation API for a running StreamLib node: the graph of each stream it loads, each stream's node catalog, its channels, and its event stream. A route reading one stream takes an optional `stream` query parameter naming it; absent names the only loaded stream. A node's graph is defined by its code, so this API does not mutate it.",
         license(name = "BUSL-1.1")
     ),
     tags(
         (name = "graph", description = "Graph inspection"),
         (name = "registry", description = "Processor and schema registry"),
-        (name = "runtime", description = "Runtime lifecycle control"),
+        (name = "runtime", description = "Runtime lifecycle control: the shutdown of every loaded stream"),
         (name = "surfaces", description = "Published-surface pixel exchange"),
         (name = "events", description = "Real-time event streaming via WebSocket")
     )

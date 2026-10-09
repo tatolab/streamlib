@@ -21,6 +21,21 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 
+/// An empty stream loaded into `runner`, its project in `project_directory`.
+fn an_empty_stream_loaded_into(
+    runner: &Runner,
+    project_directory: &std::path::Path,
+) -> std::sync::Arc<streamlib::sdk::runtime::LoadedStreamInThisRuntime> {
+    runner
+        .load_an_empty_stream(
+            streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
+                project_directory,
+            )
+            .named("main"),
+        )
+        .expect("an empty stream loads")
+}
+
 /// A Rust path, because a Python one nothing registered is described in the
 /// stream's own interpreter before it is added, and is refused by that.
 const UNKNOWN_PATH: &str = "ghost_package::DefinitelyNotARegisteredProcessor";
@@ -32,10 +47,12 @@ fn unknown_ident() -> ProcessorClassImportPath {
 #[test]
 #[serial]
 fn add_processor_with_unknown_type_returns_typed_error() {
-    let runtime = Runner::new().unwrap();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     let ident = unknown_ident();
 
-    let result = runtime.add_processor(ProcessorSpec::new(ident.clone(), serde_json::json!({})));
+    let result = stream.add_processor(ProcessorSpec::new(ident.clone(), serde_json::json!({})));
 
     match result {
         Err(Error::UnknownProcessorType { ident: returned }) => {
@@ -52,20 +69,22 @@ fn add_processor_with_unknown_type_returns_typed_error() {
 #[test]
 #[serial]
 fn unknown_processor_type_leaves_failed_node_in_graph_with_error_state() {
-    let runtime = Runner::new().unwrap();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     let ident = unknown_ident();
 
     // Add — expect typed error, but the node IS added as a side effect for
     // observability. Mentally revert the `add_v_op.rs` change (return empty
     // traversal on miss) and this test fails — the graph stays empty.
-    let _ = runtime
+    let _ = stream
         .add_processor(ProcessorSpec::new(ident.clone(), serde_json::json!({})))
         .err()
         .expect("registry miss should error");
 
     // Inspect the graph via the public `to_json` API — the failed node must
     // be visible with components.state == "Error".
-    let graph_json = runtime.to_json().expect("to_json should succeed");
+    let graph_json = stream.to_json().expect("to_json should succeed");
     let nodes = graph_json
         .get("nodes")
         .and_then(|v| v.as_array())
@@ -107,7 +126,8 @@ fn graph_snapshot_validate_rejects_unknown_processor_type() {
     }"#;
 
     let snapshot = GraphSnapshot::from_json_str(json).unwrap();
-    match snapshot.validate() {
+    match snapshot.validate(&streamlib_engine::core::processors::NodeTypesOneStreamResolves::new())
+    {
         Err(Error::UnknownProcessorType { ident }) => {
             assert_eq!(ident.as_str(), UNKNOWN_PATH);
         }

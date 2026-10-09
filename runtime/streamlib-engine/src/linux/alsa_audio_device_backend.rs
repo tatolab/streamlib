@@ -1163,7 +1163,11 @@ struct PlaybackWriterThreadInputs {
 fn spawn_playback_writer_thread(inputs: PlaybackWriterThreadInputs) -> Result<JoinHandle<()>> {
     std::thread::Builder::new()
         .name(format!("streamlib-alsa-playback-{}", inputs.device_name))
-        .spawn(move || run_playback_writer_thread(inputs))
+        .spawn(
+            crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+                run_playback_writer_thread(inputs)
+            }),
+        )
         .map_err(|e| {
             Error::Runtime(format!(
                 "the ALSA playback writer thread could not start: {e}"
@@ -1517,7 +1521,11 @@ struct CaptureReaderThreadInputs {
 fn spawn_capture_reader_thread(inputs: CaptureReaderThreadInputs) -> Result<JoinHandle<()>> {
     std::thread::Builder::new()
         .name(format!("streamlib-alsa-capture-{}", inputs.device_name))
-        .spawn(move || run_capture_reader_thread(inputs))
+        .spawn(
+            crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+                run_capture_reader_thread(inputs)
+            }),
+        )
         .map_err(|e| {
             Error::Runtime(format!(
                 "the ALSA capture reader thread could not start: {e}"

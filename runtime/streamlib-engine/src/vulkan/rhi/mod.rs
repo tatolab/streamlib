@@ -119,6 +119,7 @@ mod vulkan_kernel_capability_refusal;
 pub use vulkan_compute_kernel::VulkanComputeKernel;
 
 mod vulkan_graphics_kernel;
+mod vulkan_pipeline_cache_on_disk;
 pub use vulkan_graphics_kernel::{OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

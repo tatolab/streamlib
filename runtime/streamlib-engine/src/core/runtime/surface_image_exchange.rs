@@ -197,14 +197,17 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // The operation as a caller reaches it: through `RuntimeOperations`,
-    // on a real `Runner`. Without these the whole production path — the
-    // `Runner` impl, the blocking hop, and the composed
+    // The operation as a caller reaches it: through
+    // `OperationsOnTheStreamsLoadedInThisRuntime`, on a real `Runner`. Without
+    // these the whole production path — the `Runner` impl, the blocking hop,
+    // and the composed
     // claim/copy/release/encode — is unlocked: replacing its body with an
     // error leaves every other test in this branch green.
     // ------------------------------------------------------------------
 
-    use crate::core::runtime::{Runner, RuntimeOperations};
+    use crate::core::runtime::{
+        OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream, Runner,
+    };
 
     /// Runs the operation's future to completion on a runtime of the
     /// test's own, so the blocking hop the `Runner` impl makes has a
@@ -226,18 +229,25 @@ mod tests {
             )
     }
 
-    /// A node that has not started owns no pool and no device, so the
-    /// operation says that rather than failing somewhere inside a resolve.
-    /// Needs no GPU.
+    /// A runtime none of whose streams has started owns no pool and no
+    /// device, so the operation says that rather than failing somewhere
+    /// inside a resolve. Needs no GPU.
     #[test]
     #[serial_test::serial]
-    fn exchanging_against_a_runtime_that_never_started_names_the_missing_context() {
+    fn exchanging_against_a_runtime_no_stream_of_which_started_names_the_missing_context() {
+        let project_directory = tempfile::tempdir().expect("a project directory");
         let runner = Runner::new().expect("a runner boots without a graph");
+        runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("main"),
+            )
+            .expect("an empty stream loads");
         let Err(refusal) = awaiting_the_exchange(&runner, "any-surface", None) else {
             panic!("a runtime with no GPU context has no frame to hand back");
         };
         let reported = refusal.to_string();
-        assert!(reported.contains("start the runtime"), "{reported}");
+        assert!(reported.contains("start a stream"), "{reported}");
     }
 
     /// The whole path a `curl` drives, minus the HTTP hop: pool frame in,
@@ -255,18 +265,23 @@ mod tests {
         const FRAME_PIXEL_HEIGHT: u32 = 32;
         const PUBLISHED_RGBA8_PIXEL: [u8; 4] = [0x0D, 0x7A, 0xC4, 0xFF];
 
+        let project_directory = tempfile::tempdir().expect("a project directory");
         let runner = Runner::new().expect("a runner boots without a graph");
-        if runner.start().is_err() {
-            println!("Skipping - the runtime could not start (no GPU device available)");
+        let stream = runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("main"),
+            )
+            .expect("an empty stream loads");
+        if stream.start().is_err() {
+            println!("Skipping - the stream could not start (no GPU device available)");
             return;
         }
 
-        let gpu_context = runner
-            .runtime_context
-            .lock()
-            .as_ref()
+        let gpu_context = stream
+            .runtime_context_while_started()
             .map(|runtime_context| runtime_context.gpu.clone())
-            .expect("a started runtime carries its GPU context");
+            .expect("a started stream carries its GPU context");
 
         let (published_frame_id, pooled_backing) = gpu_context
             .acquire_pixel_buffer(
@@ -289,7 +304,7 @@ mod tests {
 
         let exchanged = awaiting_the_exchange(&runner, &published_frame_id.to_string(), None)
             .expect("the published frame exchanges for an image");
-        runner.stop().expect("the runtime stops");
+        stream.stop().expect("the stream stops");
 
         assert_eq!(
             (
