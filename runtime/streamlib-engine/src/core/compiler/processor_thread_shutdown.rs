@@ -214,10 +214,9 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
                     node.remove::<ExposedOutputPortsComponent>()
                 });
             if graph.traversal_mut().v(processor_id).drop().exists() {
-                if let (Some(node), Some(exposures)) = (
-                    graph.traversal_mut().v(processor_id).first_mut(),
-                    exposures_of_the_removed_node.take(),
-                ) {
+                if let Some(node) = graph.traversal_mut().v(processor_id).first_mut()
+                    && let Some(exposures) = exposures_of_the_removed_node.take()
+                {
                     node.insert_component_without_rendering_it(exposures);
                 }
                 first_node_left_behind.get_or_insert_with(|| processor_id.clone());

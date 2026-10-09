@@ -407,3 +407,110 @@ fn a_cut_that_panics_leaves_every_other_reader_cut_off() {
 
     assert_eq!(cuts.load(Ordering::SeqCst), 1);
 }
+
+/// Records, when dropped, whether its stream's graph could be read: a drop
+/// under the graph's write lock leaves the read waiting past the bound.
+struct RecordsWhetherTheStreamsGraphWasFreeWhenDropped {
+    stream: Weak<LoadedStreamInThisRuntime>,
+    graph_was_free: Arc<std::sync::Mutex<Option<bool>>>,
+}
+
+impl Drop for RecordsWhetherTheStreamsGraphWasFreeWhenDropped {
+    fn drop(&mut self) {
+        let stream = self.stream.clone();
+        let (rendered, graph_rendered) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Some(stream) = stream.upgrade() {
+                let _ = stream.to_json();
+            }
+            let _ = rendered.send(());
+        });
+        *self.graph_was_free.lock().unwrap() = Some(
+            graph_rendered
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .is_ok(),
+        );
+    }
+}
+
+/// A cut owning a probe that records whether the graph was free when the
+/// cut was dropped, and the record it writes.
+fn a_cut_probing_the_graph_lock_when_dropped(
+    stream: &Arc<LoadedStreamInThisRuntime>,
+) -> (
+    CutOffAReaderOfAnExposedOutputPort,
+    Arc<std::sync::Mutex<Option<bool>>>,
+) {
+    let graph_was_free = Arc::new(std::sync::Mutex::new(None));
+    let probe = RecordsWhetherTheStreamsGraphWasFreeWhenDropped {
+        stream: Arc::downgrade(stream),
+        graph_was_free: Arc::clone(&graph_was_free),
+    };
+    (
+        Box::new(move || {
+            let _owned_by_the_cut = &probe;
+        }),
+        graph_was_free,
+    )
+}
+
+#[test]
+#[serial]
+fn every_reader_a_registration_lets_go_of_is_dropped_once_the_graph_lock_is_released() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = a_camera_stream_exposing(
+        &runner,
+        project_directory.path(),
+        serde_json::json!([{"node": "camera", "port": "video", "level": "private"}]),
+    );
+
+    for (node, port, refused_because) in [
+        ("camera", "preview", "the port is internal"),
+        ("camera", "missing", "the node has no such output"),
+        ("display", "video", "the stream holds no such node"),
+    ] {
+        let (cut, graph_was_free) = a_cut_probing_the_graph_lock_when_dropped(&stream);
+        assert!(
+            stream
+                .register_a_reader_of_an_exposed_output_port(
+                    node,
+                    port,
+                    OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+                    cut,
+                )
+                .is_err(),
+            "{refused_because}"
+        );
+        assert_eq!(
+            *graph_was_free.lock().unwrap(),
+            Some(true),
+            "a reader refused because {refused_because} was dropped under the graph lock"
+        );
+    }
+
+    let (cut, graph_was_free) = a_cut_probing_the_graph_lock_when_dropped(&stream);
+    let first = stream
+        .register_a_reader_of_an_exposed_output_port(
+            "camera",
+            "video",
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            cut,
+        )
+        .unwrap();
+    drop(first);
+    let cuts = Arc::new(AtomicUsize::new(0));
+    let _second = stream
+        .register_a_reader_of_an_exposed_output_port(
+            "camera",
+            "video",
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            a_cut_counting_into(&cuts),
+        )
+        .unwrap();
+    assert_eq!(
+        *graph_was_free.lock().unwrap(),
+        Some(true),
+        "a reader whose registration was dropped was let go under the graph lock"
+    );
+}
