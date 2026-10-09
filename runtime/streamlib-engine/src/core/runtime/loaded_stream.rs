@@ -416,7 +416,10 @@ impl LoadedStreamInThisRuntime {
     /// service, iceoryx2 node or tokio.
     ///
     /// Runs every step even when removing the processors failed, and reports
-    /// that failure once the rest is down. Idempotent.
+    /// that failure once the rest is down. Idempotent. The stream stays loaded,
+    /// its name taken, until [`Runner::unload_stream`] ends it.
+    ///
+    /// [`Runner::unload_stream`]: crate::core::runtime::Runner::unload_stream
     #[tracing::instrument(name = "stream.stop", skip_all, fields(stream = %self.stream_name()))]
     pub fn stop(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
