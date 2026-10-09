@@ -182,10 +182,11 @@ impl Graph {
                 .flat_map(|node| {
                     node.get::<ExposedOutputPortsComponent>()
                         .into_iter()
-                        .flat_map(|exposed| exposed.0.iter())
-                        .map(|port| ExposedOutputPortOutput {
+                        .flat_map(ExposedOutputPortsComponent::exposed_ports_and_their_levels)
+                        .map(|(port, level)| ExposedOutputPortOutput {
                             node: node.display_name.clone(),
-                            port: port.clone(),
+                            port: port.to_string(),
+                            level,
                         })
                 })
                 .collect(),

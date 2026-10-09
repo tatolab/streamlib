@@ -83,6 +83,19 @@ pub enum Error {
     )]
     NodeNameTaken { name: String, cast: String },
 
+    #[error(
+        "port `{port}` of node `{node}` in stream `{stream}` is {level}, and {reader} reads \
+         only a port that is {levels_the_reader_may_read}"
+    )]
+    OutputPortNotExposedToTheReader {
+        stream: String,
+        node: String,
+        port: String,
+        level: String,
+        reader: String,
+        levels_the_reader_may_read: String,
+    },
+
     #[error("Invalid graph: {0}")]
     InvalidGraph(String),
 

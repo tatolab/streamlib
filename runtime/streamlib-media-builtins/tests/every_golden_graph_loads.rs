@@ -19,10 +19,16 @@ use streamlib_media_builtins::register_media_builtin_processor_types;
 
 /// Each golden graph's SHA-256, pinned as it was added: a golden is never
 /// edited, so a change to what a graph holds adds a golden and a line here.
-const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[(
-    "0001-every-key-and-every-built-in.json",
-    "b799e9e2ab499bfd5eb1a44691692c1567c80597c27737d89d5751bb4f7031b0",
-)];
+const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
+    (
+        "0001-every-key-and-every-built-in.json",
+        "b799e9e2ab499bfd5eb1a44691692c1567c80597c27737d89d5751bb4f7031b0",
+    ),
+    (
+        "0002-every-key-with-exposure-levels.json",
+        "7fd38a0ec6d9678e0b3410ca3aa4cf367e6c2c8bb7f5162e507d0fd9674ad263",
+    ),
+];
 
 fn golden_graph_paths() -> Vec<PathBuf> {
     let golden_graphs_directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden_graphs");

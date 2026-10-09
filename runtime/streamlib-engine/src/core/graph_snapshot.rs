@@ -17,7 +17,9 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::graph::{cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal};
+use crate::core::graph::{
+    OutputPortExposureLevel, cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal,
+};
 use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
@@ -39,7 +41,7 @@ pub struct GraphSnapshot {
     /// Every link, each end a node's port.
     pub links: Vec<GraphSnapshotLink>,
 
-    /// The output ports the stream exposes.
+    /// The output ports the stream exposes, each at its level.
     pub exposed: Vec<ExposedOutputPortOutput>,
 }
 
@@ -96,7 +98,7 @@ const GRAPH_LINK_END_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 
 const GRAPH_EXPOSURE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "an exposure",
-    spec_keys: &["node", "port"],
+    spec_keys: &["node", "port", "level"],
     live_keys: &[],
 };
 
@@ -168,7 +170,8 @@ impl GraphSnapshot {
     /// Check the graph without loading it: every `type` one the stream
     /// resolves on this floor, every config one its type takes, names unique
     /// once cast, every link end a port of the right direction on a node the
-    /// graph holds, and every exposure an output port a node has, named once.
+    /// graph holds, and every exposure an output port a node has, named once,
+    /// at a level beyond internal.
     pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
         let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
@@ -239,6 +242,14 @@ impl GraphSnapshot {
                 &exposed.port,
                 PortDirection::Output,
             )?;
+            if exposed.level == OutputPortExposureLevel::Internal {
+                return Err(Error::GraphError(format!(
+                    "the graph exposes `{}/{}` at the level `internal`, and an internal port \
+                     is one the graph leaves out of `exposed`. A port is exposed `private` \
+                     or `public`",
+                    exposed.node, exposed.port
+                )));
+            }
             if !exposures_seen.insert((node_cast, port_cast)) {
                 return Err(Error::GraphError(format!(
                     "the graph exposes `{}/{}` twice",
@@ -510,7 +521,8 @@ mod tests {
             graph.exposed,
             vec![ExposedOutputPortOutput {
                 node: "camera".into(),
-                port: "video".into()
+                port: "video".into(),
+                level: OutputPortExposureLevel::Private,
             }]
         );
     }
@@ -606,6 +618,61 @@ mod tests {
             .to_string();
 
         assert!(refusal.contains("holds no node `display`"), "{refusal}");
+    }
+
+    #[test]
+    fn an_exposure_reads_its_level_and_one_written_without_a_level_reads_as_private() {
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
+            "exposed": [
+                {"node": "camera", "port": "video", "level": "public"},
+                {"node": "camera", "port": "preview"}
+            ]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            graph
+                .exposed
+                .iter()
+                .map(|exposed| (exposed.port.as_str(), exposed.level))
+                .collect::<Vec<_>>(),
+            [
+                ("video", OutputPortExposureLevel::Public),
+                ("preview", OutputPortExposureLevel::Private)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_exposure_at_the_level_internal_is_refused_naming_the_levels_an_exposure_takes() {
+        let camera_class = a_registered_camera_class();
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "camera", "type": camera_class}],
+            "exposed": [{"node": "camera", "port": "video", "level": "internal"}]
+        }))
+        .unwrap();
+
+        let refusal = graph
+            .validate(&NodeTypesOneStreamResolves::new())
+            .unwrap_err()
+            .to_string();
+
+        for named in ["`camera/video`", "`internal`", "`private`", "`public`"] {
+            assert!(refusal.contains(named), "{named:?} not in: {refusal}");
+        }
+    }
+
+    #[test]
+    fn an_exposure_at_a_level_no_runtime_knows_does_not_parse() {
+        let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
+            "exposed": [{"node": "camera", "port": "video", "level": "everyone"}]
+        }))
+        .unwrap_err()
+        .to_string();
+
+        assert!(refusal.contains("everyone"), "{refusal}");
     }
 
     #[test]
@@ -830,10 +897,10 @@ mod tests {
             ),
             (
                 serde_json::json!({"nodes": [a_node.clone()],
-                                   "exposed": [{"node": "camera", "port": "video", "level": "public"}]}),
+                                   "exposed": [{"node": "camera", "port": "video", "levle": "public"}]}),
                 [
-                    "the exposure `camera/video` carries the key `level`",
-                    "`node` and `port`",
+                    "the exposure `camera/video` carries the key `levle`",
+                    "`node`, `port` and `level`",
                 ],
             ),
         ] {

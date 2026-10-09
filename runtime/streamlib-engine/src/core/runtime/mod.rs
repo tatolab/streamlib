@@ -7,6 +7,7 @@ mod engine_teardown_watchdog;
 mod graph_change_listener;
 mod helper_process_group_registry;
 mod loaded_stream;
+mod loaded_stream_output_port_exposure;
 mod local_processor_type_registration;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
@@ -48,6 +49,7 @@ pub(crate) use helper_process_group_registry::{
     kill_every_registered_helper_process_group_of_one_stream,
 };
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
+pub use loaded_stream_output_port_exposure::ExposedOutputPortReaderRegistration;
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 pub use runtime::{
