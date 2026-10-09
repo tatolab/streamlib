@@ -1,0 +1,402 @@
+{
+  "stream": "every-built-in",
+  "nodes": [
+    {
+      "id": "golden01",
+      "name": "testpatternsource",
+      "type": "tatolab.stream:TestPatternSource",
+      "config": {
+        "width": 1280,
+        "height": 720
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden02",
+      "name": "displaywindow",
+      "type": "tatolab.stream:DisplayWindow",
+      "config": {
+        "title": "Golden graph",
+        "width": 640,
+        "height": 360,
+        "scaling": "fit"
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden03",
+      "name": "camerasource",
+      "type": "tatolab.stream:CameraSource",
+      "config": {
+        "device_id": "/dev/video0",
+        "max_width": 1920,
+        "max_height": 1080
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden04",
+      "name": "h264encoder",
+      "type": "tatolab.stream:H264Encoder",
+      "config": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "bitrate_bps": 4000000,
+        "keyframe_interval_seconds": 2,
+        "effort_level": 1
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden05",
+      "name": "h264decoder",
+      "type": "tatolab.stream:H264Decoder",
+      "config": {
+        "max_width": 1920,
+        "max_height": 1080
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden06",
+      "name": "h265encoder",
+      "type": "tatolab.stream:H265Encoder",
+      "config": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "bitrate_bps": 4000000,
+        "keyframe_interval_seconds": 2,
+        "effort_level": 1
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden07",
+      "name": "h265decoder",
+      "type": "tatolab.stream:H265Decoder",
+      "config": {
+        "max_width": 1920,
+        "max_height": 1080
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden08",
+      "name": "virtualcamerasink",
+      "type": "tatolab.stream:VirtualCameraSink",
+      "config": {
+        "name": "Golden Camera",
+        "door": "auto"
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden09",
+      "name": "microphonesource",
+      "type": "tatolab.stream:MicrophoneSource",
+      "config": {
+        "device_id": "default"
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden10",
+      "name": "opusencoder",
+      "type": "tatolab.stream:OpusEncoder",
+      "config": {
+        "bitrate_bps": 64000,
+        "application": "audio"
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden11",
+      "name": "opusdecoder",
+      "type": "tatolab.stream:OpusDecoder",
+      "config": {},
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden12",
+      "name": "speakersink",
+      "type": "tatolab.stream:SpeakerSink",
+      "config": {
+        "device_id": "default"
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden13",
+      "name": "mp4sink",
+      "type": "tatolab.stream:Mp4Sink",
+      "config": {
+        "path": "recording.mp4"
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    }
+  ],
+  "links": [
+    {
+      "id": "goldenlink01",
+      "source": {
+        "node": "testpatternsource",
+        "port": "video"
+      },
+      "target": {
+        "node": "displaywindow",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "error",
+      "error_reason": "a reason `graph` renders only on a link in error",
+      "components": {}
+    },
+    {
+      "id": "goldenlink02",
+      "source": {
+        "node": "camerasource",
+        "port": "video"
+      },
+      "target": {
+        "node": "h264encoder",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink03",
+      "source": {
+        "node": "camerasource",
+        "port": "video"
+      },
+      "target": {
+        "node": "h265encoder",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink04",
+      "source": {
+        "node": "h264encoder",
+        "port": "encoded_video"
+      },
+      "target": {
+        "node": "h264decoder",
+        "port": "encoded_video"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink05",
+      "source": {
+        "node": "h265encoder",
+        "port": "encoded_video"
+      },
+      "target": {
+        "node": "h265decoder",
+        "port": "encoded_video"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink06",
+      "source": {
+        "node": "h264decoder",
+        "port": "video"
+      },
+      "target": {
+        "node": "virtualcamerasink",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink07",
+      "source": {
+        "node": "microphonesource",
+        "port": "audio"
+      },
+      "target": {
+        "node": "opusencoder",
+        "port": "audio"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink08",
+      "source": {
+        "node": "opusencoder",
+        "port": "encoded_audio"
+      },
+      "target": {
+        "node": "opusdecoder",
+        "port": "encoded_audio"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink09",
+      "source": {
+        "node": "opusdecoder",
+        "port": "audio"
+      },
+      "target": {
+        "node": "speakersink",
+        "port": "audio"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink10",
+      "source": {
+        "node": "h264encoder",
+        "port": "encoded_video"
+      },
+      "target": {
+        "node": "mp4sink",
+        "port": "tracks"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink11",
+      "source": {
+        "node": "opusencoder",
+        "port": "encoded_audio"
+      },
+      "target": {
+        "node": "mp4sink",
+        "port": "tracks"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    }
+  ],
+  "exposed": [
+    {
+      "node": "camerasource",
+      "port": "video",
+      "level": "private"
+    },
+    {
+      "node": "h264encoder",
+      "port": "encoded_video",
+      "level": "public"
+    }
+  ],
+  "extensions": [],
+  "runtime_name": "golden-desk-a1b2"
+}

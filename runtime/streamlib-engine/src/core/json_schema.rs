@@ -160,13 +160,22 @@ impl LinkPortRefOutput {
     }
 }
 
-/// One output port a stream exposes, named by its node's name.
+/// One output port a stream exposes, named by its node's name, at its level.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ExposedOutputPortOutput {
     /// The name of the node that owns the port.
     pub node: String,
     /// The output port's own name on that node.
     pub port: String,
+    /// How far outside its stream the port may be read: `private` or
+    /// `public`. A graph written before exposure had levels carries none, and
+    /// reads as `private`, which is what its exposure meant.
+    #[serde(default = "an_exposure_written_without_a_level_is_private")]
+    pub level: crate::core::graph::OutputPortExposureLevel,
+}
+
+fn an_exposure_written_without_a_level_is_private() -> crate::core::graph::OutputPortExposureLevel {
+    crate::core::graph::OutputPortExposureLevel::Private
 }
 
 /// Every node's name by its processor id, for rendering the ends a graph

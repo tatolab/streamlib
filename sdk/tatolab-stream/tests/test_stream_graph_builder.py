@@ -889,7 +889,9 @@ def test_a_hand_built_reference_reaches_the_graph_cast() -> None:
                 "target": {"node": "brightnessreader", "port": "video_from_upstream"},
             },
         ],
-        "exposed": [{"node": "frameinverter", "port": "video_to_downstream"}],
+        "exposed": [
+            {"node": "frameinverter", "port": "video_to_downstream", "level": "private"}
+        ],
     }
 
 
@@ -957,8 +959,8 @@ def test_a_stream_compiles_to_its_graph() -> None:
             },
         ],
         "exposed": [
-            {"node": "frameinverter", "port": "video_to_downstream"},
-            {"node": "frameinverter-2", "port": "video_to_downstream"},
+            {"node": "frameinverter", "port": "video_to_downstream", "level": "private"},
+            {"node": "frameinverter-2", "port": "video_to_downstream", "level": "private"},
         ],
     }
     assert json.loads(json.dumps(graph)) == graph

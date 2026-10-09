@@ -27,9 +27,8 @@ use crate::core::context::{
     SharedAudioClock, TimeContext,
 };
 use crate::core::graph::{
-    ExposedOutputPortsComponent, GraphNodeWithComponents, GraphState, LinkUniqueId,
-    ObservableGraphReadiness, ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent,
-    cast_exposed_name_to_url_safe,
+    GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
+    ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::logging::LoadedStreamLogRoute;
@@ -969,7 +968,7 @@ impl LoadedStreamInThisRuntime {
     /// every type it names that no native registration holds described in the
     /// stream's own interpreter, the graph validated against what the stream
     /// resolves, each node added under its name, each link connected by name,
-    /// and the exposures recorded on their nodes.
+    /// and each exposure put at its level in the stream's live exposure map.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,
@@ -1006,23 +1005,9 @@ impl LoadedStreamInThisRuntime {
             )?;
         }
 
-        let mut exposed_ports_by_processor_id: HashMap<ProcessorUniqueId, Vec<String>> =
-            HashMap::new();
         for exposed in &graph.exposed {
-            exposed_ports_by_processor_id
-                .entry(processor_id_of(&exposed.node)?)
-                .or_default()
-                .push(cast_exposed_name_to_url_safe(&exposed.port)?.into_owned());
+            self.set_output_port_exposure_level(&exposed.node, &exposed.port, exposed.level)?;
         }
-        self.compiler.scope(|live_graph, _tx| {
-            for (processor_id, exposed_ports) in exposed_ports_by_processor_id {
-                if let Some(node) = live_graph.traversal_mut().v(&processor_id).first_mut() {
-                    node.insert_component_without_rendering_it(ExposedOutputPortsComponent(
-                        exposed_ports,
-                    ));
-                }
-            }
-        });
         Ok(())
     }
 }

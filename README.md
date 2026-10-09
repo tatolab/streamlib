@@ -152,8 +152,10 @@ def main(stream_builder: StreamBuilder) -> None:
 One output, two readers: the window shows the frame, the meter measures it. `add` names each node
 after its class, lowercased (`invertingeffect`), unless you pass `name=`. A built-in's `config` is
 a `TypedDict` — `CameraSourceConfig`, `DisplayWindowConfig` — so a type checker catches a
-misspelled key. `expose` records an output port the stream offers beyond this machine; serving it
-there is not built yet.
+misspelled key. `expose` makes an output private, readable by other streams and code on this
+machine; `expose(output, Exposure.PUBLIC)`, with `Exposure` imported from `tatolab.stream`, makes
+it public, readable off the machine too. Reading an exposed port from outside its stream is not
+built yet.
 
 Pixels stay on the GPU. `nodes/inverting_effect.py` is one shader function:
 

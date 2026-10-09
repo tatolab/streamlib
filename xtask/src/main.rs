@@ -386,6 +386,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "rust_port_name_cast_test",
                 "--test",
                 "unknown_processor_type_test",
+                "--test",
+                "output_port_exposure_test",
             ],
         ),
         (
@@ -825,6 +827,9 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel",
                 "core::graph_snapshot",
+                "core::graph::output_port_exposure",
+                "core::graph::components::exposed_output_ports_component",
+                "core::graph::graph_tests::mutation_persistence::a_dropped_node_takes_its_exposures_and_their_readers_with_it",
                 "core::graph::traversal::mutation_ops::add_v_op::tests::a_built_in_this_floor_compiles_out_is_refused_and_nothing_is_added",
                 "core::graph::traversal::mutation_ops::add_v_op::tests::a_config_the_type_does_not_take_is_refused_naming_the_node_and_nothing_is_added",
                 "core::processors::processor_instance_factory::tests::a_typed_registration_refuses_a_config_naming_the_setting_and_a_python_class_takes_any",

@@ -12,6 +12,28 @@
 
 use streamlib_processor_schema::{ExposedNameCastsToNothingError, ProcessorClassImportPath};
 
+/// An output port refused a reader from outside its stream: the port's level
+/// does not allow a reader where that reader reads from.
+#[derive(thiserror::Error, Debug)]
+#[error(
+    "port `{port}` of node `{node}` in stream `{stream}` is {level}, and {reader} reads only a \
+     port that is {levels_the_reader_may_read}"
+)]
+pub struct OutputPortNotExposedToTheReader {
+    /// The stream that holds the port.
+    pub stream: String,
+    /// The node that owns the port.
+    pub node: String,
+    /// The output port's name on that node.
+    pub port: String,
+    /// The port's level: `internal`, `private` or `public`.
+    pub level: String,
+    /// Where the refused reader reads from.
+    pub reader: String,
+    /// The levels a reader there may read.
+    pub levels_the_reader_may_read: String,
+}
+
 /// The StreamLib error type.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -82,6 +104,9 @@ pub enum Error {
          next free `-2`, `-3` …"
     )]
     NodeNameTaken { name: String, cast: String },
+
+    #[error("{0}")]
+    OutputPortNotExposedToTheReader(Box<OutputPortNotExposedToTheReader>),
 
     #[error("Invalid graph: {0}")]
     InvalidGraph(String),

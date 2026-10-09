@@ -167,7 +167,7 @@ fn a_graph_document_saved_from_a_running_stream_loads_back_as_the_same_graph() {
 
 #[test]
 #[serial]
-fn a_loaded_stream_renders_its_name_and_its_exposures_and_round_trips_them() {
+fn a_loaded_stream_renders_its_name_and_its_exposures_at_their_levels_and_round_trips_them() {
     let camera = register_test_type("ExposedCamera", "_unused_in", "video");
 
     let project_directory = tempfile::tempdir().expect("a project directory");
@@ -177,8 +177,14 @@ fn a_loaded_stream_renders_its_name_and_its_exposures_and_round_trips_them() {
         project_directory.path(),
         serde_json::json!({
             "stream": "main",
-            "nodes": [{"name": "Front Camera", "type": camera.as_str(), "config": {}}],
-            "exposed": [{"node": "front-camera", "port": "Video"}]
+            "nodes": [
+                {"name": "Front Camera", "type": camera.as_str(), "config": {}},
+                {"name": "Back Camera", "type": camera.as_str(), "config": {}}
+            ],
+            "exposed": [
+                {"node": "front-camera", "port": "Video"},
+                {"node": "back-camera", "port": "video", "level": "public"}
+            ]
         }),
     )
     .expect("the graph loads");
@@ -187,7 +193,11 @@ fn a_loaded_stream_renders_its_name_and_its_exposures_and_round_trips_them() {
     assert_eq!(rendered["stream"], "main");
     assert_eq!(
         rendered["exposed"],
-        serde_json::json!([{"node": "front-camera", "port": "video"}])
+        serde_json::json!([
+            {"node": "front-camera", "port": "video", "level": "private"},
+            {"node": "back-camera", "port": "video", "level": "public"}
+        ]),
+        "an exposure renders its level, and one written with no level renders as private"
     );
 
     let reloading_runner = Runner::new().unwrap();

@@ -14,7 +14,7 @@ use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
-    ProcessorUniqueId, StateComponent, node_names_listed_for_a_refusal,
+    ProcessorUniqueId, StateComponent, node_named_or_refused,
 };
 use crate::core::logging::{
     carrying_this_threads_loaded_stream_log_route, polled_in_a_loaded_stream_log_route,
@@ -296,19 +296,10 @@ async fn connect_impl(
 /// ones it does.
 fn the_node_this_stream_names(compiler: &Arc<Compiler>, node_name: &str) -> Result<NodeInTheGraph> {
     compiler.scope(|graph, _tx| {
-        if let Some(named) = graph.traversal().v_with_node_name(node_name).first() {
-            return Ok(NodeInTheGraph {
-                processor_id: named.id.clone(),
-                name: named.display_name.clone(),
-            });
-        }
-        let every_node = graph.traversal().v(());
-        Err(Error::ProcessorNotFound(format!(
-            "no node in this stream is named {node_name:?}. This stream holds: {}",
-            node_names_listed_for_a_refusal(
-                every_node.iter().map(|node| node.display_name.as_str())
-            )
-        )))
+        node_named_or_refused(graph, node_name).map(|named| NodeInTheGraph {
+            processor_id: named.id.clone(),
+            name: named.display_name.clone(),
+        })
     })
 }
 

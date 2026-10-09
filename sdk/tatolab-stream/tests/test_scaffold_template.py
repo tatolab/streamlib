@@ -265,7 +265,9 @@ def test_the_scaffold_compiles_to_its_graph_with_no_runtime(tmp_path: Path):
                     "target": {"node": "brightnessmeter", "port": "video_from_upstream"},
                 },
             ],
-            "exposed": [{"node": "invertingeffect", "port": "video_to_downstream"}],
+            "exposed": [
+                {"node": "invertingeffect", "port": "video_to_downstream", "level": "private"}
+            ],
         },
         "project_directory": str(app_directory),
     }

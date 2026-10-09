@@ -835,6 +835,70 @@ mod mutation_persistence {
         assert!(!graph.traversal().v(id.as_str()).exists());
     }
 
+    /// A node's exposures live on the node, so dropping it — what a live
+    /// removal's commit does — takes them out of `graph` and drops every
+    /// reader's cut unrun.
+    #[test]
+    fn a_dropped_node_takes_its_exposures_and_their_readers_with_it() {
+        use crate::core::graph::{
+            ExposedOutputPortsComponent, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
+            ReaderOfAnExposedOutputPort,
+        };
+
+        let mut graph = test_graph();
+        let id = graph
+            .traversal_mut()
+            .add_v(MockProcessor::Processor::node(Default::default()))
+            .expect("the node is named")
+            .first()
+            .expect("should create processor")
+            .id
+            .to_string();
+        let cuts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut exposed_ports = ExposedOutputPortsComponent::default();
+        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        let cut_holding_the_count = Arc::clone(&cuts);
+        assert!(
+            exposed_ports
+                .register_reader(
+                    "video",
+                    ReaderOfAnExposedOutputPort::new(
+                        Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                        OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+                        Box::new(move || {
+                            cut_holding_the_count.fetch_add(1, Ordering::SeqCst);
+                        }),
+                    ),
+                )
+                .is_ok()
+        );
+        graph
+            .traversal_mut()
+            .v(id.as_str())
+            .first_mut()
+            .expect("the node is in the graph")
+            .insert_component_without_rendering_it(exposed_ports);
+        assert_eq!(
+            graph.to_graph_response("rig".into()).exposed.len(),
+            1,
+            "the exposure renders while its node is there"
+        );
+
+        graph.traversal_mut().v(id.as_str()).drop();
+
+        assert!(graph.to_graph_response("rig".into()).exposed.is_empty());
+        assert_eq!(
+            cuts.load(Ordering::SeqCst),
+            0,
+            "a dropped node's readers are not cut"
+        );
+        assert_eq!(
+            Arc::strong_count(&cuts),
+            1,
+            "the node took its readers' cuts with it"
+        );
+    }
+
     #[test]
     fn test_drop_removes_link() {
         let mut graph = test_graph();
