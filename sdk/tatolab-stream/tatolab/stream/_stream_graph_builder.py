@@ -38,6 +38,7 @@ __all__ = [
     "stream",
 ]
 
+
 class Exposure(enum.Enum):
     """How far outside its stream an exposed output port may be read."""
 

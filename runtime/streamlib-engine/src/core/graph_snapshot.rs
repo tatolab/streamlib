@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
     OutputPortExposureLevel, cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal,
+    port_names_listed_for_a_refusal,
 };
 use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
 use crate::core::processors::NodeTypesOneStreamResolves;
@@ -400,11 +401,7 @@ fn refuse_a_port_the_node_does_not_have(
     }
     Err(Error::GraphError(format!(
         "node `{node_name}` has no {direction} port `{port}`. Its {direction} ports are: {}",
-        if port_names.is_empty() {
-            "none".to_string()
-        } else {
-            port_names.join(", ")
-        }
+        port_names_listed_for_a_refusal(port_names.iter().map(String::as_str))
     )))
 }
 

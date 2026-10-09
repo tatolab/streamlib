@@ -15,7 +15,9 @@ use streamlib::sdk::descriptors::{
     PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
 };
 use streamlib::sdk::error::Error;
-use streamlib::sdk::graph::{OutputPortExposureLevel, OutputPortReaderLocation};
+use streamlib::sdk::graph::{
+    CutOffAReaderOfAnExposedOutputPort, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
+};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
@@ -63,7 +65,7 @@ fn the_exposures_graph_renders_for(stream: &LoadedStreamInThisRuntime) -> serde_
 }
 
 /// A cut that counts how often it ran.
-fn a_cut_counting_into(cuts: &Arc<AtomicUsize>) -> Box<dyn FnOnce() + Send + Sync> {
+fn a_cut_counting_into(cuts: &Arc<AtomicUsize>) -> CutOffAReaderOfAnExposedOutputPort {
     let cuts = Arc::clone(cuts);
     Box::new(move || {
         cuts.fetch_add(1, Ordering::SeqCst);
@@ -110,26 +112,19 @@ fn a_reader_from_outside_the_stream_of_an_internal_port_is_refused_naming_the_po
         .register_a_reader_of_an_exposed_output_port(
             "camera",
             "video",
-            OutputPortReaderLocation::ElsewhereOnThisMachine,
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
             a_cut_counting_into(&cuts),
         )
-        .err()
-        .expect("an internal port refuses a reader from another stream");
+        .expect_err("an internal port refuses a reader from another stream");
 
     match &refusal {
-        Error::OutputPortNotExposedToTheReader {
-            stream,
-            node,
-            port,
-            level,
-            ..
-        } => {
+        Error::OutputPortNotExposedToTheReader(refused) => {
             assert_eq!(
                 (
-                    stream.as_str(),
-                    node.as_str(),
-                    port.as_str(),
-                    level.as_str()
+                    refused.stream.as_str(),
+                    refused.node.as_str(),
+                    refused.port.as_str(),
+                    refused.level.as_str()
                 ),
                 ("main", "camera", "video", "internal")
             );
@@ -169,11 +164,10 @@ fn a_private_port_refuses_a_reader_on_another_machine_and_takes_one_on_this_mach
         .register_a_reader_of_an_exposed_output_port(
             "camera",
             "video",
-            OutputPortReaderLocation::OnAnotherMachine,
+            OutputPortReaderOutsideItsStream::OnAnotherMachine,
             a_cut_counting_into(&cuts),
         )
-        .err()
-        .expect("a private port refuses a reader on another machine")
+        .expect_err("a private port refuses a reader on another machine")
         .to_string();
     assert!(
         refusal.contains("private") && refusal.contains("only a port that is public"),
@@ -184,7 +178,7 @@ fn a_private_port_refuses_a_reader_on_another_machine_and_takes_one_on_this_mach
         .register_a_reader_of_an_exposed_output_port(
             "camera",
             "video",
-            OutputPortReaderLocation::ElsewhereOnThisMachine,
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
             a_cut_counting_into(&cuts),
         )
         .expect("a private port takes a reader on this machine");
@@ -206,7 +200,7 @@ fn lowering_a_level_cuts_off_at_once_every_reader_it_no_longer_allows_and_no_oth
         .register_a_reader_of_an_exposed_output_port(
             "camera",
             "video",
-            OutputPortReaderLocation::ElsewhereOnThisMachine,
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
             a_cut_counting_into(&on_this_machine),
         )
         .unwrap();
@@ -214,7 +208,7 @@ fn lowering_a_level_cuts_off_at_once_every_reader_it_no_longer_allows_and_no_oth
         .register_a_reader_of_an_exposed_output_port(
             "camera",
             "video",
-            OutputPortReaderLocation::OnAnotherMachine,
+            OutputPortReaderOutsideItsStream::OnAnotherMachine,
             a_cut_counting_into(&on_another_machine),
         )
         .unwrap();
@@ -239,11 +233,10 @@ fn lowering_a_level_cuts_off_at_once_every_reader_it_no_longer_allows_and_no_oth
         .register_a_reader_of_an_exposed_output_port(
             "camera",
             "video",
-            OutputPortReaderLocation::ElsewhereOnThisMachine,
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
             a_cut_counting_into(&on_this_machine),
         )
-        .err()
-        .expect("a reader arriving after the level fell is checked against the new level");
+        .expect_err("a reader arriving after the level fell is checked against the new level");
     assert!(refusal.to_string().contains("internal"), "{refusal}");
 }
 
@@ -264,7 +257,7 @@ fn a_cut_runs_after_the_stream_lets_go_of_its_graph() {
         .register_a_reader_of_an_exposed_output_port(
             "camera",
             "video",
-            OutputPortReaderLocation::ElsewhereOnThisMachine,
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
             Box::new(move || {
                 let stream = stream_held_weakly.upgrade().expect("the stream is loaded");
                 *into.lock().unwrap() =
@@ -299,7 +292,7 @@ fn a_dropped_registration_takes_its_reader_off_the_port() {
         .register_a_reader_of_an_exposed_output_port(
             "camera",
             "video",
-            OutputPortReaderLocation::ElsewhereOnThisMachine,
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
             a_cut_counting_into(&cuts),
         )
         .unwrap();
@@ -321,7 +314,14 @@ fn a_node_or_an_output_port_the_stream_does_not_hold_is_refused_by_name() {
     let stream = a_camera_stream_exposing(&runner, project_directory.path(), serde_json::json!([]));
 
     for (node, port, named) in [
-        ("display", "video", ["holds no node `display`", "camera"]),
+        (
+            "display",
+            "video",
+            [
+                "no node in this stream is named \"display\"",
+                "This stream holds: camera",
+            ],
+        ),
         (
             "camera",
             "frames_in",
@@ -336,4 +336,74 @@ fn a_node_or_an_output_port_the_stream_does_not_hold_is_refused_by_name() {
             assert!(refusal.contains(expected), "{expected:?} not in: {refusal}");
         }
     }
+}
+
+#[test]
+#[serial]
+fn a_cut_that_owns_its_own_registration_is_cut_and_lets_it_go() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = a_camera_stream_exposing(
+        &runner,
+        project_directory.path(),
+        serde_json::json!([{"node": "camera", "port": "video", "level": "private"}]),
+    );
+    let its_own_registration = Arc::new(std::sync::Mutex::new(None));
+    let held_by_the_cut = Arc::clone(&its_own_registration);
+    let cuts = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&cuts);
+    let registration = stream
+        .register_a_reader_of_an_exposed_output_port(
+            "camera",
+            "video",
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            Box::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                drop(held_by_the_cut.lock().unwrap().take());
+            }),
+        )
+        .unwrap();
+    *its_own_registration.lock().unwrap() = Some(registration);
+
+    stream
+        .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Internal)
+        .unwrap();
+
+    assert_eq!(cuts.load(Ordering::SeqCst), 1);
+    assert!(its_own_registration.lock().unwrap().is_none());
+}
+
+#[test]
+#[serial]
+fn a_cut_that_panics_leaves_every_other_reader_cut_off() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = a_camera_stream_exposing(
+        &runner,
+        project_directory.path(),
+        serde_json::json!([{"node": "camera", "port": "video", "level": "private"}]),
+    );
+    let _panicking_reader = stream
+        .register_a_reader_of_an_exposed_output_port(
+            "camera",
+            "video",
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            Box::new(|| panic!("a reader's cut that panics")),
+        )
+        .unwrap();
+    let cuts = Arc::new(AtomicUsize::new(0));
+    let _reader_after_it = stream
+        .register_a_reader_of_an_exposed_output_port(
+            "camera",
+            "video",
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            a_cut_counting_into(&cuts),
+        )
+        .unwrap();
+
+    stream
+        .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Internal)
+        .expect("a panicking cut does not fail the level change");
+
+    assert_eq!(cuts.load(Ordering::SeqCst), 1);
 }

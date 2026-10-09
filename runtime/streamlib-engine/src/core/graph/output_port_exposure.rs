@@ -50,14 +50,24 @@ pub enum OutputPortReaderLocation {
     OnAnotherMachine,
 }
 
+impl OutputPortExposureLevel {
+    /// Every level, narrowest first.
+    pub const EVERY_LEVEL: [Self; 3] = [Self::Internal, Self::Private, Self::Public];
+}
+
 impl OutputPortReaderLocation {
-    /// The levels a port must be at for a reader here to read it, as a refusal
-    /// names them.
-    pub fn levels_a_reader_here_may_read(self) -> &'static str {
-        match self {
-            Self::InsideThePortsStream => "internal, private or public",
-            Self::ElsewhereOnThisMachine => "private or public",
-            Self::OnAnotherMachine => "public",
+    /// The levels the check lets a reader here read, as a refusal names them:
+    /// `private or public`.
+    pub fn levels_a_reader_here_may_read(self) -> String {
+        let levels: Vec<String> = OutputPortExposureLevel::EVERY_LEVEL
+            .into_iter()
+            .filter(|level| output_port_exposure_allows_the_reader(*level, self))
+            .map(|level| level.to_string())
+            .collect();
+        match levels.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, before)) => format!("{} or {last}", before.join(", ")),
+            None => "no level".to_string(),
         }
     }
 }
@@ -69,6 +79,32 @@ impl std::fmt::Display for OutputPortReaderLocation {
             Self::ElsewhereOnThisMachine => "another stream or other code on this machine",
             Self::OnAnotherMachine => "a reader on another machine",
         })
+    }
+}
+
+/// Where a reader from outside an output port's stream reads it from: the
+/// readers that register against a port and that a level change can cut off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OutputPortReaderOutsideItsStream {
+    /// Another stream, or other code, on this machine.
+    ElsewhereOnThisMachine,
+    /// Anything on another machine.
+    OnAnotherMachine,
+}
+
+impl OutputPortReaderOutsideItsStream {
+    /// The location the one check reads this reader at.
+    pub fn location(self) -> OutputPortReaderLocation {
+        match self {
+            Self::ElsewhereOnThisMachine => OutputPortReaderLocation::ElsewhereOnThisMachine,
+            Self::OnAnotherMachine => OutputPortReaderLocation::OnAnotherMachine,
+        }
+    }
+}
+
+impl std::fmt::Display for OutputPortReaderOutsideItsStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.location().fmt(f)
     }
 }
 
@@ -121,13 +157,31 @@ mod tests {
     }
 
     #[test]
-    fn a_level_is_written_in_lowercase_on_the_wire() {
+    fn a_refusal_names_the_levels_the_check_allows_a_reader_there() {
+        for (location, named) in [
+            (
+                OutputPortReaderLocation::InsideThePortsStream,
+                "internal, private or public",
+            ),
+            (
+                OutputPortReaderLocation::ElsewhereOnThisMachine,
+                "private or public",
+            ),
+            (OutputPortReaderLocation::OnAnotherMachine, "public"),
+        ] {
+            assert_eq!(location.levels_a_reader_here_may_read(), named);
+        }
+    }
+
+    #[test]
+    fn a_level_is_written_in_lowercase_on_the_wire_and_displayed_as_written() {
         for (level, written) in [
             (OutputPortExposureLevel::Internal, "\"internal\""),
             (OutputPortExposureLevel::Private, "\"private\""),
             (OutputPortExposureLevel::Public, "\"public\""),
         ] {
             assert_eq!(serde_json::to_string(&level).unwrap(), written);
+            assert_eq!(format!("\"{level}\""), written);
             assert_eq!(
                 serde_json::from_str::<OutputPortExposureLevel>(written).unwrap(),
                 level

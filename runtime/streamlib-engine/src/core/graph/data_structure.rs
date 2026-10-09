@@ -195,6 +195,43 @@ impl Graph {
     }
 }
 
+/// The node `node_name` names once cast, refused by name — listing the nodes
+/// `graph` holds — when there is none.
+pub(crate) fn node_named_or_refused<'graph>(
+    graph: &'graph Graph,
+    node_name: &str,
+) -> crate::core::Result<&'graph crate::core::graph::ProcessorNode> {
+    graph
+        .traversal()
+        .v_with_node_name(node_name)
+        .first()
+        .ok_or_else(|| {
+            crate::core::Error::ProcessorNotFound(format!(
+                "no node in this stream is named {node_name:?}. This stream holds: {}",
+                node_names_listed_for_a_refusal(
+                    graph
+                        .traversal()
+                        .v(())
+                        .iter()
+                        .map(|node| node.display_name.as_str())
+                )
+            ))
+        })
+}
+
+/// Port names, comma-joined in the order a node declares them for a refusal
+/// that lists them — `none` when it declares none.
+pub(crate) fn port_names_listed_for_a_refusal<'name>(
+    port_names: impl IntoIterator<Item = &'name str>,
+) -> String {
+    let listed: Vec<&str> = port_names.into_iter().collect();
+    if listed.is_empty() {
+        "none".to_string()
+    } else {
+        listed.join(", ")
+    }
+}
+
 /// Node names, sorted and comma-joined for a refusal that lists what a graph
 /// holds — `no node` when it holds none.
 pub(crate) fn node_names_listed_for_a_refusal<'name>(

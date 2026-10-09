@@ -17,11 +17,14 @@ mod validation;
 mod graph_tests;
 
 // top level
-pub(crate) use data_structure::node_names_listed_for_a_refusal;
 pub use data_structure::{Graph, GraphState};
+pub(crate) use data_structure::{
+    node_named_or_refused, node_names_listed_for_a_refusal, port_names_listed_for_a_refusal,
+};
 pub use graph_readiness::ObservableGraphReadiness;
 pub use output_port_exposure::{
-    OutputPortExposureLevel, OutputPortReaderLocation, output_port_exposure_allows_the_reader,
+    OutputPortExposureLevel, OutputPortReaderLocation, OutputPortReaderOutsideItsStream,
+    output_port_exposure_allows_the_reader,
 };
 pub use processor_state_ecs_component::{ProcessorState, ProcessorStateComponent};
 pub(crate) use streamlib_processor_schema::is_in_exposed_name_cast_form;

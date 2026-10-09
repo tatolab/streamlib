@@ -19,8 +19,8 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
-    ThreadHandleComponent,
+    ExposedOutputPortsComponent, Graph, GraphNodeWithComponents, ProcessorUniqueId,
+    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
 };
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -200,18 +200,26 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
 
     let mut first_node_left_behind = None;
     for processor_id in processor_ids {
+        let exposures_of_the_removed_node;
         {
             let mut graph = graph_arc.write();
-            if let Some(node) = graph.traversal_mut().v(processor_id).first_mut() {
-                if let Some(state) = node.get::<StateComponent>() {
-                    state.transition_to(ProcessorState::Stopped);
-                }
-            }
+            exposures_of_the_removed_node = graph
+                .traversal_mut()
+                .v(processor_id)
+                .first_mut()
+                .and_then(|node| {
+                    if let Some(state) = node.get::<StateComponent>() {
+                        state.transition_to(ProcessorState::Stopped);
+                    }
+                    node.remove::<ExposedOutputPortsComponent>()
+                });
             if graph.traversal_mut().v(processor_id).drop().exists() {
                 first_node_left_behind.get_or_insert_with(|| processor_id.clone());
                 continue;
             }
         }
+        // Its readers' cuts may own anything, so they are dropped only once the graph lock is released.
+        drop(exposures_of_the_removed_node);
         the_stream_the_processors_belong_to.publish_on_this_streams_topic(
             RuntimeEvent::CompilerDidDestroyProcessor {
                 processor_id: processor_id.clone(),

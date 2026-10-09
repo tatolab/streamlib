@@ -841,7 +841,7 @@ mod mutation_persistence {
     #[test]
     fn a_dropped_node_takes_its_exposures_and_their_readers_with_it() {
         use crate::core::graph::{
-            ExposedOutputPortsComponent, OutputPortExposureLevel, OutputPortReaderLocation,
+            ExposedOutputPortsComponent, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
             ReaderOfAnExposedOutputPort,
         };
 
@@ -863,8 +863,8 @@ mod mutation_persistence {
                 .register_reader(
                     "video",
                     ReaderOfAnExposedOutputPort::new(
-                        1,
-                        OutputPortReaderLocation::ElsewhereOnThisMachine,
+                        Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                        OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
                         Box::new(move || {
                             cut_holding_the_count.fetch_add(1, Ordering::SeqCst);
                         }),
