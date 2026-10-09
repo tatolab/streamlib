@@ -12,8 +12,8 @@
 
 use super::bus::{EVENTS_QUEUED_PER_SUBSCRIPTION, PubSub};
 use super::events::{
-    Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, RuntimeEvent,
-    topics,
+    Event, EventListener, KeyCode, KeyState, LoadedStreamIdentity, Modifiers, MouseButton,
+    MouseState, RuntimeEvent, topics,
 };
 use parking_lot::Mutex;
 use std::sync::mpsc;
@@ -55,8 +55,34 @@ fn number_of(event: &Event) -> usize {
     }
 }
 
+/// The stream `stream_name`, tagged `stream_tag`, loaded in the runtime
+/// `runtime_id`.
+fn a_loaded_stream(runtime_id: &str, stream_name: &str, stream_tag: u32) -> LoadedStreamIdentity {
+    LoadedStreamIdentity {
+        runtime_id: runtime_id.to_string(),
+        stream_name: stream_name.to_string(),
+        stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(stream_tag),
+    }
+}
+
+/// The stream the tests that need one stream's topic publish on.
+fn the_test_stream() -> LoadedStreamIdentity {
+    a_loaded_stream("Rpubsubtest", "main", 1)
+}
+
+fn the_test_streams_topic() -> String {
+    topics::loaded_stream(&the_test_stream())
+}
+
+fn an_event_of(stream: &LoadedStreamIdentity, event: RuntimeEvent) -> Event {
+    Event::OfALoadedStream {
+        stream: stream.clone(),
+        event,
+    }
+}
+
 fn sentinel() -> Event {
-    Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped)
+    an_event_of(&the_test_stream(), RuntimeEvent::RuntimeStopped)
 }
 
 /// Every event the listener received before the sentinel, which must arrive.
@@ -77,10 +103,10 @@ fn received_before_the_sentinel(received: &mpsc::Receiver<Event>) -> Vec<Event> 
 fn an_event_published_the_instant_subscribe_returns_is_delivered() {
     let bus = PubSub::new();
     let (listener, received) = forwarding_listener();
-    bus.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))
+    bus.subscribe(&the_test_streams_topic(), Arc::clone(&listener))
         .expect("subscribe");
 
-    let event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping);
+    let event = an_event_of(&the_test_stream(), RuntimeEvent::RuntimeStopping);
     bus.publish(&event.topic(), &event);
 
     assert_eq!(received.recv_timeout(DELIVERY_DEADLINE), Ok(event));
@@ -141,7 +167,7 @@ fn a_wildcard_listener_hears_every_topic_exactly_once() {
     for event in &published {
         bus.publish(&event.topic(), event);
     }
-    bus.publish(topics::RUNTIME_GLOBAL, &sentinel());
+    bus.publish(&the_test_streams_topic(), &sentinel());
 
     assert_eq!(received_before_the_sentinel(&received), published);
 }
@@ -152,12 +178,12 @@ fn a_hundred_listeners_on_one_topic_each_receive_the_event() {
     let bus = PubSub::new();
     let listeners: Vec<_> = (0..100).map(|_| forwarding_listener()).collect();
     for (listener, _) in &listeners {
-        bus.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(listener))
+        bus.subscribe(&the_test_streams_topic(), Arc::clone(listener))
             .expect("subscribe");
     }
 
-    let event = Event::RuntimeGlobal(RuntimeEvent::GraphDidChange);
-    bus.publish(topics::RUNTIME_GLOBAL, &event);
+    let event = an_event_of(&the_test_stream(), RuntimeEvent::GraphDidChange);
+    bus.publish(&the_test_streams_topic(), &event);
 
     for (index, (_, received)) in listeners.iter().enumerate() {
         assert_eq!(
@@ -414,14 +440,14 @@ fn a_dropped_listeners_subscription_goes_at_the_next_publish() {
     let bus = PubSub::new();
     let (kept_listener, kept_received) = forwarding_listener();
     let (dropped_listener, _) = forwarding_listener();
-    bus.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&kept_listener))
+    bus.subscribe(&the_test_streams_topic(), Arc::clone(&kept_listener))
         .expect("subscribe");
-    bus.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&dropped_listener))
+    bus.subscribe(&the_test_streams_topic(), Arc::clone(&dropped_listener))
         .expect("subscribe");
     assert_eq!(bus.subscriptions_held(), 2);
 
     drop(dropped_listener);
-    bus.publish(topics::RUNTIME_GLOBAL, &sentinel());
+    bus.publish(&the_test_streams_topic(), &sentinel());
 
     assert_eq!(bus.subscriptions_held(), 1);
     assert!(received_before_the_sentinel(&kept_received).is_empty());
@@ -461,4 +487,39 @@ fn two_buses_share_no_events() {
 
     assert_eq!(first_received.recv_timeout(DELIVERY_DEADLINE), Ok(event));
     assert!(received_before_the_sentinel(&second_received).is_empty());
+}
+
+/// A stream's listener hears only its own stream's events — not another
+/// stream's in the same runtime, not a stream of the same name in another
+/// runtime, and not a stream loaded under its name in the same runtime, as one
+/// loaded after a stream its watchdog abandoned is.
+///
+/// Mental-revert: a topic built from the stream name alone delivers the other
+/// runtime's `main` to this listener; one built from the runtime id and the
+/// name delivers the stream loaded under its name.
+#[test]
+fn a_streams_listener_hears_only_its_own_streams_events() {
+    let bus = PubSub::new();
+    let this_stream = a_loaded_stream("Rfirstruntime", "main", 1);
+    let another_stream_beside_it = a_loaded_stream("Rfirstruntime", "camera", 2);
+    let a_stream_of_the_same_name_elsewhere = a_loaded_stream("Rsecondruntime", "main", 3);
+    let a_stream_loaded_under_its_name = a_loaded_stream("Rfirstruntime", "main", 4);
+    let (listener, received) = forwarding_listener();
+    bus.subscribe(&topics::loaded_stream(&this_stream), Arc::clone(&listener))
+        .expect("subscribe");
+
+    for other_stream in [
+        &another_stream_beside_it,
+        &a_stream_of_the_same_name_elsewhere,
+        &a_stream_loaded_under_its_name,
+    ] {
+        let event = an_event_of(other_stream, RuntimeEvent::GraphDidChange);
+        bus.publish(&event.topic(), &event);
+    }
+    // Published last: a listener's queue is FIFO, so its arriving first means
+    // no other stream's event was delivered.
+    let own_event = an_event_of(&this_stream, RuntimeEvent::GraphDidChange);
+    bus.publish(&own_event.topic(), &own_event);
+
+    assert_eq!(received.recv_timeout(DELIVERY_DEADLINE), Ok(own_event));
 }

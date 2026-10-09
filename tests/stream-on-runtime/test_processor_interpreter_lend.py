@@ -55,7 +55,7 @@ def write_project_module(project_directory: Path, module_name: str, source: str)
 
 
 def graph_naming_one_node_of_type(node_type: str) -> "dict[str, object]":
-    return {"nodes": [{"name": "nodeundertest", "type": node_type, "config": {}}]}
+    return {"stream": "nodeundertest", "nodes": [{"name": "nodeundertest", "type": node_type, "config": {}}]}
 
 
 def refused_naming(load_outcome: StreamGraphLoadOutcome) -> str:

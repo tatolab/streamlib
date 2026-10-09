@@ -1,27 +1,21 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-mod api_server_config;
-pub mod control_plane_host;
 #[cfg(test)]
 mod control_plane_stub_support;
 mod handlers;
+mod local_api_served_for_an_engine;
 mod local_api_socket;
 mod mcp;
 mod mcp_prompts;
 mod mcp_resources;
 mod mcp_stdio_upgrade;
 mod state;
+#[cfg(test)]
+mod two_streams_in_one_engine_tests;
 
-// `processors/` is the one processor-discovery root for every language and
-// every crate-type. This crate is a statically-linked host rlib (plus a
-// `[[bin]]`), so it keeps a committed crate root instead of the generated one a
-// distributable cdylib package uses — the `#[path]` is how that committed root
-// reaches the shared discovery root.
-#[path = "../processors/api_server.rs"]
-pub mod api_server;
-
-pub use api_server::ApiServerProcessor;
-pub use api_server_config::ApiServerConfig;
 pub use handlers::control_plane_openapi_spec;
+pub use local_api_served_for_an_engine::{
+    LocalApiServedForAnEngine, serve_the_local_api_for_an_engine,
+};
 pub use mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH;

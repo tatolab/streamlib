@@ -23,7 +23,8 @@ use crate::core::graph::{
     ThreadHandleComponent,
 };
 use crate::core::processors::ProcessorState;
-use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
+use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
+use crate::core::runtime::TeardownProgressNoteOfOneStream;
 
 /// What a processor thread runs, which decides how long its join may take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,22 +130,25 @@ impl std::fmt::Display for DescriptionOfTheAbandonedProcessorThreads<'_> {
 /// stop before waiting on any.
 ///
 /// Every node is removed whether its thread returned or not. The threads
-/// abandoned are added to `abandoned_processor_threads` before any node is
-/// dropped, and named in the return value.
+/// abandoned are added to `abandoned_processor_threads` and counted into the
+/// process-wide total before any node is dropped, and named in the return
+/// value. The wait writes what it is waiting on into the stream's
+/// `teardown_progress_note`.
 pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
     graph_arc: &Arc<RwLock<Graph>>,
+    the_stream_the_processors_belong_to: &LoadedStreamIdentity,
     processor_ids: &[ProcessorUniqueId],
     budgets: ProcessorThreadJoinBudgets,
     is_shutdown_forced: impl Fn() -> bool,
+    teardown_progress_note: &TeardownProgressNoteOfOneStream,
     abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
 ) -> Result<Vec<ProcessorDisplayNameAndId>> {
     let mut signalled_threads = Vec::with_capacity(processor_ids.len());
     for processor_id in processor_ids {
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::CompilerWillDestroyProcessor {
+        the_stream_the_processors_belong_to.publish_on_this_streams_topic(
+            RuntimeEvent::CompilerWillDestroyProcessor {
                 processor_id: processor_id.clone(),
-            }),
+            },
         );
         tracing::info!("[REMOVE] {}", processor_id);
 
@@ -177,6 +181,7 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
         signalled_threads,
         budgets,
         is_shutdown_forced,
+        teardown_progress_note,
     );
     let abandoned_processors: Vec<ProcessorDisplayNameAndId> = abandoned_by_this_removal
         .iter()
@@ -185,6 +190,13 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
     abandoned_processor_threads
         .lock()
         .extend(abandoned_by_this_removal);
+    crate::core::runtime::count_threads_abandoned_in_this_process(
+        abandoned_processors.len(),
+        &format!(
+            "removing processors from the stream `{}`",
+            the_stream_the_processors_belong_to.stream_name
+        ),
+    );
 
     let mut first_node_left_behind = None;
     for processor_id in processor_ids {
@@ -200,11 +212,10 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
                 continue;
             }
         }
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::CompilerDidDestroyProcessor {
+        the_stream_the_processors_belong_to.publish_on_this_streams_topic(
+            RuntimeEvent::CompilerDidDestroyProcessor {
                 processor_id: processor_id.clone(),
-            }),
+            },
         );
     }
     if let Some(processor_id) = first_node_left_behind {
@@ -222,6 +233,7 @@ fn join_every_signalled_processor_thread_within_its_budget(
     signalled_threads: Vec<SignalledProcessorThread>,
     budgets: ProcessorThreadJoinBudgets,
     is_shutdown_forced: impl Fn() -> bool,
+    teardown_progress_note: &TeardownProgressNoteOfOneStream,
 ) -> Vec<AbandonedProcessorThreadStillRunning> {
     let waiting_began = Instant::now();
     let mut shutdown_forced_at: Option<Instant> = None;
@@ -260,7 +272,7 @@ fn join_every_signalled_processor_thread_within_its_budget(
                 .iter()
                 .map(|thread| thread.processor.clone())
                 .collect();
-            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(format!(
+            teardown_progress_note.note_what_the_teardown_is_waiting_on(format!(
                 "the processor threads of {}",
                 ProcessorDisplayNamesAndIds(&waiting_on)
             ));
@@ -416,9 +428,15 @@ mod tests {
         let abandoned_processor_threads = Mutex::new(Vec::new());
         let abandoned = remove_processors_signalling_every_thread_before_joining_any(
             &graph_arc,
+            &LoadedStreamIdentity {
+                runtime_id: "processor-thread-shutdown-test".to_string(),
+                stream_name: "main".to_string(),
+                stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
+            },
             processor_ids,
             budgets,
             is_shutdown_forced,
+            &TeardownProgressNoteOfOneStream::default(),
             &abandoned_processor_threads,
         )
         .expect("the removal completes");

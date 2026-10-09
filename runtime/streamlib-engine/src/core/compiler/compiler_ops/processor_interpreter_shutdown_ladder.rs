@@ -23,6 +23,7 @@ use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant};
 
 use super::subprocess_bridge::HelperProcessShutdownCommand;
+use crate::core::runtime::ShutdownEscalationOfOneStream;
 
 /// How long a Python callback has to return before the ladder interrupts it.
 ///
@@ -127,30 +128,21 @@ enum CooperativeRungEnded {
 pub(crate) struct HelperProcessShutdownLadder {
     processor_display_name: String,
     child: Child,
-    is_shutdown_forced: fn() -> bool,
+    shutdown_escalation_of_its_stream: ShutdownEscalationOfOneStream,
 }
 
 impl HelperProcessShutdownLadder {
-    pub(crate) fn taking_over(processor_display_name: String, child: Child) -> Self {
+    /// Take over `child`, skipping to terminating its group once
+    /// `shutdown_escalation_of_its_stream` is forced.
+    pub(crate) fn taking_over(
+        processor_display_name: String,
+        child: Child,
+        shutdown_escalation_of_its_stream: ShutdownEscalationOfOneStream,
+    ) -> Self {
         Self {
             processor_display_name,
             child,
-            is_shutdown_forced: crate::core::runtime::is_runtime_shutdown_forced,
-        }
-    }
-
-    /// A ladder that reads whether shutdown was forced from `is_shutdown_forced`
-    /// rather than the process's own escalation, which only a delivered signal
-    /// raises.
-    #[cfg(test)]
-    fn taking_over_reading_a_forced_shutdown_from(
-        processor_display_name: String,
-        child: Child,
-        is_shutdown_forced: fn() -> bool,
-    ) -> Self {
-        Self {
-            is_shutdown_forced,
-            ..Self::taking_over(processor_display_name, child)
+            shutdown_escalation_of_its_stream,
         }
     }
 
@@ -256,7 +248,7 @@ impl HelperProcessShutdownLadder {
     ) -> CooperativeRungEnded {
         let deadline = Instant::now() + budget;
         loop {
-            if (self.is_shutdown_forced)() {
+            if self.shutdown_escalation_of_its_stream.is_forced() {
                 return CooperativeRungEnded::ShutdownForced;
             }
             if a_helper_process_has_exited_without_being_reaped(self.child.id()) {
@@ -299,7 +291,7 @@ impl HelperProcessShutdownLadder {
     /// a reaped leader's pid, and the group id equal to it, are free for reuse
     /// the moment it returns.
     fn end_the_process_group_and_reap(&mut self) -> HelperProcessShutdownOutcome {
-        if !(self.is_shutdown_forced)() {
+        if !self.shutdown_escalation_of_its_stream.is_forced() {
             let _ =
                 wait_for_a_child_to_become_collectable_within(&self.child, CHILD_SELF_EXIT_GRACE);
         }
@@ -469,18 +461,21 @@ mod tests {
         }
 
         fn into_ladder(self, processor_display_name: &str) -> HelperProcessShutdownLadder {
-            HelperProcessShutdownLadder::taking_over(processor_display_name.to_string(), self.child)
+            self.into_ladder_of_a_stream_whose_shutdown_escalation_is(
+                processor_display_name,
+                ShutdownEscalationOfOneStream::default(),
+            )
         }
 
-        fn into_ladder_reading_a_forced_shutdown_from(
+        fn into_ladder_of_a_stream_whose_shutdown_escalation_is(
             self,
             processor_display_name: &str,
-            is_shutdown_forced: fn() -> bool,
+            shutdown_escalation_of_its_stream: ShutdownEscalationOfOneStream,
         ) -> HelperProcessShutdownLadder {
-            HelperProcessShutdownLadder::taking_over_reading_a_forced_shutdown_from(
+            HelperProcessShutdownLadder::taking_over(
                 processor_display_name.to_string(),
                 self.child,
-                is_shutdown_forced,
+                shutdown_escalation_of_its_stream,
             )
         }
     }
@@ -749,7 +744,10 @@ time.sleep(120)
         let mut stub = a_stub_parking_after(LEAVES_THROUGH_THE_INTERRUPT);
         assert_eq!(stub.next_reported_line(), "ready");
 
-        let ladder = stub.into_ladder_reading_a_forced_shutdown_from("ForcedProbe", || true);
+        let forced_stream = ShutdownEscalationOfOneStream::default();
+        forced_stream.raise_to_forced();
+        let ladder =
+            stub.into_ladder_of_a_stream_whose_shutdown_escalation_is("ForcedProbe", forced_stream);
         let started = Instant::now();
         let outcome = ladder.walk_every_rung(never_answers);
 
@@ -765,13 +763,6 @@ time.sleep(120)
         );
     }
 
-    static SHUTDOWN_FORCED_WHILE_TEARDOWN_IS_AWAITED: std::sync::atomic::AtomicBool =
-        std::sync::atomic::AtomicBool::new(false);
-
-    fn shutdown_forced_while_teardown_is_awaited() -> bool {
-        SHUTDOWN_FORCED_WHILE_TEARDOWN_IS_AWAITED.load(std::sync::atomic::Ordering::SeqCst)
-    }
-
     /// A second interrupt landing while a helper's `teardown()` is awaited ends
     /// that wait rather than the rest of its five seconds.
     #[test]
@@ -779,14 +770,14 @@ time.sleep(120)
         let mut stub = a_stub_parking_after("signal.signal(signal.SIGINT, signal.SIG_IGN)");
         assert_eq!(stub.next_reported_line(), "ready");
 
-        let ladder = stub.into_ladder_reading_a_forced_shutdown_from(
+        let shutdown_escalation_of_its_stream = ShutdownEscalationOfOneStream::default();
+        let ladder = stub.into_ladder_of_a_stream_whose_shutdown_escalation_is(
             "TeardownForcedProbe",
-            shutdown_forced_while_teardown_is_awaited,
+            shutdown_escalation_of_its_stream.clone(),
         );
-        let forced_during_teardown = std::thread::spawn(|| {
+        let forced_during_teardown = std::thread::spawn(move || {
             std::thread::sleep(CALLBACK_RETURN_BUDGET + Duration::from_millis(500));
-            SHUTDOWN_FORCED_WHILE_TEARDOWN_IS_AWAITED
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            shutdown_escalation_of_its_stream.raise_to_forced();
         });
         let started = Instant::now();
         let outcome = ladder.walk_every_rung(never_answers);

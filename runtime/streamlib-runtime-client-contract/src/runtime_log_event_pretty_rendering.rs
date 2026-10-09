@@ -19,10 +19,19 @@ pub fn format_event_pretty(event: &RuntimeLogEvent, out: &mut String) {
     };
     let _ = write!(
         out,
-        "{} [{:>5}] [{}/{}] {} — {}",
+        "{} [{:>5}] [",
         format_ns_timestamp(event.host_ts),
-        level,
-        event.runtime_id,
+        level
+    );
+    if !event.runtime_id.is_empty() {
+        let _ = write!(out, "{}/", event.runtime_id);
+    }
+    if let Some(stream) = &event.stream {
+        let _ = write!(out, "{}/", stream);
+    }
+    let _ = write!(
+        out,
+        "{}] {} — {}",
         event.source.as_str(),
         event.target,
         event.message,
@@ -64,6 +73,7 @@ mod tests {
             schema_version: 1,
             host_ts: 1_786_136_667_573_387_556,
             runtime_id: "Rabc".to_string(),
+            stream: None,
             source: Source::Rust,
             level: LogLevel::Info,
             message: message.to_string(),
@@ -122,6 +132,34 @@ mod tests {
             "21:04:27.573 [ WARN] [Rabc/rust] streamlib_media_builtins::camera_source — \
              frame captured pipeline_id=pl-42 processor_id=camera-1 rhi_op=acquire_texture \
              device=\"/dev/video0\" frames=3\n"
+        );
+    }
+
+    #[test]
+    fn a_streams_record_names_its_stream_between_the_runtime_and_the_source() {
+        let mut event = a_rust_info_record_of_runtime_rabc("tatolabd", "Creating Runner");
+        event.stream = Some("main".to_string());
+
+        let mut rendered = String::new();
+        format_event_pretty(&event, &mut rendered);
+
+        assert_eq!(
+            rendered,
+            "21:04:27.573 [ INFO] [Rabc/main/rust] tatolabd — Creating Runner\n"
+        );
+    }
+
+    #[test]
+    fn a_record_no_runtime_claimed_renders_only_its_source() {
+        let mut event = a_rust_info_record_of_runtime_rabc("tatolabd", "Creating Runner");
+        event.runtime_id = String::new();
+
+        let mut rendered = String::new();
+        format_event_pretty(&event, &mut rendered);
+
+        assert_eq!(
+            rendered,
+            "21:04:27.573 [ INFO] [rust] tatolabd — Creating Runner\n"
         );
     }
 

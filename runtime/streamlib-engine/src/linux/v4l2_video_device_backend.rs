@@ -290,20 +290,22 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
 
         let join_handle = std::thread::Builder::new()
             .name(format!("v4l2-capture-{}", self.opened_device.id))
-            .spawn(move || {
-                capture_thread_loop(
-                    stream,
-                    is_capturing_in_the_thread,
-                    hand_off,
-                    gpu_context,
-                    camera_name,
-                    width,
-                    height,
-                    capture_fourcc,
-                    failure_recorder,
-                    capture_instant_resolver,
-                );
-            })
+            .spawn(
+                crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+                    capture_thread_loop(
+                        stream,
+                        is_capturing_in_the_thread,
+                        hand_off,
+                        gpu_context,
+                        camera_name,
+                        width,
+                        height,
+                        capture_fourcc,
+                        failure_recorder,
+                        capture_instant_resolver,
+                    );
+                }),
+            )
             .map_err(|e| Error::Configuration(format!("Failed to spawn capture thread: {}", e)))?;
 
         self.capture_thread = Some(V4l2CaptureThread {

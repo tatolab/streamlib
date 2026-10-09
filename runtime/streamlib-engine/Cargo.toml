@@ -88,6 +88,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync"] }
 crossbeam-channel = "0.5"
 inventory = "0.3"
 parking_lot = "0.12"  # Fast mutexes for all synchronization
+pin-project-lite = "0.2"  # Safe pin projection for the future a stream's log route wraps
 crossbeam-queue = "0.3"  # Lock-free MPMC queue for thread-safe mailboxes
 iceoryx2 = "0.10.0"  # Zero-copy IPC pub/sub for cross-process communication
 iceoryx2-log = "0.10.0"  # Bridge iceoryx2's internal log records into streamlib tracing
@@ -200,9 +201,9 @@ streamlib = { path = "../../sdk/streamlib-sdk" }
 # Same permitted dev-dep cycle as the self-alias above: built-ins depend on
 # the SDK, which re-exports this crate.
 streamlib-media-builtins = { path = "../streamlib-media-builtins" }
-# The control plane the `codec_roundtrip_rig` example hosts, so a rig run is
-# reachable by `tatolab graph` / `tap` / `exchange` — the observation
-# surface the codec proof is scored on. Same permitted dev-dep cycle.
+# The local API the `codec_roundtrip_rig` example serves for its engine, so a
+# rig run is reachable by `tatolab graph` / `tap` / `exchange` — the
+# observation surface the codec proof is scored on. Same permitted dev-dep cycle.
 streamlib-api-server = { path = "../streamlib-api-server" }
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples

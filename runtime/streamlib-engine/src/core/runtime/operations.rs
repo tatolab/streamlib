@@ -4,7 +4,7 @@
 use crate::core::error::Result;
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 use crate::core::processors::ProcessorSpec;
-use crate::core::runtime::{ExchangedPublishedSurfaceFramePngImage, TapSubscription};
+use crate::core::runtime::TapSubscription;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use std::future::Future;
 use std::pin::Pin;
@@ -23,10 +23,11 @@ pub struct NodeInTheGraph {
     pub name: String,
 }
 
-/// Unified interface for runtime graph operations.
+/// The operations on one loaded stream's graph.
 ///
-/// Implemented by `Runner`, and by the control plane's test stubs. Callers use
-/// this trait and don't need to know the underlying implementation.
+/// Implemented by [`LoadedStreamInThisRuntime`](crate::core::runtime::LoadedStreamInThisRuntime),
+/// and by the control plane's test stubs. Callers use this trait and don't
+/// need to know the underlying implementation.
 ///
 /// # Thread Safety
 ///
@@ -39,7 +40,7 @@ pub struct NodeInTheGraph {
 /// - **Async methods** (`*_async`): Safe to call from any context including tokio tasks.
 ///   Use these from async code: `ctx.runtime().add_processor_async(spec).await`
 /// - **Sync methods**: Convenience wrappers that block on the async variants.
-///   Use these from sync code: `runtime.add_processor(spec)`
+///   Use these from sync code: `stream.add_processor(spec)`
 ///
 /// The sync methods internally use `block_on`, so they must NOT be called from
 /// within a tokio task (will panic). Use the async variants in async contexts.
@@ -109,34 +110,6 @@ pub trait RuntimeOperations: Send + Sync {
         count: Option<usize>,
     ) -> BoxFuture<'_, Result<TapSubscription>>;
 
-    /// Exchange a published surface id for that frame's pixels, encoded as
-    /// a PNG.
-    ///
-    /// `published_surface_id` is a surface id a bag carried
-    /// (`<slot>#<generation>` for a pooled frame); a retired one fails with
-    /// [`Error::SurfaceFrameRecycled`] before any bytes move, never
-    /// resolving to the slot's newer pixels, so the caller taps a newer bag
-    /// and exchanges that. `downscale_long_edge_pixel_cap` bounds the
-    /// encoded image's long edge, preserving aspect and never upscaling;
-    /// `None` returns the exact source resolution, and the result reports
-    /// both extents either way.
-    ///
-    /// Never attaches to a channel — composing this with [`Self::tap_async`]
-    /// is entirely the caller's job, because the engine inspects no bag
-    /// content.
-    /// Why the verb has this shape:
-    /// `docs/decisions/control-plane-pixel-exchange.md`.
-    ///
-    /// There is no sync variant: the copy blocks on the GPU, so every
-    /// caller is already async or on a blocking pool.
-    ///
-    /// [`Error::SurfaceFrameRecycled`]: crate::core::error::Error::SurfaceFrameRecycled
-    fn exchange_published_surface_id_for_png_image_bytes_async(
-        &self,
-        published_surface_id: String,
-        downscale_long_edge_pixel_cap: Option<u32>,
-    ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>>;
-
     // =========================================================================
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)
     // =========================================================================
@@ -177,37 +150,25 @@ pub trait RuntimeOperations: Send + Sync {
     // Identity
     // =========================================================================
 
-    /// The name this runtime's tap channels and node-registry row carry.
-    ///
-    /// Not `runtime_name()`, because `Runner` has an inherent `runtime_name()`
-    /// of its own returning a different type, and a caller holding a `Runner`
-    /// rather than a `dyn RuntimeOperations` would silently get that one.
+    /// The name the runtime this stream is loaded in gives its tap channels
+    /// and node-registry row.
     fn this_runtimes_name(&self) -> &str;
 
     // =========================================================================
     // Lifecycle
     // =========================================================================
 
-    /// Ask whoever owns the run loop to shut the runtime down, with a
-    /// human-readable `reason` logged for attribution.
+    /// Ask for this stream's shutdown, with a human-readable `reason` logged
+    /// for attribution. Every other stream in the runtime keeps running.
     ///
-    /// A *request*, not a teardown: the loop owner
-    /// ([`Runner::wait_for_signal_with`](crate::core::runtime::Runner::wait_for_signal_with))
-    /// observes it and runs the normal stop sequence. Idempotent — requesting
-    /// twice is not an error.
-    ///
-    /// The effect is process-global (matching the `RuntimeShutdown` event on
-    /// `topics::RUNTIME_GLOBAL`): the receiver is not a scoping parameter, and
-    /// the escalation it raises is cleared only by the run loop that observed it,
-    /// once that run has ended. A request issued while no run loop is running
-    /// is observed by the next one to start, so a host that decides to abort
-    /// before it calls `start()` still stops the run.
+    /// A *request*, not a teardown: the stream's level moves to graceful and
+    /// the stream is stopped and unloaded off the caller's thread. Idempotent
+    /// — requesting twice is not an error and escalates nothing.
     ///
     /// Fire-and-forget with no completion payload, so unlike every other sync
     /// method on this trait it never `block_on`s and therefore cannot deadlock
-    /// when called from inside a tokio task. It can still block briefly: the
-    /// host arm publishes over iceoryx2.
-    fn request_runtime_shutdown(&self, reason: &str) -> Result<()>;
+    /// when called from inside a tokio task.
+    fn request_this_streams_shutdown(&self, reason: &str) -> Result<()>;
 
     // =========================================================================
     // Introspection

@@ -110,7 +110,7 @@ pub mod sdk {
     /// `Runner` op.
     pub mod app;
 
-    pub use app::{AddedProcessor, App, AppPortEndpoint};
+    pub use app::{AddedProcessor, App, AppPortEndpoint, THE_STREAM_NAME_AN_APP_LOADS};
 
     // ---- Processors namespace ----
     pub mod processors {
@@ -123,10 +123,10 @@ pub mod sdk {
     }
 
     // ---- Runtime-control requests ----
-    /// `request_runtime_shutdown` — ask whoever owns the run loop to stop the
-    /// runtime.
+    /// `request_the_shutdown_of_every_loaded_stream` — ask whoever owns the
+    /// machine's shutdown signals to shut every loaded stream down.
     pub mod runtime_control {
-        pub use streamlib_engine::core::runtime::request_runtime_shutdown;
+        pub use streamlib_engine::core::runtime::request_the_shutdown_of_every_loaded_stream;
     }
 
     // ---- Cross-cutting modules from engine top-level ----

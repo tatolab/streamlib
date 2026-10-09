@@ -22,6 +22,7 @@ use streamlib::sdk::context::{
 };
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::OutputWriter;
+use streamlib::sdk::logging::carrying_this_threads_loaded_stream_log_route;
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
@@ -168,7 +169,7 @@ impl ManualProcessor for MicrophoneSource::Processor {
 
         let handle = std::thread::Builder::new()
             .name("audio-capture-publish".to_string())
-            .spawn(move || {
+            .spawn(carrying_this_threads_loaded_stream_log_route(move || {
                 publish_captured_blocks(
                     &hand_off_ring_for_publishing,
                     &is_publishing_in_the_thread,
@@ -177,7 +178,7 @@ impl ManualProcessor for MicrophoneSource::Processor {
                     &outputs,
                     stream_format,
                 );
-            })
+            }))
             .map_err(|e| {
                 Error::Runtime(format!(
                     "MicrophoneSource: failed to spawn the publishing thread: {e}"

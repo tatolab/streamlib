@@ -85,7 +85,7 @@ pub(crate) enum RuntimeLogReadFailure {
         read_failure: io::Error,
     },
     /// The log directory exists and could not be listed.
-    #[error("cannot read the runtime log directory {}: {listing_failure}", .log_directory.display())]
+    #[error("cannot read the stream log directory {}: {listing_failure}", .log_directory.display())]
     LogDirectoryUnreadable {
         log_directory: PathBuf,
         #[source]
@@ -596,7 +596,7 @@ impl RuntimeLogRecordsReader {
                     {
                         let _ = writeln!(
                             note_output,
-                            "note: runtime '{}' restarted into a newer log file; switching.",
+                            "note: the stream log '{}' started a newer log file; switching.",
                             self.instance_being_read.runtime_id
                         );
                         self.instance_segments_reader = RuntimeLogInstanceSegmentsReader::reading(
@@ -1092,7 +1092,7 @@ mod tests {
         );
         assert_eq!(
             followed_runtime_log.notes(),
-            "note: runtime 'Rabc' restarted into a newer log file; switching.\n"
+            "note: the stream log 'Rabc' started a newer log file; switching.\n"
         );
     }
 
@@ -1132,7 +1132,7 @@ mod tests {
         );
         assert!(
             listing_failure.to_string().starts_with(&format!(
-                "cannot read the runtime log directory {}: ",
+                "cannot read the stream log directory {}: ",
                 log_directory_that_is_a_file.display()
             )),
             "{listing_failure}"

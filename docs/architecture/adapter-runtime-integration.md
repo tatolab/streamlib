@@ -280,10 +280,12 @@ this design — the working hypothesis may not fit:
 
 Every surface adapter's host-side wiring runs through
 [`Runner::install_setup_hook`][hook]. The hook fires exactly
-once per `start()`, after `GpuContext::init_for_platform_sync` has
-created the live `GpuContext` but before any processor's `setup()`
-runs — the window where pre-allocated host surfaces have to be in
-place.
+once per engine, when the first stream to start has
+`GpuContext::init_for_platform_sync` create the engine's `GpuContext`
+and its own surface store, before any processor's `setup()` runs —
+the window where pre-allocated host surfaces have to be in place. It
+registers through the engine's surface store, so its surfaces outlive
+every stream; a hook installed after the hooks ran is refused.
 
 [hook]: ../../runtime/streamlib-engine/src/core/runtime/runtime.rs
 
@@ -463,9 +465,10 @@ calls.
 With `install_setup_hook` the model is:
 
 1. Add the adapter crate as a Cargo dep.
-2. Call `runtime.install_setup_hook(...)` exactly once at app
-   startup, doing the adapter's required pre-start work (allocate
-   host surfaces, register in surface-share).
+2. Call `runner.install_setup_hook(...)?` exactly once at app
+   startup, before the first stream starts, doing the adapter's
+   required pre-start work (allocate host surfaces, register in
+   surface-share).
 
 The cost: one extra line of wiring per adapter at the application's
 `main.rs`. Compile-time presence is not enough — you have to

@@ -16,7 +16,7 @@
 
 #[cfg(unix)]
 use crate::core::runtime::{
-    RuntimeShutdownEscalation, escalate_runtime_shutdown_for_a_delivered_signal,
+    RuntimeShutdownEscalation, escalate_the_machines_shutdown_for_a_delivered_signal,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -401,7 +401,7 @@ fn forward_signals_until_stopped(read_end: std::os::fd::RawFd) {
 /// process at once on the step that says so.
 #[cfg(unix)]
 fn escalate_the_runtime_shutdown_one_step_for_a_delivered_signal(signal_name: &str) {
-    if escalate_runtime_shutdown_for_a_delivered_signal(&format!("posix signal {signal_name}"))
+    if escalate_the_machines_shutdown_for_a_delivered_signal(&format!("posix signal {signal_name}"))
         == RuntimeShutdownEscalation::ExitAtOnce
     {
         crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
@@ -583,7 +583,7 @@ mod tests {
         awaited: crate::core::runtime::RuntimeShutdownEscalation,
         context: &str,
     ) {
-        use crate::core::runtime::runtime_shutdown_escalation;
+        use crate::core::runtime::the_machines_shutdown_escalation;
 
         // SAFETY: the signal is owned by the caller's live
         // `ScopedShutdownSignalOwnership`, so this reaches the self-pipe
@@ -596,7 +596,7 @@ mod tests {
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if runtime_shutdown_escalation() == awaited {
+            if the_machines_shutdown_escalation() == awaited {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -604,7 +604,7 @@ mod tests {
         panic!(
             "signal {signal} never escalated the shutdown to {awaited:?}; it reads {:?} \
              ({context})",
-            runtime_shutdown_escalation()
+            the_machines_shutdown_escalation()
         );
     }
 
@@ -615,7 +615,7 @@ mod tests {
     #[cfg(unix)]
     fn a_delivered_sigint_becomes_a_runtime_shutdown_request() {
         let _escalation_cleared_even_on_unwind =
-            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+            crate::core::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
 
         let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
             .expect("no other run loop owns the shutdown signals");
@@ -633,7 +633,7 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     fn a_delivered_sighup_becomes_a_graceful_shutdown() {
         let _escalation_cleared_even_on_unwind =
-            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+            crate::core::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
         let _hangup_not_ignored = SignalDispositionSetForOneTest::set(libc::SIGHUP, libc::SIG_DFL);
 
         let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
@@ -655,11 +655,13 @@ mod tests {
     #[serial]
     #[cfg(unix)]
     fn repeated_interrupts_escalate_one_run_and_the_next_run_starts_graceful() {
-        use crate::core::runtime::{RuntimeShutdownEscalation, take_runtime_shutdown_escalation};
+        use crate::core::runtime::{
+            RuntimeShutdownEscalation, take_the_machines_shutdown_escalation,
+        };
         use signal_hook::consts::signal::{SIGINT, SIGTERM};
 
         let _escalation_cleared_even_on_unwind =
-            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+            crate::core::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
 
         let first_run = ScopedShutdownSignalOwnership::take_until_dropped()
             .expect("no other run loop owns the shutdown signals");
@@ -667,7 +669,7 @@ mod tests {
         raise_and_await_escalation_to(SIGTERM, RuntimeShutdownEscalation::Forced, "second");
         drop(first_run);
         assert_eq!(
-            take_runtime_shutdown_escalation(),
+            take_the_machines_shutdown_escalation(),
             RuntimeShutdownEscalation::Forced
         );
 
@@ -676,7 +678,7 @@ mod tests {
         raise_and_await_escalation_to(SIGINT, RuntimeShutdownEscalation::Graceful, "next run");
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert_eq!(
-            crate::core::runtime::runtime_shutdown_escalation(),
+            crate::core::runtime::the_machines_shutdown_escalation(),
             RuntimeShutdownEscalation::Graceful,
             "the next run's first interrupt must not force it"
         );
@@ -698,7 +700,7 @@ mod tests {
     fn every_retaken_ownership_still_catches_sigint() {
         for ownership_generation in 1..=3 {
             let _escalation_cleared_even_on_unwind =
-                crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+                crate::core::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
 
             let owned = ScopedShutdownSignalOwnership::take_until_dropped()
                 .expect("each run loop in turn may own the shutdown signals");
@@ -718,7 +720,7 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     fn a_stale_signal_does_not_shut_down_the_next_run_loop() {
         let _escalation_cleared_even_on_unwind =
-            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+            crate::core::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
 
         {
             let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
@@ -735,12 +737,12 @@ mod tests {
             }
         }
 
-        crate::core::runtime::take_runtime_shutdown_escalation();
+        crate::core::runtime::take_the_machines_shutdown_escalation();
         let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
             .expect("ownership must be retakeable once the first owner drops");
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert!(
-            !crate::core::runtime::is_runtime_shutdown_requested(),
+            !crate::core::runtime::is_the_machines_shutdown_requested(),
             "a byte left over from the previous owner must not shut this run loop down",
         );
     }
@@ -752,7 +754,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn dropping_ownership_on_macos_leaves_the_process_lifetime_handlers_installed() {
         let _escalation_cleared_even_on_unwind =
-            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+            crate::core::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
 
         drop(
             ScopedShutdownSignalOwnership::take_until_dropped()
@@ -830,7 +832,7 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     fn a_hangup_the_process_was_told_to_ignore_stays_ignored() {
         let _escalation_cleared_even_on_unwind =
-            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+            crate::core::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
         let _hangup_ignored = SignalDispositionSetForOneTest::set(libc::SIGHUP, libc::SIG_IGN);
 
         let owned = ScopedShutdownSignalOwnership::take_until_dropped()
@@ -843,7 +845,7 @@ mod tests {
         unsafe { libc::raise(libc::SIGHUP) };
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert!(
-            !crate::core::runtime::is_runtime_shutdown_requested(),
+            !crate::core::runtime::is_the_machines_shutdown_requested(),
             "an ignored SIGHUP still shut the run loop down"
         );
         drop(owned);
@@ -918,7 +920,9 @@ mod tests {
         std::fs::write(&record_path, helper_process_group.to_string())
             .expect("the record is written");
         assert!(crate::core::runtime::register_a_helper_process_group(
-            helper_process_group
+            helper_process_group,
+            crate::core::runtime::LoadedStreamTag::next_in_this_process()
+                .expect("a fresh stream tag")
         ));
 
         let _owned = ScopedShutdownSignalOwnership::take_until_dropped()

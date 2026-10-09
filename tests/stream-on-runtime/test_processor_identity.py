@@ -36,11 +36,11 @@ from tatolab.stream import StreamBuilder, stream
 # would agree with a derivation that never ran.
 DERIVED_IDENTITY_PATTERN = re.compile(r'processor_class_import_path="([^"]+)"')
 
-#: The engine's message on that record.
-PROCESSOR_TYPE_REGISTERED_LOG_LINE_FRAGMENT = "new processor type registered"
-
-#: The import path every built-in node type registers under.
-BUILT_IN_NODE_TYPE_IMPORT_PATH_PREFIX = "tatolab.stream:"
+#: The engine's message on that record, written for each node type a stream's
+#: processor interpreter described into the stream; a built-in's says otherwise.
+PROCESSOR_TYPE_REGISTERED_LOG_LINE_FRAGMENT = (
+    "node type described in the stream's processor interpreter registered"
+)
 
 IDENTITY_STABLE_PROCESSOR_FILE = Path(__file__).with_name("identity_stable_processor.py")
 
@@ -123,21 +123,13 @@ def two_identity_stable_processors(stream_builder: StreamBuilder) -> None:
 
 
 def identities_the_engine_logged(stderr_text: str) -> "list[str]":
-    """Every identity the engine derived for the stream's node types, off its own
-    registration records, in order.
-
-    `tatolabd` registers each of its built-ins under `tatolab.stream:<Type>`
-    before it loads anything, and its local API's processor once the stream has
-    loaded; neither is a type the stream named.
-    """
-    loaded = STREAM_LOADED_LOG_LINE_PATTERN.search(stderr_text)
-    records_up_to_the_load = stderr_text[: loaded.start()] if loaded else stderr_text
+    """Every identity the engine derived for the stream's Python node types, off
+    its own registration records, in order."""
     return [
         found.group(1)
-        for line in records_up_to_the_load.splitlines()
+        for line in stderr_text.splitlines()
         if PROCESSOR_TYPE_REGISTERED_LOG_LINE_FRAGMENT in line
         and (found := DERIVED_IDENTITY_PATTERN.search(line))
-        and not found.group(1).startswith(BUILT_IN_NODE_TYPE_IMPORT_PATH_PREFIX)
     ]
 
 

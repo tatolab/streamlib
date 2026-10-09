@@ -69,7 +69,8 @@ fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown
         Arc::clone(state.cross_process_timeline_pairs()),
     );
     store.connect().expect("the store connects");
-    gpu.set_surface_store(store);
+    gpu.install_the_engines_surface_store(store)
+        .expect("the engine's surface store installs once");
     let sandbox = GpuContextLimitedAccess::new(gpu);
     let registry = EscalateHandleRegistry::new();
     let (width, height, format) = (64, 32, TextureFormat::Rgba8Unorm);
@@ -211,7 +212,8 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
         Arc::clone(state.cross_process_timeline_pairs()),
     );
     store.connect().expect("the store connects");
-    gpu.set_surface_store(store);
+    gpu.install_the_engines_surface_store(store)
+        .expect("the engine's surface store installs once");
     let sandbox = GpuContextLimitedAccess::new(gpu);
     let registry = EscalateHandleRegistry::new();
     let (width, height, format) = (64, 32, TextureFormat::Rgba8Unorm);
@@ -572,7 +574,8 @@ impl LiveSurfaceShareServiceForATest {
             Arc::clone(state.check_out_leases()),
         );
         store.connect().expect("the store connects");
-        gpu.set_surface_store(store);
+        gpu.install_the_engines_surface_store(store)
+            .expect("the engine's surface store installs once");
         Self {
             state,
             service,
@@ -626,7 +629,8 @@ impl LiveSurfaceShareServiceForATest {
             Arc::clone(state.cross_process_timeline_pairs()),
         );
         store.connect().expect("the store connects");
-        gpu.set_surface_store(store);
+        gpu.install_the_engines_surface_store(store)
+            .expect("the engine's surface store installs once");
         Self { state, service }
     }
 

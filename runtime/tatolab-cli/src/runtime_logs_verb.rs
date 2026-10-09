@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab logs`: with RUNTIME_ID, a runtime's on-disk JSONL log rendered as the runtime
-//! mirrored it; with `--list`, the runtimes that have one; with `--node`, a bounded sample of a
-//! running runtime's live event stream.
+//! `tatolab logs`: with RUNTIME_ID-STREAM, one loaded stream's on-disk JSONL log rendered as the
+//! runtime mirrored it; with `--list`, the stream logs on disk; with `--node`, a bounded sample of
+//! a running runtime's live event stream.
 
 use std::fmt::Write as _;
 use std::io::{self, Write};
@@ -33,7 +33,7 @@ use crate::{RuntimeTargetArguments, TatolabCommandFailure};
 /// The local API tool `logs --node` drives.
 pub(crate) const LOGS_TOOL_NAME: &str = "logs";
 
-/// The width `--list` pads its RUNTIME_ID and STARTED_AT columns to.
+/// The width `--list` pads its RUNTIME_ID-STREAM and STARTED_AT columns to.
 const RUNTIME_LOG_LISTING_COLUMN_WIDTH: usize = 24;
 
 /// The latest year an ISO-8601 STARTED_AT is written for; a later start is shown as its number.
@@ -42,12 +42,13 @@ const LATEST_STARTED_AT_YEAR_RENDERED_AS_A_DATE: i32 = 9999;
 /// `tatolab logs`' flags.
 #[derive(Args, Debug)]
 pub(crate) struct RuntimeLogsVerbArguments {
-    /// Runtime to read logs for. Omit with --list or --node.
-    #[arg(value_name = "RUNTIME_ID")]
-    pub(crate) runtime_id: Option<String>,
-    /// Enumerate the runtimes that have log files instead of reading one.
+    /// The stream log to read: `<runtime_id>-<stream>`, as --list names it. Omit with --list or
+    /// --node.
+    #[arg(value_name = "RUNTIME_ID-STREAM")]
+    pub(crate) stream_log_instance_name: Option<String>,
+    /// Enumerate the stream logs on disk instead of reading one.
     #[arg(long = "list")]
-    pub(crate) list_runtimes_with_log_files: bool,
+    pub(crate) list_stream_logs_on_disk: bool,
     /// Follow the log file as new records land (like `tail -F`).
     #[arg(short = 'f', long = "follow")]
     pub(crate) follow_appended_records: bool,
@@ -107,10 +108,10 @@ where
 /// What `logs` was asked to do on disk, once `--node` and `--count` are ruled out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct OnDiskRuntimeLogRequest {
-    /// The runtime whose newest instance is read.
-    pub(crate) runtime_id: Option<String>,
-    /// List the runtimes with log files rather than read one.
-    pub(crate) list_runtimes_with_log_files: bool,
+    /// The stream log, `<runtime_id>-<stream>`, whose newest instance is read.
+    pub(crate) stream_log_instance_name: Option<String>,
+    /// List the stream logs on disk rather than read one.
+    pub(crate) list_stream_logs_on_disk: bool,
     /// Keep reading as records land, across rotations and restarts.
     pub(crate) follow_appended_records: bool,
     /// The records a read keeps.
@@ -123,8 +124,11 @@ impl OnDiskRuntimeLogRequest {
     fn on_disk_flags_given(&self) -> Vec<&'static str> {
         let record_filters = &self.record_filters;
         [
-            ("RUNTIME_ID", is_given(&self.runtime_id)),
-            ("--list", self.list_runtimes_with_log_files),
+            (
+                "RUNTIME_ID-STREAM",
+                is_given(&self.stream_log_instance_name),
+            ),
+            ("--list", self.list_stream_logs_on_disk),
             ("--follow", self.follow_appended_records),
             ("--processor", is_given(&record_filters.processor_id)),
             ("--pipeline", is_given(&record_filters.pipeline_id)),
@@ -156,8 +160,8 @@ fn is_given(flag_value: &Option<String>) -> bool {
 impl From<&RuntimeLogsVerbArguments> for OnDiskRuntimeLogRequest {
     fn from(logs_arguments: &RuntimeLogsVerbArguments) -> Self {
         Self {
-            runtime_id: logs_arguments.runtime_id.clone(),
-            list_runtimes_with_log_files: logs_arguments.list_runtimes_with_log_files,
+            stream_log_instance_name: logs_arguments.stream_log_instance_name.clone(),
+            list_stream_logs_on_disk: logs_arguments.list_stream_logs_on_disk,
             follow_appended_records: logs_arguments.follow_appended_records,
             record_filters: RuntimeLogRecordFilters {
                 processor_id: logs_arguments.processor_id.clone(),
@@ -213,7 +217,7 @@ pub(crate) fn run_runtime_logs_verb(
     })?;
     let standard_output = io::stdout();
     let mut buffered_standard_output = io::BufWriter::new(standard_output.lock());
-    print_runtime_log_files(
+    print_stream_log_files_on_disk(
         &log_dir(),
         &on_disk_request,
         &mut buffered_standard_output,
@@ -236,8 +240,8 @@ pub(crate) fn logs_tool_arguments(
 }
 
 /// The on-disk side of `logs` against the log files in `log_directory`: `--list`, or one
-/// runtime's records — followed until `read_interrupted` answers true when following.
-pub(crate) fn print_runtime_log_files(
+/// stream log's records — followed until `read_interrupted` answers true when following.
+pub(crate) fn print_stream_log_files_on_disk(
     log_directory: &Path,
     on_disk_request: &OnDiskRuntimeLogRequest,
     standard_output: &mut dyn Write,
@@ -245,12 +249,12 @@ pub(crate) fn print_runtime_log_files(
     read_interrupted: &dyn Fn() -> bool,
     follow_poll_interval: Duration,
 ) -> Result<u8, TatolabCommandFailure> {
-    if on_disk_request.list_runtimes_with_log_files {
+    if on_disk_request.list_stream_logs_on_disk {
         let flags_ignored_beside_list = on_disk_request.flags_given_besides_list();
         if !flags_ignored_beside_list.is_empty() {
             return Err(TatolabCommandFailure::refused(format!(
-                "`--list` enumerates the runtimes that have log files and reads none of them, so \
-                 it takes no {}.",
+                "`--list` enumerates the stream logs on disk and reads none of them, so it takes \
+                 no {}.",
                 flags_ignored_beside_list.join(", ")
             )));
         }
@@ -268,29 +272,29 @@ pub(crate) fn print_runtime_log_files(
             Err(write_failure) => standard_output_closed_or_failed(write_failure),
         };
     }
-    let Some(runtime_id) = on_disk_request.runtime_id.as_deref() else {
+    let Some(stream_log_instance_name) = on_disk_request.stream_log_instance_name.as_deref() else {
         return Err(TatolabCommandFailure::refused(
-            "missing RUNTIME_ID.\n`tatolab logs --list` enumerates the runtimes that have log \
-             files, and `--node` reads a running runtime's live event stream instead."
+            "missing RUNTIME_ID-STREAM.\n`tatolab logs --list` enumerates the stream logs on \
+             disk, and `--node` reads a running runtime's live event stream instead."
                 .to_owned(),
         ));
     };
-    let newest_instance = newest_runtime_log_instance_in_directory(log_directory, runtime_id)
-        .map_err(|listing_failure| {
-            runtime_log_directory_unreadable(log_directory, listing_failure)
-        })?;
+    let newest_instance =
+        newest_runtime_log_instance_in_directory(log_directory, stream_log_instance_name).map_err(
+            |listing_failure| runtime_log_directory_unreadable(log_directory, listing_failure),
+        )?;
     let instance_to_read = match newest_instance {
         Some(instance_to_read) => instance_to_read,
         None if !on_disk_request.follow_appended_records => {
             return Err(TatolabCommandFailure::refused(format!(
-                "no log file for runtime `{runtime_id}` in {}.\nUse `tatolab logs --list` to see \
-                 the runtimes that have one.",
+                "no stream log `{stream_log_instance_name}` in {}.\nA runtime logs per loaded stream, as \
+                 `<runtime_id>-<stream>`; `tatolab logs --list` names each one.",
                 log_directory.display()
             )));
         }
-        None => match wait_for_the_first_log_file_of_runtime(
+        None => match wait_for_the_first_segment_of_the_stream_log(
             log_directory,
-            runtime_id,
+            stream_log_instance_name,
             standard_error,
             read_interrupted,
             follow_poll_interval,
@@ -362,27 +366,28 @@ fn print_rendered_records_until_the_read_ends(
     Ok(())
 }
 
-/// Wait for `runtime_id`'s first log file, for `--follow` before the runtime starts; `None` when
-/// the wait was interrupted.
+/// Wait for the first segment of the stream log `stream_log_instance_name`, for `--follow` before
+/// the stream loads; `None` when the wait was interrupted.
 ///
-/// Following a runtime you are about to start is the point of `--follow`; failing because the
-/// file does not exist yet would refuse the one case the flag is for.
-fn wait_for_the_first_log_file_of_runtime(
+/// Following a stream log whose stream is about to load is the point of `--follow`; failing
+/// because the file does not exist yet would refuse the one case the flag is for.
+fn wait_for_the_first_segment_of_the_stream_log(
     log_directory: &Path,
-    runtime_id: &str,
+    stream_log_instance_name: &str,
     standard_error: &mut dyn Write,
     read_interrupted: &dyn Fn() -> bool,
     follow_poll_interval: Duration,
 ) -> Result<Option<RuntimeLogInstanceOnDisk>, TatolabCommandFailure> {
     let _ = writeln!(
         standard_error,
-        "note: no log file yet for runtime '{runtime_id}', waiting in --follow mode..."
+        "note: no stream log '{stream_log_instance_name}' yet, waiting in --follow mode..."
     );
     loop {
         if let Some(first_instance) =
-            newest_runtime_log_instance_in_directory(log_directory, runtime_id).map_err(
-                |listing_failure| runtime_log_directory_unreadable(log_directory, listing_failure),
-            )?
+            newest_runtime_log_instance_in_directory(log_directory, stream_log_instance_name)
+                .map_err(|listing_failure| {
+                    runtime_log_directory_unreadable(log_directory, listing_failure)
+                })?
         {
             return Ok(Some(first_instance));
         }
@@ -410,13 +415,13 @@ pub(crate) fn render_runtime_log_instance_listing(
     mut runtime_log_instances: Vec<RuntimeLogInstanceOnDisk>,
 ) -> String {
     if runtime_log_instances.is_empty() {
-        return format!("(no runtime log files in {})\n", log_directory.display());
+        return format!("(no stream logs in {})\n", log_directory.display());
     }
     runtime_log_instances
         .sort_by(|earlier_listed, later_listed| later_listed.compare_started_at(earlier_listed));
     let mut runtime_log_listing = format!(
         "{:<RUNTIME_LOG_LISTING_COLUMN_WIDTH$}  {:<RUNTIME_LOG_LISTING_COLUMN_WIDTH$}  SIZE\n",
-        "RUNTIME_ID", "STARTED_AT"
+        "RUNTIME_ID-STREAM", "STARTED_AT"
     );
     for runtime_log_instance in &runtime_log_instances {
         let _ = writeln!(
@@ -506,8 +511,8 @@ mod tests {
 
         assert_eq!(
             TatolabCommandFailure::refusal_message_of(refused),
-            "`--node` reads a running runtime's live event stream, which takes no RUNTIME_ID, \
-             --list, --follow, --processor, --pipeline, --rhi, --level, --source, \
+            "`--node` reads a running runtime's live event stream, which takes no \
+             RUNTIME_ID-STREAM, --list, --follow, --processor, --pipeline, --rhi, --level, --source, \
              --intercepted-only. Drop `--node` to read an on-disk log file instead."
         );
     }
@@ -573,15 +578,15 @@ mod tests {
         }
     }
 
-    /// `print_runtime_log_files` against `log_directory`, never interrupted: stdout, stderr and
+    /// `print_stream_log_files_on_disk` against `log_directory`, never interrupted: stdout, stderr and
     /// the outcome.
-    fn print_runtime_log_files_capturing_output(
+    fn print_stream_log_files_on_disk_capturing_output(
         log_directory: &Path,
         on_disk_request: &OnDiskRuntimeLogRequest,
     ) -> (String, String, Result<u8, TatolabCommandFailure>) {
         let mut standard_output = Vec::new();
         let mut standard_error = Vec::new();
-        let printed = print_runtime_log_files(
+        let printed = print_stream_log_files_on_disk(
             log_directory,
             on_disk_request,
             &mut standard_output,
@@ -633,7 +638,7 @@ mod tests {
     fn an_empty_log_directory_lists_as_one_line_naming_it() {
         assert_eq!(
             render_runtime_log_instance_listing(Path::new("/srv/app/.streamlib/logs"), Vec::new()),
-            "(no runtime log files in /srv/app/.streamlib/logs)\n"
+            "(no stream logs in /srv/app/.streamlib/logs)\n"
         );
     }
 
@@ -653,7 +658,7 @@ mod tests {
         assert_eq!(
             runtime_log_listing,
             [
-                "RUNTIME_ID                STARTED_AT                SIZE\n",
+                "RUNTIME_ID-STREAM         STARTED_AT                SIZE\n",
                 "Rnewest                   2026-08-07T21:04:27Z      5.0 MiB\n",
                 "Rolder                    2023-11-14T22:13:20Z      512 B\n",
                 "Rstray                    1970-01-01T00:00:00Z      2.0 KiB\n",
@@ -676,10 +681,10 @@ mod tests {
         )
         .unwrap();
 
-        let (printed_listing, notes, printed) = print_runtime_log_files_capturing_output(
+        let (printed_listing, notes, printed) = print_stream_log_files_on_disk_capturing_output(
             log_directory.path(),
             &OnDiskRuntimeLogRequest {
-                list_runtimes_with_log_files: true,
+                list_stream_logs_on_disk: true,
                 ..Default::default()
             },
         );
@@ -698,11 +703,11 @@ mod tests {
     fn list_refuses_the_flags_it_would_otherwise_ignore() {
         let log_directory = tempfile::tempdir().unwrap();
 
-        let (printed_listing, _, printed) = print_runtime_log_files_capturing_output(
+        let (printed_listing, _, printed) = print_stream_log_files_on_disk_capturing_output(
             log_directory.path(),
             &OnDiskRuntimeLogRequest {
-                runtime_id: Some("Rabc".to_owned()),
-                list_runtimes_with_log_files: true,
+                stream_log_instance_name: Some("Rabc".to_owned()),
+                list_stream_logs_on_disk: true,
                 follow_appended_records: true,
                 record_filters: RuntimeLogRecordFilters {
                     processor_id: Some("proc".to_owned()),
@@ -717,37 +722,37 @@ mod tests {
 
         assert_eq!(
             TatolabCommandFailure::refusal_message_of(printed),
-            "`--list` enumerates the runtimes that have log files and reads none of them, so it \
-             takes no RUNTIME_ID, --follow, --processor, --pipeline, --rhi, --level, --source, \
+            "`--list` enumerates the stream logs on disk and reads none of them, so it takes no \
+             RUNTIME_ID-STREAM, --follow, --processor, --pipeline, --rhi, --level, --source, \
              --intercepted-only."
         );
         assert_eq!(printed_listing, "");
     }
 
     #[test]
-    fn a_missing_runtime_id_names_list_and_node() {
+    fn a_missing_stream_log_instance_name_names_list_and_node() {
         let log_directory = tempfile::tempdir().unwrap();
 
-        let (_, _, printed) = print_runtime_log_files_capturing_output(
+        let (_, _, printed) = print_stream_log_files_on_disk_capturing_output(
             log_directory.path(),
             &OnDiskRuntimeLogRequest::default(),
         );
 
         assert_eq!(
             TatolabCommandFailure::refusal_message_of(printed),
-            "missing RUNTIME_ID.\n`tatolab logs --list` enumerates the runtimes that have log \
-             files, and `--node` reads a running runtime's live event stream instead."
+            "missing RUNTIME_ID-STREAM.\n`tatolab logs --list` enumerates the stream logs on \
+             disk, and `--node` reads a running runtime's live event stream instead."
         );
     }
 
     #[test]
-    fn a_runtime_with_no_log_file_names_list() {
+    fn a_stream_log_with_no_segment_names_list() {
         let log_directory = tempfile::tempdir().unwrap();
 
-        let (_, _, printed) = print_runtime_log_files_capturing_output(
+        let (_, _, printed) = print_stream_log_files_on_disk_capturing_output(
             log_directory.path(),
             &OnDiskRuntimeLogRequest {
-                runtime_id: Some("Rnone".to_owned()),
+                stream_log_instance_name: Some("Rnone".to_owned()),
                 ..Default::default()
             },
         );
@@ -755,8 +760,8 @@ mod tests {
         assert_eq!(
             TatolabCommandFailure::refusal_message_of(printed),
             format!(
-                "no log file for runtime `Rnone` in {}.\nUse `tatolab logs --list` to see the \
-                 runtimes that have one.",
+                "no stream log `Rnone` in {}.\nA runtime logs per loaded stream, as \
+                 `<runtime_id>-<stream>`; `tatolab logs --list` names each one.",
                 log_directory.path().display()
             )
         );
@@ -772,20 +777,20 @@ mod tests {
 
         for on_disk_request in [
             OnDiskRuntimeLogRequest {
-                list_runtimes_with_log_files: true,
+                list_stream_logs_on_disk: true,
                 ..Default::default()
             },
             OnDiskRuntimeLogRequest {
-                runtime_id: Some("Rabc".to_owned()),
+                stream_log_instance_name: Some("Rabc".to_owned()),
                 ..Default::default()
             },
             OnDiskRuntimeLogRequest {
-                runtime_id: Some("Rabc".to_owned()),
+                stream_log_instance_name: Some("Rabc".to_owned()),
                 follow_appended_records: true,
                 ..Default::default()
             },
         ] {
-            let (printed, _, outcome) = print_runtime_log_files_capturing_output(
+            let (printed, _, outcome) = print_stream_log_files_on_disk_capturing_output(
                 &log_directory_that_is_a_file,
                 &on_disk_request,
             );
@@ -793,7 +798,7 @@ mod tests {
             let refusal = TatolabCommandFailure::refusal_message_of(outcome);
             assert!(
                 refusal.starts_with(&format!(
-                    "cannot read the runtime log directory {}: ",
+                    "cannot read the stream log directory {}: ",
                     log_directory_that_is_a_file.display()
                 )),
                 "{on_disk_request:?}: {refusal}"
@@ -816,10 +821,10 @@ mod tests {
         )
         .unwrap();
 
-        let (printed_records, notes, printed) = print_runtime_log_files_capturing_output(
+        let (printed_records, notes, printed) = print_stream_log_files_on_disk_capturing_output(
             log_directory.path(),
             &OnDiskRuntimeLogRequest {
-                runtime_id: Some("Rabc".to_owned()),
+                stream_log_instance_name: Some("Rabc".to_owned()),
                 ..Default::default()
             },
         );
@@ -849,10 +854,10 @@ mod tests {
         let mut standard_output = Vec::new();
         let mut standard_error = Vec::new();
 
-        let printed = print_runtime_log_files(
+        let printed = print_stream_log_files_on_disk(
             log_directory.path(),
             &OnDiskRuntimeLogRequest {
-                runtime_id: Some("Rlater".to_owned()),
+                stream_log_instance_name: Some("Rlater".to_owned()),
                 follow_appended_records: true,
                 ..Default::default()
             },
@@ -865,7 +870,7 @@ mod tests {
         assert_eq!(printed.unwrap(), 0);
         assert_eq!(
             String::from_utf8(standard_error).unwrap(),
-            "note: no log file yet for runtime 'Rlater', waiting in --follow mode...\n"
+            "note: no stream log 'Rlater' yet, waiting in --follow mode...\n"
         );
         assert_eq!(
             String::from_utf8(standard_output).unwrap(),
@@ -879,10 +884,10 @@ mod tests {
         let mut standard_output = Vec::new();
         let mut standard_error = Vec::new();
 
-        let printed = print_runtime_log_files(
+        let printed = print_stream_log_files_on_disk(
             log_directory.path(),
             &OnDiskRuntimeLogRequest {
-                runtime_id: Some("Rnever".to_owned()),
+                stream_log_instance_name: Some("Rnever".to_owned()),
                 follow_appended_records: true,
                 ..Default::default()
             },
@@ -935,10 +940,10 @@ mod tests {
         .unwrap();
         let mut standard_error = Vec::new();
 
-        let printed = print_runtime_log_files(
+        let printed = print_stream_log_files_on_disk(
             log_directory.path(),
             &OnDiskRuntimeLogRequest {
-                runtime_id: Some("Rabc".to_owned()),
+                stream_log_instance_name: Some("Rabc".to_owned()),
                 ..Default::default()
             },
             &mut StandardOutputWhoseReaderClosed,

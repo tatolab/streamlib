@@ -4,15 +4,23 @@
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::Result;
 use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
+use crate::core::runtime::LoadedStreamTag;
 use serde::{Deserialize, Serialize};
+
+use super::PUBSUB;
 
 /// Common topic constants for system events
 pub mod topics {
+    use super::LoadedStreamIdentity;
+
     /// Wildcard topic - receives ALL events from any topic
     pub const ALL: &str = "*";
 
-    /// Runtime global events (lifecycle, errors)
-    pub const RUNTIME_GLOBAL: &str = "runtime:global";
+    /// The topic one loaded stream's events publish on:
+    /// `stream:<runtime id>/<stream name>#<stream tag>`.
+    pub fn loaded_stream(stream: &LoadedStreamIdentity) -> String {
+        format!("stream:{stream}")
+    }
 
     /// Keyboard input events
     pub const KEYBOARD: &str = "input:keyboard";
@@ -34,9 +42,50 @@ pub trait EventListener: Send {
     fn on_event(&mut self, event: &Event) -> Result<()>;
 }
 
+/// The loaded stream an event belongs to: the runtime that loaded it, its
+/// cast name, and its process-unique tag, which tells apart two streams loaded
+/// under one name — one abandoned by its watchdog and the one loaded after it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LoadedStreamIdentity {
+    /// The id of the runtime the stream is loaded in.
+    pub runtime_id: String,
+    /// The stream's URL-safe cast name.
+    pub stream_name: String,
+    /// The stream's process-unique tag, never reused in one process.
+    pub stream_tag: LoadedStreamTag,
+}
+
+impl LoadedStreamIdentity {
+    /// Publish `event` on this stream's topic.
+    pub fn publish_on_this_streams_topic(&self, event: RuntimeEvent) {
+        let event = Event::OfALoadedStream {
+            stream: self.clone(),
+            event,
+        };
+        PUBSUB.publish(&event.topic(), &event);
+    }
+}
+
+/// `<runtime id>/<stream name>#<stream tag>`, unique in the process.
+impl std::fmt::Display for LoadedStreamIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}/{}#{}",
+            self.runtime_id, self.stream_name, self.stream_tag
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Event {
-    RuntimeGlobal(RuntimeEvent),
+    /// An event of one loaded stream, published on its topic.
+    OfALoadedStream {
+        stream: LoadedStreamIdentity,
+        event: RuntimeEvent,
+    },
+    /// Keyboard, mouse and window input, published on the input topics.
+    KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent),
     ProcessorEvent {
         processor_id: ProcessorUniqueId,
         event: ProcessorEvent,
@@ -54,15 +103,14 @@ impl Event {
     /// You can still use custom topic strings directly.
     pub fn topic(&self) -> String {
         match self {
-            Event::RuntimeGlobal(runtime_event) => {
-                // Route input events to specific topics
-                match runtime_event {
-                    RuntimeEvent::KeyboardInput { .. } => topics::KEYBOARD.to_string(),
-                    RuntimeEvent::MouseInput { .. } => topics::MOUSE.to_string(),
-                    RuntimeEvent::WindowEvent { .. } => topics::WINDOW.to_string(),
-                    _ => topics::RUNTIME_GLOBAL.to_string(),
+            Event::OfALoadedStream { stream, .. } => topics::loaded_stream(stream),
+            Event::KeyboardMouseOrWindowInput(input_event) => match input_event {
+                KeyboardMouseOrWindowInputEvent::KeyboardInput { .. } => {
+                    topics::KEYBOARD.to_string()
                 }
-            }
+                KeyboardMouseOrWindowInputEvent::MouseInput { .. } => topics::MOUSE.to_string(),
+                KeyboardMouseOrWindowInputEvent::WindowEvent { .. } => topics::WINDOW.to_string(),
+            },
             Event::ProcessorEvent { processor_id, .. } => topics::processor(processor_id.as_str()),
             Event::Custom { topic, .. } => topic.clone(),
         }
@@ -70,7 +118,7 @@ impl Event {
 
     /// Create a keyboard input event
     pub fn keyboard(key: KeyCode, modifiers: Modifiers, state: KeyState) -> Self {
-        Event::RuntimeGlobal(RuntimeEvent::KeyboardInput {
+        Event::KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent::KeyboardInput {
             key,
             modifiers,
             state,
@@ -79,7 +127,7 @@ impl Event {
 
     /// Create a mouse input event
     pub fn mouse(button: MouseButton, position: (f64, f64), state: MouseState) -> Self {
-        Event::RuntimeGlobal(RuntimeEvent::MouseInput {
+        Event::KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent::MouseInput {
             button,
             position,
             state,
@@ -88,7 +136,7 @@ impl Event {
 
     /// Create a window event
     pub fn window(event: WindowEventType) -> Self {
-        Event::RuntimeGlobal(RuntimeEvent::WindowEvent { event })
+        Event::KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent::WindowEvent { event })
     }
 
     /// Create a processor event
@@ -107,28 +155,42 @@ impl Event {
         }
     }
 
-    /// Returns a readable log name like "RuntimeGlobal.GraphDidChange"
+    /// Returns a readable log name like
+    /// `OfALoadedStream.GraphDidChange (<runtime id>/main#1)`.
     pub fn log_name(&self) -> String {
         match self {
-            Event::RuntimeGlobal(inner) => {
-                let variant = format!("{:?}", inner);
-                // Extract just the variant name (before any { or ()
-                let variant_name = variant.split(['{', '(']).next().unwrap_or(&variant).trim();
-                format!("RuntimeGlobal.{}", variant_name)
+            Event::OfALoadedStream { stream, event } => {
+                format!("OfALoadedStream.{} ({})", debug_variant_name(event), stream)
+            }
+            Event::KeyboardMouseOrWindowInput(inner) => {
+                format!("KeyboardMouseOrWindowInput.{}", debug_variant_name(inner))
             }
             Event::ProcessorEvent {
                 processor_id,
                 event,
             } => {
-                let variant = format!("{:?}", event);
-                let variant_name = variant.split(['{', '(']).next().unwrap_or(&variant).trim();
-                format!("ProcessorEvent.{} ({})", variant_name, processor_id)
+                format!(
+                    "ProcessorEvent.{} ({})",
+                    debug_variant_name(event),
+                    processor_id
+                )
             }
             Event::Custom { topic, .. } => {
                 format!("Custom.{}", topic)
             }
         }
     }
+}
+
+/// The variant name of an enum value's `Debug` rendering, without its fields.
+fn debug_variant_name(value: &impl std::fmt::Debug) -> String {
+    let rendered = format!("{value:?}");
+    rendered
+        .split(['{', '('])
+        .next()
+        .unwrap_or(&rendered)
+        .trim()
+        .to_owned()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -166,7 +228,7 @@ pub enum RuntimeEvent {
     RuntimeResumeFailed {
         error: String,
     },
-    /// Emitted when shutdown is requested (e.g., Ctrl+C, Cmd+Q)
+    /// Emitted when this stream's shutdown is requested.
     RuntimeShutdown,
 
     // Legacy variants (kept for compatibility)
@@ -174,21 +236,6 @@ pub enum RuntimeEvent {
     RuntimeStart,
     #[doc(hidden)]
     RuntimeStop,
-
-    // ===== Input Events =====
-    KeyboardInput {
-        key: KeyCode,
-        modifiers: Modifiers,
-        state: KeyState,
-    },
-    MouseInput {
-        button: MouseButton,
-        position: (f64, f64),
-        state: MouseState,
-    },
-    WindowEvent {
-        event: WindowEventType,
-    },
 
     // ===== Runtime Errors =====
     RuntimeError {
@@ -320,6 +367,24 @@ pub enum RuntimeEvent {
     /// Emitted when a processor type is unregistered from the factory (`remove_module`).
     RuntimeDidUnregisterProcessorType {
         processor_type: ProcessorClassImportPath,
+    },
+}
+
+/// Keyboard, mouse and window input.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum KeyboardMouseOrWindowInputEvent {
+    KeyboardInput {
+        key: KeyCode,
+        modifiers: Modifiers,
+        state: KeyState,
+    },
+    MouseInput {
+        button: MouseButton,
+        position: (f64, f64),
+        state: MouseState,
+    },
+    WindowEvent {
+        event: WindowEventType,
     },
 }
 
@@ -555,11 +620,23 @@ pub enum WindowEventType {
 mod tests {
     use super::*;
 
+    fn a_loaded_stream_identity() -> LoadedStreamIdentity {
+        LoadedStreamIdentity {
+            runtime_id: "Rtest".to_string(),
+            stream_name: "main".to_string(),
+            stream_tag: LoadedStreamTag::numbered_for_a_test(7),
+        }
+    }
+
     #[test]
     fn test_event_topic_routing() {
-        // RuntimeEvent non-input → RUNTIME_GLOBAL
-        let event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted);
-        assert_eq!(event.topic(), topics::RUNTIME_GLOBAL);
+        let stream = a_loaded_stream_identity();
+        let event = Event::OfALoadedStream {
+            stream: stream.clone(),
+            event: RuntimeEvent::RuntimeStarted,
+        };
+        assert_eq!(event.topic(), topics::loaded_stream(&stream));
+        assert_eq!(event.topic(), "stream:Rtest/main#7");
 
         // Keyboard input → KEYBOARD
         let kb = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
@@ -587,19 +664,21 @@ mod tests {
         let kb = Event::keyboard(KeyCode::Enter, Modifiers::default(), KeyState::Pressed);
         assert!(matches!(
             kb,
-            Event::RuntimeGlobal(RuntimeEvent::KeyboardInput { .. })
+            Event::KeyboardMouseOrWindowInput(
+                KeyboardMouseOrWindowInputEvent::KeyboardInput { .. }
+            )
         ));
 
         let mouse = Event::mouse(MouseButton::Middle, (0.0, 0.0), MouseState::Pressed);
         assert!(matches!(
             mouse,
-            Event::RuntimeGlobal(RuntimeEvent::MouseInput { .. })
+            Event::KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent::MouseInput { .. })
         ));
 
         let window = Event::window(WindowEventType::Closed);
         assert!(matches!(
             window,
-            Event::RuntimeGlobal(RuntimeEvent::WindowEvent { .. })
+            Event::KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent::WindowEvent { .. })
         ));
 
         let proc = Event::processor("test", ProcessorEvent::Started);
@@ -607,6 +686,28 @@ mod tests {
 
         let custom = Event::custom("my-topic", serde_json::json!({"key": "value"}));
         assert!(matches!(custom, Event::Custom { .. }));
+    }
+
+    #[test]
+    fn each_log_name_names_its_variant_without_its_fields() {
+        let of_a_loaded_stream = Event::OfALoadedStream {
+            stream: a_loaded_stream_identity(),
+            event: RuntimeEvent::RuntimeStartFailed {
+                error: "no device".to_string(),
+            },
+        };
+        assert_eq!(
+            of_a_loaded_stream.log_name(),
+            "OfALoadedStream.RuntimeStartFailed (Rtest/main#7)"
+        );
+        assert_eq!(
+            Event::window(WindowEventType::Closed).log_name(),
+            "KeyboardMouseOrWindowInput.WindowEvent"
+        );
+        assert_eq!(
+            Event::processor("audio-mixer", ProcessorEvent::Started).log_name(),
+            "ProcessorEvent.Started (audio-mixer)"
+        );
     }
 
     #[test]
@@ -662,8 +763,14 @@ mod tests {
     #[test]
     fn test_event_serialization_roundtrip() {
         let events = vec![
-            Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
-            Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
+            Event::OfALoadedStream {
+                stream: a_loaded_stream_identity(),
+                event: RuntimeEvent::RuntimeStarted,
+            },
+            Event::OfALoadedStream {
+                stream: a_loaded_stream_identity(),
+                event: RuntimeEvent::GraphDidChange,
+            },
             Event::processor("test-proc", ProcessorEvent::Started),
             Event::custom("my-topic", serde_json::json!({"key": "value"})),
             Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed),
@@ -672,10 +779,13 @@ mod tests {
                 width: 1920,
                 height: 1080,
             }),
-            Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
-                from: OutputLinkPortRef::new("Pcam", "video_out"),
-                to: InputLinkPortRef::new("Pdisplay", "video_in"),
-            }),
+            Event::OfALoadedStream {
+                stream: a_loaded_stream_identity(),
+                event: RuntimeEvent::RuntimeWillConnect {
+                    from: OutputLinkPortRef::new("Pcam", "video_out"),
+                    to: InputLinkPortRef::new("Pdisplay", "video_in"),
+                },
+            },
         ];
 
         for event in events {

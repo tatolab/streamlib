@@ -29,7 +29,7 @@
 //! display server, and for the camera arm a `/dev/video*` device. CI
 //! compiles it, which is what keeps it from rotting between rig runs.
 //!
-//! Scoring is not this binary's job: it hosts the control plane and stays up,
+//! Scoring is not this binary's job: it serves its engine's local API and stays up,
 //! so `tatolab tap` and the surface-id `exchange` read the decoded
 //! channel's exact pixels out of process — no window in the observation path,
 //! and the graph unchanged by being watched.
@@ -1001,10 +1001,8 @@ mod linux_rig {
         // Hosted, not optional: an unobservable rig can only be watched, and
         // the codec proof is scored by tapping the decoded channel and
         // exchanging its surface ids for exact pixels.
-        let _local_api_socket_held_for_its_processor = streamlib_api_server::control_plane_host::register_api_server_control_plane_processor_on_runtime(
-            app.runner(),
-            streamlib_api_server::control_plane_host::ApiServerControlPlaneHostConfig::default(),
-        )?;
+        let local_api_served_for_the_engine =
+            streamlib_api_server::serve_the_local_api_for_an_engine(app.runner())?;
 
         match &encoder {
             Some(encoder) => {
@@ -1024,6 +1022,8 @@ mod linux_rig {
             source.display_name(),
             if encoder.is_some() { "encoder -> " } else { "" },
         );
-        app.run()
+        let run_outcome = app.run();
+        drop(local_api_served_for_the_engine);
+        run_outcome
     }
 }

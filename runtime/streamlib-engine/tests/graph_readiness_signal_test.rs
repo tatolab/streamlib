@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `Runner::wait_until_every_processor_is_running` — the signal an app process
-//! polls to know the graph is up.
+//! `LoadedStreamInThisRuntime::wait_until_every_processor_is_running` — the
+//! signal an app process polls to know the stream's graph is up.
 //!
 //! What makes it load-bearing: a processor in a helper process attaches its
 //! iceoryx2 subscriber during `setup`, tens of milliseconds after the graph
@@ -22,6 +22,21 @@ use streamlib::sdk::descriptors::{
 };
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
+
+/// An empty stream loaded into `runner`, its project in `project_directory`.
+fn an_empty_stream_loaded_into(
+    runner: &Runner,
+    project_directory: &std::path::Path,
+) -> std::sync::Arc<streamlib::sdk::runtime::LoadedStreamInThisRuntime> {
+    runner
+        .load_an_empty_stream(
+            streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
+                project_directory,
+            )
+            .named("main"),
+        )
+        .expect("an empty stream loads")
+}
 
 /// Short enough that a test waiting it out stays quick, long enough that
 /// reaching it means nothing transitioned rather than that the machine stalled.
@@ -45,9 +60,11 @@ fn register_test_type(short: &str) -> ProcessorClassImportPath {
 #[test]
 #[serial]
 fn a_graph_with_no_processors_has_nothing_to_wait_for() {
-    let runtime = Runner::new().unwrap();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
 
-    runtime
+    stream
         .wait_until_every_processor_is_running(SHORT_TIMEOUT)
         .expect("an empty graph is up by definition");
 }
@@ -62,15 +79,17 @@ fn a_graph_with_no_processors_has_nothing_to_wait_for() {
 #[test]
 #[serial]
 fn a_graph_that_was_never_started_is_not_reported_as_running() {
-    let runtime = Runner::new().unwrap();
-    let processor_id = runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+    let processor_id = stream
         .add_processor(ProcessorSpec::new(
             register_test_type("NeverStarted"),
             serde_json::json!({}),
         ))
         .expect("a registered type adds cleanly");
 
-    let failure = runtime
+    let failure = stream
         .wait_until_every_processor_is_running(SHORT_TIMEOUT)
         .expect_err("a graph that never started must not report itself running");
 
@@ -96,20 +115,22 @@ fn a_graph_that_was_never_started_is_not_reported_as_running() {
 #[test]
 #[serial]
 fn a_failure_behind_a_processor_that_never_starts_is_still_reported() {
-    let runtime = Runner::new().unwrap();
-    runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+    stream
         .add_processor(ProcessorSpec::new(
             register_test_type("StaysPending"),
             serde_json::json!({}),
         ))
         .expect("a registered type adds cleanly");
     // A registry miss lands the node in `Error` without spawning anything.
-    let _ = runtime.add_processor(ProcessorSpec::new(
+    let _ = stream.add_processor(ProcessorSpec::new(
         ProcessorClassImportPath::new("ghost_package::BehindTheSlowOne").unwrap(),
         serde_json::json!({}),
     ));
 
-    let reported = runtime
+    let reported = stream
         .wait_until_every_processor_is_running(SHORT_TIMEOUT)
         .expect_err("a graph holding a failed processor is not running")
         .to_string();
@@ -127,16 +148,18 @@ fn a_failure_behind_a_processor_that_never_starts_is_still_reported() {
 #[test]
 #[serial]
 fn a_processor_that_failed_ends_the_wait_without_burning_the_timeout() {
-    let runtime = Runner::new().unwrap();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     // A registry miss leaves the node in the graph in `Error` — the same state
     // a failed `setup` lands a processor in, reached without spawning one.
-    let _ = runtime.add_processor(ProcessorSpec::new(
+    let _ = stream.add_processor(ProcessorSpec::new(
         ProcessorClassImportPath::new("ghost_package::NotRegistered").unwrap(),
         serde_json::json!({}),
     ));
 
     let began_waiting = Instant::now();
-    let failure = runtime
+    let failure = stream
         .wait_until_every_processor_is_running(Duration::from_secs(30))
         .expect_err("a graph holding a failed processor is not running");
     let waited = began_waiting.elapsed();

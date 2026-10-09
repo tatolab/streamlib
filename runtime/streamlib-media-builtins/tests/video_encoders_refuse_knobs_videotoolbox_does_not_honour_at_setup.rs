@@ -8,7 +8,7 @@
 //! frame arrives — the session mint on the first frame would latch the same
 //! refusal silently, which is the path this rules out.
 //!
-//! Rig tier: `App::new()` brings up a real `GpuContext`.
+//! Rig tier: starting the `App`'s stream brings up a real `GpuContext`.
 
 use std::sync::Once;
 use std::time::Duration;
@@ -33,7 +33,8 @@ fn readiness_refusal_of_an_encoder_configured_with(
     encoder_config: serde_json::Value,
 ) -> String {
     ensure_the_media_builtins_are_registered();
-    let app = App::new().expect("a runtime");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let app = App::new_in_project_directory(project_directory.path()).expect("a runtime");
     let source = app
         .add(
             TestPatternSource::Processor::processor_class_import_path(),
@@ -46,11 +47,11 @@ fn readiness_refusal_of_an_encoder_configured_with(
         .expect("the encoder is added; its config is judged at setup");
     app.connect((&source, "video"), (&encoder, "video"))
         .expect("the pattern to the encoder");
-    app.runner().start().expect("the graph starts");
+    app.stream().start().expect("the graph starts");
     let readiness = app
-        .runner()
+        .stream()
         .wait_until_every_processor_is_running(READINESS_TIMEOUT);
-    let _ = app.runner().stop();
+    let _ = app.stream().stop();
     readiness
         .expect_err("an encoder with a knob VideoToolbox does not honour must not reach Running")
         .to_string()

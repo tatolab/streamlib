@@ -32,7 +32,7 @@
 //! semaphore signaling, presentation).
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -58,15 +58,10 @@ use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 use super::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
-use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
-use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
-    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+use super::vulkan_pipeline_cache_on_disk::{
+    PipelineCacheKernelKind, create_pipeline_cache_handle, persist_pipeline_cache,
+    pipeline_cache_file_path_keyed_by, read_cache_blob,
 };
-
-/// Env var that overrides the default pipeline-cache directory. Shared with
-/// [`super::vulkan_compute_kernel`] so cached pipelines for both kernel
-/// kinds live under the same root.
-pub const PIPELINE_CACHE_DIR_ENV: &str = "STREAMLIB_PIPELINE_CACHE_DIR";
 
 /// Rich data backing a [`VulkanGraphicsKernel`], reached through the
 /// kernel's opaque handle.
@@ -174,6 +169,16 @@ impl VulkanGraphicsKernelInner {
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &GraphicsKernelDescriptor<'_>,
     ) -> Result<Self> {
+        Self::new_caching_its_pipeline_in(vulkan_device, descriptor, None)
+    }
+
+    /// [`Self::new`], keeping the pipeline's on-disk cache in the stream's
+    /// `pipeline_cache_directory_of_its_stream` when one is given.
+    pub fn new_caching_its_pipeline_in(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &GraphicsKernelDescriptor<'_>,
+        pipeline_cache_directory_of_its_stream: Option<&Path>,
+    ) -> Result<Self> {
         if descriptor.descriptor_sets_in_flight == 0 {
             return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': descriptor_sets_in_flight must be ≥ 1",
@@ -260,6 +265,7 @@ impl VulkanGraphicsKernelInner {
             pipeline_layout,
             &descriptor.pipeline_state,
             descriptor.label,
+            pipeline_cache_directory_of_its_stream,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -1258,6 +1264,21 @@ impl VulkanGraphicsKernel {
         Ok(Self::from_arc_into_raw(Arc::new(inner)))
     }
 
+    /// [`Self::new`], keeping the pipeline's on-disk cache in the stream's
+    /// `pipeline_cache_directory_of_its_stream` when one is given.
+    pub fn new_caching_its_pipeline_in(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        descriptor: &GraphicsKernelDescriptor<'_>,
+        pipeline_cache_directory_of_its_stream: Option<&Path>,
+    ) -> Result<Self> {
+        let inner = VulkanGraphicsKernelInner::new_caching_its_pipeline_in(
+            vulkan_device,
+            descriptor,
+            pipeline_cache_directory_of_its_stream,
+        )?;
+        Ok(Self::from_arc_into_raw(Arc::new(inner)))
+    }
+
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanGraphicsKernelInner>) -> Self {
         let cached_push_constant_size = arc.push_constant_size();
         let cached_descriptor_sets_in_flight = arc.descriptor_sets_in_flight();
@@ -1978,6 +1999,7 @@ fn create_graphics_pipeline_with_cache(
     pipeline_layout: vk::PipelineLayout,
     state: &GraphicsPipelineState,
     label: &str,
+    pipeline_cache_directory_of_its_stream: Option<&Path>,
 ) -> Result<vk::Pipeline> {
     // Reject NV12 as a color attachment (planar-format output is not a
     // graphics-pipeline target).
@@ -1997,8 +2019,12 @@ fn create_graphics_pipeline_with_cache(
 
     // Hash the SPIR-V across all stages to key the pipeline cache.
     let cache_key = hash_stages(stages);
-    let cache_path = pipeline_cache_file_path(&cache_key);
-    let initial_data = cache_path.as_deref().and_then(read_cache_blob);
+    let cache_path = pipeline_cache_file_path_keyed_by(
+        PipelineCacheKernelKind::Graphics,
+        &cache_key,
+        pipeline_cache_directory_of_its_stream,
+    );
+    let initial_data = read_cache_blob(PipelineCacheKernelKind::Graphics, &cache_path);
     tracing::debug!(
         label,
         cache_path = ?cache_path,
@@ -2006,7 +2032,12 @@ fn create_graphics_pipeline_with_cache(
         blob_bytes = initial_data.as_ref().map_or(0, |d| d.len()),
         "graphics pipeline cache lookup",
     );
-    let pipeline_cache = create_pipeline_cache_handle(device, initial_data.as_deref(), label);
+    let pipeline_cache = create_pipeline_cache_handle(
+        PipelineCacheKernelKind::Graphics,
+        device,
+        initial_data.as_deref(),
+        label,
+    );
     let cache_handle = pipeline_cache.unwrap_or(vk::PipelineCache::null());
 
     // Shader stages — match `shader_modules` order to `stages` order.
@@ -2148,9 +2179,13 @@ fn create_graphics_pipeline_with_cache(
         unsafe { device.create_graphics_pipelines(cache_handle, &[pipeline_info], None) };
 
     if pipeline_cache.is_some() {
-        if let Some(path) = cache_path.as_deref() {
-            persist_pipeline_cache(device, cache_handle, path, label);
-        }
+        persist_pipeline_cache(
+            PipelineCacheKernelKind::Graphics,
+            device,
+            cache_handle,
+            &cache_path,
+            label,
+        );
         unsafe { device.destroy_pipeline_cache(cache_handle, None) };
     }
 
@@ -2231,110 +2266,6 @@ fn hash_stages(stages: &[GraphicsStage<'_>]) -> String {
         hasher.update(stage.spv);
     }
     format!("{:x}", hasher.finalize())
-}
-
-fn pipeline_cache_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var(PIPELINE_CACHE_DIR_ENV) {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir));
-        }
-    }
-    // Co-located under the streamlib home (`<STREAMLIB_HOME>/.streamlib/cache/`),
-    // NOT the XDG cache dir — every built/cached artifact lives under the
-    // streamlib working tree per the home contract. See
-    // `streamlib_runtime_client_contract::streamlib_home`.
-    Some(
-        streamlib_runtime_client_contract::streamlib_home::get_streamlib_data_dir()
-            .join("cache")
-            .join("pipeline-cache"),
-    )
-}
-
-fn pipeline_cache_file_path(hash_hex: &str) -> Option<PathBuf> {
-    let dir = pipeline_cache_dir()?;
-    Some(dir.join(format!("{hash_hex}.gfx.bin")))
-}
-
-fn read_cache_blob(path: &Path) -> Option<Vec<u8>> {
-    match std::fs::read(path) {
-        Ok(bytes) if !bytes.is_empty() => Some(bytes),
-        Ok(_) => None,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => {
-            tracing::warn!(
-                "graphics pipeline cache: unreadable cache file at {}: {e}",
-                path.display()
-            );
-            None
-        }
-    }
-}
-
-fn create_pipeline_cache_handle(
-    device: &vulkanalia::Device,
-    initial_data: Option<&[u8]>,
-    label: &str,
-) -> Option<vk::PipelineCache> {
-    let mut info = vk::PipelineCacheCreateInfo::builder();
-    if let Some(data) = initial_data {
-        info = info.initial_data(data);
-        tracing::debug!(
-            "Graphics kernel '{label}': loading pipeline cache (pInitialData {} bytes)",
-            data.len()
-        );
-    }
-    let info = info.build();
-    match unsafe { device.create_pipeline_cache(&info, None) } {
-        Ok(handle) => Some(handle),
-        Err(e) => {
-            tracing::warn!(
-                "Graphics kernel '{label}': vkCreatePipelineCache failed: {e} — falling back to null cache"
-            );
-            None
-        }
-    }
-}
-
-fn persist_pipeline_cache(
-    device: &vulkanalia::Device,
-    cache: vk::PipelineCache,
-    path: &Path,
-    label: &str,
-) {
-    let data = match unsafe { device.get_pipeline_cache_data(cache) } {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!("Graphics kernel '{label}': vkGetPipelineCacheData failed: {e}");
-            return;
-        }
-    };
-    if data.is_empty() {
-        return;
-    }
-    if let Err(e) = atomic_write_pipeline_cache(path, &data) {
-        tracing::warn!(
-            "Graphics kernel '{label}': failed to persist pipeline cache to {}: {e}",
-            path.display()
-        );
-    } else {
-        tracing::debug!(
-            "Graphics kernel '{label}': persisted pipeline cache ({} bytes) to {}",
-            data.len(),
-            path.display()
-        );
-    }
-}
-
-fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        create_directory_and_its_missing_parents_at_mode(parent, OWNER_ONLY_DIRECTORY_MODE)?;
-    }
-    let suffix = format!("tmp.{}", mint_machine_global_unique_name_suffix());
-    let mut tmp = path.to_path_buf();
-    tmp.set_extension(format!("gfx.bin.{suffix}"));
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 #[cfg(test)]

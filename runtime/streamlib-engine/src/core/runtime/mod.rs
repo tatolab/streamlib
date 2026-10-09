@@ -6,8 +6,10 @@ mod end_the_process_at_once;
 mod engine_teardown_watchdog;
 mod graph_change_listener;
 mod helper_process_group_registry;
+mod loaded_stream;
 mod local_processor_type_registration;
 mod operations;
+mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
 mod processor_interpreter_launch_record;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
@@ -32,22 +34,35 @@ pub(crate) use end_the_process_at_once::{
 };
 pub use engine_teardown_watchdog::{
     ArmedEngineTeardownWatchdog, EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
-    note_what_the_engine_teardown_is_waiting_on,
+    TeardownProgressNoteOfOneStream, note_what_the_engine_teardown_is_waiting_on,
 };
-pub(crate) use helper_process_group_registry::kill_every_registered_helper_process_group;
+pub(crate) use engine_teardown_watchdog::{
+    ArmedTeardownWatchdogOfOneStream, ENGINE_TEARDOWN_WATCHDOG_BUDGET,
+    count_threads_abandoned_in_this_process,
+};
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
+pub(crate) use helper_process_group_registry::{
+    kill_every_registered_helper_process_group,
+    kill_every_registered_helper_process_group_of_one_stream,
+};
+pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-pub use runtime::{Runner, RunnerConstructionOptions};
+pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
+pub use runtime::{
+    OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
+    StreamLoadObservingMachineShutdownRequests,
+};
 pub use runtime_name::RuntimeName;
 #[cfg(test)]
-pub(crate) use runtime_shutdown_request::RuntimeShutdownEscalationClearedOnDrop;
-pub(crate) use runtime_shutdown_request::escalate_runtime_shutdown_for_a_delivered_signal;
+pub(crate) use runtime_shutdown_request::TheMachinesShutdownEscalationClearedOnDrop;
+pub(crate) use runtime_shutdown_request::escalate_the_machines_shutdown_for_a_delivered_signal;
 pub use runtime_shutdown_request::{
     RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, RuntimeShutdownEscalation,
-    is_runtime_shutdown_forced, is_runtime_shutdown_requested, request_runtime_shutdown,
-    runtime_shutdown_escalation, take_runtime_shutdown_escalation,
+    ShutdownEscalationOfOneStream, is_the_machines_shutdown_requested,
+    request_the_shutdown_of_every_loaded_stream, take_the_machines_shutdown_escalation,
+    the_machines_shutdown_escalation,
 };
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;

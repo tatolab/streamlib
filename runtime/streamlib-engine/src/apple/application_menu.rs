@@ -3,9 +3,10 @@
 
 //! The application menu the engine installs over the window event pump.
 //!
-//! Its Quit asks the runtime to shut down, the same request Ctrl-C makes, so
-//! the run tears the graph down and returns. `terminate:` — what a stock
-//! Quit sends — would exit the process from under the run loop instead.
+//! Its Quit asks for the shutdown of every loaded stream, the same request
+//! Ctrl-C makes, so the run tears every stream down and returns. `terminate:`
+//! — what a stock Quit sends — would exit the process from under the run loop
+//! instead.
 
 use std::cell::OnceCell;
 
@@ -26,7 +27,9 @@ define_class!(
         #[unsafe(method(requestRuntimeShutdown:))]
         fn request_runtime_shutdown(&self, _sender: Option<&AnyObject>) {
             if let Err(e) =
-                crate::core::runtime::request_runtime_shutdown("Quit from the application menu")
+                crate::core::runtime::request_the_shutdown_of_every_loaded_stream(
+                    "Quit from the application menu",
+                )
             {
                 tracing::warn!(error = %e, "the application menu's Quit could not request a shutdown");
             }

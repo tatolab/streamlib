@@ -23,7 +23,7 @@ use common::{
 /// One engine on the GPU at a time, so the tests' runs never contend for it.
 static ONE_STREAM_ON_THE_GPU_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-const THE_ENGINE_STARTED_LOG_LINE: &str = "[start] Runtime started";
+const THE_ENGINE_STARTED_LOG_LINE: &str = "[start] The stream `main` started";
 const THE_ENGINE_STARTS_WITHIN: Duration = Duration::from_secs(60);
 const A_STREAM_STOPS_WITHIN: Duration = Duration::from_secs(30);
 
@@ -84,7 +84,7 @@ fn an_interrupt_stops_the_stream_cleanly_and_exits_zero() {
     assert!(
         spawned
             .standard_error()
-            .contains("[stop] Graceful shutdown complete"),
+            .contains("[stop] The stream `main` stopped"),
         "{}",
         spawned.standard_error()
     );

@@ -7,12 +7,13 @@
 //! `docs/plan/ARCHITECTURE.md` §Language SDKs: such a thread is abandoned rather
 //! than joined, the engine stays alive beneath it, and the caller is told which
 //! processor it was. What it locks:
-//! - `Runner::stop()` finishes the teardown and fails naming the processor by
-//!   display name and id, and the runner still lists the thread as abandoned.
+//! - `LoadedStreamInThisRuntime::stop()` finishes the teardown and fails naming
+//!   the processor by display name and id, and the stream still lists the
+//!   thread as abandoned.
 //! - A live `remove_processor` takes the node out of the graph, announces the
 //!   removal, and fails naming the processor.
 //!
-//! Starts a real `Runner` (GPU + iceoryx2), so this runs on the rig only.
+//! Starts a real stream (GPU + iceoryx2), so this runs on the rig only.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -21,7 +22,9 @@ use parking_lot::Mutex;
 use serial_test::serial;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
-use streamlib::sdk::runtime::{Runner, RuntimeStatus};
+use streamlib::sdk::runtime::{
+    LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, RuntimeStatus,
+};
 use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 
@@ -48,13 +51,27 @@ impl streamlib_engine::ManualProcessor for StopIgnoringShutdownTestProcessor::Pr
     }
 }
 
-/// A started runner holding one processor that ignores shutdown, and its id.
-fn a_running_runner_with_a_processor_that_ignores_shutdown(
+/// A started stream holding one processor that ignores shutdown, the project
+/// directory it is loaded from, the runner it is loaded in, and the
+/// processor's id.
+fn a_running_stream_with_a_processor_that_ignores_shutdown(
     display_name: &str,
-) -> (Arc<Runner>, String) {
+) -> (
+    tempfile::TempDir,
+    Arc<Runner>,
+    Arc<LoadedStreamInThisRuntime>,
+    String,
+) {
     PROCESSOR_REGISTRY.register::<StopIgnoringShutdownTestProcessor::Processor>();
-    let runtime = Runner::new().expect("Runner::new");
-    let processor_id = runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+    let stream = runner
+        .load_an_empty_stream(
+            OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                .named("main"),
+        )
+        .expect("an empty stream loads");
+    let processor_id = stream
         .add_processor(
             ProcessorSpec::new(
                 StopIgnoringShutdownTestProcessor::processor_class_import_path(),
@@ -63,11 +80,11 @@ fn a_running_runner_with_a_processor_that_ignores_shutdown(
             .with_display_name(display_name),
         )
         .expect("add the processor that ignores shutdown");
-    runtime.start().expect("runtime start");
-    runtime
+    stream.start().expect("stream start");
+    stream
         .wait_until_every_processor_is_running(Duration::from_secs(30))
         .expect("the processor starts");
-    (runtime, processor_id.to_string())
+    (project_directory, runner, stream, processor_id.to_string())
 }
 
 /// Records the ids of the processors a `RuntimeDidRemoveProcessor` names.
@@ -75,8 +92,10 @@ struct RemovedProcessorIdsRecorder(Arc<Mutex<Vec<String>>>);
 
 impl EventListener for RemovedProcessorIdsRecorder {
     fn on_event(&mut self, event: &Event) -> Result<()> {
-        if let Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRemoveProcessor { processor_id }) =
-            event
+        if let Event::OfALoadedStream {
+            event: RuntimeEvent::RuntimeDidRemoveProcessor { processor_id },
+            ..
+        } = event
         {
             self.0.lock().push(processor_id.to_string());
         }
@@ -84,8 +103,8 @@ impl EventListener for RemovedProcessorIdsRecorder {
     }
 }
 
-fn assert_the_graph_holds_no_processor(runtime: &Runner) {
-    let graph = runtime.to_json().expect("the graph serializes");
+fn assert_the_graph_holds_no_processor(stream: &LoadedStreamInThisRuntime) {
+    let graph = stream.to_json().expect("the graph serializes");
     assert!(
         graph["nodes"]
             .as_array()
@@ -97,12 +116,12 @@ fn assert_the_graph_holds_no_processor(runtime: &Runner) {
 
 #[test]
 #[serial]
-fn stopping_the_runtime_abandons_the_thread_and_names_the_processor() {
-    let (runtime, processor_id) =
-        a_running_runner_with_a_processor_that_ignores_shutdown("StuckOnStop");
+fn stopping_the_stream_abandons_the_thread_and_names_the_processor() {
+    let (_project_directory, _runner, stream, processor_id) =
+        a_running_stream_with_a_processor_that_ignores_shutdown("stuck-on-stop");
 
     let started = Instant::now();
-    let refusal = runtime
+    let refusal = stream
         .stop()
         .expect_err("a stop that abandoned a thread must say so")
         .to_string();
@@ -114,16 +133,16 @@ fn stopping_the_runtime_abandons_the_thread_and_names_the_processor() {
         "the stop took {stopped_in:?}, not the native join budget"
     );
     assert!(
-        refusal.contains("'StuckOnStop'") && refusal.contains(&processor_id),
+        refusal.contains("'stuck-on-stop'") && refusal.contains(&processor_id),
         "the refusal must name the processor by display name and id: {refusal}"
     );
     assert_eq!(
-        runtime.status(),
+        stream.status(),
         RuntimeStatus::Stopped,
         "the rest of the teardown must still run"
     );
-    assert_the_graph_holds_no_processor(&runtime);
-    let still_running = runtime.processor_threads_abandoned_and_still_running();
+    assert_the_graph_holds_no_processor(&stream);
+    let still_running = stream.processor_threads_abandoned_and_still_running();
     assert_eq!(
         still_running
             .iter()
@@ -137,30 +156,31 @@ fn stopping_the_runtime_abandons_the_thread_and_names_the_processor() {
 #[test]
 #[serial]
 fn a_live_removal_abandons_the_thread_removes_the_node_and_fails_naming_it() {
-    let (runtime, processor_id) =
-        a_running_runner_with_a_processor_that_ignores_shutdown("StuckOnRemoval");
+    let (_project_directory, _runner, stream, processor_id) =
+        a_running_stream_with_a_processor_that_ignores_shutdown("stuck-on-removal");
     let removed_processor_ids = Arc::new(Mutex::new(Vec::new()));
     let recorder: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(
         RemovedProcessorIdsRecorder(Arc::clone(&removed_processor_ids)),
     ));
     PUBSUB
-        .subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&recorder))
+        .subscribe(
+            &topics::loaded_stream(stream.loaded_stream_identity()),
+            Arc::clone(&recorder),
+        )
         .expect("subscribe to the removal events");
 
-    let refusal = runtime
+    let refusal = stream
         .remove_processor(&processor_id.as_str().into())
         .expect_err("a removal that abandoned a thread must say so")
         .to_string();
 
     assert!(
-        refusal.contains("'StuckOnRemoval'") && refusal.contains(&processor_id),
+        refusal.contains("'stuck-on-removal'") && refusal.contains(&processor_id),
         "the refusal must name the processor by display name and id: {refusal}"
     );
-    assert_the_graph_holds_no_processor(&runtime);
+    assert_the_graph_holds_no_processor(&stream);
     assert_eq!(
-        runtime
-            .processor_threads_abandoned_and_still_running()
-            .len(),
+        stream.processor_threads_abandoned_and_still_running().len(),
         1
     );
     let announced_by = Instant::now() + Duration::from_secs(5);
@@ -171,7 +191,7 @@ fn a_live_removal_abandons_the_thread_removes_the_node_and_fails_naming_it() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
-    runtime
+    stream
         .stop()
         .expect("a stop that abandons nothing new succeeds");
 }

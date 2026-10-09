@@ -2,46 +2,25 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Integration-style tests for the unified logging pathway. Each test
-//! installs its own thread-local tracing dispatcher via
-//! [`init_for_tests`] so they don't collide with each other or with the
-//! global subscriber installed by production callers.
+//! installs its own thread-local tracing dispatcher, routing its thread's
+//! records into one stream's log file, so they don't collide with each other
+//! or with the process pathway installed by production callers.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use serial_test::serial;
-use streamlib_runtime_client_contract::runtime_log_event::{
-    LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source,
-};
-use streamlib_runtime_client_contract::runtime_log_file_paths::log_dir;
-use tempfile::TempDir;
+use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, SCHEMA_VERSION, Source};
 
+use crate::core::logging::one_stream_log_file_written_on_a_test_thread::{
+    OneStreamLogFileWrittenOnThisTestThread, STREAM_NAME_OF_A_TEST_STREAM_LOG,
+    read_every_record_of_a_jsonl_log,
+};
 use crate::core::logging::{
-    LoggingTunables, PrettyLogMirrorStandardStream, StreamlibLoggingConfig, init::init_for_tests,
+    LoggingTunables, PrettyLogMirrorStandardStream, StreamlibLoggingConfig,
 };
-use crate::core::runtime::RuntimeUniqueId;
-
-fn set_streamlib_home(tmp: &TempDir) {
-    unsafe {
-        std::env::set_var("STREAMLIB_HOME", tmp.path());
-    }
-}
-
-fn clear_streamlib_home() {
-    unsafe { std::env::remove_var("STREAMLIB_HOME") };
-}
 
 fn clear_quiet() {
     unsafe { std::env::remove_var("STREAMLIB_QUIET") };
-}
-
-fn read_jsonl(path: &std::path::Path) -> Vec<RuntimeLogEvent> {
-    let contents = std::fs::read_to_string(path).unwrap_or_default();
-    contents
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str::<RuntimeLogEvent>(l).expect("valid JSONL line"))
-        .collect()
 }
 
 fn reset_for_test() {
@@ -52,37 +31,36 @@ fn reset_for_test() {
 
 #[test]
 #[serial]
-fn jsonl_file_created_on_runtime_new() {
+fn a_streams_jsonl_file_is_created_as_its_route_opens() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("Rtest1"));
-    let config = StreamlibLoggingConfig::for_runtime("test", Arc::clone(&runtime_id));
-    let guard = init_for_tests(config).unwrap();
+    let runtime_id = "Rtest1";
+    let config = StreamlibLoggingConfig::for_runtime("test");
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     tracing::info!(pipeline_id = "p1", processor_id = "pr1", "hi");
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
     assert!(
         path.exists(),
         "jsonl file was not created at {}",
         path.display()
     );
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     assert!(
         events.iter().any(|e| e.message == "hi"
             && e.runtime_id == "Rtest1"
+            && e.stream.as_deref() == Some(STREAM_NAME_OF_A_TEST_STREAM_LOG)
             && e.source == Source::Rust
             && e.pipeline_id.as_deref() == Some("p1")
             && e.processor_id.as_deref() == Some("pr1")
             && e.schema_version == SCHEMA_VERSION),
-        "expected record with runtime_id + pipeline_id + processor_id; got {:#?}",
+        "expected record with runtime_id + stream + pipeline_id + processor_id; got {:#?}",
         events
     );
-    clear_streamlib_home();
 }
 
 #[test]
@@ -91,25 +69,23 @@ fn stdout_mirror_suppressed_by_quiet_env_keeps_jsonl() {
     reset_for_test();
     unsafe { std::env::set_var("STREAMLIB_QUIET", "1") };
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestQ"));
-    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
-    let guard = init_for_tests(config).unwrap();
+    let runtime_id = "RtestQ";
+    let config = StreamlibLoggingConfig::for_runtime("test");
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     tracing::info!("still-writes-to-jsonl");
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     assert!(
         events.iter().any(|e| e.message == "still-writes-to-jsonl"),
         "expected record present in JSONL despite STREAMLIB_QUIET"
     );
 
     clear_quiet();
-    clear_streamlib_home();
 }
 
 #[test]
@@ -117,20 +93,19 @@ fn stdout_mirror_suppressed_by_quiet_env_keeps_jsonl() {
 fn drop_triggers_flush_and_persists() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDrop"));
-    let config = StreamlibLoggingConfig::for_runtime("test", Arc::clone(&runtime_id));
-    let guard = init_for_tests(config).unwrap();
+    let runtime_id = "RtestDrop";
+    let config = StreamlibLoggingConfig::for_runtime("test");
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     for i in 0..50u64 {
         tracing::info!(i, "drop-flush-line");
     }
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let info_events: Vec<_> = events
         .iter()
         .filter(|e| e.level == LogLevel::Info && e.message == "drop-flush-line")
@@ -140,7 +115,6 @@ fn drop_triggers_flush_and_persists() {
         "expected at least 50 info events, got {}",
         info_events.len()
     );
-    clear_streamlib_home();
 }
 
 #[test]
@@ -148,14 +122,11 @@ fn drop_triggers_flush_and_persists() {
 fn time_triggered_flush_writes_without_size_trigger() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestTime"));
+    let runtime_id = "RtestTime";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
             batch_ms: Some(50),
@@ -166,20 +137,19 @@ fn time_triggered_flush_writes_without_size_trigger() {
             ..LoggingTunables::default()
         },
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     tracing::info!("single-line-timed-flush");
     std::thread::sleep(Duration::from_millis(250));
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
+    let path = logging.jsonl_log_path();
     let contents_before_drop = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(
         contents_before_drop.contains("single-line-timed-flush"),
         "time-triggered flush did not persist; got {:?}",
         contents_before_drop
     );
-    drop(guard);
-    clear_streamlib_home();
+    logging.finish();
 }
 
 #[test]
@@ -187,11 +157,10 @@ fn time_triggered_flush_writes_without_size_trigger() {
 fn origin_fields_round_trip_via_event_fields() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestOrigin"));
-    let config = StreamlibLoggingConfig::for_runtime("test", Arc::clone(&runtime_id));
-    let guard = init_for_tests(config).unwrap();
+    let runtime_id = "RtestOrigin";
+    let config = StreamlibLoggingConfig::for_runtime("test");
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     tracing::info!(
         pipeline_id = "pl-42",
@@ -201,10 +170,10 @@ fn origin_fields_round_trip_via_event_fields() {
         "origin-round-trip"
     );
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let ev = events
         .iter()
         .find(|e| e.message == "origin-round-trip")
@@ -219,8 +188,6 @@ fn origin_fields_round_trip_via_event_fields() {
         ev.attrs.get("custom_k"),
         Some(&serde_json::Value::Number(123.into()))
     );
-
-    clear_streamlib_home();
 }
 
 #[test]
@@ -233,14 +200,11 @@ fn panic_hook_best_effort_flush() {
     // the hook routes a flush through the doorbell.
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestPanic"));
+    let runtime_id = "RtestPanic";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
             batch_ms: Some(25),
@@ -250,23 +214,22 @@ fn panic_hook_best_effort_flush() {
             ..LoggingTunables::default()
         },
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     // Simulated panic-hook path: the caller requests a best-effort
     // flush before the panic unwinds.
     tracing::error!("panic-hook-best-effort-line");
-    guard.request_flush();
+    logging.guard().request_flush();
     std::thread::sleep(Duration::from_millis(60));
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
+    let path = logging.jsonl_log_path();
     let contents = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(
         contents.contains("panic-hook-best-effort-line"),
         "request_flush did not land the record on disk: {:?}",
         contents
     );
-    drop(guard);
-    clear_streamlib_home();
+    logging.finish();
 }
 
 /// Coarse latency check. The #430 target is p50 <1µs / p99 <5µs on a
@@ -279,14 +242,11 @@ fn panic_hook_best_effort_flush() {
 fn hot_path_is_not_blocked_on_io() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestHot"));
+    let runtime_id = "RtestHot";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
             batch_ms: Some(100),
@@ -296,7 +256,7 @@ fn hot_path_is_not_blocked_on_io() {
             ..LoggingTunables::default()
         },
     };
-    let _guard = init_for_tests(config).unwrap();
+    let _logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     const N: u32 = 10_000;
     let start = std::time::Instant::now();
@@ -315,8 +275,6 @@ fn hot_path_is_not_blocked_on_io() {
         "hot path averaged {}ns per call — expected < 50µs; I/O likely on the hot path",
         per_call_ns
     );
-
-    clear_streamlib_home();
 }
 
 /// Cargo's libtest installs a thread-local `OUTPUT_CAPTURE` hook
@@ -337,18 +295,15 @@ fn rust_println_captured_via_fd_redirect() {
 
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdPrint"));
+    let runtime_id = "RintercFdPrint";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     // Dup fd 1 so the File wrapper owns a separate fd we can close
     // on drop without touching the interceptor's fd 1.
@@ -360,10 +315,10 @@ fn rust_println_captured_via_fd_redirect() {
 
     std::thread::sleep(Duration::from_millis(150));
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     assert!(
         events.iter().any(|e| e.message == "sneaky-fd-interception"
             && e.intercepted
@@ -373,8 +328,6 @@ fn rust_println_captured_via_fd_redirect() {
         "expected intercepted record (fd1, warn, rust); got {:#?}",
         events
     );
-
-    clear_streamlib_home();
 }
 
 /// `libc::write(1, ...)` bypasses stdlib / libtest entirely and hits
@@ -385,18 +338,15 @@ fn rust_println_captured_via_fd_redirect() {
 fn rust_c_printf_via_libc_captured() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdLibc"));
+    let runtime_id = "RintercFdLibc";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     unsafe {
         let bytes = b"hi-from-libc\n";
@@ -409,10 +359,10 @@ fn rust_c_printf_via_libc_captured() {
 
     std::thread::sleep(Duration::from_millis(150));
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     assert!(
         events.iter().any(|e| e.message == "hi-from-libc"
             && e.intercepted
@@ -422,8 +372,6 @@ fn rust_c_printf_via_libc_captured() {
         "expected intercepted libc::write record; got {:#?}",
         events
     );
-
-    clear_streamlib_home();
 }
 
 /// With `intercept_stdio: false`, `libc::write(1, ...)` reaches the
@@ -435,18 +383,15 @@ fn rust_c_printf_via_libc_captured() {
 fn intercept_stdio_off_in_tests() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdOff"));
+    let runtime_id = "RintercFdOff";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables::default(),
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     unsafe {
         let bytes = b"off-bypass-interceptor\n";
@@ -459,10 +404,10 @@ fn intercept_stdio_off_in_tests() {
 
     std::thread::sleep(Duration::from_millis(50));
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     assert!(
         !events
             .iter()
@@ -470,8 +415,6 @@ fn intercept_stdio_off_in_tests() {
         "expected NO intercepted record when intercept_stdio=false; got {:#?}",
         events
     );
-
-    clear_streamlib_home();
 }
 
 /// Writes to fd 2 land in JSONL with `channel: "fd2"`.
@@ -481,18 +424,15 @@ fn intercept_stdio_off_in_tests() {
 fn intercepted_fd2_uses_channel_fd2() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFd2"));
+    let runtime_id = "RintercFd2";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     unsafe {
         let bytes = b"stderr-interception-line\n";
@@ -505,10 +445,10 @@ fn intercepted_fd2_uses_channel_fd2() {
 
     std::thread::sleep(Duration::from_millis(150));
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     assert!(
         events
             .iter()
@@ -518,8 +458,6 @@ fn intercepted_fd2_uses_channel_fd2() {
         "expected intercepted record with channel=fd2; got {:#?}",
         events
     );
-
-    clear_streamlib_home();
 }
 
 /// With both the pretty-mirror and the interceptor on, the mirror
@@ -533,27 +471,24 @@ fn intercepted_fd2_uses_channel_fd2() {
 fn no_redirect_loop_when_mirror_enabled() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdLoop"));
+    let runtime_id = "RintercFdLoop";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardOutput),
-        jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     tracing::info!("unique-loop-token-xyz123");
 
     std::thread::sleep(Duration::from_millis(150));
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let matching: Vec<_> = events
         .iter()
         .filter(|e| e.message.contains("unique-loop-token-xyz123"))
@@ -570,8 +505,6 @@ fn no_redirect_loop_when_mirror_enabled() {
         "the one record should not be intercepted; got {:#?}",
         matching[0]
     );
-
-    clear_streamlib_home();
 }
 
 /// Dropping the guard restores fds 1/2, closes the pipe write ends,
@@ -583,18 +516,15 @@ fn no_redirect_loop_when_mirror_enabled() {
 fn reader_thread_shuts_down_on_runtime_drop() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdShut"));
+    let runtime_id = "RintercFdShut";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     // Put the readers through at least one wake-up so we're verifying
     // shutdown from a live-reader state, not a fresh-spawn state.
@@ -609,7 +539,7 @@ fn reader_thread_shuts_down_on_runtime_drop() {
     std::thread::sleep(Duration::from_millis(50));
 
     let start = std::time::Instant::now();
-    drop(guard);
+    logging.finish();
     let elapsed = start.elapsed();
 
     assert!(
@@ -617,8 +547,6 @@ fn reader_thread_shuts_down_on_runtime_drop() {
         "guard drop took {:?} — reader threads likely stranded",
         elapsed
     );
-
-    clear_streamlib_home();
 }
 
 /// Workspace default pins `tracing/release_max_level_debug`. Verify the
@@ -634,19 +562,18 @@ fn trace_compiled_out_in_release() {
     // survives the compile-time strip reaches the JSONL.
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestTraceStrip"));
-    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
-    let guard = init_for_tests(config).unwrap();
+    let runtime_id = "RtestTraceStrip";
+    let config = StreamlibLoggingConfig::for_runtime("test");
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     tracing::trace!("trace-release-stripped-token");
     tracing::debug!("debug-release-default-token");
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let trace_count = events
         .iter()
         .filter(|e| e.message == "trace-release-stripped-token")
@@ -679,8 +606,6 @@ fn trace_compiled_out_in_release() {
             "debug! must stay live in release without strip_debug_logging"
         );
     }
-
-    clear_streamlib_home();
 }
 
 /// Without the opt-in feature, `debug!` produces a JSONL record under
@@ -691,18 +616,17 @@ fn trace_compiled_out_in_release() {
 fn debug_lives_in_release_default() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDebugLive"));
-    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
-    let guard = init_for_tests(config).unwrap();
+    let runtime_id = "RtestDebugLive";
+    let config = StreamlibLoggingConfig::for_runtime("test");
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     tracing::debug!("debug-default-must-survive");
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     assert!(
         events
             .iter()
@@ -710,8 +634,6 @@ fn debug_lives_in_release_default() {
         "expected debug! record in JSONL; got {:#?}",
         events
     );
-
-    clear_streamlib_home();
 }
 
 /// With `--features streamlib/strip_debug_logging`, release builds
@@ -724,19 +646,18 @@ fn strip_debug_logging_feature_strips_debug() {
     reset_for_test();
     unsafe { std::env::set_var("RUST_LOG", "trace") };
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDebugStrip"));
-    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
-    let guard = init_for_tests(config).unwrap();
+    let runtime_id = "RtestDebugStrip";
+    let config = StreamlibLoggingConfig::for_runtime("test");
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     tracing::debug!("debug-feature-stripped-token");
     tracing::info!("info-feature-keeps-token");
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let debug_count = events
         .iter()
         .filter(|e| e.message == "debug-feature-stripped-token")
@@ -767,8 +688,6 @@ fn strip_debug_logging_feature_strips_debug() {
         );
         assert_eq!(info_count, 1, "info! must survive strip_debug_logging");
     }
-
-    clear_streamlib_home();
 }
 
 /// `warn!` and `error!` must always reach the JSONL. No feature combo
@@ -778,19 +697,18 @@ fn strip_debug_logging_feature_strips_debug() {
 fn warn_and_error_never_stripped() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestWarnErr"));
-    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
-    let guard = init_for_tests(config).unwrap();
+    let runtime_id = "RtestWarnErr";
+    let config = StreamlibLoggingConfig::for_runtime("test");
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     tracing::warn!("warn-never-stripped-token");
     tracing::error!("error-never-stripped-token");
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     assert!(
         events
             .iter()
@@ -810,8 +728,6 @@ fn warn_and_error_never_stripped() {
         "STATIC_MAX_LEVEL must always admit warn!/error!; got {:?}",
         tracing::level_filters::STATIC_MAX_LEVEL
     );
-
-    clear_streamlib_home();
 }
 
 #[test]
@@ -819,14 +735,11 @@ fn warn_and_error_never_stripped() {
 fn burst_surfaces_dropped_counter_record() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestBurst"));
+    let runtime_id = "RtestBurst";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
             batch_ms: Some(25),
@@ -837,17 +750,17 @@ fn burst_surfaces_dropped_counter_record() {
             ..LoggingTunables::default()
         },
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     for i in 0..5_000u64 {
         tracing::info!(i, "burst-line");
     }
     std::thread::sleep(Duration::from_millis(1_200));
 
-    let path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let path = logging.jsonl_log_path();
+    logging.finish();
 
-    let events = read_jsonl(&path);
+    let events = read_every_record_of_a_jsonl_log(&path);
     let dropped_records: Vec<_> = events
         .iter()
         .filter(|e| e.level == LogLevel::Warn && e.attrs.contains_key("dropped"))
@@ -856,23 +769,18 @@ fn burst_surfaces_dropped_counter_record() {
         !dropped_records.is_empty(),
         "expected at least one synthetic dropped=N record in the JSONL"
     );
-
-    clear_streamlib_home();
 }
 
 #[test]
 #[serial]
-fn a_runtime_logging_past_its_rotation_threshold_keeps_every_retained_record_whole() {
+fn a_stream_logging_past_its_rotation_threshold_keeps_every_retained_record_whole() {
     reset_for_test();
     let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
-    set_streamlib_home(&tmp);
 
-    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestRotate"));
+    let runtime_id = "RtestRotate";
     let config = StreamlibLoggingConfig {
         service_name: "test".into(),
-        runtime_id: Some(Arc::clone(&runtime_id)),
         pretty_log_mirror_stream: None,
-        jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
             batch_ms: Some(25),
@@ -883,17 +791,17 @@ fn a_runtime_logging_past_its_rotation_threshold_keeps_every_retained_record_who
             retain_segments: Some(1000),
         },
     };
-    let guard = init_for_tests(config).unwrap();
+    let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
     const EVENT_COUNT: u64 = 2_000;
     for i in 0..EVENT_COUNT {
         tracing::info!(i, "rotation-line");
     }
 
-    let active_segment_path = guard.jsonl_path().unwrap().to_path_buf();
-    drop(guard);
+    let active_segment_path = logging.jsonl_log_path();
+    logging.finish();
 
-    let segment_paths: Vec<_> = std::fs::read_dir(log_dir())
+    let segment_paths: Vec<_> = std::fs::read_dir(active_segment_path.parent().unwrap())
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
@@ -905,7 +813,7 @@ fn a_runtime_logging_past_its_rotation_threshold_keeps_every_retained_record_who
 
     let mut rotation_line_indices: Vec<u64> = segment_paths
         .iter()
-        .flat_map(|path| read_jsonl(path))
+        .flat_map(|path| read_every_record_of_a_jsonl_log(path))
         .filter(|event| event.message == "rotation-line")
         .map(|event| event.attrs["i"].as_u64().unwrap())
         .collect();
@@ -915,6 +823,90 @@ fn a_runtime_logging_past_its_rotation_threshold_keeps_every_retained_record_who
         (0..EVENT_COUNT).collect::<Vec<_>>(),
         "every record lands in exactly one segment"
     );
+}
 
-    clear_streamlib_home();
+/// A stream's log, once closed, is whole on disk — every record queued
+/// before the close is in it — and a record the stream emits after reaches
+/// the pretty mirror only.
+#[test]
+#[serial]
+fn a_closed_stream_log_holds_every_record_queued_before_the_close_and_none_after() {
+    reset_for_test();
+    let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+    let config = StreamlibLoggingConfig {
+        pretty_log_mirror_stream: None,
+        intercept_stdio: false,
+        ..StreamlibLoggingConfig::for_runtime("test")
+    };
+    let logging =
+        OneStreamLogFileWrittenOnThisTestThread::install(config, "RtestClose", tmp.path());
+    let path = logging.jsonl_log_path();
+
+    for i in 0..200u64 {
+        tracing::info!(i, "queued-before-the-close");
+    }
+    logging.route().close_the_jsonl_log_file();
+    let records_on_disk_at_the_close = read_every_record_of_a_jsonl_log(&path);
+    tracing::info!("emitted-after-the-close");
+    logging.finish();
+
+    assert_eq!(
+        records_on_disk_at_the_close
+            .iter()
+            .filter(|e| e.message == "queued-before-the-close")
+            .count(),
+        200,
+        "the close wrote every record queued before it"
+    );
+    assert!(
+        !read_every_record_of_a_jsonl_log(&path)
+            .iter()
+            .any(|e| e.message == "emitted-after-the-close"),
+        "a record emitted after the close reached the closed log"
+    );
+}
+
+/// A stream's log close waits for the readers of its helpers' pipes to reach
+/// the end of what the helper wrote, so a line still in the pipe at the close
+/// lands in the stream's file.
+#[test]
+#[serial]
+fn a_closed_stream_log_holds_every_line_its_helpers_wrote_before_their_pipes_ended() {
+    reset_for_test();
+    let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+    let config = StreamlibLoggingConfig {
+        pretty_log_mirror_stream: None,
+        intercept_stdio: false,
+        ..StreamlibLoggingConfig::for_runtime("test")
+    };
+    let logging =
+        OneStreamLogFileWrittenOnThisTestThread::install(config, "RtestPipeEnd", tmp.path());
+    let path = logging.jsonl_log_path();
+
+    let (helper_pipe_read_end, mut helper_pipe_write_end) =
+        std::os::unix::net::UnixStream::pair().expect("a pipe stands in for a helper's stdout");
+    crate::core::compiler::compiler_ops::subprocess_bridge::spawn_fd_line_reader(
+        helper_pipe_read_end,
+        "py-stdout",
+        "fd1",
+        "helper-in-the-test",
+    )
+    .expect("the pipe's reader starts");
+    let helper_writing_until_its_pipe_ends = std::thread::spawn(move || {
+        use std::io::Write;
+        std::thread::sleep(Duration::from_millis(300));
+        writeln!(helper_pipe_write_end, "written-just-before-the-pipe-ended").unwrap();
+    });
+
+    logging.route().close_the_jsonl_log_file();
+    let records_on_disk_at_the_close = read_every_record_of_a_jsonl_log(&path);
+    helper_writing_until_its_pipe_ends.join().unwrap();
+    logging.finish();
+
+    assert!(
+        records_on_disk_at_the_close
+            .iter()
+            .any(|e| e.message == "written-just-before-the-pipe-ended"),
+        "the close finished before the helper's pipe reader reached the pipe's end"
+    );
 }

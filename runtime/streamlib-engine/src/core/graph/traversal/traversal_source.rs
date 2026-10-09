@@ -4,6 +4,7 @@
 //! Query builder types for graph operations.
 
 use crate::core::graph::{Link, ProcessorNode, ProcessorUniqueId};
+use crate::core::processors::NodeTypesOneStreamResolves;
 
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 
@@ -38,12 +39,20 @@ pub struct LinkTraversal<'a> {
 /// Entry point for mutable graph traversals.
 pub struct TraversalSourceMut<'a> {
     pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) node_types_this_stream_resolves:
+        &'a NodeTypesOneStreamResolves,
 }
 
 impl<'a> TraversalSourceMut<'a> {
     /// Create a new mutable traversal source for the given graph.
-    pub(in crate::core::graph) fn new(graph: &'a mut DiGraph<ProcessorNode, Link>) -> Self {
-        Self { graph }
+    pub(in crate::core::graph) fn new(
+        graph: &'a mut DiGraph<ProcessorNode, Link>,
+        node_types_this_stream_resolves: &'a NodeTypesOneStreamResolves,
+    ) -> Self {
+        Self {
+            graph,
+            node_types_this_stream_resolves,
+        }
     }
 
     /// A link traversal over nothing — what an op that could not add its link

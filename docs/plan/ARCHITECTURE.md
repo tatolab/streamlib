@@ -1032,9 +1032,9 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   naming the fix rather than on a bare trait bound. `EmptyConfig`, what a processor with no
   `config =` gets, publishes an object with no properties and `additionalProperties:
   false`, and refuses a non-empty map naming the key that had nowhere to go. Every
-  in-tree config type derives the schema — the built-ins' configs, their enums and
-  `ApiServerConfig` — and a field's `///` doc is its `description`, a serde default its
-  `default`, a field with neither `required`. Every catalog document, from either language,
+  in-tree config type derives the schema — the built-ins' configs and their enums — and a
+  field's `///` doc is its `description`, a serde default its `default`, a field with neither
+  `required`. Every catalog document, from either language,
   is JSON Schema draft 2020-12
   with no `$schema` key: schemars 0.8 emits draft-07, so the Rust seam writes its
   definitions under `$defs` with references pointing there and a tuple's positional

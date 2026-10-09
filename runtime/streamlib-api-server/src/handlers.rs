@@ -18,11 +18,11 @@ use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::Arc;
+use streamlib::sdk::descriptors::ProcessorDescriptor;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
-use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::RuntimeOperations;
+use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -37,6 +37,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 
 use crate::state::{
     ApiDoc, AppState, ErrorResponse, RuntimeShutdownAcceptedResponse, RuntimeShutdownRequest,
+    StreamSelectionQuery,
 };
 
 // ============================================================================
@@ -49,7 +50,7 @@ fn control_plane_rest_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(health))
         .routes(routes!(get_graph))
         .routes(routes!(get_registry))
-        .routes(routes!(request_runtime_shutdown))
+        .routes(routes!(request_the_shutdown_of_every_loaded_stream))
         .routes(routes!(exchange_published_surface_id_for_png_image))
 }
 
@@ -77,7 +78,7 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
 /// `subscriptions/listen` `/mcp` holds open and every stream `/mcp/stdio`
 /// upgraded.
 pub(crate) fn build_router(
-    runtime: Arc<dyn RuntimeOperations>,
+    operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     local_api_stopping_token: CancellationToken,
 ) -> Router {
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -85,12 +86,15 @@ pub(crate) fn build_router(
         .split_for_parts();
 
     let local_api_mcp_server_handler = crate::mcp::LocalApiMcpServerHandler::new(
-        runtime.clone(),
+        Arc::clone(&operations_on_the_loaded_streams),
         local_api_stopping_token.clone(),
     );
     let local_api_mcp_service =
         crate::mcp::local_api_mcp_streamable_http_service(local_api_mcp_server_handler.clone());
-    let state = AppState { runtime, openapi };
+    let state = AppState {
+        operations_on_the_loaded_streams,
+        openapi,
+    };
 
     // Method, path, status and latency for every request, at DEBUG so a client
     // polling the node stays out of the app's own log at the default `info`
@@ -133,24 +137,65 @@ pub(crate) async fn health() -> &'static str {
     "ok"
 }
 
+/// What a route answers when the stream it was asked about cannot be named:
+/// `404` for one not loaded, or an absent `stream` meeting none or several —
+/// the refusal names the loaded streams — and `500` for anything else.
+fn stream_resolution_refusal_response(refusal: &Error) -> Response {
+    let status = match refusal {
+        Error::NotFound(_) => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    error_response(status, refusal)
+}
+
+/// The operations on the stream `stream` names — `None` names the only
+/// loaded stream — or the response refusing the call.
+fn stream_operations_or_refusal(
+    state: &AppState,
+    stream: Option<&str>,
+) -> std::result::Result<Arc<dyn RuntimeOperations>, Box<Response>> {
+    state
+        .operations_on_the_loaded_streams
+        .runtime_operations_of_the_stream_a_call_names(stream)
+        .map_err(|refusal| Box::new(stream_resolution_refusal_response(&refusal)))
+}
+
+/// `status` with `error` as an [`ErrorResponse`] body.
+fn error_response(status: StatusCode, error: &impl std::fmt::Display) -> Response {
+    (
+        status,
+        Json(ErrorResponse {
+            error: error.to_string(),
+        }),
+    )
+        .into_response()
+}
+
 #[utoipa::path(
     get,
     path = "/api/graph",
     tag = "graph",
+    params(
+        ("stream" = Option<String>, Query, description = "The loaded stream whose graph to export; absent names the only loaded stream")
+    ),
     responses(
-        (status = 200, description = "Current graph state as JSON"),
-        (status = 500, description = "Internal server error")
+        (status = 200, description = "The stream's current graph state as JSON"),
+        (status = 404, description = "The named stream is not loaded, or `stream` was absent while none or several are; the error names the loaded streams", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
 pub(crate) async fn get_graph(
     State(state): State<AppState>,
-) -> std::result::Result<Json<serde_json::Value>, axum::http::StatusCode> {
-    state
-        .runtime
-        .to_json_async()
-        .await
-        .map(Json)
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+    Query(StreamSelectionQuery { stream }): Query<StreamSelectionQuery>,
+) -> Response {
+    let stream_operations = match stream_operations_or_refusal(&state, stream.as_deref()) {
+        Ok(stream_operations) => stream_operations,
+        Err(refusal) => return *refusal,
+    };
+    match stream_operations.to_json_async().await {
+        Ok(graph) => Json(graph).into_response(),
+        Err(export_failure) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &export_failure),
+    }
 }
 
 #[utoipa::path(
@@ -159,21 +204,23 @@ pub(crate) async fn get_graph(
     tag = "runtime",
     request_body = RuntimeShutdownRequest,
     responses(
-        (status = 202, description = "Shutdown request accepted and handed to the runtime; teardown proceeds asynchronously and is NOT awaited by this response", body = RuntimeShutdownAcceptedResponse),
+        (status = 202, description = "Shutdown of every loaded stream requested; teardown proceeds asynchronously and is NOT awaited by this response", body = RuntimeShutdownAcceptedResponse),
         (status = 500, description = "The request could not be handed to the runtime", body = ErrorResponse)
     )
 )]
-pub(crate) async fn request_runtime_shutdown(
+pub(crate) async fn request_the_shutdown_of_every_loaded_stream(
     State(state): State<AppState>,
     Json(body): Json<RuntimeShutdownRequest>,
 ) -> axum::response::Response {
     let reason = body.reason.unwrap_or_default();
 
-    // Never await teardown: this control plane is torn down BY the shutdown it
-    // just requested (`ApiServerProcessor::stop` fires the graceful-shutdown
-    // signal for this very server), so a handler that waited would be racing
-    // its own socket. Hand the request to the runtime and answer 202.
-    match state.runtime.request_runtime_shutdown(&reason) {
+    // Never await teardown: the host stops serving this very socket once every
+    // stream has ended, so a handler that waited would be racing its own
+    // socket.
+    match state
+        .operations_on_the_loaded_streams
+        .request_the_shutdown_of_every_loaded_stream(&reason)
+    {
         Ok(()) => (
             StatusCode::ACCEPTED,
             Json(RuntimeShutdownAcceptedResponse {
@@ -182,13 +229,7 @@ pub(crate) async fn request_runtime_shutdown(
             }),
         )
             .into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: error.to_string(),
-            }),
-        )
-            .into_response(),
+        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &error),
     }
 }
 
@@ -245,7 +286,7 @@ pub(crate) async fn exchange_published_surface_id_for_png_image(
     Query(query): Query<SurfaceImageExchangeQuery>,
 ) -> Response {
     match state
-        .runtime
+        .operations_on_the_loaded_streams
         .exchange_published_surface_id_for_png_image_bytes_async(
             surface_id,
             query.downscale_long_edge_pixel_cap,
@@ -291,37 +332,43 @@ fn surface_exchange_failure_response(failure: &Error) -> Response {
         Error::NotSupported(_) => StatusCode::NOT_IMPLEMENTED,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    (
-        status,
-        Json(ErrorResponse {
-            error: failure.to_string(),
-        }),
-    )
-        .into_response()
+    error_response(status, failure)
 }
 
 #[utoipa::path(
     get,
     path = "/api/registry",
     tag = "registry",
+    params(
+        ("stream" = Option<String>, Query, description = "The loaded stream whose node catalog to list; absent names the only loaded stream")
+    ),
     responses(
-        (status = 200, description = "Available node types", body = RegistryResponse)
+        (status = 200, description = "The node types the stream can add: the natively compiled ones, then the ones described in its own interpreter", body = RegistryResponse),
+        (status = 404, description = "The named stream is not loaded, or `stream` was absent while none or several are; the error names the loaded streams", body = ErrorResponse)
     )
 )]
-pub(crate) async fn get_registry() -> Json<RegistryResponse> {
-    Json(processor_catalog_of_this_process())
+pub(crate) async fn get_registry(
+    State(state): State<AppState>,
+    Query(StreamSelectionQuery { stream }): Query<StreamSelectionQuery>,
+) -> Response {
+    match state
+        .operations_on_the_loaded_streams
+        .node_catalog_of_the_stream_a_call_names(stream.as_deref())
+    {
+        Ok(node_catalog) => Json(node_catalog_response(&node_catalog)).into_response(),
+        Err(refusal) => stream_resolution_refusal_response(&refusal),
+    }
 }
 
-/// Every node type this process has registered, rendered as the catalog
-/// `/api/registry` and the MCP node catalog resource both serve.
-pub(crate) fn processor_catalog_of_this_process() -> RegistryResponse {
-    let nodes: Vec<ProcessorDescriptorOutput> = PROCESSOR_REGISTRY
-        .list_registered()
-        .into_iter()
-        .map(|d| ProcessorDescriptorOutput::from(&d))
-        .collect();
-
-    RegistryResponse { nodes }
+/// One stream's node catalog, rendered as `/api/registry` and the MCP node
+/// catalog resource both serve it.
+pub(crate) fn node_catalog_response(node_catalog: &[ProcessorDescriptor]) -> RegistryResponse {
+    RegistryResponse {
+        nodes: node_catalog
+            .iter()
+            .map(ProcessorDescriptorOutput::from)
+            .collect(),
+    }
 }
 
 pub(crate) async fn get_openapi_spec(
@@ -406,9 +453,12 @@ impl EventListener for WebSocketEventForwarder {
 // Channel Tap WebSocket (read-only channel observer)
 // ============================================================================
 
-/// Query parameters for the tap WebSocket: an optional bounded sample count.
+/// Query parameters for the tap WebSocket: the stream the channel is in and
+/// an optional bounded sample count.
 #[derive(Deserialize)]
 pub(crate) struct TapQuery {
+    /// The loaded stream the channel is in; absent names the only loaded one.
+    stream: Option<String>,
     /// Stream exactly `count` bags then close; absent streams live until the
     /// client disconnects.
     count: Option<usize>,
@@ -427,9 +477,11 @@ pub(crate) struct TapQuery {
     tag = "events",
     params(
         ("channel" = String, Path, description = "The output port's address, `<runtime_name>/<node>/<port>`, percent-encoded as one path segment"),
+        ("stream" = Option<String>, Query, description = "The loaded stream the channel is in; absent names the only loaded stream"),
         ("count" = Option<usize>, Query, description = "Stream exactly this many bags then close; absent streams live until the client disconnects")
     ),
     responses(
+        (status = 404, description = "The named stream is not loaded, or `stream` was absent while none or several are; the error names the loaded streams", body = ErrorResponse),
         (status = 101, description = "WebSocket upgraded. Read-only observability tap: each channel bag is forwarded verbatim (FrameHeader-framed) as a binary WS frame with no encode, containerize, or transcode — decoding is the client's concern. To observe a viewable video feed, tap an encoded (h264/h265/jpeg) or container (CMAF/fMP4) channel; a raw video channel carries zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels, and this is not a realtime-video transport (use the WebRTC/display processors).")
     )
 )]
@@ -438,13 +490,19 @@ pub(crate) async fn tap_websocket_handler(
     State(state): State<AppState>,
     Path(channel): Path<String>,
     Query(query): Query<TapQuery>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_tap_websocket(socket, state.runtime, channel, query.count))
+) -> Response {
+    let stream_operations = match stream_operations_or_refusal(&state, query.stream.as_deref()) {
+        Ok(stream_operations) => stream_operations,
+        Err(refusal) => return *refusal,
+    };
+    ws.on_upgrade(move |socket| {
+        handle_tap_websocket(socket, stream_operations, channel, query.count)
+    })
 }
 
 async fn handle_tap_websocket(
     socket: WebSocket,
-    runtime: Arc<dyn RuntimeOperations>,
+    stream_operations: Arc<dyn RuntimeOperations>,
     channel: String,
     count: Option<usize>,
 ) {
@@ -452,7 +510,7 @@ async fn handle_tap_websocket(
 
     // Attach the tap; a resolution / slot-occupied failure closes the socket
     // with the typed reason rather than silently hanging.
-    let mut subscription = match runtime.tap_async(channel.clone(), count).await {
+    let mut subscription = match stream_operations.tap_async(channel.clone(), count).await {
         Ok(subscription) => subscription,
         Err(e) => {
             tracing::info!(channel = %channel, "tap attach rejected: {e}");
@@ -565,6 +623,7 @@ pub(crate) mod router_surface_tests {
     use streamlib::sdk::descriptors::{
         ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
     };
+    use streamlib::sdk::processors::PROCESSOR_REGISTRY;
     use streamlib::sdk::runtime::BoxFuture;
     use streamlib_runtime_client_contract::local_api_wire_contract::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE;
     use tower::ServiceExt;
@@ -578,7 +637,7 @@ pub(crate) mod router_surface_tests {
     /// declares them — the runtime API is not what changed — but no route may
     /// reach one, so a route that regrows here fails loudly instead of quietly
     /// succeeding against a permissive stub.
-    #[derive(Default)]
+    #[derive(Clone, Default)]
     struct ControlPlaneRouterStubRuntime {
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
         exchange: StubSurfaceExchange,
@@ -591,12 +650,6 @@ pub(crate) mod router_surface_tests {
         fn to_json(&self) -> Result<serde_json::Value> {
             Ok(serde_json::json!({}))
         }
-        fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
-            self.recorded_shutdown_reasons
-                .lock()
-                .push(reason.to_string());
-            Ok(())
-        }
         fn tap_async(
             &self,
             channel: String,
@@ -605,9 +658,12 @@ pub(crate) mod router_surface_tests {
             Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
         }
 
-        crate::control_plane_stub_support::surface_exchange_op_answers_the_stub!();
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
     }
+
+    crate::control_plane_stub_support::a_stub_runtime_loading_this_stub_as_its_only_stream!(
+        ControlPlaneRouterStubRuntime
+    );
 
     /// The routes this control plane deliberately does not have: every graph
     /// mutation the pre-pivot api-server served. Method + path exactly as they
@@ -626,7 +682,8 @@ pub(crate) mod router_surface_tests {
     }
 
     /// A default stub runtime, for tests that build the router themselves.
-    pub(crate) fn a_control_plane_router_stub_runtime() -> Arc<dyn RuntimeOperations> {
+    pub(crate) fn a_control_plane_router_stub_runtime()
+    -> Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime> {
         Arc::new(ControlPlaneRouterStubRuntime::default())
     }
 
@@ -707,8 +764,9 @@ pub(crate) mod router_surface_tests {
         }
     }
 
-    /// `/api/registry` reads the process-global registry, so this registers a
-    /// probe under a path no other test names and asserts on that path alone.
+    /// The stub stream's node catalog is the process-global native registry,
+    /// so this registers a probe under a path no other test names and asserts
+    /// on that path alone.
     /// There is no teardown: a registration is for the life of the process, and
     /// the registry refuses a second one of the same path.
     ///
@@ -793,6 +851,59 @@ pub(crate) mod router_surface_tests {
                 "GET {uri} must answer 200"
             );
         }
+    }
+
+    /// A route reading one stream refuses a stream the runtime does not load
+    /// with `404`, naming the streams it does.
+    #[tokio::test]
+    async fn a_route_naming_a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
+        for uri in [
+            "/api/graph?stream=elsewhere",
+            "/api/registry?stream=elsewhere",
+        ] {
+            let response = control_plane_router_over_a_stub_runtime()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri(uri)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "GET {uri}");
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let refusal = body["error"].as_str().unwrap_or_default();
+            assert!(
+                refusal.contains("elsewhere")
+                    && refusal.contains(crate::control_plane_stub_support::STUB_STREAM_NAME),
+                "GET {uri}: {refusal}"
+            );
+        }
+    }
+
+    /// A tap naming a stream the runtime does not load is refused before the
+    /// upgrade, rather than upgraded and closed.
+    #[tokio::test]
+    async fn a_tap_naming_a_stream_not_loaded_is_refused_before_the_upgrade() {
+        let served = crate::control_plane_stub_support::LocalApiServedOnAFreshSocket::over(
+            a_control_plane_router_stub_runtime(),
+        );
+        let mut connection = tokio::net::UnixStream::connect(&served.local_api_socket_path)
+            .await
+            .unwrap();
+        let head = crate::control_plane_stub_support::response_head_over_the_socket(
+            &mut connection,
+            "GET /ws/tap/stub-runtime%2Fnode%2Fport?stream=elsewhere HTTP/1.1\r\n\
+             Host: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+             Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+        )
+        .await;
+
+        assert!(head.starts_with("HTTP/1.1 404 "), "{head}");
     }
 
     /// File permission on the local API socket is the whole gate, so a request

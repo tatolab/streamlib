@@ -22,6 +22,7 @@ use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess}
 use streamlib::sdk::engine::host_rhi::PresentScalingMode;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::InputMailboxes;
+use streamlib::sdk::logging::carrying_this_threads_loaded_stream_log_route;
 use streamlib::sdk::processor_owned_window::{
     NamedSurfacePresentationOutcome, ProcessorOwnedWindow,
     ProcessorOwnedWindowAwaitingItsPresentTarget, ProcessorOwnedWindowRequest,
@@ -155,10 +156,10 @@ impl ManualProcessor for DisplayWindow::Processor {
 
         let handle = std::thread::Builder::new()
             .name("display-window".to_string())
-            .spawn(move || {
+            .spawn(carrying_this_threads_loaded_stream_log_route(move || {
                 DisplayWindowRenderLoop::new(gpu_context, inputs, running, frame_counter, config)
                     .run();
-            })
+            }))
             .map_err(|e| Error::Configuration(format!("Failed to spawn render thread: {}", e)))?;
 
         self.render_thread = Some(handle);

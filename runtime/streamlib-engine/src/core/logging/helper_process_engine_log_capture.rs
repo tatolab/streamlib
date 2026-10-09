@@ -30,7 +30,7 @@ use crate::core::logging::iceoryx2_log_bridge::install_iceoryx2_log_bridge_at_th
 use crate::core::logging::init::the_engines_configured_tracing_filter;
 use crate::core::logging::layer::JsonlSinkLayer;
 use crate::core::logging::record::LogRecord;
-use crate::core::logging::worker::WorkerSignal;
+use crate::core::logging::worker::{DrainWorkerRecordQueue, WorkerSignal};
 use streamlib_runtime_client_contract::runtime_log_event::LogLevel;
 
 /// How many engine records a helper holds for its parent before the oldest
@@ -88,11 +88,12 @@ pub struct HelperProcessEngineLogRecordRing {
 
 impl HelperProcessEngineLogRecordRing {
     fn with_capacity(capacity: usize) -> (Self, JsonlSinkLayer) {
-        let queue = Arc::new(ArrayQueue::new(capacity));
-        let dropped = Arc::new(AtomicU64::new(0));
         let (doorbell_sender, doorbell): (Sender<WorkerSignal>, Receiver<WorkerSignal>) =
             bounded(DOORBELL_SIGNALS_HELD_FOR_THE_DRAIN);
-        let layer = JsonlSinkLayer::new(Arc::clone(&queue), doorbell_sender, Arc::clone(&dropped));
+        let record_queue = DrainWorkerRecordQueue::holding(capacity, doorbell_sender);
+        let queue = Arc::clone(&record_queue.queue);
+        let dropped = Arc::clone(&record_queue.dropped);
+        let layer = JsonlSinkLayer::feeding_a_queue_that_writes_no_stream_log_file(record_queue);
         (
             Self {
                 queue,
@@ -219,6 +220,7 @@ mod tests {
             source: None,
             source_ts: None,
             source_seq: None,
+            loaded_stream_log_route: None,
         }
     }
 

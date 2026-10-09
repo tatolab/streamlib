@@ -10,7 +10,7 @@
 //! stated is that the timer is not running unless something is pacing on it —
 //! device ticks and timer ticks cannot interleave if the timer is stopped.
 //!
-//! Starts a real `Runner` (GPU + iceoryx2), so this runs outside the `--lib`
+//! Starts a real stream (GPU + iceoryx2), so this runs outside the `--lib`
 //! gate, which never builds `tests/` integration binaries.
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -87,13 +87,23 @@ impl streamlib_engine::ManualProcessor for ProcessorThatPacesOnTheAudioClock::Pr
 }
 
 fn run_a_graph_of(processor: ProcessorSpec) {
-    let runtime = Runner::new().expect("Runner::new");
-    runtime.add_processor(processor).expect("add the processor");
-    runtime.start().expect("runtime start");
-    runtime.stop().expect("runtime stop");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+    let stream = runner
+        .load_an_empty_stream(
+            streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
+                project_directory.path(),
+            )
+            .named("main"),
+        )
+        .expect("an empty stream loads");
+    stream.add_processor(processor).expect("add the processor");
+    stream.start().expect("stream start");
+    stream.stop().expect("stream stop");
 }
 
-/// Mental revert: put `audio_clock.start()` back into `Runner::start` and this
+/// Mental revert: put `audio_clock.start()` back into
+/// `LoadedStreamInThisRuntime::start` and this
 /// fails — which is the whole of what the entry claims.
 #[test]
 #[serial]

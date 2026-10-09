@@ -20,6 +20,21 @@ use streamlib::sdk::descriptors::{
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
+/// An empty stream loaded into `runner`, its project in `project_directory`.
+fn an_empty_stream_loaded_into(
+    runner: &Runner,
+    project_directory: &std::path::Path,
+) -> std::sync::Arc<streamlib::sdk::runtime::LoadedStreamInThisRuntime> {
+    runner
+        .load_an_empty_stream(
+            streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
+                project_directory,
+            )
+            .named("main"),
+        )
+        .expect("an empty stream loads")
+}
+
 /// The keys the identity grammar used to put on this wire. None may appear in
 /// a node's rendering at any depth.
 const RETIRED_IDENTITY_KEYS: [&str; 3] = ["org", "package", "version"];
@@ -60,12 +75,15 @@ fn every_key(value: &serde_json::Value, into: &mut Vec<String>) {
 fn a_processor_node_renders_its_class_as_a_string_and_carries_no_structured_identity() {
     let camera = register_test_type("ControlPlaneCamera");
 
-    let runtime = Runner::new().unwrap();
-    runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+    stream
         .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
 
-    let graph = runtime.to_json().expect("graph json");
+    let graph = stream.to_json().expect("graph json");
     let node = &graph["nodes"][0];
 
     assert_eq!(
@@ -94,15 +112,18 @@ fn two_classes_render_two_distinct_type_strings() {
     let source = register_test_type("ControlPlaneSource");
     let sink = register_test_type("ControlPlaneSink");
 
-    let runtime = Runner::new().unwrap();
-    runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+    stream
         .add_processor(ProcessorSpec::new(source.clone(), serde_json::json!({})))
         .unwrap();
-    runtime
+    stream
         .add_processor(ProcessorSpec::new(sink.clone(), serde_json::json!({})))
         .unwrap();
 
-    let graph = runtime.to_json().expect("graph json");
+    let graph = stream.to_json().expect("graph json");
     let rendered: Vec<&str> = graph["nodes"]
         .as_array()
         .expect("nodes array")

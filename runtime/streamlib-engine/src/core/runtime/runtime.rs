@@ -1,35 +1,26 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::BTreeMap;
 use std::ops::ControlFlow;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use serde::Serialize;
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
 use super::RuntimeName;
-use super::RuntimeOperations;
-use super::RuntimeStatus;
 use super::RuntimeUniqueId;
-use super::graph_change_listener::GraphChangeListener;
-use crate::core::compiler::{Compiler, PendingOperation};
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-use crate::core::context::SoftwareAudioClock;
-use crate::core::context::{
-    AudioClockConfig, GpuContext, RuntimeContext, SharedAudioClock, TimeContext,
-};
-use crate::core::graph::{
-    GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
-    ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent,
-};
-use crate::core::processors::ProcessorSpec;
-use crate::core::processors::ProcessorState;
-use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
+use super::loaded_stream::LoadedStreamInThisRuntime;
+use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
+use super::{RuntimeShutdownEscalation, StreamEnvironment};
+use crate::core::context::GpuContext;
+use crate::core::graph::cast_exposed_name_to_url_safe;
+use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::signals::ScopedShutdownSignalOwnership;
-use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
+use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
 /// Storage variant for tokio runtime in Runner.
@@ -91,92 +82,232 @@ impl Drop for TokioRuntimeShutDownWithinItsBudget {
     }
 }
 
-/// The main stream processing runtime.
+/// What every stream loaded in one [`Runner`] shares: the engine's tokio
+/// runtime, iceoryx2 node, surface-sharing service, GPU context, lend
+/// directory and the table of loaded streams.
 ///
-/// # Thread Safety
-///
-/// `Runner` is designed for concurrent access from multiple threads.
-/// All public methods take `&self` (not `&mut self`), allowing the runtime
-/// to be shared via `Arc<Runner>` without external synchronization.
-///
-/// Internal state uses fine-grained locking:
-/// - Graph operations: `RwLock` (multiple readers OR one writer)
-/// - Pending operations: `Mutex` (batched for compilation)
-/// - Status: `Mutex` (lifecycle state)
-/// - Runtime context: `Mutex<Option<...>>` (created on start, cleared on stop)
-///
-/// This means multiple threads can concurrently call `add_processor()`,
-/// `connect()`, etc. without blocking each other on an outer lock.
-pub struct Runner {
+/// Fields drop in declaration order, so the hold on the process's logging
+/// pathway, declared last, lets go after everything else is gone.
+pub(crate) struct EngineResourcesSharedByEveryStream {
     /// Unique identifier for this runtime instance.
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
     /// The name this runtime's tap channels and node-registry row carry.
     pub(crate) runtime_name: Arc<RuntimeName>,
-    /// Tokio runtime storage - either owned or external handle.
-    pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
-    /// Compiles graph changes into running processors. Owns the graph and transaction.
-    pub(crate) compiler: Arc<Compiler>,
-    /// Runtime context (GPU, audio config). Created on start(), cleared on stop().
-    /// Using Mutex<Option<...>> allows restart cycles with fresh context each time.
-    pub(crate) runtime_context: Arc<Mutex<Option<Arc<RuntimeContext>>>>,
-    /// Runtime lifecycle status. Protected by Mutex for interior mutability.
-    pub(crate) status: Arc<Mutex<RuntimeStatus>>,
-    /// Listener for graph changes that triggers compilation.
-    /// Stored to keep subscription alive for runtime lifetime.
-    _graph_change_listener: Arc<Mutex<dyn EventListener>>,
-    /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
-    /// Created in new(); cloned into the RuntimeContext during start().
-    pub(crate) iceoryx2_node: Iceoryx2Node,
-    /// Per-runtime surface-sharing service. Bound to a unique Unix socket in
-    /// `new()`; polyglot subprocesses connect to it via the
-    /// `STREAMLIB_SURFACE_SOCKET` env var. Wrapped in `Mutex<Option<...>>`
-    /// so `stop()` can drop it deterministically; the `Drop` impl on
-    /// `UnixSocketSurfaceService` removes the socket file.
+    /// The streams loaded in this runtime, keyed by their URL-safe cast name.
+    pub(crate) streams_loaded_in_this_runtime:
+        Mutex<BTreeMap<String, Arc<LoadedStreamInThisRuntime>>>,
+    /// The one GPU context, created by the first stream that starts.
+    gpu_context_created_by_the_first_stream_start: Mutex<Option<GpuContext>>,
+    /// Hooks run once, when the GPU context is created, before any
+    /// processor's `setup()` runs.
+    setup_hooks: Mutex<SetupHooksOfTheEngine>,
+    /// The lend directory the host handed this runtime.
+    pub(crate) processor_interpreter_lend_directory: ProcessorInterpreterLendDirectoryOfTheEngine,
+    /// Whether [`Runner::shut_down`] has run.
+    shut_down: AtomicBool,
+    /// Whether this engine holds the machine's shutdown signals now, and so
+    /// walks every loaded stream to the machine's shutdown level as it waits.
+    owns_the_machine_shutdown_signals: AtomicBool,
+    /// The runtime-internal surface-sharing service, alive for the engine's
+    /// life; helper processes connect to it via `STREAMLIB_SURFACE_SOCKET`.
     #[cfg(target_os = "linux")]
-    pub(crate) surface_service:
-        Arc<Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>>,
-    /// Path of the per-runtime surface-sharing socket, inside the runtime directory.
+    surface_service: Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>,
+    /// Path of the surface-sharing socket, inside the runtime directory.
     #[cfg(target_os = "linux")]
-    pub(crate) surface_socket_path: std::path::PathBuf,
-    /// Per-runtime surface-sharing service, registered under a dynamic
-    /// bootstrap name in `new()`; helper processes connect to it through
-    /// `STREAMLIB_SURFACE_MACH_SERVICE`. `Mutex<Option<...>>` so `stop()` can
-    /// drop it deterministically, which unregisters the name.
+    pub(crate) surface_socket_path: PathBuf,
+    /// The runtime-internal surface-sharing Mach service, alive for the
+    /// engine's life; helper processes connect to it through
+    /// `STREAMLIB_SURFACE_MACH_SERVICE`.
     #[cfg(target_os = "macos")]
-    pub(crate) mach_surface_share_service:
-        Arc<Mutex<Option<crate::apple::surface_share::MachSurfaceShareService>>>,
+    mach_surface_share_service: Mutex<Option<crate::apple::surface_share::MachSurfaceShareService>>,
     /// The Mach service's name and helper-process admissions.
     #[cfg(target_os = "macos")]
     pub(crate) surface_share_mach_service_rendezvous:
         crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
-    /// The runtime directory this runtime resolved as it started.
-    pub(crate) runtime_directory: StreamlibRuntimeDirectory,
     /// The surfaces cross-process consumers currently hold checked out, owned
-    /// by the service above and read by the pixel-buffer pool through the
-    /// `SurfaceStore` `start()` hands it. Held here because the service is
-    /// brought up in `new()` and the store is built in `start()`.
+    /// by the service above and read through each stream's surface store.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) surface_check_out_leases: Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
+    /// The service's registrations by owner, from which a stopping stream's
+    /// go: the service keeps a registration from this process past its
+    /// connection's close.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    surface_share_registrations_by_owner:
+        Arc<dyn crate::core::context::SurfaceShareRegistrationsByRuntime + Send + Sync>,
     /// The Mach service's table of engine timeline pairs by surface, shared
-    /// with the GPU context's surface store.
+    /// with each stream's surface store.
     #[cfg(target_os = "macos")]
-    surface_share_cross_process_timeline_pairs:
+    pub(crate) surface_share_cross_process_timeline_pairs:
         Arc<crate::apple::surface_share::CrossProcessTimelinePairsBySurface>,
-    /// Logging guard — keeps the drain worker alive for the runtime's
-    /// lifetime. On drop, flushes buffered JSONL records and
-    /// `fdatasync`s the log file.
+    /// The runtime directory this runtime resolved as it was built.
+    pub(crate) runtime_directory: StreamlibRuntimeDirectory,
+    /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
+    pub(crate) iceoryx2_node: Iceoryx2Node,
+    /// Tokio runtime storage - either owned or external handle.
+    pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
+    /// This engine's hold on the process's logging pathway, which keeps the
+    /// standard streams intercepted while any engine lives.
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-    _logging_guard: crate::core::logging::StreamlibLoggingGuard,
-    /// Engine-extension hooks invoked exactly once during [`Self::start`],
-    /// after the [`GpuContext`] is initialized and before any
-    /// processor's `setup()` runs, for engine extensions whose
-    /// construction needs the live GpuContext but whose registration must
-    /// precede the first `process()` call. Drained on each `start()`.
-    setup_hooks: Arc<Mutex<Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>>>>,
-    /// The lend directory and the stream environment this runtime starts its
-    /// processor interpreters with.
-    pub(crate) processor_interpreter_launch_record:
-        Arc<super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecord>,
+    process_logging_pathway_hold: crate::core::logging::ProcessLoggingPathwayHold,
+}
+
+impl EngineResourcesSharedByEveryStream {
+    /// The engine's GPU context — created now when no stream has started yet,
+    /// its own surface store installed and the setup hooks run once — and the
+    /// view `make_the_starting_streams_view` builds over it.
+    ///
+    /// The slot stays locked until the hooks have run, so no other stream's
+    /// start commits a processor before them.
+    pub(crate) fn gpu_context_view_for_a_starting_stream(
+        &self,
+        make_the_starting_streams_view: impl FnOnce(&GpuContext) -> Result<GpuContext>,
+    ) -> Result<GpuContext> {
+        let engine_gpu_context = {
+            let mut gpu_context_slot = self.gpu_context_created_by_the_first_stream_start.lock();
+            let engine_gpu_context = match gpu_context_slot.as_ref() {
+                Some(engine_gpu_context) => engine_gpu_context.clone(),
+                None => {
+                    tracing::info!("[start] Initializing the engine's GPU context...");
+                    let created = GpuContext::init_for_platform_sync()?;
+                    tracing::info!("[start] The engine's GPU context is initialized");
+                    gpu_context_slot.insert(created).clone()
+                }
+            };
+            // Retried by every start until it connects, and the hooks wait for
+            // it, because they register the engine's host surfaces through it.
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            if engine_gpu_context.engines_own_surface_store().is_none() {
+                engine_gpu_context.install_the_engines_surface_store(
+                    self.a_connected_surface_store_owned_by(self.runtime_id.to_string())?,
+                )?;
+            }
+            self.run_the_setup_hooks_once(&engine_gpu_context)?;
+            engine_gpu_context
+        };
+        make_the_starting_streams_view(&engine_gpu_context)
+    }
+
+    /// Run every setup hook once — each, even after one fails — and report
+    /// the first failure. A later call runs none.
+    fn run_the_setup_hooks_once(&self, engine_gpu_context: &GpuContext) -> Result<()> {
+        let hooks = match std::mem::replace(
+            &mut *self.setup_hooks.lock(),
+            SetupHooksOfTheEngine::RanAsTheGpuContextWasCreated,
+        ) {
+            SetupHooksOfTheEngine::WaitingForTheGpuContext(hooks) => hooks,
+            SetupHooksOfTheEngine::RanAsTheGpuContextWasCreated => return Ok(()),
+        };
+        if hooks.is_empty() {
+            return Ok(());
+        }
+        tracing::info!("[start] Running {} setup hook(s)", hooks.len());
+        let mut first_failure = Ok(());
+        for hook in hooks {
+            if let Err(hook_failure) = hook(engine_gpu_context) {
+                tracing::error!("[start] A setup hook failed: {hook_failure}");
+                if first_failure.is_ok() {
+                    first_failure = Err(hook_failure);
+                }
+            }
+        }
+        first_failure
+    }
+
+    /// A surface store that registers under `owner_key`, connected to the
+    /// engine's surface-sharing service.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn a_connected_surface_store_owned_by(
+        &self,
+        owner_key: String,
+    ) -> Result<crate::core::context::SurfaceStore> {
+        use crate::core::context::SurfaceStore;
+
+        let surface_share_address = self.surface_share_address();
+        #[cfg(target_os = "linux")]
+        let surface_store = SurfaceStore::new_reading_check_out_leases(
+            surface_share_address.clone(),
+            owner_key.clone(),
+            Arc::clone(&self.surface_check_out_leases),
+        );
+        #[cfg(target_os = "macos")]
+        let surface_store = SurfaceStore::new_sharing_the_mach_services_tables(
+            surface_share_address.clone(),
+            owner_key.clone(),
+            Arc::clone(&self.surface_check_out_leases),
+            Arc::clone(&self.surface_share_cross_process_timeline_pairs),
+        );
+        surface_store.connect().map_err(|connect_failure| {
+            Error::Runtime(format!(
+                "the surface store of `{owner_key}` failed to connect to the runtime-internal \
+                 surface-sharing service at {surface_share_address}: {connect_failure}"
+            ))
+        })?;
+        Ok(surface_store)
+    }
+
+    /// Release every surface registered under `owner_key` — a stopping
+    /// stream's — from the engine's surface-sharing service.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn release_every_surface_registered_by(&self, owner_key: &str) {
+        crate::core::context::surface_share_wire_verbs::release_every_surface_registered_by(
+            self.surface_share_registrations_by_owner.as_ref(),
+            owner_key,
+        );
+    }
+
+    /// The address a stream's surface store connects to.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn surface_share_address(&self) -> String {
+        #[cfg(target_os = "linux")]
+        {
+            self.surface_socket_path.to_string_lossy().to_string()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.surface_share_mach_service_rendezvous
+                .service_name()
+                .to_string()
+        }
+    }
+
+    /// Take `stream` out of the table, unless another stream has taken its
+    /// name since.
+    pub(crate) fn remove_from_the_stream_table(&self, stream: &Arc<LoadedStreamInThisRuntime>) {
+        let mut streams = self.streams_loaded_in_this_runtime.lock();
+        if streams
+            .get(stream.stream_name())
+            .is_some_and(|loaded| Arc::ptr_eq(loaded, stream))
+        {
+            streams.remove(stream.stream_name());
+        }
+    }
+
+    fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
+        self.streams_loaded_in_this_runtime
+            .lock()
+            .values()
+            .cloned()
+            .collect()
+    }
+}
+
+/// A hook run once with the engine's GPU context.
+type SetupHookOfTheEngine = Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>;
+
+/// The engine's setup hooks: queued until the GPU context is created, then
+/// run once.
+enum SetupHooksOfTheEngine {
+    WaitingForTheGpuContext(Vec<SetupHookOfTheEngine>),
+    RanAsTheGpuContextWasCreated,
+}
+
+/// The engine: one per runtime process, holding a table of loaded streams
+/// under one GPU context, iceoryx2 node, tokio runtime and surface service.
+///
+/// Every graph operation is a stream's: load a stream, then use the
+/// [`LoadedStreamInThisRuntime`] it hands back.
+pub struct Runner {
+    engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
 }
 
 /// What a host chooses as it constructs a [`Runner`].
@@ -185,9 +316,82 @@ pub struct RunnerConstructionOptions {
     /// The runtime's name; else `STREAMLIB_RUNTIME_NAME`, else
     /// `<host name>-<app directory name>-<id>`.
     pub runtime_name: Option<String>,
-    /// The standard stream the runtime's pretty log mirror writes to, when
-    /// this runtime is the first in its process to install logging.
+    /// The standard stream the pretty log mirror writes to, when this runtime
+    /// is the first in its process to install the process's logging pathway.
     pub pretty_log_mirror_stream: crate::core::logging::PrettyLogMirrorStandardStream,
+}
+
+/// What a host chooses as it loads one stream into a [`Runner`].
+#[derive(Debug, Clone, Default)]
+pub struct OptionsForLoadingOneStream {
+    /// The stream's name, overriding the one the graph carries. Required when
+    /// the graph names none, and for an empty stream.
+    pub stream_name: Option<String>,
+    /// The stream's project directory, when no stream environment is given.
+    pub project_directory: Option<PathBuf>,
+    /// Where the stream's processor interpreters start; its project directory
+    /// is the stream's project directory.
+    pub stream_environment: Option<StreamEnvironment>,
+}
+
+impl OptionsForLoadingOneStream {
+    /// A stream whose project lives in `project_directory` and starts no
+    /// processor interpreter.
+    pub fn in_project_directory(project_directory: impl Into<PathBuf>) -> Self {
+        Self {
+            project_directory: Some(project_directory.into()),
+            ..Self::default()
+        }
+    }
+
+    /// A stream whose processor interpreters start in `stream_environment`.
+    pub fn in_stream_environment(stream_environment: StreamEnvironment) -> Self {
+        Self {
+            stream_environment: Some(stream_environment),
+            ..Self::default()
+        }
+    }
+
+    /// These options, loading the stream as `stream_name`.
+    pub fn named(self, stream_name: impl Into<String>) -> Self {
+        Self {
+            stream_name: Some(stream_name.into()),
+            ..self
+        }
+    }
+
+    /// The stream's project directory: the stream environment's, else the one
+    /// given, refused when the two disagree or neither is given.
+    fn resolved_project_directory(&self, stream_name: &str) -> Result<PathBuf> {
+        match (&self.stream_environment, &self.project_directory) {
+            (Some(stream_environment), Some(project_directory))
+                if *project_directory != stream_environment.project_directory =>
+            {
+                Err(Error::Configuration(format!(
+                    "the stream `{stream_name}` was given the project directory `{}` and a \
+                     stream environment in `{}`; a stream's environment lives in its project \
+                     directory, so give one of them, or the same directory to both",
+                    project_directory.display(),
+                    stream_environment.project_directory.display()
+                )))
+            }
+            (Some(stream_environment), _) => Ok(stream_environment.project_directory.clone()),
+            (None, Some(project_directory)) => Ok(project_directory.clone()),
+            (None, None) => Err(Error::Configuration(format!(
+                "the stream `{stream_name}` was given no project directory; a stream's logs, \
+                 caches and node identities live under its project, so load it with one"
+            ))),
+        }
+    }
+}
+
+/// How a load watched for a machine shutdown request ended.
+pub enum StreamLoadObservingMachineShutdownRequests {
+    /// The stream loaded and no machine shutdown was requested.
+    Loaded(Arc<LoadedStreamInThisRuntime>),
+    /// A machine shutdown was requested before the load or while it ran; the
+    /// stream was never loaded.
+    AbandonedForAMachineShutdownRequest,
 }
 
 impl Runner {
@@ -212,16 +416,13 @@ impl Runner {
         // worker, the iceoryx2 node, and every processor thread spawned
         // later. SCHED_FIFO/RR threads (rtkit-promoted reactive processors)
         // bypass slack entirely per kernel design — this only affects
-        // SCHED_OTHER waits. Same call QEMU has shipped in production
-        // since 2013. Cannot fail for self per `prctl(2)`.
+        // SCHED_OTHER waits. Cannot fail for self per `prctl(2)`.
         #[cfg(target_os = "linux")]
         unsafe {
             libc::prctl(libc::PR_SET_TIMERSLACK, 1u64, 0u64, 0u64, 0u64);
         }
 
         // Auto-detect tokio context FIRST — telemetry exporters need a Tokio handle.
-        // If inside tokio runtime: use current handle (external handle mode)
-        // If outside tokio runtime: create owned runtime
         let tokio_runtime_variant = match tokio::runtime::Handle::try_current() {
             Ok(handle) => TokioRuntimeVariant::ExternalTokioHandle(handle),
             Err(_) => {
@@ -240,33 +441,24 @@ impl Runner {
         // Load a local .env if present (RUST_LOG and other dev overrides).
         let _ = dotenvy::dotenv();
 
-        // The id names the log file opened below, so a pinned one is refused
+        // The id names every stream's log file, so a pinned one is refused
         // before the runtime writes anything.
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
-        // Beside the id, and before the runtime writes anything: a name the
-        // caller cannot use in a port address is a wiring error, and refusing
-        // it here costs nothing that has to be undone.
+        // A name the caller cannot use in a port address is a wiring error,
+        // and refusing it here costs nothing that has to be undone.
         let resolved_runtime_name =
             RuntimeName::from_configuration_environment_or_default(runtime_name)?;
 
-        // Stand up the runtime's unified logging pathway: `tracing` →
-        // bounded lossy channel → drain worker → line-buffered pretty
-        // mirror + batched JSONL file at
-        // `<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl`.
-        // See `docs/logging-schema.md` for the schema (the durable
-        // interface contract) and `streamlib::sdk::logging` for the
-        // implementation.
+        // See `docs/logging-schema.md` for the schema.
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-        let _logging_guard =
-            crate::core::logging::init(crate::core::logging::StreamlibLoggingConfig {
+        let process_logging_pathway_hold = crate::core::logging::hold_the_process_logging_pathway(
+            crate::core::logging::StreamlibLoggingConfig {
                 pretty_log_mirror_stream: Some(pretty_log_mirror_stream),
-                ..crate::core::logging::StreamlibLoggingConfig::for_runtime(
-                    format!("runtime:{}", runtime_id),
-                    Arc::clone(&runtime_id),
-                )
-            })
-            .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
+                ..crate::core::logging::StreamlibLoggingConfig::for_runtime("streamlib-runtime")
+            },
+        )
+        .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
         let runtime_name = Arc::new(
             resolved_runtime_name
                 .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name(),
@@ -280,36 +472,32 @@ impl Runner {
             runtime_directory.path().display()
         );
 
-        // Get STREAMLIB_HOME and run init hooks (once per process)
         let streamlib_home =
             streamlib_runtime_client_contract::streamlib_home::get_streamlib_home();
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
         crate::core::runtime_hooks::run_init_hooks(&streamlib_home)?;
-
-        // The engine substrate is empty by construction — there are no
-        // compile-time-linked processors. Callers populate the
-        // `PROCESSOR_REGISTRY` after `Runner::new()` returns, by calling
-        // `PROCESSOR_REGISTRY.register::<P>()` in process.
 
         // Bridge iceoryx2's internal log records into streamlib tracing
         // before creating the iceoryx2 Node so any iceoryx2 emit at
         // construction time lands in the unified JSONL pipeline.
         crate::core::logging::install_iceoryx2_log_bridge_at_the_engines_configured_level();
 
-        // Bring up the per-runtime surface-sharing service. Each runtime owns
-        // a unique Unix socket in the runtime directory that its polyglot
-        // subprocesses connect to via STREAMLIB_SURFACE_SOCKET. Binding it is
-        // also the refusal of a second live runtime with this id, so it runs
-        // before the runtime creates its iceoryx2 node.
+        // Binding the surface-sharing service is also the refusal of a second
+        // live runtime with this id, so it runs before the iceoryx2 node.
         #[cfg(target_os = "linux")]
-        let (surface_service, surface_socket_path, surface_check_out_leases) =
-            bring_up_surface_service(&runtime_directory, &runtime_id)?;
+        let (
+            surface_service,
+            surface_socket_path,
+            surface_check_out_leases,
+            surface_share_registrations_by_owner,
+        ) = bring_up_surface_service(&runtime_directory, &runtime_id)?;
         #[cfg(target_os = "macos")]
         let (
             mach_surface_share_service,
             surface_share_mach_service_rendezvous,
             surface_check_out_leases,
             surface_share_cross_process_timeline_pairs,
+            surface_share_registrations_by_owner,
         ) = bring_up_mach_surface_share_service(&runtime_id)?;
 
         crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
@@ -321,766 +509,196 @@ impl Runner {
         )?;
         tracing::info!("[new] iceoryx2 Node created");
 
-        // Create Arc-wrapped components
-        let compiler = Arc::new(Compiler::new());
-        let runtime_context = Arc::new(Mutex::new(None));
-        let status = Arc::new(Mutex::new(RuntimeStatus::Initial));
-
-        // Create listener with cloned Arc references
-        let listener = GraphChangeListener::new(
-            Arc::clone(&status),
-            Arc::clone(&runtime_context),
-            Arc::clone(&compiler),
-        );
-        let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
-
-        // Subscribe to graph changes
-        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))?;
-
-        let runtime = Arc::new(Self {
-            runtime_id,
-            runtime_name,
-            tokio_runtime_variant,
-            compiler,
-            runtime_context,
-            status,
-            _graph_change_listener: listener,
-            iceoryx2_node,
-            #[cfg(target_os = "linux")]
-            surface_service,
-            #[cfg(target_os = "linux")]
-            surface_socket_path,
-            #[cfg(target_os = "macos")]
-            mach_surface_share_service,
-            #[cfg(target_os = "macos")]
-            surface_share_mach_service_rendezvous,
-            runtime_directory,
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            surface_check_out_leases,
-            #[cfg(target_os = "macos")]
-            surface_share_cross_process_timeline_pairs,
-            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-            _logging_guard,
-            setup_hooks: Arc::new(Mutex::new(Vec::new())),
-            processor_interpreter_launch_record: Arc::default(),
-        });
-
-        Ok(runtime)
+        Ok(Arc::new(Self {
+            engine_resources_shared_by_every_stream: Arc::new(EngineResourcesSharedByEveryStream {
+                runtime_id,
+                runtime_name,
+                streams_loaded_in_this_runtime: Mutex::new(BTreeMap::new()),
+                gpu_context_created_by_the_first_stream_start: Mutex::new(None),
+                setup_hooks: Mutex::new(SetupHooksOfTheEngine::WaitingForTheGpuContext(Vec::new())),
+                processor_interpreter_lend_directory:
+                    ProcessorInterpreterLendDirectoryOfTheEngine::default(),
+                shut_down: AtomicBool::new(false),
+                owns_the_machine_shutdown_signals: AtomicBool::new(false),
+                #[cfg(target_os = "linux")]
+                surface_service: Mutex::new(Some(surface_service)),
+                #[cfg(target_os = "linux")]
+                surface_socket_path,
+                #[cfg(target_os = "macos")]
+                mach_surface_share_service: Mutex::new(Some(mach_surface_share_service)),
+                #[cfg(target_os = "macos")]
+                surface_share_mach_service_rendezvous,
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                surface_check_out_leases,
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                surface_share_registrations_by_owner,
+                #[cfg(target_os = "macos")]
+                surface_share_cross_process_timeline_pairs,
+                runtime_directory,
+                iceoryx2_node,
+                tokio_runtime_variant,
+                #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
+                process_logging_pathway_hold,
+            }),
+        }))
     }
 
-    /// Register a one-shot hook to run during [`Self::start`], after the
-    /// [`GpuContext`] is initialized and before any processor's
-    /// `setup()` runs. The hook receives the live `Arc<GpuContext>`,
-    /// giving caller code a window to register engine extensions before
-    /// any processor runs. Hooks fire FIFO; a hook returning `Err` aborts
-    /// `start()` with the same error.
-    pub fn install_setup_hook<F>(&self, hook: F)
+    /// Register a one-shot hook to run with the engine's GPU context when the
+    /// first stream to start creates it, before any processor's `setup()`
+    /// runs. Hooks fire FIFO, every one even after one fails; the first
+    /// failure aborts that stream's `start()`. Refused once the hooks have
+    /// run.
+    pub fn install_setup_hook<F>(&self, hook: F) -> Result<()>
     where
         F: FnOnce(&GpuContext) -> Result<()> + Send + 'static,
     {
-        self.setup_hooks.lock().push(Box::new(hook));
+        match &mut *self
+            .engine_resources_shared_by_every_stream
+            .setup_hooks
+            .lock()
+        {
+            SetupHooksOfTheEngine::WaitingForTheGpuContext(hooks) => {
+                hooks.push(Box::new(hook));
+                Ok(())
+            }
+            SetupHooksOfTheEngine::RanAsTheGpuContextWasCreated => Err(Error::Configuration(
+                "a setup hook was installed after the engine's GPU context was created and its \
+                 setup hooks had run; install every setup hook before the first stream starts"
+                    .into(),
+            )),
+        }
     }
 
-    /// Path of the per-runtime surface-sharing Unix socket.
-    ///
-    /// Bound during [`Runner::new`] at
-    /// `<runtime directory>/surface-share-<runtime_id>.sock`. Polyglot
-    /// subprocesses spawned by this runtime inherit this path via the
-    /// `STREAMLIB_SURFACE_SOCKET` env var so their `streamlib-surface-client`
-    /// connects to the runtime-internal service.
+    /// Path of the runtime-internal surface-sharing Unix socket, bound during
+    /// [`Runner::new`] at `<runtime directory>/surface-share-<runtime_id>.sock`.
     #[cfg(target_os = "linux")]
     pub fn surface_socket_path(&self) -> &std::path::Path {
-        &self.surface_socket_path
+        &self
+            .engine_resources_shared_by_every_stream
+            .surface_socket_path
     }
 
-    /// The per-runtime surface-sharing Mach service's name and helper-process
-    /// admissions, registered during [`Runner::new`].
+    /// The runtime-internal surface-sharing Mach service's name and
+    /// helper-process admissions, registered during [`Runner::new`].
     #[cfg(target_os = "macos")]
     pub fn surface_share_mach_service_rendezvous(
         &self,
     ) -> &crate::apple::surface_share::MachSurfaceShareServiceRendezvous {
-        &self.surface_share_mach_service_rendezvous
+        &self
+            .engine_resources_shared_by_every_stream
+            .surface_share_mach_service_rendezvous
     }
 
     /// Unique identifier for this runtime instance.
     pub fn runtime_id(&self) -> &RuntimeUniqueId {
-        &self.runtime_id
+        &self.engine_resources_shared_by_every_stream.runtime_id
     }
 
     /// The name this runtime's tap channels and node-registry row carry.
     pub fn runtime_name(&self) -> &RuntimeName {
-        &self.runtime_name
+        &self.engine_resources_shared_by_every_stream.runtime_name
     }
 
     /// The runtime directory this runtime resolved as it was built.
     pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
-        &self.runtime_directory
+        &self
+            .engine_resources_shared_by_every_stream
+            .runtime_directory
     }
 
     /// This runtime's iceoryx2 node.
     pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
-        &self.iceoryx2_node
+        &self.engine_resources_shared_by_every_stream.iceoryx2_node
     }
 
-    /// Path of the JSONL log file this runtime is writing to, if any.
-    /// Returns `None` on platforms where the logging pathway is not
-    /// installed, or when the caller opted out of JSONL output.
-    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-    pub fn jsonl_log_path(&self) -> Option<&std::path::Path> {
-        self._logging_guard.jsonl_path()
-    }
-
-    /// Update a processor's configuration at runtime.
-    pub fn update_processor_config<C: Serialize>(
-        &self,
-        processor_id: &ProcessorUniqueId,
-        config: C,
-    ) -> Result<()> {
-        let config_json =
-            serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
-
-        self.compiler.scope(|_graph, tx| {
-            tx.log(PendingOperation::UpdateProcessorConfig {
-                processor_id: processor_id.clone(),
-                config_to_apply: config_json,
-            });
-        });
-
-        // Notify listeners that graph changed (triggers commit via GraphChangeListener)
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
-        );
-
-        Ok(())
-    }
-
-    // =========================================================================
-    // Lifecycle
-    // =========================================================================
-
-    /// Start the runtime.
-    ///
-    /// Takes `&Arc<Self>` to allow passing the runtime to processors via RuntimeContext.
-    /// Processors can then call runtime operations directly without indirection.
-    #[tracing::instrument(name = "runtime.start", skip_all)]
-    pub fn start(self: &Arc<Self>) -> Result<()> {
-        *self.status.lock() = RuntimeStatus::Starting;
-        tracing::info!("[start] Starting runtime");
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarting),
-        );
-
-        // Initialize GPU context FIRST, before any platform app setup.
-        // wgpu's Metal backend uses async operations that need to complete
-        // before NSApplication configuration changes thread behavior.
-        // Always create fresh context on start - enables tracking per session.
-        tracing::info!("[start] Initializing GPU context...");
-        let gpu = GpuContext::init_for_platform_sync()?;
-        tracing::info!("[start] GPU context initialized");
-
-        // Connect the GPU context's SurfaceStore to the runtime-internal
-        // surface-sharing service `new()` already brought up — failing fast,
-        // because the service is guaranteed to be running.
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        {
-            use crate::core::context::SurfaceStore;
-
-            #[cfg(target_os = "linux")]
-            let surface_share_address = self.surface_socket_path.to_string_lossy().to_string();
-            #[cfg(target_os = "macos")]
-            let surface_share_address = self
-                .surface_share_mach_service_rendezvous
-                .service_name()
-                .to_string();
-            tracing::info!(
-                "[start] Initializing SurfaceStore against the runtime-internal surface-sharing \
-                 service '{}'...",
-                surface_share_address
-            );
-            #[cfg(target_os = "linux")]
-            let surface_store = SurfaceStore::new_reading_check_out_leases(
-                surface_share_address.clone(),
-                self.runtime_id.to_string(),
-                Arc::clone(&self.surface_check_out_leases),
-            );
-            #[cfg(target_os = "macos")]
-            let surface_store = SurfaceStore::new_sharing_the_mach_services_tables(
-                surface_share_address.clone(),
-                self.runtime_id.to_string(),
-                Arc::clone(&self.surface_check_out_leases),
-                Arc::clone(&self.surface_share_cross_process_timeline_pairs),
-            );
-            surface_store.connect().map_err(|e| {
-                Error::Runtime(format!(
-                    "Failed to connect to runtime-internal surface-sharing service at {}: {}",
-                    surface_share_address, e
-                ))
-            })?;
-            gpu.set_surface_store(surface_store);
-            tracing::info!("[start] SurfaceStore initialized against runtime-internal broker");
-        }
-
-        // Drain pre-start hooks now — after the GpuContext is FULLY live
-        // (device + SurfaceStore) but before any processor setup runs.
-        // Adapter bridges and surface registrations happen here so
-        // processors that issue escalate ops or `resolve_surface` lookups
-        // in their first `process()` find everything already in place.
-        let hooks: Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>> = {
-            let mut guard = self.setup_hooks.lock();
-            std::mem::take(&mut *guard)
-        };
-        if !hooks.is_empty() {
-            tracing::info!("[start] Running {} setup hook(s)", hooks.len());
-            for hook in hooks {
-                hook(&gpu)?;
-            }
-        }
-
-        // Create shared timing context - clock starts now
-        let time = Arc::new(TimeContext::new());
-
-        let iceoryx2_node = self.iceoryx2_node.clone();
-
-        // Create audio clock - platform-specific for best precision. It paces
-        // deviceless audio only, so whatever needs it is what starts it — a
-        // graph with no audio in it never runs the timer.
-        let audio_clock_config = AudioClockConfig::default();
-        let audio_clock: SharedAudioClock = {
-            #[cfg(target_os = "macos")]
-            {
-                tracing::info!(
-                    "[start] Creating CoreAudioClock (GCD): {}Hz, {} samples/tick",
-                    audio_clock_config.sample_rate,
-                    audio_clock_config.buffer_size
-                );
-                Arc::new(crate::apple::CoreAudioClock::new(audio_clock_config))
-            }
-            #[cfg(target_os = "linux")]
-            {
-                tracing::info!(
-                    "[start] Creating LinuxTimerFdAudioClock: {}Hz, {} samples/tick",
-                    audio_clock_config.sample_rate,
-                    audio_clock_config.buffer_size
-                );
-                Arc::new(crate::linux::LinuxTimerFdAudioClock::new(
-                    audio_clock_config,
-                ))
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-            {
-                tracing::info!(
-                    "[start] Creating SoftwareAudioClock: {}Hz, {} samples/tick",
-                    audio_clock_config.sample_rate,
-                    audio_clock_config.buffer_size
-                );
-                Arc::new(SoftwareAudioClock::new(audio_clock_config))
-            }
-        };
-
-        // Pass runtime directly to RuntimeContext. Processors call runtime operations
-        // directly - this is safe because processor lifecycle methods (setup, process)
-        // run on their own threads with no locks held.
-        let runtime_ops: Arc<dyn RuntimeOperations> =
-            Arc::clone(self) as Arc<dyn RuntimeOperations>;
-        let runtime_ctx = Arc::new(RuntimeContext::new(
-            gpu,
-            time,
-            Arc::clone(&self.runtime_id),
-            Arc::clone(&self.runtime_name),
-            runtime_ops,
-            self.tokio_runtime_variant.handle(),
-            iceoryx2_node,
-            Arc::clone(&audio_clock),
-            self.runtime_directory.clone(),
-            #[cfg(target_os = "linux")]
-            self.surface_socket_path.clone(),
-            #[cfg(target_os = "macos")]
-            self.surface_share_mach_service_rendezvous.clone(),
-        ));
-        *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
-
-        // Platform-specific setup (the macOS window event pump, Windows Win32,
-        // etc.); RuntimeContext handles all platform-specific details internally.
-        runtime_ctx.ensure_platform_ready()?;
-
-        // Set graph state to Running
-        self.compiler.scope(|graph, _tx| {
-            graph.set_state(GraphState::Running);
-        });
-
-        // Mark runtime as started so commit will actually compile
-        *self.status.lock() = RuntimeStatus::Started;
-
-        // Compile any pending changes directly (includes Phase 4: START)
-        // This ensures all queued operations are processed before start() returns.
-        // After this, GraphChangeListener handles commits asynchronously.
-        tracing::info!("[start] Committing pending graph operations");
-        self.compiler.commit(&runtime_ctx)?;
-
-        tracing::info!("[start] Runtime started (platform verified)");
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
-        );
-
-        Ok(())
-    }
-
-    /// Stop the runtime.
-    ///
-    /// Runs every step of the teardown even when removing the processors
-    /// failed — a processor thread abandoned past its budget included — and
-    /// reports that failure once the rest is down.
-    #[tracing::instrument(name = "runtime.stop", skip_all)]
-    pub fn stop(&self) -> Result<()> {
-        // Idempotent, and claimed under one lock acquisition so two concurrent
-        // callers cannot both pass the check: the run loop stops the runtime
-        // itself and an embedding host tears down afterwards, and without this
-        // every subscriber sees the Stopping/Stopped pair twice.
-        {
-            let mut runtime_status = self.status.lock();
-            if *runtime_status == RuntimeStatus::Stopped {
-                tracing::debug!("[stop] Already stopped");
-                return Ok(());
-            }
-            *runtime_status = RuntimeStatus::Stopping;
-        }
-
-        tracing::info!("[stop] Beginning graceful shutdown");
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping),
-        );
-
-        // Queue removal of all processors and commit
-        let runtime_ctx = self.runtime_context.lock().clone();
-        let processor_count = self.compiler.scope(|graph, tx| {
-            let processor_ids: Vec<ProcessorUniqueId> = graph.traversal().v(()).ids();
-            let count = processor_ids.len();
-            for proc_id in processor_ids {
-                tx.log(PendingOperation::RemoveProcessor(proc_id));
-            }
-            graph.set_state(GraphState::Idle);
-            count
-        });
-        tracing::info!("[stop] Queued removal of {} processor(s)", processor_count);
-
-        let mut processor_removal_outcome = Ok(());
-        if let Some(ctx) = runtime_ctx {
-            tracing::debug!("[stop] Committing processor teardown");
-            processor_removal_outcome = self.compiler.commit(&ctx);
-            if let Err(removal_failure) = &processor_removal_outcome {
-                tracing::error!("[stop] Removing the processors failed: {removal_failure}");
-            }
-            tracing::debug!("[stop] Processor teardown complete");
-
-            #[cfg(target_os = "macos")]
-            crate::core::window_event_pump::release_the_windows_handed_back_while_the_event_pump_was_not_driven();
-
-            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on("the audio clock");
-            tracing::debug!("[stop] Stopping audio clock");
-            if let Err(e) = ctx.audio_clock().stop() {
-                tracing::warn!("[stop] Failed to stop audio clock: {}", e);
-            }
-
-            // Cleanup SurfaceStore - releases all surfaces and disconnects
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            {
-                crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
-                    "the GPU context's surface store",
-                );
-                ctx.gpu.clear_surface_store();
-                tracing::debug!("[stop] SurfaceStore cleared");
-            }
-        }
-
-        // The service thread answers helpers' reports against the timeline
-        // pairs, so it is joined before the pairs go, and both go while the
-        // device that made their semaphores still exists.
-        #[cfg(target_os = "macos")]
-        {
-            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
-                "the surface-sharing service",
-            );
-            if let Some(mut mach_surface_share_service) =
-                self.mach_surface_share_service.lock().take()
-            {
-                mach_surface_share_service.stop();
-            }
-            self.surface_share_cross_process_timeline_pairs.clear();
-        }
-
-        // Clear runtime context - allows fresh context on next start().
-        // This enables per-session tracking (e.g., AI agents analyzing runtime state).
-        *self.runtime_context.lock() = None;
-        tracing::debug!("[stop] Runtime context cleared");
-
-        // Tear down the per-runtime surface-sharing service. The Drop impl
-        // on UnixSocketSurfaceService also stops it, but doing it here makes
-        // the socket file disappear before stop() returns — important for
-        // tests that immediately re-bind a new runtime on the same path.
-        #[cfg(target_os = "linux")]
-        {
-            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
-                "the surface-sharing service",
-            );
-            if let Some(mut svc) = self.surface_service.lock().take() {
-                svc.stop();
-                tracing::debug!(
-                    "[stop] Runtime-internal surface-sharing service stopped at {}",
-                    self.surface_socket_path.display()
-                );
-            }
-        }
-
-        *self.status.lock() = RuntimeStatus::Stopped;
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped),
-        );
-
-        tracing::info!("[stop] Graceful shutdown complete");
-        processor_removal_outcome
+    /// The engine's tokio runtime handle, which a host serving this runtime's
+    /// local API runs it on.
+    pub fn tokio_handle(&self) -> tokio::runtime::Handle {
+        self.engine_resources_shared_by_every_stream
+            .tokio_runtime_variant
+            .handle()
     }
 
     /// Hand fds 1 and 2 back to the process now, for a caller about to leave
     /// this engine alive rather than drop it.
     pub fn stop_intercepting_the_standard_streams(&self) {
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-        self._logging_guard.stop_intercepting_the_standard_streams();
+        self.engine_resources_shared_by_every_stream
+            .process_logging_pathway_hold
+            .stop_intercepting_the_standard_streams();
     }
 
-    /// The processors whose threads were abandoned past their shutdown budget
-    /// and have not returned since. Each one holds this engine alive.
-    pub fn processor_threads_abandoned_and_still_running(
+    /// Hand this runtime the lend directory — the directory holding the
+    /// `tatolab/runtime/` package every stream's processor interpreters
+    /// borrow. The host calls it once, before any load; a second call is
+    /// refused.
+    pub fn set_processor_interpreter_lend_directory(&self, lend_directory: PathBuf) -> Result<()> {
+        self.engine_resources_shared_by_every_stream
+            .processor_interpreter_lend_directory
+            .set(lend_directory)
+    }
+
+    // =========================================================================
+    // The stream table
+    // =========================================================================
+
+    /// Load `graph` as a stream: built in a scope of its own and published to
+    /// the stream table only once every node, link and exposure is in.
+    ///
+    /// The stream's name — `load_options`' else the graph's, cast URL-safe —
+    /// is refused when it casts to nothing, when there is none, and when a
+    /// stream of that name is loaded; a graph holding no node is refused. A
+    /// load refused anywhere after that is torn down through the stream's own
+    /// stop and inserts nothing.
+    pub fn load_stream_from_graph_snapshot(
         &self,
-    ) -> Vec<crate::core::runtime::ProcessorDisplayNameAndId> {
-        self.compiler
-            .processor_threads_abandoned_and_still_running()
+        graph: &GraphSnapshot,
+        load_options: OptionsForLoadingOneStream,
+    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
+        let stream = self.build_the_stream_a_graph_load_names(graph, load_options)?;
+        self.load_the_graph_into_the_stream(&stream, graph)?;
+        self.insert_a_complete_stream(stream)
     }
 
-    // =========================================================================
-    // Per-Processor Pause/Resume
-    // =========================================================================
-
-    /// Pause a specific processor.
-    pub fn pause_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
-        self.compiler.scope(|graph, _tx| {
-            // Validate processor exists
-            let node = graph
-                .traversal()
-                .v(processor_id)
-                .first()
-                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
-
-            let pause_gate = node.get::<ProcessorPauseGateComponent>().ok_or_else(|| {
-                Error::Runtime(format!(
-                    "Processor '{}' has no ProcessorPauseGate",
-                    processor_id
-                ))
-            })?;
-
-            // Check if already paused
-            if pause_gate.is_paused() {
-                return Ok(()); // Already paused, no-op
-            }
-
-            // Set the pause gate
-            pause_gate
-                .clone_inner()
-                .store(true, std::sync::atomic::Ordering::Release);
-
-            // Update processor state
-            if let Some(state) = node.get::<crate::core::graph::StateComponent>() {
-                state.transition_to(ProcessorState::Paused);
-            }
-
-            // Publish event
-            let event = Event::processor(processor_id, ProcessorEvent::Paused);
-            PUBSUB.publish(&event.topic(), &event);
-
-            tracing::info!("[{}] Processor paused", processor_id);
-            Ok(())
-        })
-    }
-
-    /// Resume a specific processor.
-    pub fn resume_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
-        self.compiler.scope(|graph, _tx| {
-            // Validate processor exists
-            let node = graph
-                .traversal()
-                .v(processor_id)
-                .first()
-                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
-
-            let pause_gate = node.get::<ProcessorPauseGateComponent>().ok_or_else(|| {
-                Error::Runtime(format!(
-                    "Processor '{}' has no ProcessorPauseGate",
-                    processor_id
-                ))
-            })?;
-
-            // Check if already running
-            if !pause_gate.is_paused() {
-                return Ok(()); // Already running, no-op
-            }
-
-            // Clear the pause gate
-            pause_gate
-                .clone_inner()
-                .store(false, std::sync::atomic::Ordering::Release);
-
-            // Update processor state
-            if let Some(state) = node.get::<crate::core::graph::StateComponent>() {
-                state.transition_to(ProcessorState::Running);
-            }
-
-            // Publish event
-            let event = Event::processor(processor_id, ProcessorEvent::Resumed);
-            PUBSUB.publish(&event.topic(), &event);
-
-            tracing::info!("[{}] Processor resumed", processor_id);
-            Ok(())
-        })
-    }
-
-    /// Check if a specific processor is paused.
-    pub fn is_processor_paused(&self, processor_id: &ProcessorUniqueId) -> Result<bool> {
-        self.compiler.scope(|graph, _tx| {
-            let node = graph
-                .traversal()
-                .v(processor_id)
-                .first()
-                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
-
-            let pause_gate = node
-                .get::<ProcessorPauseGateComponent>()
-                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
-
-            Ok(pause_gate.is_paused())
-        })
-    }
-
-    // =========================================================================
-    // Graph readiness
-    // =========================================================================
-
-    /// Take hold of every processor's state, to wait on without the graph.
-    ///
-    /// The graph lock is released before anything blocks on what it hands
-    /// back, which is the whole point: the transitions being waited for are
-    /// made by processor threads that need that lock.
-    pub fn observable_graph_readiness(&self) -> ObservableGraphReadiness {
-        ObservableGraphReadiness::new(self.compiler.scope(|graph, _tx| {
-            graph
-                .traversal()
-                .v(())
-                .iter()
-                .filter_map(|node| {
-                    Some((node.id.clone(), node.get::<StateComponent>()?.clone_inner()))
-                })
-                .collect()
-        }))
-    }
-
-    /// Block until every processor in the graph has finished `setup` and
-    /// reached `Running`, giving up after `timeout`.
-    ///
-    /// This is what "the graph is up" means for a processor in a helper
-    /// process: its `setup` is the call that waits for the child to register
-    /// and wire its ports, so a publisher that starts only after this returns
-    /// cannot lose bags to a link nobody has attached to yet.
-    pub fn wait_until_every_processor_is_running(&self, timeout: Duration) -> Result<()> {
-        self.observable_graph_readiness()
-            .wait_until_every_processor_is_running(timeout)
-    }
-
-    // =========================================================================
-    // Runtime-level Pause/Resume (all processors)
-    // =========================================================================
-
-    /// Pause the runtime (all processors).
-    pub fn pause(&self) -> Result<()> {
-        *self.status.lock() = RuntimeStatus::Pausing;
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimePausing),
-        );
-
-        // Get all processor IDs
-        let processor_ids: Vec<ProcessorUniqueId> = self
-            .compiler
-            .scope(|graph, _tx| graph.traversal().v(()).ids());
-
-        // Pause each processor
-        let mut failures = Vec::new();
-        for processor_id in &processor_ids {
-            if let Err(e) = self.pause_processor(processor_id) {
-                tracing::warn!("[{}] Failed to pause: {}", processor_id, e);
-                failures.push((processor_id.clone(), e));
-            }
-        }
-
-        // Set graph state to Paused
-        self.compiler.scope(|graph, _tx| {
-            graph.set_state(GraphState::Paused);
-        });
-
-        *self.status.lock() = RuntimeStatus::Paused;
-        if failures.is_empty() {
-            PUBSUB.publish(
-                topics::RUNTIME_GLOBAL,
-                &Event::RuntimeGlobal(RuntimeEvent::RuntimePaused),
-            );
-        } else {
-            PUBSUB.publish(
-                topics::RUNTIME_GLOBAL,
-                &Event::RuntimeGlobal(RuntimeEvent::RuntimePauseFailed {
-                    error: format!("{} processor(s) rejected pause", failures.len()),
-                }),
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Resume the runtime (all processors).
-    pub fn resume(&self) -> Result<()> {
-        *self.status.lock() = RuntimeStatus::Starting;
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeResuming),
-        );
-
-        // Get all processor IDs
-        let processor_ids: Vec<ProcessorUniqueId> = self
-            .compiler
-            .scope(|graph, _tx| graph.traversal().v(()).ids());
-
-        // Resume each processor
-        let mut failures = Vec::new();
-        for processor_id in &processor_ids {
-            if let Err(e) = self.resume_processor(processor_id) {
-                tracing::warn!("[{}] Failed to resume: {}", processor_id, e);
-                failures.push((processor_id.clone(), e));
-            }
-        }
-
-        // Set graph state to Running
-        self.compiler.scope(|graph, _tx| {
-            graph.set_state(GraphState::Running);
-        });
-
-        *self.status.lock() = RuntimeStatus::Started;
-        if failures.is_empty() {
-            PUBSUB.publish(
-                topics::RUNTIME_GLOBAL,
-                &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumed),
-            );
-        } else {
-            PUBSUB.publish(
-                topics::RUNTIME_GLOBAL,
-                &Event::RuntimeGlobal(RuntimeEvent::RuntimeResumeFailed {
-                    error: format!("{} processor(s) rejected resume", failures.len()),
-                }),
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Block until shutdown signal (Ctrl+C, SIGTERM, SIGHUP, Cmd+Q) or a
-    /// [`request_runtime_shutdown`](crate::core::runtime::request_runtime_shutdown).
-    pub fn wait_for_signal(self: &Arc<Self>) -> Result<()> {
-        self.wait_for_signal_with(|_| ControlFlow::Continue(()))
-    }
-
-    /// Own the shutdown signals, [`start`](Self::start), block until shutdown,
-    /// and tear down — the whole run in one call.
-    ///
-    /// Preferred over `start()` followed by
-    /// [`wait_for_signal`](Self::wait_for_signal), because signal ownership
-    /// spans startup here: a Ctrl-C arriving while the graph is still coming up
-    /// reaches the request funnel rather than whatever disposition was
-    /// installed before.
-    pub fn start_and_wait_for_shutdown(self: &Arc<Self>) -> Result<()> {
-        Self::run_owning_the_shutdown_signals(|| {
-            self.start().and_then(|()| {
-                self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
-            })
-        })
-    }
-
-    /// Own the shutdown signals, [`load_graph_snapshot`](Self::load_graph_snapshot),
-    /// run `prepare_the_loaded_runtime_before_start`, then start, block until
-    /// shutdown, and tear down — a stream host's whole run in one call.
-    ///
-    /// A shutdown requested while the graph loads interrupts every processor
-    /// interpreter describe the load is running, and the graph is never
-    /// started: that run ends without a refusal.
-    pub fn load_graph_snapshot_start_and_wait_for_shutdown(
-        self: &Arc<Self>,
-        graph: &crate::core::graph_snapshot::GraphSnapshot,
-        stream_environment: Option<super::StreamEnvironment>,
-        prepare_the_loaded_runtime_before_start: impl FnOnce(&Arc<Self>) -> Result<()>,
-    ) -> Result<()> {
-        Self::run_owning_the_shutdown_signals(|| {
-            match self
-                .load_graph_snapshot_unless_a_shutdown_is_requested(graph, stream_environment)?
-            {
-                GraphLoadObservingShutdownRequests::Loaded => {}
-                GraphLoadObservingShutdownRequests::AbandonedForAShutdownRequest => return Ok(()),
-            }
-            prepare_the_loaded_runtime_before_start(self)?;
-            self.start()?;
-            self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
-        })
-    }
-
-    /// Run `run` while owning the shutdown signals, then clear what this run's
-    /// interrupts escalated.
-    fn run_owning_the_shutdown_signals(run: impl FnOnce() -> Result<()>) -> Result<()> {
-        let run_outcome = {
-            let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
-            run()
-        };
-        Self::clear_the_shutdown_escalation_this_run_observed();
-        run_outcome
-    }
-
-    /// Load `graph` on a thread of its own while this one watches for a
-    /// shutdown request, interrupting every describe once one is seen.
-    fn load_graph_snapshot_unless_a_shutdown_is_requested(
+    /// Load `graph` as a stream on a thread of its own while this one watches
+    /// for a machine shutdown request. Once one is seen the stream being
+    /// loaded — which is in no table the machine's walk reaches — is walked to
+    /// the machine's level and its describes interrupted. A load a machine
+    /// shutdown cut short is abandoned without a refusal.
+    pub fn load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested(
         &self,
-        graph: &crate::core::graph_snapshot::GraphSnapshot,
-        stream_environment: Option<super::StreamEnvironment>,
-    ) -> Result<GraphLoadObservingShutdownRequests> {
+        graph: &GraphSnapshot,
+        load_options: OptionsForLoadingOneStream,
+    ) -> Result<StreamLoadObservingMachineShutdownRequests> {
         use std::sync::mpsc::RecvTimeoutError;
 
         use crate::core::runtime::{
-            RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, is_runtime_shutdown_requested,
+            RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, is_the_machines_shutdown_requested,
         };
 
-        if is_runtime_shutdown_requested() {
-            tracing::info!("a shutdown was requested before the graph loaded; it was never loaded");
-            return Ok(GraphLoadObservingShutdownRequests::AbandonedForAShutdownRequest);
+        if is_the_machines_shutdown_requested() {
+            tracing::info!(
+                "a machine shutdown was requested before the stream loaded; it was never loaded"
+            );
+            return Ok(
+                StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest,
+            );
         }
+        let stream = self.build_the_stream_a_graph_load_names(graph, load_options)?;
         let load_outcome = std::thread::scope(|scope| {
             // Never sent on: the loading thread's end drops it, a panic included.
             let (load_ended_sender, load_ended_receiver) = std::sync::mpsc::channel::<()>();
+            let stream_being_loaded = &stream;
             let loading = scope.spawn(move || {
-                let load_outcome = self.load_graph_snapshot(graph, stream_environment);
+                let load_outcome = self.load_the_graph_into_the_stream(stream_being_loaded, graph);
                 drop(load_ended_sender);
                 load_outcome
             });
             loop {
                 // Repeated, because the load forgets an interrupt that lands
                 // before it begins.
-                if is_runtime_shutdown_requested() {
-                    self.interrupt_every_processor_interpreter_describe();
+                if is_the_machines_shutdown_requested() {
+                    walk_a_stream_being_loaded_to_the_machines_shutdown_level(&stream);
                 }
                 if let Err(RecvTimeoutError::Disconnected) = load_ended_receiver
                     .recv_timeout(RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL)
@@ -1093,110 +711,206 @@ impl Runner {
                 .unwrap_or_else(|load_panic| std::panic::resume_unwind(load_panic))
         });
 
-        if !is_runtime_shutdown_requested() {
-            return load_outcome.map(|()| GraphLoadObservingShutdownRequests::Loaded);
+        if !is_the_machines_shutdown_requested() {
+            load_outcome?;
+            return self
+                .insert_a_complete_stream(stream)
+                .map(StreamLoadObservingMachineShutdownRequests::Loaded);
         }
         match load_outcome {
-            Ok(()) => tracing::info!(
-                "a shutdown was requested while the graph loaded, so the stream was never started"
-            ),
+            Ok(()) => {
+                tracing::info!(
+                    "a machine shutdown was requested while the stream `{}` loaded, so it was \
+                     never loaded or started",
+                    stream.stream_name()
+                );
+                tear_down_a_stream_that_never_entered_the_table(&stream);
+            }
             Err(interrupted_load) => tracing::info!(
-                "a shutdown was requested while the graph loaded, so the stream was never \
+                "a machine shutdown was requested while the stream loaded, so it was never \
                  started; the interrupted load reported: {interrupted_load}"
             ),
         }
-        Ok(GraphLoadObservingShutdownRequests::AbandonedForAShutdownRequest)
+        Ok(StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest)
     }
 
-    /// Take any request that landed after the run loop stopped observing, and
-    /// how far this run's interrupts escalated.
-    ///
-    /// Called once shutdown-signal ownership has dropped, so no further signal
-    /// can reach the funnel.
-    fn clear_the_shutdown_escalation_this_run_observed() {
-        crate::core::runtime::take_runtime_shutdown_escalation();
-    }
-
-    /// Own SIGINT, SIGTERM and SIGHUP until the returned value drops.
-    ///
-    /// Fails if another run loop in this process already owns them.
-    fn take_shutdown_signal_ownership() -> Result<ScopedShutdownSignalOwnership> {
-        crate::core::signals::ScopedShutdownSignalOwnership::take_until_dropped().map_err(
-            |ownership_failure| {
-                crate::core::Error::Configuration(format!(
-                    "Failed to own shutdown signals: {}",
-                    ownership_failure
-                ))
-            },
+    /// Load an empty stream a Rust host builds in code, published to the
+    /// stream table at once. `load_options` must name it.
+    pub fn load_an_empty_stream(
+        &self,
+        load_options: OptionsForLoadingOneStream,
+    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
+        self.load_an_empty_stream_with_its_teardown_watchdog_budget(
+            load_options,
+            super::ENGINE_TEARDOWN_WATCHDOG_BUDGET,
         )
     }
 
-    /// Block until shutdown signal, with periodic callback for dynamic control.
-    ///
-    /// This is the run-loop owner: it observes both the `RuntimeShutdown`
-    /// event and the shutdown escalation, then runs the normal teardown.
-    /// The escalation is polled as well as the event because a request published
-    /// before this subscriber was wired up leaves no event to receive.
-    pub fn wait_for_signal_with<F>(self: &Arc<Self>, callback: F) -> Result<()>
-    where
-        F: FnMut(&Self) -> ControlFlow<()>,
-    {
-        // Held only for the wait, so the dispositions are handed back once the
-        // teardown inside has run.
-        Self::run_owning_the_shutdown_signals(|| self.wait_for_shutdown_observation_with(callback))
+    /// Load an empty stream whose teardown watchdog fires after
+    /// `teardown_watchdog_budget` rather than the engine's budget.
+    #[cfg(test)]
+    pub(crate) fn load_an_empty_stream_whose_teardown_watchdog_fires_after(
+        &self,
+        load_options: OptionsForLoadingOneStream,
+        teardown_watchdog_budget: Duration,
+    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
+        self.load_an_empty_stream_with_its_teardown_watchdog_budget(
+            load_options,
+            teardown_watchdog_budget,
+        )
     }
 
-    /// The wait loop and the teardown after it, for callers that already own
-    /// the shutdown signals.
-    fn wait_for_shutdown_observation_with<F>(self: &Arc<Self>, callback: F) -> Result<()>
-    where
-        F: FnMut(&Self) -> ControlFlow<()>,
-    {
-        self.block_until_shutdown_is_observed_with(callback)?;
-        let _watchdog = super::ArmedEngineTeardownWatchdog::arm(
-            "the engine stop the run loop began once a shutdown was requested",
+    fn load_an_empty_stream_with_its_teardown_watchdog_budget(
+        &self,
+        load_options: OptionsForLoadingOneStream,
+        teardown_watchdog_budget: Duration,
+    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
+        self.refuse_a_load_while_the_machine_shuts_down(load_options.stream_name.as_deref())?;
+        let stream_name = the_cast_name_of_the_stream_a_load_names(
+            load_options.stream_name.as_deref(),
+            "an empty stream",
+        )?;
+        let stream = self.build_a_stream(stream_name, load_options, teardown_watchdog_budget)?;
+        self.insert_a_complete_stream(stream)
+    }
+
+    /// The loaded stream `stream_name` names once cast, refused naming the
+    /// streams that are loaded — a name that casts to nothing names none.
+    pub fn loaded_stream_named(&self, stream_name: &str) -> Result<Arc<LoadedStreamInThisRuntime>> {
+        // Read under its own statement: the refusal lists the table, and the
+        // table's lock is not reentrant.
+        let loaded = cast_exposed_name_to_url_safe(stream_name)
+            .ok()
+            .and_then(|cast| {
+                self.engine_resources_shared_by_every_stream
+                    .streams_loaded_in_this_runtime
+                    .lock()
+                    .get(cast.as_ref())
+                    .cloned()
+            });
+        loaded.ok_or_else(|| {
+            Error::NotFound(format!(
+                "no stream named `{stream_name}` is loaded in this runtime. Loaded: {}",
+                self.loaded_stream_names_listed_for_a_refusal()
+            ))
+        })
+    }
+
+    /// Every loaded stream, read under one lock of the stream table.
+    pub(crate) fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
+        self.engine_resources_shared_by_every_stream
+            .every_loaded_stream()
+    }
+
+    /// The cast names of the loaded streams, in order.
+    pub fn names_of_the_loaded_streams(&self) -> Vec<String> {
+        self.engine_resources_shared_by_every_stream
+            .streams_loaded_in_this_runtime
+            .lock()
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Shut the stream `stream_name` names down and wait until it has ended —
+    /// stopped and out of the table, or abandoned by its watchdog — reporting
+    /// how it ended.
+    pub fn unload_stream(&self, stream_name: &str) -> Result<()> {
+        let stream = self.loaded_stream_named(stream_name)?;
+        request_a_streams_shutdown_and_wait_until_it_has_ended(
+            &stream,
+            "the stream is being unloaded",
         );
-        self.stop()
+        stream.how_this_stream_ended_as_a_waiter_reports_it()
     }
 
-    /// The wait loop alone.
-    fn block_until_shutdown_is_observed_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
-    where
-        F: FnMut(&Self) -> ControlFlow<()>,
-    {
-        let shutdown_flag = Arc::new(AtomicBool::new(false));
-        let shutdown_flag_clone = Arc::clone(&shutdown_flag);
+    /// Raise the machine's shutdown level to graceful, exactly as a first
+    /// signal does: whoever owns the machine's shutdown signals walks every
+    /// loaded stream to it.
+    pub fn request_the_shutdown_of_every_loaded_stream(&self, reason: &str) -> Result<()> {
+        crate::core::runtime::request_the_shutdown_of_every_loaded_stream(reason)
+    }
 
-        // Listener that sets shutdown flag when RuntimeShutdown received
-        struct ShutdownListener {
-            flag: Arc<AtomicBool>,
-        }
+    // =========================================================================
+    // The machine's shutdown signals and the waits
+    // =========================================================================
 
-        impl EventListener for ShutdownListener {
-            fn on_event(&mut self, event: &Event) -> Result<()> {
-                if let Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown) = event {
-                    self.flag.store(true, Ordering::SeqCst);
+    /// Run `run` while owning the machine's shutdown signals (SIGINT, SIGTERM,
+    /// SIGHUP) — the waits inside it walk every loaded stream to the machine's
+    /// shutdown level — then clear what this run's interrupts escalated. Fails
+    /// if another owner in this process already holds them.
+    pub fn run_owning_the_machine_shutdown_signals<R>(
+        &self,
+        run: impl FnOnce() -> Result<R>,
+    ) -> Result<R> {
+        let run_outcome = {
+            let _shutdown_signals = take_shutdown_signal_ownership()?;
+            let _owned_by_this_engine = TheMachineShutdownSignalsOwnedByOneEngine::mark(
+                &self.engine_resources_shared_by_every_stream,
+            );
+            run()
+        };
+        crate::core::runtime::take_the_machines_shutdown_escalation();
+        run_outcome
+    }
+
+    /// Block until `stream` has ended — its own shutdown request, a machine
+    /// shutdown, an unload or its watchdog — reporting how it ended.
+    pub fn wait_until_the_stream_ends(
+        &self,
+        stream: &Arc<LoadedStreamInThisRuntime>,
+    ) -> Result<()> {
+        self.block_until(&|| stream.has_ended());
+        stream.how_this_stream_ended_as_a_waiter_reports_it()
+    }
+
+    /// Block until every loaded stream has ended, reporting the first that
+    /// ended with a failure.
+    pub fn wait_until_every_stream_has_ended(&self) -> Result<()> {
+        let streams_seen_during_the_wait: Mutex<Vec<Arc<LoadedStreamInThisRuntime>>> =
+            Mutex::new(Vec::new());
+        self.block_until(&|| {
+            let mut streams_seen = streams_seen_during_the_wait.lock();
+            for stream in self
+                .engine_resources_shared_by_every_stream
+                .every_loaded_stream()
+            {
+                if !streams_seen.iter().any(|seen| Arc::ptr_eq(seen, &stream)) {
+                    streams_seen.push(stream);
                 }
-                Ok(())
             }
-        }
+            streams_seen.iter().all(|stream| stream.has_ended())
+        });
+        streams_seen_during_the_wait
+            .into_inner()
+            .iter()
+            .map(|stream| stream.how_this_stream_ended_as_a_waiter_reports_it())
+            .find(Result::is_err)
+            .unwrap_or(Ok(()))
+    }
 
-        let shutdown_listener: Arc<parking_lot::Mutex<dyn EventListener>> =
-            Arc::new(parking_lot::Mutex::new(ShutdownListener {
-                flag: shutdown_flag_clone.clone(),
-            }));
-        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener))?;
-
-        let mut observe_the_shutdown_request_then_the_callback = || {
-            if runtime_shutdown_observed(&shutdown_flag) {
+    /// Poll until `has_ended` holds — driving the window event pump where the
+    /// platform needs the first thread to, and, while this engine owns the
+    /// machine's shutdown signals, walking every loaded stream to the
+    /// machine's shutdown level on the way.
+    fn block_until(&self, has_ended: &dyn Fn() -> bool) {
+        let observe = || {
+            if self
+                .engine_resources_shared_by_every_stream
+                .owns_the_machine_shutdown_signals
+                .load(Ordering::SeqCst)
+            {
+                self.walk_every_loaded_stream_to_the_machines_shutdown_level();
+            }
+            if has_ended() {
                 ControlFlow::Break(())
             } else {
-                callback(self)
+                ControlFlow::Continue(())
             }
         };
 
-        // On Apple the window event pump lives on the process's first thread,
-        // so a wait there drives it; anywhere else the wait polls.
+        // The drive lasts the whole wait, so the pump keeps answering a
+        // stream's teardown — run off this thread — until the stream ends.
         #[cfg(target_os = "macos")]
         {
             use crate::core::window_event_pump::{
@@ -1206,250 +920,383 @@ impl Runner {
 
             let drive_outcome = drive_the_window_event_pump_on_the_first_thread_until(
                 crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
-                &mut observe_the_shutdown_request_then_the_callback,
+                &observe,
                 || {
-                    let _watchdog = super::ArmedEngineTeardownWatchdog::arm(
-                        "the engine stop the window event pump began once a shutdown was \
-                         requested",
-                    );
-                    if let Err(e) = self.stop() {
-                        tracing::error!("Failed to stop runtime during shutdown: {}", e);
+                    if let Err(e) = self
+                        .shut_every_loaded_stream_down_and_wait_until_each_has_ended(
+                            "the application is terminating",
+                        )
+                    {
+                        tracing::error!(
+                            "a stream failed to stop as the application terminated: {e}"
+                        );
                     }
                 },
             );
             if drive_outcome
                 == WindowEventPumpDriveOnTheFirstThreadOutcome::DrivenUntilTheObservationBroke
             {
-                return Ok(());
+                return;
             }
         }
 
-        while observe_the_shutdown_request_then_the_callback().is_continue() {
+        while observe().is_continue() {
             std::thread::sleep(
                 crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
             );
         }
-
-        Ok(())
     }
 
-    pub fn status(&self) -> RuntimeStatus {
-        *self.status.lock()
+    /// Move every loaded stream to the machine's shutdown level at once:
+    /// graceful asks each for its shutdown, forced forces each.
+    fn walk_every_loaded_stream_to_the_machines_shutdown_level(&self) {
+        let machines_level = crate::core::runtime::the_machines_shutdown_escalation();
+        if machines_level < RuntimeShutdownEscalation::Graceful {
+            return;
+        }
+        for stream in self
+            .engine_resources_shared_by_every_stream
+            .every_loaded_stream()
+        {
+            stream.ask_for_this_streams_shutdown("the machine is shutting down every stream");
+            if machines_level >= RuntimeShutdownEscalation::Forced {
+                stream.force_this_streams_shutdown("the machine's shutdown was forced");
+            }
+        }
     }
 
-    // =========================================================================
-    // RuntimeOperations delegation (inherent methods for ergonomic API)
-    // =========================================================================
-
-    /// Add a processor to the graph.
-    pub fn add_processor(&self, spec: impl Into<ProcessorSpec>) -> Result<ProcessorUniqueId> {
-        <Self as RuntimeOperations>::add_processor(self, spec.into())
-    }
-
-    /// Remove a processor from the graph.
-    pub fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
-        <Self as RuntimeOperations>::remove_processor(self, processor_id)
-    }
-
-    /// Connect two ports.
-    pub fn connect(
+    /// Ask every loaded stream for its shutdown at once — each on its own
+    /// thread, under its own watchdog — and wait until each has ended,
+    /// reporting the first that ended with a failure.
+    fn shut_every_loaded_stream_down_and_wait_until_each_has_ended(
         &self,
-        from: impl Into<OutputLinkPortRef>,
-        to: impl Into<InputLinkPortRef>,
-    ) -> Result<LinkUniqueId> {
-        <Self as RuntimeOperations>::connect(self, from.into(), to.into())
-    }
-
-    /// Disconnect a link.
-    pub fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
-        <Self as RuntimeOperations>::disconnect(self, link_id)
-    }
-
-    /// Ask whoever owns the run loop to shut the runtime down, with a
-    /// human-readable `reason` logged for attribution.
-    pub fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
-        <Self as RuntimeOperations>::request_runtime_shutdown(self, reason)
-    }
-
-    // =========================================================================
-    // Introspection
-    // =========================================================================
-
-    /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
-    pub fn to_json(&self) -> Result<serde_json::Value> {
-        let runtime_name = self.runtime_name.as_str().to_string();
-        self.compiler.scope(|graph, _tx| {
-            serde_json::to_value(graph.to_graph_response(runtime_name))
-                .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
-        })
-    }
-
-    // =========================================================================
-    // Graph Load
-    // =========================================================================
-
-    /// Hand this runtime the lend directory — the directory holding the
-    /// `tatolab/runtime/` package its processor interpreters borrow. The host
-    /// calls it once, before any load.
-    pub fn set_processor_interpreter_lend_directory(&self, lend_directory: std::path::PathBuf) {
-        self.processor_interpreter_launch_record
-            .set_processor_interpreter_lend_directory(lend_directory);
-    }
-
-    /// Kill any describe this runtime is running and refuse every later one
-    /// until the next [`Self::load_graph_snapshot`] begins — its host's user
-    /// interrupted the load that started it.
-    pub fn interrupt_every_processor_interpreter_describe(&self) {
-        self.processor_interpreter_launch_record
-            .interrupt_every_describe();
-    }
-
-    /// The stream environment the last [`Self::load_graph_snapshot`] recorded.
-    #[cfg(test)]
-    pub(crate) fn stream_environment_recorded_at_the_last_load(
-        &self,
-    ) -> Option<super::StreamEnvironment> {
-        self.processor_interpreter_launch_record
-            .stream_environment_recorded_at_the_last_load()
-    }
-
-    /// Load `graph` into this runtime: each node added under its name, each
-    /// link connected by name, the exposures recorded on their nodes, and the
-    /// stream's name recorded on the graph in its URL-safe cast.
-    ///
-    /// A stream name casting to nothing, then a graph holding no node, are
-    /// refused first, naming the stream. A host
-    /// interrupt of an earlier load is then forgotten and `stream_environment`
-    /// recorded. Every `type` the graph names that is neither a built-in nor
-    /// registered in Rust is then described in one start of the stream's own
-    /// interpreter and registered, so a load with no environment refuses such a
-    /// type by name. A node name already in the graph is refused rather than
-    /// suffixed — a loaded graph's names are already resolved.
-    pub fn load_graph_snapshot(
-        &self,
-        graph: &crate::core::graph_snapshot::GraphSnapshot,
-        stream_environment: Option<super::StreamEnvironment>,
+        reason: &str,
     ) -> Result<()> {
-        use std::collections::HashMap;
+        let every_stream = self
+            .engine_resources_shared_by_every_stream
+            .every_loaded_stream();
+        for stream in &every_stream {
+            stream.ask_for_this_streams_shutdown(reason);
+        }
+        let mut first_failed_end = Ok(());
+        for stream in &every_stream {
+            request_a_streams_shutdown_and_wait_until_it_has_ended(stream, reason);
+            if let Err(end_failure) = stream.how_this_stream_ended_as_a_waiter_reports_it()
+                && first_failed_end.is_ok()
+            {
+                first_failed_end = Err(end_failure);
+            }
+        }
+        first_failed_end
+    }
 
-        use crate::core::graph::{
-            ExposedOutputPortsComponent, GraphNodeWithComponents, cast_exposed_name_to_url_safe,
-        };
+    // =========================================================================
+    // Engine shutdown
+    // =========================================================================
 
-        let cast_stream_name = graph
-            .stream
+    /// Shut every loaded stream down at once, each under its own watchdog,
+    /// then stop the surface-sharing service. Idempotent; dropping the
+    /// `Runner` runs it. A load after it is refused.
+    pub fn shut_down(&self) -> Result<()> {
+        let engine = &self.engine_resources_shared_by_every_stream;
+        if engine.shut_down.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let first_failed_end = self.shut_every_loaded_stream_down_and_wait_until_each_has_ended(
+            "the engine is shutting down",
+        );
+        // The streams stopped off this thread, so the windows they handed back
+        // are released here when this is the first thread.
+        #[cfg(target_os = "macos")]
+        crate::core::window_event_pump::release_the_windows_handed_back_while_the_event_pump_was_not_driven();
+
+        // The Mach service thread answers helpers' reports against the
+        // timeline pairs, so it is joined before the pairs go, and both go
+        // while the device that made their semaphores still exists.
+        #[cfg(target_os = "macos")]
+        {
+            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+                "the surface-sharing service",
+            );
+            if let Some(mut mach_surface_share_service) =
+                engine.mach_surface_share_service.lock().take()
+            {
+                mach_surface_share_service.stop();
+            }
+            engine.surface_share_cross_process_timeline_pairs.clear();
+        }
+        // Stopped here rather than left to its `Drop`, so the socket file is
+        // gone before this returns.
+        #[cfg(target_os = "linux")]
+        {
+            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+                "the surface-sharing service",
+            );
+            if let Some(mut surface_service) = engine.surface_service.lock().take() {
+                surface_service.stop();
+                tracing::debug!(
+                    "[shut_down] Runtime-internal surface-sharing service stopped at {}",
+                    engine.surface_socket_path.display()
+                );
+            }
+        }
+        tracing::info!("[shut_down] The engine is shut down");
+        first_failed_end
+    }
+
+    // =========================================================================
+    // Loading
+    // =========================================================================
+
+    fn build_the_stream_a_graph_load_names(
+        &self,
+        graph: &GraphSnapshot,
+        load_options: OptionsForLoadingOneStream,
+    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
+        let requested_stream_name = load_options
+            .stream_name
             .as_deref()
-            .map(|stream_name| {
-                cast_exposed_name_to_url_safe(stream_name)
-                    .map(|cast| cast.into_owned())
-                    .map_err(|casts_to_nothing| {
-                        Error::GraphError(format!(
-                            "cannot load the graph as the stream `{stream_name}`: \
-                             {casts_to_nothing}"
-                        ))
-                    })
-            })
-            .transpose()?;
+            .or(graph.stream.as_deref());
+        self.refuse_a_load_while_the_machine_shuts_down(requested_stream_name)?;
+        let stream_name =
+            the_cast_name_of_the_stream_a_load_names(requested_stream_name, "the graph")?;
         if graph.nodes.is_empty() {
-            let what_holds_no_node = match &cast_stream_name {
-                Some(stream_name) => format!("the stream `{stream_name}`"),
-                None => "the graph".to_owned(),
-            };
             return Err(Error::GraphError(format!(
-                "{what_holds_no_node} holds no node — a stream whose function adds nothing \
-                 compiles to an empty graph, and there is nothing to run. Add a node with \
-                 `stream_builder.add(...)`"
+                "the stream `{stream_name}` holds no node — a stream whose function adds \
+                 nothing compiles to an empty graph, and there is nothing to run. Add a node \
+                 with `stream_builder.add(...)`"
             )));
         }
-        self.processor_interpreter_launch_record
-            .forget_the_interrupt_of_an_earlier_load();
-        self.processor_interpreter_launch_record
-            .record_the_stream_environment_of_a_load(stream_environment);
-        self.processor_interpreter_launch_record
-            .describe_and_register_every_type_a_load_names(
-                graph.nodes.iter().map(|node| &node.processor_type),
-            )?;
-        graph.validate()?;
-        self.refuse_a_node_name_this_runtimes_graph_already_holds(graph)?;
+        self.build_a_stream(
+            stream_name,
+            load_options,
+            super::ENGINE_TEARDOWN_WATCHDOG_BUDGET,
+        )
+    }
 
-        let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
-        for node in &graph.nodes {
-            let added = self.add_processor_reporting_its_name(
-                ProcessorSpec::new(node.processor_type.clone(), node.config.clone())
-                    .with_display_name(node.name.clone()),
-            )?;
-            processor_id_by_node_name.insert(added.name, added.processor_id);
+    fn build_a_stream(
+        &self,
+        stream_name: String,
+        load_options: OptionsForLoadingOneStream,
+        teardown_watchdog_budget: Duration,
+    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
+        self.refuse_a_load_once_the_engine_is_shut_down(&stream_name)?;
+        self.refuse_a_stream_name_already_loaded(&stream_name)?;
+        let project_directory = load_options.resolved_project_directory(&stream_name)?;
+        LoadedStreamInThisRuntime::new(
+            Arc::clone(&self.engine_resources_shared_by_every_stream),
+            stream_name,
+            project_directory,
+            load_options.stream_environment,
+            teardown_watchdog_budget,
+        )
+    }
+
+    /// Load `graph` into `stream`, which is not in the table; a refused load
+    /// tears the stream down through its own stop.
+    fn load_the_graph_into_the_stream(
+        &self,
+        stream: &Arc<LoadedStreamInThisRuntime>,
+        graph: &GraphSnapshot,
+    ) -> Result<()> {
+        let lend_directory = self
+            .engine_resources_shared_by_every_stream
+            .processor_interpreter_lend_directory
+            .get();
+        if let Err(load_refusal) =
+            stream.load_graph_snapshot_into_this_stream(graph, lend_directory)
+        {
+            tear_down_a_stream_that_never_entered_the_table(stream);
+            return Err(load_refusal);
         }
-        let processor_id_of = |node: &str| -> Result<ProcessorUniqueId> {
-            let cast = cast_exposed_name_to_url_safe(node)?;
-            processor_id_by_node_name
-                .get(cast.as_ref())
-                .cloned()
-                .ok_or_else(|| Error::GraphError(format!("the graph holds no node `{node}`")))
-        };
-
-        for link in &graph.links {
-            self.connect(
-                OutputLinkPortRef::new(processor_id_of(&link.source.node)?, &link.source.port),
-                InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port),
-            )?;
-        }
-
-        let mut exposed_ports_by_processor_id: HashMap<ProcessorUniqueId, Vec<String>> =
-            HashMap::new();
-        for exposed in &graph.exposed {
-            exposed_ports_by_processor_id
-                .entry(processor_id_of(&exposed.node)?)
-                .or_default()
-                .push(cast_exposed_name_to_url_safe(&exposed.port)?.into_owned());
-        }
-        self.compiler.scope(|live_graph, _tx| {
-            for (processor_id, exposed_ports) in exposed_ports_by_processor_id {
-                if let Some(node) = live_graph.traversal_mut().v(&processor_id).first_mut() {
-                    node.insert_component_without_rendering_it(ExposedOutputPortsComponent(
-                        exposed_ports,
-                    ));
-                }
-            }
-            if let Some(cast_stream_name) = cast_stream_name {
-                live_graph.set_loaded_stream_name(cast_stream_name);
-            }
-        });
-
         Ok(())
     }
 
-    /// Refuse, before anything is added, a node name this runtime's own graph
-    /// already holds, which it would refuse partway through the load. With
-    /// `validate` run first, a load refused for it adds nothing; a link the
-    /// engine refuses after that still leaves the nodes added before it.
-    fn refuse_a_node_name_this_runtimes_graph_already_holds(
+    fn insert_a_complete_stream(
         &self,
-        graph: &crate::core::graph_snapshot::GraphSnapshot,
+        stream: Arc<LoadedStreamInThisRuntime>,
+    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
+        let mut streams = self
+            .engine_resources_shared_by_every_stream
+            .streams_loaded_in_this_runtime
+            .lock();
+        if let Err(refusal) = self.refuse_a_load_once_the_engine_is_shut_down(stream.stream_name())
+        {
+            drop(streams);
+            tear_down_a_stream_that_never_entered_the_table(&stream);
+            return Err(refusal);
+        }
+        if let Some(first) = streams.get(stream.stream_name()) {
+            let refusal = a_stream_name_already_loaded_refusal(first);
+            drop(streams);
+            tear_down_a_stream_that_never_entered_the_table(&stream);
+            return Err(refusal);
+        }
+        streams.insert(stream.stream_name().to_string(), Arc::clone(&stream));
+        Ok(stream)
+    }
+
+    fn refuse_a_stream_name_already_loaded(&self, stream_name: &str) -> Result<()> {
+        match self
+            .engine_resources_shared_by_every_stream
+            .streams_loaded_in_this_runtime
+            .lock()
+            .get(stream_name)
+        {
+            Some(first) => Err(a_stream_name_already_loaded_refusal(first)),
+            None => Ok(()),
+        }
+    }
+
+    fn refuse_a_load_once_the_engine_is_shut_down(&self, stream_name: &str) -> Result<()> {
+        if !self
+            .engine_resources_shared_by_every_stream
+            .shut_down
+            .load(Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        Err(Error::Runtime(format!(
+            "the stream `{stream_name}` was not loaded: this runtime's engine has shut down; \
+             build a new one to load it"
+        )))
+    }
+
+    fn refuse_a_load_while_the_machine_shuts_down(
+        &self,
+        requested_stream_name: Option<&str>,
     ) -> Result<()> {
-        self.compiler.scope(|live_graph, _tx| {
-            for node in &graph.nodes {
-                live_graph.the_requested_node_name_unless_taken(&node.name)?;
-            }
-            Ok(())
-        })
+        if !crate::core::runtime::is_the_machines_shutdown_requested() {
+            return Ok(());
+        }
+        Err(Error::Runtime(format!(
+            "the stream `{}` was not loaded: the machine is shutting every stream down",
+            requested_stream_name.unwrap_or("(unnamed)")
+        )))
+    }
+
+    fn loaded_stream_names_listed_for_a_refusal(&self) -> String {
+        let names = self.names_of_the_loaded_streams();
+        if names.is_empty() {
+            "none".to_string()
+        } else {
+            names.join(", ")
+        }
     }
 }
 
-/// How a load watched for shutdown requests ended.
-enum GraphLoadObservingShutdownRequests {
-    /// The graph loaded and no shutdown was requested.
-    Loaded,
-    /// A shutdown was requested before the load or while it ran.
-    AbandonedForAShutdownRequest,
+impl Drop for Runner {
+    fn drop(&mut self) {
+        if let Err(shut_down_failure) = self.shut_down() {
+            tracing::error!("the engine shut down with a failure: {shut_down_failure}");
+        }
+    }
 }
 
-/// Whether the run loop should stop: the `RuntimeShutdown` event was received,
-/// or the shutdown escalation has been raised. One predicate so both `#[cfg]` arms of
-/// [`Runner::wait_for_signal_with`] observe the same set of sources.
-fn runtime_shutdown_observed(event_shutdown_flag: &AtomicBool) -> bool {
-    event_shutdown_flag.load(Ordering::SeqCst)
-        || crate::core::runtime::is_runtime_shutdown_requested()
+/// The URL-safe cast of the stream name a load names, refused when it casts
+/// to nothing and when there is none.
+fn the_cast_name_of_the_stream_a_load_names(
+    requested_stream_name: Option<&str>,
+    what_is_loaded: &str,
+) -> Result<String> {
+    let Some(requested_stream_name) = requested_stream_name else {
+        return Err(Error::GraphError(format!(
+            "{what_is_loaded} names no stream; give it a name — `--name` on the command line"
+        )));
+    };
+    cast_exposed_name_to_url_safe(requested_stream_name)
+        .map(|cast| cast.into_owned())
+        .map_err(|casts_to_nothing| {
+            Error::GraphError(format!(
+                "cannot load the stream `{requested_stream_name}`: {casts_to_nothing}"
+            ))
+        })
+}
+
+fn a_stream_name_already_loaded_refusal(first: &LoadedStreamInThisRuntime) -> Error {
+    Error::GraphError(format!(
+        "a stream named `{}` is already loaded in this runtime, from `{}`; load this one under \
+         another name with `--name`",
+        first.stream_name(),
+        first.project_directory().display()
+    ))
+}
+
+/// Walk a stream a load is still building — in no table the machine's walk
+/// reaches — to the machine's shutdown level, and interrupt its describes.
+fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStreamInThisRuntime) {
+    let machines_level = crate::core::runtime::the_machines_shutdown_escalation();
+    stream
+        .this_streams_shutdown_escalation()
+        .raise_to_graceful();
+    if machines_level >= RuntimeShutdownEscalation::Forced {
+        stream.this_streams_shutdown_escalation().raise_to_forced();
+    }
+    stream.interrupt_every_processor_interpreter_describe();
+}
+
+/// Ask `stream` for its shutdown and block until it has ended. Once its
+/// shutdown thread has started, the stream's watchdog bounds the wait; until
+/// then each poll asks again, retrying the thread's spawn.
+fn request_a_streams_shutdown_and_wait_until_it_has_ended(
+    stream: &LoadedStreamInThisRuntime,
+    reason: &str,
+) {
+    loop {
+        stream.ask_for_this_streams_shutdown(reason);
+        if stream.wait_for_this_streams_end_within(
+            crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
+        ) {
+            return;
+        }
+    }
+}
+
+/// Marks an engine the owner of the machine's shutdown signals until dropped.
+struct TheMachineShutdownSignalsOwnedByOneEngine<'engine>(
+    &'engine EngineResourcesSharedByEveryStream,
+);
+
+impl<'engine> TheMachineShutdownSignalsOwnedByOneEngine<'engine> {
+    fn mark(engine: &'engine EngineResourcesSharedByEveryStream) -> Self {
+        engine
+            .owns_the_machine_shutdown_signals
+            .store(true, Ordering::SeqCst);
+        Self(engine)
+    }
+}
+
+impl Drop for TheMachineShutdownSignalsOwnedByOneEngine<'_> {
+    fn drop(&mut self) {
+        self.0
+            .owns_the_machine_shutdown_signals
+            .store(false, Ordering::SeqCst);
+    }
+}
+
+/// Stop a stream a refused load built, which never entered the table, and
+/// close its JSONL log.
+fn tear_down_a_stream_that_never_entered_the_table(stream: &Arc<LoadedStreamInThisRuntime>) {
+    if let Err(teardown_failure) = stream.stop() {
+        stream.log_route().run_entered(|| {
+            tracing::error!(
+                "the stream `{}`, refused before it was loaded, failed to tear down: \
+                 {teardown_failure}",
+                stream.stream_name()
+            )
+        });
+    }
+    stream.log_route().close_the_jsonl_log_file();
+}
+
+/// Own SIGINT, SIGTERM and SIGHUP until the returned value drops.
+fn take_shutdown_signal_ownership() -> Result<ScopedShutdownSignalOwnership> {
+    ScopedShutdownSignalOwnership::take_until_dropped().map_err(|ownership_failure| {
+        Error::Configuration(format!(
+            "Failed to own shutdown signals: {}",
+            ownership_failure
+        ))
+    })
 }
 
 /// Compute the per-runtime surface-sharing socket path, refuse to start if
@@ -1460,9 +1307,10 @@ fn bring_up_surface_service(
     runtime_directory: &StreamlibRuntimeDirectory,
     runtime_id: &RuntimeUniqueId,
 ) -> Result<(
-    Arc<Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>>,
+    crate::linux::surface_share::UnixSocketSurfaceService,
     std::path::PathBuf,
     Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
+    Arc<dyn crate::core::context::SurfaceShareRegistrationsByRuntime + Send + Sync>,
 )> {
     use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
@@ -1483,6 +1331,9 @@ fn bring_up_surface_service(
 
     let state = SurfaceShareState::new();
     let check_out_leases = Arc::clone(state.check_out_leases());
+    let registrations_by_owner: Arc<
+        dyn crate::core::context::SurfaceShareRegistrationsByRuntime + Send + Sync,
+    > = Arc::new(state.clone());
     let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
     service.start().map_err(|e| {
         Error::Runtime(format!(
@@ -1498,9 +1349,10 @@ fn bring_up_surface_service(
     );
 
     Ok((
-        Arc::new(Mutex::new(Some(service))),
+        service,
         socket_path,
         check_out_leases,
+        registrations_by_owner,
     ))
 }
 
@@ -1511,10 +1363,11 @@ fn bring_up_surface_service(
 fn bring_up_mach_surface_share_service(
     runtime_id: &RuntimeUniqueId,
 ) -> Result<(
-    Arc<Mutex<Option<crate::apple::surface_share::MachSurfaceShareService>>>,
+    crate::apple::surface_share::MachSurfaceShareService,
     crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
     Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
     Arc<crate::apple::surface_share::CrossProcessTimelinePairsBySurface>,
+    Arc<dyn crate::core::context::SurfaceShareRegistrationsByRuntime + Send + Sync>,
 )> {
     use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
 
@@ -1522,6 +1375,9 @@ fn bring_up_mach_surface_share_service(
     let state = IOSurfaceShareState::new();
     let check_out_leases = Arc::clone(state.check_out_leases());
     let cross_process_timeline_pairs = Arc::clone(state.cross_process_timeline_pairs());
+    let registrations_by_owner: Arc<
+        dyn crate::core::context::SurfaceShareRegistrationsByRuntime + Send + Sync,
+    > = Arc::new(state.clone());
     let mut service = MachSurfaceShareService::new(state, service_name.clone());
     service.start().map_err(|start_failure| {
         if start_failure.kind() == std::io::ErrorKind::AddrInUse {
@@ -1540,17 +1396,41 @@ fn bring_up_mach_surface_share_service(
     let rendezvous = service.rendezvous();
 
     Ok((
-        Arc::new(Mutex::new(Some(service))),
+        service,
         rendezvous,
         check_out_leases,
         cross_process_timeline_pairs,
+        registrations_by_owner,
     ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::runtime::{HowALoadedStreamEnded, RuntimeStatus};
     use serial_test::serial;
+
+    /// An empty stream named `stream_name` loaded into `runner`, its project in
+    /// `project_directory`.
+    fn an_empty_stream_loaded_into(
+        runner: &Runner,
+        project_directory: &std::path::Path,
+        stream_name: &str,
+    ) -> Arc<LoadedStreamInThisRuntime> {
+        runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory)
+                    .named(stream_name),
+            )
+            .expect("an empty stream loads")
+    }
+
+    /// A project directory the test owns, removed with everything its streams
+    /// wrote when the test drops it.
+    fn a_project_directory_this_test_owns() -> tempfile::TempDir {
+        crate::core::test_support::a_temporary_directory_at_owner_only_mode()
+            .expect("a temporary project directory")
+    }
 
     // All Runner::new() tests are `#[serial]` because the runtime
     // reads/writes process-global env vars (XDG_RUNTIME_DIR,
@@ -1606,6 +1486,7 @@ mod tests {
     fn two_runners_given_one_runtime_name_both_construct() {
         let shared_runtime_name = "one-name-two-runners";
 
+        let project_directory = a_project_directory_this_test_owns();
         let first = Runner::new_with_construction_options(RunnerConstructionOptions {
             runtime_name: Some(shared_runtime_name.to_string()),
             ..RunnerConstructionOptions::default()
@@ -1620,12 +1501,15 @@ mod tests {
         assert_ne!(first.runtime_id(), second.runtime_id());
         for runner in [&first, &second] {
             assert_eq!(runner.runtime_name().as_str(), shared_runtime_name);
+            let stream = an_empty_stream_loaded_into(runner, project_directory.path(), "main");
             assert_eq!(
-                <Runner as RuntimeOperations>::this_runtimes_name(runner),
+                <LoadedStreamInThisRuntime as crate::core::runtime::RuntimeOperations>::this_runtimes_name(
+                    &stream
+                ),
                 shared_runtime_name
             );
             assert_eq!(
-                runner.to_json().expect("the graph serializes")["runtime_name"],
+                stream.to_json().expect("the graph serializes")["runtime_name"],
                 shared_runtime_name
             );
         }
@@ -1653,7 +1537,9 @@ mod tests {
         // Outside tokio context - creates owned runtime
         let runtime = Runner::new().unwrap();
         assert!(matches!(
-            runtime.tokio_runtime_variant,
+            runtime
+                .engine_resources_shared_by_every_stream
+                .tokio_runtime_variant,
             TokioRuntimeVariant::OwnedTokioRuntime(_)
         ));
     }
@@ -1698,7 +1584,9 @@ mod tests {
         assert!(result.is_ok());
         let runtime = result.unwrap();
         assert!(matches!(
-            runtime.tokio_runtime_variant,
+            runtime
+                .engine_resources_shared_by_every_stream
+                .tokio_runtime_variant,
             TokioRuntimeVariant::ExternalTokioHandle(_)
         ));
     }
@@ -1709,22 +1597,26 @@ mod tests {
     #[test]
     #[serial]
     fn a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_graph_node() {
+        use crate::core::compiler::PendingOperation;
+        use crate::core::processors::ProcessorSpec;
         use crate::core::test_support::{MockOutputOnlyProcessor, ensure_test_mocks_registered};
 
         ensure_test_mocks_registered();
-        let runtime = Runner::new().expect("Runner::new");
-        let processor_id = runtime
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
+        let processor_id = stream
             .add_processor(ProcessorSpec::new(
                 MockOutputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
             .expect("the mock is added");
 
-        runtime
+        stream
             .update_processor_config(&processor_id, serde_json::json!({"gain": 3}))
             .expect("the update is queued");
 
-        let config_on_the_node = runtime.compiler.scope(|graph, _tx| {
+        let config_on_the_node = stream.compiler.scope(|graph, _tx| {
             graph
                 .traversal()
                 .v(&processor_id)
@@ -1735,7 +1627,7 @@ mod tests {
         });
         assert_eq!(config_on_the_node, Some(serde_json::Value::Null));
         assert!(
-            runtime.compiler.logged_pending_operations().iter().any(|op| matches!(
+            stream.compiler.logged_pending_operations().iter().any(|op| matches!(
                 op,
                 PendingOperation::UpdateProcessorConfig { processor_id: queued_for, config_to_apply }
                     if *queued_for == processor_id && *config_to_apply == serde_json::json!({"gain": 3})
@@ -1753,9 +1645,11 @@ mod tests {
             .build()
             .unwrap();
         temp_rt.block_on(async {
-            let runtime = Runner::new().unwrap();
+            let project_directory = a_project_directory_this_test_owns();
+            let runner = Runner::new().unwrap();
+            let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
             // Sync methods should work (use spawn + channel internally)
-            let json = runtime.to_json().unwrap();
+            let json = stream.to_json().unwrap();
             assert!(json["nodes"].is_array());
         });
     }
@@ -1947,7 +1841,7 @@ mod tests {
                 runtime.surface_socket_path().display(),
                 fallback.display()
             );
-            let iceoryx2_config = runtime.iceoryx2_node.config();
+            let iceoryx2_config = runtime.iceoryx2_node().config();
             assert_eq!(
                 iceoryx2_config.global.root_path().as_bytes_const(),
                 fallback.join("iox2").as_os_str().as_encoded_bytes()
@@ -2215,8 +2109,8 @@ mod tests {
         }
     }
 
-    /// An embedding host tears the engine down after the run loop already
-    /// stopped it, so the second `stop()` must be a no-op rather than a second
+    /// A stream's shutdown thread stops a stream an embedding host already
+    /// stopped, so the second `stop()` must be a no-op rather than a second
     /// full teardown that republishes the transition to every subscriber.
     ///
     /// Mental-revert: removing the already-stopped early return in `stop()`
@@ -2224,7 +2118,7 @@ mod tests {
     /// and fails the counts below.
     #[test]
     #[serial_test::serial]
-    fn stopping_an_already_stopped_runtime_is_a_no_op() {
+    fn stopping_an_already_stopped_stream_is_a_no_op() {
         use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
 
         #[derive(Default)]
@@ -2239,24 +2133,35 @@ mod tests {
             fn on_event(&mut self, event: &Event) -> Result<()> {
                 let mut counts = self.0.lock();
                 match event {
-                    Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping) => counts.stopping += 1,
-                    Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped) => counts.stopped += 1,
+                    Event::OfALoadedStream {
+                        event: RuntimeEvent::RuntimeStopping,
+                        ..
+                    } => counts.stopping += 1,
+                    Event::OfALoadedStream {
+                        event: RuntimeEvent::RuntimeStopped,
+                        ..
+                    } => counts.stopped += 1,
                     _ => {}
                 }
                 Ok(())
             }
         }
 
+        let project_directory = a_project_directory_this_test_owns();
         let runner = Runner::new().expect("a runner boots without a graph");
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
         let counts = Arc::new(Mutex::new(StopTransitionCounter::default()));
         let listener: Arc<Mutex<dyn EventListener>> =
             Arc::new(Mutex::new(CountingListener(Arc::clone(&counts))));
         PUBSUB
-            .subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))
+            .subscribe(
+                &topics::loaded_stream(stream.loaded_stream_identity()),
+                Arc::clone(&listener),
+            )
             .expect("subscribe establishes the subscriber");
 
-        runner.stop().expect("the first stop succeeds");
-        runner.stop().expect("the second stop succeeds");
+        stream.stop().expect("the first stop succeeds");
+        stream.stop().expect("the second stop succeeds");
 
         // Delivery is not synchronous with the publish, so wait for the first
         // teardown's pair to land before counting — otherwise a duplicate that
@@ -2279,5 +2184,925 @@ mod tests {
             observed.stopped, 1,
             "RuntimeStopped must be published exactly once across two stops",
         );
+    }
+
+    // =========================================================================
+    // Two streams loaded in one engine
+    // =========================================================================
+
+    /// How long a test waits for a stream to end before calling it hung.
+    const A_STREAM_ENDS_WITHIN: Duration = Duration::from_secs(10);
+
+    /// Records every event published on one stream's topic.
+    struct EveryEventOnOneStreamsTopic(Arc<Mutex<Vec<crate::core::pubsub::Event>>>);
+
+    impl crate::core::pubsub::EventListener for EveryEventOnOneStreamsTopic {
+        fn on_event(&mut self, event: &crate::core::pubsub::Event) -> Result<()> {
+            self.0.lock().push(event.clone());
+            Ok(())
+        }
+    }
+
+    /// Subscribe a recorder to `stream`'s topic, returning what it records and
+    /// the listener that keeps the subscription alive.
+    fn record_every_event_on_the_topic_of(
+        stream: &LoadedStreamInThisRuntime,
+    ) -> (
+        Arc<Mutex<Vec<crate::core::pubsub::Event>>>,
+        Arc<Mutex<dyn crate::core::pubsub::EventListener>>,
+    ) {
+        use crate::core::pubsub::{PUBSUB, topics};
+
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let listener: Arc<Mutex<dyn crate::core::pubsub::EventListener>> = Arc::new(Mutex::new(
+            EveryEventOnOneStreamsTopic(Arc::clone(&recorded)),
+        ));
+        PUBSUB
+            .subscribe(
+                &topics::loaded_stream(stream.loaded_stream_identity()),
+                Arc::clone(&listener),
+            )
+            .expect("subscribe establishes the subscriber");
+        (recorded, listener)
+    }
+
+    /// Publish a sentinel on `stream`'s topic and wait for `recorded` to hold
+    /// it, returning everything recorded before it. A listener's queue is FIFO,
+    /// so the sentinel arriving means every event published before it that
+    /// reached this topic already has.
+    fn recorded_before_a_sentinel_on_the_topic_of(
+        stream: &LoadedStreamInThisRuntime,
+        recorded: &Mutex<Vec<crate::core::pubsub::Event>>,
+    ) -> Vec<crate::core::pubsub::Event> {
+        use crate::core::pubsub::{Event, PUBSUB, topics};
+
+        let topic = topics::loaded_stream(stream.loaded_stream_identity());
+        let sentinel = Event::custom(&topic, serde_json::json!({"sentinel": true}));
+        PUBSUB.publish(&topic, &sentinel);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            {
+                let recorded = recorded.lock();
+                if let Some(sentinel_at) = recorded.iter().position(|event| *event == sentinel) {
+                    return recorded[..sentinel_at].to_vec();
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the sentinel published on the stream's topic never arrived"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// One stream's shutdown ends that stream and takes it out of the table,
+    /// and leaves the other loaded, unrequested and as it was.
+    #[test]
+    #[serial]
+    fn one_streams_shutdown_ends_it_and_leaves_the_other_loaded() {
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let shut_down = an_empty_stream_loaded_into(&runner, project_directory.path(), "shut-down");
+        let left_running =
+            an_empty_stream_loaded_into(&runner, project_directory.path(), "left-running");
+        let (recorded_by_the_other, _listener) = record_every_event_on_the_topic_of(&left_running);
+
+        shut_down.ask_for_this_streams_shutdown("the test shuts one stream down");
+        assert!(
+            shut_down.wait_for_this_streams_end_within(A_STREAM_ENDS_WITHIN),
+            "the stream whose shutdown was requested never ended"
+        );
+
+        assert_eq!(
+            shut_down.how_this_stream_ended(),
+            Some(HowALoadedStreamEnded::Stopped)
+        );
+        assert_eq!(shut_down.status(), RuntimeStatus::Stopped);
+        assert_eq!(runner.names_of_the_loaded_streams(), ["left-running"]);
+        assert!(!left_running.has_ended());
+        assert_eq!(left_running.status(), RuntimeStatus::Initial);
+        assert_eq!(
+            left_running.this_streams_shutdown_escalation().escalation(),
+            RuntimeShutdownEscalation::NotRequested
+        );
+        assert!(
+            recorded_before_a_sentinel_on_the_topic_of(&left_running, &recorded_by_the_other)
+                .is_empty(),
+            "the other stream heard the shut-down stream's events"
+        );
+
+        shut_down.ask_for_this_streams_shutdown("a second request");
+        assert_eq!(
+            shut_down.this_streams_shutdown_escalation().escalation(),
+            RuntimeShutdownEscalation::Graceful,
+            "a second request escalates nothing further"
+        );
+    }
+
+    /// A graph change in one stream is logged on its own compiler and heard
+    /// by its own listener; the other stream's transaction, graph and topic
+    /// see nothing.
+    #[test]
+    #[serial]
+    fn one_streams_graph_change_reaches_only_its_own_compiler_and_topic() {
+        use crate::core::compiler::PendingOperation;
+        use crate::core::processors::ProcessorSpec;
+        use crate::core::pubsub::{Event, RuntimeEvent};
+        use crate::core::test_support::{MockOutputOnlyProcessor, ensure_test_mocks_registered};
+
+        ensure_test_mocks_registered();
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let changed = an_empty_stream_loaded_into(&runner, project_directory.path(), "changed");
+        let untouched = an_empty_stream_loaded_into(&runner, project_directory.path(), "untouched");
+        let (recorded_by_the_changed, _changed_listener) =
+            record_every_event_on_the_topic_of(&changed);
+        let (recorded_by_the_untouched, _untouched_listener) =
+            record_every_event_on_the_topic_of(&untouched);
+
+        let processor_id = changed
+            .add_processor(ProcessorSpec::new(
+                MockOutputOnlyProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .expect("the mock is added");
+
+        assert!(
+            changed
+                .compiler
+                .logged_pending_operations()
+                .iter()
+                .any(|op| matches!(op, PendingOperation::AddProcessor(id) if *id == processor_id)),
+            "the change is logged on its own stream's compiler"
+        );
+        assert!(
+            untouched.compiler.logged_pending_operations().is_empty(),
+            "another stream's change reached this stream's compiler"
+        );
+        assert_eq!(untouched.to_json().unwrap()["nodes"], serde_json::json!([]));
+        assert!(
+            recorded_before_a_sentinel_on_the_topic_of(&changed, &recorded_by_the_changed)
+                .iter()
+                .any(|event| matches!(
+                    event,
+                    Event::OfALoadedStream {
+                        event: RuntimeEvent::GraphDidChange,
+                        stream,
+                    } if stream.stream_name == "changed"
+                )),
+            "the changed stream's listener never heard its graph change"
+        );
+        assert!(
+            recorded_before_a_sentinel_on_the_topic_of(&untouched, &recorded_by_the_untouched)
+                .is_empty(),
+            "the untouched stream's listener heard another stream's graph change"
+        );
+    }
+
+    /// A stream whose teardown outlives its watchdog is unloaded, its helper
+    /// process groups killed and no other stream's, and every other stream is
+    /// left alive. The budget is injected so the test never waits fifteen
+    /// seconds.
+    #[test]
+    #[serial]
+    fn the_watchdog_on_one_streams_teardown_unloads_it_and_leaves_the_other_alive() {
+        use crate::core::runtime::{
+            deregister_a_helper_process_group, register_a_helper_process_group,
+        };
+        use crate::core::test_support::a_process_parked_in_a_process_group_of_its_own;
+
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let hung = runner
+            .load_an_empty_stream_whose_teardown_watchdog_fires_after(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("hung"),
+                Duration::from_millis(300),
+            )
+            .expect("the stream loads");
+        let alive = an_empty_stream_loaded_into(&runner, project_directory.path(), "alive");
+        let mut hung_streams_helper = a_process_parked_in_a_process_group_of_its_own();
+        let mut alive_streams_helper = a_process_parked_in_a_process_group_of_its_own();
+        assert!(register_a_helper_process_group(
+            hung_streams_helper.id() as i32,
+            hung.stream_tag()
+        ));
+        assert!(register_a_helper_process_group(
+            alive_streams_helper.id() as i32,
+            alive.stream_tag()
+        ));
+
+        // The stop takes this lock after it marks the stream stopping, so
+        // holding it hangs the teardown where no budget of its own reaches.
+        let the_hung_teardown_waits_on = hung.runtime_context.lock();
+        hung.ask_for_this_streams_shutdown("the test hangs this stream's teardown");
+        let ended = hung.wait_for_this_streams_end_within(A_STREAM_ENDS_WITHIN);
+        let how_it_ended = hung.how_this_stream_ended();
+        let names_once_it_ended = runner.names_of_the_loaded_streams();
+        let hung_helper_exited = (0..500).any(|_| {
+            if hung_streams_helper.try_wait().ok().flatten().is_some() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            false
+        });
+        let alive_helper_still_running = alive_streams_helper.try_wait().ok().flatten().is_none();
+        drop(the_hung_teardown_waits_on);
+        deregister_a_helper_process_group(hung_streams_helper.id() as i32);
+        deregister_a_helper_process_group(alive_streams_helper.id() as i32);
+        let _ = alive_streams_helper.kill();
+        let _ = alive_streams_helper.wait();
+        let _ = hung_streams_helper.wait();
+
+        assert!(ended, "the watchdog never ended the hung stream");
+        assert!(
+            matches!(
+                how_it_ended,
+                Some(HowALoadedStreamEnded::AbandonedByItsTeardownWatchdog { .. })
+            ),
+            "the hung stream ended as {how_it_ended:?}"
+        );
+        assert_eq!(names_once_it_ended, ["alive"]);
+        assert!(
+            hung_helper_exited,
+            "the watchdog left the hung stream's helper process group running"
+        );
+        assert!(
+            alive_helper_still_running,
+            "the watchdog killed another stream's helper process group"
+        );
+        assert!(!alive.has_ended());
+        assert_eq!(alive.status(), RuntimeStatus::Initial);
+        assert!(!alive.this_streams_shutdown_escalation().is_requested());
+
+        let released_by = std::time::Instant::now() + A_STREAM_ENDS_WITHIN;
+        while hung.status() != RuntimeStatus::Stopped {
+            assert!(
+                std::time::Instant::now() < released_by,
+                "the released teardown never finished"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            matches!(
+                hung.how_this_stream_ended(),
+                Some(HowALoadedStreamEnded::AbandonedByItsTeardownWatchdog { .. })
+            ),
+            "a teardown that finished after its watchdog fired rewrote how the stream ended"
+        );
+    }
+
+    /// A call naming a stream that is not loaded, or naming none while several
+    /// are, is refused naming the loaded streams; naming none while one is
+    /// loaded finds that one.
+    #[test]
+    #[serial]
+    fn a_call_naming_a_stream_not_loaded_is_refused_naming_the_loaded_streams() {
+        use crate::core::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
+
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let Err(none_loaded) = runner.the_stream_a_call_names(None) else {
+            panic!("a call naming no stream found one where none is loaded");
+        };
+        assert!(
+            none_loaded.to_string().contains("no stream"),
+            "{none_loaded}"
+        );
+
+        let only = an_empty_stream_loaded_into(&runner, project_directory.path(), "camera");
+        assert!(Arc::ptr_eq(
+            &runner
+                .the_stream_a_call_names(None)
+                .expect("the only stream is the one a call naming none means"),
+            &only
+        ));
+        an_empty_stream_loaded_into(&runner, project_directory.path(), "microphone");
+
+        for refusal in [
+            runner
+                .runtime_operations_of_the_stream_a_call_names(Some("display"))
+                .err()
+                .expect("a stream not loaded is refused"),
+            runner
+                .runtime_operations_of_the_stream_a_call_names(Some(""))
+                .err()
+                .expect("a name that casts to nothing names no loaded stream"),
+            runner
+                .runtime_operations_of_the_stream_a_call_names(Some(".."))
+                .err()
+                .expect("a name that casts to nothing names no loaded stream"),
+            runner
+                .runtime_operations_of_the_stream_a_call_names(None)
+                .err()
+                .expect("naming none while several are loaded is refused"),
+        ] {
+            let refusal = refusal.to_string();
+            assert!(
+                refusal.contains("camera") && refusal.contains("microphone"),
+                "the refusal must name the loaded streams: {refusal}"
+            );
+        }
+        assert!(
+            runner
+                .node_catalog_of_the_stream_a_call_names(Some("display"))
+                .is_err()
+        );
+        assert!(Arc::ptr_eq(
+            &runner
+                .the_stream_a_call_names(Some("Camera"))
+                .expect("a call's name is cast"),
+            &only
+        ));
+    }
+
+    /// The machine's shutdown request, seen by the engine that owns the
+    /// machine's signals, walks every loaded stream to its end.
+    #[test]
+    #[serial]
+    fn the_machines_shutdown_walks_every_loaded_stream_to_its_end() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let first = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+        let second = an_empty_stream_loaded_into(&runner, project_directory.path(), "second");
+
+        let (every_stream_ended, every_stream_has_ended) = std::sync::mpsc::channel();
+        let waiting_runner = Arc::clone(&runner);
+        std::thread::spawn(move || {
+            let outcome = waiting_runner.run_owning_the_machine_shutdown_signals(|| {
+                waiting_runner.request_the_shutdown_of_every_loaded_stream(
+                    "the test shuts the machine down",
+                )?;
+                waiting_runner.wait_until_every_stream_has_ended()
+            });
+            let _ = every_stream_ended.send(outcome);
+        });
+        every_stream_has_ended
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the machine's shutdown never ended every stream")
+            .expect("every stream ended cleanly");
+
+        for stream in [&first, &second] {
+            assert_eq!(
+                stream.how_this_stream_ended(),
+                Some(HowALoadedStreamEnded::Stopped)
+            );
+        }
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+    }
+
+    /// A stream loaded while the machine is shutting every stream down is
+    /// refused by name.
+    #[test]
+    #[serial]
+    fn a_load_while_the_machine_shuts_down_is_refused_by_name() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        crate::core::runtime::request_the_shutdown_of_every_loaded_stream(
+            "the test shuts the machine down",
+        )
+        .expect("the machine's shutdown is requested");
+
+        let Err(refusal) = runner.load_an_empty_stream(
+            OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                .named("too-late"),
+        ) else {
+            panic!("a stream loaded while the machine shuts down");
+        };
+
+        let refusal = refusal.to_string();
+        assert!(refusal.contains("too-late"), "{refusal}");
+        assert!(refusal.contains("shutting"), "{refusal}");
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+    }
+
+    /// Unloading a stream stops it and frees its name for the next load; the
+    /// other stream stays loaded.
+    #[test]
+    #[serial]
+    fn an_unloaded_stream_frees_its_name_and_leaves_the_other_loaded() {
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let unloaded = an_empty_stream_loaded_into(&runner, project_directory.path(), "unloaded");
+        let kept = an_empty_stream_loaded_into(&runner, project_directory.path(), "kept");
+
+        runner
+            .unload_stream("unloaded")
+            .expect("the stream unloads cleanly");
+
+        assert_eq!(
+            unloaded.how_this_stream_ended(),
+            Some(HowALoadedStreamEnded::Stopped)
+        );
+        assert_eq!(runner.names_of_the_loaded_streams(), ["kept"]);
+        assert!(!kept.has_ended());
+        let reloaded = an_empty_stream_loaded_into(&runner, project_directory.path(), "unloaded");
+        assert!(!Arc::ptr_eq(&reloaded, &unloaded));
+    }
+
+    /// Counts the ticks of [`TickCountingInTheFirstStream`].
+    static TICKS_IN_THE_FIRST_STREAM: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+
+    /// Counts the ticks of [`TickCountingInTheSecondStream`].
+    static TICKS_IN_THE_SECOND_STREAM: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+
+    /// What [`TickCountingInTheFirstStream`] logs on its first tick.
+    const TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD: &str =
+        "token-of-the-first-streams-processor-thread";
+
+    /// What [`TickCountingInTheSecondStream`] logs on its first tick.
+    const TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD: &str =
+        "token-of-the-second-streams-processor-thread";
+
+    /// A source that counts its own ticks, for the first stream.
+    #[crate::processor(execution = continuous(interval_ms = 5))]
+    pub(crate) struct TickCountingInTheFirstStream;
+
+    impl crate::core::ContinuousProcessor for TickCountingInTheFirstStream::Processor {
+        fn process(
+            &mut self,
+            _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+        ) -> Result<()> {
+            if TICKS_IN_THE_FIRST_STREAM.fetch_add(1, Ordering::SeqCst) == 0 {
+                tracing::info!("{TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD}");
+            }
+            Ok(())
+        }
+    }
+
+    /// A source that counts its own ticks, for the second stream.
+    #[crate::processor(execution = continuous(interval_ms = 5))]
+    pub(crate) struct TickCountingInTheSecondStream;
+
+    impl crate::core::ContinuousProcessor for TickCountingInTheSecondStream::Processor {
+        fn process(
+            &mut self,
+            _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+        ) -> Result<()> {
+            if TICKS_IN_THE_SECOND_STREAM.fetch_add(1, Ordering::SeqCst) == 0 {
+                tracing::info!("{TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD}");
+            }
+            Ok(())
+        }
+    }
+
+    /// Two started streams hold the engine's one Vulkan device, each one's
+    /// processor thread logs only to its own stream's file, and one's
+    /// shutdown leaves the other started and processing, its graph changes
+    /// still committing on its own compiler.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn two_started_streams_share_one_vulkan_device_and_one_shutdown_leaves_the_other_processing() {
+        use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+
+        PROCESSOR_REGISTRY.register::<TickCountingInTheFirstStream::Processor>();
+        PROCESSOR_REGISTRY.register::<TickCountingInTheSecondStream::Processor>();
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let runner = Runner::new().expect("Runner::new");
+        let load_named = |stream_name: &str| {
+            runner
+                .load_an_empty_stream(
+                    OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                        .named(stream_name),
+                )
+                .expect("an empty stream loads")
+        };
+        let first = load_named("first");
+        let second = load_named("second");
+        let first_log = first.jsonl_log_path().expect("first logs").to_path_buf();
+        let second_log = second.jsonl_log_path().expect("second logs").to_path_buf();
+        first
+            .add_processor(ProcessorSpec::new(
+                TickCountingInTheFirstStream::processor_class_import_path(),
+                serde_json::json!({}),
+            ))
+            .expect("the first stream's source is added");
+        second
+            .add_processor(ProcessorSpec::new(
+                TickCountingInTheSecondStream::processor_class_import_path(),
+                serde_json::json!({}),
+            ))
+            .expect("the second stream's source is added");
+        first.start().expect("the first stream starts");
+        second.start().expect("the second stream starts");
+        for stream in [&first, &second] {
+            stream
+                .wait_until_every_processor_is_running(Duration::from_secs(30))
+                .expect("the stream's source runs");
+        }
+
+        let device_of = |stream: &LoadedStreamInThisRuntime| {
+            Arc::clone(
+                stream
+                    .runtime_context_while_started()
+                    .expect("a started stream has its runtime context")
+                    .gpu
+                    .device(),
+            )
+        };
+        assert!(
+            Arc::ptr_eq(&device_of(&first), &device_of(&second)),
+            "two streams in one engine must hold one Vulkan device"
+        );
+
+        first.ask_for_this_streams_shutdown("the test shuts the first stream down");
+        runner
+            .wait_until_the_stream_ends(&first)
+            .expect("the first stream stops cleanly");
+        assert_eq!(first.status(), RuntimeStatus::Stopped);
+
+        let first_ticks_once_stopped = TICKS_IN_THE_FIRST_STREAM.load(Ordering::SeqCst);
+        let second_ticks_once_the_first_stopped = TICKS_IN_THE_SECOND_STREAM.load(Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            TICKS_IN_THE_FIRST_STREAM.load(Ordering::SeqCst),
+            first_ticks_once_stopped,
+            "the stopped stream's processor kept running"
+        );
+        assert!(
+            TICKS_IN_THE_SECOND_STREAM.load(Ordering::SeqCst) > second_ticks_once_the_first_stopped,
+            "the other stream stopped processing when the first shut down"
+        );
+        assert_eq!(second.status(), RuntimeStatus::Started);
+        assert_eq!(runner.names_of_the_loaded_streams(), ["second"]);
+
+        second
+            .add_processor(ProcessorSpec::new(
+                TickCountingInTheSecondStream::processor_class_import_path(),
+                serde_json::json!({}),
+            ))
+            .expect("a live add into the running stream");
+        second
+            .wait_until_every_processor_is_running(Duration::from_secs(30))
+            .expect("the live add commits on the running stream's own compiler");
+        assert_eq!(
+            second.to_json().unwrap()["nodes"].as_array().map(Vec::len),
+            Some(2)
+        );
+
+        runner.shut_down().expect("the engine shuts down");
+        assert!(second.has_ended());
+
+        for (stream_log, stream_name, own_token, other_token) in [
+            (
+                &first_log,
+                "first",
+                TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD,
+                TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD,
+            ),
+            (
+                &second_log,
+                "second",
+                TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD,
+                TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD,
+            ),
+        ] {
+            let records = every_record_of_the_stream_log_at(stream_log);
+            for record in &records {
+                assert_eq!(record.stream.as_deref(), Some(stream_name), "{record:?}");
+                assert_ne!(
+                    record.message, other_token,
+                    "the log of `{stream_name}` holds the other stream's processor record"
+                );
+            }
+            assert!(
+                records.iter().any(|record| record.message == own_token),
+                "the log of `{stream_name}` lacks its processor thread's record: {records:#?}"
+            );
+        }
+    }
+
+    /// Check in a memfd under `owner_key` over `connection`, as a surface
+    /// store registering under that owner does.
+    #[cfg(target_os = "linux")]
+    fn check_in_a_surface_under(connection: &std::os::unix::net::UnixStream, owner_key: &str) {
+        let name = std::ffi::CString::new("a-surface-a-stream-registered").unwrap();
+        let memfd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+        assert!(memfd >= 0, "memfd_create failed");
+        let contents = b"pixels";
+        let written = unsafe { libc::write(memfd, contents.as_ptr().cast(), contents.len()) };
+        assert_eq!(written, contents.len() as isize);
+        let (answer, _) = streamlib_surface_client::send_request_with_fds(
+            connection,
+            &serde_json::json!({
+                "op": "check_in",
+                "runtime_id": owner_key,
+                "width": 16,
+                "height": 16,
+                "format": "bgra32",
+                "resource_type": "pixel_buffer",
+            }),
+            &[memfd],
+            0,
+        )
+        .expect("the check-in is answered");
+        unsafe { libc::close(memfd) };
+        assert!(
+            answer.get("surface_id").is_some(),
+            "the check-in was refused: {answer}"
+        );
+    }
+
+    /// An unloaded stream's surface registrations leave the engine's
+    /// surface-sharing service, which outlives the stream and keeps a
+    /// registration from this process past its connection's close; the other
+    /// stream's and the engine's own stay.
+    ///
+    /// Mental-revert: without the release in the stream's stop, the unloaded
+    /// stream's registration stays until the engine shuts down.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[serial]
+    fn an_unloaded_streams_surface_registrations_go_and_the_others_stay() {
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let unloaded = an_empty_stream_loaded_into(&runner, project_directory.path(), "unloaded");
+        let staying = an_empty_stream_loaded_into(&runner, project_directory.path(), "staying");
+        let unloaded_streams_owner_key = unloaded.loaded_stream_identity().to_string();
+        let staying_streams_owner_key = staying.loaded_stream_identity().to_string();
+        let the_engines_owner_key = runner.runtime_id().to_string();
+        let connection =
+            streamlib_surface_client::connect_to_surface_share_socket(runner.surface_socket_path())
+                .expect("the engine's surface-sharing service accepts a connection");
+        for owner_key in [
+            &unloaded_streams_owner_key,
+            &staying_streams_owner_key,
+            &the_engines_owner_key,
+        ] {
+            check_in_a_surface_under(&connection, owner_key);
+        }
+
+        runner
+            .unload_stream("unloaded")
+            .expect("the stream unloads");
+
+        let registrations = &runner
+            .engine_resources_shared_by_every_stream
+            .surface_share_registrations_by_owner;
+        assert!(
+            registrations
+                .surface_ids_by_runtime(&unloaded_streams_owner_key)
+                .is_empty(),
+            "the unloaded stream's registration outlived it"
+        );
+        assert_eq!(
+            registrations
+                .surface_ids_by_runtime(&staying_streams_owner_key)
+                .len(),
+            1,
+            "another stream's registration went with the unloaded one"
+        );
+        assert_eq!(
+            registrations
+                .surface_ids_by_runtime(&the_engines_owner_key)
+                .len(),
+            1,
+            "the engine's own registration went with the unloaded stream"
+        );
+    }
+
+    /// Two streams loaded under one name in one runtime — the second loaded
+    /// once the first left the table — publish on different topics and own
+    /// different surface registrations.
+    ///
+    /// Mental-revert: an identity of the runtime id and the name alone gives
+    /// both one topic, so a late event of the first reaches the second's
+    /// listener.
+    #[test]
+    #[serial]
+    fn a_stream_loaded_under_the_name_of_one_that_left_has_its_own_topic() {
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let first = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
+        runner
+            .unload_stream("main")
+            .expect("the first stream unloads");
+        let second = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
+
+        assert_ne!(first.stream_tag(), second.stream_tag());
+        assert_ne!(
+            crate::core::pubsub::topics::loaded_stream(first.loaded_stream_identity()),
+            crate::core::pubsub::topics::loaded_stream(second.loaded_stream_identity())
+        );
+        assert_ne!(
+            first.loaded_stream_identity().to_string(),
+            second.loaded_stream_identity().to_string()
+        );
+    }
+
+    /// Every record the JSONL log at `path` holds.
+    fn every_record_of_the_stream_log_at(
+        path: &std::path::Path,
+    ) -> Vec<streamlib_runtime_client_contract::runtime_log_event::RuntimeLogEvent> {
+        crate::core::logging::one_stream_log_file_written_on_a_test_thread::read_every_record_of_a_jsonl_log(path)
+    }
+
+    /// Each stream's records — from its own threads, from a thread it spawned,
+    /// and from engine code acting on it — land in its own JSONL file under its
+    /// project and never in the other's, and a record no stream emitted lands
+    /// in neither. Each file is whole on disk once its stream is unloaded.
+    #[test]
+    #[serial]
+    fn two_streams_log_each_to_its_own_file_and_a_record_no_stream_emitted_to_neither() {
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let runner = Runner::new().expect("Runner::new");
+        let load_named = |stream_name: &str| {
+            runner
+                .load_an_empty_stream(
+                    OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                        .named(stream_name),
+                )
+                .expect("an empty stream loads")
+        };
+        let first = load_named("first");
+        let second = load_named("second");
+        let first_log = first.jsonl_log_path().expect("first logs").to_path_buf();
+        let second_log = second.jsonl_log_path().expect("second logs").to_path_buf();
+        assert_ne!(first_log, second_log);
+        for stream_log in [&first_log, &second_log] {
+            assert_eq!(
+                stream_log.parent(),
+                Some(
+                    project_directory
+                        .path()
+                        .join(".streamlib")
+                        .join("logs")
+                        .as_path()
+                )
+            );
+        }
+
+        first.log_route().run_entered(|| {
+            std::thread::spawn(
+                crate::core::logging::carrying_this_threads_loaded_stream_log_route(|| {
+                    tracing::info!("token-from-a-thread-the-first-stream-spawned")
+                }),
+            )
+            .join()
+            .expect("the spawned thread logs")
+        });
+        second
+            .log_route()
+            .run_entered(|| tracing::info!("token-of-the-second-stream"));
+        tracing::info!("token-no-stream-emitted");
+        runner.unload_stream("first").expect("first unloads");
+        runner.unload_stream("second").expect("second unloads");
+
+        let runtime_id = runner.runtime_id().to_string();
+        let first_token = "token-from-a-thread-the-first-stream-spawned";
+        let second_token = "token-of-the-second-stream";
+        for (stream_log, stream_name, own_token, other_stream_name, other_token) in [
+            (&first_log, "first", first_token, "second", second_token),
+            (&second_log, "second", second_token, "first", first_token),
+        ] {
+            let records = every_record_of_the_stream_log_at(stream_log);
+            for record in &records {
+                assert_eq!(record.stream.as_deref(), Some(stream_name), "{record:?}");
+                assert_eq!(record.runtime_id, runtime_id, "{record:?}");
+                assert!(
+                    !record.message.contains(&format!("`{other_stream_name}`"))
+                        && record.message != other_token
+                        && record.message != "token-no-stream-emitted",
+                    "the log of `{stream_name}` holds a record it did not emit: {record:?}"
+                );
+            }
+            for message_the_stream_logged in [
+                format!("Loading the stream `{stream_name}`"),
+                format!("[stop] The stream `{stream_name}` stopped"),
+                own_token.to_string(),
+            ] {
+                assert!(
+                    records
+                        .iter()
+                        .any(|record| record.message.starts_with(&message_the_stream_logged)),
+                    "the log of `{stream_name}` lacks `{message_the_stream_logged}`: {records:#?}"
+                );
+            }
+        }
+    }
+
+    /// A second runner in one process logs fully: each runner's stream writes
+    /// its own file, every record carrying that runner's id.
+    #[test]
+    #[serial]
+    fn a_second_runner_in_one_process_logs_to_its_own_stream_files() {
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let first_runner = Runner::new().expect("the first runner constructs");
+        let second_runner = Runner::new().expect("the second runner constructs");
+        let mut stream_logs_by_runtime_id = Vec::new();
+        for runner in [&first_runner, &second_runner] {
+            let stream = runner
+                .load_an_empty_stream(
+                    OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                        .named("main"),
+                )
+                .expect("an empty stream loads");
+            stream_logs_by_runtime_id.push((
+                runner.runtime_id().to_string(),
+                stream
+                    .jsonl_log_path()
+                    .expect("each runner's stream logs")
+                    .to_path_buf(),
+            ));
+            runner.unload_stream("main").expect("the stream unloads");
+        }
+
+        assert_ne!(
+            stream_logs_by_runtime_id[0].1,
+            stream_logs_by_runtime_id[1].1
+        );
+        for (runtime_id, stream_log) in &stream_logs_by_runtime_id {
+            let records = every_record_of_the_stream_log_at(stream_log);
+            assert!(
+                records
+                    .iter()
+                    .any(|record| record.message == "[stop] The stream `main` stopped"),
+                "the stream of runtime {runtime_id} wrote no record of its stop: {records:#?}"
+            );
+            for record in &records {
+                assert_eq!(&record.runtime_id, runtime_id, "{record:?}");
+                assert_eq!(record.stream.as_deref(), Some("main"), "{record:?}");
+            }
+        }
+    }
+
+    /// The setup hooks run once, with the engine's GPU context and its own
+    /// surface store, when the first stream's start creates it — every hook
+    /// even after one fails, that start reporting the failure — and a hook
+    /// installed after them is refused.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn the_setup_hooks_run_once_each_even_after_one_fails_and_a_later_one_is_refused() {
+        use std::sync::atomic::AtomicUsize;
+
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let hook_runs = Arc::new(AtomicUsize::new(0));
+        let hooks_saw_the_engines_surface_store = Arc::new(AtomicBool::new(true));
+        for hook_fails in [true, false] {
+            let hook_runs = Arc::clone(&hook_runs);
+            let hooks_saw_the_engines_surface_store =
+                Arc::clone(&hooks_saw_the_engines_surface_store);
+            runner
+                .install_setup_hook(move |engine_gpu_context| {
+                    hook_runs.fetch_add(1, Ordering::SeqCst);
+                    if cfg!(any(target_os = "linux", target_os = "macos"))
+                        && engine_gpu_context.surface_store().is_none()
+                    {
+                        hooks_saw_the_engines_surface_store.store(false, Ordering::SeqCst);
+                    }
+                    if hook_fails {
+                        return Err(Error::Configuration("the first setup hook fails".into()));
+                    }
+                    Ok(())
+                })
+                .expect("a hook installed before any start is queued");
+        }
+
+        let first = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+        let first_start_failure = first
+            .start()
+            .expect_err("the failing hook aborts the start that ran it");
+        assert!(
+            first_start_failure
+                .to_string()
+                .contains("the first setup hook fails"),
+            "{first_start_failure}"
+        );
+        assert_eq!(
+            hook_runs.load(Ordering::SeqCst),
+            2,
+            "a failing hook stopped the rest"
+        );
+        assert!(hooks_saw_the_engines_surface_store.load(Ordering::SeqCst));
+
+        let second = an_empty_stream_loaded_into(&runner, project_directory.path(), "second");
+        second.start().expect("the second stream starts");
+        assert_eq!(hook_runs.load(Ordering::SeqCst), 2, "the hooks ran again");
+        assert!(
+            runner.install_setup_hook(|_| Ok(())).is_err(),
+            "a hook installed after the hooks ran was queued where nothing runs it"
+        );
+
+        runner.shut_down().expect("the engine shuts down");
     }
 }

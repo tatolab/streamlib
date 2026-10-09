@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Hosting one stream: the engine built, the graph loaded with its
-//! environment, the local API added, the run until a shutdown, and a teardown
-//! that drops the engine — or leaves it beneath the processor threads it
-//! abandoned.
+//! Hosting one stream: the engine built, the graph loaded as its one stream
+//! with its environment, the engine's local API served, the run until the
+//! stream ends, and a teardown that drops the engine — or leaves it beneath
+//! the threads its stream abandoned.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -13,21 +13,21 @@ use std::sync::Arc;
 use streamlib::engine_internal::core::app_directory::record_the_app_directory_the_runtime_host_was_given;
 use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
-    ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads, Runner,
-    RunnerConstructionOptions, note_what_the_engine_teardown_is_waiting_on,
+    ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
+    EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, HowALoadedStreamEnded, LoadedStreamInThisRuntime,
+    OptionsForLoadingOneStream, Runner, RunnerConstructionOptions,
+    StreamLoadObservingMachineShutdownRequests, note_what_the_engine_teardown_is_waiting_on,
 };
-use streamlib_api_server::control_plane_host::{
-    ApiServerControlPlaneHostConfig, register_api_server_control_plane_processor_on_runtime,
-};
+use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
 
 use crate::refusal_on_standard_error::write_refusal_to_standard_error;
 use crate::stream_launch_inputs::StreamLaunchInputs;
 
-/// Host the stream until a shutdown is requested, tear the engine down, and
-/// return the status `tatolabd` exits with.
+/// Host the stream until it ends, tear the engine down, and return the status
+/// `tatolabd` exits with.
 ///
 /// Called on the process's first thread: on macOS the engine drives the window
-/// event pump on it while it waits for the shutdown.
+/// event pump on it while it waits for the stream to end.
 pub(crate) fn host_the_stream_until_shutdown(
     StreamLaunchInputs {
         stream_graph,
@@ -52,36 +52,52 @@ pub(crate) fn host_the_stream_until_shutdown(
             ));
         }
     };
-    engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory);
+    if let Err(lend_directory_refusal) =
+        engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory)
+    {
+        return write_refusal_to_standard_error(&format!(
+            "the engine could not be handed its lend directory: {lend_directory_refusal}"
+        ));
+    }
     streamlib_media_builtins::register_media_builtin_processor_types();
 
-    let mut local_api_socket_held_for_its_processor = None;
+    let mut hosted_stream = None;
+    let mut local_api_served_for_the_engine = None;
     let run_outcome = engine
-        .load_graph_snapshot_start_and_wait_for_shutdown(
-            &stream_graph,
-            Some(stream_environment),
-            |loaded_engine| {
-                log_that_the_stream_loaded(loaded_engine)?;
-                local_api_socket_held_for_its_processor =
-                    Some(register_api_server_control_plane_processor_on_runtime(
-                        loaded_engine,
-                        ApiServerControlPlaneHostConfig::default(),
-                    )?);
-                Ok(())
-            },
-        )
+        .run_owning_the_machine_shutdown_signals(|| {
+            let stream = match engine
+                .load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested(
+                    &stream_graph,
+                    OptionsForLoadingOneStream::in_stream_environment(stream_environment),
+                )? {
+                StreamLoadObservingMachineShutdownRequests::Loaded(stream) => stream,
+                StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest => {
+                    return Ok(());
+                }
+            };
+            hosted_stream = Some(Arc::clone(&stream));
+            log_that_the_stream_loaded(&stream)?;
+            local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
+            stream.start()?;
+            engine.wait_until_the_stream_ends(&stream)
+        })
         .map_err(|run_refusal| format!("the stream did not run: {run_refusal}"));
     if let Err(run_refusal) = &run_outcome {
         tracing::error!("{run_refusal}");
     }
 
-    let engine_teardown_outcome = tear_the_engine_down(engine);
-    drop(local_api_socket_held_for_its_processor);
+    let engine_teardown_outcome =
+        tear_the_engine_down(engine, hosted_stream, local_api_served_for_the_engine);
     let mut exit_code = ExitCode::SUCCESS;
     for refusal in
-        refusals_written_once_the_engine_is_torn_down(run_outcome, engine_teardown_outcome)
+        refusals_written_once_the_engine_is_torn_down(run_outcome, &engine_teardown_outcome)
     {
         exit_code = write_refusal_to_standard_error(&refusal);
+    }
+    if let EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(_) =
+        engine_teardown_outcome
+    {
+        exit_code = ExitCode::from(EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED as u8);
     }
     exit_code
 }
@@ -94,7 +110,7 @@ pub(crate) fn host_the_stream_until_shutdown(
 /// under `STREAMLIB_QUIET` no log mirror carried it to standard error.
 fn refusals_written_once_the_engine_is_torn_down(
     run_outcome: Result<(), String>,
-    engine_teardown_outcome: EngineTeardownOutcome,
+    engine_teardown_outcome: &EngineTeardownOutcome,
 ) -> Vec<String> {
     let mut refusals = Vec::new();
     if let Err(run_refusal) = run_outcome {
@@ -103,29 +119,27 @@ fn refusals_written_once_the_engine_is_torn_down(
     match engine_teardown_outcome {
         EngineTeardownOutcome::Dropped => {}
         EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(description)
-        | EngineTeardownOutcome::StillReferenced(description) => refusals.push(description),
+        | EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(description)
+        | EngineTeardownOutcome::StillReferenced(description) => refusals.push(description.clone()),
     }
     refusals
 }
 
-/// Log the load's success under the stream name and node count the engine's
+/// Log the load's success under the stream name and node count the stream's
 /// live graph holds, so a reader of the log can tell a stream that loaded but
 /// failed to start from one the load refused.
-///
-/// Called before the local API's processor is added, so the count is the
-/// stream's own nodes.
-fn log_that_the_stream_loaded(loaded_engine: &Runner) -> streamlib::sdk::error::Result<()> {
-    let live_graph = loaded_engine.to_json()?;
-    let loaded_node_count = live_graph
+fn log_that_the_stream_loaded(
+    stream: &LoadedStreamInThisRuntime,
+) -> streamlib::sdk::error::Result<()> {
+    let loaded_node_count = stream
+        .to_json()?
         .get("nodes")
         .and_then(|nodes| nodes.as_array())
         .map_or(0, Vec::len);
-    match live_graph.get("stream").and_then(|stream| stream.as_str()) {
-        Some(loaded_stream_name) => tracing::info!(
-            "the stream `{loaded_stream_name}` loaded with {loaded_node_count} nodes"
-        ),
-        None => tracing::info!("the stream loaded with {loaded_node_count} nodes"),
-    }
+    tracing::info!(
+        "the stream `{}` loaded with {loaded_node_count} nodes",
+        stream.stream_name()
+    );
     Ok(())
 }
 
@@ -137,31 +151,61 @@ enum EngineTeardownOutcome {
     /// left alive beneath them until the process exits: a thread returning late
     /// would otherwise run the engine's drop on its own thread.
     LeftBeneathAbandonedProcessorThreads(String),
+    /// The stream's teardown outlived its watchdog and its thread was
+    /// abandoned, so the engine is left alive beneath it and the process ends
+    /// with the watchdog's status.
+    LeftBeneathAStreamTeardownItsWatchdogAbandoned(String),
     /// Something else still held the engine, so its threads were not joined.
     StillReferenced(String),
 }
 
-/// Stop the engine and drop it under the engine's teardown watchdog, whether or
-/// not it started.
-///
-/// `stop()` runs even after a run loop that stopped the engine itself, because
-/// `start()` parks a reference to the engine inside the context only `stop()`
-/// clears; after a failed start, that cycle would otherwise outlive the drop.
-fn tear_the_engine_down(engine: Arc<Runner>) -> EngineTeardownOutcome {
+/// Stop serving the local API, shut the engine down and drop it under the
+/// engine's teardown watchdog, whether or not the stream started.
+fn tear_the_engine_down(
+    engine: Arc<Runner>,
+    hosted_stream: Option<Arc<LoadedStreamInThisRuntime>>,
+    local_api_served_for_the_engine: Option<LocalApiServedForAnEngine>,
+) -> EngineTeardownOutcome {
     let _watchdog = ArmedEngineTeardownWatchdog::arm("the engine teardown tatolabd began");
-    if let Err(stop_failure) = engine.stop() {
-        tracing::warn!(%stop_failure, "engine stop reported a failure during teardown");
+    // First, because its router holds the engine.
+    note_what_the_engine_teardown_is_waiting_on("the local API to stop serving");
+    drop(local_api_served_for_the_engine);
+    if let Err(shut_down_failure) = engine.shut_down() {
+        tracing::warn!(%shut_down_failure, "the engine shut down reporting a failure");
     }
 
-    let abandoned_processor_threads = engine.processor_threads_abandoned_and_still_running();
-    if !abandoned_processor_threads.is_empty() {
-        // The report goes straight to the real standard error, because the
-        // engine that owns the log worker is never dropped to flush it.
-        engine.stop_intercepting_the_standard_streams();
-        std::mem::forget(engine);
-        return EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(
-            DescriptionOfTheAbandonedProcessorThreads(&abandoned_processor_threads).to_string(),
-        );
+    if let Some(hosted_stream) = hosted_stream {
+        let teardown_abandoned_by_its_watchdog = match hosted_stream.how_this_stream_ended() {
+            Some(HowALoadedStreamEnded::AbandonedByItsTeardownWatchdog {
+                what_its_teardown_was_waiting_on,
+            }) => Some(format!(
+                "the teardown of the stream `{}` outlived its watchdog while waiting on \
+                 {what_its_teardown_was_waiting_on}, and was abandoned",
+                hosted_stream.stream_name()
+            )),
+            _ => None,
+        };
+        let abandoned_processor_threads =
+            hosted_stream.processor_threads_abandoned_and_still_running();
+        if teardown_abandoned_by_its_watchdog.is_some() || !abandoned_processor_threads.is_empty() {
+            // The report goes straight to the real standard error, because the
+            // forgotten engine never drops its hold on the process logging
+            // pathway, which is what gives the standard streams back.
+            engine.stop_intercepting_the_standard_streams();
+            std::mem::forget(hosted_stream);
+            std::mem::forget(engine);
+            return match teardown_abandoned_by_its_watchdog {
+                Some(description) => {
+                    EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(
+                        description,
+                    )
+                }
+                None => EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(
+                    DescriptionOfTheAbandonedProcessorThreads(&abandoned_processor_threads)
+                        .to_string(),
+                ),
+            };
+        }
     }
 
     note_what_the_engine_teardown_is_waiting_on("the engine's own drop");
@@ -190,7 +234,7 @@ mod tests {
     #[test]
     fn a_clean_run_and_a_dropped_engine_write_nothing() {
         assert!(
-            refusals_written_once_the_engine_is_torn_down(Ok(()), EngineTeardownOutcome::Dropped)
+            refusals_written_once_the_engine_is_torn_down(Ok(()), &EngineTeardownOutcome::Dropped)
                 .is_empty()
         );
     }
@@ -200,7 +244,7 @@ mod tests {
         assert_eq!(
             refusals_written_once_the_engine_is_torn_down(
                 Err("the stream did not run: refused".to_owned()),
-                EngineTeardownOutcome::Dropped,
+                &EngineTeardownOutcome::Dropped,
             ),
             ["the stream did not run: refused"]
         );
@@ -216,6 +260,12 @@ mod tests {
                 "a processor thread was abandoned",
             ),
             (
+                EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(
+                    "a stream teardown was abandoned".to_owned(),
+                ),
+                "a stream teardown was abandoned",
+            ),
+            (
                 EngineTeardownOutcome::StillReferenced("a live reference was left".to_owned()),
                 "a live reference was left",
             ),
@@ -223,7 +273,7 @@ mod tests {
             assert_eq!(
                 refusals_written_once_the_engine_is_torn_down(
                     Err("the stream did not run: refused".to_owned()),
-                    engine_teardown_outcome,
+                    &engine_teardown_outcome,
                 ),
                 ["the stream did not run: refused", teardown_description]
             );
@@ -235,7 +285,7 @@ mod tests {
         assert_eq!(
             refusals_written_once_the_engine_is_torn_down(
                 Ok(()),
-                EngineTeardownOutcome::StillReferenced("a live reference was left".to_owned()),
+                &EngineTeardownOutcome::StillReferenced("a live reference was left".to_owned()),
             ),
             ["a live reference was left"]
         );

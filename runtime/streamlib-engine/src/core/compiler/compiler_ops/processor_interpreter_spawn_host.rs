@@ -36,7 +36,7 @@ use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorNode;
 use crate::core::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
-use crate::core::runtime::StreamEnvironment;
+use crate::core::runtime::{LoadedStreamTag, ShutdownEscalationOfOneStream, StreamEnvironment};
 use crate::iceoryx2::{
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, spawn_outside_every_iceoryx2_listener_bind,
 };
@@ -161,6 +161,15 @@ pub(crate) struct SurfaceShareChannelNamedToTheHelperProcess<'a> {
     pub(crate) channel_name: &'a std::ffi::OsStr,
 }
 
+/// The loaded stream a helper process — a processor interpreter or a describe —
+/// belongs to: the tag its process group is registered under, and the shutdown
+/// escalation its waits and its ladder read.
+#[derive(Debug, Clone)]
+pub(crate) struct LoadedStreamAHelperProcessBelongsTo {
+    pub(crate) stream_tag: LoadedStreamTag,
+    pub(crate) shutdown_escalation: ShutdownEscalationOfOneStream,
+}
+
 pub(crate) struct ProcessorInterpreterSpawnHostProcessor {
     /// `module:qualname` — what the child imports the class back by, and what
     /// it receives as `STREAMLIB_ENTRYPOINT`.
@@ -174,6 +183,7 @@ pub(crate) struct ProcessorInterpreterSpawnHostProcessor {
     stream_environment: StreamEnvironment,
     /// The directory holding the `tatolab/runtime/` the child borrows.
     processor_interpreter_lend_directory: PathBuf,
+    the_stream_this_helper_belongs_to: LoadedStreamAHelperProcessBelongsTo,
     child: Option<Child>,
     /// The engine-owned iceoryx2 domain this processor's nodes live in, kept
     /// from `setup` because the sweep that reclaims a dead helper's nodes runs
@@ -374,15 +384,11 @@ impl ProcessorInterpreterSpawnHostProcessor {
             .as_ref()
             .ok_or_else(|| Error::Runtime("there is no helper process to wait for".to_string()))?;
         let deadline = Instant::now() + REGISTRATION_DEADLINE;
-        // Only a request that arrives *during* this wait cuts it short. The
-        // escalation is process-global and taken only when a run ends, so one
-        // already raised when a helper starts belongs to a run that has not
-        // taken it yet — and reading that as "shutdown began" would refuse
-        // every helper a later graph in this process adds.
-        let shutdown_was_already_requested = crate::core::runtime::is_runtime_shutdown_requested();
         let reply = loop {
-            if !shutdown_was_already_requested
-                && crate::core::runtime::is_runtime_shutdown_requested()
+            if self
+                .the_stream_this_helper_belongs_to
+                .shutdown_escalation
+                .is_requested()
             {
                 // A helper still importing when shutdown begins must not hold
                 // the app for the rest of a sixty-second budget. It goes on the
@@ -392,7 +398,8 @@ impl ProcessorInterpreterSpawnHostProcessor {
                 // `teardown()`.
                 self.stop_the_helper_process_on_the_shutdown_ladder();
                 return Err(Error::Runtime(format!(
-                    "[{}] shutdown began while its helper process was still setting up",
+                    "[{}] its stream's shutdown began while its helper process was still \
+                     setting up",
                     self.processor_display_name,
                 )));
             }
@@ -511,11 +518,17 @@ impl ProcessorInterpreterSpawnHostProcessor {
         self.ask_the_helper_to_stop_and_tear_down();
         let outcome = self.child.take().map(|child| {
             let bridge = self.bridge.as_ref();
-            HelperProcessShutdownLadder::taking_over(self.processor_display_name.clone(), child)
-                .walk_every_rung(|command, slice| match bridge {
-                    Some(bridge) => await_the_reply_to(bridge, command, slice),
-                    None => LifecycleReplyAwaited::NoReplyCanArrive,
-                })
+            HelperProcessShutdownLadder::taking_over(
+                self.processor_display_name.clone(),
+                child,
+                self.the_stream_this_helper_belongs_to
+                    .shutdown_escalation
+                    .clone(),
+            )
+            .walk_every_rung(|command, slice| match bridge {
+                Some(bridge) => await_the_reply_to(bridge, command, slice),
+                None => LifecycleReplyAwaited::NoReplyCanArrive,
+            })
         });
         self.close_the_engines_end_of_the_helper_process(outcome);
     }
@@ -524,8 +537,14 @@ impl ProcessorInterpreterSpawnHostProcessor {
     /// [`HelperProcessShutdownLadder::skip_to_terminating_the_process_group`].
     fn take_the_helper_process_group_down(&mut self) {
         let outcome = self.child.take().map(|child| {
-            HelperProcessShutdownLadder::taking_over(self.processor_display_name.clone(), child)
-                .skip_to_terminating_the_process_group()
+            HelperProcessShutdownLadder::taking_over(
+                self.processor_display_name.clone(),
+                child,
+                self.the_stream_this_helper_belongs_to
+                    .shutdown_escalation
+                    .clone(),
+            )
+            .skip_to_terminating_the_process_group()
         });
         self.close_the_engines_end_of_the_helper_process(outcome);
     }
@@ -683,7 +702,10 @@ impl ProcessorInterpreterSpawnHostProcessor {
             self.processor_class_import_path,
         );
         // `pre_exec` made the child the leader of a group whose id is its pid.
-        if !crate::core::runtime::register_a_helper_process_group(child.id() as i32) {
+        if !crate::core::runtime::register_a_helper_process_group(
+            child.id() as i32,
+            self.the_stream_this_helper_belongs_to.stream_tag,
+        ) {
             tracing::warn!(
                 "[{}] its helper process group could not be registered, so a third interrupt \
                  will not kill it; the kernel still kills the helper itself when the app exits",
@@ -1324,7 +1346,8 @@ impl Drop for ProcessorInterpreterSpawnHostProcessor {
     }
 }
 
-/// Build the host for one graph node, launching its child in
+/// Build the host for one graph node of the stream
+/// `the_stream_this_helper_belongs_to` names, launching its child in
 /// `stream_environment` with `tatolab.runtime` lent from
 /// `processor_interpreter_lend_directory`.
 pub(crate) fn spawn_host_for_processor_node(
@@ -1334,6 +1357,7 @@ pub(crate) fn spawn_host_for_processor_node(
     node: &ProcessorNode,
     stream_environment: &StreamEnvironment,
     processor_interpreter_lend_directory: &Path,
+    the_stream_this_helper_belongs_to: LoadedStreamAHelperProcessBelongsTo,
 ) -> ProcessorInterpreterSpawnHostProcessor {
     ProcessorInterpreterSpawnHostProcessor {
         processor_class_import_path: processor_class_import_path.to_string(),
@@ -1343,6 +1367,7 @@ pub(crate) fn spawn_host_for_processor_node(
         descriptor: descriptor.clone(),
         stream_environment: stream_environment.clone(),
         processor_interpreter_lend_directory: processor_interpreter_lend_directory.to_path_buf(),
+        the_stream_this_helper_belongs_to,
         child: None,
         iceoryx2_domain_root: None,
         child_standard_error_tail: None,
@@ -1691,6 +1716,15 @@ sys.exit(0)
 
     const LEND_DIRECTORY_FOR_TEST: &str = "/opt/tatolab/lib/tatolab/lend";
 
+    /// The stream every test host belongs to.
+    fn the_stream_a_test_helper_belongs_to() -> LoadedStreamAHelperProcessBelongsTo {
+        LoadedStreamAHelperProcessBelongsTo {
+            stream_tag: crate::core::runtime::LoadedStreamTag::next_in_this_process()
+                .expect("a fresh stream tag"),
+            shutdown_escalation: ShutdownEscalationOfOneStream::default(),
+        }
+    }
+
     fn spawn_host_for_test() -> ProcessorInterpreterSpawnHostProcessor {
         let import_path =
             crate::core::descriptors::ProcessorClassImportPath::new("my_app.filters:BlurProcessor")
@@ -1707,6 +1741,7 @@ sys.exit(0)
             &node,
             &stream_environment_for_test(),
             Path::new(LEND_DIRECTORY_FOR_TEST),
+            the_stream_a_test_helper_belongs_to(),
         );
         host.processor_id = "Pblur".to_string();
         host
@@ -1743,6 +1778,7 @@ sys.exit(0)
                 &node,
                 &stream_environment_for_test(),
                 Path::new(LEND_DIRECTORY_FOR_TEST),
+                the_stream_a_test_helper_belongs_to(),
             );
             assert_eq!(
                 host.out_of_process_link_wiring()

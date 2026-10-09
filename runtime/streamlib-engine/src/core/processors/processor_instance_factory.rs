@@ -13,7 +13,6 @@ use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode, is_in_exposed_name_cast_form};
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
-use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 
 /// A created processor instance for runtime use.
 ///
@@ -193,32 +192,11 @@ pub type DynamicProcessorConstructorFn =
 type NodeConfigTakenCheckFn =
     Box<dyn Fn(&str, &ProcessorClassImportPath, &serde_json::Value) -> Result<()> + Send + Sync>;
 
-/// Per-type registration entry the factory stores.
-enum RegistrationKind {
-    /// A host-compiled Rust type. Never replaced, and never described.
-    HostCompiledRustType {
-        constructor: DynamicProcessorConstructorFn,
-        config_taken_check: NodeConfigTakenCheckFn,
-    },
-    /// A type a processor interpreter described, whose constructor starts the
-    /// processor in one. A later describe of the same type replaces it; its
-    /// config is checked by its own config class, where the node runs.
-    DescribedInAProcessorInterpreter {
-        constructor: DynamicProcessorConstructorFn,
-    },
-}
-
-impl RegistrationKind {
-    fn constructor(&self) -> &DynamicProcessorConstructorFn {
-        match self {
-            Self::HostCompiledRustType { constructor, .. }
-            | Self::DescribedInAProcessorInterpreter { constructor } => constructor,
-        }
-    }
-
-    fn was_described_in_a_processor_interpreter(&self) -> bool {
-        matches!(self, Self::DescribedInAProcessorInterpreter { .. })
-    }
+/// What the factory stores for one host-compiled Rust type: its constructor,
+/// and the check that refuses a config its `Config` would not take.
+struct HostCompiledRustTypeRegistration {
+    constructor: DynamicProcessorConstructorFn,
+    config_taken_check: NodeConfigTakenCheckFn,
 }
 
 /// Everything the registry held for one processor type, removed by
@@ -226,12 +204,12 @@ impl RegistrationKind {
 /// refused `remove_module` can reinstate the registration exactly.
 pub(crate) struct UnregisteredProcessorTypeRecord {
     processor_type: ProcessorClassImportPath,
-    registration: Option<RegistrationKind>,
+    registration: Option<HostCompiledRustTypeRegistration>,
     port_info: Option<(Vec<PortInfo>, Vec<PortInfo>)>,
     descriptor: Option<ProcessorDescriptor>,
 }
 
-/// Factory for compile-time registered Rust processors.
+/// The natively compiled node types, registered once for the machine.
 ///
 /// Keyed on the import path of the class each processor is — the same string
 /// the control plane reports and a helper process imports its class back by.
@@ -243,17 +221,18 @@ pub(crate) struct UnregisteredProcessorTypeRecord {
 /// insert, taking `port_info` and `registrations` inside. Anything that needs
 /// two of these three must take them in that order.
 pub struct ProcessorInstanceFactory {
-    registrations: RwLock<HashMap<ProcessorClassImportPath, RegistrationKind>>,
+    registrations: RwLock<HashMap<ProcessorClassImportPath, HostCompiledRustTypeRegistration>>,
     port_info: RwLock<HashMap<ProcessorClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
     descriptors: RwLock<HashMap<ProcessorClassImportPath, ProcessorDescriptor>>,
     /// Each built-in compiled out on this floor, with the floors it runs on.
     built_in_node_types_absent_on_this_floor: RwLock<HashMap<ProcessorClassImportPath, String>>,
 }
 
-/// Global processor registry for runtime lookups.
+/// The machine's registry of natively compiled node types.
 ///
-/// Starts empty, and is filled by [`ProcessorInstanceFactory::register`] for
-/// Rust types and by a describe for the types a processor interpreter hosts.
+/// Starts empty, and is filled by [`ProcessorInstanceFactory::register`]. A
+/// type a processor interpreter describes belongs to the stream it was
+/// described into, never here.
 pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> =
     LazyLock::new(ProcessorInstanceFactory::new);
 
@@ -323,7 +302,7 @@ impl ProcessorInstanceFactory {
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
         self.register_with_constructor(
             descriptor,
-            RegistrationKind::HostCompiledRustType {
+            HostCompiledRustTypeRegistration {
                 constructor,
                 config_taken_check,
             },
@@ -332,12 +311,11 @@ impl ProcessorInstanceFactory {
     }
 
     /// Register `registration` under `descriptor`'s import path, refusing a
-    /// path already claimed — unless both the claim and `registration` came
-    /// from a describe, which replaces it.
+    /// path already claimed.
     fn register_with_constructor(
         &self,
         descriptor: ProcessorDescriptor,
-        registration: RegistrationKind,
+        registration: HostCompiledRustTypeRegistration,
     ) -> Result<()> {
         refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
@@ -351,11 +329,7 @@ impl ProcessorInstanceFactory {
         // paths write it, and reading the narrower map would let a
         // constructor-bearing registration displace a descriptor-only one.
         let mut descriptors = self.descriptors.write();
-        let a_describe_replaces_a_describe = registration
-            .was_described_in_a_processor_interpreter()
-            && self.was_described_in_a_processor_interpreter(&processor_class_import_path);
-        if descriptors.contains_key(&processor_class_import_path) && !a_describe_replaces_a_describe
-        {
+        if descriptors.contains_key(&processor_class_import_path) {
             return Err(duplicate_class_import_path(&processor_class_import_path));
         }
 
@@ -378,13 +352,6 @@ impl ProcessorInstanceFactory {
         tracing::info!(
             processor_class_import_path = processor_class_import_path.as_str(),
             "new processor type registered"
-        );
-
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
-                processor_type: processor_class_import_path,
-            }),
         );
 
         Ok(())
@@ -420,51 +387,7 @@ impl ProcessorInstanceFactory {
             processor_class_import_path
         );
 
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
-                processor_type: processor_class_import_path,
-            }),
-        );
-
         Ok(())
-    }
-
-    /// Register a type a processor interpreter described, replacing the
-    /// registration an earlier describe of it left. A type registered any
-    /// other way is never replaced: the registration that arrived first stays.
-    pub(crate) fn register_a_type_described_in_a_processor_interpreter(
-        &self,
-        descriptor: ProcessorDescriptor,
-        constructor: DynamicProcessorConstructorFn,
-    ) -> Result<()> {
-        self.register_with_constructor(
-            descriptor,
-            RegistrationKind::DescribedInAProcessorInterpreter { constructor },
-        )
-    }
-
-    /// Whether `processor_type`'s registration came from a processor
-    /// interpreter's describe.
-    pub(crate) fn was_described_in_a_processor_interpreter(
-        &self,
-        processor_type: &ProcessorClassImportPath,
-    ) -> bool {
-        self.registrations
-            .read()
-            .get(processor_type)
-            .is_some_and(RegistrationKind::was_described_in_a_processor_interpreter)
-    }
-
-    /// Whether `processor_type` is registered other than by a describe — a
-    /// typed Rust registration or a descriptor alone — which no describe
-    /// replaces.
-    pub(crate) fn is_registered_other_than_by_a_describe(
-        &self,
-        processor_type: &ProcessorClassImportPath,
-    ) -> bool {
-        self.descriptors.read().contains_key(processor_type)
-            && !self.was_described_in_a_processor_interpreter(processor_type)
     }
 
     /// Remove every registry entry for the given processor types across
@@ -579,10 +502,8 @@ impl ProcessorInstanceFactory {
         config: &serde_json::Value,
     ) -> Result<()> {
         match self.registrations.read().get(node_type) {
-            Some(RegistrationKind::HostCompiledRustType {
-                config_taken_check, ..
-            }) => config_taken_check(node_name, node_type, config),
-            _ => Ok(()),
+            Some(registration) => (registration.config_taken_check)(node_name, node_type, config),
+            None => Ok(()),
         }
     }
 
@@ -599,7 +520,7 @@ impl ProcessorInstanceFactory {
             ))
         })?;
 
-        let mut instance = ProcessorInstance::new(registration.constructor()(node)?);
+        let mut instance = ProcessorInstance::new((registration.constructor)(node)?);
         instance.install_iceoryx2_resources()?;
         Ok(instance)
     }
@@ -699,7 +620,9 @@ fn duplicate_class_import_path(processor_class_import_path: &ProcessorClassImpor
 /// Refuse a descriptor whose ports are not each in cast form under a name of
 /// their own — every lookup casts its argument, so a port registered under an
 /// uncast name could never be reached.
-fn refuse_port_names_not_cast_or_declared_twice(descriptor: &ProcessorDescriptor) -> Result<()> {
+pub(crate) fn refuse_port_names_not_cast_or_declared_twice(
+    descriptor: &ProcessorDescriptor,
+) -> Result<()> {
     let mut port_names_seen = HashSet::new();
     for port in descriptor.inputs.iter().chain(&descriptor.outputs) {
         if !is_in_exposed_name_cast_form(&port.name) {
@@ -851,35 +774,6 @@ mod tests {
         );
     }
 
-    /// A describe and `register_descriptor_only` write the same key into the
-    /// same maps, so a path claimed through one is claimed against the other —
-    /// a Python class cannot quietly displace a native built-in.
-    #[test]
-    fn the_two_registration_paths_share_one_key_space() {
-        let factory = ProcessorInstanceFactory::new();
-        let path = "my_app.filters:BlurProcessor";
-
-        factory
-            .register_descriptor_only(descriptor_for(path))
-            .expect("descriptor-only registration succeeds");
-
-        let constructor: DynamicProcessorConstructorFn =
-            Box::new(|_node| Err(Error::Configuration("unreachable".into())));
-        assert!(
-            factory
-                .register_a_type_described_in_a_processor_interpreter(
-                    descriptor_for(path),
-                    constructor
-                )
-                .is_err(),
-            "a constructor-bearing registration must not overwrite a descriptor-only one"
-        );
-        assert!(
-            !factory.can_create(&class_import_path(path)),
-            "the refused registration must not have installed its constructor either"
-        );
-    }
-
     /// Two threads racing to claim one path: exactly one wins, and the loser
     /// is refused rather than overwriting. Narrow the `descriptors` guard back
     /// to a `read()` that ends before the inserts and both threads pass the
@@ -934,75 +828,6 @@ mod tests {
         assert!(!factory.can_create(&never_registered));
     }
 
-    fn a_constructor_this_test_never_calls() -> DynamicProcessorConstructorFn {
-        Box::new(|_node| {
-            Err(Error::NotSupported(
-                "this test never constructs the processor".into(),
-            ))
-        })
-    }
-
-    /// A later describe of a type replaces what the earlier one registered —
-    /// the class's ports may have changed since — and the registration stays
-    /// one a describe made.
-    #[test]
-    fn a_later_describe_of_a_type_replaces_the_earlier_ones_registration() {
-        let factory = ProcessorInstanceFactory::new();
-        let path = "my_app.filters:BlurProcessor";
-
-        factory
-            .register_a_type_described_in_a_processor_interpreter(
-                descriptor_for(path).with_input(port_named("video")),
-                a_constructor_this_test_never_calls(),
-            )
-            .expect("a first describe registers the type");
-        factory
-            .register_a_type_described_in_a_processor_interpreter(
-                descriptor_for(path).with_input(port_named("frames")),
-                a_constructor_this_test_never_calls(),
-            )
-            .expect("a later describe replaces it");
-
-        let (inputs, _) = factory
-            .port_info(&class_import_path(path))
-            .expect("the type is registered");
-        let input_names: Vec<_> = inputs.iter().map(|port| port.name.as_str()).collect();
-        assert_eq!(input_names, ["frames"]);
-        assert!(factory.was_described_in_a_processor_interpreter(&class_import_path(path)));
-        assert!(!factory.is_registered_other_than_by_a_describe(&class_import_path(path)));
-    }
-
-    /// A typed Rust registration and a descriptor alone are never replaced by
-    /// a describe claiming their path.
-    #[test]
-    fn a_describe_never_replaces_a_registration_made_any_other_way() {
-        use crate::core::test_support::MockSourceTakingOneSetting;
-        let factory = ProcessorInstanceFactory::new();
-        factory.register::<MockSourceTakingOneSetting::Processor>();
-        let typed = MockSourceTakingOneSetting::processor_class_import_path();
-        let descriptor_only = class_import_path("my_app.filters:RegisteredAsADescriptor");
-        factory
-            .register_descriptor_only(descriptor_for(descriptor_only.as_str()))
-            .unwrap();
-
-        for registered_another_way in [&typed, &descriptor_only] {
-            assert!(factory.is_registered_other_than_by_a_describe(registered_another_way));
-            let refused = factory
-                .register_a_type_described_in_a_processor_interpreter(
-                    descriptor_for(registered_another_way.as_str()),
-                    a_constructor_this_test_never_calls(),
-                )
-                .expect_err("a describe never replaces another registration");
-            assert!(
-                refused
-                    .to_string()
-                    .contains(registered_another_way.as_str()),
-                "{refused}"
-            );
-            assert!(!factory.was_described_in_a_processor_interpreter(registered_another_way));
-        }
-    }
-
     fn port_named(name: &str) -> PortDescriptor {
         PortDescriptor {
             name: name.to_string(),
@@ -1029,13 +854,20 @@ mod tests {
 
         let constructor: DynamicProcessorConstructorFn =
             Box::new(|_node| Err(Error::Configuration("unreachable".into())));
-        let refusal = factory
-            .register_a_type_described_in_a_processor_interpreter(descriptor, constructor)
+        let node_types_one_stream_resolves =
+            crate::core::processors::NodeTypesOneStreamResolves::new();
+        let refusal = node_types_one_stream_resolves
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                descriptor,
+                constructor,
+            )
             .expect_err("a describe's registration must refuse it");
         assert!(is_the_expected_refusal(&refusal), "got {refusal:?}");
 
         assert!(factory.descriptor(&path).is_none());
         assert!(factory.port_info(&path).is_none());
+        assert!(node_types_one_stream_resolves.descriptor(&path).is_none());
+        assert!(node_types_one_stream_resolves.port_info(&path).is_none());
     }
 
     #[test]

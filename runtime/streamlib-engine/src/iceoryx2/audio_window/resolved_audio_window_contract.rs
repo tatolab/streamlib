@@ -22,7 +22,7 @@ use crate::core::descriptors::{
     AudioWindowContractDeclaredValues,
 };
 use crate::core::error::{Error, Result};
-use crate::core::processors::PROCESSOR_REGISTRY;
+use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::iceoryx2::DeliveryProfile;
 
 /// A window contract with every value settled — what the stage reads.
@@ -308,10 +308,11 @@ pub(crate) fn refuse_an_unsettled_match_device_sentinel(
 ///
 /// [`delivery_profile_for_input_port`]: crate::iceoryx2::delivery_profile_for_input_port
 pub(crate) fn audio_windowing_declared_by_input_port(
+    node_types: &NodeTypesOneStreamResolves,
     processor_type: &ProcessorClassImportPath,
     port_name: &str,
 ) -> Result<Option<AudioWindowDeclarationOfAnInputPort>> {
-    let Some((inputs, _outputs)) = PROCESSOR_REGISTRY.port_info(processor_type) else {
+    let Some((inputs, _outputs)) = node_types.port_info(processor_type) else {
         return Ok(None);
     };
     let Some(port) = inputs.iter().find(|port| port.name == port_name) else {

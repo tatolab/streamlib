@@ -184,62 +184,64 @@ impl AudioClock for SoftwareAudioClock {
 
         let handle = thread::Builder::new()
             .name("audio-clock".to_string())
-            .spawn(move || {
-                tracing::info!(
-                    "[SoftwareAudioClock] Started: {}Hz, {} samples/tick, {:?} interval",
-                    config.sample_rate,
-                    config.buffer_size,
-                    tick_duration
-                );
+            .spawn(
+                crate::core::logging::carrying_this_threads_loaded_stream_log_route(move || {
+                    tracing::info!(
+                        "[SoftwareAudioClock] Started: {}Hz, {} samples/tick, {:?} interval",
+                        config.sample_rate,
+                        config.buffer_size,
+                        tick_duration
+                    );
 
-                let mut next_tick = Instant::now() + tick_duration;
+                    let mut next_tick = Instant::now() + tick_duration;
 
-                while running.load(Ordering::SeqCst) {
-                    let now = Instant::now();
+                    while running.load(Ordering::SeqCst) {
+                        let now = Instant::now();
 
-                    if now >= next_tick {
-                        let tick_num = tick_count.fetch_add(1, Ordering::SeqCst);
+                        if now >= next_tick {
+                            let tick_num = tick_count.fetch_add(1, Ordering::SeqCst);
 
-                        let ctx = AudioTickContext {
-                            timestamp_ns: MediaClock::now().as_nanos() as i64,
-                            samples_needed: config.buffer_size,
-                            sample_rate: config.sample_rate,
-                            tick_number: tick_num,
-                        };
+                            let ctx = AudioTickContext {
+                                timestamp_ns: MediaClock::now().as_nanos() as i64,
+                                samples_needed: config.buffer_size,
+                                sample_rate: config.sample_rate,
+                                tick_number: tick_num,
+                            };
 
-                        // Invoke all registered callbacks
-                        let cbs = callbacks.lock();
-                        for callback in cbs.iter() {
-                            callback(ctx);
-                        }
+                            // Invoke all registered callbacks
+                            let cbs = callbacks.lock();
+                            for callback in cbs.iter() {
+                                callback(ctx);
+                            }
 
-                        // Schedule next tick relative to ideal time to prevent drift
-                        next_tick += tick_duration;
+                            // Schedule next tick relative to ideal time to prevent drift
+                            next_tick += tick_duration;
 
-                        // If we've fallen behind, catch up to now + one tick
-                        if next_tick < now {
-                            let missed = ((now - next_tick).as_nanos() as u64
-                                / tick_duration.as_nanos() as u64)
-                                + 1;
-                            next_tick = now + tick_duration;
-                            if missed > 1 {
-                                tracing::warn!(
-                                    "[SoftwareAudioClock] Missed {} ticks, catching up",
-                                    missed
-                                );
+                            // If we've fallen behind, catch up to now + one tick
+                            if next_tick < now {
+                                let missed = ((now - next_tick).as_nanos() as u64
+                                    / tick_duration.as_nanos() as u64)
+                                    + 1;
+                                next_tick = now + tick_duration;
+                                if missed > 1 {
+                                    tracing::warn!(
+                                        "[SoftwareAudioClock] Missed {} ticks, catching up",
+                                        missed
+                                    );
+                                }
                             }
                         }
+
+                        // Sleep until next tick (with some margin for wakeup latency)
+                        let sleep_time = next_tick.saturating_duration_since(Instant::now());
+                        if !sleep_time.is_zero() {
+                            thread::sleep(sleep_time);
+                        }
                     }
 
-                    // Sleep until next tick (with some margin for wakeup latency)
-                    let sleep_time = next_tick.saturating_duration_since(Instant::now());
-                    if !sleep_time.is_zero() {
-                        thread::sleep(sleep_time);
-                    }
-                }
-
-                tracing::info!("[SoftwareAudioClock] Stopped");
-            })
+                    tracing::info!("[SoftwareAudioClock] Stopped");
+                }),
+            )
             .map_err(|e| {
                 crate::core::Error::Runtime(format!("Failed to spawn audio clock thread: {}", e))
             })?;
@@ -393,6 +395,72 @@ mod tests {
         assert_a_tick_timestamp_is_comparable_with_a_frame_timestamp(
             &crate::apple::CoreAudioClock::new(AudioClockConfig::default()),
             "CoreAudioClock",
+        );
+    }
+
+    /// The stream log route an audio clock's ticks run in, read on the first
+    /// tick of a clock started from a thread carrying the stream `ticking`.
+    fn the_stream_an_audio_clocks_first_tick_runs_in(clock: &dyn AudioClock) -> Option<String> {
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let route = crate::core::logging::LoadedStreamLogRoute::open_in_project_directory(
+            "RtestAudioClock",
+            "ticking",
+            project_directory.path(),
+        );
+        let stream_of_the_first_tick: Arc<Mutex<Option<Option<String>>>> =
+            Arc::new(Mutex::new(None));
+        let recorder = Arc::clone(&stream_of_the_first_tick);
+        clock.on_tick(Box::new(move |_tick: AudioTickContext| {
+            let mut recorded = recorder.lock();
+            if recorded.is_none() {
+                *recorded = Some(
+                    crate::core::logging::the_loaded_stream_log_route_of_this_thread()
+                        .map(|route| route.stream_name().to_string()),
+                );
+            }
+        }));
+
+        route.run_entered(|| clock.start().expect("audio clock failed to start"));
+        let deadline = Instant::now() + FIRST_TICK_WAIT_TIMEOUT;
+        let observed = loop {
+            if let Some(stream) = stream_of_the_first_tick.lock().clone() {
+                break stream;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no audio tick fired within {FIRST_TICK_WAIT_TIMEOUT:?}"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        clock.stop().expect("audio clock failed to stop");
+        observed
+    }
+
+    #[test]
+    fn an_audio_clocks_ticks_run_in_the_stream_log_route_of_the_thread_that_started_it() {
+        assert_eq!(
+            the_stream_an_audio_clocks_first_tick_runs_in(&SoftwareAudioClock::new(
+                AudioClockConfig::default()
+            )),
+            Some("ticking".to_string()),
+            "SoftwareAudioClock"
+        );
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            the_stream_an_audio_clocks_first_tick_runs_in(
+                &crate::linux::LinuxTimerFdAudioClock::new(AudioClockConfig::default())
+            ),
+            Some("ticking".to_string()),
+            "LinuxTimerFdAudioClock"
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            the_stream_an_audio_clocks_first_tick_runs_in(&crate::apple::CoreAudioClock::new(
+                AudioClockConfig::default()
+            )),
+            Some("ticking".to_string()),
+            "CoreAudioClock"
         );
     }
 }

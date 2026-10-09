@@ -65,6 +65,10 @@ use crate::core::context::{
     DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
     DeviceStreamLivenessReport,
 };
+use crate::core::logging::{
+    LoadedStreamLogRoute, run_in_the_loaded_stream_log_route_when_there_is_one,
+    the_loaded_stream_log_route_of_this_thread,
+};
 use crate::core::media_clock::MediaClock;
 use crate::core::{Error, Result};
 
@@ -1030,9 +1034,10 @@ struct CoreAudioStreamDevicePropertyListener {
     listener_block: CoreAudioStreamDevicePropertyListenerBlock,
 }
 
-// SAFETY: the block's captures are a `Copy` change and an `Arc` of a
-// `Send + Sync` handler, and Objective-C block retain and release are
-// thread-safe, so the listener may be dropped from any thread.
+// SAFETY: the block's captures are a `Copy` change, an `Arc` of a
+// `Send + Sync` handler and an optional `Arc` of a `Send + Sync` log route,
+// and Objective-C block retain and release are thread-safe, so the listener
+// may be dropped from any thread.
 unsafe impl Send for CoreAudioStreamDevicePropertyListener {}
 
 impl CoreAudioStreamDevicePropertyListener {
@@ -1046,8 +1051,15 @@ impl CoreAudioStreamDevicePropertyListener {
         handle_the_change: CoreAudioStreamDeviceChangeHandler,
         device: &CoreAudioDevice,
     ) -> Option<Self> {
+        let loaded_stream_log_route_of_the_listening_thread =
+            the_loaded_stream_log_route_of_this_thread();
         let listener_block: CoreAudioStreamDevicePropertyListenerBlock =
-            block2::RcBlock::new(move |_address_count: u32, _addresses| handle_the_change(change));
+            block2::RcBlock::new(move |_address_count: u32, _addresses| {
+                run_in_the_loaded_stream_log_route_when_there_is_one(
+                    loaded_stream_log_route_of_the_listening_thread.as_ref(),
+                    || handle_the_change(change),
+                )
+            });
         // SAFETY: `address` is read for the call; the block is retained by the
         // HAL and by the returned listener, which unregisters it in `Drop` with
         // the same queue and block.
@@ -1403,6 +1415,9 @@ struct CoreAudioCallbackContext<Delivery> {
     /// Held by the callback across its whole call, so clearing the hand-off
     /// under it guarantees no call is in flight or to come.
     delivery: Mutex<Delivery>,
+    /// The route of the thread that bound the unit, which an ended stream's
+    /// record is emitted in.
+    loaded_stream_log_route_of_the_binding_thread: Option<Arc<LoadedStreamLogRoute>>,
 }
 
 // SAFETY: the AudioUnit handle is only rendered through on the device's I/O
@@ -1420,10 +1435,15 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioCallbackContext<Delive
         reason: String,
     ) {
         *installed_hand_off = None;
-        tracing::error!(
-            %reason,
-            "CoreAudio audio arm: the {} stream ended",
-            Delivery::DIRECTION.lowercase_direction_name()
+        run_in_the_loaded_stream_log_route_when_there_is_one(
+            self.loaded_stream_log_route_of_the_binding_thread.as_ref(),
+            || {
+                tracing::error!(
+                    %reason,
+                    "CoreAudio audio arm: the {} stream ended",
+                    Delivery::DIRECTION.lowercase_direction_name()
+                );
+            },
         );
         self.failure_recorder
             .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(reason));
@@ -1472,6 +1492,8 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
             audio_unit: hal_output_unit.audio_unit,
             failure_recorder,
             delivery: Mutex::new(delivery),
+            loaded_stream_log_route_of_the_binding_thread:
+                the_loaded_stream_log_route_of_this_thread(),
         });
         let callback_context_pointer = (callback_context.as_ref()
             as *const CoreAudioCallbackContext<Delivery>)

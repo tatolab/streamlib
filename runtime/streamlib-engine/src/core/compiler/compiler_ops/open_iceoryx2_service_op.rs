@@ -585,7 +585,12 @@ fn delivery_resolution_of_input_port(
     dest_port: &str,
 ) -> Result<DeliveryResolution> {
     let dest_type = processor_class_import_path_of(graph, dest_proc_id)?;
-    Ok(delivery_profile_for_input_port(&dest_type, dest_port)?.resolve())
+    Ok(delivery_profile_for_input_port(
+        graph.node_types_this_stream_resolves(),
+        &dest_type,
+        dest_port,
+    )?
+    .resolve())
 }
 
 /// The class a processor in the graph was added as, refused by name when the
@@ -615,7 +620,11 @@ fn audio_windowing_declared_by_input_port_of(
     let Ok(dest_type) = processor_class_import_path_of(graph, dest_proc_id) else {
         return Ok(None);
     };
-    audio_windowing_declared_by_input_port(&dest_type, dest_port)
+    audio_windowing_declared_by_input_port(
+        graph.node_types_this_stream_resolves(),
+        &dest_type,
+        dest_port,
+    )
 }
 
 /// Refuse a second inbound link into a port that windows, naming the port and

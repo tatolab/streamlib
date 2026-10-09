@@ -4,13 +4,11 @@
 //! Configuration for [`crate::core::logging::init`].
 
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::core::logging::writer::JsonlSegmentRotationPolicy;
-use crate::core::runtime::RuntimeUniqueId;
 
-/// Environment variables read at [`init`](super::init) time.
+/// Environment variables read as a logging pathway is installed.
 pub mod env {
     /// Suppresses the pretty log mirror. JSONL is unaffected.
     pub const QUIET: &str = "STREAMLIB_QUIET";
@@ -24,7 +22,7 @@ pub mod env {
     pub const FSYNC_ON_EVERY_BATCH: &str = "STREAMLIB_LOG_FSYNC_ON_EVERY_BATCH";
     /// Bytes after which the active JSONL segment rotates; `0` never rotates.
     pub const ROTATE_BYTES: &str = "STREAMLIB_LOG_ROTATE_BYTES";
-    /// JSONL segments kept per runtime, the active one included; `0` keeps every one.
+    /// JSONL segments kept per stream log, the active one included; `0` keeps every one.
     pub const RETAIN_SEGMENTS: &str = "STREAMLIB_LOG_RETAIN_SEGMENTS";
 }
 
@@ -34,27 +32,19 @@ const DEFAULT_CHANNEL_CAPACITY: usize = 65_536;
 const DEFAULT_ROTATE_BYTES: u64 = 100 * 1024 * 1024;
 const DEFAULT_RETAIN_SEGMENTS: usize = 10;
 
-/// Configuration passed to [`init`](super::init).
+/// Configuration of a logging pathway, read as it is installed.
 #[derive(Debug, Clone)]
 pub struct StreamlibLoggingConfig {
     /// Service name used as the tracing `service.name` equivalent in the
     /// pretty layer's default formatter.
     pub service_name: String,
 
-    /// Owning runtime's id. `None` disables JSONL writing (used by short-
-    /// lived CLI invocations that only want env-filtered tracing).
-    pub runtime_id: Option<Arc<RuntimeUniqueId>>,
-
     /// The standard stream the line-buffered pretty mirror writes to; `None`
     /// installs no mirror. Read as `None` when `STREAMLIB_QUIET=1` is set.
     pub pretty_log_mirror_stream: Option<PrettyLogMirrorStandardStream>,
 
-    /// Enable the batched JSONL file writer. Requires `runtime_id` to be
-    /// set; silently disabled when `runtime_id == None`.
-    pub jsonl: bool,
-
     /// Enable fd-level stdio interception. Default `false`; the main
-    /// Rust runtime binary flips this to `true`. Wiring lands in #438.
+    /// Rust runtime binary flips this to `true`.
     pub intercept_stdio: bool,
 
     /// Advanced tunables. Defaults below are used when fields are `None`;
@@ -98,7 +88,7 @@ pub struct LoggingTunables {
     pub fsync_on_every_batch: Option<bool>,
     /// Bytes after which the active JSONL segment rotates; `Some(0)` never rotates.
     pub rotate_bytes: Option<u64>,
-    /// JSONL segments kept per runtime, the active one included; `Some(0)` keeps every one.
+    /// JSONL segments kept per stream log, the active one included; `Some(0)` keeps every one.
     pub retain_segments: Option<usize>,
 }
 
@@ -147,27 +137,24 @@ impl ResolvedTunables {
 
 impl StreamlibLoggingConfig {
     /// Minimal config for short-lived CLI invocations: pretty stdout only,
-    /// no JSONL, no interceptor.
+    /// no interceptor.
     pub fn for_cli(service_name: impl Into<String>) -> Self {
         Self {
             service_name: service_name.into(),
-            runtime_id: None,
             pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardOutput),
-            jsonl: false,
             intercept_stdio: false,
             tunables: LoggingTunables::default(),
         }
     }
 
-    /// Full config for a long-lived runtime: the pretty mirror on stdout +
-    /// JSONL to disk, with fd-level stdio interception on by default so raw
-    /// `println!` / `printf` output lands in the JSONL flagged as intercepted.
-    pub fn for_runtime(service_name: impl Into<String>, runtime_id: Arc<RuntimeUniqueId>) -> Self {
+    /// Full config for a long-lived runtime: the pretty mirror on stdout,
+    /// with fd-level stdio interception on so raw `println!` / `printf`
+    /// output is mirrored flagged as intercepted. Each loaded stream's JSONL
+    /// file is opened as the stream loads.
+    pub fn for_runtime(service_name: impl Into<String>) -> Self {
         Self {
             service_name: service_name.into(),
-            runtime_id: Some(runtime_id),
             pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardOutput),
-            jsonl: true,
             intercept_stdio: true,
             tunables: LoggingTunables::default(),
         }
@@ -287,8 +274,7 @@ mod tests {
 
     #[test]
     fn a_runtime_mirrors_its_log_on_standard_output_unless_its_host_chooses_standard_error() {
-        let runtime_id = Arc::new(RuntimeUniqueId::from("RmirrorStream"));
-        let runtime_config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
+        let runtime_config = StreamlibLoggingConfig::for_runtime("test");
         assert_eq!(
             runtime_config.pretty_log_mirror_stream,
             Some(PrettyLogMirrorStandardStream::StandardOutput)
@@ -311,10 +297,9 @@ mod tests {
     #[test]
     #[serial]
     fn quiet_installs_no_pretty_log_mirror_on_either_stream() {
-        let runtime_id = Arc::new(RuntimeUniqueId::from("RmirrorQuiet"));
         let config_mirroring_on_standard_error = StreamlibLoggingConfig {
             pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardError),
-            ..StreamlibLoggingConfig::for_runtime("test", runtime_id)
+            ..StreamlibLoggingConfig::for_runtime("test")
         };
 
         unsafe { std::env::remove_var(env::QUIET) };

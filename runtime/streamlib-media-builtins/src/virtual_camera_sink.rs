@@ -31,7 +31,6 @@ use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use streamlib::engine_internal::core::app_directory::resolve_the_app_directory_this_runtime_belongs_to;
 use streamlib::engine_internal::core::stable_short_id::{
     fnv1a_64_hash_of, four_base36_characters_of,
 };
@@ -128,7 +127,7 @@ pub enum VirtualCameraDoor {
 #[serde(deny_unknown_fields)]
 pub struct VirtualCameraSinkConfig {
     /// The camera's name in every picker. Absent: `StreamLib Camera` plus a
-    /// short id that is unique per instance and app and stable across runs.
+    /// short id that is unique per node and stream and stable across runs of the stream.
     #[serde(default)]
     pub name: Option<String>,
     /// Which door to take.
@@ -497,11 +496,22 @@ pub(crate) fn find_device_carrying_label(
     })
 }
 
-/// Four base-36 characters of a hash over the app's directory and the
-/// instance's display name, on the engine's own stable-id recipe.
-fn stable_camera_id(app_directory: &Path, processor_display_name: &str) -> String {
-    let mut hash = fnv1a_64_hash_of(app_directory.as_os_str().as_encoded_bytes());
-    hash = fnv1a_64_hash_of(&[&hash.to_le_bytes()[..], processor_display_name.as_bytes()].concat());
+/// The node a virtual camera's stable id is derived from: the same on every
+/// run of the same stream.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TheNodeAVirtualCameraIsNamedFor<'a> {
+    pub(crate) stream_project_directory: &'a Path,
+    pub(crate) stream_name: &'a str,
+    pub(crate) node_name: &'a str,
+}
+
+/// Four base-36 characters of a hash over the stream's project directory, the
+/// stream's name and the node's name, on the engine's own stable-id recipe.
+fn stable_camera_id(node: TheNodeAVirtualCameraIsNamedFor<'_>) -> String {
+    let mut hash = fnv1a_64_hash_of(node.stream_project_directory.as_os_str().as_encoded_bytes());
+    for name in [node.stream_name, node.node_name] {
+        hash = fnv1a_64_hash_of(&[&hash.to_le_bytes()[..], name.as_bytes()].concat());
+    }
     four_base36_characters_of(hash)
 }
 
@@ -509,8 +519,7 @@ fn stable_camera_id(app_directory: &Path, processor_display_name: &str) -> Strin
 /// the stable id.
 pub(crate) fn camera_name_for(
     configured_name: Option<&str>,
-    app_directory: &Path,
-    processor_display_name: &str,
+    node: TheNodeAVirtualCameraIsNamedFor<'_>,
 ) -> String {
     match configured_name.map(str::trim).filter(|n| !n.is_empty()) {
         Some(name) => {
@@ -520,10 +529,7 @@ pub(crate) fn camera_name_for(
             }
             name[..end].trim_end().to_string()
         }
-        None => format!(
-            "{DEFAULT_CAMERA_NAME_PREFIX} {}",
-            stable_camera_id(app_directory, processor_display_name)
-        ),
+        None => format!("{DEFAULT_CAMERA_NAME_PREFIX} {}", stable_camera_id(node)),
     }
 }
 
@@ -729,15 +735,17 @@ pub struct VirtualCameraSink {
 
 impl ReactiveProcessor for VirtualCameraSink::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let app_directory = resolve_the_app_directory_this_runtime_belongs_to();
-        let processor_display_name = ctx
+        let node_name = ctx
             .processor_display_name()
             .or_else(|| ctx.processor_id())
             .unwrap_or_else(|| VIRTUAL_CAMERA_SINK_PROCESSOR_NAME.to_string());
         self.camera_name = camera_name_for(
             self.config.name.as_deref(),
-            &app_directory,
-            &processor_display_name,
+            TheNodeAVirtualCameraIsNamedFor {
+                stream_project_directory: ctx.stream_project_directory(),
+                stream_name: ctx.stream_name(),
+                node_name: &node_name,
+            },
         );
         self.dropped_frame_report = Some(CumulativeCountReportThreshold::reporting_every(
             DROPPED_FRAME_REPORT_STEP,
@@ -1556,15 +1564,31 @@ mod tests {
         }
     }
 
+    fn the_node_named(node_name: &str) -> TheNodeAVirtualCameraIsNamedFor<'_> {
+        TheNodeAVirtualCameraIsNamedFor {
+            stream_project_directory: Path::new("/home/someone/apps/desk"),
+            stream_name: "main",
+            node_name,
+        }
+    }
+
     #[test]
     fn an_unnamed_camera_gets_a_stable_id_that_differs_between_instances() {
-        let app = Path::new("/home/someone/apps/desk");
-        let first = camera_name_for(None, app, "virtualcamerasink");
-        let second = camera_name_for(None, app, "virtualcamerasink-2");
-        let other_app = camera_name_for(
+        let first = camera_name_for(None, the_node_named("virtualcamerasink"));
+        let second = camera_name_for(None, the_node_named("virtualcamerasink-2"));
+        let other_project = camera_name_for(
             None,
-            Path::new("/home/someone/apps/lab"),
-            "virtualcamerasink",
+            TheNodeAVirtualCameraIsNamedFor {
+                stream_project_directory: Path::new("/home/someone/apps/lab"),
+                ..the_node_named("virtualcamerasink")
+            },
+        );
+        let other_stream_of_the_same_project = camera_name_for(
+            None,
+            TheNodeAVirtualCameraIsNamedFor {
+                stream_name: "preview",
+                ..the_node_named("virtualcamerasink")
+            },
         );
 
         assert!(first.starts_with("StreamLib Camera "), "{first}");
@@ -1573,19 +1597,23 @@ mod tests {
             "StreamLib Camera ".len() + 4,
             "four characters of id"
         );
+        assert_ne!(first, second, "two nodes in one stream never share a label");
+        assert_ne!(first, other_project, "two projects never share a label");
         assert_ne!(
-            first, second,
-            "two instances in one app never share a label"
+            first, other_stream_of_the_same_project,
+            "two streams of one project never share a label"
         );
-        assert_ne!(first, other_app, "two apps never share a label");
         assert_eq!(
             first,
-            camera_name_for(None, app, "virtualcamerasink"),
-            "the same app and instance get the same label on every run, which is what reclaim keys on"
+            camera_name_for(None, the_node_named("virtualcamerasink")),
+            "the same stream and node get the same label on every run, which is what reclaim keys on"
         );
-        assert_eq!(camera_name_for(Some("Desk cam"), app, "x"), "Desk cam");
         assert_eq!(
-            camera_name_for(Some("   "), app, "virtualcamerasink"),
+            camera_name_for(Some("Desk cam"), the_node_named("x")),
+            "Desk cam"
+        );
+        assert_eq!(
+            camera_name_for(Some("   "), the_node_named("virtualcamerasink")),
             first,
             "a blank name is no name"
         );
@@ -1597,10 +1625,10 @@ mod tests {
         // A configured name longer than the module's field is capped once, on
         // a character boundary, so the name the sink stores is the name it
         // reclaims by.
-        let long = camera_name_for(Some(&"Desk camera ".repeat(4)), app, "x");
+        let long = camera_name_for(Some(&"Desk camera ".repeat(4)), the_node_named("x"));
         assert!(long.len() <= 31, "{long:?}");
         assert_eq!(V4l2LoopbackConfig::for_new_camera(&long).label(), long);
-        let multibyte = camera_name_for(Some(&"é".repeat(20)), app, "x");
+        let multibyte = camera_name_for(Some(&"é".repeat(20)), the_node_named("x"));
         assert_eq!(
             multibyte,
             "é".repeat(15),
@@ -1820,7 +1848,7 @@ mod tests {
         assert_eq!(config.label(), "Desk cam");
         // A name is capped where it is minted, so the module's field always
         // has room for its NUL and the stored label is the name searched for.
-        let capped = camera_name_for(Some(&"x".repeat(40)), Path::new("/apps/desk"), "x");
+        let capped = camera_name_for(Some(&"x".repeat(40)), the_node_named("x"));
         assert_eq!(capped.len(), 31);
         assert_eq!(V4l2LoopbackConfig::for_new_camera(&capped).label(), capped);
     }

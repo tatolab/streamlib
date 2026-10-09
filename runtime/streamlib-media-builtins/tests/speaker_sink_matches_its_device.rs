@@ -11,10 +11,10 @@
 //! stops asking whether one was left unsettled. Both scenarios below go red on
 //! exactly those reverts.
 //!
-//! Rig-tier by construction, not by choice: `App::new()` brings up a real
-//! `GpuContext`, and no GPU-free construction of one exists, so nothing that
-//! drives a processor's `setup()` can run on a CI runner. That is the same
-//! reason every graph test in this tree is rig-gated.
+//! Rig-tier by construction, not by choice: starting the `App`'s stream
+//! brings up a real `GpuContext`, and no GPU-free construction of one exists,
+//! so nothing that drives a processor's `setup()` can run on a CI runner.
+//! That is the same reason every graph test in this tree is rig-gated.
 //!
 //! Deliberately arm-agnostic. The backend chain is probed once per process with
 //! no configuration dial and no environment override by design, so a test
@@ -148,7 +148,8 @@ fn node_named<'a>(graph: &'a Value, display_name: &str) -> &'a Value {
 fn a_sixteen_kilohertz_source_reaches_whatever_this_machines_speaker_opened_at() {
     ensure_every_processor_type_is_registered();
 
-    let app = App::new().expect("a runtime");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let app = App::new_in_project_directory(project_directory.path()).expect("a runtime");
     let source = app
         .add(
             SixteenKilohertzMonoSource::Processor::processor_class_import_path(),
@@ -166,16 +167,16 @@ fn a_sixteen_kilohertz_source_reaches_whatever_this_machines_speaker_opened_at()
     app.connect((&source, "audio"), (&speaker, "audio"))
         .expect("the source to the speaker");
 
-    app.runner().start().expect("the graph starts");
+    app.stream().start().expect("the graph starts");
     let readiness = app
-        .runner()
+        .stream()
         .wait_until_every_processor_is_running(READINESS_TIMEOUT);
     let held_up_from = Instant::now();
     while held_up_from.elapsed() < BLOCKS_REALLY_FLOW_FOR {
         std::thread::sleep(Duration::from_millis(100));
     }
-    let graph = app.runner().to_json().expect("the graph renders");
-    let stop_outcome = app.runner().stop();
+    let graph = app.stream().to_json().expect("the graph renders");
+    let stop_outcome = app.stream().stop();
 
     readiness.expect(
         "every processor must reach Running — a speaker whose `match_device` port was never \
@@ -224,7 +225,8 @@ fn a_sixteen_kilohertz_source_reaches_whatever_this_machines_speaker_opened_at()
 fn a_processor_that_opens_no_device_stream_never_reaches_running() {
     ensure_every_processor_type_is_registered();
 
-    let app = App::new().expect("a runtime");
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let app = App::new_in_project_directory(project_directory.path()).expect("a runtime");
     let source = app
         .add(
             SixteenKilohertzMonoSource::Processor::processor_class_import_path(),
@@ -242,12 +244,12 @@ fn a_processor_that_opens_no_device_stream_never_reaches_running() {
     app.connect((&source, "audio"), (&consumer, "audio"))
         .expect("the source to the consumer");
 
-    app.runner().start().expect("the graph starts");
+    app.stream().start().expect("the graph starts");
     let readiness = app
-        .runner()
+        .stream()
         .wait_until_every_processor_is_running(Duration::from_secs(5));
-    let graph = app.runner().to_json().expect("the graph renders");
-    let _ = app.runner().stop();
+    let graph = app.stream().to_json().expect("the graph renders");
+    let _ = app.stream().stop();
 
     readiness.expect_err(
         "a processor whose setup() left its `match_device` port unsettled must not reach \

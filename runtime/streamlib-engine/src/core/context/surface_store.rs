@@ -2052,13 +2052,8 @@ fn dma_buf_texture_registration_payload(
 }
 
 impl SurfaceStore {
-    /// Create a new SurfaceStore handle (not yet connected). The
-    /// underlying [`SurfaceStoreInner`] is allocated as an
-    /// `Arc<SurfaceStoreInner>` and wrapped behind the opaque handle.
-    /// Engine and integration
-    /// tests use this; the runtime's `start()` path uses the
-    /// `from_arc_into_raw` helper directly so it can share the Arc
-    /// with `GpuContext::set_surface_store`.
+    /// Create a new SurfaceStore handle (not yet connected), reading no
+    /// service's checkout leases.
     pub fn new(service_name: String, runtime_id: String) -> Self {
         Self::from_arc_into_raw(SurfaceStoreInner::new(service_name, runtime_id))
     }
@@ -3039,7 +3034,8 @@ mod mach_surface_share_pool_tests {
             std::sync::Arc::clone(state.check_out_leases()),
         );
         store.connect().expect("the store connects");
-        gpu.set_surface_store(store);
+        gpu.install_the_engines_surface_store(store)
+            .expect("the engine's surface store installs once");
 
         let (frame_id, pooled_buffer) = gpu
             .acquire_pixel_buffer(64, 32, PixelFormat::Bgra32)
@@ -3109,7 +3105,8 @@ mod mach_surface_share_pool_tests {
             std::sync::Arc::clone(state.cross_process_timeline_pairs()),
         );
         store.connect().expect("the store connects");
-        gpu.set_surface_store(store);
+        gpu.install_the_engines_surface_store(store)
+            .expect("the engine's surface store installs once");
         (state, service)
     }
 

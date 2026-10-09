@@ -183,10 +183,10 @@ enum TatolabVerb {
                       without reading them."
     )]
     Mcp(RuntimeTargetArguments),
-    /// Read a runtime's JSONL log file, or a running runtime's event stream.
+    /// Read a loaded stream's JSONL log file, or a running runtime's event stream.
     #[command(
-        long_about = "With RUNTIME_ID, renders that runtime's on-disk JSONL log exactly as the \
-                      runtime mirrored it. With --node, collects a bounded sample of a running \
+        long_about = "With RUNTIME_ID-STREAM, renders that loaded stream's on-disk JSONL log \
+                      exactly as the runtime mirrored it. With --node, collects a bounded sample of a running \
                       runtime's live event stream instead."
     )]
     Logs(runtime_logs_verb::RuntimeLogsVerbArguments),

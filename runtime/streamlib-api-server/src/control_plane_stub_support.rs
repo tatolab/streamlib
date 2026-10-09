@@ -4,8 +4,9 @@
 //! Shared test scaffolding for the control plane's two front ends and for
 //! the tests that assert on what it logs.
 
-/// Implement every graph-mutating [`RuntimeOperations`] method as `unreachable!`,
-/// naming `$surface` (`"route"` / `"tool"`) in each panic.
+/// Implement every graph-mutating [`RuntimeOperations`] method, and the one
+/// stream's own shutdown request, as `unreachable!`, naming `$surface`
+/// (`"route"` / `"tool"`) in each graph-mutation panic.
 ///
 /// The trait still declares these — the runtime API is not what the pivot
 /// changed — but no route and no tool may reach one. A stub that answered them
@@ -96,6 +97,14 @@ macro_rules! graph_mutation_ops_are_unreachable {
         fn this_runtimes_name(&self) -> &str {
             $crate::control_plane_stub_support::STUB_RUNTIME_NAME
         }
+        fn request_this_streams_shutdown(
+            &self,
+            _reason: &str,
+        ) -> ::streamlib::sdk::error::Result<()> {
+            unreachable!(
+                "the control plane asks for the shutdown of every loaded stream, never of one"
+            )
+        }
     };
 }
 
@@ -138,6 +147,101 @@ pub(crate) const STUB_CREATED_LINK_ID: &str = "stub-created-link";
 /// tap's channel.
 pub(crate) const STUB_RUNTIME_NAME: &str = "stub-runtime";
 
+/// The one stream a stub runtime loads: the stub itself.
+pub(crate) const STUB_STREAM_NAME: &str = "stub-stream";
+
+/// The topic the stub stream's events publish on.
+pub(crate) const STUB_STREAM_EVENT_TOPIC: &str = "stream:stub-runtime-id/stub-stream#1";
+
+/// Refuse a call naming a stream other than [`STUB_STREAM_NAME`], in the
+/// engine's words; `None` names the stub stream, the only one loaded.
+pub(crate) fn refuse_a_stream_the_stub_runtime_does_not_load(
+    stream_name: Option<&str>,
+) -> ::streamlib::sdk::error::Result<()> {
+    match stream_name {
+        None | Some(STUB_STREAM_NAME) => Ok(()),
+        Some(other) => Err(::streamlib::sdk::error::Error::NotFound(format!(
+            "no stream named `{other}` is loaded in this runtime. Loaded: {STUB_STREAM_NAME}"
+        ))),
+    }
+}
+
+/// Implement [`OperationsOnTheStreamsLoadedInThisRuntime`] for a stub
+/// `RuntimeOperations` type as a runtime that loads one stream, the stub:
+/// every call naming it, or naming none, reaches a clone of the stub (whose
+/// state is shared behind `Arc`s); the machine's shutdown request records its
+/// reason on a `recorded_shutdown_reasons` field; the exchange answers from an
+/// `exchange` [`StubSurfaceExchange`] field; the node catalog is the native
+/// registry's.
+///
+/// [`OperationsOnTheStreamsLoadedInThisRuntime`]: ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime
+macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
+    ($stub_type:ty) => {
+        impl ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime for $stub_type {
+            fn runtime_operations_of_the_stream_a_call_names(
+                &self,
+                stream_name: Option<&str>,
+            ) -> ::streamlib::sdk::error::Result<
+                ::std::sync::Arc<dyn ::streamlib::sdk::runtime::RuntimeOperations>,
+            > {
+                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                    stream_name,
+                )?;
+                Ok(::std::sync::Arc::new(self.clone()))
+            }
+            fn node_catalog_of_the_stream_a_call_names(
+                &self,
+                stream_name: Option<&str>,
+            ) -> ::streamlib::sdk::error::Result<
+                Vec<::streamlib::sdk::descriptors::ProcessorDescriptor>,
+            > {
+                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                    stream_name,
+                )?;
+                Ok(::streamlib::sdk::processors::PROCESSOR_REGISTRY.list_registered())
+            }
+            fn event_topic_of_the_stream_a_call_names(
+                &self,
+                stream_name: Option<&str>,
+            ) -> ::streamlib::sdk::error::Result<String> {
+                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                    stream_name,
+                )?;
+                Ok($crate::control_plane_stub_support::STUB_STREAM_EVENT_TOPIC.to_string())
+            }
+            fn names_of_the_loaded_streams(&self) -> Vec<String> {
+                vec![$crate::control_plane_stub_support::STUB_STREAM_NAME.to_string()]
+            }
+            fn request_the_shutdown_of_every_loaded_stream(
+                &self,
+                reason: &str,
+            ) -> ::streamlib::sdk::error::Result<()> {
+                self.recorded_shutdown_reasons
+                    .lock()
+                    .push(reason.to_string());
+                Ok(())
+            }
+            fn exchange_published_surface_id_for_png_image_bytes_async(
+                &self,
+                published_surface_id: String,
+                downscale_long_edge_pixel_cap: Option<u32>,
+            ) -> ::streamlib::sdk::runtime::BoxFuture<
+                '_,
+                ::streamlib::sdk::error::Result<
+                    ::streamlib::sdk::runtime::ExchangedPublishedSurfaceFramePngImage,
+                >,
+            > {
+                let exchange = self.exchange.clone();
+                Box::pin(async move {
+                    exchange.answer_for(&published_surface_id, downscale_long_edge_pixel_cap)
+                })
+            }
+        }
+    };
+}
+
+pub(crate) use a_stub_runtime_loading_this_stub_as_its_only_stream;
+
 /// What a stub runtime answers an `add_node` with when the test has armed a
 /// refusal, standing in for an engine-side one — a name already taken, an
 /// unknown class.
@@ -148,8 +252,9 @@ pub(crate) type ArmedAddProcessorRefusal = ::std::sync::Arc<::parking_lot::Mutex
 /// fixed id, so a front-end test can assert its tool reached the matching op
 /// with the arguments the caller sent. An `armed_add_processor_refusal` the
 /// test filled makes the add refuse instead, so a front end's handling of an
-/// engine refusal is testable without an engine. The blocking wrappers stay
-/// unreachable: a front end awaits, it never blocks a worker.
+/// engine refusal is testable without an engine. The blocking wrappers and the
+/// one stream's own shutdown request stay unreachable: a front end awaits, it
+/// never blocks a worker, and it asks for every stream's shutdown.
 macro_rules! graph_mutation_ops_record_the_call {
     () => {
         fn add_processor_async(
@@ -265,6 +370,14 @@ macro_rules! graph_mutation_ops_record_the_call {
         fn this_runtimes_name(&self) -> &str {
             $crate::control_plane_stub_support::STUB_RUNTIME_NAME
         }
+        fn request_this_streams_shutdown(
+            &self,
+            _reason: &str,
+        ) -> ::streamlib::sdk::error::Result<()> {
+            unreachable!(
+                "the control plane asks for the shutdown of every loaded stream, never of one"
+            )
+        }
     };
 }
 
@@ -355,30 +468,6 @@ impl StubSurfaceExchange {
     }
 }
 
-/// Implement the exchange operation over a [`StubSurfaceExchange`] field
-/// named `exchange`, so both front ends' stubs answer it identically.
-macro_rules! surface_exchange_op_answers_the_stub {
-    () => {
-        fn exchange_published_surface_id_for_png_image_bytes_async(
-            &self,
-            published_surface_id: String,
-            downscale_long_edge_pixel_cap: Option<u32>,
-        ) -> ::streamlib::sdk::runtime::BoxFuture<
-            '_,
-            ::streamlib::sdk::error::Result<
-                ::streamlib::sdk::runtime::ExchangedPublishedSurfaceFramePngImage,
-            >,
-        > {
-            let exchange = self.exchange.clone();
-            Box::pin(async move {
-                exchange.answer_for(&published_surface_id, downscale_long_edge_pixel_cap)
-            })
-        }
-    };
-}
-
-pub(crate) use surface_exchange_op_answers_the_stub;
-
 /// The target of every tracing span and event raised on the calling thread
 /// while this is its default subscriber's layer.
 ///
@@ -445,25 +534,31 @@ impl<S: ::tracing::Subscriber> ::tracing_subscriber::layer::Layer<S> for Capture
     }
 }
 
-/// The real router over `runtime`, served on a local API socket at
-/// `local_api_socket_path` until the returned server is dropped.
+/// The real router over `operations_on_the_loaded_streams`, served on a
+/// local API socket at `local_api_socket_path` until the returned server is
+/// dropped.
 pub(crate) fn serve_the_control_plane_router_at(
-    runtime: ::std::sync::Arc<dyn ::streamlib::sdk::runtime::RuntimeOperations>,
+    operations_on_the_loaded_streams: ::std::sync::Arc<
+        dyn ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime,
+    >,
     local_api_socket_path: &::std::path::Path,
 ) -> crate::local_api_socket::RunningLocalApiSocketServer {
     crate::local_api_socket::bind_local_api_socket(local_api_socket_path)
         .expect("the local API socket binds in a fresh directory")
         .serve_router(
             |local_api_stopping_token| {
-                crate::handlers::build_router(runtime, local_api_stopping_token)
+                crate::handlers::build_router(
+                    operations_on_the_loaded_streams,
+                    local_api_stopping_token,
+                )
             },
             &::tokio::runtime::Handle::current(),
         )
         .expect("the bound local API socket is served")
 }
 
-/// The real router over a runtime, served on a local API socket in a fresh
-/// temp directory for as long as this lives.
+/// The real router over a runtime's loaded streams, served on a local API
+/// socket in a fresh temp directory for as long as this lives.
 pub(crate) struct LocalApiServedOnAFreshSocket {
     pub(crate) local_api_socket_path: ::std::path::PathBuf,
     running_server: Option<crate::local_api_socket::RunningLocalApiSocketServer>,
@@ -472,13 +567,15 @@ pub(crate) struct LocalApiServedOnAFreshSocket {
 
 impl LocalApiServedOnAFreshSocket {
     pub(crate) fn over(
-        runtime: ::std::sync::Arc<dyn ::streamlib::sdk::runtime::RuntimeOperations>,
+        operations_on_the_loaded_streams: ::std::sync::Arc<
+            dyn ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime,
+        >,
     ) -> Self {
         let socket_directory = ::tempfile::tempdir().expect("a temp directory");
         let local_api_socket_path = socket_directory.path().join("local-api-Rtest.sock");
         Self {
             running_server: Some(serve_the_control_plane_router_at(
-                runtime,
+                operations_on_the_loaded_streams,
                 &local_api_socket_path,
             )),
             local_api_socket_path,

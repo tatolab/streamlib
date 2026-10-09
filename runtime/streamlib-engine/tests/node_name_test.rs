@@ -18,6 +18,21 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
+/// An empty stream loaded into `runner`, its project in `project_directory`.
+fn an_empty_stream_loaded_into(
+    runner: &Runner,
+    project_directory: &std::path::Path,
+) -> std::sync::Arc<streamlib::sdk::runtime::LoadedStreamInThisRuntime> {
+    runner
+        .load_an_empty_stream(
+            streamlib::sdk::runtime::OptionsForLoadingOneStream::in_project_directory(
+                project_directory,
+            )
+            .named("main"),
+        )
+        .expect("an empty stream loads")
+}
+
 /// Register a descriptor-only processor type — enough for `add_processor`'s
 /// port-info lookup, with no instance to construct. Idempotent: a second
 /// register under `serial_test` returns an already-registered error we ignore.
@@ -42,8 +57,10 @@ fn register_test_type_named(path_tail: &str, short_name: &str) -> ProcessorClass
 }
 
 /// Every node's name, in node-iteration order, as the graph JSON renders it.
-fn node_names_in_the_graph_json(runtime: &Runner) -> Vec<String> {
-    runtime.to_json().expect("graph json")["nodes"]
+fn node_names_in_the_graph_json(
+    stream: &streamlib::sdk::runtime::LoadedStreamInThisRuntime,
+) -> Vec<String> {
+    stream.to_json().expect("graph json")["nodes"]
         .as_array()
         .expect("nodes array")
         .iter()
@@ -61,16 +78,19 @@ fn node_names_in_the_graph_json(runtime: &Runner) -> Vec<String> {
 fn the_graph_json_carries_distinct_names_for_two_defaulted_nodes_of_one_type() {
     let camera = register_test_type("SuffixedCamera");
 
-    let runtime = Runner::new().unwrap();
-    runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+    stream
         .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
-    runtime
+    stream
         .add_processor(ProcessorSpec::new(camera, serde_json::json!({})))
         .unwrap();
 
     assert_eq!(
-        node_names_in_the_graph_json(&runtime),
+        node_names_in_the_graph_json(&stream),
         vec!["suffixedcamera", "suffixedcamera-2"],
         "`tatolab graph` must name the two instances apart"
     );
@@ -81,8 +101,11 @@ fn the_graph_json_carries_distinct_names_for_two_defaulted_nodes_of_one_type() {
 fn the_read_back_name_is_the_cast_of_the_typed_one() {
     let camera = register_test_type("ReadBackCamera");
 
-    let runtime = Runner::new().unwrap();
-    let name = runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+    let name = stream
         .add_processor_reporting_its_name(
             ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("Front Camera"),
         )
@@ -90,7 +113,7 @@ fn the_read_back_name_is_the_cast_of_the_typed_one() {
         .name;
 
     assert_eq!(name, "front-camera");
-    assert_eq!(node_names_in_the_graph_json(&runtime), vec!["front-camera"]);
+    assert_eq!(node_names_in_the_graph_json(&stream), vec!["front-camera"]);
 }
 
 #[test]
@@ -98,13 +121,16 @@ fn the_read_back_name_is_the_cast_of_the_typed_one() {
 fn a_typed_duplicate_is_refused_by_name_and_adds_nothing() {
     let camera = register_test_type("TypedTwiceCamera");
 
-    let runtime = Runner::new().unwrap();
-    runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+    stream
         .add_processor(
             ProcessorSpec::new(camera.clone(), serde_json::json!({})).with_display_name("FrontCam"),
         )
         .unwrap();
-    let refusal = runtime.add_processor(
+    let refusal = stream.add_processor(
         ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("frontcam"),
     );
 
@@ -115,7 +141,7 @@ fn a_typed_duplicate_is_refused_by_name_and_adds_nothing() {
         }
         other => panic!("expected NodeNameTaken, got {other:?}"),
     }
-    assert_eq!(node_names_in_the_graph_json(&runtime), vec!["frontcam"]);
+    assert_eq!(node_names_in_the_graph_json(&stream), vec!["frontcam"]);
 }
 
 /// The suffix reaches the name and nothing else: identity is never derived
@@ -125,15 +151,18 @@ fn a_typed_duplicate_is_refused_by_name_and_adds_nothing() {
 fn the_suffix_never_reaches_the_processor_type() {
     let camera = register_test_type("TypeUntouchedCamera");
 
-    let runtime = Runner::new().unwrap();
-    runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+    stream
         .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
-    runtime
+    stream
         .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
 
-    let graph = runtime.to_json().expect("graph json");
+    let graph = stream.to_json().expect("graph json");
     for node in graph["nodes"].as_array().expect("nodes array") {
         assert_eq!(node["type"], serde_json::json!(camera.as_str()));
     }
@@ -152,13 +181,16 @@ fn the_suffix_never_reaches_the_processor_type() {
 fn the_default_name_comes_from_the_descriptor_not_the_import_path() {
     let widgetron = register_test_type_named("WidgetronImpl", "Widgetron");
 
-    let runtime = Runner::new().unwrap();
-    runtime
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
+    stream
         .add_processor(ProcessorSpec::new(widgetron.clone(), serde_json::json!({})))
         .expect("the fixture type is registered");
 
     assert_eq!(
-        node_names_in_the_graph_json(&runtime),
+        node_names_in_the_graph_json(&stream),
         vec!["widgetron".to_string()],
         "the name must be the descriptor's short name cast, not the path's tail"
     );

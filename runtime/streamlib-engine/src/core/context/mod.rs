@@ -60,6 +60,7 @@ pub use gpu_context::{
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
+pub(crate) use runtime_context::LoadedStreamARuntimeContextBelongsTo;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 // Exported rather than crate-private so a test about deviceless pacing can open
 // the arm it means. The chain's probe takes the first arm that opens, so a test

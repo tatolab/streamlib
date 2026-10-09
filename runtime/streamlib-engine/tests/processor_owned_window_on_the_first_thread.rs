@@ -36,7 +36,7 @@ mod apple_first_thread {
         ProcessorOwnedWindow, ProcessorOwnedWindowAwaitingItsPresentTarget,
     };
     use streamlib_engine::core::runtime::{
-        is_runtime_shutdown_requested, take_runtime_shutdown_escalation,
+        is_the_machines_shutdown_requested, take_the_machines_shutdown_escalation,
     };
     use streamlib_engine::core::window_event_pump::{
         WindowEventPumpDriveOnTheFirstThreadOutcome,
@@ -86,15 +86,14 @@ mod apple_first_thread {
     pub fn run() {
         // SAFETY: registers a plain `extern "C"` fn that captures nothing.
         unsafe { libc::atexit(fail_an_exit_that_did_not_come_from_the_end_of_run) };
-        let _logging = streamlib_engine::logging::init(StreamlibLoggingConfig {
-            service_name: "processor-owned-window-on-the-first-thread".to_string(),
-            runtime_id: None,
-            pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardOutput),
-            jsonl: false,
-            intercept_stdio: false,
-            tunables: LoggingTunables::default(),
-        })
-        .expect("logging");
+        let _logging =
+            streamlib_engine::logging::hold_the_process_logging_pathway(StreamlibLoggingConfig {
+                service_name: "processor-owned-window-on-the-first-thread".to_string(),
+                pretty_log_mirror_stream: Some(PrettyLogMirrorStandardStream::StandardOutput),
+                intercept_stdio: false,
+                tunables: LoggingTunables::default(),
+            })
+            .expect("logging");
 
         let event_pump = process_wide_window_event_pump()
             .expect("the pump builds on the process's first thread");
@@ -255,7 +254,7 @@ mod apple_first_thread {
     }
 
     /// Choose the application menu's Quit as a user would, and check it asks
-    /// the runtime to shut down rather than terminating the process.
+    /// for the shutdown of every loaded stream rather than terminating the process.
     fn quit_from_the_application_menu_while_the_loop_is_driven() {
         let mut quit_item_action = None;
         dispatch2::DispatchQueue::main().exec_sync(|| {
@@ -279,10 +278,10 @@ mod apple_first_thread {
             "the menu's Quit must request a shutdown, never send `terminate:`"
         );
         assert!(
-            is_runtime_shutdown_requested(),
-            "the menu's Quit must reach the runtime's shutdown request"
+            is_the_machines_shutdown_requested(),
+            "the menu's Quit must reach the machine's shutdown request"
         );
-        take_runtime_shutdown_escalation();
+        take_the_machines_shutdown_escalation();
     }
 
     fn open_and_release_while_the_loop_is_not_driven(

@@ -85,11 +85,6 @@ pub(crate) fn bind_local_api_socket(
 }
 
 impl LocalApiSocketBoundAndNotYetServed {
-    /// Where the listener is bound.
-    pub(crate) fn local_api_socket_path(&self) -> &Path {
-        &self.local_api_socket_file.local_api_socket_path
-    }
-
     /// Serve the router `build_control_plane_router` builds on this listener
     /// from `tokio_handle`, until the returned server is dropped.
     ///
@@ -120,13 +115,16 @@ impl LocalApiSocketBoundAndNotYetServed {
             tokio::net::UnixListener::from_std(local_api_listener).map_err(adopt_failure)?
         };
         let local_api_stopping_token = CancellationToken::new();
+        let (router_dropped_sender, router_dropped_receiver) = std::sync::mpsc::channel::<()>();
         tokio_handle.spawn(serve_local_api_until_stopped(
             local_api_listener,
             build_control_plane_router(local_api_stopping_token.clone()),
             local_api_stopping_token.clone(),
+            router_dropped_sender,
         ));
         Ok(RunningLocalApiSocketServer {
             local_api_stopping_token,
+            router_dropped_receiver,
             _local_api_socket_file: local_api_socket_file,
         })
     }
@@ -138,7 +136,27 @@ impl LocalApiSocketBoundAndNotYetServed {
 #[derive(Debug)]
 pub(crate) struct RunningLocalApiSocketServer {
     local_api_stopping_token: CancellationToken,
+    /// Disconnected once the serving task has dropped the router and all it
+    /// holds; never sent on.
+    router_dropped_receiver: std::sync::mpsc::Receiver<()>,
     _local_api_socket_file: LocalApiSocketFileRemovedOnDrop,
+}
+
+impl RunningLocalApiSocketServer {
+    /// Stop serving and block for up to `budget` until the router — and all it
+    /// holds — has been dropped, answering whether it was. Never call it from
+    /// inside the tokio runtime serving the socket: that would block the very
+    /// worker the serving task ends on.
+    pub(crate) fn stop_serving_and_wait_until_the_router_is_dropped(
+        self,
+        budget: std::time::Duration,
+    ) -> bool {
+        self.local_api_stopping_token.cancel();
+        matches!(
+            self.router_dropped_receiver.recv_timeout(budget),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        )
+    }
 }
 
 impl Drop for RunningLocalApiSocketServer {
@@ -152,6 +170,7 @@ async fn serve_local_api_until_stopped(
     local_api_listener: tokio::net::UnixListener,
     control_plane_router: axum::Router,
     local_api_stopping_token: CancellationToken,
+    router_dropped_sender: std::sync::mpsc::Sender<()>,
 ) {
     let served = axum::serve(local_api_listener, control_plane_router)
         .with_graceful_shutdown(local_api_stopping_token.cancelled_owned())
@@ -159,6 +178,7 @@ async fn serve_local_api_until_stopped(
     if let Err(error) = served {
         tracing::error!(%error, "the local API socket stopped serving");
     }
+    drop(router_dropped_sender);
 }
 
 /// Remove the local API's socket file. Already gone is not a failure.

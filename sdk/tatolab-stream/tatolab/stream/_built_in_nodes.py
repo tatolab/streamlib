@@ -609,7 +609,7 @@ class VirtualCameraSinkConfig(TypedDict, total=False):
 
     name: str | None
     """The camera's name in every picker. Absent: `StreamLib Camera` plus a short id
-    that is unique per instance and app and stable across runs.
+    that is unique per node and stream and stable across runs of the stream.
     """
 
 

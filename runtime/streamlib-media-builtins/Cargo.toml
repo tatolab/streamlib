@@ -51,6 +51,8 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 rmp-serde = { workspace = true }
 rmpv = { workspace = true }
+# The project directory each golden graph's stream loads in.
+tempfile = { workspace = true }
 
 # The window-server assertions of the macOS display test.
 [target.'cfg(target_os = "macos")'.dev-dependencies]

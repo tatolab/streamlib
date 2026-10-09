@@ -234,7 +234,7 @@ tatolab dev [TARGET] [-f FILE] [--dir DIR] [--name NAME] [--runtime-name NAME]
 tatolab nodes
 tatolab graph [--node RUNTIME]
 tatolab tap CHANNEL [--count N] [--max-bag-bytes BYTES] [--node RUNTIME]
-tatolab logs RUNTIME_ID [-f | --follow] [--processor ID] [--pipeline ID] [--rhi]
+tatolab logs RUNTIME_ID-STREAM [-f | --follow] [--processor ID] [--pipeline ID] [--rhi]
              [--level trace|debug|info|warn|error] [--source rust|python] [--intercepted-only]
 tatolab logs --list
 tatolab logs --node RUNTIME [--count N]
@@ -262,11 +262,11 @@ tatolab enable-virtual-camera [--print]
   `<runtime_name>/<node>/<port>`, spelled as `graph` names them. The sample is bounded and never
   blocks the producer: a quiet port returns a partial sample rather than hanging, and
   `--max-bag-bytes` raises the per-bag cap when a bag comes back flagged as truncated.
-- **`logs`** reads a runtime's JSONL log, rendered the way the runtime prints it. Run it in the
-  stream's project directory, where the runtime writes its logs: `--list` shows the runtimes that
-  have a log there, `RUNTIME_ID` renders one (`--follow` keeps reading as records land, and the
-  other flags filter what it shows), and `--node` takes a bounded sample of a running runtime's live
-  event stream instead.
+- **`logs`** reads a loaded stream's JSONL log, rendered the way the runtime prints it. Run it in
+  the stream's project directory, where the runtime writes each stream's log: `--list` shows the
+  stream logs there, each named `<runtime_id>-<stream>`, `RUNTIME_ID-STREAM` renders one
+  (`--follow` keeps reading as records land, and the other flags filter what it shows), and
+  `--node` takes a bounded sample of a running runtime's live event stream instead.
 - **`exchange`** turns a published surface id (`<slot>#<generation>`, as a bag carries it) into that
   frame's exact, full-resolution PNG in `--out`, and prints each written path on stdout. With
   `--channel` it taps the port, reads the id from each sampled bag (the `surface_id` field unless

@@ -49,6 +49,7 @@ use std::time::Duration;
 
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::error::{Error, PortDirection, Result};
+use crate::core::logging::carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe;
 use crate::core::processors::{
     LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessFarSideLinkDelivery,
     OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
@@ -639,9 +640,11 @@ fn spawn_the_reader_and_the_escalate_worker(
     let worker_dispatch = Arc::clone(&escalate_request_dispatch);
     let escalate_worker_thread = thread::Builder::new()
         .name(bridge_escalate_worker_thread_name(&processor_id))
-        .spawn(move || {
-            escalate_worker_loop(escalate_requests_rx, &worker_parent_side, &worker_dispatch);
-        })
+        .spawn(
+            carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe(move || {
+                escalate_worker_loop(escalate_requests_rx, &worker_parent_side, &worker_dispatch);
+            }),
+        )
         .map_err(|spawn_failure| {
             Error::Runtime(format!(
                 "[{processor_id}] could not start its bridge's escalate worker: {spawn_failure}"
@@ -650,15 +653,17 @@ fn spawn_the_reader_and_the_escalate_worker(
 
     let frame_demultiplexing_reader_thread = thread::Builder::new()
         .name(bridge_reader_thread_name(&processor_id))
-        .spawn(move || {
-            reader_loop(
-                reader,
-                &parent_side,
-                &escalate_request_dispatch,
-                escalate_requests_tx,
-                lifecycle_tx,
-            );
-        })
+        .spawn(
+            carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe(move || {
+                reader_loop(
+                    reader,
+                    &parent_side,
+                    &escalate_request_dispatch,
+                    escalate_requests_tx,
+                    lifecycle_tx,
+                );
+            }),
+        )
         .map_err(|spawn_failure| {
             Error::Runtime(format!(
                 "[{processor_id}] could not start its bridge's reader: {spawn_failure}"
@@ -856,7 +861,9 @@ fn refuse_every_link_this_subprocess_still_owed(
 /// Captures the caller's current [`tracing::Dispatch`] and installs it
 /// as the reader thread's default, so events route through whatever
 /// subscriber the owning runtime installed (global for production,
-/// thread-local for `init_for_tests`).
+/// thread-local for `init_for_tests`), and carries the caller's stream log
+/// route, so each line lands in the log of the stream whose helper wrote it —
+/// the stream's log stays open until the reader reaches the pipe's end.
 pub fn spawn_fd_line_reader<R>(
     reader: R,
     thread_prefix: &str,
@@ -881,21 +888,23 @@ where
 
     thread::Builder::new()
         .name(name)
-        .spawn(move || {
-            use std::io::BufRead;
-            tracing::dispatcher::with_default(&dispatch, || {
-                let reader = BufReader::new(reader);
-                for line in reader.lines() {
-                    match line {
-                        Ok(text) if !text.is_empty() => {
-                            emit_intercepted_line(target, channel, source, &proc_id, &text);
+        .spawn(
+            carrying_this_threads_loaded_stream_log_route_and_reading_a_helper_pipe(move || {
+                use std::io::BufRead;
+                tracing::dispatcher::with_default(&dispatch, || {
+                    let reader = BufReader::new(reader);
+                    for line in reader.lines() {
+                        match line {
+                            Ok(text) if !text.is_empty() => {
+                                emit_intercepted_line(target, channel, source, &proc_id, &text);
+                            }
+                            Err(_) => break,
+                            _ => {}
                         }
-                        Err(_) => break,
-                        _ => {}
                     }
-                }
-            });
-        })
+                });
+            }),
+        )
         .ok()
 }
 
@@ -1816,7 +1825,8 @@ mod tests {
         store
             .connect()
             .expect("connect to the test surface-share service");
-        gpu.set_surface_store(store);
+        gpu.install_the_engines_surface_store(store)
+            .expect("the engine's surface store installs once");
         let sandbox = GpuContextLimitedAccess::new(gpu);
         let registered_surface_ids = || -> HashSet<String> {
             state

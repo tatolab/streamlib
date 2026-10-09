@@ -434,9 +434,9 @@ use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib_adapter_<name>::<Name>SurfaceAdapter;
 
-let runtime = Runner::new()?;
+let runner = Runner::new()?;
 
-runtime.install_setup_hook(move |gpu| {
+runner.install_setup_hook(move |gpu| {
     let host_device = Arc::clone(gpu.device().vulkan_device());
     let adapter = Arc::new(<Name>SurfaceAdapter::new(Arc::clone(&host_device)));
 
@@ -456,14 +456,15 @@ runtime.install_setup_hook(move |gpu| {
     register_host_surface(&adapter, gpu)?;
 
     Ok(())
-});
+})?;
 ```
 
 The application calls `install_setup_hook` exactly once per adapter
-it wants to expose. The hook fires after `GpuContext::init_for_platform_sync`
-has created the live `GpuContext`, before any processor's `setup()`
-runs — the window where pre-allocated host surfaces have to be in
-place.
+it wants to expose, before the first stream starts. The hook fires
+once per engine, after `GpuContext::init_for_platform_sync` has
+created the engine's `GpuContext` and its own surface store, before
+any processor's `setup()` runs — the window where pre-allocated host
+surfaces have to be in place. A hook installed after that is refused.
 
 An adapter serves consumers in this process. A subprocess reaching a
 surface goes through the escalate ops instead, which `GpuContext`

@@ -185,7 +185,7 @@ jobs:
           .venv/bin/python tests/runtime_backed_protocol_conformance.py --print-stubtest-allowlist > "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
           .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
 
-      # The runner has no GPU. `Runner::start()` initializes a GPU context whose
+      # The runner has no GPU. A runtime's first stream start initializes a GPU context whose
       # DMA-BUF pool pre-warm needs a driver that can allocate exportable device
       # memory, and a software rasterizer (lavapipe) cannot — verified in a
       # GPU-less container. So this runs the half of the wheel's own suite that

@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tracing` layer that captures events and pushes [`LogRecord`]s onto
-//! the drain worker's bounded queue. Hot path: no fd writes, no
+//! `tracing` layer that captures events, stamps each with the stream route of
+//! the thread it was emitted on, and pushes [`LogRecord`]s onto the drain
+//! worker's bounded queue. Hot path: no fd writes, no
 //! formatting beyond `Debug` on the message field, and at most one
 //! allocation per captured field value. All fan-out work (JSON
 //! serialization, file I/O, stdout write) happens on the drain worker
@@ -10,47 +11,64 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
-use crossbeam_channel::Sender;
-use crossbeam_queue::ArrayQueue;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 
+use crate::core::logging::config::ResolvedTunables;
+use crate::core::logging::loaded_stream_log_route::the_loaded_stream_log_route_of_this_thread;
 use crate::core::logging::record::LogRecord;
-use crate::core::logging::worker::{WorkerSignal, now_ns};
+use crate::core::logging::worker::{DrainWorkerRecordQueue, now_ns};
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, Source};
 
 pub(crate) struct JsonlSinkLayer {
-    queue: Arc<ArrayQueue<LogRecord>>,
-    doorbell: Sender<WorkerSignal>,
-    dropped: Arc<AtomicU64>,
+    record_queue: DrainWorkerRecordQueue,
+    /// How the stream log files the queue's drain worker writes batch, sync
+    /// and rotate; `None` for a queue no drain worker empties, such as a
+    /// helper process's capture ring.
+    stream_log_file_tunables: Option<ResolvedTunables>,
 }
 
 impl JsonlSinkLayer {
-    pub(crate) fn new(
-        queue: Arc<ArrayQueue<LogRecord>>,
-        doorbell: Sender<WorkerSignal>,
-        dropped: Arc<AtomicU64>,
+    /// A layer feeding a drain worker that writes each stream's log file as
+    /// `stream_log_file_tunables` say.
+    pub(crate) fn feeding_a_drain_worker_that_writes_stream_log_files(
+        record_queue: DrainWorkerRecordQueue,
+        stream_log_file_tunables: ResolvedTunables,
     ) -> Self {
         Self {
-            queue,
-            doorbell,
-            dropped,
+            record_queue,
+            stream_log_file_tunables: Some(stream_log_file_tunables),
         }
     }
 
-    fn enqueue(&self, record: LogRecord) {
-        // Drop-oldest when the queue is full. `force_push` returns the
-        // evicted record (if any); we count that as one drop.
-        if self.queue.force_push(record).is_some() {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
+    /// A layer feeding a queue that something other than a drain worker
+    /// empties, so no stream log file is opened through it.
+    pub(crate) fn feeding_a_queue_that_writes_no_stream_log_file(
+        record_queue: DrainWorkerRecordQueue,
+    ) -> Self {
+        Self {
+            record_queue,
+            stream_log_file_tunables: None,
         }
-        let _ = self.doorbell.try_send(WorkerSignal::Record);
+    }
+
+    /// The queue a stream log file opened through this layer is written
+    /// from, and how that file batches, syncs and rotates.
+    pub(crate) fn record_queue_that_writes_stream_log_files(
+        &self,
+    ) -> Option<(DrainWorkerRecordQueue, ResolvedTunables)> {
+        self.stream_log_file_tunables
+            .map(|tunables| (self.record_queue.clone(), tunables))
+    }
+
+    /// Queue `record`, stamped with the route of the calling thread.
+    pub(crate) fn enqueue_in_this_threads_route(&self, mut record: LogRecord) {
+        record.loaded_stream_log_route = the_loaded_stream_log_route_of_this_thread();
+        self.record_queue.enqueue(record);
     }
 }
 
@@ -83,9 +101,10 @@ where
             source: visitor.source,
             source_ts: None,
             source_seq: None,
+            loaded_stream_log_route: None,
         };
 
-        self.enqueue(record);
+        self.enqueue_in_this_threads_route(record);
     }
 }
 

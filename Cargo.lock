@@ -4419,6 +4419,7 @@ dependencies = [
  "serde",
  "serde_json",
  "streamlib-engine",
+ "tempfile",
 ]
 
 [[package]]
@@ -4613,6 +4614,7 @@ dependencies = [
  "objc2-video-toolbox",
  "parking_lot",
  "petgraph",
+ "pin-project-lite",
  "png",
  "raw-window-handle",
  "rmp-serde",
@@ -4708,6 +4710,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "streamlib",
+ "tempfile",
  "tracing",
  "v4l",
 ]
