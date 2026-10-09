@@ -68,6 +68,11 @@ pub use runtime_shutdown_request::{
 };
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
+pub use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects_interpreter::{
+    PROJECT_STREAM_COMPILE_ENTRY_MODULE, STREAM_FUNCTION_COMPILE_BOUND,
+    StreamFunctionCompiledInTheProjectsInterpreter,
+    compile_the_stream_function_in_the_projects_interpreter, the_projects_venv_interpreter,
+};
 pub use stream_environment::StreamEnvironment;
 pub use surface_image_exchange::ExchangedPublishedSurfaceFramePngImage;
 pub use tap::TapSubscription;
