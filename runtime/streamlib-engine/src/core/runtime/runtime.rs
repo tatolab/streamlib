@@ -301,8 +301,8 @@ enum SetupHooksOfTheEngine {
     RanAsTheGpuContextWasCreated,
 }
 
-/// The engine: one per runtime process, holding a table of loaded streams
-/// under one GPU context, iceoryx2 node, tokio runtime and surface service.
+/// The engine: a table of loaded streams under one GPU context, iceoryx2
+/// node, tokio runtime and surface service.
 ///
 /// Every graph operation is a stream's: load a stream, then use the
 /// [`LoadedStreamInThisRuntime`] it hands back.
