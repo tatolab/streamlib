@@ -1412,7 +1412,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   refusals]
   <!-- verify: cargo test -p streamlib-engine --test node_name_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::address_chunk -->
-  <!-- verify: cargo test -p streamlib-engine --test graph_snapshot_round_trip_test a_loaded_name_already_in_the_graph_is_refused_rather_than_suffixed -->
+  <!-- verify: cargo test -p streamlib-engine --test node_name_test a_typed_duplicate_is_refused_by_name_and_adds_nothing -->
   <!-- verify: pytest sdk/tatolab-stream/tests/test_stream_graph_builder.py::test_a_typed_duplicate_is_refused_at_the_add_that_typed_it_naming_both -->
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
