@@ -48,4 +48,3 @@ def test_the_enum_offers_exactly_private_and_public() -> None:
         ("PRIVATE", "private"),
         ("PUBLIC", "public"),
     ]
-

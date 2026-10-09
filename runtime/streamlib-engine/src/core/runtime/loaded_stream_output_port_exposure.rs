@@ -19,8 +19,9 @@ use crate::core::graph::{
 use crate::core::{Error, Result};
 
 /// One reader's registration against an exposed output port. Dropping it
-/// takes the reader off the port: its cut never runs after that, and the port
-/// lets the reader go at its next change. Dropping it takes no lock.
+/// takes the reader off the port: a cut not yet begun never begins, though one
+/// already under way is not waited for, and the port lets the reader go at its
+/// next change. Dropping it takes no lock.
 #[derive(Debug)]
 #[must_use = "dropping the registration takes the reader off the port at once"]
 pub struct ExposedOutputPortReaderRegistration {
@@ -47,16 +48,17 @@ impl LoadedStreamInThisRuntime {
             self.compiler.scope(|graph, _tx| -> Result<_> {
                 let (node, port_cast) = self.the_output_port_named(graph, node_name, port_name)?;
                 let port_address = format!("{}/{port_cast}", node.display_name);
-                let readers_leaving_the_port = match node.get_mut::<ExposedOutputPortsComponent>() {
-                    Some(exposed_ports) => exposed_ports.set_level(&port_cast, level),
-                    None if level == OutputPortExposureLevel::Internal => Vec::new(),
-                    None => {
-                        let mut exposed_ports = ExposedOutputPortsComponent::default();
-                        exposed_ports.set_level(&port_cast, level);
-                        node.insert_component_without_rendering_it(exposed_ports);
-                        Vec::new()
-                    }
-                };
+                if level != OutputPortExposureLevel::Internal
+                    && !node.has::<ExposedOutputPortsComponent>()
+                {
+                    node.insert_component_without_rendering_it(
+                        ExposedOutputPortsComponent::default(),
+                    );
+                }
+                let readers_leaving_the_port = node
+                    .get_mut::<ExposedOutputPortsComponent>()
+                    .map(|exposed_ports| exposed_ports.set_level(&port_cast, level))
+                    .unwrap_or_default();
                 Ok((port_address, readers_leaving_the_port))
             })?;
         tracing::debug!(
@@ -94,8 +96,10 @@ impl LoadedStreamInThisRuntime {
     /// Register a reader from `location` against output port `port_name` of
     /// node `node_name`, refused naming the port and its level when that level
     /// does not allow a reader there. `cut_off` runs at most once, outside
-    /// every graph lock, when a later level no longer allows the reader, and
-    /// never once the registration this hands back is dropped.
+    /// every graph lock, when a later level no longer allows the reader. It
+    /// never begins once the registration this hands back is dropped, but a
+    /// drop racing a cut already under way does not wait for it, so a cut must
+    /// tolerate its reader being gone.
     pub fn register_a_reader_of_an_exposed_output_port(
         &self,
         node_name: &str,
@@ -107,13 +111,17 @@ impl LoadedStreamInThisRuntime {
         let reader =
             ReaderOfAnExposedOutputPort::new(Arc::clone(&still_registered), location, cut_off);
         let (registered, readers_to_drop_outside_the_graph_lock) =
-            self.compiler.scope(|graph, _tx| -> Result<_> {
-                let (node, port_cast) = self.the_output_port_named(graph, node_name, port_name)?;
+            self.compiler.scope(|graph, _tx| {
+                let (node, port_cast) =
+                    match self.the_output_port_named(graph, node_name, port_name) {
+                        Ok(found) => found,
+                        Err(refusal) => return (Err(refusal), vec![reader]),
+                    };
                 let outcome = match node.get_mut::<ExposedOutputPortsComponent>() {
                     Some(exposed_ports) => exposed_ports.register_reader(&port_cast, reader),
                     None => Err((reader, OutputPortExposureLevel::Internal)),
                 };
-                Ok(match outcome {
+                match outcome {
                     Ok(registration_dropped) => (Ok(()), registration_dropped),
                     Err((refused_reader, level)) => (
                         Err(Error::OutputPortNotExposedToTheReader(Box::new(
@@ -130,8 +138,8 @@ impl LoadedStreamInThisRuntime {
                         ))),
                         vec![refused_reader],
                     ),
-                })
-            })?;
+                }
+            });
         // A reader's cut may own anything, so it is dropped only once the graph lock is released.
         drop(readers_to_drop_outside_the_graph_lock);
         registered.map(|()| ExposedOutputPortReaderRegistration { still_registered })

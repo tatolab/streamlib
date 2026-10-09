@@ -200,7 +200,7 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
 
     let mut first_node_left_behind = None;
     for processor_id in processor_ids {
-        let exposures_of_the_removed_node;
+        let mut exposures_of_the_removed_node;
         {
             let mut graph = graph_arc.write();
             exposures_of_the_removed_node = graph
@@ -214,6 +214,12 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
                     node.remove::<ExposedOutputPortsComponent>()
                 });
             if graph.traversal_mut().v(processor_id).drop().exists() {
+                if let (Some(node), Some(exposures)) = (
+                    graph.traversal_mut().v(processor_id).first_mut(),
+                    exposures_of_the_removed_node.take(),
+                ) {
+                    node.insert_component_without_rendering_it(exposures);
+                }
                 first_node_left_behind.get_or_insert_with(|| processor_id.clone());
                 continue;
             }
@@ -497,6 +503,101 @@ mod tests {
             last_heard.duration_since(*first_heard)
         );
         assert!(graph_arc.read().traversal().v(()).ids().is_empty());
+    }
+
+    /// Fail-without-fix: dropping the node with its exposures on it drops
+    /// every reader's cut under the graph's write lock, so a cut owning
+    /// anything that takes that lock would hang the removal.
+    #[test]
+    fn a_removed_nodes_readers_are_dropped_uncut_once_the_graph_lock_is_released() {
+        use std::sync::Weak;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        use crate::core::graph::{
+            ExposedOutputPortsComponent, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
+            ReaderOfAnExposedOutputPort,
+        };
+
+        /// Records, when dropped, whether the graph's lock was free.
+        struct GraphLockFreeWhenDropped {
+            graph: Arc<Mutex<Weak<RwLock<Graph>>>>,
+            lock_was_free: Arc<Mutex<Option<bool>>>,
+        }
+        impl Drop for GraphLockFreeWhenDropped {
+            fn drop(&mut self) {
+                let lock_was_free = self
+                    .graph
+                    .lock()
+                    .upgrade()
+                    .map(|graph| graph.try_write().is_some());
+                *self.lock_was_free.lock() = lock_was_free;
+            }
+        }
+
+        ensure_test_mocks_registered();
+        let mut graph = Graph::new();
+        let processor_id = a_processor_node_running_a_thread(
+            &mut graph,
+            "Camera",
+            ThreadOnceToldToStop::ReturnsAfter(Duration::ZERO),
+            ProcessorThreadKind::HelperProcessHost,
+            &WhenEachThreadWasToldToStop::default(),
+        );
+        let graph_slot = Arc::new(Mutex::new(Weak::new()));
+        let lock_was_free = Arc::new(Mutex::new(None));
+        let cuts = Arc::new(AtomicUsize::new(0));
+        let guard = GraphLockFreeWhenDropped {
+            graph: Arc::clone(&graph_slot),
+            lock_was_free: Arc::clone(&lock_was_free),
+        };
+        let counted = Arc::clone(&cuts);
+        let mut exposed_ports = ExposedOutputPortsComponent::default();
+        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        assert!(
+            exposed_ports
+                .register_reader(
+                    "video",
+                    ReaderOfAnExposedOutputPort::new(
+                        Arc::new(AtomicBool::new(true)),
+                        OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+                        Box::new(move || {
+                            let _owned_by_the_cut = &guard;
+                            counted.fetch_add(1, Ordering::SeqCst);
+                        }),
+                    ),
+                )
+                .is_ok()
+        );
+        graph
+            .traversal_mut()
+            .v(&processor_id)
+            .first_mut()
+            .expect("the node exists")
+            .insert_component_without_rendering_it(exposed_ports);
+        let graph_arc = Arc::new(RwLock::new(graph));
+        *graph_slot.lock() = Arc::downgrade(&graph_arc);
+
+        remove_processors_signalling_every_thread_before_joining_any(
+            &graph_arc,
+            &LoadedStreamIdentity {
+                runtime_id: "processor-thread-shutdown-test".to_string(),
+                stream_name: "main".to_string(),
+                stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
+            },
+            std::slice::from_ref(&processor_id),
+            BUDGETS_A_TEST_CAN_OUTLIVE,
+            never_forced,
+            &TeardownProgressNoteOfOneStream::default(),
+            &Mutex::new(Vec::new()),
+        )
+        .expect("the removal completes");
+
+        assert_eq!(*lock_was_free.lock(), Some(true));
+        assert_eq!(
+            cuts.load(Ordering::SeqCst),
+            0,
+            "a removed node's readers are not cut"
+        );
     }
 
     /// A native thread that ignores shutdown is abandoned at its budget and

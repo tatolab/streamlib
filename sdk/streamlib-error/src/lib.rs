@@ -12,8 +12,8 @@
 
 use streamlib_processor_schema::{ExposedNameCastsToNothingError, ProcessorClassImportPath};
 
-/// A reader from outside a stream refused an output port whose level does not
-/// allow a reader where it reads from.
+/// An output port refused a reader from outside its stream: the port's level
+/// does not allow a reader where that reader reads from.
 #[derive(thiserror::Error, Debug)]
 #[error(
     "port `{port}` of node `{node}` in stream `{stream}` is {level}, and {reader} reads only a \

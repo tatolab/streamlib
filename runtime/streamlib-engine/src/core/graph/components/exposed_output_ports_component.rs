@@ -30,7 +30,7 @@ struct ExposedOutputPortOfThisNode {
 }
 
 /// What cuts one reader off the port it reads. It runs at most once, outside
-/// every graph lock.
+/// every graph lock, and may race the drop of its reader's registration.
 pub type CutOffAReaderOfAnExposedOutputPort = Box<dyn FnOnce() + Send + Sync>;
 
 /// One reader from outside a port's stream, registered against the port.
@@ -73,7 +73,8 @@ impl ReaderOfAnExposedOutputPort {
         self.still_registered.load(Ordering::Acquire)
     }
 
-    /// Cut the reader off its port, unless its registration was dropped first.
+    /// Cut the reader off its port, unless its registration was dropped before
+    /// the cut began.
     pub(crate) fn cut_off_unless_its_registration_was_dropped(self) {
         if self.is_still_registered() {
             (self.cut_off)();
@@ -102,6 +103,7 @@ impl ExposedOutputPortsComponent {
     /// Put `port_name` at `level`, handing back every reader that leaves the
     /// port: each the new level no longer allows, and each whose registration
     /// was dropped. The caller cuts them off once it has let go of the graph.
+    #[must_use = "the readers leaving the port are cut off or dropped once the graph lock is released"]
     pub(crate) fn set_level(
         &mut self,
         port_name: &str,
@@ -136,6 +138,7 @@ impl ExposedOutputPortsComponent {
     /// registration was dropped since, for the caller to drop once it has let
     /// go of the graph; or hand `reader` back with the port's level when that
     /// level does not allow a reader where it reads from.
+    #[must_use = "the readers handed back are dropped once the graph lock is released"]
     pub(crate) fn register_reader(
         &mut self,
         port_name: &str,
@@ -233,7 +236,7 @@ mod tests {
     #[test]
     fn lowering_a_level_hands_back_exactly_the_readers_it_no_longer_allows() {
         let mut exposed_ports = ExposedOutputPortsComponent::default();
-        exposed_ports.set_level("video", OutputPortExposureLevel::Public);
+        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Public);
         let on_this_machine = Arc::new(AtomicUsize::new(0));
         let off_this_machine = Arc::new(AtomicUsize::new(0));
         for (location, cuts) in [
@@ -270,7 +273,7 @@ mod tests {
     #[test]
     fn raising_a_level_cuts_no_reader() {
         let mut exposed_ports = ExposedOutputPortsComponent::default();
-        exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
         let cuts = Arc::new(AtomicUsize::new(0));
         let (reader, _) = a_reader_counting_its_cuts_into(
             OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
@@ -289,7 +292,7 @@ mod tests {
     #[test]
     fn a_reader_whose_registration_was_dropped_is_never_cut_and_leaves_at_the_next_change() {
         let mut exposed_ports = ExposedOutputPortsComponent::default();
-        exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
         let cuts = Arc::new(AtomicUsize::new(0));
         let (reader, still_registered) = a_reader_counting_its_cuts_into(
             OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
@@ -313,7 +316,7 @@ mod tests {
     #[test]
     fn a_registration_hands_back_the_readers_whose_registrations_were_dropped() {
         let mut exposed_ports = ExposedOutputPortsComponent::default();
-        exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
         let cuts = Arc::new(AtomicUsize::new(0));
         let (first, first_still_registered) = a_reader_counting_its_cuts_into(
             OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,

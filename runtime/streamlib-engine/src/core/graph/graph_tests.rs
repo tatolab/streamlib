@@ -856,7 +856,7 @@ mod mutation_persistence {
             .to_string();
         let cuts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut exposed_ports = ExposedOutputPortsComponent::default();
-        exposed_ports.set_level("video", OutputPortExposureLevel::Private);
+        let _ = exposed_ports.set_level("video", OutputPortExposureLevel::Private);
         let cut_holding_the_count = Arc::clone(&cuts);
         assert!(
             exposed_ports

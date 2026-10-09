@@ -65,11 +65,6 @@ impl Compiler {
         }
     }
 
-    /// This compiler's graph, held weakly so a holder never keeps it alive.
-    pub(crate) fn graph_held_weakly(&self) -> std::sync::Weak<RwLock<Graph>> {
-        Arc::downgrade(&self.graph)
-    }
-
     /// The processors whose threads a removal abandoned and that have not
     /// returned since.
     pub fn processor_threads_abandoned_and_still_running(&self) -> Vec<ProcessorDisplayNameAndId> {
