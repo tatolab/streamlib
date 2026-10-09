@@ -827,6 +827,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel",
                 "core::graph_snapshot",
+                "core::runtime::machine_state_directory",
                 "core::graph::output_port_exposure",
                 "core::graph::components::exposed_output_ports_component",
                 "core::graph::graph_tests::mutation_persistence::a_dropped_node_takes_its_exposures_and_their_readers_with_it",

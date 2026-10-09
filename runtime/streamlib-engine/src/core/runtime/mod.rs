@@ -9,6 +9,7 @@ mod helper_process_group_registry;
 mod loaded_stream;
 mod loaded_stream_output_port_exposure;
 mod local_processor_type_registration;
+mod machine_state_directory;
 mod operations;
 mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
@@ -50,6 +51,11 @@ pub(crate) use helper_process_group_registry::{
 };
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use loaded_stream_output_port_exposure::ExposedOutputPortReaderRegistration;
+pub use machine_state_directory::{
+    KEPT_STREAM_RECORD_FILE_MODE, KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord,
+    KeptStreamRecordReadFailure, KeptStreamRecordsInTheStateDirectory, OwnerExposureRuling,
+    graph_with_the_owners_exposure_rulings_applied,
+};
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 pub use runtime::{
