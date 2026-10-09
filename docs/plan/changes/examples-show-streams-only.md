@@ -36,7 +36,9 @@ the held figure (its `:144`). The two edits touch different words, so they can s
   `streamlib::sdk::context::RuntimeContextFullAccess`, `ContinuousProcessor`, `MediaClock`
   and `#[streamlib::sdk::processor]` (`src/sequenced_tick_source.rs:6-17`,
   `src/tick_cadence_reporting_sink.rs:7-8`).
-- It is already broken against the tree. #2615 lists it: `tap_async` is handed the old channel
+- It is already broken against the tree. It does not compile: it calls
+  `Runner::start_and_wait_for_shutdown` (`src/main.rs:94`) and `request_runtime_shutdown`
+  (`:267`), which no longer exist on `Runner` since #2704 (#2615's comment). #2615 also lists: `tap_async` is handed the old channel
   name (`src/main.rs:155`, `:172`), and `node["display_name"]` is read (`:352`, `:390`) and
   built (`:404-406`).
 - `git grep tokio-integration` outside the directory finds `ARCHITECTURE.md:710` and
