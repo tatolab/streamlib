@@ -34,7 +34,7 @@ Each file holds the hex-preview-plus-byte-length sample for that channel (bytes-
 ```bash
 tatolab logs --node <runtime_id> --count 200 > "$EVIDENCE_DIR/logs.txt"
 ```
-`--count` bounds the sample of the runtime event stream (all topics) within a short window. In this live mode `logs` is addressed by `--node` and bounded by `--count` — there is no positional `runtime_id` here (that form is the offline on-disk log reader, a different mode).
+`--count` bounds the sample of the events the node's one loaded stream publishes on its own topic (its graph changes, lifecycle and shutdown) within a short window; processor-topic events do not appear in it — the local API's `/ws/events` is the all-topic observer. In this live mode `logs` is addressed by `--node` and bounded by `--count` — there is no positional `runtime_id` here (that form is the offline on-disk log reader, a different mode).
 
 ### 5. Confirm and hand off the bundle
 ```bash
