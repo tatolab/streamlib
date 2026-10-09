@@ -20,7 +20,7 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
 
-use crate::refusal_on_standard_error::write_refusal_to_standard_error;
+use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_to_standard_error};
 use crate::stream_launch_inputs::StreamLaunchInputs;
 
 /// Host the stream until it ends, tear the engine down, and return the status
@@ -79,7 +79,14 @@ pub(crate) fn host_the_stream_until_shutdown(
             log_that_the_stream_loaded(&stream)?;
             local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
             stream.start()?;
-            engine.wait_until_the_stream_ends(&stream)
+            let stream_end = engine.wait_until_the_stream_ends(&stream);
+            if let Some(HowALoadedStreamEnded::AbandonedByItsTeardownWatchdog { .. }) =
+                stream.how_this_stream_ended()
+            {
+                // The teardown names the abandonment, so it is written once.
+                return Ok(());
+            }
+            stream_end
         })
         .map_err(|run_refusal| format!("the stream did not run: {run_refusal}"));
     if let Err(run_refusal) = &run_outcome {
@@ -88,18 +95,32 @@ pub(crate) fn host_the_stream_until_shutdown(
 
     let engine_teardown_outcome =
         tear_the_engine_down(engine, hosted_stream, local_api_served_for_the_engine);
-    let mut exit_code = ExitCode::SUCCESS;
+    let exit_status =
+        exit_status_once_the_engine_is_torn_down(&run_outcome, &engine_teardown_outcome);
     for refusal in
         refusals_written_once_the_engine_is_torn_down(run_outcome, &engine_teardown_outcome)
     {
-        exit_code = write_refusal_to_standard_error(&refusal);
+        write_refusal_to_standard_error(&refusal);
     }
-    if let EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(_) =
-        engine_teardown_outcome
-    {
-        exit_code = ExitCode::from(EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED as u8);
+    ExitCode::from(exit_status)
+}
+
+/// The status `tatolabd` exits with once the teardown is over: the
+/// watchdog's for a stream teardown it abandoned, a refusal's for anything
+/// else written to standard error, and success otherwise.
+fn exit_status_once_the_engine_is_torn_down(
+    run_outcome: &Result<(), String>,
+    engine_teardown_outcome: &EngineTeardownOutcome,
+) -> u8 {
+    match engine_teardown_outcome {
+        EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(_) => {
+            EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED as u8
+        }
+        EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(_)
+        | EngineTeardownOutcome::StillReferenced(_) => EXIT_STATUS_OF_A_REFUSAL,
+        EngineTeardownOutcome::Dropped if run_outcome.is_err() => EXIT_STATUS_OF_A_REFUSAL,
+        EngineTeardownOutcome::Dropped => 0,
     }
-    exit_code
 }
 
 /// What `tatolabd` writes to standard error once the teardown is over, in
@@ -276,6 +297,45 @@ mod tests {
                     &engine_teardown_outcome,
                 ),
                 ["the stream did not run: refused", teardown_description]
+            );
+        }
+    }
+
+    #[test]
+    fn a_stream_teardown_the_watchdog_abandoned_exits_with_the_watchdogs_status() {
+        for run_outcome in [Ok(()), Err("the stream did not run: refused".to_owned())] {
+            assert_eq!(
+                exit_status_once_the_engine_is_torn_down(
+                    &run_outcome,
+                    &EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(
+                        "a stream teardown was abandoned".to_owned(),
+                    ),
+                ),
+                124
+            );
+        }
+    }
+
+    #[test]
+    fn every_other_outcome_exits_as_a_refusal_or_succeeds() {
+        let refused_run: Result<(), String> = Err("the stream did not run: refused".to_owned());
+        assert_eq!(
+            exit_status_once_the_engine_is_torn_down(&Ok(()), &EngineTeardownOutcome::Dropped),
+            0
+        );
+        assert_eq!(
+            exit_status_once_the_engine_is_torn_down(&refused_run, &EngineTeardownOutcome::Dropped),
+            EXIT_STATUS_OF_A_REFUSAL
+        );
+        for engine_teardown_outcome in [
+            EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(
+                "a processor thread was abandoned".to_owned(),
+            ),
+            EngineTeardownOutcome::StillReferenced("a live reference was left".to_owned()),
+        ] {
+            assert_eq!(
+                exit_status_once_the_engine_is_torn_down(&Ok(()), &engine_teardown_outcome),
+                EXIT_STATUS_OF_A_REFUSAL
             );
         }
     }
