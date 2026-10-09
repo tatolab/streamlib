@@ -2494,6 +2494,41 @@ pub(crate) mod tests {
         );
     }
 
+    /// Every tool that acts on one stream advertises the optional `stream`
+    /// argument an agent names it with.
+    #[tokio::test]
+    async fn every_tool_acting_on_one_stream_advertises_an_optional_stream_argument() {
+        let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
+        for tool_name in [
+            "graph",
+            "tap",
+            "logs",
+            "add_node",
+            "remove_node",
+            "connect",
+            "disconnect",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == tool_name)
+                .unwrap_or_else(|| panic!("the `{tool_name}` tool is listed"));
+            assert!(
+                tool["inputSchema"]["properties"]["stream"].is_object(),
+                "`{tool_name}` must advertise `stream`: {}",
+                tool["inputSchema"]
+            );
+            let required = tool["inputSchema"]["required"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                !required.contains(&json!("stream")),
+                "`{tool_name}` must keep `stream` optional: {}",
+                tool["inputSchema"]
+            );
+        }
+    }
+
     // ------------------------------------------------------------------------
     // Resources and prompts
     // ------------------------------------------------------------------------

@@ -764,6 +764,38 @@ pub(crate) mod router_surface_tests {
         }
     }
 
+    /// A generated client names a stream through the `stream` query parameter
+    /// of every route that acts on one, so the spec must declare it optional.
+    #[tokio::test]
+    async fn the_openapi_spec_declares_an_optional_stream_query_on_every_route_acting_on_one_stream()
+     {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/openapi.json")
+            .body(Body::empty())
+            .unwrap();
+        let spec = json_body_of(request).await;
+
+        for path in ["/api/graph", "/api/registry", "/ws/tap/{channel}"] {
+            let parameters = spec["paths"][path]["get"]["parameters"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{path} must document its parameters: {spec}"));
+            let stream_parameter = parameters
+                .iter()
+                .find(|parameter| parameter["name"] == "stream")
+                .unwrap_or_else(|| panic!("{path} must declare `stream`: {parameters:?}"));
+            assert_eq!(
+                stream_parameter["in"], "query",
+                "{path}: {stream_parameter}"
+            );
+            assert_ne!(
+                stream_parameter["required"],
+                serde_json::json!(true),
+                "{path} must keep `stream` optional: {stream_parameter}"
+            );
+        }
+    }
+
     /// The stub stream's node catalog is the process-global native registry,
     /// so this registers a probe under a path no other test names and asserts
     /// on that path alone.
