@@ -1211,7 +1211,8 @@ fn the_cast_name_of_the_stream_a_load_names(
 ) -> Result<String> {
     let Some(requested_stream_name) = requested_stream_name else {
         return Err(Error::GraphError(format!(
-            "{what_is_loaded} names no stream; give it a name — `--name` on the command line"
+            "{what_is_loaded} names no stream; give it a name — \
+             `OptionsForLoadingOneStream::named`, or `--name` on the `tatolab` command line"
         )));
     };
     cast_exposed_name_to_url_safe(requested_stream_name)
@@ -1226,7 +1227,8 @@ fn the_cast_name_of_the_stream_a_load_names(
 fn a_stream_name_already_loaded_refusal(first: &LoadedStreamInThisRuntime) -> Error {
     Error::GraphError(format!(
         "a stream named `{}` is already loaded in this runtime, from `{}`; load this one under \
-         another name with `--name`",
+         another name — `OptionsForLoadingOneStream::named`, or `--name` on the `tatolab` \
+         command line",
         first.stream_name(),
         first.project_directory().display()
     ))
