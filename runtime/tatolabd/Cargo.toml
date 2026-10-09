@@ -21,8 +21,8 @@ path = "src/main.rs"
 hardware-tests = ["streamlib/hardware-tests"]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.43.0" }
-streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.43.0" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.43.1" }
+streamlib-media-builtins = { path = "../streamlib-media-builtins", version = "0.43.1" }
 streamlib-api-server = { path = "../streamlib-api-server" }
 clap = { version = "4.5", features = ["derive"] }
 tracing = { workspace = true }

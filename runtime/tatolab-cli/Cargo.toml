@@ -28,7 +28,7 @@ libc = { workspace = true }
 thiserror = { workspace = true }
 # The contract a running runtime offers its clients: the runtime directory and the node registry
 # it is found in, its log files, and the wire names and tap result shape its local API speaks.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.43.0" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.43.1" }
 # The MCP client of a runtime's local API: the official SDK's, over the local API socket.
 rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket"] }
 # One current-thread runtime per local API connection, driving its MCP client and its HTTP
@@ -40,7 +40,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 # `exchange --channel`: a tapped bag's frame header stripped by the transport's own accessor, then
 # its msgpack payload decoded.
-streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.43.0" }
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.43.1" }
 rmpv = { workspace = true }
 # A tapped bag's hex preview back to its framed bytes.
 hex = "0.4"

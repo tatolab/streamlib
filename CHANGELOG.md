@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.1](https://github.com/tatolab/streamlib/compare/v0.43.0...v0.43.1) (2026-10-09)
+
+
+### Features
+
+* **engine:** a port is read from outside its stream only at the level its stream exposes it ([#2708](https://github.com/tatolab/streamlib/issues/2708)) ([e70a20b](https://github.com/tatolab/streamlib/commit/e70a20be7b3dd0c8f07fb8269cb911b8236c0d37))
+
 ## [0.43.0](https://github.com/tatolab/streamlib/compare/v0.42.1...v0.43.0) (2026-10-09)
 
 
