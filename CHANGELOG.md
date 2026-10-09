@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.43.0](https://github.com/tatolab/streamlib/compare/v0.42.1...v0.43.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** `Runner` no longer carries per-graph methods (`add_processor`, `connect`, `start`, `stop`, `to_json`, `load_graph_snapshot`, …); load a stream (`load_an_empty_stream`, `load_stream_from_graph_snapshot`) and call them on the returned `LoadedStreamInThisRuntime`. `request_runtime_shutdown` is `request_the_shutdown_of_every_loaded_stream`, and `RuntimeOperations`' `request_runtime_shutdown` is `request_this_streams_shutdown`. The logging `init` is `hold_the_process_logging_pathway`.
+
+### Features
+
+* **engine:** one engine runs many streams, each with its own graph and bookkeeping ([#2704](https://github.com/tatolab/streamlib/issues/2704)) ([a33039e](https://github.com/tatolab/streamlib/commit/a33039e79bc98ab854a43ac99153c3002e6fa242))
+
 ## [0.42.1](https://github.com/tatolab/streamlib/compare/v0.42.0...v0.42.1) (2026-10-08)
 
 
