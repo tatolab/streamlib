@@ -1,5 +1,7 @@
 # examples-show-streams-only
 
+> **Approved by the owner, 2026-10-09**, as written, with its stated assumptions.
+
 An example shows a person writing and running a stream. It never shows engine work:
 embedding the engine in a host process, driving its executor, or wiring its internals.
 After this change:
