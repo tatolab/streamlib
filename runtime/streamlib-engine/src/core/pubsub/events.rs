@@ -231,12 +231,6 @@ pub enum RuntimeEvent {
     /// Emitted when this stream's shutdown is requested.
     RuntimeShutdown,
 
-    // Legacy variants (kept for compatibility)
-    #[doc(hidden)]
-    RuntimeStart,
-    #[doc(hidden)]
-    RuntimeStop,
-
     // ===== Runtime Errors =====
     RuntimeError {
         error: String,
