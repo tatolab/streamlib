@@ -676,15 +676,21 @@ impl Runner {
             RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, is_the_machines_shutdown_requested,
         };
 
-        if is_the_machines_shutdown_requested() {
-            tracing::info!(
-                "a machine shutdown was requested before the stream loaded; it was never loaded"
-            );
-            return Ok(
-                StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest,
-            );
-        }
-        let stream = self.build_the_stream_a_graph_load_names(graph, load_options)?;
+        let stream = match self.build_the_stream_a_graph_load_names(graph, load_options) {
+            Ok(stream) => stream,
+            // Read after the build, so a request landing during it abandons
+            // the load rather than refusing it.
+            Err(build_refusal) if is_the_machines_shutdown_requested() => {
+                tracing::info!(
+                    "a machine shutdown was requested before the stream loaded, so it was never \
+                     loaded; building it reported: {build_refusal}"
+                );
+                return Ok(
+                    StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest,
+                );
+            }
+            Err(build_refusal) => return Err(build_refusal),
+        };
         let load_outcome = std::thread::scope(|scope| {
             // Never sent on: the loading thread's end drops it, a panic included.
             let (load_ended_sender, load_ended_receiver) = std::sync::mpsc::channel::<()>();
@@ -2579,6 +2585,44 @@ mod tests {
         let refusal = refusal.to_string();
         assert!(refusal.contains("too-late"), "{refusal}");
         assert!(refusal.contains("shutting"), "{refusal}");
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+    }
+
+    /// A watched load the machine's shutdown reaches before or while the
+    /// stream is built is abandoned, never refused: its host exits as an
+    /// interrupt rather than as a refusal.
+    #[test]
+    #[serial]
+    fn a_watched_load_the_machines_shutdown_reaches_while_it_builds_is_abandoned() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        crate::core::runtime::request_the_shutdown_of_every_loaded_stream(
+            "the test shuts the machine down",
+        )
+        .expect("the machine's shutdown is requested");
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{
+                "name": "source",
+                "type": TickCountingInTheFirstStream::processor_class_import_path().as_str()
+            }]
+        }))
+        .expect("the test graph reads");
+
+        let load_outcome = runner
+            .load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested(
+                &graph,
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("too-late"),
+            )
+            .expect("a load the machine's shutdown reached is abandoned, not refused");
+
+        assert!(matches!(
+            load_outcome,
+            StreamLoadObservingMachineShutdownRequests::AbandonedForAMachineShutdownRequest
+        ));
         assert!(runner.names_of_the_loaded_streams().is_empty());
     }
 

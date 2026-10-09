@@ -920,6 +920,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::runtime::tests::a_call_naming_a_stream_not_loaded_is_refused_naming_the_loaded_streams",
                 "core::runtime::runtime::tests::the_machines_shutdown_walks_every_loaded_stream_to_its_end",
                 "core::runtime::runtime::tests::a_load_while_the_machine_shuts_down_is_refused_by_name",
+                "core::runtime::runtime::tests::a_watched_load_the_machines_shutdown_reaches_while_it_builds_is_abandoned",
                 "core::runtime::runtime::tests::an_unloaded_stream_frees_its_name_and_leaves_the_other_loaded",
                 "core::runtime::runtime::tests::stopping_an_already_stopped_stream_is_a_no_op",
                 "core::runtime::runtime::tests::an_unloaded_streams_surface_registrations_go_and_the_others_stay",
