@@ -71,8 +71,9 @@ Each loaded stream writes one or more **segments**, all in
 - The active segment opens as the stream loads, and is flushed, `fdatasync`ed and
   closed as it unloads, once the readers of its helpers' stdout / stderr and
   bridges have reached the end of what the helpers wrote (bounded at two
-  seconds) and every record queued for it before then is written. A record the
-  stream emits after that reaches the pretty mirror only.
+  seconds) and every record queued for it before then is written (bounded at two
+  seconds more). A record the stream emits after that, or one either bound cut
+  off, reaches the pretty mirror only, and a warning names the bound it outlasted.
 - `started_at_millis` is the wall-clock moment the stream loaded, so loading the
   same stream again — or a restart under a pinned `STREAMLIB_RUNTIME_ID` — starts
   a new set of segments.
@@ -182,9 +183,12 @@ calls, fd writes from native modules).
 ## Durability
 
 - **Clean shutdown** (a stream's unload — SIGTERM-driven or explicit —
-  or a test pathway's `StreamlibLoggingGuard::drop`): **zero loss**. Every
-  record the stream queued before its unload — its helpers' last lines
-  included — is written, flushed and `fdatasync`'d before the unload returns.
+  or a test pathway's `StreamlibLoggingGuard::drop`): **zero loss** within two
+  bounds. Every record the stream queued before its unload — its helpers' last
+  lines included — is written, flushed and `fdatasync`'d before the unload
+  returns, provided its helpers' pipe readers reach their end within two seconds
+  and the drain worker writes what was queued within two seconds more. A record
+  either bound cuts off reaches the pretty mirror only, and a warning says so.
 - **Hard crash** (SIGKILL, abort, power loss): up to the last
   `STREAMLIB_LOG_BATCH_MS` milliseconds of in-memory records may be
   lost. **Previously flushed batches are always complete on disk** —
