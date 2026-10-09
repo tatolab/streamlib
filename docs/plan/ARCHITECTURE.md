@@ -676,7 +676,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   that venv. Undecided: the registry's owner and
   standards, a manager UI, and what the app's own catalog does. [one-runtime-per-machine]
 
-## Consumers — examples & packages — IN-FLIGHT (→ jpeg-after-the-robotics-cut)
+## Consumers — examples & packages — IN-FLIGHT (→ jpeg-after-the-robotics-cut, examples-show-streams-only)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
 
 - **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
