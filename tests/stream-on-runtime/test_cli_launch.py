@@ -764,7 +764,7 @@ def test_the_scaffolded_app_reaches_a_running_graph(
         f"the node must render the stream it was loaded as; graph was {live_graph}"
     )
     assert live_graph["exposed"] == [
-        {"node": "invertingeffect", "port": "video_to_downstream"}
+        {"node": "invertingeffect", "port": "video_to_downstream", "level": "private"}
     ], f"the node must render the exposure the stream declared; graph was {live_graph}"
     assert {
         "testpatternsource",

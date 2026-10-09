@@ -12,6 +12,7 @@ stream module imports and compiles with no engine in the process. The graph
 from __future__ import annotations
 
 import copy
+import enum
 import inspect
 import math
 from collections.abc import Callable, Mapping
@@ -27,6 +28,7 @@ from ._exposed_name_cast import (
 from ._node_declaration import NODE_DECLARATION_DECLARED_STAMP
 
 __all__ = [
+    "Exposure",
     "NodeInputPortReference",
     "NodeOutputPortReference",
     "NodeReference",
@@ -35,6 +37,15 @@ __all__ = [
     "is_stream_function",
     "stream",
 ]
+
+class Exposure(enum.Enum):
+    """How far outside its stream an exposed output port may be read."""
+
+    PRIVATE = "private"
+    """Read by any other stream, and any code, on this machine."""
+    PUBLIC = "public"
+    """Read off this machine as well."""
+
 
 _StreamFunction = TypeVar("_StreamFunction", bound="Callable[[StreamBuilder], object]")
 
@@ -251,7 +262,7 @@ class StreamBuilder:
         self._name = _cast_name(name, "stream name")
         self._recorded_nodes_by_name: dict[str, _RecordedNode] = {}
         self._recorded_links: list[dict[str, dict[str, str]]] = []
-        self._exposed_output_ports: list[tuple[str, str]] = []
+        self._exposed_output_ports: dict[tuple[str, str], Exposure] = {}
 
     @property
     def name(self) -> str:
@@ -326,12 +337,19 @@ class StreamBuilder:
             }
         )
 
-    def expose(self, output: NodeOutputPortReference) -> None:
-        """Record `output` as one the stream offers beyond this machine."""
+    def expose(
+        self, output: NodeOutputPortReference, level: Exposure = Exposure.PRIVATE
+    ) -> None:
+        """Let `output` be read outside this stream: on this machine, or off it too at `PUBLIC`."""
         if not isinstance(output, NodeOutputPortReference):
             raise TypeError(
                 f"expose takes an output port of a node this stream added — "
                 f"`stream_builder.add(...).output(port_name)`. Got {output!r}."
+            )
+        if not isinstance(level, Exposure):
+            raise TypeError(
+                f"expose takes its level as a member of `Exposure` — `Exposure.PRIVATE` "
+                f"or `Exposure.PUBLIC`, imported from `tatolab.stream`. Got {level!r}."
             )
         self._refuse_a_node_this_stream_does_not_hold(output.node_name)
         exposed_output_port = (output.node_name, output.port_name)
@@ -340,7 +358,7 @@ class StreamBuilder:
                 f"stream `{self._name}` already exposes port `{output.port_name}` of node "
                 f"`{output.node_name}`; an output is exposed once"
             )
-        self._exposed_output_ports.append(exposed_output_port)
+        self._exposed_output_ports[exposed_output_port] = level
 
     def _typed_name_unless_taken(self, typed_name: str) -> str:
         cast = _cast_name(typed_name, "node name")
@@ -395,8 +413,8 @@ class StreamBuilder:
             ],
             "links": copy.deepcopy(self._recorded_links),
             "exposed": [
-                {"node": node_name, "port": port_name}
-                for node_name, port_name in self._exposed_output_ports
+                {"node": node_name, "port": port_name, "level": level.value}
+                for (node_name, port_name), level in self._exposed_output_ports.items()
             ],
         }
 

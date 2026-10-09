@@ -80,6 +80,7 @@ from ._node_owned_window_protocols import NodeOwnedWindow as NodeOwnedWindow
 from ._node_owned_window_protocols import (
     NodeOwnedWindowEvents as NodeOwnedWindowEvents,
 )
+from ._stream_graph_builder import Exposure as Exposure
 from ._stream_graph_builder import NodeInputPortReference as NodeInputPortReference
 from ._stream_graph_builder import (
     NodeOutputPortReference as NodeOutputPortReference,
@@ -133,6 +134,7 @@ __all__ = [
     "DisplayWindowConfig",
     "EncodedAudioPacket",
     "EncodedVideoFrame",
+    "Exposure",
     "GlslPixelEffect",
     "GlslPixelEffectDialType",
     "GpuContextFullAccess",

@@ -170,7 +170,9 @@ def test_the_scaffolded_project_compiles_with_no_runtime_in_its_venv(
         "nodes.brightness_meter:BrightnessMeter",
         DisplayWindow.type,
     ]
-    assert stream_graph["exposed"] == [{"node": "invertingeffect", "port": "video_to_downstream"}]
+    assert stream_graph["exposed"] == [
+        {"node": "invertingeffect", "port": "video_to_downstream", "level": "private"}
+    ]
 
 
 def test_the_test_pattern_render_names_no_camera(
