@@ -867,6 +867,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_machine_is_refused_naming_that_machine",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_stream_or_no_address_is_refused_by_name",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_in_this_stream_is_named_by_its_address_and_not_by_its_channel",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_read_only_from_other_streams_is_named_by_its_address",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::removing_a_link_reading_another_stream_takes_its_edge_and_leaves_its_readers_other_links_wired",
                 "core::graph_snapshot",
                 "core::runtime::machine_state_directory",

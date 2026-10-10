@@ -740,8 +740,9 @@ fn subscriber_ring_depth_of_input_port(
 /// one naming another machine as [`Error::PortAddressNamesAnotherMachine`];
 /// one naming another stream as [`Error::InvalidPortAddress`] naming both, since
 /// a stream taps its own ports. A channel's iceoryx2 data service only exists
-/// once a `connect()` has wired its source, so an address no link carries from
-/// is genuinely untappable and answers [`Error::TapChannelNotFound`].
+/// once a link has wired its source, so an address that neither a link of this
+/// stream nor a reader from another stream reads is genuinely untappable and
+/// answers [`Error::TapChannelNotFound`].
 pub(crate) fn find_the_source_a_caller_named(
     graph: &Graph,
     this_machine: &crate::core::runtime::MachineName,
@@ -767,7 +768,7 @@ pub(crate) fn find_the_source_a_caller_named(
         .id
         .clone();
     let source = OutputLinkPortRef::new(processor_id, address.port_name());
-    if every_link_carrying_from(graph, &source).next().is_some() {
+    if channel_destination_count(graph, &source) > 0 {
         Ok(source)
     } else {
         Err(not_found())
@@ -4455,6 +4456,77 @@ mod tests {
         assert!(
             matches!(refused, Error::InvalidPortAddress(_)),
             "{refused:?}"
+        );
+    }
+
+    /// A port whose only readers are links in other streams is tapped by its
+    /// address, since those links installed its publisher; once their
+    /// registrations are dropped it answers `TapChannelNotFound` again.
+    ///
+    /// Fail-without-fix: count the links of this stream alone and the tap is
+    /// refused a channel another stream's link keeps live.
+    #[test]
+    fn a_port_read_only_from_other_streams_is_named_by_its_address() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::core::graph::{
+            OutputPortExposureLevel, OutputPortReaderOutsideItsStream, ReaderOfAnExposedOutputPort,
+        };
+
+        let mut graph = Graph::new();
+        let src_id = add_mock_output_only(&mut graph);
+        let source_node_name = graph
+            .traversal()
+            .v(src_id.as_str())
+            .first()
+            .expect("the source node is in the graph")
+            .display_name
+            .clone();
+        let address = format!("main/{source_node_name}/out1");
+        let this_machine = the_machine_these_tests_run_on();
+        assert!(
+            matches!(
+                find_the_source_a_caller_named(&graph, &this_machine, "main", &address),
+                Err(Error::TapChannelNotFound(_))
+            ),
+            "a port nothing reads has no channel to tap"
+        );
+
+        let still_registered = Arc::new(AtomicBool::new(true));
+        let mut exposed_ports = ExposedOutputPortsComponent::default();
+        let _ = exposed_ports.set_level("out1", OutputPortExposureLevel::Private);
+        assert!(
+            exposed_ports
+                .register_reader(
+                    "out1",
+                    ReaderOfAnExposedOutputPort::new(
+                        Arc::clone(&still_registered),
+                        OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+                        Box::new(|_why| {}),
+                    ),
+                )
+                .is_ok()
+        );
+        graph
+            .traversal_mut()
+            .v(src_id.as_str())
+            .first_mut()
+            .expect("the source is in its graph")
+            .insert_component_without_rendering_it(exposed_ports);
+
+        let resolved = find_the_source_a_caller_named(&graph, &this_machine, "main", &address)
+            .expect("a port another stream's link reads is tapped by its address");
+        assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
+        assert_eq!(resolved.port_name(), "out1");
+
+        still_registered.store(false, Ordering::Release);
+        assert!(
+            matches!(
+                find_the_source_a_caller_named(&graph, &this_machine, "main", &address),
+                Err(Error::TapChannelNotFound(_))
+            ),
+            "a reader whose registration was dropped keeps no channel tappable"
         );
     }
 
