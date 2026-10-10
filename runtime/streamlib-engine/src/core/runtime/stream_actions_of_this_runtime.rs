@@ -252,7 +252,8 @@ pub enum KeptStreamReloadAtTheStart {
         failed_because: String,
     },
     /// The kept stream did not re-load, and is recorded failed for it — unless
-    /// a machine shutdown abandoned the re-load.
+    /// the refusal was the engine's own, or a machine shutdown abandoned the
+    /// re-load, when it stays kept.
     NotReloaded {
         /// The stream's URL-safe cast name.
         stream_name: String,
@@ -656,8 +657,9 @@ impl Runner {
     /// the owner's rulings applied, and record it neither stopped nor failed,
     /// its crash count reset. Refused for a stream already loaded, an attached
     /// one, and a name no record holds. A failed stream whose retry is refused
-    /// stays failed for the retry's reason, its crash count reset; one whose
-    /// retry crashes the runtime stays failed as it was.
+    /// stays failed for the retry's reason, its crash count reset — or as it
+    /// was, when the refusal was the engine's own; one whose retry crashes the
+    /// runtime stays failed as it was.
     pub fn start_stream(&self, stream_name: &str) -> Result<StreamStartOutcome> {
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let stream_cast = self.the_cast_name_of_a_stream_an_action_names(stream_name)?;
@@ -684,7 +686,13 @@ impl Runner {
         };
         let stream = match self.load_a_kept_stream_from_its_record(&kept_record) {
             Ok(stream) => stream,
-            Err(retry_refusal) if kept_record.is_failed() => {
+            Err(retry_refusal)
+                if kept_record.is_failed()
+                    && !matches!(
+                        retry_refusal,
+                        Error::EngineResourceRefusedAtAStreamsStart(_)
+                    ) =>
+            {
                 kept_record.failed_because = Some(format!(
                     "`start` retried it, and it did not load: {retry_refusal}"
                 ));
@@ -870,8 +878,9 @@ impl Runner {
     /// Load and start every kept stream neither stopped nor failed, as a
     /// runtime does at its start, reporting each record it tried in file-name
     /// order. A stream that does not re-load is recorded failed for the
-    /// reason, unless a machine shutdown abandoned the re-load; a record that
-    /// cannot be read is logged and left in place.
+    /// reason, unless the refusal was the engine's own — its GPU context — or
+    /// a machine shutdown abandoned the re-load; a record that cannot be read
+    /// is logged and left in place.
     pub fn reload_every_kept_stream_neither_stopped_nor_failed(
         &self,
     ) -> Vec<KeptStreamReloadAtTheStart> {
@@ -951,6 +960,16 @@ impl Runner {
                         stream.node_count()
                     );
                     reloads.push(KeptStreamReloadAtTheStart::Reloaded { stream_name });
+                }
+                Err(reload_refusal @ Error::EngineResourceRefusedAtAStreamsStart(_)) => {
+                    tracing::error!(
+                        "the kept stream `{stream_name}` was not re-loaded, and stays kept for \
+                         the runtime's next start: {reload_refusal}"
+                    );
+                    reloads.push(KeptStreamReloadAtTheStart::NotReloaded {
+                        stream_name,
+                        refusal: reload_refusal,
+                    });
                 }
                 Err(reload_refusal) if is_the_machines_shutdown_requested() => {
                     tracing::info!(

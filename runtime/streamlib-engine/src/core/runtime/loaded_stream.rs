@@ -384,9 +384,13 @@ impl LoadedStreamInThisRuntime {
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStarting);
 
         let engine = &self.engine_resources_shared_by_every_stream;
-        let gpu = engine.gpu_context_view_for_a_starting_stream(|engine_gpu_context| {
-            self.this_streams_view_of_the_engines_gpu_context(engine_gpu_context)
-        })?;
+        let gpu = engine
+            .gpu_context_view_for_a_starting_stream(|engine_gpu_context| {
+                self.this_streams_view_of_the_engines_gpu_context(engine_gpu_context)
+            })
+            .map_err(|engine_refusal| {
+                Error::EngineResourceRefusedAtAStreamsStart(engine_refusal.to_string())
+            })?;
 
         let time = Arc::new(TimeContext::new());
         let audio_clock = an_audio_clock_for_one_stream();

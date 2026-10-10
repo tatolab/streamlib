@@ -4,7 +4,8 @@
 //! A kept stream that keeps crashing `tatolabd` is recorded failed, GPU-free:
 //! the crash-on-demand test node crashes the runtime while its stream loads,
 //! twice, and the next start lists the stream failed with its reason and
-//! skips it; `start_stream` retries it. Built with
+//! skips it; `start_stream` retries it past its crash, to the GPU the runtime
+//! is left without, which changes nothing the stream owns. Built with
 //! `--features machine-directories-under-a-test-root`, which registers the
 //! node.
 
@@ -60,6 +61,8 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
         serde_json::json!({}),
     )
     .json();
+    let after_two_crashes_and_the_start_that_failed_it =
+        kept_stream_records.read("crasher").unwrap().unwrap();
     assert_eq!(listed["streams"][0]["name"], "crasher", "{listed}");
     assert_eq!(listed["streams"][0]["state"], "failed", "{listed}");
     let failed_because = listed["streams"][0]["failed_because"]
@@ -86,24 +89,23 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
     runtime.interrupt_and_expect_a_clean_exit();
 
     assert!(
-        retried.is_error,
-        "a stream's start needs the GPU this runtime was left without: {}",
+        retried.is_error
+            && retried
+                .text
+                .contains("the engine could not give the stream its GPU context"),
+        "the retry did not load the stream past its crash to the GPU this runtime was left \
+         without: {}",
         retried.text
     );
     assert!(
         !run_in_progress_record.exists(),
         "a clean stop left the run-in-progress record behind"
     );
-    let after_the_retry = kept_stream_records.read("crasher").unwrap().unwrap();
-    assert_eq!(after_the_retry.runtime_crashes_in_a_row_implicating_it, 0);
-    let failed_because = after_the_retry
-        .failed_because
-        .expect("a refused retry stays failed");
-    assert!(
-        failed_because.contains("`start` retried it, and it did not load"),
-        "the retry did not load the stream past its crash: {failed_because}"
+    assert_eq!(
+        kept_stream_records.read("crasher").unwrap().unwrap(),
+        after_two_crashes_and_the_start_that_failed_it,
+        "a retry the engine refused changes nothing the stream owns"
     );
-    assert!(!failed_because.contains("SIGSEGV"), "{failed_because}");
 }
 
 #[test]

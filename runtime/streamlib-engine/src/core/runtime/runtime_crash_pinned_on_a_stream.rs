@@ -102,8 +102,8 @@ static STREAM_THIS_THREAD_WORKS_FOR_KEY: OnceLock<Option<libc::pthread_key_t>> =
 type StreamSlotOfOneThread = Cell<StreamThisThreadWorksFor>;
 
 extern "C" fn free_the_stream_slot_of_an_exiting_thread(stream_slot: *mut libc::c_void) {
-    // SAFETY: the key's only values are boxes `this_threads_stream_slot`
-    // leaked, and the key's value is cleared before this runs.
+    // SAFETY: the key's only values are boxes
+    // `mark_this_thread_as_working_for` leaked, and the key's value is cleared before this runs.
     drop(unsafe { Box::from_raw(stream_slot.cast::<StreamSlotOfOneThread>()) });
 }
 
@@ -116,11 +116,11 @@ fn the_stream_this_thread_works_for_key() -> Option<libc::pthread_key_t> {
             libc::pthread_key_create(&mut key, Some(free_the_stream_slot_of_an_exiting_thread))
         } {
             0 => Some(key),
-            _ => {
+            error_code => {
                 tracing::warn!(
                     "no thread key for the stream a thread works for could be made, so a crash \
                      is pinned on no stream: {}",
-                    std::io::Error::last_os_error()
+                    std::io::Error::from_raw_os_error(error_code)
                 );
                 None
             }
