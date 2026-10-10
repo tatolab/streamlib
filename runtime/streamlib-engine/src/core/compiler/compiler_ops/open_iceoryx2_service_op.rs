@@ -4904,43 +4904,6 @@ mod tests {
             );
         }
 
-        /// Releasing the source's side of a link reading another stream
-        /// returns while the source stream's graph lock is held elsewhere.
-        ///
-        /// Fail-without-fix: release through the source's processor in its
-        /// graph, as an in-stream disconnect does, and the release waits on
-        /// the lock past the bound.
-        #[test]
-        fn releasing_the_source_side_takes_no_lock_of_the_source_graph() {
-            let mut two_graphs = NativeSourceAndReaderInTwoGraphs::new();
-            let (_, wired_on) = two_graphs.wire().expect("the link wires across two graphs");
-            let source_side = SourceSideOfALinkReadingAnotherStream::released_when_dropped(
-                wired_on
-                    .as_ref()
-                    .expect("a native source's side is its output writer"),
-                "out1",
-                &two_graphs.link_id,
-            );
-            let source_graph = parking_lot::RwLock::new(two_graphs.source_graph);
-
-            let released = {
-                let _the_source_graph_held_elsewhere = source_graph.write();
-                std::thread::scope(|scope| {
-                    let (released_tx, released_rx) = std::sync::mpsc::channel();
-                    scope.spawn(move || {
-                        drop(source_side);
-                        let _ = released_tx.send(());
-                    });
-                    released_rx
-                        .recv_timeout(LONGEST_A_WIRING_OP_MAY_TAKE_BESIDE_A_HELPER_SETTING_UP)
-                        .is_ok()
-                })
-            };
-
-            assert!(released, "the release waited on the source graph's lock");
-            assert_eq!(two_graphs.source_output.channel_notifier_count("out1"), 0);
-        }
-
         /// A source processor that is gone makes releasing its side a no-op,
         /// and the release never kept it alive; one still there is told.
         #[test]

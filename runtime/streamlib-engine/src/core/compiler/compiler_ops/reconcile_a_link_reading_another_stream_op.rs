@@ -634,6 +634,9 @@ mod tests {
     /// How long a test waits for a spawned cut to land on the reading stream.
     const A_CUT_LANDS_WITHIN: Duration = Duration::from_secs(10);
 
+    /// How long releasing a link's source side may take with no lock to wait on.
+    const A_RELEASE_RETURNS_WITHIN: Duration = Duration::from_secs(2);
+
     /// Give node `node_name` of `stream` a live instance of `P`, holding the
     /// iceoryx2 resources its ports call for, as a start leaves it.
     fn run_the_node<P>(
@@ -739,6 +742,21 @@ mod tests {
                 )
                 .expect("the node is added");
             stream
+        }
+
+        /// Add a node `node_name` of `node_type` to `stream`; its id.
+        fn add_a_node_to(
+            stream: &LoadedStreamInThisRuntime,
+            node_type: crate::core::descriptors::ProcessorClassImportPath,
+            node_name: &str,
+        ) -> crate::core::graph::ProcessorUniqueId {
+            stream
+                .add_processor_reporting_its_name(
+                    ProcessorSpec::new(node_type, Value::Null)
+                        .with_display_name(node_name.to_string()),
+                )
+                .expect("the node is added")
+                .processor_id
         }
 
         /// A stream `a` whose `camera` runs, its `out1` private.
@@ -1030,6 +1048,131 @@ mod tests {
             .unwrap();
         streams.display_input.receive_pending();
         assert_eq!(streams.display_input.drain("in1").len(), 1);
+    }
+
+    /// A commit's WIRE phase over a link that waits, a link that is refused
+    /// and a link in the reading stream succeeds: the one in the stream is
+    /// wired and carries bags, and the other two say why they carry nothing.
+    ///
+    /// Fail-without-fix: hand a waiting or refused link's outcome back as an
+    /// error and the phase fails before the link in the stream is wired.
+    #[test]
+    fn an_awaiting_or_refused_link_never_fails_the_commit_it_is_wired_in() {
+        let streams = TwoStreamsReadAsRunning::load();
+        let in_stream_source_id = TwoStreamsReadAsRunning::add_a_node_to(
+            &streams.b,
+            MockOutputOnlyProcessor::processor_class_import_path(),
+            "pattern",
+        );
+        let (pattern_output, _) =
+            run_the_node::<MockOutputOnlyProcessor::Processor>(&streams.b, "pattern");
+        let pattern_output = pattern_output.expect("an output-only mock holds an output writer");
+        streams
+            .a
+            .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Internal)
+            .unwrap();
+        let refused = streams.link_the_display_from(camera_out1_of("a"));
+        let awaiting = streams.link_the_display_from(camera_out1_of("nowhere"));
+        let display = streams.b.the_node_named("display").unwrap();
+        let in_stream = streams
+            .b
+            .connect(
+                OutputLinkPortRef::new(in_stream_source_id, "out1"),
+                InputLinkPortRef::new(display.processor_id, "in1"),
+            )
+            .expect("a link in the stream is added");
+
+        let links_wired = streams.b.compiler.wire_every_link_a_plan_adds_for_a_test(
+            &[refused.clone(), awaiting.clone(), in_stream.clone()],
+            &streams.b,
+        );
+
+        assert_eq!(
+            links_wired.expect("a link that waits or is refused never fails the commit"),
+            1
+        );
+        let refused = streams.the_link_as_graph_renders_it(&refused);
+        assert_eq!(refused["state"], "error", "{refused}");
+        assert!(
+            refused["error_reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("internal")),
+            "{refused}"
+        );
+        let awaiting = streams.the_link_as_graph_renders_it(&awaiting);
+        assert_eq!(awaiting["state"], "awaiting_remote", "{awaiting}");
+        assert_eq!(
+            awaiting["awaiting_remote_reason"],
+            "the stream `nowhere` is not loaded on this machine; the link wires when it loads"
+        );
+        let in_stream = streams.the_link_as_graph_renders_it(&in_stream);
+        assert_eq!(in_stream["state"], "wired", "{in_stream}");
+        pattern_output
+            .write_raw("out1", b"a bag of the reading stream's own", 0)
+            .unwrap();
+        streams.display_input.receive_pending();
+        assert_eq!(streams.display_input.drain("in1").len(), 1);
+    }
+
+    /// Closing a link reading another stream releases the source's side —
+    /// the link's notifier and the publisher on the source's port — while the
+    /// source stream's graph lock is held elsewhere.
+    ///
+    /// Fail-without-fix: release through the source's processor in the
+    /// source stream's graph, as a close of a link in one stream does, and the
+    /// close waits on that lock past the bound.
+    #[test]
+    fn releasing_the_source_side_takes_no_lock_of_the_source_graph() {
+        let streams = TwoStreamsReadAsRunning::load();
+        let link_id = streams.link_the_display_from(camera_out1_of("a"));
+        assert_eq!(
+            reconcile_a_link_reading_another_stream(&streams.b, &link_id),
+            HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired)
+        );
+        assert_eq!(streams.camera_output.channel_notifier_count("out1"), 1);
+
+        let (closed_while_the_source_graph_was_held, notifiers_while_it_was_held) =
+            std::thread::scope(|scope| {
+                let (held_tx, held_rx) = std::sync::mpsc::channel();
+                let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+                let source_stream = &streams.a;
+                scope.spawn(move || {
+                    source_stream.compiler.scope(|_graph, _tx| {
+                        let _ = held_tx.send(());
+                        let _ = release_rx.recv();
+                    })
+                });
+                held_rx.recv().expect("the source's graph is held");
+                let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+                let reading_stream = &streams.b;
+                let link_id = &link_id;
+                scope.spawn(move || {
+                    reading_stream
+                        .compiler
+                        .scope(|graph, _tx| {
+                            crate::core::compiler::compiler_ops::close_iceoryx2_service(
+                                graph, link_id,
+                            )
+                        })
+                        .expect("the link closes");
+                    let _ = closed_tx.send(());
+                });
+                let closed = closed_rx.recv_timeout(A_RELEASE_RETURNS_WITHIN).is_ok();
+                let notifiers = streams.camera_output.channel_notifier_count("out1");
+                let _ = release_tx.send(());
+                (closed, notifiers)
+            });
+
+        assert!(
+            closed_while_the_source_graph_was_held,
+            "the close waited on the source stream's graph lock"
+        );
+        assert_eq!(notifiers_while_it_was_held, 0);
+        assert!(!streams.camera_output.has_channel_publisher("out1"));
+        assert_eq!(
+            TwoStreamsReadAsRunning::readers_registered_against_the_camera_of(&streams.a),
+            0
+        );
     }
 
     /// A source stream whose graph is held past the bound leaves the link

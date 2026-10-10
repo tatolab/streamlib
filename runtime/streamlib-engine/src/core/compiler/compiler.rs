@@ -25,6 +25,8 @@ use crate::core::graph::{
 };
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
+use crate::core::runtime::LoadedStreamInThisRuntime;
+use crate::iceoryx2::Iceoryx2Node;
 
 /// Compiles graph changes into running processor state.
 pub struct Compiler {
@@ -108,6 +110,26 @@ impl Compiler {
         self.one_commit_at_a_time.lock()
     }
 
+    /// Run a commit's WIRE phase over `links_to_add` of this compiler's graph
+    /// as `reading_stream`, without the processors a start leaves running;
+    /// how many it wired.
+    #[cfg(test)]
+    pub(crate) fn wire_every_link_a_plan_adds_for_a_test(
+        &self,
+        links_to_add: &[LinkUniqueId],
+        reading_stream: &Arc<LoadedStreamInThisRuntime>,
+    ) -> Result<usize> {
+        wire_every_link_a_plan_adds(
+            &self.graph,
+            links_to_add,
+            Some(reading_stream),
+            &reading_stream
+                .engine_resources_shared_by_every_stream()
+                .iceoryx2_node,
+            reading_stream.loaded_stream_identity(),
+        )
+    }
+
     /// The operations logged and not yet committed, in the order they were
     /// logged.
     #[cfg(test)]
@@ -158,6 +180,35 @@ impl Compiler {
         abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
     ) -> Result<()> {
         let mut result = CompileResult::default();
+        let compiled = Self::compile_counting_into(
+            graph_arc,
+            operations,
+            runtime_ctx,
+            abandoned_processor_threads,
+            &mut result,
+        );
+        // Processors this compile created may be the sources links in other
+        // streams wait on, and they run whether or not the rest of it failed.
+        if result.processors_created > 0
+            && let Some(this_stream) = runtime_ctx.this_stream()
+        {
+            this_stream
+                .engine_resources_shared_by_every_stream()
+                .re_plan_every_link_reading_the_stream(this_stream.stream_name());
+        }
+        compiled
+    }
+
+    /// Compile `operations` against `graph_arc`, counting what it did into
+    /// `result` as it goes, so a compile that fails part-way still says what
+    /// it created.
+    fn compile_counting_into(
+        graph_arc: Arc<RwLock<Graph>>,
+        operations: Vec<PendingOperation>,
+        runtime_ctx: &Arc<RuntimeContext>,
+        abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+        result: &mut CompileResult,
+    ) -> Result<()> {
         let the_stream_the_compile_belongs_to = runtime_ctx.loaded_stream_identity();
         // =====================================================================
         // 1. Validate and categorize operations
@@ -298,52 +349,13 @@ impl Compiler {
         // =====================================================================
         if !plan.links_to_add.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Wire);
-            for link_id in &plan.links_to_add {
-                let (from_port, to_port, reads_another_stream) = {
-                    let graph = graph_arc.read();
-                    let link = graph.traversal().e(link_id).first().ok_or_else(|| {
-                        Error::LinkNotFound(format!("Link '{}' not found", link_id))
-                    })?;
-                    (
-                        link.source().to_string(),
-                        link.to_port().to_string(),
-                        link.source_in_this_stream().is_none(),
-                    )
-                };
-
-                the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                    RuntimeEvent::CompilerWillWireLink {
-                        link_id: link_id.to_string(),
-                        from_port: from_port.clone(),
-                        to_port: to_port.clone(),
-                    },
-                );
-
-                let wired = if reads_another_stream {
-                    wire_a_link_reading_another_stream(runtime_ctx, link_id)
-                } else {
-                    tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
-                    super::compiler_ops::open_iceoryx2_service(
-                        &mut graph_arc.write(),
-                        link_id,
-                        runtime_ctx.iceoryx2_node(),
-                    )?;
-                    true
-                };
-                if !wired {
-                    continue;
-                }
-
-                the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                    RuntimeEvent::CompilerDidWireLink {
-                        link_id: link_id.to_string(),
-                        from_port,
-                        to_port,
-                    },
-                );
-
-                result.links_wired += 1;
-            }
+            result.links_wired += wire_every_link_a_plan_adds(
+                &graph_arc,
+                &plan.links_to_add,
+                runtime_ctx.this_stream().as_ref(),
+                runtime_ctx.iceoryx2_node(),
+                the_stream_the_compile_belongs_to,
+            )?;
             tracing::debug!("[{}] Completed", CompilePhase::Wire);
         }
 
@@ -386,16 +398,6 @@ impl Compiler {
             .publish_on_this_streams_topic(RuntimeEvent::CompilerDidCompile);
         tracing::info!("Compile complete: {}", result);
 
-        // Processors this compile created may be the sources links in other
-        // streams wait on.
-        if result.processors_created > 0
-            && let Some(this_stream) = runtime_ctx.this_stream()
-        {
-            this_stream
-                .engine_resources_shared_by_every_stream()
-                .re_plan_every_link_reading_the_stream(this_stream.stream_name());
-        }
-
         if !abandoned_in_this_compile.is_empty() {
             return Err(Error::Runtime(
                 DescriptionOfTheAbandonedProcessorThreads(&abandoned_in_this_compile).to_string(),
@@ -405,16 +407,81 @@ impl Compiler {
     }
 }
 
-/// Reconcile link `link_id`, which reads another stream, against that stream;
-/// whether it is wired now or handed to its out-of-process ends. A link that
-/// waits or was refused says so in its own state and never fails the commit.
+/// Wire each of `links_to_add` in `graph_arc`, telling the stream's topic
+/// before and after; how many were wired. A link in this stream that cannot be
+/// wired fails the phase; a link reading another stream is reconciled against
+/// that stream through `reading_stream`, and one that waits or was refused
+/// says so in its own state and never fails it.
+fn wire_every_link_a_plan_adds(
+    graph_arc: &RwLock<Graph>,
+    links_to_add: &[LinkUniqueId],
+    reading_stream: Option<&Arc<LoadedStreamInThisRuntime>>,
+    iceoryx2_node: &Iceoryx2Node,
+    the_stream_the_compile_belongs_to: &LoadedStreamIdentity,
+) -> Result<usize> {
+    let mut links_wired = 0;
+    for link_id in links_to_add {
+        let (from_port, to_port, reads_another_stream) = {
+            let graph = graph_arc.read();
+            let link = graph
+                .traversal()
+                .e(link_id)
+                .first()
+                .ok_or_else(|| Error::LinkNotFound(format!("Link '{}' not found", link_id)))?;
+            (
+                link.source().to_string(),
+                link.to_port().to_string(),
+                link.source_in_this_stream().is_none(),
+            )
+        };
+
+        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+            RuntimeEvent::CompilerWillWireLink {
+                link_id: link_id.to_string(),
+                from_port: from_port.clone(),
+                to_port: to_port.clone(),
+            },
+        );
+
+        let wired = if reads_another_stream {
+            wire_a_link_reading_another_stream(reading_stream, link_id)
+        } else {
+            tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
+            super::compiler_ops::open_iceoryx2_service(
+                &mut graph_arc.write(),
+                link_id,
+                iceoryx2_node,
+            )?;
+            true
+        };
+        if !wired {
+            continue;
+        }
+
+        the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
+            RuntimeEvent::CompilerDidWireLink {
+                link_id: link_id.to_string(),
+                from_port,
+                to_port,
+            },
+        );
+
+        links_wired += 1;
+    }
+    Ok(links_wired)
+}
+
+/// Reconcile link `link_id` of `reading_stream`, which reads another stream,
+/// against that stream; whether it is wired now or handed to its
+/// out-of-process ends. A link that waits or was refused says so in its own
+/// state and never fails the commit.
 fn wire_a_link_reading_another_stream(
-    runtime_ctx: &Arc<RuntimeContext>,
+    reading_stream: Option<&Arc<LoadedStreamInThisRuntime>>,
     link_id: &LinkUniqueId,
 ) -> bool {
     use super::compiler_ops::HowALinkReadingAnotherStreamWasReconciled;
 
-    let Some(reading_stream) = runtime_ctx.this_stream() else {
+    let Some(reading_stream) = reading_stream else {
         tracing::warn!(
             "[{}] {} reads another stream, and the stream compiling it is gone; not wired",
             CompilePhase::Wire,
@@ -423,7 +490,7 @@ fn wire_a_link_reading_another_stream(
         return false;
     };
     let how_it_was_reconciled =
-        super::compiler_ops::reconcile_a_link_reading_another_stream(&reading_stream, link_id);
+        super::compiler_ops::reconcile_a_link_reading_another_stream(reading_stream, link_id);
     tracing::info!(
         "[{}] {} reads another stream: {:?}",
         CompilePhase::Wire,

@@ -3,8 +3,9 @@
 
 //! Links between started streams where a test has to reach inside the engine:
 //! holding a stream's commits so a re-added source node is exposed before the
-//! reading stream hears of it, and a source stream abandoned by its teardown
-//! watchdog. Starts real streams, so these run on the rig only.
+//! reading stream hears of it, a compile that fails after it created a
+//! source, and a source stream abandoned by its teardown watchdog. Starts real
+//! streams, so these run on the rig only.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
@@ -446,4 +447,82 @@ fn an_awaiting_link_never_fails_the_commit() {
     b.wait_until_every_processor_is_running(THE_ENGINE_ANSWERS_WITHIN)
         .expect("the display runs beside its links that carry nothing");
     assert_eq!(bags_tallied_as("never-carries"), 0);
+}
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[serial]
+fn a_compile_that_creates_a_source_and_then_fails_still_wakes_the_links_waiting_on_it() {
+    ensure_the_test_processors_are_registered();
+    let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
+    let runner = Runner::new().expect("the engine builds");
+    let load = |stream_name: &str| {
+        runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named(stream_name),
+            )
+            .expect("the stream loads")
+    };
+    let a = load("a");
+    let display_of_a = add_a_display_tallying_into(&a, "a-display-of-the-failed-compile");
+    let b = load("b");
+    let display_of_b = add_a_display_tallying_into(&b, "woken-by-a-compile-that-failed");
+    let link_id = b
+        .connect_from_an_output_port_in_another_stream(camera_video_of_the_stream_a(), display_of_b)
+        .expect("a link added before its stream starts is checked when it wires");
+    start(&a);
+    start(&b);
+    let events_of_b = EveryEventOfOneStream::listen_to(&b);
+    let rendered =
+        events_of_b.until_the_link(&b, &link_id, reads_awaiting_remote_because("\"camera\""));
+    assert!(
+        reads_awaiting_remote_because("\"camera\"")(&rendered),
+        "{rendered}"
+    );
+
+    // One batch creates the camera and then refuses a config update of the
+    // display beside it, after the camera already runs.
+    a.compiler.scope(|graph, tx| {
+        let camera = graph
+            .traversal_mut()
+            .add_v(
+                ProcessorSpec::new(
+                    BagSourceOfALinkBetweenStreams::processor_class_import_path(),
+                    serde_json::Value::Null,
+                )
+                .with_display_name("camera".to_string()),
+            )
+            .expect("the camera's type resolves")
+            .first()
+            .expect("the camera is added")
+            .id
+            .clone();
+        tx.log(crate::core::compiler::PendingOperation::AddProcessor(
+            camera,
+        ));
+        tx.log(
+            crate::core::compiler::PendingOperation::UpdateProcessorConfig {
+                processor_id: display_of_a.processor_id().clone(),
+                config_to_apply: serde_json::json!({ "tally": 7 }),
+            },
+        );
+    });
+    a.set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+    let compiled = a.compiler.commit(
+        &a.runtime_context_while_started()
+            .expect("a started stream holds its runtime context"),
+    );
+    assert!(
+        compiled.is_err(),
+        "the display of `a` refuses a tally that is not a string"
+    );
+
+    let rendered = events_of_b.until_the_link(&b, &link_id, reads_wired);
+    assert!(reads_wired(&rendered), "{rendered}");
+    assert!(wait_until_tallied("woken-by-a-compile-that-failed", 5));
 }
