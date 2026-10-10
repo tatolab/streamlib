@@ -134,17 +134,17 @@ echo "[e2e] Loading $SCRIPT_DIR/$STREAM_ENTRY_FILE_NAME as $STREAM_NAME with \`t
     >"$STREAM_RUN_LOG_FILE" 2>&1 &
 STREAM_RUN_PID=$!
 
-# ── Wait for the stream to answer ────────────────────────────────────
-# The stream answers `graph --stream` only once its graph has loaded, so that
-# is its own liveness signal — not a fixed sleep — and the name it was loaded
-# under is what every later verb addresses.
-if ! wait_until_the_stream_answers "$STREAM_NAME" "$STREAM_RUN_PID" "$LOAD_SECS"; then
-    echo "[e2e] FAIL: the stream did not answer within ${LOAD_SECS}s"
+# ── Wait for the stream to run ───────────────────────────────────────
+# Every node reading `Running` in `graph --stream` is the stream's own liveness
+# signal — not a fixed sleep — and the name it was loaded under is what every
+# later verb addresses.
+if ! wait_until_the_stream_is_running "$STREAM_NAME" "$STREAM_RUN_PID" "$LOAD_SECS"; then
+    echo "[e2e] FAIL: the stream was not running within ${LOAD_SECS}s"
     tail -30 "$STREAM_RUN_LOG_FILE"
     tail -30 "$LOG_FILE"
     exit 1
 fi
-echo "[e2e] Stream answering: $STREAM_NAME"
+echo "[e2e] Stream running: $STREAM_NAME"
 
 # ── Graph assertions ─────────────────────────────────────────────────
 tatolab_observation_verb graph --stream "$STREAM_NAME" >"$GRAPH_FILE" 2>/dev/null || true

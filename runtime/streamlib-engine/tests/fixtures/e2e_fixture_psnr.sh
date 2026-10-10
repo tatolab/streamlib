@@ -223,11 +223,11 @@ stop_rig() {
 }
 trap stop_rig EXIT
 
-# Wait for the launched rig's stream to answer a graph round trip over the
-# local API socket, which is the first moment a tap can attach. Sets
-# STREAM_NAME to the name the rig loaded it under.
+# Wait for the launched rig's stream to run — every node `Running` in its
+# graph over the local API socket — before a tap attaches. Sets STREAM_NAME to
+# the name the rig loaded it under.
 wait_for_the_launched_rig() {
-    STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_answers "$1" 30)" || {
+    STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_runs "$1" 30)" || {
         STREAM_NAME=""
         return 1
     }
@@ -254,7 +254,7 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
     RIG_PID=$!
 
     if ! wait_for_the_launched_rig "$RIG_PID"; then
-        echo "[psnr] FAIL: $stem — the rig never answered over its local API socket" >&2
+        echo "[psnr] FAIL: $stem — the rig's stream never ran — it never answered over the local API socket with every node Running" >&2
         tail -30 "$pipeline_log" >&2
         stop_rig
         exit 1

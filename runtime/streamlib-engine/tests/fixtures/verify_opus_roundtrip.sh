@@ -98,8 +98,8 @@ STREAM_RUN_PID=$!
 # OpusDecoder of its own is never the one measured. Polled rather than slept:
 # the stream compiles and the engine brings up a GPU context and an iceoryx2
 # node, and a fixed sleep is either flaky or slow.
-if ! wait_until_the_stream_answers "$STREAM_NAME" "$STREAM_RUN_PID" 60; then
-    echo "ERROR: the round-trip stream never answered over the local API socket" >&2
+if ! wait_until_the_stream_is_running "$STREAM_NAME" "$STREAM_RUN_PID" 60; then
+    echo "ERROR: the round-trip stream never ran — it never answered over the local API socket with every node Running" >&2
     tail -40 "$STREAM_RUN_LOG" >&2
     tail -40 "$NODE_LOG" >&2
     exit 1

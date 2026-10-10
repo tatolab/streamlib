@@ -244,14 +244,31 @@ the_fixture_runtime_stopped_cleanly() {
     return 1
 }
 
-# Polls `graph --stream <stream name>` until the stream answers, while
-# <loading pid> — the `tatolab run` loading it — lives, for up to <seconds>
-# (default 60). Returns 1 when the pid ends or the budget runs out first.
-wait_until_the_stream_answers() {
+# Whether `graph --stream <stream name>` answers with every node `Running`: a
+# stream answers from its load, while its nodes are still `Pending`, and runs
+# only once it has started.
+the_stream_is_running() {
+    "$TATOLAB_EXECUTABLE" graph --stream "$1" 2>/dev/null | "$FIXTURE_PYTHON" -c '
+import json, sys
+try:
+    stream_graph = json.load(sys.stdin)
+except ValueError:
+    sys.exit(1)
+nodes = stream_graph.get("nodes", [])
+sys.exit(0 if nodes and all(
+    node.get("components", {}).get("state") == "Running" for node in nodes
+) else 1)
+'
+}
+
+# Polls until the stream <stream name> is running, while <loading pid> — the
+# `tatolab run` loading it — lives, for up to <seconds> (default 60). Returns 1
+# when the pid ends or the budget runs out first.
+wait_until_the_stream_is_running() {
     local stream_name="$1" loading_pid="$2" answer_budget_seconds="${3:-60}"
     for _ in $(seq 1 $(( answer_budget_seconds * 2 ))); do
         kill -0 "$loading_pid" 2>/dev/null || return 1
-        if "$TATOLAB_EXECUTABLE" graph --stream "$stream_name" >/dev/null 2>&1; then
+        if the_stream_is_running "$stream_name"; then
             return 0
         fi
         sleep 0.5
@@ -275,14 +292,16 @@ print(streams[0]["stream"])
 '
 }
 
-# Polls until the runtime a Rust rig serves answers holding exactly one stream,
-# while <rig pid> lives, for up to <seconds> (default 30), and prints that
-# stream's name. Returns 1 when the pid ends or the budget runs out first.
-name_of_the_stream_a_rig_serves_once_it_answers() {
+# Polls until the runtime a Rust rig serves holds exactly one stream and that
+# stream is running, while <rig pid> lives, for up to <seconds> (default 30),
+# and prints that stream's name. Returns 1 when the pid ends or the budget runs
+# out first.
+name_of_the_stream_a_rig_serves_once_it_runs() {
     local rig_pid="$1" answer_budget_seconds="${2:-30}" served_stream_name
     for _ in $(seq 1 $(( answer_budget_seconds * 2 ))); do
         kill -0 "$rig_pid" 2>/dev/null || return 1
-        if served_stream_name="$(name_of_the_sole_stream_the_runtime_holds)"; then
+        if served_stream_name="$(name_of_the_sole_stream_the_runtime_holds)" \
+            && the_stream_is_running "$served_stream_name"; then
             printf '%s\n' "$served_stream_name"
             return 0
         fi

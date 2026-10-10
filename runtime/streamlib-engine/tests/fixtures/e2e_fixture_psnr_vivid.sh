@@ -303,18 +303,18 @@ else
     RIG_PID=$!
 fi
 
-# Waits for the stream to answer a graph round trip over the local API socket,
-# which is the first moment a tap can attach: the python arm's under the name it
+# Waits for the stream to run — every node `Running` in its graph over the
+# local API socket — before a tap attaches: the python arm's under the name it
 # was loaded as, the rust arm's under whatever name the rig gave it.
 STREAM_NAME=""
 if [ "$PIPELINE" = "python" ]; then
-    wait_until_the_stream_answers "$PYTHON_ARM_STREAM_NAME" "$RIG_PID" 60 \
+    wait_until_the_stream_is_running "$PYTHON_ARM_STREAM_NAME" "$RIG_PID" 60 \
         && STREAM_NAME="$PYTHON_ARM_STREAM_NAME"
 else
-    STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_answers "$RIG_PID" 30)" || STREAM_NAME=""
+    STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_runs "$RIG_PID" 30)" || STREAM_NAME=""
 fi
 if [ -z "$STREAM_NAME" ]; then
-    echo "[vivid-color] FAIL: the stream never answered over the local API socket" >&2
+    echo "[vivid-color] FAIL: the stream never ran — it never answered over the local API socket with every node Running" >&2
     [ "$PIPELINE" = "python" ] && tail -30 "$STREAM_RUN_LOG_FILE" >&2
     tail -30 "$LOG_FILE" >&2
     exit 1

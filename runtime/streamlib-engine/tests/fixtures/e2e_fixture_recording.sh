@@ -295,8 +295,8 @@ timeout --kill-after=5 "$RECORD_SECONDS" \
     > "$RECORD_RUN_LOG" 2>&1 &
 RUNNING_PID=$!
 
-if ! wait_until_the_stream_answers "$RECORDING_STREAM_NAME" "$RUNNING_PID" 60; then
-    echo "[recording] FAIL: the recording stream never answered over the local API socket" >&2
+if ! wait_until_the_stream_is_running "$RECORDING_STREAM_NAME" "$RUNNING_PID" 60; then
+    echo "[recording] FAIL: the recording stream never ran — it never answered over the local API socket with every node Running" >&2
     tail -30 "$RECORD_RUN_LOG" >&2
     tail -30 "$RECORD_LOG" >&2
     exit 1
@@ -444,8 +444,8 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         > "$REPLAY_LOG" 2>&1 &
 RUNNING_PID=$!
 
-if ! REPLAY_STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_answers "$RUNNING_PID" 30)"; then
-    echo "[recording] FAIL: the replay rig never answered over the local API socket" >&2
+if ! REPLAY_STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_runs "$RUNNING_PID" 30)"; then
+    echo "[recording] FAIL: the replay rig's stream never ran — it never answered over the local API socket with every node Running" >&2
     tail -30 "$REPLAY_LOG" >&2
     exit 1
 fi
