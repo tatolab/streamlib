@@ -500,10 +500,10 @@ fn open_the_destination_side_and_hold_the_wiring(
     (
         HowALinkReadingAnotherStreamWasReconciled::WiredNow(how_it_stands),
         WiringPiecesNoLinkTook {
-            exposure_registration: None,
-            source_side: None,
-            opened_source_side: None,
-            replaced_wiring,
+            _exposure_registration: None,
+            _source_side: None,
+            _opened_source_side: None,
+            _replaced_wiring: replaced_wiring,
         },
     )
 }
@@ -512,10 +512,10 @@ fn open_the_destination_side_and_hold_the_wiring(
 /// order: the reader comes off the source's port, then the source's side is
 /// released, then the services go.
 struct WiringPiecesNoLinkTook {
-    exposure_registration: Option<ExposedOutputPortReaderRegistration>,
-    source_side: Option<SourceSideOfALinkReadingAnotherStream>,
-    opened_source_side: Option<OpenedSourceSideOfALink>,
-    replaced_wiring: Option<WiringOfALinkReadingAnotherStream>,
+    _exposure_registration: Option<ExposedOutputPortReaderRegistration>,
+    _source_side: Option<SourceSideOfALinkReadingAnotherStream>,
+    _opened_source_side: Option<OpenedSourceSideOfALink>,
+    _replaced_wiring: Option<WiringOfALinkReadingAnotherStream>,
 }
 
 impl WiringPiecesNoLinkTook {
@@ -526,20 +526,11 @@ impl WiringPiecesNoLinkTook {
         opened_source_side: Option<OpenedSourceSideOfALink>,
     ) -> Self {
         Self {
-            exposure_registration: Some(exposure_registration),
-            source_side: Some(source_side),
-            opened_source_side,
-            replaced_wiring: None,
+            _exposure_registration: Some(exposure_registration),
+            _source_side: Some(source_side),
+            _opened_source_side: opened_source_side,
+            _replaced_wiring: None,
         }
-    }
-}
-
-impl Drop for WiringPiecesNoLinkTook {
-    fn drop(&mut self) {
-        drop(self.exposure_registration.take());
-        drop(self.source_side.take());
-        drop(self.opened_source_side.take());
-        drop(self.replaced_wiring.take());
     }
 }
 
