@@ -136,6 +136,10 @@ pub(crate) fn processor_interpreter_python_path(
 /// whose name begins with `PYTHON`, and `PYTHONPATH` set to the lend directory
 /// then the project.
 ///
+/// The compile adds `-I`, which ignores every `PYTHON*` variable, so this
+/// `PYTHONPATH` reaches only the describe and the processor interpreters; the
+/// compile takes its import root from the compile entry.
+///
 /// Nothing per stream and nothing from a caller is added: what the runtime
 /// itself was started with is what each stream's interpreters inherit.
 pub(crate) fn stream_interpreter_command_in_its_project_directory(
@@ -2273,8 +2277,9 @@ sys.exit(0)
     }
 
     /// Every `PYTHON*` variable the runtime was started with is kept from the
-    /// bootstrap, the describe and any other stream interpreter, and
-    /// `PYTHONPATH` is set outright to the lend directory then the project.
+    /// bootstrap and the describe, and `PYTHONPATH` is set outright to the lend
+    /// directory then the project; the compile starts under `-I`, which ignores
+    /// them all.
     ///
     /// Asserted in a re-run of this test started with those variables,
     /// because the process running the tests carries none to inherit.
@@ -2341,7 +2346,6 @@ sys.exit(0)
         for (command_kind, command) in [
             ("bootstrap", &bootstrap_command),
             ("describe", &describe_command),
-            ("compile", &compile_command),
         ] {
             for (name, _) in INHERITED_PYTHON_VARIABLES {
                 let entry = command
@@ -2358,6 +2362,12 @@ sys.exit(0)
                 assert_eq!(entry, expected, "{name} on the {command_kind} command");
             }
         }
+        let compile_arguments: Vec<&OsStr> = compile_command.get_args().collect();
+        assert_eq!(
+            compile_arguments.first().copied(),
+            Some(OsStr::new("-I")),
+            "the compile ignores every PYTHON* variable: {compile_arguments:?}"
+        );
 
         let project_directory = tempfile::tempdir().expect("a project directory");
         let started = stream_interpreter_command_in_its_project_directory(
