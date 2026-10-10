@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A verb's standard output: written whole and flushed, a reader that closed the pipe ending the
-//! verb quietly rather than panicking it (Rust ignores SIGPIPE, so a closed pipe is a write error).
+//! A verb's standard output and standard error: written whole and flushed, a reader that closed
+//! the output pipe ending the verb quietly rather than panicking it (Rust ignores SIGPIPE, so a
+//! closed pipe is a write error).
 
 use std::io::{self, Write};
 
@@ -19,6 +20,16 @@ pub(crate) fn write_verb_standard_output(verb_output: &str) -> Result<u8, Tatola
         Ok(()) => Ok(0),
         Err(write_failure) => standard_output_closed_or_failed(write_failure),
     }
+}
+
+/// Write `standard_error_text` — a note or a warning — to the locked standard error and flush
+/// it. Text that cannot be written there has nowhere else to go, so it never changes the verb's
+/// outcome.
+pub(crate) fn write_verb_standard_error(standard_error_text: &str) {
+    let mut locked_standard_error = io::stderr().lock();
+    let _written_or_nowhere_to_report_it = locked_standard_error
+        .write_all(standard_error_text.as_bytes())
+        .and_then(|()| locked_standard_error.flush());
 }
 
 /// A reader that closed its end of the pipe has seen all it wanted, which ends the verb quietly;

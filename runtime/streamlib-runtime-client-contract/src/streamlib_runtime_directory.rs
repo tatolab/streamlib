@@ -513,7 +513,10 @@ mod tests {
         assert!(!directory.path().exists());
         assert_eq!(
             directory.local_api_socket_path(),
-            xdg_runtime_dir.path().join("streamlib").join("local-api.sock")
+            xdg_runtime_dir
+                .path()
+                .join("streamlib")
+                .join("local-api.sock")
         );
         assert!(!fallback_path_for(shared_temporary_directory.path()).exists());
     }

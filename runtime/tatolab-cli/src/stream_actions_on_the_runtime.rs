@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use crate::TatolabCommandFailure;
 use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
-use crate::verb_standard_output::write_verb_standard_output;
+use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard_output};
 
 /// The local API tool that compiles a project's stream in its own interpreter and loads it.
 pub(crate) const RUN_STREAM_TOOL_NAME: &str = "run_stream";
@@ -164,6 +164,8 @@ pub(crate) struct RunStreamToolResult {
 struct StopStreamToolResult {
     stream: String,
     kept: bool,
+    #[serde(default)]
+    not_recorded_because: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -199,6 +201,8 @@ struct ExposePortToolResult {
     port: String,
     level: String,
     recorded: bool,
+    #[serde(default)]
+    not_recorded_because: Option<String>,
 }
 
 /// The exposure level `expose` asks for.
@@ -292,18 +296,36 @@ pub(crate) fn stop_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
             stop_stream_tool_arguments(stream),
         )?,
     )?;
+    if let Some(not_recorded_warning) = stop_not_recorded_warning_line(&stop_stream_result) {
+        write_verb_standard_error(&not_recorded_warning);
+    }
     write_verb_standard_output(&rendered_stopped_stream_line(&stop_stream_result))
 }
 
 fn rendered_stopped_stream_line(stop_stream_result: &StopStreamToolResult) -> String {
     let stream = &stop_stream_result.stream;
-    if stop_stream_result.kept {
+    if stop_stream_result.kept && stop_stream_result.not_recorded_because.is_none() {
         format!(
             "{stream} stopped; it stays stopped across restarts until `tatolab start {stream}`\n"
         )
     } else {
         format!("{stream} stopped\n")
     }
+}
+
+/// The warning a kept stream stopped but not recorded stopped earns: a restart of the runtime
+/// loads it again.
+fn stop_not_recorded_warning_line(stop_stream_result: &StopStreamToolResult) -> Option<String> {
+    stop_stream_result
+        .not_recorded_because
+        .as_ref()
+        .map(|not_recorded_because| {
+            format!(
+                "warning: {} was not recorded stopped, so a restart of the runtime loads it \
+                 again: {not_recorded_because}\n",
+                stop_stream_result.stream
+            )
+        })
 }
 
 /// `tatolab start STREAM`.
@@ -430,6 +452,9 @@ pub(crate) fn expose_port(
             expose_port_tool_arguments(stream, node, port, requested_level),
         )?,
     )?;
+    if let Some(not_recorded_warning) = exposure_not_recorded_warning_line(&expose_port_result) {
+        write_verb_standard_error(&not_recorded_warning);
+    }
     write_verb_standard_output(&rendered_exposed_port_line(&expose_port_result))
 }
 
@@ -440,13 +465,33 @@ fn rendered_exposed_port_line(expose_port_result: &ExposePortToolResult) -> Stri
         port,
         level,
         recorded,
+        not_recorded_because,
     } = expose_port_result;
-    let what_holds_it = if *recorded {
-        "recorded; it holds across restarts"
-    } else {
-        "live only: an attached stream keeps no record"
+    let what_holds_it = match (recorded, not_recorded_because) {
+        (true, _) => "recorded; it holds across restarts",
+        (false, None) => "live only: an attached stream keeps no record",
+        (false, Some(_)) => "live only: not recorded",
     };
     format!("{stream}/{node}/{port} is {level} ({what_holds_it})\n")
+}
+
+/// The warning a kept stream's level changed live but not recorded earns: a restart of the
+/// runtime puts back the level it had.
+fn exposure_not_recorded_warning_line(expose_port_result: &ExposePortToolResult) -> Option<String> {
+    let ExposePortToolResult {
+        stream,
+        node,
+        port,
+        not_recorded_because,
+        ..
+    } = expose_port_result;
+    not_recorded_because.as_ref().map(|not_recorded_because| {
+        format!(
+            "warning: {stream}/{node}/{port} changed live but was not recorded as the owner's \
+             ruling, so a restart of the runtime puts back the level it had: \
+             {not_recorded_because}\n"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -553,6 +598,7 @@ mod tests {
             rendered_stopped_stream_line(&StopStreamToolResult {
                 stream: "camera".to_owned(),
                 kept: true,
+                not_recorded_because: None,
             }),
             "camera stopped; it stays stopped across restarts until `tatolab start camera`\n"
         );
@@ -560,8 +606,33 @@ mod tests {
             rendered_stopped_stream_line(&StopStreamToolResult {
                 stream: "camera".to_owned(),
                 kept: false,
+                not_recorded_because: None,
             }),
             "camera stopped\n"
+        );
+    }
+
+    #[test]
+    fn a_kept_stop_the_runtime_could_not_record_warns_naming_why() {
+        let stop_stream_result: StopStreamToolResult = serde_json::from_value(json!({
+            "stream": "camera",
+            "stopped": true,
+            "kept": true,
+            "not_recorded_because": "the record /state/streams/camera.json cannot be read",
+        }))
+        .unwrap();
+
+        assert_eq!(
+            rendered_stopped_stream_line(&stop_stream_result),
+            "camera stopped\n",
+            "a stop not recorded never claims the stream stays stopped across restarts"
+        );
+        assert_eq!(
+            stop_not_recorded_warning_line(&stop_stream_result).as_deref(),
+            Some(
+                "warning: camera was not recorded stopped, so a restart of the runtime loads it \
+                 again: the record /state/streams/camera.json cannot be read\n"
+            )
         );
     }
 
@@ -629,6 +700,7 @@ mod tests {
             port: "video".to_owned(),
             level: "public".to_owned(),
             recorded,
+            not_recorded_because: None,
         };
 
         assert_eq!(
@@ -638,6 +710,33 @@ mod tests {
         assert_eq!(
             rendered_exposed_port_line(&exposed(false)),
             "camera/effect/video is public (live only: an attached stream keeps no record)\n"
+        );
+        assert_eq!(exposure_not_recorded_warning_line(&exposed(true)), None);
+    }
+
+    #[test]
+    fn a_kept_exposure_the_runtime_could_not_record_warns_naming_why() {
+        let expose_port_result: ExposePortToolResult = serde_json::from_value(json!({
+            "stream": "camera",
+            "node": "effect",
+            "port": "video",
+            "level": "internal",
+            "recorded": false,
+            "not_recorded_because": "the record /state/streams/camera.json cannot be written",
+        }))
+        .unwrap();
+
+        assert_eq!(
+            rendered_exposed_port_line(&expose_port_result),
+            "camera/effect/video is internal (live only: not recorded)\n"
+        );
+        assert_eq!(
+            exposure_not_recorded_warning_line(&expose_port_result).as_deref(),
+            Some(
+                "warning: camera/effect/video changed live but was not recorded as the owner's \
+                 ruling, so a restart of the runtime puts back the level it had: the record \
+                 /state/streams/camera.json cannot be written\n"
+            )
         );
     }
 
