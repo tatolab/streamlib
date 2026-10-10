@@ -136,6 +136,10 @@ THE_STREAM_STOPPED_LOG_LINE = f"[stop] The stream `{STREAM_NAME}` stopped"
 DEV_LOADING_AGAIN_AFTER_A_SAVE = f"tatolab dev: a saved change — loading {STREAM_NAME} again"
 # What `dev` says when a load is refused and nothing is loaded until the next save.
 DEV_NO_STREAM_IS_LOADED = "tatolab dev: no stream is loaded — fix it and save again"
+# What `dev` says once a refused save left the stream it was to replace running.
+DEV_KEPT_THE_RUNNING_STREAM = (
+    f"tatolab dev: {STREAM_NAME} keeps running the last save that loaded — fix it and save again"
+)
 
 # The `surface_id` field of one bag `tatolab tap` forwarded, given its hex.
 # Run with the lend on `PYTHONPATH`: a tapped bag is the channel's
@@ -839,20 +843,26 @@ def the_scaffolded_effect_edited(scaffolded_effect_source: str) -> str:
     return edited
 
 
-def test_the_edit_loop_reports_a_bad_save_and_loads_the_next_good_one(
+def node_ids_of(graph: "dict[str, Any]") -> "list[str]":
+    """The ids of a live graph's nodes, which the runtime mints afresh for each load."""
+    return sorted(node["id"] for node in graph["nodes"])
+
+
+def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
     make_tatolab_project: "Callable[..., Path]",
     run_tatolab: "Callable[..., subprocess.CompletedProcess[str]]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """The MVP edit loop: `dev` stopping the stream on a save and loading it again.
+    """The MVP edit loop: `dev` running the stream again on every save.
 
-    A save is a file write. `dev` stops the running stream — which showed live
-    video until then — and has the runtime compile the saved code; a broken
-    save is refused, named, and leaves nothing loaded until the next save, and
-    a good one loads the edited code. Both halves run against the same `dev`
-    and the same `tatolabd` in sequence because the first is only meaningful if
-    the second follows: a loop that survives a bad save by ignoring the file
-    entirely would pass the first alone.
+    A save is a file write, and `dev` runs the stream again over its
+    connection. The runtime compiles the save before it touches the running
+    stream, so a broken save is refused, named, and leaves the same stream —
+    the same load, still showing live video — running; a good one replaces it
+    with the edited code. Both halves run against the same `dev` and the same
+    `tatolabd` in sequence because the first is only meaningful if the second
+    follows: a loop that survives a bad save by ignoring the file entirely
+    would pass the first alone.
     """
     app_directory = make_scaffolded_test_pattern_project(make_tatolab_project, run_tatolab)
     effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
@@ -863,30 +873,61 @@ def test_the_edit_loop_reports_a_bad_save_and_loads_the_next_good_one(
     dev = attach_the_projects_stream(tatolabd, app_directory, "dev")
     dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
+    node_ids_before_the_bad_save = node_ids_of(
+        local_api.await_every_node_running(stream=STREAM_NAME)
+    )
 
     time.sleep(SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS)
     effect_module.write_text("def process(self ctx:\n    this does not parse\n")
     dev.await_stderr_containing(DEV_LOADING_AGAIN_AFTER_A_SAVE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    dev.await_stderr_containing(DEV_NO_STREAM_IS_LOADED, timeout=NODE_READY_TIMEOUT_SECONDS)
+    dev.await_stderr_containing(DEV_KEPT_THE_RUNNING_STREAM, timeout=NODE_READY_TIMEOUT_SECONDS)
+    time.sleep(
+        SCAFFOLD_OBSERVATION_WINDOW_SECONDS - SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS
+    )
     assert "SyntaxError" in dev.stderr_text, (
         f"`dev` must show why the save was refused; standard error ended:\n{dev.recent_stderr()}"
     )
+    assert DEV_NO_STREAM_IS_LOADED not in dev.stderr_text, dev.recent_stderr()
     assert dev.process.poll() is None, (
         f"a bad save must not take `dev` down; standard error ended:\n{dev.recent_stderr()}"
     )
-    assert local_api.list_streams() == [], "a refused load leaves nothing loaded"
-    assert_the_window_showed_live_video(
-        tatolabd, the_first_streams_output(tatolabd), "the stream running when the bad save landed"
+    assert node_ids_of(local_api.graph(stream=STREAM_NAME)) == node_ids_before_the_bad_save, (
+        "a bad save must leave the same load of the stream running"
     )
-    assert ENGINE_GRACEFUL_STOP_LOG_LINE in tatolabd.stderr_text, (
-        "the stream running when the bad save landed did not stop gracefully"
+    assert [listed["state"] for listed in local_api.list_streams()] == ["attached"]
+    assert DISPLAY_WINDOW_FRAME_COUNT.search(tatolabd.stderr_text) is None, (
+        "the window stopped although the bad save was to leave the stream running"
     )
 
     effect_module.write_text(the_scaffolded_effect_edited(last_good_effect_source))
+    assert_the_window_showed_live_video(
+        tatolabd,
+        the_first_streams_output(tatolabd),
+        "the stream running when the bad save landed, through the replace",
+    )
     dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS, occurrence=2)
     tatolabd.await_marker("EDITED_EFFECT", timeout=NODE_READY_TIMEOUT_SECONDS)
     tatolabd.await_stderr_containing(
         ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS, occurrence=2
+    )
+    stderr_lines = list(tatolabd.stderr_lines)
+    engine_started_line_indices = [
+        line_index
+        for line_index, stderr_line in enumerate(stderr_lines)
+        if ENGINE_STARTED_LOG_LINE in stderr_line
+    ]
+    assert any(
+        ENGINE_GRACEFUL_STOP_LOG_LINE in stderr_line
+        for stderr_line in stderr_lines[: engine_started_line_indices[1]]
+    ), (
+        "the stream that survived the bad save did not stop gracefully before the edited one "
+        "started"
+    )
+    node_ids_after_the_good_save = node_ids_of(
+        local_api.await_every_node_running(stream=STREAM_NAME)
+    )
+    assert set(node_ids_after_the_good_save).isdisjoint(node_ids_before_the_bad_save), (
+        "a good save replaces the stream with a load of its own"
     )
     assert tatolabd.process.poll() is None, "every load of the edit loop lands on the one runtime"
 

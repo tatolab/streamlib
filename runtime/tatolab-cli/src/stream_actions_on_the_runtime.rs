@@ -221,7 +221,7 @@ fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
 }
 
 /// `count` followed by `noun`, plural unless it is one.
-fn counted(count: usize, noun: &str) -> String {
+pub(crate) fn counted(count: usize, noun: &str) -> String {
     if count == 1 {
         format!("1 {noun}")
     } else {

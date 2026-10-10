@@ -67,7 +67,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   Python version range. [importable-python-library — SHIPPED #1684, #1711; schema-free-ports
   — SHIPPED #1814]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_each_node_lives_outside_the_entry_file -->
-  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_edit_loop_reports_a_bad_save_and_loads_the_next_good_one -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one -->
 - **DECIDED** — Rust authoring stays a supported capability: a Rust app is a plain
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,

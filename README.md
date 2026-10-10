@@ -124,8 +124,9 @@ instead.
 starts one. `dev` asks it to load the project in the working directory: the runtime compiles
 `stream.py`'s one `@stream` function to the stream's graph in the project's `.venv`, loads it and
 starts it, and `dev` prints the stream's records in your terminal. The stream is attached: Ctrl-C
-unloads it. Save an edit and `dev` unloads the stream and loads it again; an edit that fails to
-compile prints the refusal and leaves no stream loaded until the next save. `tatolab run` does the
+unloads it. Save an edit and `dev` runs the stream again: the runtime compiles the edit and only
+then replaces the running stream, so an edit that fails to compile prints the refusal and leaves the
+running stream in place until a save that compiles. `tatolab run` does the
 same once, without watching for edits, and `tatolab run -d` hands the stream to the runtime to keep:
 it runs on after the command returns, and the runtime loads it again each time it starts.
 
@@ -268,8 +269,8 @@ tatolab enable-virtual-camera [--print]
   starts until `stop` or `rm`. `TARGET` is `<file>.py[:<function>]` or `<module>:<function>`. A
   name already loaded or kept is refused naming the project that holds it; `--name` loads the
   stream under another.
-- **`dev`** is `run` attached, loaded again on every saved edit to a `.py` file or `pyproject.toml`
-  in the project.
+- **`dev`** is `run` attached, run again on every saved edit to a `.py` file or `pyproject.toml`
+  in the project; the runtime replaces the running stream only once the edit compiles.
   When the runtime goes away, `dev` waits for it and loads the stream again.
 - **`streams`** lists the streams the runtime holds: each one's name, whether it is attached, kept
   or stopped, its node count and its project.
@@ -574,8 +575,9 @@ Not built yet: an installer, serving an exposed port off the machine, and Window
   the project does not depend on `tatolab-stream` yet: `uv add tatolab-stream`.
 - **A node defined in `stream.py` is refused** — move the class into a module beside `stream.py` and
   import it from there.
-- **`tatolab dev: no stream is loaded — fix it and save again`** — the last edit failed to compile;
-  the runtime's refusal, with its traceback, is printed just above.
+- **`tatolab dev: no stream is loaded — fix it and save again`** — the edit failed to compile
+  with no earlier save running, or the earlier save could not be loaded again; the runtime's
+  refusal, with its traceback, is printed just above.
 - **`No usable Vulkan driver (ICD) was found` or `No Vulkan loader library could be opened`**
   (Linux) — install your GPU vendor's Vulkan driver (the proprietary NVIDIA driver, or
   `mesa-vulkan-drivers` for AMD and Intel) and the loader (`libvulkan1`), then check that

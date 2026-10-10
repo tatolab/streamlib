@@ -3,8 +3,10 @@
 
 //! `tatolab run` attached and `tatolab dev`: the stream loaded into the machine's runtime over a
 //! `/mcp/stdio` connection of this process's own, which the runtime ties the stream's life to,
-//! and its records followed by sequence number until a signal stops it. `dev` loads it again on
-//! every settled save and, when the runtime goes away, waits for it and loads again.
+//! and its records followed by sequence number until a signal stops it. `dev` runs it again on
+//! every settled save over the same connection — the runtime replaces the running stream once the
+//! save compiles, and keeps it when the save does not — and, when the runtime goes away, waits for
+//! it and loads again.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -26,8 +28,8 @@ use crate::process_signal_handling::block_the_stop_signals_and_listen;
 use crate::project_source_change_watcher::watch_project_sources;
 use crate::runtime_log_files_reader::RuntimeLogRecordFilters;
 use crate::stream_actions_on_the_runtime::{
-    StreamActionTool, StreamLoadArguments, StreamLoadRequest, rendered_compile_warning_lines,
-    stop_stream_tool_arguments, tool_result_from,
+    StreamActionTool, StreamLoadArguments, StreamLoadRequest, counted,
+    rendered_compile_warning_lines, stop_stream_tool_arguments, tool_result_from,
 };
 use crate::stream_log_records_from_the_runtime::{
     LOGS_TOOL_NAME, STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
@@ -82,6 +84,9 @@ enum FinishedUnlessStopped<CallOutcome> {
 enum AttachedStreamSessionStep {
     /// Load the stream over the connection.
     Load,
+    /// `dev` after a save: run the stream again over the connection, which replaces `stream`,
+    /// followed after `after`, once the save compiles.
+    Reload { stream: String, after: u64 },
     /// Follow the loaded stream's records after `after`.
     Follow { stream: String, after: u64 },
     /// `dev` with nothing loaded: wait for the next save.
@@ -134,6 +139,7 @@ pub(crate) fn run_stream_attached(
             attached_stream_events_open: true,
             project_sources_changed_during_a_call: false,
             a_stop_signal_cut_short_the_stop: false,
+            a_refused_reload_left_its_stream_to_confirm: false,
         }
         .run_until_it_ends(),
     );
@@ -152,6 +158,9 @@ struct AttachedStreamSession {
     /// A stop signal ended the wait on a `stop_stream`: the session exits, dropping the
     /// connection rather than closing it, so a runtime that does not answer holds it no longer.
     a_stop_signal_cut_short_the_stop: bool,
+    /// `dev`'s reload was refused, and the next `logs` page says whether the runtime still holds
+    /// the stream the reload was to replace.
+    a_refused_reload_left_its_stream_to_confirm: bool,
 }
 
 impl AttachedStreamSession {
@@ -186,7 +195,13 @@ impl AttachedStreamSession {
                     self.wait_for_the_next_save().await
                 }
                 AttachedStreamSessionStep::Load => match &connected_client {
-                    Some(connected_client) => self.load(connected_client).await,
+                    Some(connected_client) => self.load(connected_client, None).await,
+                    None => AttachedStreamSessionStep::Reconnect,
+                },
+                AttachedStreamSessionStep::Reload { stream, after } => match &connected_client {
+                    Some(connected_client) => {
+                        self.load(connected_client, Some((stream, after))).await
+                    }
                     None => AttachedStreamSessionStep::Reconnect,
                 },
                 AttachedStreamSessionStep::Follow { stream, after } => match &connected_client {
@@ -263,9 +278,12 @@ impl AttachedStreamSession {
         }
     }
 
+    /// Run the stream over the connection; `running` is the stream this connection already
+    /// attached and the record it was followed after, which the run replaces.
     async fn load(
         &mut self,
         connected_client: &LocalApiMcpToolClient,
+        running: Option<(String, u64)>,
     ) -> AttachedStreamSessionStep {
         self.project_sources_changed_during_a_call = false;
         let run_stream_arguments = self.stream_load_request.run_stream_tool_arguments(false);
@@ -291,19 +309,17 @@ impl AttachedStreamSession {
             .map_err(LocalApiMcpToolClientFailure::request_refused_by_the_runtime)
         }) {
             Ok(run_stream_result) => run_stream_result,
-            Err(load_failure) => return self.after_a_failed_load(load_failure),
+            Err(load_failure) => return self.after_a_failed_load(load_failure, running),
         };
         write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
         self.note(&format!(
-            "{} loaded ({} nodes, project {}); Ctrl-C stops it",
+            "{} loaded ({}, project {}); Ctrl-C stops it",
             run_stream_result.stream,
-            run_stream_result.node_count,
+            counted(run_stream_result.node_count, "node"),
             run_stream_result.project_directory.display()
         ));
         if self.project_sources_changed_during_a_call {
-            return self
-                .reload_after_a_save(connected_client, &run_stream_result.stream)
-                .await;
+            return self.reload_after_a_save(run_stream_result.stream, 0);
         }
         AttachedStreamSessionStep::Follow {
             stream: run_stream_result.stream,
@@ -341,9 +357,13 @@ impl AttachedStreamSession {
         }
     }
 
+    /// Where the session goes after a refused run: `run` exits; `dev` follows the stream the run
+    /// was to replace, which the runtime keeps when the save does not compile, or waits for a
+    /// save when nothing was running.
     fn after_a_failed_load(
         &mut self,
         load_failure: LocalApiMcpToolClientFailure,
+        running: Option<(String, u64)>,
     ) -> AttachedStreamSessionStep {
         if let Some(after_a_lost_connection) = self.after_a_lost_connection(&load_failure) {
             return after_a_lost_connection;
@@ -352,11 +372,22 @@ impl AttachedStreamSession {
             AttachedStreamVerb::Run => AttachedStreamSessionStep::Exit(Err(load_failure.into())),
             AttachedStreamVerb::Dev => {
                 self.note(&load_failure.to_string());
-                if self.project_sources_changed_during_a_call {
-                    return AttachedStreamSessionStep::Load;
+                match running {
+                    Some((stream, after)) if self.project_sources_changed_during_a_call => {
+                        AttachedStreamSessionStep::Reload { stream, after }
+                    }
+                    Some((stream, after)) => {
+                        self.a_refused_reload_left_its_stream_to_confirm = true;
+                        AttachedStreamSessionStep::Follow { stream, after }
+                    }
+                    None if self.project_sources_changed_during_a_call => {
+                        AttachedStreamSessionStep::Load
+                    }
+                    None => {
+                        self.note(NO_STREAM_IS_LOADED_UNTIL_A_SAVE_COMPILES);
+                        AttachedStreamSessionStep::WaitForTheNextSave
+                    }
                 }
-                self.note("no stream is loaded — fix it and save again");
-                AttachedStreamSessionStep::WaitForTheNextSave
             }
         }
     }
@@ -403,10 +434,15 @@ impl AttachedStreamSession {
                     write_failure,
                 ));
             }
+            if std::mem::take(&mut self.a_refused_reload_left_its_stream_to_confirm) {
+                self.note(&format!(
+                    "{stream} keeps running the last save that loaded — fix it and save again"
+                ));
+            }
             let page_brought_nothing = stream_log_records_page.next_after == after;
             after = stream_log_records_page.next_after;
             if self.project_sources_changed_during_a_call {
-                return self.reload_after_a_save(connected_client, &stream).await;
+                return self.reload_after_a_save(stream, after);
             }
             if !page_brought_nothing {
                 continue;
@@ -429,6 +465,12 @@ impl AttachedStreamSession {
         stream: &str,
         logs_failure: LocalApiMcpToolClientFailure,
     ) -> AttachedStreamSessionStep {
+        if logs_failure.kind == LocalApiMcpToolClientFailureKind::ToolCallFailed
+            && std::mem::take(&mut self.a_refused_reload_left_its_stream_to_confirm)
+        {
+            self.note(NO_STREAM_IS_LOADED_UNTIL_A_SAVE_COMPILES);
+            return AttachedStreamSessionStep::WaitForTheNextSave;
+        }
         if logs_failure.kind == LocalApiMcpToolClientFailureKind::ToolCallFailed {
             self.note(&format!(
                 "{stream} was unloaded by the runtime — stopped elsewhere or by its watchdog: \
@@ -491,38 +533,11 @@ impl AttachedStreamSession {
         AttachedStreamSessionStep::Exit(Ok(0))
     }
 
-    async fn reload_after_a_save(
-        &mut self,
-        connected_client: &LocalApiMcpToolClient,
-        stream: &str,
-    ) -> AttachedStreamSessionStep {
+    /// `dev` after a settled save: run the stream again over the same connection, which the
+    /// runtime answers by replacing `stream` once the save compiles.
+    fn reload_after_a_save(&self, stream: String, after: u64) -> AttachedStreamSessionStep {
         self.note(&format!("a saved change — loading {stream} again"));
-        let stop_outcome = match self
-            .finish_unless_stopped(stop_stream_over(connected_client, stream))
-            .await
-        {
-            FinishedUnlessStopped::Finished(stop_outcome) => stop_outcome,
-            FinishedUnlessStopped::StopSignalDelivered => {
-                self.note(&format!(
-                    "stopped; the runtime unloads {stream} as this connection closes"
-                ));
-                return AttachedStreamSessionStep::Exit(Ok(0));
-            }
-        };
-        match stop_outcome {
-            Ok(_stop_stream_result_text) => AttachedStreamSessionStep::Load,
-            Err(stop_failure)
-                if stop_failure.kind
-                    == LocalApiMcpToolClientFailureKind::LocalApiConnectionClosed =>
-            {
-                self.note(&the_runtime_closed_the_connection_message());
-                AttachedStreamSessionStep::Reconnect
-            }
-            Err(stop_failure) => {
-                self.note(&stop_failure.to_string());
-                AttachedStreamSessionStep::Load
-            }
-        }
+        AttachedStreamSessionStep::Reload { stream, after }
     }
 
     async fn wait_for_the_next_save(&mut self) -> AttachedStreamSessionStep {
@@ -568,6 +583,10 @@ impl AttachedStreamSession {
         }
     }
 }
+
+/// What `dev` says when a load was refused and nothing is loaded until a save compiles.
+const NO_STREAM_IS_LOADED_UNTIL_A_SAVE_COMPILES: &str =
+    "no stream is loaded — fix it and save again";
 
 /// `stop_stream` for `stream` over `connected_client`, waiting as long as the tool may take.
 async fn stop_stream_over(
