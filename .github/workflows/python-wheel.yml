@@ -128,6 +128,28 @@ jobs:
         with:
           name: tatolab-runtime-unit-linux
           path: ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
+
+      # The integration suite's own unit: both binaries built with the
+      # `machine-directories-under-a-test-root` feature, so every `tatolabd` a
+      # test starts takes its lock, serves its socket and keeps its streams
+      # under that test's `TATOLAB_TEST_MACHINE_ROOT`, and the marker file at
+      # the unit's root says so — the suite refuses a unit without it. Built
+      # after the unit above is packed, because it replaces it in place.
+      - name: Build the runtime unit the integration suite runs
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/sdk/streamlib-python-wheel/.venv
+        run: cargo xtask build-runtime --machine-directories-under-a-test-root
+
+      - name: Pack the integration suite's runtime unit
+        run: >-
+          tar -C target/tatolab-runtime
+          -czf "$RUNNER_TEMP/tatolab-runtime-unit-under-a-test-root.tar.gz"
+          bin lib machine-directories-under-a-test-root
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tatolab-runtime-unit-linux-machine-directories-under-a-test-root
+          path: ${{ runner.temp }}/tatolab-runtime-unit-under-a-test-root.tar.gz
           retention-days: 1
           if-no-files-found: error
 
@@ -211,11 +233,13 @@ jobs:
           cargo test --locked -p streamlib-engine --lib -- \
             core::signals core::runtime::runtime::tests::stopping
 
-  # The integration suite: a fixture stream compiled in the suite's venv, run
-  # on `tatolabd` from the runtime unit the job above built, and driven over
-  # its local API. The venv holds `tatolab-stream`, the suite's tooling and
-  # nothing of the runtime — a test reaching for `tatolab.runtime` fails to
-  # import — and every processor interpreter borrows the runtime from the lend.
+  # The integration suite: one `tatolabd` per test from the test-root runtime
+  # unit the job above built, each fixture stream loaded into it with
+  # `tatolab run` — the runtime compiling it in the suite project's own venv —
+  # and driven over its local API. The venv holds `tatolab-stream`, the suite's
+  # tooling and nothing of the runtime — a test reaching for `tatolab.runtime`
+  # fails to import — and every processor interpreter borrows the runtime from
+  # the lend.
   integration-suite:
     name: Integration suite (stream on runtime, no GPU)
     runs-on: ubuntu-latest
@@ -237,14 +261,14 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: tatolab-runtime-unit-linux
+          name: tatolab-runtime-unit-linux-machine-directories-under-a-test-root
           path: ${{ runner.temp }}/tatolab-runtime-unit
 
       # Where the suite looks for it by default, `<repository>/target/tatolab-runtime`.
       - name: Unpack the runtime unit
         run: |
           mkdir -p target/tatolab-runtime
-          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit/tatolab-runtime-unit.tar.gz"
+          tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit/tatolab-runtime-unit-under-a-test-root.tar.gz"
 
       - name: The suite's venv, from its lockfile
         working-directory: tests/stream-on-runtime
