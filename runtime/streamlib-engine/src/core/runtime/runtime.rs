@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
@@ -946,6 +946,17 @@ impl Runner {
     /// request the Rust SDK makes — with zero, one or many streams loaded.
     pub fn wait_until_a_machine_shutdown_is_requested(&self) {
         self.block_until(&crate::core::runtime::is_the_machines_shutdown_requested);
+    }
+
+    /// Block, as the waits above do, until `self` is the one reference left to
+    /// this engine or `budget` has passed; whether it is.
+    pub fn wait_until_this_reference_alone_holds_the_engine(
+        self: &Arc<Self>,
+        budget: Duration,
+    ) -> bool {
+        let deadline = Instant::now() + budget;
+        self.block_until(&|| Arc::strong_count(self) == 1 || Instant::now() >= deadline);
+        Arc::strong_count(self) == 1
     }
 
     /// Poll until `has_ended` holds — driving the window event pump where the
@@ -2653,6 +2664,77 @@ mod tests {
             .expect("the wait never saw the machine's shutdown request")
             .expect("the wait owned the machine's shutdown signals");
         assert!(stream.wait_for_this_streams_end_within(A_STREAM_ENDS_WITHIN));
+    }
+
+    /// The wait for the last other reference returns once another holder
+    /// hands the engine back.
+    #[test]
+    #[serial]
+    fn the_wait_for_the_last_other_reference_returns_once_it_is_dropped() {
+        let runner = Runner::new().expect("Runner::new");
+        let held_by_another_holder = Arc::clone(&runner);
+        let other_holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            drop(held_by_another_holder);
+        });
+
+        assert!(runner.wait_until_this_reference_alone_holds_the_engine(A_STREAM_ENDS_WITHIN));
+        other_holder
+            .join()
+            .expect("the other holder dropped its reference");
+    }
+
+    /// The wait for the last other reference gives up once its budget passes.
+    #[test]
+    #[serial]
+    fn the_wait_for_the_last_other_reference_stops_at_its_budget() {
+        let runner = Runner::new().expect("Runner::new");
+        let _held_past_the_budget = Arc::clone(&runner);
+
+        let wait_started = Instant::now();
+        assert!(
+            !runner.wait_until_this_reference_alone_holds_the_engine(Duration::from_millis(30))
+        );
+        assert!(wait_started.elapsed() < A_STREAM_ENDS_WITHIN);
+    }
+
+    /// The wait for the last other reference, inside a run that owns the
+    /// machine's shutdown signals, walks every loaded stream to the machine's
+    /// shutdown level while it waits.
+    #[test]
+    #[serial]
+    fn the_wait_for_the_last_other_reference_walks_every_loaded_stream_to_the_machines_shutdown() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+
+        let waiting_runner = Arc::clone(&runner);
+        let waiting_stream = Arc::clone(&stream);
+        let (wait_returned, the_wait_has_returned) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = waiting_runner.run_owning_the_machine_shutdown_signals(|| {
+                waiting_runner.request_the_shutdown_of_every_loaded_stream(
+                    "the test shuts the machine down",
+                )?;
+                let alone = waiting_runner
+                    .wait_until_this_reference_alone_holds_the_engine(Duration::from_secs(2));
+                Ok((alone, waiting_stream.has_ended()))
+            });
+            let _ = wait_returned.send(outcome);
+        });
+
+        let (alone, stream_ended_during_the_wait) = the_wait_has_returned
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the wait never returned")
+            .expect("the wait owned the machine's shutdown signals");
+        assert!(!alone, "the test's own reference still holds the engine");
+        assert!(
+            stream_ended_during_the_wait,
+            "the wait never walked the loaded stream to the machine's shutdown"
+        );
     }
 
     /// A stream loaded while the machine is shutting every stream down is

@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
@@ -28,9 +28,6 @@ use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_t
 /// such action observes the shutdown within its own poll interval and kills
 /// what it started.
 const STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET: Duration = Duration::from_secs(10);
-
-/// How often that wait looks again.
-const STREAM_ACTIONS_IN_FLIGHT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Host the machine's streams until a machine shutdown is requested and every
 /// stream has ended, tear the engine down, and return the status `tatolabd`
@@ -86,8 +83,9 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             drop(local_api_served_for_the_engine.take());
             // Inside the run: a load the local API began gives itself up only
             // on reading the machine's shutdown, which the run's end clears.
-            if !wait_until_the_teardown_alone_holds(&engine, STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET)
-            {
+            if !engine.wait_until_this_reference_alone_holds_the_engine(
+                STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET,
+            ) {
                 tracing::warn!(
                     "a stream action the local API began still held the engine \
                      {STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET:?} after it stopped serving"
@@ -284,48 +282,9 @@ fn tear_the_engine_down(
     }
 }
 
-/// Wait up to `budget` until `engine` is held by this one reference; whether it is.
-fn wait_until_the_teardown_alone_holds<Held>(engine: &Arc<Held>, budget: Duration) -> bool {
-    let deadline = Instant::now() + budget;
-    while Arc::strong_count(engine) > 1 {
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(STREAM_ACTIONS_IN_FLIGHT_POLL_INTERVAL);
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_teardown_waits_for_a_stream_action_to_hand_the_engine_back() {
-        let engine = Arc::new(());
-        let held_by_a_stream_action = Arc::clone(&engine);
-        let stream_action = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            drop(held_by_a_stream_action);
-        });
-
-        assert!(wait_until_the_teardown_alone_holds(
-            &engine,
-            Duration::from_secs(10)
-        ));
-        stream_action.join().unwrap();
-    }
-
-    #[test]
-    fn the_teardown_stops_waiting_for_a_reference_held_past_its_budget() {
-        let engine = Arc::new(());
-        let _held_past_the_budget = Arc::clone(&engine);
-
-        assert!(!wait_until_the_teardown_alone_holds(
-            &engine,
-            Duration::from_millis(30)
-        ));
-    }
 
     #[test]
     fn a_clean_run_and_a_dropped_engine_write_nothing() {
