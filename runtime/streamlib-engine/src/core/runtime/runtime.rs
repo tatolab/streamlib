@@ -682,7 +682,11 @@ impl Runner {
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        let stream = self.build_the_stream_a_graph_load_names(graph, load_options)?;
+        let stream = self.build_the_stream_a_graph_load_names(
+            graph,
+            load_options,
+            LoadedStreamHolding::Attached,
+        )?;
         self.load_the_graph_into_the_stream(&stream, graph)?;
         self.insert_a_complete_stream(stream)
     }
@@ -718,7 +722,7 @@ impl Runner {
             RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, is_the_machines_shutdown_requested,
         };
 
-        let stream = match self.build_the_stream_a_graph_load_names(graph, load_options) {
+        let stream = match self.build_the_stream_a_graph_load_names(graph, load_options, holding) {
             Ok(stream) => stream,
             // Read after the build, so a request landing during it abandons
             // the load rather than refusing it.
@@ -733,7 +737,6 @@ impl Runner {
             }
             Err(build_refusal) => return Err(build_refusal),
         };
-        stream.hold_as(holding);
         let load_outcome = std::thread::scope(|scope| {
             // Never sent on: the loading thread's end drops it, a panic included.
             let (load_ended_sender, load_ended_receiver) = std::sync::mpsc::channel::<()>();
@@ -819,7 +822,12 @@ impl Runner {
             load_options.stream_name.as_deref(),
             "an empty stream",
         )?;
-        let stream = self.build_a_stream(stream_name, load_options, teardown_watchdog_budget)?;
+        let stream = self.build_a_stream(
+            stream_name,
+            load_options,
+            teardown_watchdog_budget,
+            LoadedStreamHolding::Attached,
+        )?;
         self.insert_a_complete_stream(stream)
     }
 
@@ -1126,6 +1134,7 @@ impl Runner {
         &self,
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
+        holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         let requested_stream_name = load_options
             .stream_name
@@ -1145,6 +1154,7 @@ impl Runner {
             stream_name,
             load_options,
             super::ENGINE_TEARDOWN_WATCHDOG_BUDGET,
+            holding,
         )
     }
 
@@ -1153,6 +1163,7 @@ impl Runner {
         stream_name: String,
         load_options: OptionsForLoadingOneStream,
         teardown_watchdog_budget: Duration,
+        holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         self.refuse_a_load_once_the_engine_is_shut_down(&stream_name)?;
         self.refuse_a_stream_name_already_loaded(&stream_name)?;
@@ -1163,6 +1174,7 @@ impl Runner {
             project_directory,
             load_options.stream_environment,
             teardown_watchdog_budget,
+            holding,
         )
     }
 

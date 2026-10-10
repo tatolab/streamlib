@@ -80,11 +80,13 @@ impl LoadedStreamLogRecordHistory {
         let first_sequence_asked_for = after.saturating_add(1);
         let records_no_longer_held = first_held_sequence.saturating_sub(first_sequence_asked_for);
         let first_sequence_read = first_sequence_asked_for.max(first_held_sequence);
+        let first_held_index_read = usize::try_from(first_sequence_read - first_held_sequence)
+            .unwrap_or(usize::MAX)
+            .min(self.held_serialized_records.len());
         let records: Vec<NumberedLogRecord> = self
             .held_serialized_records
-            .iter()
-            .zip(first_held_sequence..)
-            .skip_while(|(_, sequence)| *sequence < first_sequence_read)
+            .range(first_held_index_read..)
+            .zip(first_sequence_read..)
             .take(max_count)
             .map(|(serialized_record, sequence)| NumberedLogRecord {
                 sequence,

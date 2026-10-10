@@ -27,13 +27,13 @@ use crate::core::runtime::StreamEnvironment;
 use crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind;
 
 /// The module `tatolab.stream` compiles a project's stream function with.
-pub const PROJECT_STREAM_COMPILE_ENTRY_MODULE: &str =
+pub(crate) const PROJECT_STREAM_COMPILE_ENTRY_MODULE: &str =
     "tatolab.stream._project_stream_compile_entry";
 
 /// How long one compile may run before its process group is killed and the
 /// compile refused: the describe's bound, since both run a project's
 /// import-time work.
-pub const STREAM_FUNCTION_COMPILE_BOUND: Duration = PROCESSOR_INTERPRETER_DESCRIBE_BOUND;
+pub(crate) const STREAM_FUNCTION_COMPILE_BOUND: Duration = PROCESSOR_INTERPRETER_DESCRIBE_BOUND;
 
 /// The verb the compile entry is told it serves, as its refusals spell it.
 const COMPILE_ENTRY_VERB: &str = "run";
@@ -48,16 +48,16 @@ const COMPILE_STANDARD_OUTPUT_KEPT_BYTES: usize = 64 * 1024 * 1024;
 /// A project's stream function compiled in the project's own interpreter: the
 /// graph it compiled to, and the environment its processor interpreters start in.
 #[derive(Debug, Clone, PartialEq)]
-pub struct StreamFunctionCompiledInTheProjectsInterpreter {
+pub(crate) struct StreamFunctionCompiledInTheProjectsInterpreter {
     /// The stream graph the compile entry printed, as it printed it.
-    pub graph_json: serde_json::Value,
+    pub(crate) graph_json: serde_json::Value,
     /// The project directory the compile entry reported, and the project's
     /// venv interpreter.
-    pub stream_environment: StreamEnvironment,
+    pub(crate) stream_environment: StreamEnvironment,
     /// What the compile wrote to its standard error, line by line — the
     /// cross-floor check's warnings among it — for the caller to show its
     /// user; the runtime's log carries the same lines.
-    pub compile_warnings: Vec<String>,
+    pub(crate) compile_warnings: Vec<String>,
 }
 
 /// The document the compile entry prints on its standard output.
@@ -69,7 +69,7 @@ struct ProjectStreamCompileDocument {
 
 /// The interpreter a project's streams run in: `<project>/.venv/bin/python`,
 /// taken as it is spelled, never resolved through its symlink.
-pub fn the_projects_venv_interpreter(project_directory: &Path) -> PathBuf {
+pub(crate) fn the_projects_venv_interpreter(project_directory: &Path) -> PathBuf {
     project_directory.join(".venv").join("bin").join("python")
 }
 
@@ -78,7 +78,7 @@ pub fn the_projects_venv_interpreter(project_directory: &Path) -> PathBuf {
 /// venv interpreter, as `stream_name` when one is given.
 ///
 /// A machine shutdown requested while it runs kills the compile and refuses it.
-pub fn compile_the_stream_function_in_the_projects_interpreter(
+pub(crate) fn compile_the_stream_function_in_the_projects_interpreter(
     project_directory: &Path,
     stream_function: Option<&str>,
     stream_name: Option<&str>,

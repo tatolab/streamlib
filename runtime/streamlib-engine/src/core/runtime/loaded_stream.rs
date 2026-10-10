@@ -120,7 +120,7 @@ pub struct LoadedStreamInThisRuntime {
     this_stream: Weak<Self>,
     /// Whether the runtime keeps this stream or it lives as long as what
     /// loaded it.
-    holding: Mutex<LoadedStreamHolding>,
+    holding: LoadedStreamHolding,
 }
 
 /// How a loaded stream ended, and the wait for it. Held apart from the stream
@@ -163,6 +163,7 @@ impl LoadedStreamInThisRuntime {
         project_directory: PathBuf,
         stream_environment: Option<StreamEnvironment>,
         teardown_watchdog_budget: Duration,
+        holding: LoadedStreamHolding,
     ) -> Result<Arc<Self>> {
         let stream_tag = LoadedStreamTag::next_in_this_process()?;
         let log_route = LoadedStreamLogRoute::open_in_project_directory(
@@ -233,7 +234,7 @@ impl LoadedStreamInThisRuntime {
             end_claimed: AtomicBool::new(false),
             the_end_of_this_stream: Arc::default(),
             this_stream: this_stream.clone(),
-            holding: Mutex::new(LoadedStreamHolding::Attached),
+            holding,
         }))
     }
 
@@ -265,13 +266,7 @@ impl LoadedStreamInThisRuntime {
     /// Whether the runtime keeps this stream or it lives as long as what
     /// loaded it.
     pub fn holding(&self) -> LoadedStreamHolding {
-        *self.holding.lock()
-    }
-
-    /// Hold this stream as `holding`, set by the load before the stream
-    /// enters the table.
-    pub(crate) fn hold_as(&self, holding: LoadedStreamHolding) {
-        *self.holding.lock() = holding;
+        self.holding
     }
 
     /// The stream's active JSONL log segment, `None` when it writes none.

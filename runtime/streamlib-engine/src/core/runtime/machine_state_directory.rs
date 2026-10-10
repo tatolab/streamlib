@@ -23,7 +23,7 @@ use crate::core::{Error, Result};
 pub const KEPT_STREAM_RECORD_SCHEMA_VERSION: u32 = 1;
 
 /// The mode a kept-stream record is written at: its owner's alone.
-pub const KEPT_STREAM_RECORD_FILE_MODE: u32 = 0o600;
+pub(crate) const KEPT_STREAM_RECORD_FILE_MODE: u32 = 0o600;
 
 /// The extension every kept-stream record's file name carries.
 const KEPT_STREAM_RECORD_FILE_EXTENSION: &str = "json";
@@ -83,14 +83,6 @@ impl KeptStreamRecord {
         }
     }
 
-    /// The owner's rulings split around the recorded graph's load, as
-    /// [`the_owners_exposure_rulings_split_around_the_load`] splits them.
-    pub fn the_owners_exposure_rulings_split_around_its_load(
-        &self,
-    ) -> OwnerExposureRulingsSplitAroundTheLoad {
-        the_owners_exposure_rulings_split_around_the_load(&self.graph, &self.exposure_rulings)
-    }
-
     /// Record `ruling`, replacing an earlier ruling on the same port.
     pub fn record_the_owners_exposure_ruling(&mut self, ruling: OwnerExposureRuling) {
         self.exposure_rulings
@@ -115,17 +107,63 @@ pub struct OwnerExposureRuling {
 impl OwnerExposureRuling {
     /// Whether `other` rules on the same port, the names compared cast.
     pub fn names_the_same_port_as(&self, other: &OwnerExposureRuling) -> bool {
-        match (self.cast_node_and_port(), other.cast_node_and_port()) {
-            (Some(this_port), Some(other_port)) => this_port == other_port,
-            _ => self.node == other.node && self.port == other.port,
+        self.names_the_port(&other.node, &other.port)
+    }
+
+    /// Whether this ruling's port is output port `port` of node `node`, the
+    /// names compared cast; a name that casts to nothing is compared as
+    /// spelled.
+    pub fn names_the_port(&self, node: &str, port: &str) -> bool {
+        CastPortOfAnOwnerExposureRuling::of(self).is_the_port(node, port)
+    }
+}
+
+/// An owner's ruling's node and port, cast once to be compared against many
+/// ports.
+enum CastPortOfAnOwnerExposureRuling<'ruling> {
+    /// Both names cast.
+    Cast { node: String, port: String },
+    /// A name casts to nothing, so both are compared as spelled.
+    AsSpelled {
+        node: &'ruling str,
+        port: &'ruling str,
+    },
+}
+
+impl<'ruling> CastPortOfAnOwnerExposureRuling<'ruling> {
+    fn of(ruling: &'ruling OwnerExposureRuling) -> Self {
+        match (
+            cast_exposed_name_to_url_safe(&ruling.node),
+            cast_exposed_name_to_url_safe(&ruling.port),
+        ) {
+            (Ok(node), Ok(port)) => Self::Cast {
+                node: node.into_owned(),
+                port: port.into_owned(),
+            },
+            _ => Self::AsSpelled {
+                node: &ruling.node,
+                port: &ruling.port,
+            },
         }
     }
 
-    fn cast_node_and_port(&self) -> Option<(String, String)> {
-        Some((
-            cast_exposed_name_to_url_safe(&self.node).ok()?.into_owned(),
-            cast_exposed_name_to_url_safe(&self.port).ok()?.into_owned(),
-        ))
+    fn is_the_port(&self, node: &str, port: &str) -> bool {
+        match self {
+            Self::Cast {
+                node: ruling_node,
+                port: ruling_port,
+            } => match (
+                cast_exposed_name_to_url_safe(node),
+                cast_exposed_name_to_url_safe(port),
+            ) {
+                (Ok(node), Ok(port)) => node == *ruling_node && port == *ruling_port,
+                _ => false,
+            },
+            Self::AsSpelled {
+                node: ruling_node,
+                port: ruling_port,
+            } => node == *ruling_node && port == *ruling_port,
+        }
     }
 }
 
@@ -133,21 +171,21 @@ impl OwnerExposureRuling {
 /// stream loads from, and the rulings its load applies once it has the nodes'
 /// ports.
 #[derive(Debug, Clone, PartialEq)]
-pub struct OwnerExposureRulingsSplitAroundTheLoad {
+pub(crate) struct OwnerExposureRulingsSplitAroundTheLoad {
     /// The graph with every ruling applied that makes a port internal or rules
     /// on a port the stream function exposes, so a restriction holds before
     /// the stream admits any reader.
-    pub graph_with_the_rulings_that_hold_before_the_load: serde_json::Value,
+    pub(crate) graph_with_the_rulings_that_hold_before_the_load: serde_json::Value,
     /// The `private` and `public` rulings on ports the stream function left
     /// internal, which the graph cannot show exist; each is applied to the
     /// loaded stream, and skipped when its port is not there.
-    pub rulings_applied_once_loaded: Vec<OwnerExposureRuling>,
+    pub(crate) rulings_applied_once_loaded: Vec<OwnerExposureRuling>,
 }
 
 /// Split `rulings` around the load of `graph_json`: an `internal` ruling, and
 /// one on a port the function's own `exposed` names, is applied to the graph;
 /// a ruling that opens a port the function left internal waits for the load.
-pub fn the_owners_exposure_rulings_split_around_the_load(
+pub(crate) fn the_owners_exposure_rulings_split_around_the_load(
     graph_json: &serde_json::Value,
     rulings: &[OwnerExposureRuling],
 ) -> OwnerExposureRulingsSplitAroundTheLoad {
@@ -169,34 +207,29 @@ fn the_function_exposes_the_port_of(
     graph_json: &serde_json::Value,
     ruling: &OwnerExposureRuling,
 ) -> bool {
+    let ruled_port = CastPortOfAnOwnerExposureRuling::of(ruling);
     graph_json
         .get("exposed")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|exposed| {
             exposed
                 .iter()
-                .any(|entry| the_exposed_entry_names_the_port_of(entry, ruling))
+                .any(|entry| the_exposed_entry_is_the_port(entry, &ruled_port))
         })
 }
 
-/// Whether one entry of a graph's `exposed` names the port `ruling` rules on,
-/// the names compared cast.
-fn the_exposed_entry_names_the_port_of(
+/// Whether one entry of a graph's `exposed` names `ruled_port`.
+fn the_exposed_entry_is_the_port(
     exposed_entry: &serde_json::Value,
-    ruling: &OwnerExposureRuling,
+    ruled_port: &CastPortOfAnOwnerExposureRuling<'_>,
 ) -> bool {
     let named = |key: &str| {
         exposed_entry
             .get(key)
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
-            .to_string()
     };
-    ruling.names_the_same_port_as(&OwnerExposureRuling {
-        node: named("node"),
-        port: named("port"),
-        level: ruling.level,
-    })
+    ruled_port.is_the_port(named("node"), named("port"))
 }
 
 /// `graph_json` with each of `rulings` applied to the entries of its
@@ -215,10 +248,19 @@ fn graph_with_the_owners_exposure_rulings_applied(
         return ruled_graph;
     };
     for ruling in rulings {
-        let first_entry_of_the_port = exposed
-            .iter()
-            .position(|entry| the_exposed_entry_names_the_port_of(entry, ruling));
-        exposed.retain(|entry| !the_exposed_entry_names_the_port_of(entry, ruling));
+        let ruled_port = CastPortOfAnOwnerExposureRuling::of(ruling);
+        let mut first_entry_of_the_port = None;
+        let mut position = 0;
+        exposed.retain(|entry| {
+            let is_the_port = the_exposed_entry_is_the_port(entry, &ruled_port);
+            if is_the_port && first_entry_of_the_port.is_none() {
+                first_entry_of_the_port = Some(position);
+            }
+            if !is_the_port {
+                position += 1;
+            }
+            !is_the_port
+        });
         if let Some(position) = first_entry_of_the_port
             && ruling.level != OutputPortExposureLevel::Internal
         {
@@ -324,10 +366,7 @@ impl KeptStreamRecordsInTheStateDirectory {
             let _ = std::fs::remove_file(&temporary_path);
             return Err(refuse(write_failure.to_string()));
         }
-        // The rename reaches the disk with the directory's own sync.
-        if let Ok(directory) = std::fs::File::open(&self.kept_streams_directory) {
-            let _ = directory.sync_all();
-        }
+        self.sync_the_kept_streams_directory();
         Ok(())
     }
 
@@ -387,9 +426,7 @@ impl KeptStreamRecordsInTheStateDirectory {
         let record_path = self.record_path_of(stream_name)?;
         match std::fs::remove_file(&record_path) {
             Ok(()) => {
-                if let Ok(directory) = std::fs::File::open(&self.kept_streams_directory) {
-                    let _ = directory.sync_all();
-                }
+                self.sync_the_kept_streams_directory();
                 Ok(true)
             }
             Err(not_removed) if not_removed.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -397,6 +434,14 @@ impl KeptStreamRecordsInTheStateDirectory {
                 "the kept-stream record {} was not removed: {not_removed}",
                 record_path.display()
             ))),
+        }
+    }
+
+    /// Sync the records' directory, best effort, so a rename or a removal in
+    /// it reaches the disk.
+    fn sync_the_kept_streams_directory(&self) {
+        if let Ok(directory) = std::fs::File::open(&self.kept_streams_directory) {
+            let _ = directory.sync_all();
         }
     }
 
@@ -751,7 +796,10 @@ mod tests {
                 a_ruling("Camera", "Video", OutputPortExposureLevel::Internal),
             ]
         );
-        let split = record.the_owners_exposure_rulings_split_around_its_load();
+        let split = the_owners_exposure_rulings_split_around_the_load(
+            &record.graph,
+            &record.exposure_rulings,
+        );
         assert_eq!(
             split.graph_with_the_rulings_that_hold_before_the_load["exposed"],
             serde_json::json!([])

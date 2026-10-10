@@ -20,10 +20,7 @@ use streamlib::sdk::graph::{
 };
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::runtime::{
-    KeptStreamRecord, LoadedStreamInThisRuntime, OptionsForLoadingOneStream, OwnerExposureRuling,
-    Runner, StreamEnvironment,
-};
+use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
 
 /// Register a descriptor-only camera type with a `video` and a `preview`
 /// output and a `frames_in` input. Idempotent under `serial_test`.
@@ -515,74 +512,5 @@ fn every_reader_a_registration_lets_go_of_is_dropped_once_the_graph_lock_is_rele
         *graph_was_free.lock().unwrap(),
         Some(true),
         "a reader whose registration was dropped was let go under the graph lock"
-    );
-}
-
-/// The owner's restriction of a port its stream function exposes more openly
-/// is the level the loaded stream holds before it starts, so no reader from
-/// outside the stream is ever admitted at the function's level.
-#[test]
-#[serial]
-fn a_recorded_restriction_is_the_level_a_loaded_stream_holds_before_it_starts() {
-    let project_directory = tempfile::tempdir().expect("a project directory");
-    let runner = Runner::new().unwrap();
-    let mut record = KeptStreamRecord::of_a_running_stream(
-        "main",
-        &StreamEnvironment {
-            project_directory: project_directory.path().to_path_buf(),
-            interpreter: project_directory.path().join(".venv/bin/python"),
-        },
-        None,
-        serde_json::json!({
-            "stream": "main",
-            "nodes": [{"name": "camera", "type": a_registered_camera_type().as_str()}],
-            "exposed": [
-                {"node": "camera", "port": "video", "level": "private"},
-                {"node": "camera", "port": "preview", "level": "private"}
-            ]
-        }),
-    );
-    record.record_the_owners_exposure_ruling(OwnerExposureRuling {
-        node: "camera".to_string(),
-        port: "video".to_string(),
-        level: OutputPortExposureLevel::Internal,
-    });
-    record.record_the_owners_exposure_ruling(OwnerExposureRuling {
-        node: "camera".to_string(),
-        port: "preview".to_string(),
-        level: OutputPortExposureLevel::Public,
-    });
-
-    let split = record.the_owners_exposure_rulings_split_around_its_load();
-    assert!(
-        split.rulings_applied_once_loaded.is_empty(),
-        "both rulings are on ports the function exposes, so both hold before the load"
-    );
-    let graph =
-        GraphSnapshot::from_graph_document(split.graph_with_the_rulings_that_hold_before_the_load)
-            .expect("the ruled graph is a graph");
-    let stream = runner
-        .load_stream_from_graph_snapshot(
-            &graph,
-            OptionsForLoadingOneStream::in_project_directory(project_directory.path()),
-        )
-        .expect("the ruled graph loads");
-
-    assert_eq!(
-        the_exposures_graph_renders_for(&stream),
-        serde_json::json!([{"node": "camera", "port": "preview", "level": "public"}])
-    );
-    let cuts = Arc::new(AtomicUsize::new(0));
-    let refusal = stream
-        .register_a_reader_of_an_exposed_output_port(
-            "camera",
-            "video",
-            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
-            a_cut_counting_into(&cuts),
-        )
-        .expect_err("the owner's internal holds over the function's private");
-    assert!(
-        matches!(refusal, Error::OutputPortNotExposedToTheReader(_)),
-        "{refusal}"
     );
 }

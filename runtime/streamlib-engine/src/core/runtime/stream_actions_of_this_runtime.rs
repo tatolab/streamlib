@@ -32,13 +32,23 @@ use crate::core::{Error, Result};
 
 /// How a loaded stream is held: kept by the runtime, or attached to what
 /// loaded it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum LoadedStreamHolding {
     /// Recorded in the runtime's state directory and re-loaded at its start.
     Kept,
     /// Lives as long as what loaded it: a local API connection, or the
     /// program that loaded it into a library [`Runner`].
     Attached,
+}
+
+impl std::fmt::Display for LoadedStreamHolding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Kept => "kept",
+            Self::Attached => "attached",
+        })
+    }
 }
 
 /// What [`Runner::run_stream`] compiles and loads.
@@ -111,7 +121,8 @@ pub struct StreamRemoveOutcome {
 }
 
 /// The state one stream of [`Runner::list_streams`] is in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum StreamListingState {
     /// Loaded, and lives as long as what loaded it.
     Attached,
@@ -120,6 +131,25 @@ pub enum StreamListingState {
     Kept,
     /// Kept, and stopped by its owner.
     Stopped,
+}
+
+impl From<LoadedStreamHolding> for StreamListingState {
+    fn from(holding: LoadedStreamHolding) -> Self {
+        match holding {
+            LoadedStreamHolding::Kept => Self::Kept,
+            LoadedStreamHolding::Attached => Self::Attached,
+        }
+    }
+}
+
+impl std::fmt::Display for StreamListingState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Attached => "attached",
+            Self::Kept => "kept",
+            Self::Stopped => "stopped",
+        })
+    }
 }
 
 /// One stream the runtime holds, as [`Runner::list_streams`] lists it.
@@ -427,10 +457,7 @@ impl Runner {
             return Err(Error::Runtime(format!(
                 "the stream `{stream_cast}` is already loaded in this runtime, {}; only a kept \
                  stream that is not loaded starts",
-                match loaded.holding() {
-                    LoadedStreamHolding::Kept => "kept",
-                    LoadedStreamHolding::Attached => "attached",
-                }
+                loaded.holding()
             )));
         }
         let kept_record =
@@ -494,10 +521,7 @@ impl Runner {
             .iter()
             .map(|stream| StreamListing {
                 name: stream.stream_name().to_string(),
-                state: match stream.holding() {
-                    LoadedStreamHolding::Kept => StreamListingState::Kept,
-                    LoadedStreamHolding::Attached => StreamListingState::Attached,
-                },
+                state: stream.holding().into(),
                 project_directory: stream.project_directory().to_path_buf(),
                 node_count: Some(stream.node_count()),
             })
@@ -1994,6 +2018,52 @@ mod tests {
             serde_json::json!([{"node": "source", "port": "out2", "level": "private"}])
         );
         assert_eq!(loaded.holding(), LoadedStreamHolding::Kept);
+    }
+
+    #[test]
+    #[serial]
+    fn a_recorded_restriction_is_the_level_a_kept_stream_holds_before_it_starts() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let mut record = a_kept_record_of(
+            &project,
+            "camera",
+            serde_json::json!([
+                {"node": "source", "port": "out1", "level": "private"},
+                {"node": "source", "port": "out2", "level": "private"}
+            ]),
+        );
+        for (port, level) in [
+            ("out1", OutputPortExposureLevel::Internal),
+            ("out2", OutputPortExposureLevel::Public),
+        ] {
+            record.record_the_owners_exposure_ruling(OwnerExposureRuling {
+                node: "source".to_string(),
+                port: port.to_string(),
+                level,
+            });
+        }
+
+        let loaded =
+            a_kept_stream_loaded_without_its_start(&runner, state_directory.path(), &record);
+
+        assert_eq!(
+            the_exposures_graph_renders_for(&loaded),
+            serde_json::json!([{"node": "source", "port": "out2", "level": "public"}])
+        );
+        let refusal = loaded
+            .register_a_reader_of_an_exposed_output_port(
+                "source",
+                "out1",
+                crate::core::graph::OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+                Box::new(|| {}),
+            )
+            .expect_err("the owner's internal holds over the function's private");
+        assert!(
+            matches!(refusal, Error::OutputPortNotExposedToTheReader(_)),
+            "{refusal}"
+        );
     }
 
     #[test]
