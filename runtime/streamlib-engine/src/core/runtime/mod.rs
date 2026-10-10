@@ -18,6 +18,7 @@ mod operations_on_the_streams_loaded_in_this_runtime;
 mod operations_runtime;
 mod processor_interpreter_launch_record;
 pub(crate) use operations_runtime::{
+    EnginesTokioRuntimeForWorkSpawnedAgainstAStream,
     mark_this_thread_as_a_processor_execution_thread,
     spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly,
     the_cut_of_a_link_reading_another_stream,

@@ -158,12 +158,8 @@ impl Compiler {
         )
     }
 
-    // =========================================================================
-    // Compilation - ONE method, ALL logic inlined
-    // =========================================================================
-
-    /// Single compile method - ALL orchestration logic here, no helper methods.
-    /// Calls compiler_ops::* for actual operations.
+    /// Compile `operations` against `graph_arc`, then wake the links in other
+    /// streams that read a processor it created.
     ///
     /// A removal whose thread outlived its budget still removes the processor
     /// and lets the rest of the batch compile; the call then fails naming it.

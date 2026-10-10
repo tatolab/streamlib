@@ -202,10 +202,12 @@ impl Graph {
     }
 }
 
-/// The node `node_name` names once cast, refused by name — listing the nodes
-/// `graph` holds — when there is none.
+/// The node `node_name` names once cast in `graph`, the graph of the stream
+/// `stream_name`, refused by name — listing the nodes it holds — when there is
+/// none.
 pub(crate) fn node_named_or_refused<'graph>(
     graph: &'graph Graph,
+    stream_name: &str,
     node_name: &str,
 ) -> crate::core::Result<&'graph crate::core::graph::ProcessorNode> {
     graph
@@ -214,7 +216,8 @@ pub(crate) fn node_named_or_refused<'graph>(
         .first()
         .ok_or_else(|| {
             crate::core::Error::ProcessorNotFound(format!(
-                "no node in this stream is named {node_name:?}. This stream holds: {}",
+                "no node in the stream `{stream_name}` is named {node_name:?}. The stream \
+                 `{stream_name}` holds: {}",
                 node_names_listed_for_a_refusal(
                     graph
                         .traversal()

@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use std::path::{Path, PathBuf};
@@ -371,13 +372,18 @@ async fn connect_from_another_stream_impl(
     Ok(link_id)
 }
 
-/// The node `node_name` names in this stream once cast.
+/// The node `node_name` names once cast in the stream `stream_name`, whose
+/// graph `compiler` holds.
 ///
-/// Refused by name when this stream holds no node by that name, listing the
+/// Refused by name when the stream holds no node by that name, listing the
 /// ones it does.
-fn the_node_this_stream_names(compiler: &Arc<Compiler>, node_name: &str) -> Result<NodeInTheGraph> {
+fn the_node_this_stream_names(
+    compiler: &Arc<Compiler>,
+    stream_name: &str,
+    node_name: &str,
+) -> Result<NodeInTheGraph> {
     compiler.scope(|graph, _tx| {
-        node_named_or_refused(graph, node_name).map(|named| NodeInTheGraph {
+        node_named_or_refused(graph, stream_name, node_name).map(|named| NodeInTheGraph {
             processor_id: named.id.clone(),
             name: named.display_name.clone(),
         })
@@ -597,9 +603,9 @@ impl LoadedStreamInThisRuntime {
     /// port `to` of this stream, the stream that holds the link's input.
     ///
     /// A source naming this stream is linked as a port of it. While this
-    /// stream runs and the source's stream has started, a source port its
-    /// level does not let another stream read — or a node or port that stream
-    /// does not hold — is refused by name, and no link is added.
+    /// stream runs and the source's stream is started or paused, a source port
+    /// its level does not let another stream read — or a node or port that
+    /// stream does not hold — is refused by name, and no link is added.
     pub fn connect_from_an_output_port_in_another_stream(
         &self,
         source: OutputPortInAnotherStreamOnThisMachine,
@@ -617,7 +623,9 @@ impl LoadedStreamInThisRuntime {
             .loaded_stream_of_the_cast_name(source.stream_name());
         if self.has_started_and_is_not_shutting_down()
             && let Some(source_stream) = &source_stream
-            && source_stream.has_started_and_is_not_shutting_down()
+            && source_stream
+                .why_a_link_from_another_stream_cannot_wire_to_it_now()
+                .is_none()
         {
             source_stream.refuse_a_reader_its_output_port_does_not_allow(
                 source.node_name(),
@@ -644,6 +652,33 @@ impl LoadedStreamInThisRuntime {
             && !self.this_streams_shutdown_escalation().is_requested()
     }
 
+    /// Why a link in another stream cannot wire to this stream's processors
+    /// now, or `None` when it can: while this stream is starting, started,
+    /// pausing or paused — each of which keeps the processors its start
+    /// made — and no shutdown of it has been asked for.
+    pub(crate) fn why_a_link_from_another_stream_cannot_wire_to_it_now(&self) -> Option<String> {
+        let status = *self.status.lock();
+        let stream_name = self.stream_name();
+        if self.this_streams_shutdown_escalation().is_requested() {
+            return Some(format!(
+                "the stream `{stream_name}` is shutting down; the link wires when it is loaded \
+                 again"
+            ));
+        }
+        match status {
+            RuntimeStatus::Starting
+            | RuntimeStatus::Started
+            | RuntimeStatus::Pausing
+            | RuntimeStatus::Paused => None,
+            RuntimeStatus::Initial => Some(format!(
+                "the stream `{stream_name}` has not started; the link wires when it starts"
+            )),
+            RuntimeStatus::Stopping | RuntimeStatus::Stopped => Some(format!(
+                "the stream `{stream_name}` has stopped; the link wires when it starts again"
+            )),
+        }
+    }
+
     /// Add a processor and report the node it became: its id and its name — the
     /// requested one cast, or the class's short name with any `-2` suffix.
     pub fn add_processor_reporting_its_name(&self, spec: ProcessorSpec) -> Result<NodeInTheGraph> {
@@ -656,11 +691,28 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
+/// The engine's tokio runtime as work spawned against a stream reaches it.
+#[derive(Clone)]
+pub(crate) struct EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
+    pub(crate) tokio: tokio::runtime::Handle,
+    /// Set once the engine shuts down: past it nothing is spawned, and a task
+    /// spawned before it never upgrades its stream, so no tokio worker holds
+    /// the engine as its teardown drops it.
+    pub(crate) set_once_the_engine_shuts_down: Arc<AtomicBool>,
+}
+
+impl EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
+    /// Whether the engine has begun to shut down.
+    pub(crate) fn the_engine_has_shut_down(&self) -> bool {
+        self.set_once_the_engine_shuts_down.load(Ordering::SeqCst)
+    }
+}
+
 /// Run `act` against `stream` on the engine's tokio runtime, in the stream's
-/// log route, once the stream is upgraded; nothing when it has gone. A failure
-/// is logged naming `what_it_does`.
+/// log route, once the stream is upgraded; nothing when it has gone or the
+/// engine has shut down. A failure is logged naming `what_it_does`.
 pub(crate) fn spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly<Act, ActFuture>(
-    tokio: &tokio::runtime::Handle,
+    tokio: &EnginesTokioRuntimeForWorkSpawnedAgainstAStream,
     stream: Weak<LoadedStreamInThisRuntime>,
     what_it_does: &'static str,
     act: Act,
@@ -668,7 +720,14 @@ pub(crate) fn spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly<Ac
     Act: FnOnce(Arc<LoadedStreamInThisRuntime>) -> ActFuture + Send + 'static,
     ActFuture: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    tokio.spawn(async move {
+    if tokio.the_engine_has_shut_down() {
+        return;
+    }
+    let set_once_the_engine_shuts_down = Arc::clone(&tokio.set_once_the_engine_shuts_down);
+    tokio.tokio.spawn(async move {
+        if set_once_the_engine_shuts_down.load(Ordering::SeqCst) {
+            return;
+        }
         let Some(stream) = stream.upgrade() else {
             return;
         };
@@ -694,7 +753,7 @@ pub(crate) fn the_cut_of_a_link_reading_another_stream(
     reading_stream: Weak<LoadedStreamInThisRuntime>,
     link_id: LinkUniqueId,
     wiring_generation: u64,
-    tokio: tokio::runtime::Handle,
+    tokio: EnginesTokioRuntimeForWorkSpawnedAgainstAStream,
 ) -> CutOffAReaderOfAnExposedOutputPort {
     Box::new(move |why| {
         spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly(
@@ -838,7 +897,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph> {
-        the_node_this_stream_names(&self.compiler, node_name)
+        the_node_this_stream_names(&self.compiler, self.stream_name(), node_name)
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -1224,11 +1283,14 @@ mod connect_wires_without_inspecting_a_port_tests {
         let (compiler, from, _to) = compiler_holding_a_producer_and_consumer_node();
         let displayed = the_display_name_the_graph_gave(&compiler, from.processor_id());
 
-        let refusal = the_node_this_stream_names(&compiler, "NoSuchProcessor")
+        let refusal = the_node_this_stream_names(&compiler, "main", "NoSuchProcessor")
             .expect_err("a node name this runtime does not hold is refused")
             .to_string();
 
-        assert!(refusal.contains("NoSuchProcessor"), "{refusal}");
+        assert!(
+            refusal.contains("no node in the stream `main` is named \"NoSuchProcessor\""),
+            "{refusal}"
+        );
         assert!(refusal.contains(&displayed), "{refusal}");
     }
 
@@ -1334,13 +1396,15 @@ mod connect_from_another_stream_tests {
     //! not let another stream read it.
 
     use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     use serde_json::Value;
 
     use super::{
-        LiveGraphChangeOnOneStream, WhereTheSourceStreamOfALinkIsAsItIsAdded,
-        connect_from_another_stream_impl, remove_processor_impl,
+        EnginesTokioRuntimeForWorkSpawnedAgainstAStream, LiveGraphChangeOnOneStream,
+        WhereTheSourceStreamOfALinkIsAsItIsAdded, connect_from_another_stream_impl,
+        remove_processor_impl, spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly,
     };
     use crate::core::compiler::{Compiler, PendingOperation};
     use crate::core::graph::{
@@ -1853,5 +1917,33 @@ mod connect_from_another_stream_tests {
                 .wait_until_the_stream_ends(stream)
                 .expect("the stream stops cleanly");
         }
+    }
+
+    /// Work spawned against a stream once the engine has shut down is never
+    /// spawned: what it would run is dropped before the call returns, so no
+    /// tokio worker is left holding the stream and, through it, the engine.
+    #[test]
+    fn work_spawned_against_a_stream_after_the_engine_shut_down_is_never_spawned() {
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a tokio runtime builds");
+        let held_by_the_work = Arc::new(());
+        let held_by_the_spawned_work = Arc::clone(&held_by_the_work);
+        let after_the_engine_shut_down = EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
+            tokio: tokio.handle().clone(),
+            set_once_the_engine_shuts_down: Arc::new(AtomicBool::new(true)),
+        };
+
+        spawn_on_the_engines_tokio_runtime_against_a_stream_held_weakly(
+            &after_the_engine_shut_down,
+            std::sync::Weak::new(),
+            "work the test spawns",
+            move |_stream| async move {
+                drop(held_by_the_spawned_work);
+                Ok(())
+            },
+        );
+
+        assert_eq!(Arc::strong_count(&held_by_the_work), 1);
     }
 }

@@ -16,7 +16,9 @@ use super::RuntimeUniqueId;
 use super::loaded_stream::LoadedStreamInThisRuntime;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
-use super::{RuntimeShutdownEscalation, StreamEnvironment};
+use super::{
+    EnginesTokioRuntimeForWorkSpawnedAgainstAStream, RuntimeShutdownEscalation, StreamEnvironment,
+};
 use crate::core::context::GpuContext;
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
@@ -104,8 +106,9 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     setup_hooks: Mutex<SetupHooksOfTheEngine>,
     /// The lend directory the host handed this runtime.
     pub(crate) processor_interpreter_lend_directory: ProcessorInterpreterLendDirectoryOfTheEngine,
-    /// Whether [`Runner::shut_down`] has run.
-    shut_down: AtomicBool,
+    /// Whether [`Runner::shut_down`] has run; shared with the work spawned
+    /// against a stream, which does nothing past it.
+    shut_down: Arc<AtomicBool>,
     /// Whether this engine holds the machine's shutdown signals now, and so
     /// walks every loaded stream to the machine's shutdown level as it waits.
     owns_the_machine_shutdown_signals: AtomicBool,
@@ -292,15 +295,26 @@ impl EngineResourcesSharedByEveryStream {
         }
     }
 
+    /// The engine's tokio runtime as work spawned against a stream reaches
+    /// it, with the flag that stops that work once the engine shuts down.
+    pub(crate) fn tokio_runtime_for_work_spawned_against_a_stream(
+        &self,
+    ) -> EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
+        EnginesTokioRuntimeForWorkSpawnedAgainstAStream {
+            tokio: self.tokio_runtime_variant.handle(),
+            set_once_the_engine_shuts_down: Arc::clone(&self.shut_down),
+        }
+    }
+
     /// Re-plan, on every other loaded stream, every link reading the stream
     /// `source_stream_name`: each stream's re-plan is spawned on the engine's
     /// tokio runtime and commits on that stream's own compiler, never inline.
     /// Nothing once the engine is shutting down, when every stream is.
     pub(crate) fn re_plan_every_link_reading_the_stream(&self, source_stream_name: &str) {
-        if self.shut_down.load(Ordering::SeqCst) {
+        let tokio = self.tokio_runtime_for_work_spawned_against_a_stream();
+        if tokio.the_engine_has_shut_down() {
             return;
         }
-        let tokio = self.tokio_runtime_variant.handle();
         for reading_stream in self.every_loaded_stream() {
             if reading_stream.stream_name() == source_stream_name {
                 continue;
@@ -577,7 +591,7 @@ impl Runner {
                 setup_hooks: Mutex::new(SetupHooksOfTheEngine::WaitingForTheGpuContext(Vec::new())),
                 processor_interpreter_lend_directory:
                     ProcessorInterpreterLendDirectoryOfTheEngine::default(),
-                shut_down: AtomicBool::new(false),
+                shut_down: Arc::new(AtomicBool::new(false)),
                 owns_the_machine_shutdown_signals: AtomicBool::new(false),
                 #[cfg(target_os = "linux")]
                 surface_service: Mutex::new(Some(surface_service)),

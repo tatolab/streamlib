@@ -15,8 +15,8 @@ use crate::core::graph::{
     GraphNodeWithComponents, OutputPortExposureLevel, OutputPortReaderLocation,
     OutputPortReaderOutsideItsStream, ProcessorNode, ProcessorUniqueId,
     ReaderOfAnExposedOutputPort, WhyAReaderOfAnExposedOutputPortIsCutOff,
-    cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal,
-    output_port_exposure_allows_the_reader, port_names_listed_for_a_refusal,
+    cast_exposed_name_to_url_safe, node_named_or_refused, output_port_exposure_allows_the_reader,
+    port_names_listed_for_a_refusal,
 };
 use crate::core::{Error, Result};
 
@@ -303,19 +303,7 @@ fn the_output_port_named_on_this_graph<'graph>(
     node_name: &str,
     port_name: &str,
 ) -> Result<(&'graph mut ProcessorNode, String)> {
-    let Some(named) = graph.traversal().v_with_node_name(node_name).first() else {
-        return Err(Error::ProcessorNotFound(format!(
-            "no node in the stream `{stream_name}` is named {node_name:?}. The stream \
-             `{stream_name}` holds: {}",
-            node_names_listed_for_a_refusal(
-                graph
-                    .traversal()
-                    .v(())
-                    .iter()
-                    .map(|node| node.display_name.as_str())
-            )
-        )));
-    };
+    let named = node_named_or_refused(graph, stream_name, node_name)?;
     let port_cast = cast_exposed_name_to_url_safe(port_name)?.into_owned();
     if !named.has_output(&port_cast) {
         return Err(Error::GraphError(format!(

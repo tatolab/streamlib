@@ -95,16 +95,15 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
             ),
         );
     };
-    if !source_stream.has_started_and_is_not_shutting_down() {
+    if let Some(why_the_source_stream_cannot_be_wired_to) =
+        source_stream.why_a_link_from_another_stream_cannot_wire_to_it_now()
+    {
         return carry_nothing_for(
             reading_stream,
             link_id,
             generation,
             LinkState::AwaitingRemote,
-            format!(
-                "the stream `{}` has not started; the link wires when it starts",
-                source.stream_name()
-            ),
+            why_the_source_stream_cannot_be_wired_to,
         );
     }
 
@@ -112,7 +111,7 @@ pub(crate) fn reconcile_a_link_reading_another_stream(
         Arc::downgrade(reading_stream),
         link_id.clone(),
         generation,
-        engine.tokio_runtime_variant.handle(),
+        engine.tokio_runtime_for_work_spawned_against_a_stream(),
     );
     let Some((opened_on_the_source, readers_to_drop_once_the_lock_is_released)) =
         source_stream.compiler.scope_within(
@@ -955,9 +954,34 @@ mod tests {
         assert_eq!(streams.camera_output.channel_notifier_count("out1"), 1);
     }
 
+    /// A paused source stream keeps the processors its start made, so a link
+    /// reading it wires and carries what it writes once it resumes.
+    #[test]
+    fn a_link_wires_to_a_paused_source_stream() {
+        for status_of_the_source in [RuntimeStatus::Pausing, RuntimeStatus::Paused] {
+            let streams = TwoStreamsReadAsRunning::load();
+            *streams.a.status.lock() = status_of_the_source;
+            let link_id = streams.link_the_display_from(camera_out1_of("a"));
+
+            assert_eq!(
+                reconcile_a_link_reading_another_stream(&streams.b, &link_id),
+                HowALinkReadingAnotherStreamWasReconciled::WiredNow(HowAnOpenedLinkStands::Wired),
+                "a source stream {status_of_the_source:?}"
+            );
+            let rendered = streams.the_link_as_graph_renders_it(&link_id);
+            assert_eq!(rendered["state"], "wired", "{rendered}");
+            streams
+                .camera_output
+                .write_raw("out1", b"a bag written once the stream a resumes", 0)
+                .expect("the camera publishes");
+            streams.display_input.receive_pending();
+            assert_eq!(streams.display_input.drain("in1").len(), 1);
+        }
+    }
+
     /// Until its source can be wired a link says what it waits for: a
-    /// stream not loaded, a stream not started, a node the stream does not
-    /// hold, and a node that does not run yet.
+    /// stream not loaded, a stream not started or stopped, a node the stream
+    /// does not hold, and a node that does not run yet.
     #[test]
     fn a_link_says_what_it_waits_for_until_its_source_can_be_wired() {
         let streams = TwoStreamsReadAsRunning::load();
@@ -1013,6 +1037,12 @@ mod tests {
         assert_eq!(
             reason_of(camera_out1_of("a")),
             "the stream `a` has not started; the link wires when it starts"
+        );
+
+        *streams.a.status.lock() = RuntimeStatus::Stopped;
+        assert_eq!(
+            reason_of(camera_out1_of("a")),
+            "the stream `a` has stopped; the link wires when it starts again"
         );
     }
 
