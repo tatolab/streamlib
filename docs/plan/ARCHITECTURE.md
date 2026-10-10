@@ -133,7 +133,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [package-split-and-lend — SHIPPED #2693, #2697; amended by runtime-hosting: one `tatolabd`
   per machine hosts every stream, and `run` loads into the running one rather than starting
   its own]
-  <!-- verify: cargo test -p tatolab-cli --test tatolab_run_and_dev_supervise_tatolabd -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_run_and_dev_attached -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_stream_actions -->
   <!-- verify: cargo test -p tatolabd --test tatolabd_refuses_by_name -->
 - **DECIDED** — The tests divide as the code does. The stream suite
   (`sdk/tatolab-stream/tests`) is pure Python in a venv holding only `tatolab-stream` —
