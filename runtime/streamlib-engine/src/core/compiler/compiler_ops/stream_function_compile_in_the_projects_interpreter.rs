@@ -10,18 +10,17 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::processor_interpreter_describe::PROCESSOR_INTERPRETER_DESCRIBE_BOUND;
-use super::processor_interpreter_shutdown_ladder::{
-    kill_the_process_group_and_reap_its_leader, wait_for_a_child_to_become_collectable_within,
-};
+use super::processor_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
 use super::processor_interpreter_spawn_host::{
-    HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE,
+    HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE, StreamInterpreterExitAwaited,
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio, spawn_standard_error_reader_keeping_its_tail,
     spawn_standard_output_reader_keeping_its_head, standard_error_tail_as_a_refusal_quotes_it,
-    stream_interpreter_command_in_its_project_directory,
+    standard_output_head_as_a_refusal_quotes_it,
+    stream_interpreter_command_in_its_project_directory, wait_for_a_stream_interpreter_to_exit,
 };
 use crate::core::error::{Error, Result};
 use crate::core::runtime::StreamEnvironment;
@@ -39,20 +38,12 @@ pub const STREAM_FUNCTION_COMPILE_BOUND: Duration = PROCESSOR_INTERPRETER_DESCRI
 /// The verb the compile entry is told it serves, as its refusals spell it.
 const COMPILE_ENTRY_VERB: &str = "run";
 
-/// How long the wait for a compile parks before it re-reads whether it was
-/// interrupted.
-const COMPILE_INTERRUPT_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
-
 /// What a compile's standard-error lines are logged under.
 const COMPILE_STANDARD_ERROR_LOG_LABEL: &str = "stream-function-compile";
 
 /// How much of a compile's standard output is kept; the rest is read and
 /// dropped, so the compile never blocks on a full pipe.
 const COMPILE_STANDARD_OUTPUT_KEPT_BYTES: usize = 64 * 1024 * 1024;
-
-/// How much of a standard output that is not a compile document a refusal
-/// quotes.
-const COMPILE_STANDARD_OUTPUT_QUOTED_BYTES: usize = 512;
 
 /// A project's stream function compiled in the project's own interpreter: the
 /// graph it compiled to, and the environment its processor interpreters start in.
@@ -200,22 +191,25 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
         )
     });
 
-    let compile_exit =
-        wait_for_the_compile_to_exit(&child, compile_bound, is_interrupted_by_the_host);
+    // A compile works for no loaded stream yet, so only the host cuts it short.
+    let compile_exit = wait_for_a_stream_interpreter_to_exit(
+        &child,
+        compile_bound,
+        &|| false,
+        is_interrupted_by_the_host,
+    );
     // Killed whether or not the leader already exited: nothing a compile
     // starts outlives it.
     let exit_status = kill_the_process_group_and_reap_its_leader(&mut child, "the compile");
-    let standard_error_bytes = standard_error_tail
-        .map(|tail| tail.bytes_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE))
+    let standard_error_text = standard_error_tail
+        .map(|tail| tail.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE))
         .unwrap_or_default();
-    let standard_error_text = String::from_utf8_lossy(&standard_error_bytes)
-        .trim()
-        .to_string();
-    let quoted_standard_error = standard_error_tail_as_a_refusal_quotes_it(&standard_error_text);
+    let quoted_standard_error =
+        standard_error_tail_as_a_refusal_quotes_it(standard_error_text.trim());
 
     match compile_exit {
-        CompileExitAwaited::Exited => {}
-        CompileExitAwaited::BoundElapsed => {
+        StreamInterpreterExitAwaited::Exited => {}
+        StreamInterpreterExitAwaited::BoundElapsed => {
             return Err(Error::Runtime(format!(
                 "the stream function in {project} did not finish compiling within {}s, and \
                  `{interpreter_shown}` was killed. Work a module does at import time runs in \
@@ -224,7 +218,8 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
                 compile_bound.as_secs_f64()
             )));
         }
-        CompileExitAwaited::InterruptedByTheHost => {
+        StreamInterpreterExitAwaited::ItsStreamsShutdownRequested
+        | StreamInterpreterExitAwaited::InterruptedByTheHost => {
             return Err(Error::Runtime(format!(
                 "the stream function in {project} was not compiled: the runtime began shutting \
                  down while `{interpreter_shown}` compiled it, and it was killed. \
@@ -283,7 +278,7 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
             project_directory: compile_document.project_directory,
             interpreter,
         },
-        compile_warnings: String::from_utf8_lossy(&standard_error_bytes)
+        compile_warnings: standard_error_text
             .lines()
             .map(str::trim_end)
             .filter(|line| !line.is_empty())
@@ -303,56 +298,12 @@ fn the_compile_entry_could_not_be_imported(standard_error: &str) -> bool {
     ))
 }
 
-/// How the wait for a compile to exit ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CompileExitAwaited {
-    Exited,
-    BoundElapsed,
-    InterruptedByTheHost,
-}
-
-/// Wait up to `compile_bound` for the compile to exit, leaving it unreaped,
-/// cut short whenever a host interrupt is read.
-fn wait_for_the_compile_to_exit(
-    child: &std::process::Child,
-    compile_bound: Duration,
-    is_interrupted_by_the_host: &dyn Fn() -> bool,
-) -> CompileExitAwaited {
-    let deadline = Instant::now() + compile_bound;
-    loop {
-        let observation_slice = deadline
-            .saturating_duration_since(Instant::now())
-            .min(COMPILE_INTERRUPT_OBSERVATION_INTERVAL);
-        if wait_for_a_child_to_become_collectable_within(child, observation_slice) {
-            return CompileExitAwaited::Exited;
-        }
-        if is_interrupted_by_the_host() {
-            return CompileExitAwaited::InterruptedByTheHost;
-        }
-        if Instant::now() >= deadline {
-            return CompileExitAwaited::BoundElapsed;
-        }
-    }
-}
-
-/// The first [`COMPILE_STANDARD_OUTPUT_QUOTED_BYTES`] of a standard output, quoted.
-fn standard_output_head_as_a_refusal_quotes_it(standard_output_bytes: &[u8]) -> String {
-    let head = &standard_output_bytes[..standard_output_bytes
-        .len()
-        .min(COMPILE_STANDARD_OUTPUT_QUOTED_BYTES)];
-    let ellipsis = if head.len() < standard_output_bytes.len() {
-        "…"
-    } else {
-        ""
-    };
-    format!("{:?}{ellipsis}", String::from_utf8_lossy(head))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::OsStr;
+    use std::time::Instant;
 
     const LEND_DIRECTORY_FOR_TEST: &str = "/opt/tatolab/lib/tatolab/lend";
 

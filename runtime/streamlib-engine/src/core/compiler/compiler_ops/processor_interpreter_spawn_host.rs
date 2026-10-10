@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use super::processor_interpreter_shutdown_ladder::{
     HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,
     a_helper_process_has_exited_without_being_reaped,
+    wait_for_a_child_to_become_collectable_within,
 };
 use super::subprocess_bridge::{
     ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
@@ -870,6 +871,75 @@ pub(super) fn standard_error_tail_as_a_refusal_quotes_it(standard_error_tail: &s
         return "It wrote nothing to its standard error.".to_string();
     }
     format!("Its standard error ended with:\n{standard_error_tail}")
+}
+
+/// How much of a standard output that is not the document a stream
+/// interpreter was to print a refusal quotes.
+const STREAM_INTERPRETER_STANDARD_OUTPUT_QUOTED_BYTES: usize = 512;
+
+/// The first [`STREAM_INTERPRETER_STANDARD_OUTPUT_QUOTED_BYTES`] of a stream
+/// interpreter's standard output, quoted.
+pub(super) fn standard_output_head_as_a_refusal_quotes_it(standard_output_bytes: &[u8]) -> String {
+    let head = &standard_output_bytes[..standard_output_bytes
+        .len()
+        .min(STREAM_INTERPRETER_STANDARD_OUTPUT_QUOTED_BYTES)];
+    let ellipsis = if head.len() < standard_output_bytes.len() {
+        "…"
+    } else {
+        ""
+    };
+    format!("{:?}{ellipsis}", String::from_utf8_lossy(head))
+}
+
+// =============================================================================
+// The bounded wait for a stream interpreter
+// =============================================================================
+
+/// How long the wait for a stream interpreter parks before it re-reads whether
+/// it was cut short.
+const STREAM_INTERPRETER_EXIT_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
+
+/// How the wait for a stream interpreter that runs to its own exit — a
+/// describe, a compile — ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StreamInterpreterExitAwaited {
+    /// It exited, and is left unreaped.
+    Exited,
+    /// Its bound elapsed first.
+    BoundElapsed,
+    /// The shutdown of the stream it works for was requested first.
+    ItsStreamsShutdownRequested,
+    /// The runtime's host interrupted it first.
+    InterruptedByTheHost,
+}
+
+/// Wait up to `bound` for `child` to exit, leaving it unreaped, cut short
+/// whenever `is_its_streams_shutdown_requested` or `is_interrupted_by_the_host`
+/// reports true.
+pub(super) fn wait_for_a_stream_interpreter_to_exit(
+    child: &Child,
+    bound: Duration,
+    is_its_streams_shutdown_requested: &dyn Fn() -> bool,
+    is_interrupted_by_the_host: &dyn Fn() -> bool,
+) -> StreamInterpreterExitAwaited {
+    let deadline = Instant::now() + bound;
+    loop {
+        let observation_slice = deadline
+            .saturating_duration_since(Instant::now())
+            .min(STREAM_INTERPRETER_EXIT_OBSERVATION_INTERVAL);
+        if wait_for_a_child_to_become_collectable_within(child, observation_slice) {
+            return StreamInterpreterExitAwaited::Exited;
+        }
+        if is_its_streams_shutdown_requested() {
+            return StreamInterpreterExitAwaited::ItsStreamsShutdownRequested;
+        }
+        if is_interrupted_by_the_host() {
+            return StreamInterpreterExitAwaited::InterruptedByTheHost;
+        }
+        if Instant::now() >= deadline {
+            return StreamInterpreterExitAwaited::BoundElapsed;
+        }
+    }
 }
 
 // =============================================================================
