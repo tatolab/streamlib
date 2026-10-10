@@ -16,7 +16,7 @@ use serde_json::json;
 use common::isolated_machine_directories::IsolatedMachineDirectories;
 use common::stub_local_api_server::{
     RecordedToolCall, StubLocalApiScript, StubLocalApiServer, StubToolAnswer,
-    run_stream_tool_result_text, stop_stream_tool_result_text,
+    StubToolCallTransport, run_stream_tool_result_text, stop_stream_tool_result_text,
 };
 use common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -94,6 +94,7 @@ fn run_detached_hands_the_stream_to_the_runtime_to_keep_and_prints_one_line() {
                 "name": "cam",
                 "keep": true,
             }),
+            tool_call_transport: StubToolCallTransport::StreamableHttpPost,
         }]
     );
     assert_eq!(

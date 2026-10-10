@@ -133,6 +133,7 @@ pub(crate) fn run_stream_attached(
             attached_stream_events,
             attached_stream_events_open: true,
             project_sources_changed_during_a_call: false,
+            a_stop_signal_cut_short_the_stop: false,
         }
         .run_until_it_ends(),
     );
@@ -148,23 +149,26 @@ struct AttachedStreamSession {
     attached_stream_events: UnboundedReceiver<AttachedStreamEvent>,
     attached_stream_events_open: bool,
     project_sources_changed_during_a_call: bool,
+    /// A stop signal came while the stream was being stopped: the connection is dropped rather
+    /// than closed, so a runtime that does not answer holds the verb no longer.
+    a_stop_signal_cut_short_the_stop: bool,
 }
 
 impl AttachedStreamSession {
     async fn run_until_it_ends(mut self) -> Result<u8, TatolabCommandFailure> {
-        let mut connected_client = Some(
-            LocalApiMcpToolClient::connect_over_an_mcp_stdio_upgrade(
-                &self.local_api_socket_path,
-                ATTACHED_STREAM_REQUEST_TIMEOUT,
-            )
-            .await?,
-        );
+        let mut connected_client = match self.connect_unless_stopped().await {
+            FinishedUnlessStopped::Finished(connect_outcome) => Some(connect_outcome?),
+            FinishedUnlessStopped::StopSignalDelivered => {
+                self.note("stopped before the runtime opened a connection; nothing was loaded");
+                return Ok(0);
+            }
+        };
         let mut next_step = AttachedStreamSessionStep::Load;
         loop {
             next_step = match next_step {
                 AttachedStreamSessionStep::Exit(session_outcome) => {
                     if let Some(connected_client) = connected_client.take() {
-                        connected_client.close().await;
+                        self.close_unless_stopped_again(connected_client).await;
                     }
                     return session_outcome;
                 }
@@ -190,6 +194,32 @@ impl AttachedStreamSession {
                     None => AttachedStreamSessionStep::Reconnect,
                 },
             };
+        }
+    }
+
+    /// A `/mcp/stdio` connection of the session's own, unless a stop signal comes first.
+    async fn connect_unless_stopped(
+        &mut self,
+    ) -> FinishedUnlessStopped<Result<LocalApiMcpToolClient, LocalApiMcpToolClientFailure>> {
+        let local_api_socket_path = self.local_api_socket_path.clone();
+        self.finish_unless_stopped(LocalApiMcpToolClient::connect_over_an_mcp_stdio_upgrade(
+            &local_api_socket_path,
+            ATTACHED_STREAM_REQUEST_TIMEOUT,
+        ))
+        .await
+    }
+
+    /// Close the connection, unless a stop signal already cut the stop short or one comes while
+    /// it closes; a connection dropped unclosed unloads the stream all the same.
+    async fn close_unless_stopped_again(&mut self, connected_client: LocalApiMcpToolClient) {
+        if self.a_stop_signal_cut_short_the_stop {
+            return;
+        }
+        match self.finish_unless_stopped(connected_client.close()).await {
+            FinishedUnlessStopped::Finished(()) => {}
+            FinishedUnlessStopped::StopSignalDelivered => {
+                self.note("stopped again; leaving without waiting for the runtime to close");
+            }
         }
     }
 
@@ -409,33 +439,51 @@ impl AttachedStreamSession {
                 self.note(&the_runtime_closed_the_connection_message());
                 AttachedStreamSessionStep::Reconnect
             }
+            (AttachedStreamVerb::Dev, LocalApiMcpToolClientFailureKind::LocalApiUnreachable) => {
+                self.note(&format!("{logs_failure}; connecting again"));
+                AttachedStreamSessionStep::Reconnect
+            }
             (AttachedStreamVerb::Run, _) => {
                 self.stop_the_stream(connected_client, stream).await;
                 AttachedStreamSessionStep::Exit(Err(logs_failure.into()))
             }
             (AttachedStreamVerb::Dev, _) => {
-                self.note(&format!("{logs_failure}; connecting again"));
-                AttachedStreamSessionStep::Reconnect
+                // A refusal or a page this CLI cannot read comes back the same on every load.
+                self.note(&logs_failure.to_string());
+                self.stop_the_stream(connected_client, stream).await;
+                self.note("no stream is loaded — save again to load it");
+                AttachedStreamSessionStep::WaitForTheNextSave
             }
         }
     }
 
     /// Ask the runtime to unload `stream`, noting a failure: closing the connection unloads it
-    /// anyway.
-    async fn stop_the_stream(&self, connected_client: &LocalApiMcpToolClient, stream: &str) {
-        match connected_client
-            .call_tool(STOP_STREAM_TOOL_NAME, stop_stream_tool_arguments(stream))
+    /// anyway. A stop signal meanwhile ends the wait.
+    async fn stop_the_stream(&mut self, connected_client: &LocalApiMcpToolClient, stream: &str) {
+        match self
+            .finish_unless_stopped(
+                connected_client
+                    .call_tool(STOP_STREAM_TOOL_NAME, stop_stream_tool_arguments(stream)),
+            )
             .await
         {
-            Ok(_stop_stream_result_text) => self.note(&format!("{stream} stopped")),
-            Err(stop_failure) => self.note(&format!(
+            FinishedUnlessStopped::Finished(Ok(_stop_stream_result_text)) => {
+                self.note(&format!("{stream} stopped"));
+            }
+            FinishedUnlessStopped::Finished(Err(stop_failure)) => self.note(&format!(
                 "{stop_failure}; the runtime unloads {stream} as this connection closes"
             )),
+            FinishedUnlessStopped::StopSignalDelivered => {
+                self.a_stop_signal_cut_short_the_stop = true;
+                self.note(&format!(
+                    "stopped again; the runtime unloads {stream} as this connection drops"
+                ));
+            }
         }
     }
 
     async fn stop_and_exit(
-        &self,
+        &mut self,
         connected_client: &LocalApiMcpToolClient,
         stream: &str,
     ) -> AttachedStreamSessionStep {
@@ -449,10 +497,22 @@ impl AttachedStreamSession {
         stream: &str,
     ) -> AttachedStreamSessionStep {
         self.note(&format!("a saved change — loading {stream} again"));
-        match connected_client
-            .call_tool(STOP_STREAM_TOOL_NAME, stop_stream_tool_arguments(stream))
+        let stop_outcome = match self
+            .finish_unless_stopped(
+                connected_client
+                    .call_tool(STOP_STREAM_TOOL_NAME, stop_stream_tool_arguments(stream)),
+            )
             .await
         {
+            FinishedUnlessStopped::Finished(stop_outcome) => stop_outcome,
+            FinishedUnlessStopped::StopSignalDelivered => {
+                self.note(&format!(
+                    "stopped; the runtime unloads {stream} as this connection closes"
+                ));
+                return AttachedStreamSessionStep::Exit(Ok(0));
+            }
+        };
+        match stop_outcome {
             Ok(_stop_stream_result_text) => AttachedStreamSessionStep::Load,
             Err(stop_failure)
                 if stop_failure.kind
@@ -498,17 +558,15 @@ impl AttachedStreamSession {
             if !something_answers_at(&self.local_api_socket_path) {
                 continue;
             }
-            match LocalApiMcpToolClient::connect_over_an_mcp_stdio_upgrade(
-                &self.local_api_socket_path,
-                ATTACHED_STREAM_REQUEST_TIMEOUT,
-            )
-            .await
-            {
-                Ok(connected_client) => {
+            match self.connect_unless_stopped().await {
+                FinishedUnlessStopped::Finished(Ok(connected_client)) => {
                     self.note("the runtime answers again — loading the stream");
                     return Some(connected_client);
                 }
-                Err(connect_failure) => self.note(&format!("{connect_failure}; waiting")),
+                FinishedUnlessStopped::Finished(Err(connect_failure)) => {
+                    self.note(&format!("{connect_failure}; waiting"));
+                }
+                FinishedUnlessStopped::StopSignalDelivered => return None,
             }
         }
     }

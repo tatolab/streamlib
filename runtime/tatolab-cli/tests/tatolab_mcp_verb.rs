@@ -60,7 +60,7 @@ mod against_an_isolated_machine {
     use super::common::isolated_machine_directories::IsolatedMachineDirectories;
     use super::common::stub_local_api_server::{
         RecordedHttpRequestHead, RecordedToolCall, StubLocalApiScript, StubMcpStdioUpgradeAnswer,
-        StubToolAnswer,
+        StubToolAnswer, StubToolCallTransport,
     };
     use super::common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -403,6 +403,7 @@ mod against_an_isolated_machine {
             [RecordedToolCall {
                 tool_name: "graph".to_owned(),
                 tool_arguments: json!({ "through": "tatolab mcp" }),
+                tool_call_transport: StubToolCallTransport::McpStdioConnection,
             }]
         );
         assert!(

@@ -71,7 +71,7 @@ mod against_an_isolated_machine {
 
     use super::common::isolated_machine_directories::IsolatedMachineDirectories;
     use super::common::stub_local_api_server::{
-        RecordedToolCall, StubLocalApiScript, StubToolAnswer,
+        RecordedToolCall, StubLocalApiScript, StubToolAnswer, StubToolCallTransport,
     };
     use super::common::tatolab_binary_run::{standard_error_text, standard_output_text};
 
@@ -101,6 +101,7 @@ mod against_an_isolated_machine {
             [RecordedToolCall {
                 tool_name: "graph".to_owned(),
                 tool_arguments: json!({}),
+                tool_call_transport: StubToolCallTransport::StreamableHttpPost,
             }]
         );
     }
@@ -165,6 +166,7 @@ mod against_an_isolated_machine {
             [RecordedToolCall {
                 tool_name: "tap".to_owned(),
                 tool_arguments: json!({"stream": "camera", "channel": "cam/video", "count": 3}),
+                tool_call_transport: StubToolCallTransport::StreamableHttpPost,
             }]
         );
     }

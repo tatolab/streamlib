@@ -51,6 +51,9 @@ pub const NOTHING_LISTENS_LOCAL_API_SOCKET_PATH: &str = "/nonexistent-tatolab-te
 /// The local API tool that pages a loaded stream's log records by sequence number.
 const LOGS_TOOL_NAME: &str = "logs";
 
+/// The local API tool that loads a stream, kept or attached.
+const RUN_STREAM_TOOL_NAME: &str = "run_stream";
+
 /// The revision the stub serves, and the only one: a runtime's local API serves the latest alone.
 const STUB_SERVED_MCP_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[ProtocolVersion::LATEST];
 
@@ -96,12 +99,27 @@ impl StubToolAnswer {
     }
 }
 
+/// The text the stub's `run_stream` refuses `keep: false` with over `POST /mcp`, as a runtime's
+/// local API does: only a `/mcp/stdio` connection can hold an attached stream.
+pub const STUB_ATTACHED_LOAD_OVER_POST_REFUSAL_TEXT: &str =
+    "keep: false attaches the stream to a /mcp/stdio connection; a one-shot call can only keep";
+
+/// Which transport carried a `tools/call` to the stub.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StubToolCallTransport {
+    /// One request over `POST /mcp`.
+    StreamableHttpPost,
+    /// A `/mcp/stdio` connection's upgraded stream.
+    McpStdioConnection,
+}
+
 /// One `tools/call` the stub received, as the runtime would have.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecordedToolCall {
     pub tool_name: String,
     /// The call's arguments object; empty when it sent none.
     pub tool_arguments: serde_json::Value,
+    pub tool_call_transport: StubToolCallTransport,
 }
 
 /// How the stub answers one `GET /api/surfaces/{surface_id}/image`.
@@ -213,6 +231,8 @@ pub struct StubLocalApiScript {
     pub listed_tool_names: Vec<String>,
     /// How `/mcp/stdio` answers; serving the stub's MCP server when unset.
     pub mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
+    /// Tools whose calls are recorded and never answered.
+    pub tools_that_never_answer: HashSet<String>,
 }
 
 impl StubLocalApiScript {
@@ -277,11 +297,13 @@ struct StubLocalApiState {
     mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
     recorded_mcp_stdio_request_heads: Mutex<Vec<RecordedHttpRequestHead>>,
     recorded_mcp_stdio_client_bytes: Mutex<Vec<u8>>,
+    tools_that_never_answer: HashSet<String>,
 }
 
 #[derive(Clone)]
 struct StubLocalApiMcpServerHandler {
     stub_state: Arc<StubLocalApiState>,
+    tool_call_transport: StubToolCallTransport,
 }
 
 impl ServerHandler for StubLocalApiMcpServerHandler {
@@ -334,11 +356,30 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
                 tool_arguments: serde_json::Value::Object(
                     request.arguments.clone().unwrap_or_default(),
                 ),
+                tool_call_transport: self.tool_call_transport,
             });
         if let Some(refusal_message) = &self.stub_state.refuse_every_tool_call_with {
             return Err(ErrorData::invalid_params(refusal_message.clone(), None));
         }
-        let answer = self.stub_state.answer_for(&request);
+        if self
+            .stub_state
+            .tools_that_never_answer
+            .contains(request.name.as_ref())
+        {
+            return std::future::pending().await;
+        }
+        let attached_load_over_post = request.name == RUN_STREAM_TOOL_NAME
+            && self.tool_call_transport == StubToolCallTransport::StreamableHttpPost
+            && request
+                .arguments
+                .as_ref()
+                .and_then(|arguments| arguments.get("keep"))
+                == Some(&serde_json::Value::Bool(false));
+        let answer = if attached_load_over_post {
+            StubToolAnswer::tool_failure(STUB_ATTACHED_LOAD_OVER_POST_REFUSAL_TEXT)
+        } else {
+            self.stub_state.answer_for(&request)
+        };
         let content = vec![ContentBlock::text(answer.text)];
         Ok(if answer.is_error {
             CallToolResult::error(content)
@@ -525,7 +566,10 @@ async fn play_the_upgraded_mcp_stdio_stream(
             let mut connection_closing_generation = stub_state
                 .mcp_stdio_connection_closing_generation
                 .subscribe();
-            let mcp_server_handler = StubLocalApiMcpServerHandler { stub_state };
+            let mcp_server_handler = StubLocalApiMcpServerHandler {
+                stub_state,
+                tool_call_transport: StubToolCallTransport::McpStdioConnection,
+            };
             if let Ok(running_mcp_server) =
                 mcp_server_handler.serve(upgraded_mcp_stdio_stream).await
             {
@@ -587,6 +631,7 @@ async fn play_the_upgraded_mcp_stdio_stream(
 fn stub_local_api_router(stub_state: Arc<StubLocalApiState>) -> axum::Router {
     let mcp_server_handler = StubLocalApiMcpServerHandler {
         stub_state: stub_state.clone(),
+        tool_call_transport: StubToolCallTransport::StreamableHttpPost,
     };
     let local_api_mcp_service = StreamableHttpService::new(
         move || Ok(mcp_server_handler.clone()),
@@ -677,6 +722,7 @@ impl StubLocalApiServer {
             mcp_stdio_upgrade_answer: stub_local_api_script.mcp_stdio_upgrade_answer,
             recorded_mcp_stdio_request_heads: Mutex::new(Vec::new()),
             recorded_mcp_stdio_client_bytes: Mutex::new(Vec::new()),
+            tools_that_never_answer: stub_local_api_script.tools_that_never_answer,
         });
         let (stop_serving, serving_stopped) = tokio::sync::oneshot::channel::<()>();
         let served_stub_state = stub_state.clone();
@@ -754,6 +800,15 @@ impl StubLocalApiServer {
     /// Every tool call received so far, in arrival order.
     pub fn recorded_tool_calls(&self) -> Vec<RecordedToolCall> {
         self.stub_state.recorded_tool_calls.lock().unwrap().clone()
+    }
+
+    /// The transport of every call to `tool_name` received so far, in arrival order.
+    pub fn recorded_transports_of(&self, tool_name: &str) -> Vec<StubToolCallTransport> {
+        self.recorded_tool_calls()
+            .into_iter()
+            .filter(|recorded_tool_call| recorded_tool_call.tool_name == tool_name)
+            .map(|recorded_tool_call| recorded_tool_call.tool_call_transport)
+            .collect()
     }
 
     /// The arguments of every call to `tool_name` received so far, in arrival order.

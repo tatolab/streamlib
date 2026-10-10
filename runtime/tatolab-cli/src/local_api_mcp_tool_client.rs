@@ -395,7 +395,7 @@ mod tests {
     use super::*;
     use crate::stub_local_api_server::{
         NOTHING_LISTENS_LOCAL_API_SOCKET_PATH, RecordedToolCall, StubLocalApiScript,
-        StubLocalApiServer, StubMcpStdioUpgradeAnswer, StubToolAnswer,
+        StubLocalApiServer, StubMcpStdioUpgradeAnswer, StubToolAnswer, StubToolCallTransport,
     };
 
     fn json_object(json_value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
@@ -481,10 +481,12 @@ mod tests {
                 RecordedToolCall {
                     tool_name: "run_stream".to_owned(),
                     tool_arguments: json!({"keep": false}),
+                    tool_call_transport: StubToolCallTransport::McpStdioConnection,
                 },
                 RecordedToolCall {
                     tool_name: "logs".to_owned(),
                     tool_arguments: json!({"stream": "s", "after": 0}),
+                    tool_call_transport: StubToolCallTransport::McpStdioConnection,
                 },
             ]
         );
@@ -576,6 +578,7 @@ mod tests {
             [RecordedToolCall {
                 tool_name: "tap".to_owned(),
                 tool_arguments: json!({"channel": "cam/video", "count": 4}),
+                tool_call_transport: StubToolCallTransport::StreamableHttpPost,
             }]
         );
     }

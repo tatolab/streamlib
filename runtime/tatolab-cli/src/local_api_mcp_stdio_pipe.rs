@@ -296,7 +296,7 @@ mod tests {
     use super::*;
     use crate::stub_local_api_server::{
         RecordedHttpRequestHead, RecordedToolCall, StubLocalApiScript, StubLocalApiServer,
-        StubMcpStdioUpgradeAnswer, StubToolAnswer,
+        StubMcpStdioUpgradeAnswer, StubToolAnswer, StubToolCallTransport,
     };
 
     /// Longer than any pipe here takes; a pipe still running past it never ended.
@@ -698,6 +698,7 @@ mod tests {
             [RecordedToolCall {
                 tool_name: "graph".to_owned(),
                 tool_arguments: json!({ "through": "the pipe" }),
+                tool_call_transport: StubToolCallTransport::McpStdioConnection,
             }]
         );
         assert_eq!(pipe_thread.join().unwrap().unwrap(), 0);
