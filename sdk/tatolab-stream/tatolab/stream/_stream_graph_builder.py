@@ -3,8 +3,8 @@
 
 """A stream: a `@stream` function over a `StreamBuilder`, compiled to its graph.
 
-Pure Python — the standard library, the name cast and the built-in node base,
-nothing native — so a
+Pure Python — the standard library, the name cast, the address parse and the
+built-in node base, nothing native — so a
 stream module imports and compiles with no engine in the process. The graph
 `compile_stream_to_graph` returns is the one `tatolabd` loads, handed over as JSON.
 """
@@ -16,7 +16,7 @@ import enum
 import inspect
 import math
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, TypeVar, overload
 
@@ -26,11 +26,13 @@ from ._exposed_name_cast import (
     cast_exposed_name_to_url_safe,
 )
 from ._node_declaration import NODE_DECLARATION_DECLARED_STAMP
+from ._port_address import parse_port_address
 
 __all__ = [
     "Exposure",
     "NodeInputPortReference",
     "NodeOutputPortReference",
+    "NodeOutputPortReferenceByAddress",
     "NodeReference",
     "StreamBuilder",
     "compile_stream_to_graph",
@@ -225,6 +227,30 @@ class NodeInputPortReference:
 
 
 @dataclass(frozen=True, slots=True)
+class NodeOutputPortReferenceByAddress:
+    """An output port named by its address, right-anchored — a pulled link's producing end; chunks cast."""
+
+    address: str
+    machine_name: str | None = field(init=False)
+    stream_name: str | None = field(init=False)
+    node_name: str = field(init=False)
+    port_name: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.address, str):
+            raise TypeError(
+                f"a port address is a str, `<stream>/<node>/<port>`; got {self.address!r}, "
+                f"of type `{_type_name_as_written(self.address)}` — pass the address as a str"
+            )
+        port_address = parse_port_address(self.address)
+        object.__setattr__(self, "address", str(port_address))
+        object.__setattr__(self, "machine_name", port_address.machine_name)
+        object.__setattr__(self, "stream_name", port_address.stream_name)
+        object.__setattr__(self, "node_name", port_address.node_name)
+        object.__setattr__(self, "port_name", port_address.port_name)
+
+
+@dataclass(frozen=True, slots=True)
 class NodeReference:
     """A node `StreamBuilder.add` recorded, under the cast name links and exposures name it by."""
 
@@ -315,17 +341,27 @@ class StreamBuilder:
         self._recorded_nodes_by_name[node_name] = recorded_node
         return NodeReference(node_name)
 
+    def remote_output(self, address: str) -> NodeOutputPortReferenceByAddress:
+        """Name an output port by address, right-anchored: `"main/camera/video"` is stream `main`'s, here."""
+        return NodeOutputPortReferenceByAddress(address)
+
     def connect(
         self,
-        source: NodeOutputPortReference,
+        source: NodeOutputPortReference | NodeOutputPortReferenceByAddress,
         destination: NodeInputPortReference,
     ) -> None:
-        """Record a link from `source` to `destination`."""
-        if not isinstance(source, NodeOutputPortReference):
+        """Record a link from `source`, this stream's output or one named by address, to `destination`."""
+        if not isinstance(
+            source, (NodeOutputPortReference, NodeOutputPortReferenceByAddress)
+        ):
             raise TypeError(
                 f"connect's source must name an output port of a node this stream "
-                f"added: `stream_builder.add(...).output(port_name)`. Got {source!r}."
+                f"added: `stream_builder.add(...).output(port_name)`, or of another "
+                f"stream's node by its address: "
+                f"`stream_builder.remote_output(\"<stream>/<node>/<port>\")`. Got {source!r}."
             )
+        if isinstance(destination, NodeOutputPortReferenceByAddress):
+            raise TypeError(self._a_link_is_only_pulled_refusal(source, destination))
         if not isinstance(destination, NodeInputPortReference):
             raise TypeError(
                 f"connect's destination must name an input port of a node this stream "
@@ -333,7 +369,7 @@ class StreamBuilder:
             )
         self._recorded_links.append(
             {
-                "source": self._link_end(source),
+                "source": self._link_source_end(source),
                 "target": self._link_end(destination),
             }
         )
@@ -342,6 +378,14 @@ class StreamBuilder:
         self, output: NodeOutputPortReference, level: Exposure = Exposure.PRIVATE
     ) -> None:
         """Let `output` be read outside this stream: on this machine, or off it too at `PUBLIC`."""
+        if isinstance(output, NodeOutputPortReferenceByAddress):
+            raise TypeError(
+                f"expose takes an output port of a node this stream added — "
+                f"`stream_builder.add(...).output(port_name)`. Got {output!r}, a port named "
+                f"by its address: a stream exposes only its own nodes' outputs, so "
+                f"`{output.address}` is exposed in the function of the stream that adds "
+                f"its node."
+            )
         if not isinstance(output, NodeOutputPortReference):
             raise TypeError(
                 f"expose takes an output port of a node this stream added — "
@@ -400,6 +444,60 @@ class StreamBuilder:
     ) -> dict[str, str]:
         self._refuse_a_node_this_stream_does_not_hold(end.node_name)
         return {"node": end.node_name, "port": end.port_name}
+
+    def _link_source_end(
+        self, source: NodeOutputPortReference | NodeOutputPortReferenceByAddress
+    ) -> dict[str, str]:
+        if isinstance(source, NodeOutputPortReference):
+            return self._link_end(source)
+        if self._address_names_a_port_of_this_stream(source):
+            self._refuse_a_node_this_stream_does_not_hold(source.node_name)
+            return {"node": source.node_name, "port": source.port_name}
+        return {
+            key: chunk
+            for key, chunk in (
+                ("machine", source.machine_name),
+                ("stream", source.stream_name),
+                ("node", source.node_name),
+                ("port", source.port_name),
+            )
+            if chunk is not None
+        }
+
+    def _address_names_a_port_of_this_stream(
+        self, address_reference: NodeOutputPortReferenceByAddress
+    ) -> bool:
+        return address_reference.machine_name is None and address_reference.stream_name in (
+            None,
+            self._name,
+        )
+
+    def _a_link_is_only_pulled_refusal(
+        self,
+        source: NodeOutputPortReference | NodeOutputPortReferenceByAddress,
+        destination: NodeOutputPortReferenceByAddress,
+    ) -> str:
+        if isinstance(
+            source, NodeOutputPortReference
+        ) or self._address_names_a_port_of_this_stream(source):
+            source_address_the_reading_stream_writes = (
+                f"{self._name}/{source.node_name}/{source.port_name}"
+            )
+            how_this_stream_offers_the_source = (
+                ", once this stream exposes that output with `stream_builder.expose(...)`"
+            )
+        else:
+            source_address_the_reading_stream_writes = source.address
+            how_this_stream_offers_the_source = ""
+        return (
+            f"connect's destination must name an input port of a node this stream added: "
+            f"`stream_builder.add(...).input(port_name)`. Got {destination!r}, a port named "
+            f"by its address. A link is only pulled — the stream that owns the input "
+            f"creates it — so no stream links into another's input, and there is no "
+            f"`remote_input`. Connect in the reading stream's function instead, its source "
+            f"`stream_builder.remote_output(\"{source_address_the_reading_stream_writes}\")`"
+            f"{how_this_stream_offers_the_source}."
+        )
 
     def _compiled_graph(self) -> dict[str, Any]:
         return {
