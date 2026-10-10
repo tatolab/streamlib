@@ -141,7 +141,7 @@ enum TatolabVerb {
         /// The stream to stop, as `tatolab streams` names it.
         stream: String,
     },
-    /// Load a stopped kept stream again.
+    /// Load a stopped kept stream again, or retry a failed one.
     Start {
         /// The stream to start, as `tatolab streams` names it.
         stream: String,
@@ -151,7 +151,7 @@ enum TatolabVerb {
         /// The stream to remove, as `tatolab streams` names it.
         stream: String,
     },
-    /// List the streams the runtime holds: attached, kept or stopped.
+    /// List the streams the runtime holds: attached, kept, stopped or failed, and why each failed.
     Streams,
     /// Set how far one output port of a stream is readable.
     #[command(

@@ -2839,7 +2839,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn list_streams_answers_each_stream_by_name_state_project_and_node_count() {
+    async fn list_streams_answers_each_stream_by_name_state_project_node_count_and_failure() {
         for arguments in [json!({}), json!(null)] {
             let (_served, client) =
                 connected_mcp_client(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
@@ -2857,6 +2857,7 @@ pub(crate) mod tests {
                         "state": "attached",
                         "project_directory": "",
                         "node_count": null,
+                        "failed_because": null,
                     }]
                 }),
                 "arguments {arguments}"
