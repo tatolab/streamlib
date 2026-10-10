@@ -3,8 +3,8 @@
 
 """`Mp4Sink` from Python, built-in class to a file with two tracks in it.
 
-The load tests need no device: `tatolabd` loads the graph and is then refused
-at the GPU, which is why they run in CI. The recording test starts the engine,
+The load tests need no device: `tatolabd` loads the graph and its start is
+then refused at the GPU, which is why they run in CI. The recording test starts the engine,
 so it carries `requires_gpu` like every other graph test here and runs nowhere
 in CI: writing an MP4 needs no device, but a running processor does.
 
@@ -33,7 +33,7 @@ from block_wiring_streams import (
     NEVER_OPENED_RECORDING_PATH,
     two_microphone_encoder_pairs_into_one_mp4_sink,
 )
-from conftest import StreamRunWithNoVulkanDriverOutcome
+from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from opus_blocks_probes import StereoToneSource
 from runtime_process_under_test import RuntimeProcessUnderTest
 from runtime_unit_under_test import REPOSITORY_ROOT
@@ -207,7 +207,7 @@ def test_two_encoders_wire_into_the_one_input_without_an_adapter(
 
 @pytest.mark.requires_gpu
 def test_two_sources_record_two_tracks_named_after_their_producers(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", mp4_inspect_binary, tmp_path
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]", mp4_inspect_binary, tmp_path
 ):
     """Two tone streams into one sink, read back out of the written file.
 
@@ -223,11 +223,12 @@ def test_two_sources_record_two_tracks_named_after_their_producers(
     # `setup()`, which is over by the time every node is Running, so a clock
     # started there would under-measure the run it is bounding the file against.
     run_started_at = time.monotonic()
-    tatolabd = start_tatolabd(two_tone_pairs_recorded_into(recording_path))
+    tatolabd = start_tatolabd_running_stream(two_tone_pairs_recorded_into(recording_path))
+    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
     local_api = tatolabd.local_api_client()
-    local_api.await_every_node_running(timeout=READINESS_TIMEOUT_SECONDS)
+    local_api.await_every_node_running(stream=stream_name, timeout=READINESS_TIMEOUT_SECONDS)
 
-    expected_track_names = recorded_track_names(local_api.call_tool("graph"))
+    expected_track_names = recorded_track_names(local_api.call_tool("graph", {"stream": stream_name}))
     assert len(expected_track_names) == 2
 
     while_running = await_recording_with_at_least(mp4_inspect_binary, recording_path, 1, tatolabd)

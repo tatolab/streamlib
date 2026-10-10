@@ -1,0 +1,53 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+"""The `@stream` functions `test_opus_blocks.py` runs from the suite project."""
+
+from tatolab.stream import OpusDecoder, OpusEncoder, StreamBuilder, stream
+
+from opus_blocks_probes import DecodedAudioBlockProbe, EncodedAudioPacketProbe, StereoToneSource
+
+
+@stream
+def an_opus_encoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(OpusEncoder)
+
+
+@stream
+def an_opus_decoder_alone(stream_builder: StreamBuilder) -> None:
+    stream_builder.add(OpusDecoder)
+
+
+@stream
+def stereo_tone_through_the_opus_pair_probed_on_both_links(stream_builder: StreamBuilder) -> None:
+    """A stereo tone encoded and decoded back, with no Python in the codec path.
+
+    `StereoToneSource → OpusEncoder → OpusDecoder`, a probe fanned off each of
+    the two links. The source states 48 kHz stereo `f32`, which is what the
+    encoder's window contract asks the stage to resample to — so nothing
+    between the source and the measurement is a resampler, and the channel
+    count the encoder follows is this stream's own fact.
+
+    Two probes off one run rather than two runs is what makes the trim
+    assertion possible: a decoded block's stamp is paired against the stamp of
+    the encoded packet a lookahead later, and two runs would have two anchors
+    and nothing to pair across.
+
+    The source publishes 480-sample blocks and the encoder's port declares
+    960/960, so the window stage frames two source blocks into each Opus
+    packet — there is no rechunker between them and no configuration that
+    could add one.
+    """
+    source = stream_builder.add(StereoToneSource)
+    encoder = stream_builder.add(OpusEncoder)
+    decoder = stream_builder.add(OpusDecoder)
+    encoded_probe = stream_builder.add(EncodedAudioPacketProbe)
+    decoded_probe = stream_builder.add(DecodedAudioBlockProbe)
+
+    stream_builder.connect(source.output("audio"), encoder.input("audio"))
+    stream_builder.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
+    stream_builder.connect(
+        encoder.output("encoded_audio"),
+        encoded_probe.input("encoded_audio_from_upstream"),
+    )
+    stream_builder.connect(decoder.output("audio"), decoded_probe.input("audio_from_upstream"))

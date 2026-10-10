@@ -7,8 +7,10 @@ The client is the official MCP Python SDK's, driven by a script, not a model. Wh
 resources and the one prompt it picks from the node's listings, and the import
 path of the effect it wants inserted, which no graph has named yet. Everything
 else comes from the server: the resource URIs and the prompt's argument names
-from `resources/list` and `prompts/list`, the link from the graph resource,
-and the tool order, names and ports from the recipe text, whose numbered steps it dispatches as written. The graph it
+from `resources/list` and `prompts/list`, the stream and the link from the
+graph resource, and the tool order, names and ports from the recipe text, whose
+numbered steps it dispatches as written, each naming the stream the recipe was
+rendered against. The graph it
 leaves is then checked through `graph`, and the frames through the processor it
 inserted.
 
@@ -31,8 +33,10 @@ from mcp.types import TextContent, TextResourceContents
 from mcp_types import UNSUPPORTED_PROTOCOL_VERSION
 from mcp_types.version import LATEST_PROTOCOL_VERSION
 
+from conftest import TatolabdUnderTest
 from local_api_client import LocalApiClient, mcp_error_raised_in
-from runtime_process_under_test import ENGINE_STARTED_LOG_LINE, RuntimeProcessUnderTest
+from runtime_process_under_test import ENGINE_STARTED_LOG_LINE
+from stream_runs_on_tatolabd import TatolabRunOfAProject
 from test_cli_launch import NODE_READY_TIMEOUT_SECONDS
 
 pytestmark = pytest.mark.requires_gpu
@@ -110,8 +114,10 @@ NUMBERED_STEP = re.compile(r"^\d+\. `([a-z_]+)` — (.*)$")
 EXPLICIT_ARGUMENT = re.compile(r"`([a-z_]+)`: `([^`]+)`")
 
 
-def await_link_state(client: "ScriptedMcpClient", link_id: str, wanted: str) -> str:
-    """Poll `graph` until one link reaches `wanted`, and report what it reached.
+def await_link_state(
+    client: "ScriptedMcpClient", stream_name: str, link_id: str, wanted: str
+) -> str:
+    """Poll the stream's `graph` until one link reaches `wanted`, and report what it reached.
 
     A `connect` onto a helper-placed processor returns with the link `pending`:
     the helper opens its own port and answers, and only that answer makes the
@@ -121,7 +127,7 @@ def await_link_state(client: "ScriptedMcpClient", link_id: str, wanted: str) -> 
     deadline = time.monotonic() + LINK_ANSWER_TIMEOUT_SECONDS
     link = None
     while time.monotonic() < deadline:
-        graph = client.call_tool("graph", {})
+        graph = client.call_tool("graph", {"stream": stream_name})
         link = next((each for each in graph["links"] if each["id"] == link_id), None)
         if link is not None and link["state"] in (wanted, "error"):
             return link["state"] + (
@@ -131,8 +137,10 @@ def await_link_state(client: "ScriptedMcpClient", link_id: str, wanted: str) -> 
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
-def await_added_node_state(client: "ScriptedMcpClient", node_name: str, wanted: str) -> str:
-    """Poll `graph` until one node reaches `wanted`, and report what it reached.
+def await_added_node_state(
+    client: "ScriptedMcpClient", stream_name: str, node_name: str, wanted: str
+) -> str:
+    """Poll the stream's `graph` until one node reaches `wanted`, and report what it reached.
 
     A node added to a running graph is placed in a helper process that has to
     be spawned before it can run, so `graph` reports it `Idle` for as long as
@@ -143,7 +151,11 @@ def await_added_node_state(client: "ScriptedMcpClient", node_name: str, wanted: 
     state = None
     while time.monotonic() < deadline:
         node = next(
-            (each for each in client.call_tool("graph", {})["nodes"] if each["name"] == node_name),
+            (
+                each
+                for each in client.call_tool("graph", {"stream": stream_name})["nodes"]
+                if each["name"] == node_name
+            ),
             None,
         )
         state = node["components"]["state"] if node is not None else None
@@ -209,7 +221,7 @@ def numbered_steps(prompt_text: str) -> "list[tuple[str, str]]":
 )
 def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_link(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
     sink_input_delivery_profile: str,
     inserted_input_delivery_profile: str,
 ):
@@ -226,10 +238,11 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         }
     )
 
-    tatolab = start_tatolab("run", working_directory=app_directory)
-    local_api = tatolab.local_api_client(timeout=NODE_READY_TIMEOUT_SECONDS)
-    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    client = ScriptedMcpClient(local_api)
+    tatolabd = start_tatolabd()
+    tatolab_run = tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory))
+    tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
+    client = ScriptedMcpClient(tatolabd.local_api_client())
 
     negotiated_protocol_version, capabilities = client.answer(
         lambda connected: asyncio.sleep(0, (connected.protocol_version, connected.server_capabilities))
@@ -251,21 +264,30 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     }
     insert_prompt = prompts_by_name["insert_node_between_linked_nodes"]
 
-    catalog = client.read_json_resource(resource_uris_by_name["node-catalog"])
-    catalog_paths = [entry["type"] for entry in catalog["nodes"]]
-    inserted_type = "processors.bag_marking_effect:BagMarkingEffect"
-
-    graph_before = client.read_json_resource(resource_uris_by_name["graph"])
+    machine_wide_graph_before = client.read_json_resource(resource_uris_by_name["graph"])
+    (graph_before,) = machine_wide_graph_before["streams"]
+    stream_name = graph_before["stream"]
     assert len(graph_before["links"]) == 1, graph_before["links"]
     replaced_link = graph_before["links"][0]
 
-    # The prompt's two arguments, bound by the names the listing gave them: one
-    # takes the link's id, the other a catalog import path.
+    catalog = client.read_json_resource(resource_uris_by_name["node-catalog"])
+    (catalog_of_the_stream,) = [
+        stream_catalog
+        for stream_catalog in catalog["streams"]
+        if stream_catalog["stream"] == stream_name
+    ]
+    catalog_paths = [entry["type"] for entry in catalog["nodes"] + catalog_of_the_stream["nodes"]]
+    inserted_type = "processors.bag_marking_effect:BagMarkingEffect"
+
+    # The prompt's three arguments, bound by the names the listing gave them:
+    # the stream, the link's id, and a catalog import path.
     argument_names = [argument.name for argument in insert_prompt.arguments or []]
+    assert "stream" in argument_names, argument_names
     link_argument = next(name for name in argument_names if name.startswith("link"))
-    type_argument = next(name for name in argument_names if name != link_argument)
+    type_argument = next(name for name in argument_names if name not in ("stream", link_argument))
     recipe_text = client.prompt_text(
-        insert_prompt.name, {link_argument: replaced_link["id"], type_argument: inserted_type}
+        insert_prompt.name,
+        {"stream": stream_name, link_argument: replaced_link["id"], type_argument: inserted_type},
     )
     steps = numbered_steps(recipe_text)
     assert steps, f"the recipe lists no steps:\n{recipe_text}"
@@ -287,9 +309,11 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     for tool_name, instruction in steps:
         spelled = dict(EXPLICIT_ARGUMENT.findall(instruction))
         if tool_name == "add_node":
-            added_node_name = client.call_tool("add_node", {"type": spelled["type"]})["name"]
+            added_node_name = client.call_tool(
+                "add_node", {"stream": stream_name, "type": spelled["type"]}
+            )["name"]
         elif tool_name == "graph":
-            graph_after = client.call_tool("graph", {})
+            graph_after = client.call_tool("graph", {"stream": stream_name})
             if added_node_name is not None and not added_node_ports:
                 added_node = next(n for n in graph_after["nodes"] if n["name"] == added_node_name)
                 (added_input,) = added_node["ports"]["inputs"]
@@ -297,6 +321,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
                 added_node_ports = {"to_port": added_input["name"], "from_port": added_output["name"]}
         elif tool_name == "connect":
             arguments = {
+                "stream": stream_name,
                 "from_node": spelled.get("from_node", added_node_name),
                 "from_port": spelled.get("from_port", added_node_ports["from_port"]),
                 "to_node": spelled.get("to_node", added_node_name),
@@ -304,7 +329,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
             }
             returned_link_ids.append(client.call_tool("connect", arguments)["link_id"])
         elif tool_name == "disconnect":
-            client.call_tool("disconnect", {"link_id": spelled["link_id"]})
+            client.call_tool("disconnect", {"stream": stream_name, "link_id": spelled["link_id"]})
         else:
             pytest.fail(f"the recipe calls `{tool_name}`, which this client was not asked to follow")
 
@@ -318,18 +343,20 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     # read `graph` again for.
     for link_id in returned_link_ids:
         assert links_by_id[link_id]["state"] in ("pending", "wired"), links_by_id.get(link_id)
-        assert await_link_state(client, link_id, "wired") == "wired", (
+        assert await_link_state(client, stream_name, link_id, "wired") == "wired", (
             "the helper's own answer is what makes the link wired; a link stuck "
             "pending is a helper that never opened its port, and one in error "
             "carries the helper's reason"
         )
-    links_by_id = {link["id"]: link for link in client.call_tool("graph", {})["links"]}
+    links_by_id = {
+        link["id"]: link for link in client.call_tool("graph", {"stream": stream_name})["links"]
+    }
     upstream_link, downstream_link = (links_by_id[link_id] for link_id in returned_link_ids)
     assert upstream_link["source"] == replaced_link["source"]
     assert upstream_link["target"]["node"] == added_node_name
     assert downstream_link["source"]["node"] == added_node_name
     assert downstream_link["target"] == replaced_link["target"]
-    assert await_added_node_state(client, added_node_name, "Running") == "Running", (
+    assert await_added_node_state(client, stream_name, added_node_name, "Running") == "Running", (
         "the splice is only carrying bags once the inserted node runs; a node "
         "stuck Idle is a helper that never started it"
     )
@@ -337,18 +364,19 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     # The sink announces from its own processor interpreter only once a bag
     # carrying the inserted effect's mark reaches it: frames really pass
     # through the splice.
-    tatolab.await_marker("SINK_RECEIVED_A_MARKED_BAG", timeout=FIRST_MARKED_BAG_TIMEOUT_SECONDS)
+    tatolabd.await_marker("SINK_RECEIVED_A_MARKED_BAG", timeout=FIRST_MARKED_BAG_TIMEOUT_SECONDS)
 
     # The virtual camera recipe names a type this node's catalog actually holds.
     source_endpoint = replaced_link["source"]
     camera_prompt = prompts_by_name["show_channel_on_virtual_camera"]
     camera_recipe_text = client.prompt_text(
         camera_prompt.name,
-        # Its required arguments name a node, then one of its output ports.
+        # Its required arguments name the stream, a node, then one of its output ports.
         dict(
             zip(
                 [argument.name for argument in camera_prompt.arguments or [] if argument.required],
-                [source_endpoint["node"], source_endpoint["port"]],
+                [stream_name, source_endpoint["node"], source_endpoint["port"]],
+                strict=True,
             )
         ),
     )
@@ -358,5 +386,5 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     )
     assert dict(EXPLICIT_ARGUMENT.findall(camera_add_step))["type"] in catalog_paths
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab.recent_stderr()
+    tatolab_run.interrupt()
+    assert tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab_run.recent_stderr()

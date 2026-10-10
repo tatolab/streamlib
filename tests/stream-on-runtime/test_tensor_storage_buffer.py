@@ -35,14 +35,14 @@ pytestmark = pytest.mark.requires_gpu
 
 
 def run_scenario(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
     scenario: str,
     awaited_reports: int,
     extra_environment: "dict[str, str] | None" = None,
 ) -> dict:
     """Run one scenario to completion, and return its reports by probe name;
     skip when the producer found no torch device to hand the tensor to."""
-    tatolabd = start_tatolabd(
+    tatolabd = start_tatolabd_running_stream(
         tensor_storage_buffer_streams.STREAM_BY_SCENARIO[scenario],
         extra_environment=extra_environment,
     )
@@ -102,12 +102,12 @@ def assert_written_through_torch_with_no_copy(producer_report: dict, shape) -> N
 
 
 def test_a_tensor_written_through_torch_is_read_by_another_process(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """(1, 3, 640, 640) float32: written in one processor interpreter through
     `torch.from_dlpack`, resolved by id in another, values equal."""
     reports = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "a_written_tensor_is_read_by_another_process",
         POOL_ROTATION_DEPTH + 1,
     )
@@ -127,12 +127,12 @@ def test_a_tensor_written_through_torch_is_read_by_another_process(
     assert producer["pid"] not in {read["pid"] for read in reads}
 
 
-def test_an_odd_shaped_tensor_round_trips(start_tatolabd):
+def test_an_odd_shaped_tensor_round_trips(start_tatolabd_running_stream):
     """(3, 7, 11) float16 — 462 bytes, no page multiple: CUDA maps the tensor's
     exact byte size, never the allocation's rounded one, and on macOS the
     capsule spans the tensor alone over its IOSurface's one 16 KiB row."""
     reports = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "an_odd_shaped_tensor_round_trips",
         POOL_ROTATION_DEPTH + 1,
     )
@@ -146,12 +146,12 @@ def test_an_odd_shaped_tensor_round_trips(start_tatolabd):
 
 
 def test_a_reader_resolving_a_different_id_sees_different_values(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The negative control: the comparison is not vacuous — the previous
     frame's tensor does not carry this frame's values."""
     reports = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "a_reader_resolving_a_different_id_sees_different_values",
         POOL_ROTATION_DEPTH,  # the sink skips frame 0, plus the producer's report
     )
@@ -168,12 +168,12 @@ def test_a_reader_resolving_a_different_id_sees_different_values(
         )
 
 
-def test_a_tensor_a_consumer_holds_is_never_rewritten(start_tatolabd):
+def test_a_tensor_a_consumer_holds_is_never_rewritten(start_tatolabd_running_stream):
     """The consumer holds the first tensor open while the producer publishes
     several pool depths past it: its values stay frame 0's, and its slot is
     never published from again."""
     reports = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "a_held_tensor_is_never_rewritten",
         FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD + 1,
     )
@@ -197,11 +197,11 @@ def test_a_tensor_a_consumer_holds_is_never_rewritten(start_tatolabd):
     not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")),
     reason="needs a window server: the allocation under test follows a swapchain",
 )
-def test_a_tensor_acquired_after_a_window_opens_round_trips(start_tatolabd):
+def test_a_tensor_acquired_after_a_window_opens_round_trips(start_tatolabd_running_stream):
     """DEVICE_LOCAL OPAQUE_FD memory allocated after a swapchain exists still
     allocates and round-trips (docs/learnings/nvidia-opaque-fd-after-swapchain.md)."""
     reports = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "a_tensor_acquired_after_a_window_opens_round_trips",
         POOL_ROTATION_DEPTH + 1,
         extra_environment=environment_reaching_the_window_server(),
@@ -211,14 +211,14 @@ def test_a_tensor_acquired_after_a_window_opens_round_trips(start_tatolabd):
 
 
 def test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """A compute kernel fills a tensor with an index pattern and
     `torch.from_dlpack` sees exactly that pattern; a tensor the kernel never
     named keeps its sentinel. A draw paints the colour its bound tensor holds,
     and a second tensor paints a second colour."""
     reports = run_scenario(
-        start_tatolabd, "a_kernel_binds_a_tensor_by_surface_id", 1
+        start_tatolabd_running_stream, "a_kernel_binds_a_tensor_by_surface_id", 1
     )
     observed = reports["TensorStorageBufferKernelBindingProbe"][0]
 
@@ -260,12 +260,12 @@ def test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one(
     ],
 )
 def test_mlx_reads_the_tensor_torch_mps_wrote_in_another_process(
-    start_tatolabd, scenario, shape
+    start_tatolabd_running_stream, scenario, shape
 ):
     """The reader hands the resolved tensor to MLX as well as torch: MLX sees
     the values torch-MPS wrote in the producer's process, over the same
     IOSurface pages."""
-    reports = run_scenario(start_tatolabd, scenario, POOL_ROTATION_DEPTH + 1)
+    reports = run_scenario(start_tatolabd_running_stream, scenario, POOL_ROTATION_DEPTH + 1)
     reads = reports["PublishedTensorReadingSink"]
     assert reads, "the sink resolved no tensor"
     for read in reads:

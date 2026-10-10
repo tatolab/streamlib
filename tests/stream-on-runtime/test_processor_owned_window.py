@@ -114,12 +114,12 @@ needs_a_window_server = pytest.mark.skipif(
 
 
 def start_probe_stream(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
     probe_class_name: str,
     scenario: str = BESIDE_A_DISPLAY_WINDOW,
 ) -> RuntimeProcessUnderTest:
     """The probe's stream started on `tatolabd`, with no display server for the headless scenario."""
-    return start_tatolabd(
+    return start_tatolabd_running_stream(
         STREAM_BY_PROBE_AND_SCENARIO[(probe_class_name, scenario)],
         extra_environment=(
             ENVIRONMENT_WITH_NO_DISPLAY_SERVER if scenario == WITH_NO_DISPLAY_SERVER else None
@@ -128,14 +128,14 @@ def start_probe_stream(
 
 
 def run_probe(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
     probe_class_name: str,
     *,
     scenario: str = BESIDE_A_DISPLAY_WINDOW,
 ) -> dict:
     """One probe, one observation dict — or a failure carrying the probe's own
     traceback, which names the cause better than a missing marker."""
-    tatolabd = start_probe_stream(start_tatolabd, probe_class_name, scenario)
+    tatolabd = start_probe_stream(start_tatolabd_running_stream, probe_class_name, scenario)
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -163,11 +163,11 @@ def assert_nothing_raised_after_reporting(tatolabd: RuntimeProcessUnderTest) -> 
 
 @needs_a_window_server
 def test_all_three_ways_of_naming_a_published_surface_reach_the_window(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The whole authoring surface of `show()`: a cast object, a handle a
     kernel wrote, and a bare id."""
-    observed = run_probe(start_tatolabd, "EveryArgumentShapeReachesTheWindowProbe")
+    observed = run_probe(start_tatolabd_running_stream, "EveryArgumentShapeReachesTheWindowProbe")
 
     assert observed["shapes_accepted"] == [
         "kernel_output_handle",
@@ -182,10 +182,10 @@ def test_all_three_ways_of_naming_a_published_surface_reach_the_window(
 
 
 @needs_a_window_server
-def test_the_window_reports_an_extent_of_its_own(start_tatolabd):
+def test_the_window_reports_an_extent_of_its_own(start_tatolabd_running_stream):
     """Not the requested one: the window server is free to hand back another,
     and the owner is told what it actually got."""
-    observed = run_probe(start_tatolabd, "EveryArgumentShapeReachesTheWindowProbe")
+    observed = run_probe(start_tatolabd_running_stream, "EveryArgumentShapeReachesTheWindowProbe")
 
     assert observed["drained_width"] > 0 and observed["drained_height"] > 0, (
         "a drain must report the window's real drawable extent; zero means the "
@@ -199,11 +199,11 @@ def test_the_window_reports_an_extent_of_its_own(start_tatolabd):
 
 @needs_a_window_server
 def test_a_closed_window_leaves_the_pipeline_running_and_every_show_a_no_op(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """A user's gesture must never become an exception in a per-frame path, so
     neither does the owner's own close."""
-    observed = run_probe(start_tatolabd, "AnOwnerClosingItsOwnWindowProbe")
+    observed = run_probe(start_tatolabd_running_stream, "AnOwnerClosingItsOwnWindowProbe")
 
     assert observed["closed_before_close"] is False
     assert observed["closed_after_close"] is True
@@ -213,11 +213,11 @@ def test_a_closed_window_leaves_the_pipeline_running_and_every_show_a_no_op(
 
 
 @pytest.mark.linux_only_capability(reason="DISPLAY and WAYLAND_DISPLAY are how Linux names a window server")
-def test_a_process_that_can_get_no_window_raises_at_setup(start_tatolabd):
+def test_a_process_that_can_get_no_window_raises_at_setup(start_tatolabd_running_stream):
     """The refusal an author wraps in `try/except` when the window is
     optional, carrying the pump's own account of why."""
     observed = run_probe(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "AProcessThatCanGetNoWindowRefusesAtSetupProbe",
         scenario=WITH_NO_DISPLAY_SERVER,
     )
@@ -242,12 +242,12 @@ def test_a_process_that_can_get_no_window_raises_at_setup(start_tatolabd):
 
 @pytest.mark.linux_only_capability(reason="DISPLAY and WAYLAND_DISPLAY are how Linux names a window server")
 def test_the_optional_window_pattern_leaves_the_processor_running(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The `try/except` is the whole pattern: no window, no exception out of
     `setup`, and a processor that goes on doing its work."""
     observed = run_probe(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "AProcessThatCanGetNoWindowRefusesAtSetupProbe",
         scenario=WITH_NO_DISPLAY_SERVER,
     )
@@ -341,7 +341,7 @@ def the_window_titled(title: str) -> str:
 @pytest.mark.linux_only_capability(reason="the close gesture is an X11 client message")
 @needs_a_window_server
 def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The gesture itself, performed against the window server.
 
@@ -352,7 +352,10 @@ def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
     if shutil.which("xdotool") is None:
         pytest.skip("xdotool is what finds the window the gesture is aimed at")
 
-    tatolabd = start_probe_stream(start_tatolabd, "EveryArgumentShapeReachesTheWindowProbe")
+    tatolabd = start_probe_stream(
+        start_tatolabd_running_stream,
+        "EveryArgumentShapeReachesTheWindowProbe",
+    )
     tatolabd.await_marker("PROBE_RESULT")
 
     close_the_window_the_way_a_user_would(the_window_titled(WINDOW_TITLE))
@@ -380,12 +383,12 @@ def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
 
 @needs_a_window_server
 def test_showing_something_that_names_no_surface_is_refused_by_the_three_shapes(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """Refused in the caller's own stack, naming what it could have been
     given — never a round trip that comes back "the parent refused"."""
     observed = run_probe(
-        start_tatolabd, "ShowingSomethingThatNamesNoSurfaceIsRefusedProbe"
+        start_tatolabd_running_stream, "ShowingSomethingThatNamesNoSurfaceIsRefusedProbe"
     )
 
     for refusal in (
@@ -399,7 +402,7 @@ def test_showing_something_that_names_no_surface_is_refused_by_the_three_shapes(
 
 @needs_a_window_server
 def test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The keys this side emits, checked against the host that reads them.
 
@@ -409,7 +412,7 @@ def test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar(
     `process()` and nowhere before it.
     """
     observed = run_probe(
-        start_tatolabd, "AFrameDescribingItsColourReachesTheWindowProbe"
+        start_tatolabd_running_stream, "AFrameDescribingItsColourReachesTheWindowProbe"
     )
 
     assert observed["the_described_frame_was_accepted"] is True
@@ -418,7 +421,7 @@ def test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar(
 
 @needs_a_window_server
 def test_a_closed_window_still_refuses_an_argument_that_names_no_surface(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The no-op belongs to the user's gesture, not to a programming error.
 
@@ -427,7 +430,7 @@ def test_a_closed_window_still_refuses_an_argument_that_names_no_surface(
     stops being reported the moment a user clicks the X.
     """
     observed = run_probe(
-        start_tatolabd, "ShowingSomethingThatNamesNoSurfaceIsRefusedProbe"
+        start_tatolabd_running_stream, "ShowingSomethingThatNamesNoSurfaceIsRefusedProbe"
     )
 
     for refusal in (

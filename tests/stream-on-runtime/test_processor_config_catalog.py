@@ -16,24 +16,14 @@ from typing import Any
 
 import pytest
 
-import processor_config_catalog_probes as probes
-from runtime_process_under_test import RuntimeProcessUnderTest
-from tatolab.stream import StreamBuilder, stream
+from conftest import TatolabdUnderTest
+from processor_config_catalog_streams import four_probes_each_configured_its_own_way
 
 pytestmark = pytest.mark.requires_gpu
 
 GRAPH_READY_TIMEOUT_SECONDS = 90.0
 
 PROBE_TYPE_PREFIX = "processor_config_catalog_probes:"
-
-
-@stream
-def four_probes_each_configured_its_own_way(stream_builder: StreamBuilder) -> None:
-    """Probes configured by a TypedDict, a dataclass and a model, beside one taking none."""
-    stream_builder.add(probes.TypedDictConfiguredProbe, config={"width": 320})
-    stream_builder.add(probes.DataclassConfiguredProbe, config={"width": 640, "label": "left"})
-    stream_builder.add(probes.ModelConfiguredProbe, config={"width": 1280})
-    stream_builder.add(probes.UnconfiguredProbe)
 
 
 @dataclass(frozen=True)
@@ -53,19 +43,20 @@ def catalog_run_of_this_module() -> "dict[str, CatalogRun]":
 @pytest.fixture
 def catalog_run(
     catalog_run_of_this_module: "dict[str, CatalogRun]",
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ) -> CatalogRun:
     """One node, one run: four processor interpreter spawns are the cost, so they are paid once.
 
     The first test to ask runs the stream to a clean exit through
-    `start_tatolabd`, which reaps it however that test ends; later tests read
-    what it served.
+    `start_tatolabd_running_stream`, which reaps it however that test ends;
+    later tests read what it served.
     """
     if "run" not in catalog_run_of_this_module:
-        tatolabd = start_tatolabd(four_probes_each_configured_its_own_way)
+        tatolabd = start_tatolabd_running_stream(four_probes_each_configured_its_own_way)
+        stream_name = tatolabd.await_the_latest_attached_stream_loaded()
         local_api = tatolabd.local_api_client()
-        local_api.await_every_node_running(timeout=GRAPH_READY_TIMEOUT_SECONDS)
-        served = local_api.registry()
+        local_api.await_every_node_running(stream=stream_name, timeout=GRAPH_READY_TIMEOUT_SECONDS)
+        served = local_api.registry(stream_name)
         tatolabd.interrupt()
         tatolabd.await_clean_exit()
         catalog_run_of_this_module["run"] = CatalogRun(

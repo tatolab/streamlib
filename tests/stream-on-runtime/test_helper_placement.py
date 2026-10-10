@@ -25,15 +25,19 @@ from pathlib import Path
 
 import pytest
 
-from helper_placement_processors import (
-    MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE,
-    DiesAbruptlyProbe,
-    ForksAWorkerThatOutlivesItProbe,
-    ReportsItsOwnProcessSource,
-    ReportsItsOwnProcessVideoSink,
-    ReportsUpstreamProcessSink,
-    SleepsThroughItsOwnSetupProbe,
-    SleepsThroughItsOwnShutdownProbe,
+from conftest import TatolabdUnderTest
+from helper_placement_processors import MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE
+from helper_placement_streams import (
+    dies_abruptly_beside_a_survivor_pair,
+    first_labelled_source_into_sink,
+    native_test_pattern_into_python_video_sink,
+    one_probe_forking_a_worker_that_outlives_it,
+    one_probe_sleeping_through_its_own_setup,
+    one_probe_sleeping_through_its_own_shutdown,
+    only_labelled_source_into_sink,
+    reaped_labelled_source_into_sink,
+    stale_build_labelled_source,
+    two_labelled_sources_each_into_its_own_sink,
 )
 from helper_process_observation import (
     a_process_is_gone_within,
@@ -42,13 +46,12 @@ from helper_process_observation import (
     helper_process_is_still_alive,
 )
 from local_api_client import RUNNING_NODE_STATE
-from runtime_process_under_test import RuntimeProcessUnderTest
 from runtime_unit_under_test import STREAM_ON_RUNTIME_SUITE_DIRECTORY
-from tatolab.stream import StreamBuilder, TestPatternSource, stream
+from tatolab.stream import StreamBuilder, compile_stream_to_graph
 
 pytestmark = pytest.mark.requires_gpu
 
-StartTatolabd = Callable[..., RuntimeProcessUnderTest]
+StartTatolabdRunningStream = Callable[..., TatolabdUnderTest]
 
 # The ladder's own worst case is a second of interrupt plus five of teardown
 # plus the group's grace; a helper that answers at once is far inside it. This
@@ -64,88 +67,18 @@ ENGINE_BUILD_ID_OF_ANOTHER_BUILD = (
 )
 
 
-def _labelled_source_into_sink(
-    stream_builder: StreamBuilder, label: str, *, sink_name: "str | None" = None
-) -> None:
-    source = stream_builder.add(ReportsItsOwnProcessSource, config={"label": label})
-    sink = stream_builder.add(ReportsUpstreamProcessSink, name=sink_name)
-    stream_builder.connect(source.output("frames_to_downstream"), sink.input("frames_from_upstream"))
-
-
-@stream
-def first_labelled_source_into_sink(stream_builder: StreamBuilder) -> None:
-    """A source labelled `first` into a sink reporting where its bags came from."""
-    _labelled_source_into_sink(stream_builder, "first")
-
-
-@stream
-def only_labelled_source_into_sink(stream_builder: StreamBuilder) -> None:
-    """A source labelled `only` into a sink reporting where its bags came from."""
-    _labelled_source_into_sink(stream_builder, "only")
-
-
-@stream
-def reaped_labelled_source_into_sink(stream_builder: StreamBuilder) -> None:
-    """A source labelled `reaped` into a sink reporting where its bags came from."""
-    _labelled_source_into_sink(stream_builder, "reaped")
-
-
-@stream
-def two_labelled_sources_each_into_its_own_sink(stream_builder: StreamBuilder) -> None:
-    """Two instances of one source class, each into a sink named for its label."""
-    for label in ("first", "second"):
-        _labelled_source_into_sink(stream_builder, label, sink_name=f"{label}Sink")
-
-
-@stream
-def dies_abruptly_beside_a_survivor_pair(stream_builder: StreamBuilder) -> None:
-    """A processor that takes its own process down, beside a source-sink pair."""
-    stream_builder.add(DiesAbruptlyProbe)
-    _labelled_source_into_sink(stream_builder, "survivor")
-
-
-@stream
-def stale_build_labelled_source(stream_builder: StreamBuilder) -> None:
-    """A lone source labelled `stale`, for a helper made to see another build."""
-    stream_builder.add(ReportsItsOwnProcessSource, config={"label": "stale"})
-
-
-@stream
-def native_test_pattern_into_python_video_sink(stream_builder: StreamBuilder) -> None:
-    """A native 64x32 test pattern into a Python sink reporting its own process."""
-    pattern = stream_builder.add(TestPatternSource, config={"width": 64, "height": 32})
-    sink = stream_builder.add(ReportsItsOwnProcessVideoSink)
-    stream_builder.connect(pattern.output("video"), sink.input("video_from_upstream"))
-
-
-@stream
-def one_probe_sleeping_through_its_own_shutdown(stream_builder: StreamBuilder) -> None:
-    """A processor parked in `process()` when shutdown arrives."""
-    stream_builder.add(SleepsThroughItsOwnShutdownProbe)
-
-
-@stream
-def one_probe_forking_a_worker_that_outlives_it(stream_builder: StreamBuilder) -> None:
-    """A processor that forks a worker meant to outlive its helper."""
-    stream_builder.add(ForksAWorkerThatOutlivesItProbe)
-
-
-@stream
-def one_probe_sleeping_through_its_own_setup(stream_builder: StreamBuilder) -> None:
-    """A processor still inside `setup()` when shutdown arrives."""
-    stream_builder.add(SleepsThroughItsOwnSetupProbe)
-
-
 def run_until_marker_then_interrupt(
-    start_tatolabd: StartTatolabd, stream_function: Callable[[StreamBuilder], None], marker_name: str
-) -> RuntimeProcessUnderTest:
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+    stream_function: Callable[[StreamBuilder], None],
+    marker_name: str,
+) -> TatolabdUnderTest:
     """Run a stream until `marker_name` shows up, then Ctrl-C and require a clean exit.
 
     Sequencing on the marker rather than a timer is what keeps the wait as
     short as the event and as long as the machine needs — and the interrupt
     exercises the same teardown a terminal Ctrl-C does.
     """
-    tatolabd = start_tatolabd(stream_function)
+    tatolabd = start_tatolabd_running_stream(stream_function)
     tatolabd.await_marker(marker_name)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -160,12 +93,15 @@ def importing_process_ids_recorded_in(module_import_record_directory: Path) -> "
     }
 
 
-def test_adding_a_processor_loads_nothing_into_the_app(start_tatolabd: StartTatolabd, tmp_path: Path):
-    """The test process's compile import is the only load outside a processor interpreter.
+def test_adding_a_processor_loads_nothing_into_the_app(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+    tmp_path: Path,
+):
+    """Every import of the processor's module is an interpreter `tatolabd` started.
 
-    Every other import of the processor's module — the describe that learns its
-    ports at load, and the helper hosting it — is a process `tatolabd` started,
-    never `tatolabd` itself. Checked once the stream has loaded and again once
+    The compile in the project's interpreter, the describe that learns its
+    ports at load, and the helper hosting it are each a process `tatolabd`
+    started, never `tatolabd` itself. Checked once the stream has loaded and again once
     bags are flowing: a host that constructed the class lazily, on its first
     frame, would pass the first check and fail the second.
 
@@ -174,13 +110,13 @@ def test_adding_a_processor_loads_nothing_into_the_app(start_tatolabd: StartTato
     """
     module_import_record_directory = tmp_path / "module-import-records"
     module_import_record_directory.mkdir()
-    tatolabd = start_tatolabd(
+    tatolabd = start_tatolabd_running_stream(
         first_labelled_source_into_sink,
         extra_environment={
             MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE: str(module_import_record_directory)
         },
     )
-    tatolabd.await_stream_loaded()
+    tatolabd.await_the_latest_attached_stream_loaded()
     imported_by_the_load = importing_process_ids_recorded_in(module_import_record_directory)
     tatolabd.await_marker("SINK_PID")
     imported_while_running = importing_process_ids_recorded_in(module_import_record_directory)
@@ -205,10 +141,12 @@ def test_adding_a_processor_loads_nothing_into_the_app(start_tatolabd: StartTato
     )
 
 
-def test_a_bag_is_produced_in_a_process_that_is_not_the_apps(start_tatolabd: StartTatolabd):
+def test_a_bag_is_produced_in_a_process_that_is_not_the_apps(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
     """The pid rides in the bag, so the claim is about where `process` ran —
     not about what the engine logged it was going to do."""
-    tatolabd = start_tatolabd(only_labelled_source_into_sink)
+    tatolabd = start_tatolabd_running_stream(only_labelled_source_into_sink)
     sink_report = tatolabd.await_marker("SINK_PID")
     sink_pid, upstream_pid = sink_report["sink_pid"], sink_report["upstream_pid"]
     assert_runs_in_a_process_of_its_own_beneath(upstream_pid, tatolabd.pid)
@@ -227,9 +165,11 @@ def test_a_bag_is_produced_in_a_process_that_is_not_the_apps(start_tatolabd: Sta
     )
 
 
-def test_two_instances_of_one_class_get_two_processes(start_tatolabd: StartTatolabd):
+def test_two_instances_of_one_class_get_two_processes(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
     """Registration is per class; placement is per instance."""
-    tatolabd = start_tatolabd(two_labelled_sources_each_into_its_own_sink)
+    tatolabd = start_tatolabd_running_stream(two_labelled_sources_each_into_its_own_sink)
     # Awaited twice without naming a label: the two instances report in
     # whichever order they finish booting.
     tatolabd.await_marker("SOURCE_PID", occurrence=2)
@@ -246,7 +186,9 @@ def test_two_instances_of_one_class_get_two_processes(start_tatolabd: StartTatol
     assert tatolabd.pid not in reported_pids
 
 
-def test_a_native_builtin_stays_in_the_app_process(start_tatolabd: StartTatolabd):
+def test_a_native_builtin_stays_in_the_app_process(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
     """The other side of the boundary, discriminated.
 
     Every Python processor is a child; a native built-in is not.
@@ -260,7 +202,7 @@ def test_a_native_builtin_stays_in_the_app_process(start_tatolabd: StartTatolabd
     the runtime process". Native built-ins do, by design — their per-frame path
     never enters an interpreter.
     """
-    tatolabd = start_tatolabd(native_test_pattern_into_python_video_sink)
+    tatolabd = start_tatolabd_running_stream(native_test_pattern_into_python_video_sink)
     sink_pid = tatolabd.await_marker("VIDEO_SINK_PID")["pid"]
     assert_runs_in_a_process_of_its_own_beneath(sink_pid, tatolabd.pid)
     tatolabd.interrupt()
@@ -275,7 +217,7 @@ def test_a_native_builtin_stays_in_the_app_process(start_tatolabd: StartTatolabd
     assert sink_pid != tatolabd.pid, f"the Python sink ran in tatolabd's own process ({tatolabd.pid})"
 
 
-def test_no_helper_survives_the_app(start_tatolabd: StartTatolabd):
+def test_no_helper_survives_the_app(start_tatolabd_running_stream: StartTatolabdRunningStream):
     """`tatolabd` exiting means every helper was reaped.
 
     Asserted against the helpers' own pids, which `tatolabd` logs as it starts
@@ -287,7 +229,7 @@ def test_no_helper_survives_the_app(start_tatolabd: StartTatolabd):
     fails to open them — which reads as a transport bug rather than a leak.
     """
     tatolabd = run_until_marker_then_interrupt(
-        start_tatolabd, reaped_labelled_source_into_sink, "SINK_PID"
+        start_tatolabd_running_stream, reaped_labelled_source_into_sink, "SINK_PID"
     )
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
     assert len(helper_pids) == 2, (
@@ -299,14 +241,16 @@ def test_no_helper_survives_the_app(start_tatolabd: StartTatolabd):
     assert not survivors, f"helper processes {survivors} outlived the tatolabd that spawned them"
 
 
-def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(start_tatolabd: StartTatolabd):
+def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
     """The ladder `docs/plan/ARCHITECTURE.md` §Processor model decides, end to end.
 
     Fail-without-fix: with the old pair of five-second reply deadlines the
     sleeping callback misses `stopped`, the helper is marked gone, and its
     `teardown()` is skipped outright — so `SLEEPER_TORE_DOWN` never arrives.
     """
-    tatolabd = start_tatolabd(one_probe_sleeping_through_its_own_shutdown)
+    tatolabd = start_tatolabd_running_stream(one_probe_sleeping_through_its_own_shutdown)
     tatolabd.await_marker("ASLEEP_IN_PROCESS")
     interrupted_at = time.monotonic()
     tatolabd.interrupt()
@@ -329,7 +273,7 @@ def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(start_tatola
 
 
 def test_a_processor_interrupted_while_still_setting_up_still_tears_down(
-    start_tatolabd: StartTatolabd,
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
     """The route onto the ladder the engine's `stop()` hook never reaches.
 
@@ -341,7 +285,7 @@ def test_a_processor_interrupted_while_still_setting_up_still_tears_down(
     SIGINT'd, answers its refusal, and is then killed with its group — its
     `teardown()` never asked for and never run.
     """
-    tatolabd = start_tatolabd(one_probe_sleeping_through_its_own_setup)
+    tatolabd = start_tatolabd_running_stream(one_probe_sleeping_through_its_own_setup)
     tatolabd.await_marker("ASLEEP_IN_SETUP")
     interrupted_at = time.monotonic()
     tatolabd.interrupt()
@@ -360,14 +304,16 @@ def test_a_processor_interrupted_while_still_setting_up_still_tears_down(
     )
 
 
-def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(start_tatolabd: StartTatolabd):
+def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
     """A processor's descendants die with it.
 
     Fail-without-fix: the kills target the helper's pid, the worker outlives
     `tatolabd` holding whatever it inherited, and this finds it still running.
     """
     tatolabd = run_until_marker_then_interrupt(
-        start_tatolabd, one_probe_forking_a_worker_that_outlives_it, "WORKER_PID"
+        start_tatolabd_running_stream, one_probe_forking_a_worker_that_outlives_it, "WORKER_PID"
     )
     worker_pid = tatolabd.marker_payloads("WORKER_PID")[0]["worker_pid"]
 
@@ -377,7 +323,9 @@ def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(start_tatola
     )
 
 
-def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(start_tatolabd: StartTatolabd):
+def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
     """The owner's crash policy: surface, keep running.
 
     A processor that takes its own process down mid-run is reported in error,
@@ -387,7 +335,7 @@ def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(start_tatol
     indefinitely. Break both and the death goes unreported until shutdown, which
     is what this locks.
     """
-    tatolabd = start_tatolabd(dies_abruptly_beside_a_survivor_pair)
+    tatolabd = start_tatolabd_running_stream(dies_abruptly_beside_a_survivor_pair)
     tatolabd.await_marker("ABOUT_TO_DIE")
     failure_line = tatolabd.await_stderr_containing("Processor failed unrecoverably")
     sink_reports_before_the_failure_was_surfaced = sum(
@@ -403,7 +351,7 @@ def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(start_tatol
 
 
 def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_builds(
-    start_tatolabd: StartTatolabd, tmp_path: Path
+    start_tatolabd_running_stream: StartTatolabdRunningStream, tmp_path: Path
 ):
     """The whole handshake through a real `tatolabd`: it hands its build id
     over, the child compares it with its own and refuses on raw stderr, and the
@@ -434,11 +382,15 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
         f"    os.environ['STREAMLIB_ENGINE_BUILD_ID'] = {ENGINE_BUILD_ID_OF_ANOTHER_BUILD!r}\n"
     )
 
-    tatolabd = start_tatolabd(stale_build_labelled_source, project_directory=child_startup_directory)
+    tatolabd = start_tatolabd_running_stream(
+        compile_stream_to_graph(stale_build_labelled_source),
+        project_directory=child_startup_directory,
+    )
+    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
     tatolabd.await_stderr_containing(HELPER_DIED_SETTING_UP_LOG_LINE_FRAGMENT)
     processor_states = {
         node["name"]: node.get("components", {}).get("state")
-        for node in tatolabd.local_api_client().graph()["nodes"]
+        for node in tatolabd.local_api_client().graph(stream_name)["nodes"]
     }
     tatolabd.interrupt()
     tatolabd.await_exit()

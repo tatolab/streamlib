@@ -19,13 +19,16 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
 import pytest
 
+from conftest import AttachedTatolabRun, TatolabdUnderTest
 from local_api_client import LocalApiClient
-from runtime_process_under_test import ENGINE_STARTED_LOG_LINE, RuntimeProcessUnderTest
+from runtime_process_under_test import ENGINE_STARTED_LOG_LINE
+from stream_runs_on_tatolabd import TatolabRunOfAProject
 from test_cli_launch import NODE_READY_TIMEOUT_SECONDS
 
 # A processor interpreter's first frame is a cold spawn plus an import; anything
@@ -160,8 +163,10 @@ def link_with_id(graph: dict, link_id: str) -> "dict | None":
     return next((link for link in graph["links"] if link["id"] == link_id), None)
 
 
-def await_link_state(local_api: LocalApiClient, link_id: str, wanted: str) -> str:
-    """Poll `graph` until one link reaches `wanted`, and report what it reached.
+def await_link_state(
+    local_api: LocalApiClient, stream_name: str, link_id: str, wanted: str
+) -> str:
+    """Poll the stream's `graph` until one link reaches `wanted`, and report what it reached.
 
     A `connect` onto a helper-placed processor returns with the link `pending`:
     the helper opens its own port and answers, and only that answer makes the
@@ -173,7 +178,7 @@ def await_link_state(local_api: LocalApiClient, link_id: str, wanted: str) -> st
     deadline = time.monotonic() + LINK_ANSWER_TIMEOUT_SECONDS
     link = None
     while time.monotonic() < deadline:
-        link = link_with_id(local_api.call_tool("graph"), link_id)
+        link = link_with_id(local_api.call_tool("graph", {"stream": stream_name}), link_id)
         if link is not None and link["state"] in (wanted, "error"):
             return link["state"] + (
                 f" ({link['error_reason']})" if link.get("error_reason") else ""
@@ -182,8 +187,8 @@ def await_link_state(local_api: LocalApiClient, link_id: str, wanted: str) -> st
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
-def await_node_state(local_api: LocalApiClient, name: str, wanted: str) -> str:
-    """Poll `graph` until one node reaches `wanted`, and report what it reached.
+def await_node_state(local_api: LocalApiClient, stream_name: str, name: str, wanted: str) -> str:
+    """Poll the stream's `graph` until one node reaches `wanted`, and report what it reached.
 
     A helper-placed node reads `Running` only once its helper has finished
     setting up, which is also when every link its setup command carried is
@@ -193,7 +198,8 @@ def await_node_state(local_api: LocalApiClient, name: str, wanted: str) -> str:
     deadline = time.monotonic() + FIRST_FRAME_TIMEOUT_SECONDS
     state = "absent"
     while time.monotonic() < deadline:
-        state = node_named(local_api.call_tool("graph"), name)["components"]["state"]
+        graph = local_api.call_tool("graph", {"stream": stream_name})
+        state = node_named(graph, name)["components"]["state"]
         if state == wanted:
             return state
         time.sleep(0.05)
@@ -205,27 +211,45 @@ def tap_channel_of(graph: dict, node_name: str, output_port: str) -> str:
     return f"{graph['runtime_name']}/{node_name}/{output_port}"
 
 
+@dataclass(frozen=True)
+class PatternStreamRunning:
+    """The one-source stream, run attached on this test's `tatolabd`."""
+
+    app_directory: Path
+    tatolabd: TatolabdUnderTest
+    tatolab_run: AttachedTatolabRun
+    local_api: LocalApiClient
+    stream_name: str
+
+
 def start_the_pattern_stream(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
     project_files: "dict[str, str]",
-) -> "tuple[Path, RuntimeProcessUnderTest, LocalApiClient]":
+) -> PatternStreamRunning:
     """`tatolab run` on a project holding the one-source stream and `project_files`,
     once its engine has started."""
     app_directory = make_tatolab_project(
         {"stream.py": STREAM_WITH_ONE_PATTERN_SOURCE, **project_files}
     )
-    tatolab = start_tatolab("run", working_directory=app_directory)
-    local_api = tatolab.local_api_client(timeout=NODE_READY_TIMEOUT_SECONDS)
-    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    return app_directory, tatolab, local_api
+    tatolabd = start_tatolabd()
+    tatolab_run = tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory))
+    stream_name = tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)["stream_name"]
+    tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
+    return PatternStreamRunning(
+        app_directory=app_directory,
+        tatolabd=tatolabd,
+        tatolab_run=tatolab_run,
+        local_api=tatolabd.local_api_client(),
+        stream_name=stream_name,
+    )
 
 
 @pytest.mark.requires_gpu
 @pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The whole agent loop against one node.
 
@@ -237,11 +261,17 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     helper's output can be wired after its setup; the disconnect stops the flow
     the tap was seeing; the remove takes the processor and its links away.
     """
-    app_directory, tatolab, local_api = start_the_pattern_stream(
-        make_tatolab_project, start_tatolab, {"processors/__init__.py": ""}
+    pattern_stream = start_the_pattern_stream(
+        make_tatolab_project, start_tatolabd, {"processors/__init__.py": ""}
+    )
+    app_directory, tatolabd, local_api, stream_name = (
+        pattern_stream.app_directory,
+        pattern_stream.tatolabd,
+        pattern_stream.local_api,
+        pattern_stream.stream_name,
     )
 
-    graph_before = local_api.call_tool("graph")
+    graph_before = local_api.call_tool("graph", {"stream": stream_name})
     pattern = node_named(graph_before, "pattern")
     assert pattern["components"]["state"] == "Running"
     assert graph_before["links"] == []
@@ -253,6 +283,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     added = local_api.call_tool(
         "add_node",
         {
+            "stream": stream_name,
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "FIRST_EFFECT_SAW_A_FRAME"},
             "name": "effect",
@@ -260,7 +291,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     )
     assert added == {"name": "effect"}
 
-    graph_after_add = local_api.call_tool("graph")
+    graph_after_add = local_api.call_tool("graph", {"stream": stream_name})
     effect = node_named(graph_after_add, "effect")
     assert effect["type"] == f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}"
     assert effect["config"] == {"marker": "FIRST_EFFECT_SAW_A_FRAME"}
@@ -270,6 +301,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     connected = local_api.call_tool(
         "connect",
         {
+            "stream": stream_name,
             "from_node": "pattern",
             "from_port": "video",
             "to_node": "effect",
@@ -278,15 +310,15 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     )
     upstream_link_id = connected["link_id"]
 
-    graph_after_connect = local_api.call_tool("graph")
+    graph_after_connect = local_api.call_tool("graph", {"stream": stream_name})
     upstream_link = link_with_id(graph_after_connect, upstream_link_id)
     assert upstream_link is not None, f"the link is missing from {graph_after_connect['links']}"
     assert upstream_link["state"] in ("pending", "wired"), (
         "`connect` onto a helper returns before that helper has opened its "
         f"port, so the link reads pending or wired and nothing else: {upstream_link}"
     )
-    assert await_node_state(local_api, "effect", "Running") == "Running"
-    assert await_link_state(local_api, upstream_link_id, "wired") == "wired", (
+    assert await_node_state(local_api, stream_name, "effect", "Running") == "Running"
+    assert await_link_state(local_api, stream_name, upstream_link_id, "wired") == "wired", (
         "the helper's own answer is what makes the link wired; a link stuck "
         "pending is a helper that never opened its port, and one in error "
         "carries the helper's reason"
@@ -294,7 +326,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
 
     # The processor reports from its own processor interpreter, so a marker on
     # tatolabd's standard error is a frame that crossed the late-wired link.
-    tatolab.await_marker("FIRST_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
+    tatolabd.await_marker("FIRST_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
 
     # A second consumer on the SAME source output port: the channel was
     # created for the first link, and iceoryx2 pins its subscriber count then,
@@ -302,6 +334,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     second = local_api.call_tool(
         "add_node",
         {
+            "stream": stream_name,
             "type": f"{LIVE_ADDED_EFFECT_MODULE}:{LIVE_ADDED_EFFECT_CLASS}",
             "config": {"marker": "SECOND_EFFECT_SAW_A_FRAME"},
             "name": "second-effect",
@@ -310,13 +343,14 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     local_api.call_tool(
         "connect",
         {
+            "stream": stream_name,
             "from_node": "pattern",
             "from_port": "video",
             "to_node": second["name"],
             "to_port": "video_from_upstream",
         },
     )
-    tatolab.await_marker("SECOND_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
+    tatolabd.await_marker("SECOND_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
 
     # A native built-in added live, consuming the helper's output: the output
     # side of a helper that already ran its setup, and a destination whose
@@ -324,6 +358,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     window = local_api.call_tool(
         "add_node",
         {
+            "stream": stream_name,
             "type": DISPLAY_WINDOW_TYPE,
             "config": {"title": "live-added", "scaling": "fit"},
             "name": "window",
@@ -332,6 +367,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     local_api.call_tool(
         "connect",
         {
+            "stream": stream_name,
             "from_node": "effect",
             "from_port": "video_to_downstream",
             "to_node": window["name"],
@@ -339,21 +375,27 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         },
     )
     effect_output_channel = tap_channel_of(graph_after_add, "effect", "video_to_downstream")
-    flowing = local_api.call_tool("tap", {"channel": effect_output_channel, "count": 3})
+    flowing = local_api.call_tool(
+        "tap", {"stream": stream_name, "channel": effect_output_channel, "count": 3}
+    )
     assert flowing["received"] > 0, f"no bags left the live-added effect: {flowing}"
 
-    local_api.call_tool("disconnect", {"link_id": upstream_link_id})
-    graph_after_disconnect = local_api.call_tool("graph")
+    local_api.call_tool("disconnect", {"stream": stream_name, "link_id": upstream_link_id})
+    graph_after_disconnect = local_api.call_tool("graph", {"stream": stream_name})
     assert link_with_id(graph_after_disconnect, upstream_link_id) is None
     # Nothing feeds the effect any more, so nothing leaves it — once the frame
     # it already held when the link went has gone out. A tap that then waits
     # out its window and comes back empty is the disconnect taking.
     time.sleep(SECONDS_FOR_A_HELD_FRAME_TO_LEAVE)
-    starved = local_api.call_tool("tap", {"channel": effect_output_channel, "count": 3})
+    starved = local_api.call_tool(
+        "tap", {"stream": stream_name, "channel": effect_output_channel, "count": 3}
+    )
     assert starved["received"] == 0, f"bags still leave a disconnected effect: {starved}"
 
-    assert local_api.call_tool("remove_node", {"name": "effect"}) == {"removed_name": "effect"}
-    graph_after_remove = local_api.call_tool("graph")
+    assert local_api.call_tool("remove_node", {"stream": stream_name, "name": "effect"}) == {
+        "removed_name": "effect"
+    }
+    graph_after_remove = local_api.call_tool("graph", {"stream": stream_name})
     assert all(node["name"] != "effect" for node in graph_after_remove["nodes"])
     assert all(
         "effect" not in (link["source"]["node"], link["target"]["node"])
@@ -363,8 +405,10 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     assert node_named(graph_after_remove, "second-effect")["components"]["state"] == "Running"
     assert node_named(graph_after_remove, "window")["components"]["state"] == "Running"
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab.recent_stderr()
+    pattern_stream.tatolab_run.interrupt()
+    assert pattern_stream.tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
+        pattern_stream.tatolab_run.recent_stderr()
+    )
 
 
 # How long the slowly importing helper below sleeps at import. The calls made
@@ -418,7 +462,7 @@ def seconds_taken_by(call: Callable[[], Returned]) -> "tuple[float, Returned]":
 @pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """The documented live recipe — add a Python processor, connect it at once.
 
@@ -427,25 +471,31 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     import ends, and meanwhile `graph` answers and another processor is added;
     the link reads wired once the helper is up.
     """
-    _, tatolab, local_api = start_the_pattern_stream(
+    pattern_stream = start_the_pattern_stream(
         make_tatolab_project,
-        start_tatolab,
+        start_tatolabd,
         {
             "processors/__init__.py": "",
             "processors/slowly_importing_sink.py": SLOWLY_IMPORTING_SINK_SOURCE,
         },
     )
-    pattern = node_named(local_api.call_tool("graph"), "pattern")
+    local_api, stream_name = pattern_stream.local_api, pattern_stream.stream_name
+    pattern = node_named(local_api.call_tool("graph", {"stream": stream_name}), "pattern")
 
     sink = local_api.call_tool(
         "add_node",
-        {"type": f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}", "name": "sink"},
+        {
+            "stream": stream_name,
+            "type": f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}",
+            "name": "sink",
+        },
     )
 
     connect_seconds, connected = seconds_taken_by(
         lambda: local_api.call_tool(
             "connect",
             {
+                "stream": stream_name,
                 "from_node": pattern["name"],
                 "from_port": "video",
                 "to_node": sink["name"],
@@ -457,7 +507,9 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
         f"connect took {connect_seconds:.1f}s, waiting on a helper still importing"
     )
 
-    graph_seconds, graph_while_importing = seconds_taken_by(lambda: local_api.call_tool("graph"))
+    graph_seconds, graph_while_importing = seconds_taken_by(
+        lambda: local_api.call_tool("graph", {"stream": stream_name})
+    )
     assert graph_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
         f"graph took {graph_seconds:.1f}s, waiting on a helper still importing"
     )
@@ -466,26 +518,30 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     assert link_while_importing["state"] in ("pending", "wired"), link_while_importing
 
     add_seconds, _ = seconds_taken_by(
-        lambda: local_api.call_tool("add_node", {"type": pattern["type"], "name": "second-pattern"})
+        lambda: local_api.call_tool(
+            "add_node", {"stream": stream_name, "type": pattern["type"], "name": "second-pattern"}
+        )
     )
     assert add_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
         f"add_node took {add_seconds:.1f}s, waiting on a helper still importing"
     )
 
-    assert await_node_state(local_api, "sink", "Running") == "Running"
-    assert await_link_state(local_api, connected["link_id"], "wired") == "wired", (
+    assert await_node_state(local_api, stream_name, "sink", "Running") == "Running"
+    assert await_link_state(local_api, stream_name, connected["link_id"], "wired") == "wired", (
         "the link connected during the import is wired once the helper is up"
     )
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab.recent_stderr()
+    pattern_stream.tatolab_run.interrupt()
+    assert pattern_stream.tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
+        pattern_stream.tatolab_run.recent_stderr()
+    )
 
 
 @pytest.mark.requires_gpu
 @pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """A change the engine cannot make is the caller's error, not a log line.
 
@@ -494,14 +550,15 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     `Running` node with nothing flowing. An import path naming no class the
     project can reach is the ordinary way an agent gets this wrong.
     """
-    _, tatolab, local_api = start_the_pattern_stream(make_tatolab_project, start_tatolab, {})
+    pattern_stream = start_the_pattern_stream(make_tatolab_project, start_tatolabd, {})
+    local_api, stream_name = pattern_stream.local_api, pattern_stream.stream_name
 
     refusal = local_api.call_tool_refusal(
-        "add_node", {"type": "processors.no_such_module:Missing"}
+        "add_node", {"stream": stream_name, "type": "processors.no_such_module:Missing"}
     )
     assert re.search(r"no_such_module|No module named", refusal), refusal
 
-    graph: "dict[str, Any]" = local_api.call_tool("graph")
+    graph: "dict[str, Any]" = local_api.call_tool("graph", {"stream": stream_name})
     assert [n["name"] for n in graph["nodes"] if n["name"] == "pattern"], (
         "a refused add must leave the running graph as it was"
     )
@@ -509,6 +566,7 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     port_refusal = local_api.call_tool_refusal(
         "connect",
         {
+            "stream": stream_name,
             "from_node": "pattern",
             "from_port": "no_such_port",
             "to_node": "pattern",
@@ -517,5 +575,7 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     )
     assert "no_such_port" in port_refusal
 
-    tatolab.interrupt()
-    assert tatolab.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab.recent_stderr()
+    pattern_stream.tatolab_run.interrupt()
+    assert pattern_stream.tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
+        pattern_stream.tatolab_run.recent_stderr()
+    )

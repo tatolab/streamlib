@@ -53,10 +53,13 @@ STREAM_BY_SCENARIO = {
 }
 
 
-def run_probe(start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario: str) -> dict:
+def run_probe(
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
+    scenario: str,
+) -> dict:
     """One scenario, one observation dict — or a failure carrying the probe's
     own traceback, which names the cause better than a missing marker."""
-    tatolabd = start_tatolabd(STREAM_BY_SCENARIO[scenario])
+    tatolabd = start_tatolabd_running_stream(STREAM_BY_SCENARIO[scenario])
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -72,20 +75,20 @@ def run_probe(start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario
 
 
 def test_setup_receives_the_full_access_context_with_gpu_full_access(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observation = run_probe(start_tatolabd, "SetupContextProbe")
+    observation = run_probe(start_tatolabd_running_stream, "SetupContextProbe")
     assert observation["context_type"] == "RuntimeContextFullAccess"
     assert observation["gpu_full_access_type"] == "GpuContextFullAccess"
     assert observation["gpu_limited_access_type"] == "GpuContextLimitedAccess"
 
 
 def test_process_receives_the_limited_context_without_gpu_full_access(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The capability split: reaching for the privileged GPU view from
     `process` is an `AttributeError`, not a quietly-working escape hatch."""
-    observation = run_probe(start_tatolabd, "ProcessContextProbe")
+    observation = run_probe(start_tatolabd_running_stream, "ProcessContextProbe")
     assert observation["context_type"] == "RuntimeContextLimitedAccess"
     assert observation["gpu_full_access"] == "attribute_error"
     assert observation["gpu_limited_access_type"] == "GpuContextLimitedAccess"
@@ -96,8 +99,8 @@ def test_process_receives_the_limited_context_without_gpu_full_access(
 # ---------------------------------------------------------------------------
 
 
-def test_ctx_config_is_the_dict_the_processor_was_added_with(start_tatolabd):
-    observation = run_probe(start_tatolabd, "configured_probe")
+def test_ctx_config_is_the_dict_the_processor_was_added_with(start_tatolabd_running_stream):
+    observation = run_probe(start_tatolabd_running_stream, "configured_probe")
     assert observation["config"] == {"gain": 2.5, "label": "left"}
     # The helper built the config class out of that mapping and handed the
     # object to `__init__`; `ctx.config` above is still the mapping itself.
@@ -105,12 +108,12 @@ def test_ctx_config_is_the_dict_the_processor_was_added_with(start_tatolabd):
     assert observation["constructed_type"] == "ConfigProbeConfig"
 
 
-def test_ctx_config_is_an_empty_dict_when_nothing_was_passed(start_tatolabd):
-    observation = run_probe(start_tatolabd, "ConfigProbe")
+def test_ctx_config_is_an_empty_dict_when_nothing_was_passed(start_tatolabd_running_stream):
+    observation = run_probe(start_tatolabd_running_stream, "ConfigProbe")
     assert observation["config"] == {}
 
 
-def test_ctx_time_is_the_engine_media_clock_in_nanoseconds(start_tatolabd):
+def test_ctx_time_is_the_engine_media_clock_in_nanoseconds(start_tatolabd_running_stream):
     """Two kernel reads bracket `ctx.time`, so the value is provably the
     engine's media-clock domain.
 
@@ -118,7 +121,7 @@ def test_ctx_time_is_the_engine_media_clock_in_nanoseconds(start_tatolabd):
     clock has to be the machine's, comparable across processes, not each
     interpreter's own epoch.
     """
-    observation = run_probe(start_tatolabd, "TimeProbe")
+    observation = run_probe(start_tatolabd_running_stream, "TimeProbe")
     assert observation["before"] <= observation["context_time"] <= observation["after"]
 
 
@@ -128,17 +131,17 @@ def test_ctx_time_is_the_engine_media_clock_in_nanoseconds(start_tatolabd):
 
 
 def test_an_explicit_write_timestamp_reaches_the_reader_unchanged(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observation = run_probe(start_tatolabd, "explicit_timestamp")
+    observation = run_probe(start_tatolabd_running_stream, "explicit_timestamp")
     assert observation["timestamp_ns"] == EXPLICIT_TIMESTAMP_NS
 
 
-def test_a_default_write_timestamp_is_the_engine_media_clock(start_tatolabd):
+def test_a_default_write_timestamp_is_the_engine_media_clock(start_tatolabd_running_stream):
     """The stamp a writer defaults to is the machine's media clock, so it
     is comparable against one a reader takes in a different process."""
     before_run = engine_media_clock_now_ns()
-    observation = run_probe(start_tatolabd, "default_timestamp")
+    observation = run_probe(start_tatolabd_running_stream, "default_timestamp")
     after_run = engine_media_clock_now_ns()
     assert before_run <= observation["timestamp_ns"] <= after_run
 
@@ -148,7 +151,7 @@ def test_a_default_write_timestamp_is_the_engine_media_clock(start_tatolabd):
 # ---------------------------------------------------------------------------
 
 
-def test_a_context_stashed_from_setup_keeps_answering(start_tatolabd):
+def test_a_context_stashed_from_setup_keeps_answering(start_tatolabd_running_stream):
     """A context kept past its hook still answers, because a helper process has
     no engine view to lease.
 
@@ -158,7 +161,7 @@ def test_a_context_stashed_from_setup_keeps_answering(start_tatolabd):
     pause flag is a local announcement from the parent, its config a local
     value — so there is nothing to expire, and nothing that could dangle.
     """
-    observation = run_probe(start_tatolabd, "ContextStasher")
+    observation = run_probe(start_tatolabd_running_stream, "ContextStasher")
     assert observation["stashed_is_paused"] is False
     assert observation["stashed_config"] == {}
     assert observation["stashed_node_id"]
@@ -170,11 +173,11 @@ def test_a_context_stashed_from_setup_keeps_answering(start_tatolabd):
 
 
 def test_outputs_captured_in_setup_still_write_from_a_worker_thread(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """`ctx.outputs` is deliberately not hook-bound: a manual source hands it to
     its own thread and keeps producing between hooks."""
-    observation = run_probe(start_tatolabd, "worker_thread_source")
+    observation = run_probe(start_tatolabd_running_stream, "worker_thread_source")
     assert observation["bag"] == {"origin": "worker-thread"}
 
 
@@ -183,10 +186,10 @@ def test_outputs_captured_in_setup_still_write_from_a_worker_thread(
 # ---------------------------------------------------------------------------
 
 
-def test_a_zero_argument_process_hook_fails_loudly_with_a_type_error(start_tatolabd):
+def test_a_zero_argument_process_hook_fails_loudly_with_a_type_error(start_tatolabd_running_stream):
     """Hooks require the ctx parameter; a zero-arg `process` must TypeError by
     name in the log, never be silently invoked without a context."""
-    tatolabd = start_tatolabd(capability_context_streams.zero_argument_process)
+    tatolabd = start_tatolabd_running_stream(capability_context_streams.zero_argument_process)
     tatolabd.await_stderr_containing("process() raised")
     tatolabd.await_stderr_containing("TypeError")
     tatolabd.interrupt()
@@ -201,8 +204,8 @@ def test_a_zero_argument_process_hook_fails_loudly_with_a_type_error(start_tatol
 # ---------------------------------------------------------------------------
 
 
-def test_a_hook_acquires_a_pixel_buffer_and_reaches_its_pixels(start_tatolabd):
-    observation = run_probe(start_tatolabd, "PixelBufferAcquirer")
+def test_a_hook_acquires_a_pixel_buffer_and_reaches_its_pixels(start_tatolabd_running_stream):
+    observation = run_probe(start_tatolabd_running_stream, "PixelBufferAcquirer")
     assert isinstance(observation["surface_id"], str) and observation["surface_id"]
     assert (observation["width"], observation["height"]) == (
         SURFACE_WIDTH,
@@ -213,7 +216,7 @@ def test_a_hook_acquires_a_pixel_buffer_and_reaches_its_pixels(start_tatolabd):
     assert observation["pixel_access_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
 
 
-def test_a_closed_pixel_buffer_returns_its_pool_slot(start_tatolabd):
+def test_a_closed_pixel_buffer_returns_its_pool_slot(start_tatolabd_running_stream):
     """Acquire and close beyond the pool depth — every acquire must succeed.
 
     Regression lock on a real leak: the acquire's surface-store check-in parks a
@@ -226,14 +229,14 @@ def test_a_closed_pixel_buffer_returns_its_pool_slot(start_tatolabd):
     Cross-process it also locks the release round trip: a child's close owes the
     parent a `release_handle`, and a dropped one leaks the slot just the same.
     """
-    observation = run_probe(start_tatolabd, "RepeatedPixelBufferAcquirer")
+    observation = run_probe(start_tatolabd_running_stream, "RepeatedPixelBufferAcquirer")
     assert observation["outcomes"] == ["ok"] * 8, (
         f"a closed pixel buffer did not return its pool slot: {observation['outcomes']}"
     )
 
 
 def test_a_worker_thread_constructs_privileged_resources_like_the_native_camera(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The camera's shape, from Python: stash the capabilities in setup, build
     privileged resources from a thread the processor owns.
@@ -244,7 +247,7 @@ def test_a_worker_thread_constructs_privileged_resources_like_the_native_camera(
     privileged call is its own round trip to the parent, and `escalate`'s
     callback refuses because a scope is the one thing that cannot cross.
     """
-    observation = run_probe(start_tatolabd, "WorkerThreadPrivilegedConstructor")
+    observation = run_probe(start_tatolabd_running_stream, "WorkerThreadPrivilegedConstructor")
     assert observation["privileged_surface_id"], (
         "the privileged capability did not produce a surface from a worker thread"
     )

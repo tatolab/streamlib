@@ -21,17 +21,15 @@ from pathlib import Path
 
 import pytest
 
-import tatolab.stream
-from audio_window_probes import (
-    DeclaredMonoWindowProbe,
-    ExactWindowProbe,
-    RollingWindowProbe,
-    SourceFollowingWindowProbe,
-    StereoToneSource,
+from audio_window_streams import (
+    microphone_into_a_rolling_window_probe,
+    microphone_into_an_exact_window_probe,
+    one_stereo_source_into_both_window_probes,
 )
+from conftest import TatolabdUnderTest
 from local_api_client import LocalApiClient
 from runtime_process_under_test import ENGINE_STARTED_LOG_LINE, RuntimeProcessUnderTest
-from tatolab.stream import StreamBuilder, stream
+from stream_runs_on_tatolabd import TatolabRunOfAProject
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -52,44 +50,12 @@ DISCARDED_SAMPLES_TIMEOUT_SECONDS = 30.0
 METRICS_POLL_INTERVAL_SECONDS = 0.2
 
 
-def _microphone_into(stream_builder: StreamBuilder, probe_class: type) -> None:
-    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
-    probe = stream_builder.add(probe_class)
-    stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
-
-
-@stream
-def microphone_into_an_exact_window_probe(stream_builder: StreamBuilder) -> None:
-    _microphone_into(stream_builder, ExactWindowProbe)
-
-
-@stream
-def microphone_into_a_rolling_window_probe(stream_builder: StreamBuilder) -> None:
-    _microphone_into(stream_builder, RollingWindowProbe)
-
-
-@stream
-def one_stereo_source_into_both_window_probes(stream_builder: StreamBuilder) -> None:
-    """One stated-format source into two consumers: one that declares no
-    channel count and one that declares mono.
-
-    A Python source rather than the microphone, because what is under test is
-    that the count follows *the source* — which needs a source whose count the
-    test knows.
-    """
-    source = stream_builder.add(StereoToneSource)
-    following = stream_builder.add(SourceFollowingWindowProbe)
-    declared_mono = stream_builder.add(DeclaredMonoWindowProbe)
-    stream_builder.connect(source.output("audio"), following.input("audio_from_upstream"))
-    stream_builder.connect(source.output("audio"), declared_mono.input("audio_from_upstream"))
-
-
 def run_until(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
     stream_function: object,
     awaited_marker_name: str,
-) -> RuntimeProcessUnderTest:
-    tatolabd = start_tatolabd(stream_function)
+) -> TatolabdUnderTest:
+    tatolabd = start_tatolabd_running_stream(stream_function)
     tatolabd.await_marker(awaited_marker_name)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -139,7 +105,7 @@ def assert_every_window_matches_the_contract(readings):
 
 
 def test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """A device capturing at its own rate reaches a 16 kHz mono 512/512 port as
     exactly-512-sample windows 32 ms apart, in a processor interpreter.
@@ -147,7 +113,9 @@ def test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared(
     The rate the machine's device settles on is whatever it settles on; what the
     contract promises is that the consumer never sees it.
     """
-    tatolabd = run_until(start_tatolabd, microphone_into_an_exact_window_probe, "WINDOWS_SEEN")
+    tatolabd = run_until(
+        start_tatolabd_running_stream, microphone_into_an_exact_window_probe, "WINDOWS_SEEN"
+    )
     readings = readings_from(tatolabd, "WINDOWS_SEEN", "window")
     assert len(readings) >= 2, "the cadence assertion needs two windows to subtract"
     assert_every_window_matches_the_contract(readings)
@@ -171,11 +139,11 @@ def test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared(
 
 
 def test_a_hop_below_the_window_rolls_at_the_hops_cadence_not_the_windows(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """A rolling window is still exact-size; only its cadence changes."""
     tatolabd = run_until(
-        start_tatolabd, microphone_into_a_rolling_window_probe, "ROLLING_WINDOWS_SEEN"
+        start_tatolabd_running_stream, microphone_into_a_rolling_window_probe, "ROLLING_WINDOWS_SEEN"
     )
     readings = readings_from(tatolabd, "ROLLING_WINDOWS_SEEN", "rolling window")
     assert len(readings) >= 2
@@ -194,7 +162,7 @@ def test_a_hop_below_the_window_rolls_at_the_hops_cadence_not_the_windows(
 
 
 def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """A contract stating everything but its count carries the source's stereo
     through to a processor interpreter, over a real link.
@@ -202,7 +170,7 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
     Its sibling in the same graph declares mono off the same source, so one run
     shows both that following follows and that declaring still converts.
     """
-    tatolabd = start_tatolabd(one_stereo_source_into_both_window_probes)
+    tatolabd = start_tatolabd_running_stream(one_stereo_source_into_both_window_probes)
     tatolabd.await_every_marker("SOURCE_FOLLOWING_WINDOWS_SEEN", "DECLARED_MONO_WINDOWS_SEEN")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -327,29 +295,32 @@ def the_link_into(graph: dict, name: str) -> str:
 
 def await_metrics_satisfying(
     local_api: LocalApiClient,
+    stream_name: str,
     name: str,
     satisfied: "Callable[[dict], bool]",
     awaited: str,
-    tatolab: RuntimeProcessUnderTest,
+    tatolabd: RuntimeProcessUnderTest,
 ) -> dict:
-    """Poll `graph` until `name`'s metrics satisfy `satisfied`."""
+    """Poll the stream's `graph` until `name`'s metrics satisfy `satisfied`."""
     deadline = time.monotonic() + DISCARDED_SAMPLES_TIMEOUT_SECONDS
     metrics: dict = {}
     while time.monotonic() < deadline:
-        metrics = node_named(local_api.call_tool("graph"), name)["components"].get("metrics", {})
+        metrics = node_named(local_api.call_tool("graph", {"stream": stream_name}), name)[
+            "components"
+        ].get("metrics", {})
         if satisfied(metrics):
             return metrics
         time.sleep(METRICS_POLL_INTERVAL_SECONDS)
     raise AssertionError(
         f"{name!r} never rendered {awaited} within {DISCARDED_SAMPLES_TIMEOUT_SECONDS}s; "
-        f"its metrics were {metrics}\n{tatolab.recent_stderr()}"
+        f"its metrics were {metrics}\n{tatolabd.recent_stderr()}"
     )
 
 
 @pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_on_its_link(
     make_tatolab_project: "Callable[..., Path]",
-    start_tatolab: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     """A Python windowed consumer flushes in its own processor interpreter, and
     its node renders the samples each flush discarded on the one link feeding
@@ -365,21 +336,24 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
             "stream.py": GAPPED_AUDIO_STREAM_SOURCE,
         }
     )
-    tatolab = start_tatolab("run", working_directory=app_directory)
-    local_api = tatolab.local_api_client()
-    tatolab.await_stderr_containing(ENGINE_STARTED_LOG_LINE)
-    link_id = the_link_into(local_api.call_tool("graph"), "windowed-consumer")
+    tatolabd = start_tatolabd()
+    tatolab_run = tatolabd.run_stream_attached(TatolabRunOfAProject(working_directory=app_directory))
+    stream_name = tatolab_run.await_loaded()["stream_name"]
+    local_api = tatolabd.local_api_client()
+    tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE)
+    link_id = the_link_into(local_api.call_tool("graph", {"stream": stream_name}), "windowed-consumer")
 
     metrics = await_metrics_satisfying(
         local_api,
+        stream_name,
         "windowed-consumer",
         lambda metrics: metrics.get("discarded_samples_by_link", {}).get(link_id, 0) > 0,
         f"discarded samples on {link_id}",
-        tatolab,
+        tatolabd,
     )
-    tatolab.interrupt()
-    assert tatolab.await_exit() == 0, (
-        f"`tatolab run` must exit cleanly on SIGINT:\n{tatolab.recent_stderr()}"
+    tatolab_run.interrupt()
+    assert tatolab_run.await_exit() == 0, (
+        f"`tatolab run` must exit cleanly on SIGINT:\n{tatolab_run.recent_stderr()}"
     )
 
     assert set(metrics) == {

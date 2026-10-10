@@ -55,13 +55,13 @@ PROBE_STREAMS = {
 
 
 def run_probe(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
     probe_class_name: str,
     extra_environment: "dict[str, str] | None" = None,
 ) -> dict:
     """One probe, one observation dict — or a failure carrying the probe's own
     traceback, which names the cause better than a missing marker."""
-    tatolabd = start_tatolabd(
+    tatolabd = start_tatolabd_running_stream(
         PROBE_STREAMS[probe_class_name], extra_environment=extra_environment
     )
     observation = tatolabd.await_marker("PROBE_RESULT")
@@ -73,9 +73,9 @@ def run_probe(
     return observation
 
 
-def test_a_python_processor_reads_one_surface_and_writes_another(start_tatolabd):
+def test_a_python_processor_reads_one_surface_and_writes_another(start_tatolabd_running_stream):
     """The whole point: one dispatch, two distinct surfaces, bound by name."""
-    observed = run_probe(start_tatolabd, "ReadOneWriteAnotherProbe")
+    observed = run_probe(start_tatolabd_running_stream, "ReadOneWriteAnotherProbe")
 
     assert observed["dispatched"] is True
     assert observed["surfaces_are_distinct"], (
@@ -88,18 +88,18 @@ def test_a_python_processor_reads_one_surface_and_writes_another(start_tatolabd)
     )
 
 
-def test_the_kernel_takes_its_binding_names_from_the_shader(start_tatolabd):
+def test_the_kernel_takes_its_binding_names_from_the_shader(start_tatolabd_running_stream):
     """Nothing declares these names but the shader itself."""
-    observed = run_probe(start_tatolabd, "ReadOneWriteAnotherProbe")
+    observed = run_probe(start_tatolabd_running_stream, "ReadOneWriteAnotherProbe")
     assert observed["binding_names"] == [SOURCE_BINDING, OUTPUT_BINDING]
 
 
 def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """No implicit default and no carried-over value: the kernel holds no
     binding state between dispatches to fall back on."""
-    observed = run_probe(start_tatolabd, "BindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "BindingRefusalProbe")
 
     missing = observed["missing"]
     assert OUTPUT_BINDING in missing, f"must name the missing binding: {missing}"
@@ -109,8 +109,8 @@ def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
     )
 
 
-def test_a_binding_the_shader_does_not_declare_is_refused(start_tatolabd):
-    observed = run_probe(start_tatolabd, "BindingRefusalProbe")
+def test_a_binding_the_shader_does_not_declare_is_refused(start_tatolabd_running_stream):
+    observed = run_probe(start_tatolabd_running_stream, "BindingRefusalProbe")
 
     unknown = observed["unknown"]
     assert "sharpen_amount" in unknown, f"must name the unknown binding: {unknown}"
@@ -120,11 +120,11 @@ def test_a_binding_the_shader_does_not_declare_is_refused(start_tatolabd):
 
 
 def test_a_declaration_disagreeing_with_reflection_is_refused_at_construction(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """`bindings={name: kind}` at create asserts against reflection — a name
     the shader lacks refuses before a kernel exists, naming what it has."""
-    observed = run_probe(start_tatolabd, "BindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "BindingRefusalProbe")
 
     wrong_declaration = observed["wrong_declaration"]
     assert "sharpen_amount" in wrong_declaration, wrong_declaration
@@ -133,8 +133,8 @@ def test_a_declaration_disagreeing_with_reflection_is_refused_at_construction(
     )
 
 
-def test_a_push_constant_payload_of_the_wrong_size_is_refused(start_tatolabd):
-    observed = run_probe(start_tatolabd, "BindingRefusalProbe")
+def test_a_push_constant_payload_of_the_wrong_size_is_refused(start_tatolabd_running_stream):
+    observed = run_probe(start_tatolabd_running_stream, "BindingRefusalProbe")
 
     wrong_size = observed["wrong_push_constant_size"]
     assert "push-constant" in wrong_size, wrong_size
@@ -143,8 +143,8 @@ def test_a_push_constant_payload_of_the_wrong_size_is_refused(start_tatolabd):
     )
 
 
-def test_a_binding_naming_an_unknown_surface_is_refused(start_tatolabd):
-    observed = run_probe(start_tatolabd, "BindingRefusalProbe")
+def test_a_binding_naming_an_unknown_surface_is_refused(start_tatolabd_running_stream):
+    observed = run_probe(start_tatolabd_running_stream, "BindingRefusalProbe")
 
     unresolvable = observed["unregistered_surface"]
     assert "no-such-surface" in unresolvable, (
@@ -156,12 +156,12 @@ def test_a_binding_naming_an_unknown_surface_is_refused(start_tatolabd):
 
 
 def test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The staged CPU door, both ways, with no GPU package in the process:
     a write door fills an acquired texture, and a read door answers with a
     kernel's own output pixels."""
-    observed = run_probe(start_tatolabd, "TextureBackedPixelsReachTheCpuProbe")
+    observed = run_probe(start_tatolabd_running_stream, "TextureBackedPixelsReachTheCpuProbe")
 
     assert observed["surface_id"], "an acquired texture carries the id it travels under"
     assert observed["width"] == 64 and observed["height"] == 64
@@ -191,14 +191,14 @@ def test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone(
 
 
 def test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_publication_rule(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """Over a texture backing on Linux the door is a staging published at the
     block edge, so a propagating raise leaves the frame the engine already
     held. On macOS the door is the IOSurface itself and publishes per store,
     as the pixel-buffer door does everywhere, so the stores made before the
     raise are the frame. On both, the raise is never suppressed."""
-    observed = run_probe(start_tatolabd, "TextureCpuDoorRaiseProbe")
+    observed = run_probe(start_tatolabd_running_stream, "TextureCpuDoorRaiseProbe")
 
     assert observed["raised"] == "the edit does not finish", (
         f"leaving the door must never suppress the exception: {observed['raised']!r}"
@@ -216,12 +216,12 @@ def test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_p
 
 
 def test_an_acquired_texture_takes_a_write_back_with_no_copy_usage_spelled(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The zero-ceremony bar for the LUT flow: one usage token is enough,
     because the engine implies both copy bits rather than refusing about a
     flag the author had no reason to name."""
-    observed = run_probe(start_tatolabd, "AcquiredTextureImpliesCopyUsageProbe")
+    observed = run_probe(start_tatolabd_running_stream, "AcquiredTextureImpliesCopyUsageProbe")
 
     assert observed["surface_id"], "the acquire answers with a surface id"
     assert observed["takes_a_write_back"] is True, (
@@ -235,7 +235,7 @@ def test_an_acquired_texture_takes_a_write_back_with_no_copy_usage_spelled(
 
 
 def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
-    start_tatolabd, tmp_path
+    start_tatolabd_running_stream, tmp_path
 ):
     """The claim the whole change rests on, made falsifiable.
 
@@ -260,42 +260,44 @@ def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
     )
 
     observed = run_probe(
-        start_tatolabd, "ReadOneWriteAnotherProbe", extra_environment={"PATH": sabotaged_path}
+        start_tatolabd_running_stream,
+        "ReadOneWriteAnotherProbe",
+        extra_environment={"PATH": sabotaged_path},
     )
     assert observed["dispatched"] is True
     assert sorted(observed["binding_names"]) == sorted([SOURCE_BINDING, OUTPUT_BINDING])
 
 
 def test_a_kernel_built_from_neither_source_nor_spirv_is_refused_naming_both(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observed = run_probe(start_tatolabd, "ShaderSourceRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "ShaderSourceRefusalProbe")
     assert "source" in observed["neither"]
     assert "spv_hex" in observed["neither"]
 
 
 def test_a_kernel_built_from_both_source_and_spirv_is_refused_naming_both(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """They are alternatives; which one to run is not something to guess at."""
-    observed = run_probe(start_tatolabd, "ShaderSourceRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "ShaderSourceRefusalProbe")
     assert "source" in observed["both"]
     assert "spv_hex" in observed["both"]
 
 
 def test_a_shader_that_does_not_compile_reports_the_compilers_own_diagnostic(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The author reads this message, so it carries the offending line and the
     name of what the shader got wrong — not just "compilation failed"."""
-    observed = run_probe(start_tatolabd, "ShaderSourceRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "ShaderSourceRefusalProbe")
     assert "no_such_function" in observed["does_not_compile"]
     assert ":2" in observed["does_not_compile"]
 
 
-def test_a_glsl_entry_point_other_than_main_is_refused(start_tatolabd):
+def test_a_glsl_entry_point_other_than_main_is_refused(start_tatolabd_running_stream):
     """glslang will not rename a GLSL entry point, so accepting one would build
     a pipeline against a function the module does not contain."""
-    observed = run_probe(start_tatolabd, "ShaderSourceRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "ShaderSourceRefusalProbe")
     assert "sharpen" in observed["non_main_entry_point"]
     assert "main" in observed["non_main_entry_point"]

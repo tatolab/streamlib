@@ -21,9 +21,9 @@ pytestmark = pytest.mark.requires_gpu
 
 
 def run_scenario(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario: str
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]", scenario: str
 ) -> dict:
-    tatolabd = start_tatolabd(glsl_pixel_effect_streams.STREAM_BY_SCENARIO[scenario])
+    tatolabd = start_tatolabd_running_stream(glsl_pixel_effect_streams.STREAM_BY_SCENARIO[scenario])
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -34,9 +34,9 @@ def run_scenario(
 
 
 def test_an_invert_effect_with_a_strength_dial_outputs_255_minus_the_source(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observed = run_scenario(start_tatolabd, "invert")
+    observed = run_scenario(start_tatolabd_running_stream, "invert")
 
     assert observed["source_is_not_uniform"], "a uniform frame would match by accident"
     assert observed["output_extent"] == [
@@ -47,34 +47,34 @@ def test_an_invert_effect_with_a_strength_dial_outputs_255_minus_the_source(
     assert observed["mismatched_pixels"] == 0
 
 
-def test_the_invert_check_fails_for_an_identity_effect(start_tatolabd):
+def test_the_invert_check_fails_for_an_identity_effect(start_tatolabd_running_stream):
     """The negative control: an effect that returns its source must not pass
     the check above."""
-    observed = run_scenario(start_tatolabd, "invert_negative_control")
+    observed = run_scenario(start_tatolabd_running_stream, "invert_negative_control")
 
     assert observed["mismatched_pixels"] > 0
 
 
 def test_the_pre_declared_extent_and_sampling_helpers_read_the_source(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observed = run_scenario(start_tatolabd, "PreDeclaredHelpersProbe")
+    observed = run_scenario(start_tatolabd_running_stream, "PreDeclaredHelpersProbe")
 
     assert observed["mirror_through_texel_helper"] == 0
     assert observed["clamped_past_the_right_edge"] == 0
     assert observed["texel_centres_through_uv_helper"] == 0
 
 
-def test_every_dial_type_reaches_the_shader_at_its_std430_offset(start_tatolabd):
-    observed = run_scenario(start_tatolabd, "EveryDialTypeProbe")
+def test_every_dial_type_reaches_the_shader_at_its_std430_offset(start_tatolabd_running_stream):
+    observed = run_scenario(start_tatolabd_running_stream, "EveryDialTypeProbe")
 
     assert observed["distinct_pixels"] == [
         glsl_pixel_effect_probes.EVERY_DIAL_TYPE_EXPECTED_PIXEL
     ]
 
 
-def test_a_compiler_diagnostic_names_the_line_of_the_users_body(start_tatolabd):
-    observed = run_scenario(start_tatolabd, "CompilerDiagnosticLineProbe")
+def test_a_compiler_diagnostic_names_the_line_of_the_users_body(start_tatolabd_running_stream):
+    observed = run_scenario(start_tatolabd_running_stream, "CompilerDiagnosticLineProbe")
 
     assert "no_such_function" in observed["diagnostic"]
     assert observed["reported_lines"] == [
@@ -82,8 +82,8 @@ def test_a_compiler_diagnostic_names_the_line_of_the_users_body(start_tatolabd):
     ], observed["diagnostic"]
 
 
-def test_a_frame_the_copy_refuses_is_refused_naming_the_frame(start_tatolabd):
-    observed = run_scenario(start_tatolabd, "CopyRefusedFrameProbe")
+def test_a_frame_the_copy_refuses_is_refused_naming_the_frame(start_tatolabd_running_stream):
+    observed = run_scenario(start_tatolabd_running_stream, "CopyRefusedFrameProbe")
 
     assert "GlslPixelEffect.apply_to_frame" in observed["refusal"]
     assert observed["bgra_surface_id"] in observed["refusal"]

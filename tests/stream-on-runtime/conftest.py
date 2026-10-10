@@ -50,7 +50,8 @@ the completed `tatolab run -d`. `tatolabd.interrupt()` is a machine shutdown:
 every loaded stream is unloaded and `tatolabd` exits; `AttachedTatolabRun.interrupt()`
 is a user's Ctrl-C to `tatolab run`, which stops that one stream, and
 `AttachedTatolabRun.await_loaded()` waits for its note naming the stream it
-loaded. The local API serves every stream the runtime holds, so the client's
+loaded — `tatolabd.await_the_latest_attached_stream_loaded()` for the latest
+one, returning that name. The local API serves every stream the runtime holds, so the client's
 waits on one stream's graph name it: `await_every_node_running(stream=...)`.
 """
 
@@ -470,6 +471,14 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         """A client of this runtime's local API, once it answers."""
         self.await_serving(timeout=timeout)
         return LocalApiClient(self.local_api_socket_path)
+
+    def await_the_latest_attached_stream_loaded(
+        self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS
+    ) -> str:
+        """Wait for the latest attached `tatolab run`'s note that its stream loaded;
+        return the stream's name."""
+        assert self.attached_stream_runs, "no attached `tatolab run` was started on this tatolabd"
+        return self.attached_stream_runs[-1].await_loaded(timeout=timeout)["stream_name"]
 
     def run_stream_attached(
         self,
