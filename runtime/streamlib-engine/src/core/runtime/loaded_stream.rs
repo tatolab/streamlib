@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use super::graph_change_listener::GraphChangeListener;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::EngineResourcesSharedByEveryStream;
-use super::stream_actions_of_this_runtime::LoadedStreamHolding;
+use super::stream_actions_of_this_runtime::{AttachedStreamRunSource, LoadedStreamHolding};
 use super::{
     ArmedTeardownWatchdogOfOneStream, RuntimeOperations, RuntimeStatus,
     ShutdownEscalationOfOneStream, StreamEnvironment, TeardownProgressNoteOfOneStream,
@@ -121,6 +121,9 @@ pub struct LoadedStreamInThisRuntime {
     /// Whether the runtime keeps this stream or it lives as long as what
     /// loaded it.
     holding: LoadedStreamHolding,
+    /// What an attached `run_stream` compiled this stream from; unset for
+    /// every other load.
+    attached_stream_run_source: OnceLock<AttachedStreamRunSource>,
 }
 
 /// How a loaded stream ended, and the wait for it. Held apart from the stream
@@ -235,6 +238,7 @@ impl LoadedStreamInThisRuntime {
             the_end_of_this_stream: Arc::default(),
             this_stream: this_stream.clone(),
             holding,
+            attached_stream_run_source: OnceLock::new(),
         }))
     }
 
@@ -267,6 +271,30 @@ impl LoadedStreamInThisRuntime {
     /// loaded it.
     pub fn holding(&self) -> LoadedStreamHolding {
         self.holding
+    }
+
+    /// Whether what attached a load tagged `stream_tag` holds this stream:
+    /// it is that load, or a re-load of it after a refused replace.
+    pub fn is_held_by_the_attachment_of(&self, stream_tag: LoadedStreamTag) -> bool {
+        self.stream_tag() == stream_tag
+            || self
+                .attached_stream_run_source
+                .get()
+                .is_some_and(|run_source| run_source.re_loaded_in_place_of.contains(&stream_tag))
+    }
+
+    /// What an attached `run_stream` compiled this stream from.
+    pub(crate) fn attached_stream_run_source(&self) -> Option<&AttachedStreamRunSource> {
+        self.attached_stream_run_source.get()
+    }
+
+    /// Remember what an attached `run_stream` compiled this stream from. Only
+    /// the first is kept; the run that loads a stream hands it one, once.
+    pub(crate) fn remember_the_attached_stream_run_source(
+        &self,
+        run_source: AttachedStreamRunSource,
+    ) {
+        let _a_source_already_remembered = self.attached_stream_run_source.set(run_source);
     }
 
     /// The stream's active JSONL log segment, `None` when it writes none.

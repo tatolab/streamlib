@@ -187,6 +187,16 @@ impl StreamsAttachedToOneMcpStdioConnection {
         })
     }
 
+    /// The tags of the loads this connection attached, while it is open.
+    fn stream_tags_attached_while_open(&self) -> Vec<LoadedStreamTag> {
+        self.attached_streams_while_open
+            .lock()
+            .iter()
+            .flatten()
+            .map(|(_stream_name, stream_tag)| *stream_tag)
+            .collect()
+    }
+
     /// Attach the stream `run` loaded to this connection, or — when the
     /// connection closed while the load ran — unload it now, so a stream is
     /// never left attached to a connection that is gone. Blocks.
@@ -786,7 +796,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes. A one-shot `POST /mcp` call can only keep. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
+        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes, and an attached run of the stream this connection attached, from the same project and function, replaces it. A replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. A one-shot `POST /mcp` call can only keep. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
     )]
     async fn run_stream(
         &self,
@@ -823,6 +833,12 @@ impl LocalApiMcpServerHandler {
                     } else {
                         LoadedStreamHolding::Attached
                     },
+                    stream_tags_attached_to_the_caller: streams_attached_to_this_connection
+                        .as_deref()
+                        .map(
+                            StreamsAttachedToOneMcpStdioConnection::stream_tags_attached_while_open,
+                        )
+                        .unwrap_or_default(),
                 })?;
                 if let Some(streams_attached_to_this_connection) =
                     streams_attached_to_this_connection
