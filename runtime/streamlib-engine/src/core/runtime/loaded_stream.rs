@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use super::graph_change_listener::GraphChangeListener;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::EngineResourcesSharedByEveryStream;
+use super::stream_actions_of_this_runtime::LoadedStreamHolding;
 use super::{
     ArmedTeardownWatchdogOfOneStream, RuntimeOperations, RuntimeStatus,
     ShutdownEscalationOfOneStream, StreamEnvironment, TeardownProgressNoteOfOneStream,
@@ -31,7 +32,7 @@ use crate::core::graph::{
     ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::GraphSnapshot;
-use crate::core::logging::LoadedStreamLogRoute;
+use crate::core::logging::{LoadedStreamLogRecordsPage, LoadedStreamLogRoute};
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, ProcessorEvent, RuntimeEvent, topics,
@@ -117,6 +118,9 @@ pub struct LoadedStreamInThisRuntime {
     the_end_of_this_stream: Arc<TheEndOfOneLoadedStream>,
     /// This stream, for the shutdown thread a `&self` request starts.
     this_stream: Weak<Self>,
+    /// Whether the runtime keeps this stream or it lives as long as what
+    /// loaded it.
+    holding: Mutex<LoadedStreamHolding>,
 }
 
 /// How a loaded stream ended, and the wait for it. Held apart from the stream
@@ -229,6 +233,7 @@ impl LoadedStreamInThisRuntime {
             end_claimed: AtomicBool::new(false),
             the_end_of_this_stream: Arc::default(),
             this_stream: this_stream.clone(),
+            holding: Mutex::new(LoadedStreamHolding::Attached),
         }))
     }
 
@@ -257,6 +262,18 @@ impl LoadedStreamInThisRuntime {
         self.this_streams_identity_and_handles.identity.stream_tag
     }
 
+    /// Whether the runtime keeps this stream or it lives as long as what
+    /// loaded it.
+    pub fn holding(&self) -> LoadedStreamHolding {
+        *self.holding.lock()
+    }
+
+    /// Hold this stream as `holding`, set by the load before the stream
+    /// enters the table.
+    pub(crate) fn hold_as(&self, holding: LoadedStreamHolding) {
+        *self.holding.lock() = holding;
+    }
+
     /// The stream's active JSONL log segment, `None` when it writes none.
     pub fn jsonl_log_path(&self) -> Option<&Path> {
         self.log_route().jsonl_log_path()
@@ -265,6 +282,12 @@ impl LoadedStreamInThisRuntime {
     /// Where the records this stream's threads emit go.
     pub fn log_route(&self) -> &Arc<LoadedStreamLogRoute> {
         &self.this_streams_identity_and_handles.log_route
+    }
+
+    /// This stream's log records numbered after `after`, at most `max_count`
+    /// of them, from the most recent its log route holds in memory.
+    pub fn log_records_after(&self, after: u64, max_count: usize) -> LoadedStreamLogRecordsPage {
+        self.log_route().log_records_after(after, max_count)
     }
 
     /// The runtime id, stream name and tag this stream publishes its events

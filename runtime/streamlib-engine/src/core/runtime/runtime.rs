@@ -15,6 +15,7 @@ use super::RuntimeName;
 use super::RuntimeUniqueId;
 use super::loaded_stream::LoadedStreamInThisRuntime;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
+use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
 use super::{RuntimeShutdownEscalation, StreamEnvironment};
 use crate::core::context::GpuContext;
 use crate::core::graph::cast_exposed_name_to_url_safe;
@@ -145,6 +146,9 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(crate) iceoryx2_node: Iceoryx2Node,
     /// Tokio runtime storage - either owned or external handle.
     pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
+    /// The runtime's own log, when the host asked for one; closed before the
+    /// hold on the logging pathway lets go.
+    runtime_own_log: Option<crate::core::logging::TheRuntimesOwnLogWhileItsEngineLives>,
     /// This engine's hold on the process's logging pathway, which keeps the
     /// standard streams intercepted while any engine lives.
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
@@ -307,7 +311,10 @@ enum SetupHooksOfTheEngine {
 /// Every graph operation is a stream's: load a stream, then use the
 /// [`LoadedStreamInThisRuntime`] it hands back.
 pub struct Runner {
-    engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
+    pub(super) engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
+    /// Where this runtime keeps its streams, and the lock its stream actions
+    /// take one at a time.
+    pub(super) stream_actions: StreamActionsOfTheEngine,
 }
 
 /// What a host chooses as it constructs a [`Runner`].
@@ -319,6 +326,9 @@ pub struct RunnerConstructionOptions {
     /// The standard stream the pretty log mirror writes to, when this runtime
     /// is the first in its process to install the process's logging pathway.
     pub pretty_log_mirror_stream: crate::core::logging::PrettyLogMirrorStandardStream,
+    /// Where the records no stream emits are also written as JSONL, to
+    /// `tatolabd-<started_at_millis>.jsonl`, rotated as a stream's log is.
+    pub runtime_own_log_directory: Option<PathBuf>,
 }
 
 /// What a host chooses as it loads one stream into a [`Runner`].
@@ -407,6 +417,7 @@ impl Runner {
         let RunnerConstructionOptions {
             runtime_name,
             pretty_log_mirror_stream,
+            runtime_own_log_directory,
         } = construction_options;
         // Cap per-thread timer slack at 1 ns on the calling thread before
         // spawning any worker. Linux defaults to 50 µs grouping for
@@ -459,6 +470,12 @@ impl Runner {
             },
         )
         .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
+        let runtime_own_log = runtime_own_log_directory.as_deref().and_then(|directory| {
+            crate::core::logging::TheRuntimesOwnLogWhileItsEngineLives::open(
+                runtime_id.as_str(),
+                directory,
+            )
+        });
         let runtime_name = Arc::new(
             resolved_runtime_name
                 .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name(),
@@ -537,9 +554,11 @@ impl Runner {
                 runtime_directory,
                 iceoryx2_node,
                 tokio_runtime_variant,
+                runtime_own_log,
                 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
                 process_logging_pathway_hold,
             }),
+            stream_actions: StreamActionsOfTheEngine::default(),
         }))
     }
 
@@ -597,6 +616,14 @@ impl Runner {
     /// The name this runtime's tap channels and node-registry row carry.
     pub fn runtime_name(&self) -> &RuntimeName {
         &self.engine_resources_shared_by_every_stream.runtime_name
+    }
+
+    /// The active segment of the runtime's own log, `None` when it keeps none.
+    pub fn runtime_own_log_path(&self) -> Option<&std::path::Path> {
+        self.engine_resources_shared_by_every_stream
+            .runtime_own_log
+            .as_ref()
+            .and_then(|runtime_own_log| runtime_own_log.jsonl_log_path())
     }
 
     /// The runtime directory this runtime resolved as it was built.
@@ -670,6 +697,21 @@ impl Runner {
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
     ) -> Result<StreamLoadObservingMachineShutdownRequests> {
+        self.load_stream_held_as_unless_a_machine_shutdown_is_requested(
+            graph,
+            load_options,
+            LoadedStreamHolding::Attached,
+        )
+    }
+
+    /// [`Self::load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested`],
+    /// the stream held as `holding` from the moment it enters the table.
+    pub(super) fn load_stream_held_as_unless_a_machine_shutdown_is_requested(
+        &self,
+        graph: &GraphSnapshot,
+        load_options: OptionsForLoadingOneStream,
+        holding: LoadedStreamHolding,
+    ) -> Result<StreamLoadObservingMachineShutdownRequests> {
         use std::sync::mpsc::RecvTimeoutError;
 
         use crate::core::runtime::{
@@ -691,6 +733,7 @@ impl Runner {
             }
             Err(build_refusal) => return Err(build_refusal),
         };
+        stream.hold_as(holding);
         let load_outcome = std::thread::scope(|scope| {
             // Never sent on: the loading thread's end drops it, a panic included.
             let (load_ended_sender, load_ended_receiver) = std::sync::mpsc::channel::<()>();
@@ -897,6 +940,12 @@ impl Runner {
             .map(|stream| stream.how_this_stream_ended_as_a_waiter_reports_it())
             .find(Result::is_err)
             .unwrap_or(Ok(()))
+    }
+
+    /// Block until the machine's shutdown is requested — a signal, or the
+    /// request the Rust SDK makes — with zero, one or many streams loaded.
+    pub fn wait_until_a_machine_shutdown_is_requested(&self) {
+        self.block_until(&crate::core::runtime::is_the_machines_shutdown_requested);
     }
 
     /// Poll until `has_ended` holds — driving the window event pump where the
@@ -1185,7 +1234,7 @@ impl Runner {
         )))
     }
 
-    fn loaded_stream_names_listed_for_a_refusal(&self) -> String {
+    pub(super) fn loaded_stream_names_listed_for_a_refusal(&self) -> String {
         let names = self.names_of_the_loaded_streams();
         if names.is_empty() {
             "none".to_string()
@@ -1205,7 +1254,7 @@ impl Drop for Runner {
 
 /// The URL-safe cast of the stream name a load names, refused when it casts
 /// to nothing and when there is none.
-fn the_cast_name_of_the_stream_a_load_names(
+pub(super) fn the_cast_name_of_the_stream_a_load_names(
     requested_stream_name: Option<&str>,
     what_is_loaded: &str,
 ) -> Result<String> {
@@ -1250,7 +1299,7 @@ fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStre
 /// Ask `stream` for its shutdown and block until it has ended. Once its
 /// shutdown thread has started, the stream's watchdog bounds the wait; until
 /// then each poll asks again, retrying the thread's spawn.
-fn request_a_streams_shutdown_and_wait_until_it_has_ended(
+pub(super) fn request_a_streams_shutdown_and_wait_until_it_has_ended(
     stream: &LoadedStreamInThisRuntime,
     reason: &str,
 ) {
@@ -2579,6 +2628,47 @@ mod tests {
         assert!(runner.names_of_the_loaded_streams().is_empty());
     }
 
+    /// The wait `tatolabd` blocks on returns only once the machine's shutdown
+    /// is requested, and walks every loaded stream to it on the way.
+    #[test]
+    #[serial]
+    fn the_wait_for_a_machine_shutdown_returns_once_one_is_requested_and_ends_every_stream() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+
+        let (wait_returned, the_wait_has_returned) = std::sync::mpsc::channel();
+        let waiting_runner = Arc::clone(&runner);
+        std::thread::spawn(move || {
+            let outcome = waiting_runner.run_owning_the_machine_shutdown_signals(|| {
+                waiting_runner.wait_until_a_machine_shutdown_is_requested();
+                Ok(())
+            });
+            let _ = wait_returned.send(outcome);
+        });
+        assert!(
+            the_wait_has_returned
+                .recv_timeout(Duration::from_millis(300))
+                .is_err(),
+            "the wait returned before any machine shutdown was requested"
+        );
+        assert!(!stream.has_ended());
+
+        crate::core::runtime::request_the_shutdown_of_every_loaded_stream(
+            "the test shuts the machine down",
+        )
+        .unwrap();
+
+        the_wait_has_returned
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the wait never saw the machine's shutdown request")
+            .expect("the wait owned the machine's shutdown signals");
+        assert!(stream.wait_for_this_streams_end_within(A_STREAM_ENDS_WITHIN));
+    }
+
     /// A stream loaded while the machine is shutting every stream down is
     /// refused by name.
     #[test]
@@ -3101,6 +3191,133 @@ mod tests {
                 assert_eq!(&record.runtime_id, runtime_id, "{record:?}");
                 assert_eq!(record.stream.as_deref(), Some("main"), "{record:?}");
             }
+        }
+    }
+
+    /// A stream's records are numbered from 1 in the order its route wrote
+    /// them, readable by sequence number while the stream is loaded, and its
+    /// JSONL file holds the same records with no number added.
+    #[test]
+    #[serial]
+    fn a_streams_records_are_read_by_sequence_number_and_its_jsonl_file_carries_none() {
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let runner = Runner::new().expect("Runner::new");
+        let stream = runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("main"),
+            )
+            .expect("an empty stream loads");
+        stream.log_route().run_entered(|| {
+            for token_index in 0..3 {
+                tracing::info!("token-of-the-stream-{token_index}");
+            }
+        });
+        let stream_log = stream
+            .jsonl_log_path()
+            .expect("the stream logs")
+            .to_path_buf();
+        stream.log_route().close_the_jsonl_log_file();
+
+        let every_record = stream.log_records_after(0, 4096);
+        assert_eq!(every_record.records_no_longer_held, 0);
+        let sequences: Vec<u64> = every_record.records.iter().map(|r| r.sequence).collect();
+        assert_eq!(sequences, (1..=sequences.len() as u64).collect::<Vec<_>>());
+        assert_eq!(every_record.next_after, sequences.len() as u64);
+        let token_sequences: Vec<u64> = every_record
+            .records
+            .iter()
+            .filter(|numbered| {
+                numbered.record["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("token-of-the-stream-"))
+            })
+            .map(|numbered| numbered.sequence)
+            .collect();
+        assert_eq!(token_sequences.len(), 3, "{every_record:#?}");
+
+        let after_the_first_token = stream.log_records_after(token_sequences[0], 1);
+        assert_eq!(after_the_first_token.records.len(), 1);
+        assert_eq!(
+            after_the_first_token.records[0].sequence,
+            token_sequences[0] + 1
+        );
+
+        let lines_on_disk: Vec<serde_json::Value> = std::fs::read_to_string(&stream_log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a JSONL line"))
+            .collect();
+        assert!(!lines_on_disk.is_empty());
+        for (line_on_disk, numbered) in lines_on_disk.iter().zip(&every_record.records) {
+            assert_eq!(line_on_disk, &numbered.record);
+            assert!(line_on_disk.get("sequence").is_none(), "{line_on_disk}");
+        }
+        runner.unload_stream("main").expect("the stream unloads");
+    }
+
+    /// With a runtime own-log directory, the records no stream emitted are
+    /// written to `tatolabd-<started_at_millis>.jsonl` there, stamped with the
+    /// runtime's id and no stream, and a stream's records are not.
+    #[test]
+    #[serial]
+    fn the_records_no_stream_emitted_land_in_the_runtimes_own_log_and_a_streams_do_not() {
+        let project_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let state_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let runtime_own_log_directory = state_directory.path().join("logs");
+        let runner = Runner::new_with_construction_options(RunnerConstructionOptions {
+            runtime_own_log_directory: Some(runtime_own_log_directory.clone()),
+            ..RunnerConstructionOptions::default()
+        })
+        .expect("the runner constructs");
+        let runtime_own_log = runner
+            .runtime_own_log_path()
+            .expect("the runtime keeps its own log")
+            .to_path_buf();
+        assert_eq!(
+            runtime_own_log.parent(),
+            Some(runtime_own_log_directory.as_path())
+        );
+        let file_name = runtime_own_log
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            file_name.starts_with("tatolabd-") && file_name.ends_with(".jsonl"),
+            "{file_name}"
+        );
+
+        let stream = runner
+            .load_an_empty_stream(
+                OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                    .named("main"),
+            )
+            .expect("an empty stream loads");
+        stream
+            .log_route()
+            .run_entered(|| tracing::info!("token-of-the-stream"));
+        tracing::info!("token-no-stream-emitted");
+        runner.unload_stream("main").expect("the stream unloads");
+        let runtime_id = runner.runtime_id().to_string();
+        drop(stream);
+        drop(runner);
+
+        let records = every_record_of_the_stream_log_at(&runtime_own_log);
+        assert!(
+            records
+                .iter()
+                .any(|record| record.message == "token-no-stream-emitted"
+                    && record.runtime_id == runtime_id
+                    && record.stream.is_none()),
+            "the runtime's own log lacks the record no stream emitted: {records:#?}"
+        );
+        for record in &records {
+            assert_eq!(record.stream, None, "{record:?}");
+            assert_ne!(record.message, "token-of-the-stream", "{record:?}");
         }
     }
 

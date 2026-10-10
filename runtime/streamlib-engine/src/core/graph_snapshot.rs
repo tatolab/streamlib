@@ -407,7 +407,7 @@ fn refuse_a_port_the_node_does_not_have(
 
 /// Refuse an integer literal outside `i64::MIN..=u64::MAX`, which `serde_json`
 /// would otherwise read as the nearest `f64`, handing a node another number.
-fn refuse_an_integer_literal_wider_than_64_bits(json: &str) -> Result<()> {
+pub(crate) fn refuse_an_integer_literal_wider_than_64_bits(json: &str) -> Result<()> {
     let json_bytes = json.as_bytes();
     let mut byte_index = 0;
     while byte_index < json_bytes.len() {

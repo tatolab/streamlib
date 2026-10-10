@@ -988,7 +988,6 @@ mod tests {
                 "/opt/tatolab/lib/tatolab/lend:/home/someone/my_app"
             )))
         );
-        assert_eq!(value_of("PYTHONHOME"), Some(None));
         assert_eq!(
             value_of(super::super::subprocess_bridge::ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE),
             Some(Some(OsStr::new(

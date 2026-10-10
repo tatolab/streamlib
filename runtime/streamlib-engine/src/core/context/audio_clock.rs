@@ -416,7 +416,7 @@ mod tests {
             if recorded.is_none() {
                 *recorded = Some(
                     crate::core::logging::the_loaded_stream_log_route_of_this_thread()
-                        .map(|route| route.stream_name().to_string()),
+                        .and_then(|route| route.stream_name().map(str::to_string)),
                 );
             }
         }));

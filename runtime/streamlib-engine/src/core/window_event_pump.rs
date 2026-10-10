@@ -366,8 +366,9 @@ fn build_the_processes_one_event_loop()
     {
         use winit::platform::macos::EventLoopBuilderExtMacOS;
 
-        // The engine installs its own menu, whose Quit requests a runtime
-        // shutdown instead of terminating the process under the run loop.
+        // No application menu: winit's default Quit sends `terminate:`, which
+        // ends the process from under the run loop, and the runtime is stopped
+        // by a signal, never a menu.
         builder.with_default_menu(false);
     }
     builder
@@ -546,9 +547,6 @@ where
     TearDown: FnOnce(),
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        crate::apple::application_menu::install_the_application_menu_whose_quit_requests_a_runtime_shutdown(
-            self.window_event_pump.first_thread,
-        );
         self.window_event_pump.resumed(event_loop);
     }
 
