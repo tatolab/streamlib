@@ -67,7 +67,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   Python version range. [importable-python-library — SHIPPED #1684, #1711; schema-free-ports
   — SHIPPED #1814]
   <!-- verify: pytest sdk/tatolab-stream/tests/test_scaffold_template.py::test_each_node_lives_outside_the_entry_file -->
-  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_the_edit_loop_reports_a_bad_save_and_loads_the_next_good_one -->
 - **DECIDED** — Rust authoring stays a supported capability: a Rust app is a plain
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
@@ -3989,7 +3989,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   #2660, #2662, #2663; amended by moq-on-the-tailnet: the URL listener's tailnet half,
   through `tailscale serve`]
   <!-- verify: cargo test -p streamlib-api-server serving_the_router_on_the_local_api_socket_opens_no_tcp_listener -->
-  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_a_launched_node_listens_on_no_tcp_socket -->
+  <!-- verify: pytest tests/stream-on-runtime/test_cli_launch.py::test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket -->
 - **DECIDED** — An MCP host reaches the local API by launching the CLI's `mcp` verb as a
   stdio server — `claude mcp add streamlib -- <cli> mcp`. The verb resolves the runtime,
   opens its socket, sends the one `/mcp/stdio` upgrade request, and then copies bytes,

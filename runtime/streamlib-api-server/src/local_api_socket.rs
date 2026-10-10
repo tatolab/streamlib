@@ -444,8 +444,8 @@ mod tests {
     /// Serving the real router through [`LocalApiSocketBoundAndNotYetServed::serve_router`]
     /// leaves this process holding no new TCP listener, loopback included. The
     /// scan covers the whole test process, so no other test in this binary may
-    /// hold a TCP listener. A launched node's own proof is the rig test
-    /// `test_a_launched_node_listens_on_no_tcp_socket`.
+    /// hold a TCP listener. A running runtime's own proof is the rig test
+    /// `test_neither_the_runtime_nor_tatolab_listens_on_a_tcp_socket`.
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn serving_the_router_on_the_local_api_socket_opens_no_tcp_listener() {

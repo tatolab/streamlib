@@ -48,7 +48,10 @@ standard error), plus `local_api_socket_path`, `await_serving()`,
 `AttachedTatolabRun` and `run_stream_kept(stream_or_graph, ...)` →
 the completed `tatolab run -d`. `tatolabd.interrupt()` is a machine shutdown:
 every loaded stream is unloaded and `tatolabd` exits; `AttachedTatolabRun.interrupt()`
-is a user's Ctrl-C to `tatolab run`, which stops that one stream.
+is a user's Ctrl-C to `tatolab run`, which stops that one stream, and
+`AttachedTatolabRun.await_loaded()` waits for its note naming the stream it
+loaded. The local API serves every stream the runtime holds, so the client's
+waits on one stream's graph name it: `await_every_node_running(stream=...)`.
 """
 
 from __future__ import annotations
@@ -341,7 +344,6 @@ class AttachedTatolabRun(RuntimeProcessUnderTest):
         return self._await_stderr_line_satisfying(
             observe, f"its note that the stream loaded (occurrence {occurrence})", timeout
         )
-
 
 
 @dataclass
