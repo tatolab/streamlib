@@ -149,8 +149,8 @@ struct AttachedStreamSession {
     attached_stream_events: UnboundedReceiver<AttachedStreamEvent>,
     attached_stream_events_open: bool,
     project_sources_changed_during_a_call: bool,
-    /// A stop signal came while the stream was being stopped: the connection is dropped rather
-    /// than closed, so a runtime that does not answer holds the verb no longer.
+    /// A stop signal ended the wait on a `stop_stream`: the session exits, dropping the
+    /// connection rather than closing it, so a runtime that does not answer holds it no longer.
     a_stop_signal_cut_short_the_stop: bool,
 }
 
@@ -451,6 +451,9 @@ impl AttachedStreamSession {
                 // A refusal or a page this CLI cannot read comes back the same on every load.
                 self.note(&logs_failure.to_string());
                 self.stop_the_stream(connected_client, stream).await;
+                if self.a_stop_signal_cut_short_the_stop {
+                    return AttachedStreamSessionStep::Exit(Ok(0));
+                }
                 self.note("no stream is loaded — save again to load it");
                 AttachedStreamSessionStep::WaitForTheNextSave
             }
@@ -476,7 +479,7 @@ impl AttachedStreamSession {
             FinishedUnlessStopped::StopSignalDelivered => {
                 self.a_stop_signal_cut_short_the_stop = true;
                 self.note(&format!(
-                    "stopped again; the runtime unloads {stream} as this connection drops"
+                    "stopped; the runtime unloads {stream} as this connection drops"
                 ));
             }
         }

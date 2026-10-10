@@ -319,7 +319,7 @@ fn a_second_ctrl_c_leaves_without_waiting_for_a_stop_the_runtime_does_not_answer
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
     assert_eq!(
         standard_error_lines.last().unwrap(),
-        "tatolab: stopped again; the runtime unloads cam as this connection drops"
+        "tatolab: stopped; the runtime unloads cam as this connection drops"
     );
 }
 
@@ -606,4 +606,42 @@ fn ctrl_c_while_dev_reconnects_to_a_runtime_that_never_opens_the_connection_exit
         signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
 
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
+}
+
+#[test]
+fn ctrl_c_while_dev_stops_a_stream_whose_logs_it_cannot_read_exits_zero() {
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let scratch_project = ScratchProject::new();
+    let stub_local_api_server =
+        isolated_machine_directories.serve_stub_local_api(StubLocalApiScript {
+            tool_answers_by_name: HashMap::from([
+                (
+                    "run_stream".to_owned(),
+                    vec![loaded_answer(&scratch_project.canonical_path())],
+                ),
+                (
+                    "logs".to_owned(),
+                    vec![StubToolAnswer::tool_result(r#"{"stream": "cam"}"#)],
+                ),
+            ]),
+            tools_that_never_answer: HashSet::from(["stop_stream".to_owned()]),
+            ..StubLocalApiScript::default()
+        });
+    let running_tatolab = RunningTatolab::spawn(isolated_machine_directories.tatolab_command(&[
+        "dev",
+        "--dir",
+        scratch_project.path_as_given(),
+    ]));
+    wait_until("the `stop_stream` call", || {
+        calls_to(&stub_local_api_server, "stop_stream") == 1
+    });
+
+    let (exit_status, standard_error_lines) =
+        signal_and_wait_for_a_prompt_exit(running_tatolab, libc::SIGINT);
+
+    assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
+    assert_eq!(
+        standard_error_lines.last().unwrap(),
+        "tatolab dev: stopped; the runtime unloads cam as this connection drops"
+    );
 }
