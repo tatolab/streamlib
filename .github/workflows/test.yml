@@ -314,6 +314,11 @@ jobs:
           # runtime id refused before the runtime writes anything, a live
           # runtime's id refused before a node is created, and a dropped runner
           # taking its iceoryx2 node's files with it.
+          # A link reading another stream on this machine: the edge from its
+          # target's node to itself every traversal and the cycle check read
+          # right, the source rendered `{stream, node, port}` beside the
+          # awaiting reason, and the stamping and removal of such a link in a
+          # stream that has not started.
           # The surface-share service's Linux arm whole, and the verbs its Linux
           # and macOS arms share, named by module: none of their tests needs a
           # device.
@@ -691,6 +696,9 @@ jobs:
             core::graph::graph_tests::node_names \
             core::json_schema::graph_response_top_level_key_rendering_tests::a_graph_renders_no_extensions_key_and_its_schema_declares_none \
             core::graph::edges \
+            core::graph::graph_tests::links_reading_another_stream \
+            core::graph::validation \
+            core::runtime::operations_runtime::connect_from_another_stream_tests \
             core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests \
             iceoryx2::channel_name \
             linux::surface_share \

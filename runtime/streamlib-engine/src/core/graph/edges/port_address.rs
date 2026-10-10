@@ -62,14 +62,7 @@ impl PortAddress {
             .iter()
             .zip(part_names)
             .map(|(written_part, part_name)| {
-                cast_exposed_name_to_url_safe(written_part)
-                    .map(|cast| cast.into_owned())
-                    .map_err(|names_nothing| {
-                        Error::InvalidPortAddress(format!(
-                            "the {part_name} part `{written_part}` of the address `{address}` \
-                             names nothing: {names_nothing}"
-                        ))
-                    })
+                one_part_of_an_address_cast(written_part, part_name, address)
             })
             .collect::<Result<Vec<String>>>()?;
         let (machine, stream, node, port) = match cast_parts.as_slice() {
@@ -83,6 +76,39 @@ impl PortAddress {
             stream: stream.cloned(),
             node: node.clone(),
             port: port.clone(),
+        })
+    }
+
+    /// The address a graph's link end writes in parts — machine and stream
+    /// each absent when it means here — every part cast, refused naming a
+    /// part that casts to nothing, or a machine written without its stream.
+    pub fn from_its_parts(
+        machine: Option<&str>,
+        stream: Option<&str>,
+        node: &str,
+        port: &str,
+    ) -> Result<Self> {
+        let address: Vec<&str> = [machine, stream, Some(node), Some(port)]
+            .into_iter()
+            .flatten()
+            .collect();
+        let address = address.join(&PORT_ADDRESS_PART_SEPARATOR.to_string());
+        if let (Some(machine), None) = (machine, stream) {
+            return Err(Error::InvalidPortAddress(format!(
+                "`{address}` names the machine `{machine}` and no stream, and an address naming \
+                 a machine is `machine/stream/node/port`"
+            )));
+        }
+        let cast_part = |written_part: Option<&str>, part_name: &str| {
+            written_part
+                .map(|written_part| one_part_of_an_address_cast(written_part, part_name, &address))
+                .transpose()
+        };
+        Ok(Self {
+            machine: cast_part(machine, "machine")?,
+            stream: cast_part(stream, "stream")?,
+            node: one_part_of_an_address_cast(node, "node", &address)?,
+            port: one_part_of_an_address_cast(port, "port", &address)?,
         })
     }
 
@@ -120,6 +146,23 @@ impl PortAddress {
             _ => Ok(()),
         }
     }
+}
+
+/// `written_part`, the `part_name` part of `address`, cast; refused naming
+/// the part and the address when it casts to nothing.
+fn one_part_of_an_address_cast(
+    written_part: &str,
+    part_name: &str,
+    address: &str,
+) -> Result<String> {
+    cast_exposed_name_to_url_safe(written_part)
+        .map(|cast| cast.into_owned())
+        .map_err(|names_nothing| {
+            Error::InvalidPortAddress(format!(
+                "the {part_name} part `{written_part}` of the address `{address}` names nothing: \
+                 {names_nothing}"
+            ))
+        })
 }
 
 impl fmt::Display for PortAddress {
@@ -266,6 +309,30 @@ mod tests {
             assert!(refusal.contains(named), "{named:?} not in {refusal}");
             assert!(refusal.contains(address), "{address:?} not in {refusal}");
         }
+    }
+
+    /// An address written in parts reads as the same address written whole,
+    /// and a machine written without its stream is refused.
+    #[test]
+    fn an_address_written_in_parts_reads_as_the_address_written_whole() {
+        for (machine, stream, written_whole) in [
+            (None, None, "Camera/Video"),
+            (None, Some("Main"), "Main/Camera/Video"),
+            (Some("desk"), Some("Main"), "desk/Main/Camera/Video"),
+        ] {
+            assert_eq!(
+                PortAddress::from_its_parts(machine, stream, "Camera", "Video").unwrap(),
+                PortAddress::parse(written_whole).unwrap()
+            );
+        }
+        let refusal = PortAddress::from_its_parts(Some("desk"), None, "camera", "video")
+            .expect_err("a machine without its stream is refused")
+            .to_string();
+        assert!(refusal.contains("`desk/camera/video`"), "{refusal}");
+        let refusal = PortAddress::from_its_parts(None, Some(".."), "camera", "video")
+            .expect_err("a part that casts to nothing is refused")
+            .to_string();
+        assert!(refusal.contains("the stream part `..`"), "{refusal}");
     }
 
     /// An address naming this machine — by its name or its full tailnet name,

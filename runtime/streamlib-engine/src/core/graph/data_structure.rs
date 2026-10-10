@@ -87,6 +87,12 @@ impl Graph {
         TraversalSource::new(&self.digraph)
     }
 
+    /// The petgraph digraph itself, for a test of what reads it whole.
+    #[cfg(test)]
+    pub(crate) fn petgraph_digraph_for_a_test(&self) -> &DiGraph<ProcessorNode, Link> {
+        &self.digraph
+    }
+
     /// Start a mutable traversal on the graph.
     pub fn traversal_mut(&mut self) -> TraversalSourceMut<'_> {
         TraversalSourceMut::new(&mut self.digraph, &self.node_types_this_stream_resolves)

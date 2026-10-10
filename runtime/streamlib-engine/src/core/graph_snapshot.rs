@@ -18,11 +18,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
-    OutputPortExposureLevel, cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal,
-    port_names_listed_for_a_refusal,
+    OutputPortExposureLevel, PortAddress, cast_exposed_name_to_url_safe,
+    node_names_listed_for_a_refusal, port_names_listed_for_a_refusal,
 };
 use crate::core::json_schema::{ExposedOutputPortOutput, LinkPortRefOutput};
 use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::runtime::MachineName;
 use crate::core::{Error, PortDirection, Result};
 
 /// A graph a runtime runs: its nodes by class import path, config and name,
@@ -89,12 +90,19 @@ const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
 const GRAPH_LINK_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a link",
     spec_keys: &["source", "target"],
-    live_keys: &["id", "capacity", "state", "error_reason", "components"],
+    live_keys: &[
+        "id",
+        "capacity",
+        "state",
+        "error_reason",
+        "awaiting_remote_reason",
+        "components",
+    ],
 };
 
 const GRAPH_LINK_END_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a link end",
-    spec_keys: &["node", "port"],
+    spec_keys: &["machine", "stream", "node", "port"],
     live_keys: &[],
 };
 
@@ -127,11 +135,26 @@ fn a_config_naming_no_setting() -> serde_json::Value {
 /// One link of a [`GraphSnapshot`], from an output port to an input port.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GraphSnapshotLink {
-    /// The output port the link carries from.
+    /// The output port the link carries from: `{node, port}` in this stream,
+    /// or `{stream, node, port}` — `machine` naming this machine beside them,
+    /// if at all — in another stream on this machine.
     pub source: LinkPortRefOutput,
 
-    /// The input port the link carries into.
+    /// The input port the link carries into, in the stream that loads the
+    /// graph.
     pub target: LinkPortRefOutput,
+}
+
+impl GraphSnapshotLink {
+    /// The address the link end `end` names, every part cast.
+    pub(crate) fn the_address_a_link_end_names(end: &LinkPortRefOutput) -> Result<PortAddress> {
+        PortAddress::from_its_parts(
+            end.machine.as_deref(),
+            end.stream.as_deref(),
+            &end.node,
+            &end.port,
+        )
+    }
 }
 
 impl GraphSnapshot {
@@ -169,12 +192,20 @@ impl GraphSnapshot {
             .map_err(|e| Error::GraphError(format!("the graph does not serialize: {e}")))
     }
 
-    /// Check the graph without loading it: every `type` one the stream
+    /// Check the graph, loaded as the stream `loaded_stream_name` on
+    /// `this_machine`, without loading it: every `type` one the stream
     /// resolves on this floor, every config one its type takes, names unique
-    /// once cast, every link end a port of the right direction on a node the
-    /// graph holds, and every exposure an output port a node has, named once,
-    /// at a level beyond internal.
-    pub fn validate(&self, node_types: &NodeTypesOneStreamResolves) -> Result<()> {
+    /// once cast, every link end on this machine, every target and every
+    /// source in this stream a port of the right direction on a node the graph
+    /// holds, and every exposure an output port a node has, named once, at a
+    /// level beyond internal. A source in another stream is that stream's to
+    /// hold, and is not looked up here.
+    pub fn validate(
+        &self,
+        node_types: &NodeTypesOneStreamResolves,
+        loaded_stream_name: &str,
+        this_machine: &MachineName,
+    ) -> Result<()> {
         let mut nodes_by_cast_name: HashMap<String, &GraphSnapshotNode> = HashMap::new();
         for node in &self.nodes {
             node_types.refuse_a_node_this_stream_cannot_add(
@@ -204,10 +235,32 @@ impl GraphSnapshot {
             || node_names_listed_for_a_refusal(nodes_by_cast_name.keys().map(String::as_str));
 
         for link in &self.links {
-            for (end, direction) in [
+            let source_address = GraphSnapshotLink::the_address_a_link_end_names(&link.source)?;
+            let target_address = GraphSnapshotLink::the_address_a_link_end_names(&link.target)?;
+            for address in [&source_address, &target_address] {
+                address.refuse_when_it_names_another_machine(this_machine)?;
+            }
+            if let Some(input_stream) = target_address
+                .stream()
+                .filter(|input_stream| *input_stream != loaded_stream_name)
+            {
+                return Err(Error::LinkMadeOutsideTheStreamOfItsInput {
+                    acting_stream: loaded_stream_name.to_string(),
+                    input_stream: input_stream.to_string(),
+                });
+            }
+            let source_is_in_this_stream = source_address
+                .stream()
+                .is_none_or(|source_stream| source_stream == loaded_stream_name);
+            let ends_in_this_stream = [
                 (&link.source, PortDirection::Output),
                 (&link.target, PortDirection::Input),
-            ] {
+            ]
+            .into_iter()
+            .filter(|(_, direction)| {
+                source_is_in_this_stream || *direction == PortDirection::Input
+            });
+            for (end, direction) in ends_in_this_stream {
                 let Some(node) =
                     nodes_by_cast_name.get(cast_exposed_name_to_url_safe(&end.node)?.as_ref())
                 else {
@@ -277,7 +330,13 @@ fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -
             .unwrap_or("?")
     }
     fn port_address_of(object: &GraphDocumentObject) -> String {
-        format!("{}/{}", text_at(object, "node"), text_at(object, "port"))
+        ["machine", "stream"]
+            .into_iter()
+            .filter(|leading_key| object.contains_key(*leading_key))
+            .chain(["node", "port"])
+            .map(|key| text_at(object, key))
+            .collect::<Vec<&str>>()
+            .join("/")
     }
     fn port_address_at(link: &GraphDocumentObject, end_key: &str) -> String {
         link.get(end_key)
@@ -452,6 +511,11 @@ mod tests {
 
     const A_CAMERA_CLASS: &str = "my_app.nodes:CameraNode";
 
+    /// The machine every graph here is checked on, `desk` off a tailnet.
+    fn a_machine_named_desk() -> MachineName {
+        MachineName::from_a_hostname("desk").expect("`desk` names a machine")
+    }
+
     /// A camera class registered descriptor-only, with an `frames_in` input and
     /// a `video` output. Idempotent across tests.
     fn a_registered_camera_class() -> &'static str {
@@ -502,6 +566,8 @@ mod tests {
         assert_eq!(
             graph.links[0].source,
             LinkPortRefOutput {
+                machine: None,
+                stream: None,
                 node: "camera".into(),
                 port: "video".into()
             }
@@ -564,7 +630,11 @@ mod tests {
         }))
         .unwrap();
 
-        match graph.validate(&NodeTypesOneStreamResolves::new()) {
+        match graph.validate(
+            &NodeTypesOneStreamResolves::new(),
+            "main",
+            &a_machine_named_desk(),
+        ) {
             Err(Error::NodeNameTaken { name, cast }) => {
                 assert_eq!(name, "frontcam");
                 assert_eq!(cast, "frontcam");
@@ -584,7 +654,11 @@ mod tests {
         .unwrap();
 
         let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
             .unwrap_err()
             .to_string();
 
@@ -602,7 +676,11 @@ mod tests {
         .unwrap();
 
         let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
             .unwrap_err()
             .to_string();
 
@@ -643,7 +721,11 @@ mod tests {
         .unwrap();
 
         let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
             .unwrap_err()
             .to_string();
 
@@ -675,7 +757,11 @@ mod tests {
         .unwrap();
 
         let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
             .unwrap_err()
             .to_string();
 
@@ -690,7 +776,11 @@ mod tests {
         }))
         .unwrap();
 
-        match graph.validate(&NodeTypesOneStreamResolves::new()) {
+        match graph.validate(
+            &NodeTypesOneStreamResolves::new(),
+            "main",
+            &a_machine_named_desk(),
+        ) {
             Err(Error::UnknownProcessorType { ident }) => {
                 assert_eq!(ident.as_str(), "my_app.nodes:NotARegisteredNode");
             }
@@ -708,7 +798,11 @@ mod tests {
         .unwrap();
 
         let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
             .unwrap_err()
             .to_string();
 
@@ -733,7 +827,11 @@ mod tests {
         .unwrap();
 
         let refusal = graph
-            .validate(&NodeTypesOneStreamResolves::new())
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
             .unwrap_err();
 
         assert!(
@@ -764,7 +862,11 @@ mod tests {
         }))
         .unwrap();
 
-        match graph.validate(&NodeTypesOneStreamResolves::new()) {
+        match graph.validate(
+            &NodeTypesOneStreamResolves::new(),
+            "main",
+            &a_machine_named_desk(),
+        ) {
             Err(Error::NodeConfigRefused {
                 node_name,
                 node_type,
@@ -791,7 +893,13 @@ mod tests {
         }))
         .unwrap();
 
-        graph.validate(&NodeTypesOneStreamResolves::new()).unwrap();
+        graph
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
+            .unwrap();
     }
 
     #[test]
@@ -959,22 +1067,202 @@ mod tests {
         .unwrap();
 
         graph
-            .validate(&node_types)
+            .validate(&node_types, "main", &a_machine_named_desk())
             .expect("the stream resolves the type it described");
         assert!(
             matches!(
-                graph.validate(&NodeTypesOneStreamResolves::new()),
+                graph.validate(
+                    &NodeTypesOneStreamResolves::new(),
+                    "main",
+                    &a_machine_named_desk()
+                ),
                 Err(Error::UnknownProcessorType { .. })
             ),
             "a stream that described nothing resolved another stream's type"
         );
     }
 
+    /// A graph holding one camera, whose `frames_in` input every link here
+    /// carries into.
+    fn a_graph_of_one_camera_linked(link: serde_json::Value) -> GraphSnapshot {
+        GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "camera", "type": a_registered_camera_class()}],
+            "links": [link]
+        }))
+        .expect("the graph reads")
+    }
+
+    /// A source in another stream on this machine is that stream's to hold:
+    /// the graph validates without holding its node, whether the machine is
+    /// named or not.
+    #[test]
+    fn a_source_end_in_another_stream_validates_without_its_node() {
+        for source in [
+            serde_json::json!({"stream": "camera-rig", "node": "camerasource", "port": "video"}),
+            serde_json::json!({"machine": "Desk", "stream": "camera-rig", "node": "camerasource",
+                               "port": "video"}),
+        ] {
+            a_graph_of_one_camera_linked(serde_json::json!({
+                "source": source,
+                "target": {"node": "camera", "port": "frames_in"}
+            }))
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
+            .unwrap_or_else(|refusal| panic!("{source}: {refusal}"));
+        }
+    }
+
+    /// A source naming the stream the graph loads as — in any spelling that
+    /// casts to it — is a port of this stream, and its node is looked up here.
+    #[test]
+    fn a_source_end_naming_the_loaded_stream_validates_as_a_port_of_this_stream() {
+        a_graph_of_one_camera_linked(serde_json::json!({
+            "source": {"stream": "Main", "node": "camera", "port": "video"},
+            "target": {"node": "camera", "port": "frames_in"}
+        }))
+        .validate(
+            &NodeTypesOneStreamResolves::new(),
+            "main",
+            &a_machine_named_desk(),
+        )
+        .expect("a port of this stream named with its stream validates");
+
+        let refusal = a_graph_of_one_camera_linked(serde_json::json!({
+            "source": {"stream": "main", "node": "ghost", "port": "video"},
+            "target": {"node": "camera", "port": "frames_in"}
+        }))
+        .validate(
+            &NodeTypesOneStreamResolves::new(),
+            "main",
+            &a_machine_named_desk(),
+        )
+        .expect_err("a node of this stream the graph does not hold is refused")
+        .to_string();
+        assert!(refusal.contains("`ghost`"), "{refusal}");
+    }
+
+    /// A link is made in the stream that holds its input, so a target end in
+    /// another stream is refused naming both streams.
+    #[test]
+    fn a_target_end_in_another_stream_is_refused_naming_the_rule() {
+        let refusal = a_graph_of_one_camera_linked(serde_json::json!({
+            "source": {"node": "camera", "port": "video"},
+            "target": {"stream": "elsewhere", "node": "camera", "port": "frames_in"}
+        }))
+        .validate(
+            &NodeTypesOneStreamResolves::new(),
+            "main",
+            &a_machine_named_desk(),
+        )
+        .expect_err("a target in another stream is refused");
+        assert!(
+            matches!(
+                &refusal,
+                Error::LinkMadeOutsideTheStreamOfItsInput { acting_stream, input_stream }
+                    if acting_stream == "main" && input_stream == "elsewhere"
+            ),
+            "{refusal:?}"
+        );
+        let refusal = refusal.to_string();
+        for named in [
+            "made in the stream that holds its input",
+            "`elsewhere`",
+            "`main`",
+        ] {
+            assert!(refusal.contains(named), "{named:?} not in: {refusal}");
+        }
+    }
+
+    /// Nothing links two machines until the sharing step, so an end naming
+    /// another machine is refused naming both machines, and one naming a
+    /// machine without its stream is refused as no address.
+    #[test]
+    fn a_link_end_naming_another_machine_is_refused_by_name() {
+        for (source, target) in [
+            (
+                serde_json::json!({"machine": "rig", "stream": "a", "node": "camera",
+                                   "port": "video"}),
+                serde_json::json!({"node": "camera", "port": "frames_in"}),
+            ),
+            (
+                serde_json::json!({"node": "camera", "port": "video"}),
+                serde_json::json!({"machine": "rig", "stream": "main", "node": "camera",
+                                   "port": "frames_in"}),
+            ),
+        ] {
+            let refusal = a_graph_of_one_camera_linked(
+                serde_json::json!({"source": source, "target": target}),
+            )
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
+            .expect_err("another machine is refused");
+            assert!(
+                matches!(
+                    &refusal,
+                    Error::PortAddressNamesAnotherMachine { machine, this_machine, .. }
+                        if machine == "rig" && this_machine == "desk"
+                ),
+                "{refusal:?}"
+            );
+        }
+
+        let refusal = a_graph_of_one_camera_linked(serde_json::json!({
+            "source": {"machine": "desk", "node": "camera", "port": "video"},
+            "target": {"node": "camera", "port": "frames_in"}
+        }))
+        .validate(
+            &NodeTypesOneStreamResolves::new(),
+            "main",
+            &a_machine_named_desk(),
+        )
+        .expect_err("a machine without its stream is refused");
+        assert!(
+            matches!(refusal, Error::InvalidPortAddress(_)),
+            "{refusal:?}"
+        );
+    }
+
+    /// A link end is spelled in the chunks of an address and no other key: one
+    /// carrying the `runtime_name` a retired render wrote is refused, naming
+    /// the keys a link end is written with.
+    #[test]
+    fn a_link_end_carrying_a_key_no_address_chunk_is_is_refused_naming_the_keys_of_a_link_end() {
+        let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
+            "links": [{"source": {"runtime_name": "rig", "stream": "a", "node": "camera",
+                                  "port": "video"},
+                       "target": {"node": "camera", "port": "frames_in"}}]
+        }))
+        .expect_err("a link end carrying `runtime_name` is refused")
+        .to_string();
+        for named in [
+            "the source end of the link `a/camera/video` → `camera/frames_in`",
+            "`runtime_name`",
+            "`machine`, `stream`, `node` and `port`",
+        ] {
+            assert!(refusal.contains(named), "{named:?} not in: {refusal}");
+        }
+    }
+
     #[test]
     fn an_empty_graph_is_valid() {
         let graph = GraphSnapshot::from_json_str(r#"{"nodes": []}"#).unwrap();
 
-        assert!(graph.validate(&NodeTypesOneStreamResolves::new()).is_ok());
+        assert!(
+            graph
+                .validate(
+                    &NodeTypesOneStreamResolves::new(),
+                    "main",
+                    &a_machine_named_desk()
+                )
+                .is_ok()
+        );
         assert!(graph.links.is_empty() && graph.exposed.is_empty());
     }
     #[test]

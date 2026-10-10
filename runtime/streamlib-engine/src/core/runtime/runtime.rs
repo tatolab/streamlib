@@ -286,6 +286,17 @@ impl EngineResourcesSharedByEveryStream {
         }
     }
 
+    /// The loaded stream `stream_cast`, already cast, names.
+    pub(crate) fn loaded_stream_of_the_cast_name(
+        &self,
+        stream_cast: &str,
+    ) -> Option<Arc<LoadedStreamInThisRuntime>> {
+        self.streams_loaded_in_this_runtime
+            .lock()
+            .get(stream_cast)
+            .cloned()
+    }
+
     fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
         self.streams_loaded_in_this_runtime
             .lock()
@@ -854,10 +865,7 @@ impl Runner {
         stream_cast: &str,
     ) -> Option<Arc<LoadedStreamInThisRuntime>> {
         self.engine_resources_shared_by_every_stream
-            .streams_loaded_in_this_runtime
-            .lock()
-            .get(stream_cast)
-            .cloned()
+            .loaded_stream_of_the_cast_name(stream_cast)
     }
 
     /// Every loaded stream, read under one lock of the stream table.

@@ -318,8 +318,8 @@ fn a_node_or_an_output_port_the_stream_does_not_hold_is_refused_by_name() {
             "display",
             "video",
             [
-                "no node in this stream is named \"display\"",
-                "This stream holds: camera",
+                "no node in the stream `main` is named \"display\"",
+                "The stream `main` holds: camera",
             ],
         ),
         (
@@ -513,4 +513,94 @@ fn every_reader_a_registration_lets_go_of_is_dropped_once_the_graph_lock_is_rele
         Some(true),
         "a reader whose registration was dropped was let go under the graph lock"
     );
+}
+
+/// The check a live link from another stream makes before it is added refuses
+/// in exactly the words registering the reader would, for every level and
+/// every place a reader reads from, and leaves no reader on the port.
+#[test]
+#[serial]
+fn the_check_without_registering_refuses_in_the_words_registering_would() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().unwrap();
+    let stream = a_camera_stream_exposing(&runner, project_directory.path(), serde_json::json!([]));
+
+    for level in [
+        OutputPortExposureLevel::Internal,
+        OutputPortExposureLevel::Private,
+        OutputPortExposureLevel::Public,
+    ] {
+        stream
+            .set_output_port_exposure_level("camera", "video", level)
+            .unwrap();
+        for location in [
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            OutputPortReaderOutsideItsStream::OnAnotherMachine,
+        ] {
+            let checked = stream
+                .refuse_a_reader_its_output_port_does_not_allow("camera", "video", location)
+                .map_err(|refusal| refusal.to_string());
+            let cuts = Arc::new(AtomicUsize::new(0));
+            let registered = stream
+                .register_a_reader_of_an_exposed_output_port(
+                    "camera",
+                    "video",
+                    location,
+                    a_cut_counting_into(&cuts),
+                )
+                .map(drop)
+                .map_err(|refusal| refusal.to_string());
+            assert_eq!(checked, registered, "{level} read from {location}");
+        }
+    }
+
+    let cuts = Arc::new(AtomicUsize::new(0));
+    stream
+        .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+    stream
+        .refuse_a_reader_its_output_port_does_not_allow(
+            "camera",
+            "video",
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+        )
+        .expect("a private port lets another stream read it");
+    let registration = stream
+        .register_a_reader_of_an_exposed_output_port(
+            "camera",
+            "video",
+            OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            a_cut_counting_into(&cuts),
+        )
+        .unwrap();
+    stream
+        .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Internal)
+        .unwrap();
+    assert_eq!(
+        cuts.load(Ordering::SeqCst),
+        1,
+        "only the registered reader is cut; the check left none behind"
+    );
+    drop(registration);
+
+    for (node, port) in [("display", "video"), ("camera", "frames_in")] {
+        let checked = stream
+            .refuse_a_reader_its_output_port_does_not_allow(
+                node,
+                port,
+                OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            )
+            .expect_err("a node or port the stream does not hold is refused")
+            .to_string();
+        let registered = stream
+            .register_a_reader_of_an_exposed_output_port(
+                node,
+                port,
+                OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+                a_cut_counting_into(&cuts),
+            )
+            .expect_err("a node or port the stream does not hold is refused")
+            .to_string();
+        assert_eq!(checked, registered);
+    }
 }

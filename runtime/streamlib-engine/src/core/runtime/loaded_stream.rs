@@ -29,9 +29,10 @@ use crate::core::context::{
 };
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
-    ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent, cast_exposed_name_to_url_safe,
+    OutputPortInAnotherStreamOnThisMachine, ProcessorPauseGateComponent, ProcessorUniqueId,
+    StateComponent, cast_exposed_name_to_url_safe,
 };
-use crate::core::graph_snapshot::GraphSnapshot;
+use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotLink};
 use crate::core::logging::{LoadedStreamLogRecordsPage, LoadedStreamLogRoute};
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{
@@ -1023,8 +1024,10 @@ impl LoadedStreamInThisRuntime {
     /// Load `graph` into this stream, which is not in the stream table yet:
     /// every type it names that no native registration holds described in the
     /// stream's own interpreter, the graph validated against what the stream
-    /// resolves, each node added under its name, each link connected by name,
-    /// and each exposure put at its level in the stream's live exposure map.
+    /// resolves, each node added under its name, each link connected by name —
+    /// one whose source is in another stream on this machine by that stream's
+    /// name too — and each exposure put at its level in the stream's live
+    /// exposure map.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,
@@ -1036,7 +1039,11 @@ impl LoadedStreamInThisRuntime {
                 graph.nodes.iter().map(|node| &node.processor_type),
                 lend_directory,
             )?;
-        graph.validate(&self.node_types_this_stream_resolves)?;
+        graph.validate(
+            &self.node_types_this_stream_resolves,
+            self.stream_name(),
+            &self.engine_resources_shared_by_every_stream.machine_name,
+        )?;
 
         let mut processor_id_by_node_name: HashMap<String, ProcessorUniqueId> = HashMap::new();
         for node in &graph.nodes {
@@ -1055,10 +1062,33 @@ impl LoadedStreamInThisRuntime {
         };
 
         for link in &graph.links {
-            self.connect(
-                OutputLinkPortRef::new(processor_id_of(&link.source.node)?, &link.source.port),
-                InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port),
-            )?;
+            let target =
+                InputLinkPortRef::new(processor_id_of(&link.target.node)?, &link.target.port);
+            let source = GraphSnapshotLink::the_address_a_link_end_names(&link.source)?;
+            match source
+                .stream()
+                .filter(|source_stream| *source_stream != self.stream_name())
+            {
+                Some(source_stream) => {
+                    self.connect_from_an_output_port_in_another_stream(
+                        OutputPortInAnotherStreamOnThisMachine::new(
+                            source_stream,
+                            source.node_name(),
+                            source.port_name(),
+                        )?,
+                        target,
+                    )?;
+                }
+                None => {
+                    self.connect(
+                        OutputLinkPortRef::new(
+                            processor_id_of(source.node_name())?,
+                            source.port_name(),
+                        ),
+                        target,
+                    )?;
+                }
+            }
         }
 
         for exposed in &graph.exposed {

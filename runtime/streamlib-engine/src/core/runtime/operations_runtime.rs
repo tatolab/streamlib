@@ -13,8 +13,10 @@ use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
-    ProcessorUniqueId, StateComponent, node_named_or_refused,
+    GraphEdgeWithComponents, GraphNodeWithComponents, LinkReadingAnotherStreamComponent, LinkState,
+    LinkStateComponent, LinkUniqueId, OutputPortInAnotherStreamOnThisMachine,
+    OutputPortReaderOutsideItsStream, PendingDeletionComponent, ProcessorUniqueId, StateComponent,
+    node_named_or_refused,
 };
 use crate::core::logging::{
     carrying_this_threads_loaded_stream_log_route, polled_in_a_loaded_stream_log_route,
@@ -272,7 +274,7 @@ async fn connect_impl(
     let to = to.with_its_port_name_cast()?;
 
     stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
-        from: from.clone(),
+        from: from.clone().into(),
         to: to.clone(),
     });
 
@@ -282,7 +284,85 @@ async fn connect_impl(
 
     stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidConnect {
         link_id: link_id.to_string(),
-        from,
+        from: from.into(),
+        to,
+    });
+    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+
+    Ok(link_id)
+}
+
+/// Whether the stream a link reads from is in this runtime's stream table as
+/// the link is added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhereTheSourceStreamOfALinkIsAsItIsAdded {
+    LoadedOnThisMachine,
+    NotLoadedOnThisMachine,
+}
+
+/// Core implementation for a link reading output port `source` of another
+/// stream on this machine into `to`.
+///
+/// The link is added as an edge from its target's node to itself. A source
+/// stream not loaded as the link is added stamps it `awaiting_remote` at once,
+/// so a stream that is never started still says what it waits for.
+#[tracing::instrument(
+    name = "stream.connect_from_another_stream",
+    skip(live_graph_change),
+    fields(from = %source, to = %to),
+)]
+async fn connect_from_another_stream_impl(
+    live_graph_change: LiveGraphChangeOnOneStream,
+    source: OutputPortInAnotherStreamOnThisMachine,
+    to: InputLinkPortRef,
+    where_the_source_stream_is: WhereTheSourceStreamOfALinkIsAsItIsAdded,
+) -> Result<LinkUniqueId> {
+    let LiveGraphChangeOnOneStream {
+        compiler,
+        live,
+        stream,
+    } = live_graph_change;
+    let to = to.with_its_port_name_cast()?;
+
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
+        from: source.clone().into(),
+        to: to.clone(),
+    });
+
+    let link_id = compiler.scope(|graph, tx| -> Result<LinkUniqueId> {
+        refuse_a_destination_this_graph_cannot_take(graph, &to)?;
+        let link = graph
+            .traversal_mut()
+            .add_e_reading_another_stream(source.clone(), to.clone())
+            .first_mut()
+            .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
+        match where_the_source_stream_is {
+            WhereTheSourceStreamOfALinkIsAsItIsAdded::LoadedOnThisMachine => {
+                link.insert_component_without_rendering_it(
+                    LinkReadingAnotherStreamComponent::default(),
+                );
+            }
+            WhereTheSourceStreamOfALinkIsAsItIsAdded::NotLoadedOnThisMachine => {
+                link.insert(LinkStateComponent(LinkState::AwaitingRemote));
+                link.insert_component_without_rendering_it(
+                    LinkReadingAnotherStreamComponent::carrying_nothing_because(format!(
+                        "the stream `{}` is not loaded on this machine; the link wires when it \
+                         loads",
+                        source.stream_name()
+                    )),
+                );
+            }
+        }
+        let link_id = link.id.clone();
+        tx.log(PendingOperation::AddLink(link_id.clone()));
+        Ok(link_id)
+    })?;
+
+    commit_live_graph_change(&compiler, live).await?;
+
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidConnect {
+        link_id: link_id.to_string(),
+        from: source.into(),
         to,
     });
     stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
@@ -412,7 +492,7 @@ async fn disconnect_impl(
             .traversal()
             .e(&link_id)
             .first()
-            .map(|l| (l.from_port(), l.to_port()))
+            .map(|l| (l.source(), l.to_port()))
             .ok_or_else(|| Error::NotFound(format!("Link '{}' not found", link_id)))?;
 
         let info = (from_value.clone(), to_value.clone());
@@ -510,6 +590,58 @@ impl LoadedStreamInThisRuntime {
                     .map_err(|_| Error::Runtime("Task channel closed".into()))?
             }
         }
+    }
+
+    /// Link output port `source` of another stream on this machine into input
+    /// port `to` of this stream, the stream that holds the link's input.
+    ///
+    /// A source naming this stream is linked as a port of it. While this
+    /// stream runs and the source's stream has started, a source port its
+    /// level does not let another stream read — or a node or port that stream
+    /// does not hold — is refused by name, and no link is added.
+    pub fn connect_from_an_output_port_in_another_stream(
+        &self,
+        source: OutputPortInAnotherStreamOnThisMachine,
+        to: InputLinkPortRef,
+    ) -> Result<LinkUniqueId> {
+        if source.stream_name() == self.stream_name() {
+            let source_node = self.the_node_named(source.node_name())?;
+            return self.connect(
+                OutputLinkPortRef::new(source_node.processor_id, source.port_name()),
+                to,
+            );
+        }
+        let live_graph_change = self.live_graph_change();
+        let source_stream = self
+            .engine_resources_shared_by_every_stream()
+            .loaded_stream_of_the_cast_name(source.stream_name());
+        if live_graph_change.live.is_some()
+            && let Some(source_stream) = &source_stream
+            && source_stream.has_started_and_is_not_shutting_down()
+        {
+            source_stream.refuse_a_reader_its_output_port_does_not_allow(
+                source.node_name(),
+                source.port_name(),
+                OutputPortReaderOutsideItsStream::ElsewhereOnThisMachine,
+            )?;
+        }
+        let where_the_source_stream_is = match source_stream {
+            Some(_) => WhereTheSourceStreamOfALinkIsAsItIsAdded::LoadedOnThisMachine,
+            None => WhereTheSourceStreamOfALinkIsAsItIsAdded::NotLoadedOnThisMachine,
+        };
+        self.block_on_the_engines_tokio_runtime(connect_from_another_stream_impl(
+            live_graph_change,
+            source,
+            to,
+            where_the_source_stream_is,
+        ))
+    }
+
+    /// Whether this stream has started and no shutdown of it has been asked
+    /// for.
+    fn has_started_and_is_not_shutting_down(&self) -> bool {
+        *self.status.lock() == RuntimeStatus::Started
+            && !self.this_streams_shutdown_escalation().is_requested()
     }
 
     /// Add a processor and report the node it became: its id and its name — the
@@ -1022,5 +1154,429 @@ mod connect_wires_without_inspecting_a_port_tests {
             ),
             Err(Error::ProcessorPortNotFound { .. })
         ));
+    }
+}
+
+#[cfg(test)]
+mod connect_from_another_stream_tests {
+    //! A link reading an output port of another stream on this machine: added
+    //! as an edge from its target's node to itself, stamped `awaiting_remote`
+    //! when its source's stream is not loaded, removed once with its node, and
+    //! — while both streams run — refused by name when the source's level does
+    //! not let another stream read it.
+
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use serde_json::Value;
+
+    use super::{
+        LiveGraphChangeOnOneStream, WhereTheSourceStreamOfALinkIsAsItIsAdded,
+        connect_from_another_stream_impl, remove_processor_impl,
+    };
+    use crate::core::compiler::{Compiler, PendingOperation};
+    use crate::core::graph::{
+        ExposedOutputPortsComponent, GraphNodeWithComponents, InputLinkPortRef,
+        OutputPortExposureLevel, OutputPortInAnotherStreamOnThisMachine, ProcessorUniqueId,
+    };
+    use crate::core::processors::ProcessorSpec;
+    use crate::core::pubsub::LoadedStreamIdentity;
+    use crate::core::runtime::{
+        LoadedStreamInThisRuntime, LoadedStreamTag, OptionsForLoadingOneStream, Runner,
+    };
+    use crate::core::test_support::{
+        MockInputOnlyProcessor, MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode,
+        ensure_test_mocks_registered,
+    };
+    use crate::core::{Error, Result};
+
+    fn a_fixture_graph_change(compiler: Arc<Compiler>) -> LiveGraphChangeOnOneStream {
+        LiveGraphChangeOnOneStream {
+            compiler,
+            live: None,
+            stream: LoadedStreamIdentity {
+                runtime_id: "Rcrossstream".to_string(),
+                stream_name: "b".to_string(),
+                stream_tag: LoadedStreamTag::numbered_for_a_test(1),
+            },
+        }
+    }
+
+    fn camera_video_of_the_stream_a() -> OutputPortInAnotherStreamOnThisMachine {
+        OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "out1").unwrap()
+    }
+
+    /// A fixture compiler holding one node reading `in1`, and that node's id.
+    fn a_compiler_holding_a_reader() -> (Arc<Compiler>, ProcessorUniqueId) {
+        ensure_test_mocks_registered();
+        let compiler = Arc::new(Compiler::new());
+        let reader = compiler.scope(|graph, _tx| {
+            graph
+                .traversal_mut()
+                .add_v(ProcessorSpec::new(
+                    MockInputOnlyProcessor::processor_class_import_path(),
+                    Value::Null,
+                ))
+                .expect("the node is named")
+                .first()
+                .expect("the reader is added")
+                .id
+                .clone()
+        });
+        (compiler, reader)
+    }
+
+    fn block_on<T>(operation: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a current-thread runtime")
+            .block_on(operation)
+    }
+
+    fn the_rendered_links_of(compiler: &Compiler) -> Vec<Value> {
+        compiler.scope(|graph, _tx| {
+            serde_json::to_value(graph.to_graph_response("desk".to_string()))
+                .unwrap()
+                .get("links")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+    }
+
+    /// A link whose source's stream is not loaded is stamped at once, so a
+    /// stream that never starts still says what it waits for; one whose
+    /// source's stream is loaded is pending. Either is queued for its commit.
+    #[test]
+    fn a_link_is_stamped_awaiting_when_its_source_stream_is_not_loaded_and_pending_when_it_is() {
+        for (where_the_source_stream_is, state, reason) in [
+            (
+                WhereTheSourceStreamOfALinkIsAsItIsAdded::NotLoadedOnThisMachine,
+                "awaiting_remote",
+                Some("the stream `a` is not loaded on this machine; the link wires when it loads"),
+            ),
+            (
+                WhereTheSourceStreamOfALinkIsAsItIsAdded::LoadedOnThisMachine,
+                "pending",
+                None,
+            ),
+        ] {
+            let (compiler, reader) = a_compiler_holding_a_reader();
+            let link_id = block_on(connect_from_another_stream_impl(
+                a_fixture_graph_change(Arc::clone(&compiler)),
+                camera_video_of_the_stream_a(),
+                InputLinkPortRef::new(reader.clone(), "In1"),
+                where_the_source_stream_is,
+            ))
+            .expect("the link is added");
+
+            assert!(
+                matches!(
+                    compiler.logged_pending_operations().as_slice(),
+                    [PendingOperation::AddLink(added)] if *added == link_id
+                ),
+                "{:?}",
+                compiler.logged_pending_operations()
+            );
+            let rendered = the_rendered_links_of(&compiler);
+            assert_eq!(rendered.len(), 1, "{rendered:?}");
+            assert_eq!(rendered[0]["id"], link_id.as_str());
+            assert_eq!(rendered[0]["state"], state);
+            assert_eq!(
+                rendered[0]["source"],
+                serde_json::json!({"stream": "a", "node": "camera", "port": "out1"})
+            );
+            assert_eq!(rendered[0]["target"]["port"], "in1");
+            assert_eq!(
+                rendered[0]
+                    .get("awaiting_remote_reason")
+                    .and_then(Value::as_str),
+                reason
+            );
+        }
+    }
+
+    /// An input the node does not have is refused by name, and nothing is
+    /// added.
+    #[test]
+    fn a_link_into_an_input_the_node_does_not_have_is_refused_and_nothing_is_added() {
+        let (compiler, reader) = a_compiler_holding_a_reader();
+
+        let refusal = block_on(connect_from_another_stream_impl(
+            a_fixture_graph_change(Arc::clone(&compiler)),
+            camera_video_of_the_stream_a(),
+            InputLinkPortRef::new(reader, "frames"),
+            WhereTheSourceStreamOfALinkIsAsItIsAdded::NotLoadedOnThisMachine,
+        ))
+        .expect_err("an input the node does not have is refused");
+
+        assert!(
+            matches!(&refusal, Error::ProcessorPortNotFound { port_name, .. } if port_name == "frames"),
+            "{refusal:?}"
+        );
+        assert!(the_rendered_links_of(&compiler).is_empty());
+        assert!(compiler.logged_pending_operations().is_empty());
+    }
+
+    /// The edge from the reader to itself is one inbound link of the reader
+    /// and no outbound one, so removing the reader removes the link once.
+    #[test]
+    fn removing_the_reader_removes_its_link_reading_another_stream_once() {
+        let (compiler, reader) = a_compiler_holding_a_reader();
+        let link_id = block_on(connect_from_another_stream_impl(
+            a_fixture_graph_change(Arc::clone(&compiler)),
+            camera_video_of_the_stream_a(),
+            InputLinkPortRef::new(reader.clone(), "in1"),
+            WhereTheSourceStreamOfALinkIsAsItIsAdded::NotLoadedOnThisMachine,
+        ))
+        .expect("the link is added");
+
+        block_on(remove_processor_impl(
+            a_fixture_graph_change(Arc::clone(&compiler)),
+            reader.clone(),
+        ))
+        .expect("the reader is removed");
+
+        assert!(
+            matches!(
+                compiler.logged_pending_operations().as_slice(),
+                [
+                    PendingOperation::AddLink(added),
+                    PendingOperation::RemoveLink(removed),
+                    PendingOperation::RemoveProcessor(removed_processor),
+                ] if *added == link_id && *removed == link_id && *removed_processor == reader
+            ),
+            "the link is removed once, ahead of its node: {:?}",
+            compiler.logged_pending_operations()
+        );
+    }
+
+    /// Two loaded streams, `a` holding `camera` and `b` holding `display`,
+    /// neither started.
+    struct TwoLoadedStreams {
+        runner: Arc<Runner>,
+        a: Arc<LoadedStreamInThisRuntime>,
+        b: Arc<LoadedStreamInThisRuntime>,
+        _project_directory: tempfile::TempDir,
+    }
+
+    impl TwoLoadedStreams {
+        fn load() -> Self {
+            ensure_test_mocks_registered();
+            let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
+            let runner = Runner::new().expect("the engine builds");
+            let load = |stream_name: &str, node_type, node_name: &str| {
+                let stream = runner
+                    .load_an_empty_stream(
+                        OptionsForLoadingOneStream::in_project_directory(project_directory.path())
+                            .named(stream_name),
+                    )
+                    .expect("the stream loads");
+                stream
+                    .add_processor(
+                        ProcessorSpec::new(node_type, Value::Null)
+                            .with_display_name(node_name.to_string()),
+                    )
+                    .expect("the node is added");
+                stream
+            };
+            let a = load(
+                "a",
+                MockOutputOnlyProcessor::processor_class_import_path(),
+                "camera",
+            );
+            let b = load(
+                "b",
+                MockInputOnlyProcessor::processor_class_import_path(),
+                "display",
+            );
+            Self {
+                runner,
+                a,
+                b,
+                _project_directory: project_directory,
+            }
+        }
+
+        fn into_the_display(&self) -> InputLinkPortRef {
+            let display = <LoadedStreamInThisRuntime as crate::core::runtime::RuntimeOperations>::the_node_named(&self.b, "display").unwrap();
+            InputLinkPortRef::new(display.processor_id, "in1")
+        }
+
+        fn links_of(stream: &LoadedStreamInThisRuntime) -> Vec<Value> {
+            stream.to_json().unwrap()["links"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        }
+
+        fn readers_registered_against_the_camera(&self) -> usize {
+            self.a.compiler.scope(|graph, _tx| {
+                graph
+                    .traversal()
+                    .v_with_node_name("camera")
+                    .first()
+                    .and_then(|camera| camera.get::<ExposedOutputPortsComponent>())
+                    .map_or(0, |exposed| exposed.readers_registered_against("out1"))
+            })
+        }
+    }
+
+    /// A source in a stream the engine loads is pending until it is wired,
+    /// one in a stream it does not load awaits naming that stream, and a
+    /// source naming the reading stream itself is a link of that stream.
+    #[test]
+    fn a_stream_connects_from_another_stream_by_name_whether_or_not_it_is_loaded() {
+        let loaded = TwoLoadedStreams::load();
+
+        loaded
+            .b
+            .connect_from_an_output_port_in_another_stream(
+                OutputPortInAnotherStreamOnThisMachine::new("A", "Camera", "Out1").unwrap(),
+                loaded.into_the_display(),
+            )
+            .expect("a link from a loaded stream is added");
+        loaded
+            .b
+            .connect_from_an_output_port_in_another_stream(
+                OutputPortInAnotherStreamOnThisMachine::new("nowhere", "camera", "out1").unwrap(),
+                loaded.into_the_display(),
+            )
+            .expect("a link from a stream not loaded is added");
+
+        let links = TwoLoadedStreams::links_of(&loaded.b);
+        let link_from = |stream: &str| {
+            links
+                .iter()
+                .find(|link| link["source"]["stream"] == stream)
+                .unwrap_or_else(|| panic!("no link from `{stream}` in {links:?}"))
+        };
+        assert_eq!(link_from("a")["state"], "pending");
+        assert!(link_from("a").get("awaiting_remote_reason").is_none());
+        assert_eq!(link_from("nowhere")["state"], "awaiting_remote");
+        assert_eq!(
+            link_from("nowhere")["awaiting_remote_reason"],
+            "the stream `nowhere` is not loaded on this machine; the link wires when it loads"
+        );
+        assert!(TwoLoadedStreams::links_of(&loaded.a).is_empty());
+        assert_eq!(loaded.readers_registered_against_the_camera(), 0);
+
+        loaded
+            .a
+            .add_processor(
+                ProcessorSpec::new(
+                    MockInputOnlyProcessor::processor_class_import_path(),
+                    Value::Null,
+                )
+                .with_display_name("reader-in-a".to_string()),
+            )
+            .expect("a reader is added to `a`");
+        let reader_in_a =
+            <LoadedStreamInThisRuntime as crate::core::runtime::RuntimeOperations>::the_node_named(
+                &loaded.a,
+                "reader-in-a",
+            )
+            .unwrap();
+        loaded
+            .a
+            .connect_from_an_output_port_in_another_stream(
+                OutputPortInAnotherStreamOnThisMachine::new("A", "camera", "out1").unwrap(),
+                InputLinkPortRef::new(reader_in_a.processor_id, "in1"),
+            )
+            .expect("a source naming the reading stream is a port of it");
+        let links_of_a = TwoLoadedStreams::links_of(&loaded.a);
+        assert_eq!(links_of_a.len(), 1, "{links_of_a:?}");
+        assert_eq!(
+            links_of_a[0]["source"],
+            serde_json::json!({"node": "camera", "port": "out1"})
+        );
+    }
+
+    /// While both streams run, a source port at `internal` — or a node or port
+    /// its stream does not hold — is refused naming it, and no link is added
+    /// nor any reader left on the port; once the port is `private` the link
+    /// is added, and neither it nor one awaiting a stream not loaded fails
+    /// the commit.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial_test::serial]
+    fn while_both_streams_run_a_source_its_level_does_not_allow_is_refused_by_name() {
+        let loaded = TwoLoadedStreams::load();
+        for stream in [&loaded.a, &loaded.b] {
+            stream.start().expect("the stream starts");
+            stream
+                .wait_until_every_processor_is_running(Duration::from_secs(30))
+                .expect("the stream's node runs");
+        }
+
+        let refusal = loaded
+            .b
+            .connect_from_an_output_port_in_another_stream(
+                camera_video_of_the_stream_a(),
+                loaded.into_the_display(),
+            )
+            .expect_err("an internal port is refused");
+        assert!(
+            matches!(&refusal, Error::OutputPortNotExposedToTheReader(refused)
+                if refused.stream == "a" && refused.node == "camera" && refused.port == "out1"
+                    && refused.level == "internal"),
+            "{refusal:?}"
+        );
+        for (node, port, named) in [
+            ("ghost", "out1", ["`a`", "\"ghost\"", "camera"]),
+            ("camera", "frames", ["`a`", "`frames`", "out1, out2"]),
+        ] {
+            let refusal = loaded
+                .b
+                .connect_from_an_output_port_in_another_stream(
+                    OutputPortInAnotherStreamOnThisMachine::new("a", node, port).unwrap(),
+                    loaded.into_the_display(),
+                )
+                .expect_err("a node or port the stream does not hold is refused")
+                .to_string();
+            for expected in named {
+                assert!(refusal.contains(expected), "{expected:?} not in: {refusal}");
+            }
+        }
+        assert!(TwoLoadedStreams::links_of(&loaded.b).is_empty());
+        assert_eq!(loaded.readers_registered_against_the_camera(), 0);
+
+        loaded
+            .a
+            .set_output_port_exposure_level("camera", "out1", OutputPortExposureLevel::Private)
+            .unwrap();
+        let link_id = loaded
+            .b
+            .connect_from_an_output_port_in_another_stream(
+                camera_video_of_the_stream_a(),
+                loaded.into_the_display(),
+            )
+            .expect("a private port is read by another stream");
+        loaded
+            .b
+            .connect_from_an_output_port_in_another_stream(
+                OutputPortInAnotherStreamOnThisMachine::new("nowhere", "camera", "out1").unwrap(),
+                loaded.into_the_display(),
+            )
+            .expect("a link awaiting a stream not loaded never fails its commit");
+        assert_eq!(TwoLoadedStreams::links_of(&loaded.b).len(), 2);
+        assert_eq!(loaded.readers_registered_against_the_camera(), 0);
+
+        loaded
+            .b
+            .disconnect(&link_id)
+            .expect("the link is disconnected");
+        assert_eq!(TwoLoadedStreams::links_of(&loaded.b).len(), 1);
+
+        for stream in [&loaded.b, &loaded.a] {
+            stream.ask_for_this_streams_shutdown("the test is done");
+            loaded
+                .runner
+                .wait_until_the_stream_ends(stream)
+                .expect("the stream stops cleanly");
+        }
     }
 }

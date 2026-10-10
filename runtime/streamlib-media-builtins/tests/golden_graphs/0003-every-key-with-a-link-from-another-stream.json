@@ -1,0 +1,140 @@
+{
+  "stream": "reader",
+  "nodes": [
+    {
+      "id": "golden01",
+      "name": "testpatternsource",
+      "type": "tatolab.stream:TestPatternSource",
+      "config": {
+        "width": 1280,
+        "height": 720
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden02",
+      "name": "displaywindow",
+      "type": "tatolab.stream:DisplayWindow",
+      "config": {
+        "title": "Golden graph",
+        "width": 640,
+        "height": 360,
+        "scaling": "fit"
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden03",
+      "name": "h264encoder",
+      "type": "tatolab.stream:H264Encoder",
+      "config": {
+        "width": 1920,
+        "height": 1080,
+        "fps": 30,
+        "bitrate_bps": 4000000,
+        "keyframe_interval_seconds": 2,
+        "effort_level": 1
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    },
+    {
+      "id": "golden04",
+      "name": "virtualcamerasink",
+      "type": "tatolab.stream:VirtualCameraSink",
+      "config": {
+        "name": "Golden Camera",
+        "door": "auto"
+      },
+      "config_checksum": 0,
+      "ports": {
+        "inputs": [],
+        "outputs": []
+      },
+      "components": {
+        "state": "Running"
+      }
+    }
+  ],
+  "links": [
+    {
+      "id": "goldenlink01",
+      "source": {
+        "node": "testpatternsource",
+        "port": "video"
+      },
+      "target": {
+        "node": "h264encoder",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "wired",
+      "components": {}
+    },
+    {
+      "id": "goldenlink02",
+      "source": {
+        "stream": "camera-rig",
+        "node": "camerasource",
+        "port": "video"
+      },
+      "target": {
+        "node": "displaywindow",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "awaiting_remote",
+      "awaiting_remote_reason": "the stream `camera-rig` is not loaded on this machine; the link wires when it loads",
+      "components": {
+        "state": "AwaitingRemote"
+      }
+    },
+    {
+      "id": "goldenlink03",
+      "source": {
+        "stream": "camera-rig",
+        "node": "camerasource",
+        "port": "video"
+      },
+      "target": {
+        "node": "virtualcamerasink",
+        "port": "video"
+      },
+      "capacity": 16,
+      "state": "error",
+      "error_reason": "port `video` of node `camerasource` in stream `camera-rig` is internal, and another stream or other code on this machine reads only a port that is private or public",
+      "components": {
+        "state": "Error"
+      }
+    }
+  ],
+  "exposed": [
+    {
+      "node": "h264encoder",
+      "port": "encoded_video",
+      "level": "private"
+    }
+  ],
+  "extensions": [],
+  "machine": "golden-desk"
+}

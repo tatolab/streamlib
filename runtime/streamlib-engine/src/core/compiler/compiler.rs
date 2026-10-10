@@ -193,6 +193,8 @@ impl Compiler {
 
                     if pending_deletion {
                         tracing::debug!("AddLink({}): pending deletion, skipping add", id);
+                    } else if plan.links_to_add.contains(&id) {
+                        tracing::debug!("AddLink({}): already queued in this batch, skipping", id);
                     } else if exists && !already_wired_or_awaiting_an_answer {
                         plan.links_to_add.push(id);
                     } else if !exists {
@@ -266,7 +268,7 @@ impl Compiler {
                         .filter(|link| link.id == *link_id)
                         .first()
                     {
-                        let from_port = link.from_port().to_string();
+                        let from_port = link.source().to_string();
                         let to_port = link.to_port().to_string();
 
                         the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
@@ -391,7 +393,19 @@ impl Compiler {
                     let link = graph.traversal().e(link_id).first().ok_or_else(|| {
                         Error::LinkNotFound(format!("Link '{}' not found", link_id))
                     })?;
-                    (link.from_port().to_string(), link.to_port().to_string())
+                    if link.source_in_this_stream().is_none() {
+                        // Its source's output port is in another stream's
+                        // graph, which this stream's wiring never opens; the
+                        // link keeps the state it was added in.
+                        tracing::debug!(
+                            "[{}] {} reads `{}` in another stream; not wired by this stream",
+                            CompilePhase::Wire,
+                            link_id,
+                            link.source()
+                        );
+                        continue;
+                    }
+                    (link.source().to_string(), link.to_port().to_string())
                 };
 
                 the_stream_the_compile_belongs_to.publish_on_this_streams_topic(

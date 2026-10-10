@@ -69,7 +69,14 @@ pub fn open_iceoryx2_service(
             graph.traversal_mut().e(link_id).first().ok_or_else(|| {
                 Error::LinkNotFound(format!("Link '{}' not found in graph", link_id))
             })?;
-        (link.from_port().clone(), link.to_port().clone())
+        let from_port = link.source_in_this_stream().cloned().ok_or_else(|| {
+            Error::InvalidLink(format!(
+                "link '{link_id}' reads `{}` in another stream, whose output port this stream's \
+                 graph does not hold",
+                link.source()
+            ))
+        })?;
+        (from_port, link.to_port().clone())
     };
 
     let source_proc_id = from_port.processor_id().clone();
@@ -286,11 +293,15 @@ pub fn open_iceoryx2_service(
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
 
-    let Some((source_proc_id, source_port, dest_proc_id, dest_port)) =
+    let Some((source_in_this_stream, dest_proc_id, dest_port)) =
         graph.traversal_mut().e(link_id).first().map(|link| {
             (
-                link.from_port().processor_id().clone(),
-                link.from_port().port_name().to_string(),
+                link.source_in_this_stream().map(|source| {
+                    (
+                        source.processor_id().clone(),
+                        source.port_name().to_string(),
+                    )
+                }),
                 link.to_port().processor_id().clone(),
                 link.to_port().port_name().to_string(),
             )
@@ -304,19 +315,24 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
     };
 
     // Source side: drop this link's destination notifier (and the channel
-    // publisher when this was the source port's last outbound link).
-    if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, &source_proc_id) {
+    // publisher when this was the source port's last outbound link). A link
+    // reading another stream holds nothing on a node of this graph.
+    if let Some((source_proc_id, source_port)) = &source_in_this_stream
+        && let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, source_proc_id)
+    {
         unwire_out_of_process_endpoint(
             &source_link_wiring,
             crate::core::PortDirection::Output,
-            &source_proc_id,
-            &source_port,
+            source_proc_id,
+            source_port,
             link_id,
         );
-    } else if let Some(source_processor) = processor_to_reclaim_from(graph, &source_proc_id) {
+    } else if let Some((source_proc_id, source_port)) = &source_in_this_stream
+        && let Some(source_processor) = processor_to_reclaim_from(graph, source_proc_id)
+    {
         let source_guard = source_processor.lock();
         if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
-            let channel_released = output_inner.remove_channel_link(&source_port, link_id.as_str());
+            let channel_released = output_inner.remove_channel_link(source_port, link_id.as_str());
             tracing::debug!(
                 source = %source_proc_id,
                 port = %source_port,
@@ -400,7 +416,7 @@ fn every_link_carrying_from<'a>(
         .traversal()
         .e(())
         .iter()
-        .filter(move |link| link.from_port() == source)
+        .filter(move |link| link.source_in_this_stream() == Some(source))
 }
 
 /// How many `connect()` links carry from `source` — the destinations its

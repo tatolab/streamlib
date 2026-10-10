@@ -28,6 +28,10 @@ const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
         "0002-every-key-with-exposure-levels.json",
         "7fd38a0ec6d9678e0b3410ca3aa4cf367e6c2c8bb7f5162e507d0fd9674ad263",
     ),
+    (
+        "0003-every-key-with-a-link-from-another-stream.json",
+        "a8f882c9acfbbc18f61139ece56559f8ba9af7a11feac9d30bfa5ebfde30b75f",
+    ),
 ];
 
 fn golden_graph_paths() -> Vec<PathBuf> {
@@ -146,6 +150,72 @@ fn every_golden_graph_loads_on_this_floor() {
         load_on_a_fresh_engine(&the_rest).unwrap_or_else(|refusal| {
             panic!("{path:?} without {node_names_compiled_out_here:?} no longer loads: {refusal}")
         });
+    }
+}
+
+/// A golden holding a link from a stream the fresh engine does not load reads
+/// that link back `awaiting_remote`, its reason naming that stream, without the
+/// stream ever starting — whatever state the golden recorded it in.
+#[test]
+fn a_link_from_another_stream_loads_awaiting_that_stream() {
+    register_media_builtin_processor_types();
+    let path = golden_graph_paths()
+        .into_iter()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name == "0003-every-key-with-a-link-from-another-stream.json")
+        })
+        .expect("golden 0003 is checked in");
+    let graph_document = golden_graph_document(&path);
+    let node_names_compiled_out_here: BTreeSet<String> = node_types_in(&graph_document)
+        .into_iter()
+        .zip(
+            graph_document["nodes"]
+                .as_array()
+                .expect("a graph holds nodes"),
+        )
+        .filter(|(node_type, _)| {
+            PROCESSOR_REGISTRY
+                .refuse_a_built_in_node_type_absent_on_this_floor(node_type)
+                .is_err()
+        })
+        .filter_map(|(_, node)| node["name"].as_str().map(str::to_string))
+        .collect();
+    let graph = GraphSnapshot::from_graph_document(without_the_nodes(
+        &graph_document,
+        &node_names_compiled_out_here,
+    ))
+    .expect("golden 0003 reads");
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("a runtime constructs");
+    let stream = runner
+        .load_stream_from_graph_snapshot(
+            &graph,
+            OptionsForLoadingOneStream::in_project_directory(project_directory.path()),
+        )
+        .expect("golden 0003 loads");
+    let rendered = stream.to_json().expect("the loaded graph renders");
+    let links_from_another_stream: Vec<&serde_json::Value> = rendered["links"]
+        .as_array()
+        .expect("a graph renders its links")
+        .iter()
+        .filter(|link| link["source"]["stream"].is_string())
+        .collect();
+
+    assert!(
+        !links_from_another_stream.is_empty(),
+        "golden 0003 holds a link from another stream on every floor: {rendered}"
+    );
+    for link in links_from_another_stream {
+        assert_eq!(link["source"]["stream"], "camera-rig", "{link}");
+        assert_eq!(link["state"], "awaiting_remote", "{link}");
+        assert_eq!(
+            link["awaiting_remote_reason"],
+            "the stream `camera-rig` is not loaded on this machine; the link wires when it loads",
+            "{link}"
+        );
+        assert!(link.get("error_reason").is_none(), "{link}");
     }
 }
 

@@ -14,7 +14,10 @@ use super::{
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::{Error, Result};
-use crate::core::graph::{OutputPortExposureLevel, PortAddress, cast_exposed_name_to_url_safe};
+use crate::core::graph::{
+    InputLinkPortRef, LinkUniqueId, OutputPortExposureLevel,
+    OutputPortInAnotherStreamOnThisMachine, PortAddress, cast_exposed_name_to_url_safe,
+};
 use crate::core::logging::LoadedStreamLogRecordsPage;
 
 /// One page of a loaded stream's log records, and the tag of the load that
@@ -143,6 +146,21 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         stream_tag: LoadedStreamTag,
     ) -> bool;
 
+    /// Link output port `source` of another stream on this machine into input
+    /// port `to` of the loaded stream `stream_name` names — the stream that
+    /// holds the link's input — as
+    /// [`LoadedStreamInThisRuntime::connect_from_an_output_port_in_another_stream`]
+    /// does, with the same [`Error::NotFound`] refusal when that stream is not
+    /// loaded.
+    ///
+    /// [`LoadedStreamInThisRuntime::connect_from_an_output_port_in_another_stream`]: super::LoadedStreamInThisRuntime::connect_from_an_output_port_in_another_stream
+    fn connect_from_another_stream(
+        &self,
+        stream_name: &str,
+        source: OutputPortInAnotherStreamOnThisMachine,
+        to: InputLinkPortRef,
+    ) -> Result<LinkUniqueId>;
+
     /// Exchange a published surface id for that frame's pixels, encoded as a
     /// PNG.
     ///
@@ -246,6 +264,16 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         stream_tag: LoadedStreamTag,
     ) -> bool {
         Runner::unload_the_attached_stream_if_still_the_same(self, stream_name, stream_tag)
+    }
+
+    fn connect_from_another_stream(
+        &self,
+        stream_name: &str,
+        source: OutputPortInAnotherStreamOnThisMachine,
+        to: InputLinkPortRef,
+    ) -> Result<LinkUniqueId> {
+        self.loaded_stream_named(stream_name)?
+            .connect_from_an_output_port_in_another_stream(source, to)
     }
 
     fn exchange_published_surface_id_for_png_image_bytes_async(
