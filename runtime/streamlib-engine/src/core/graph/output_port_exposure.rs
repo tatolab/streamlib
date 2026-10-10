@@ -53,6 +53,17 @@ pub enum OutputPortReaderLocation {
 impl OutputPortExposureLevel {
     /// Every level, narrowest first.
     pub const EVERY_LEVEL: [Self; 3] = [Self::Internal, Self::Private, Self::Public];
+
+    /// Whether a port at this level is read from less far than one at
+    /// `other`: putting a port here from `other` restricts it.
+    pub fn is_narrower_than(self, other: Self) -> bool {
+        let narrowness_rank = |level: Self| {
+            Self::EVERY_LEVEL
+                .iter()
+                .position(|every_level| *every_level == level)
+        };
+        narrowness_rank(self) < narrowness_rank(other)
+    }
 }
 
 impl OutputPortReaderLocation {

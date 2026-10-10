@@ -510,8 +510,26 @@ fn read_a_kept_stream_record(
             ));
         }
     }
-    KeptStreamRecord::deserialize(&record_document)
-        .map_err(|not_a_record| failure(format!("it is not a kept-stream record: {not_a_record}")))
+    let record = KeptStreamRecord::deserialize(&record_document).map_err(|not_a_record| {
+        failure(format!("it is not a kept-stream record: {not_a_record}"))
+    })?;
+    let record_file_stem = record_path
+        .file_stem()
+        .map(|file_stem| file_stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match cast_exposed_name_to_url_safe(&record.stream_name) {
+        Ok(stream_cast) if stream_cast == record_file_stem => Ok(record),
+        Ok(stream_cast) => Err(failure(format!(
+            "it records the stream `{}`, whose record is `{stream_cast}.\
+             {KEPT_STREAM_RECORD_FILE_EXTENSION}` and not this file, so no stream action on \
+             `{record_file_stem}` reaches it; rename it or remove it",
+            record.stream_name
+        ))),
+        Err(casts_to_nothing) => Err(failure(format!(
+            "it records a stream named `{}`, which names no stream: {casts_to_nothing}",
+            record.stream_name
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -644,6 +662,25 @@ mod tests {
         assert_eq!(later.path, directory.join("c-later.json"));
         assert!(later.reason.contains("schema version 2"), "{later}");
         assert_eq!(every_record[3], Ok(a_record_named("d-microphone")));
+    }
+
+    #[test]
+    fn a_record_whose_stream_name_is_not_its_file_name_is_reported_unreadable_by_its_path() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let records = KeptStreamRecordsInTheStateDirectory::open(state_directory.path()).unwrap();
+        records.write(&a_record_named("a-camera")).unwrap();
+        let renamed_copy = records.kept_streams_directory().join("b-copy.json");
+        std::fs::copy(records.record_path_of("a-camera").unwrap(), &renamed_copy).unwrap();
+
+        let every_record = records.read_every();
+
+        assert_eq!(every_record.len(), 2, "{every_record:?}");
+        assert_eq!(every_record[0], Ok(a_record_named("a-camera")));
+        let mismatched = every_record[1].as_ref().unwrap_err();
+        assert_eq!(mismatched.path, renamed_copy);
+        assert!(mismatched.reason.contains("`a-camera`"), "{mismatched}");
+        let refusal = records.read("b-copy").unwrap_err();
+        assert_eq!(refusal.path, renamed_copy);
     }
 
     #[test]

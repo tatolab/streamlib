@@ -187,6 +187,16 @@ impl StreamsAttachedToOneMcpStdioConnection {
         })
     }
 
+    /// The tags of the loads this connection attached, while it is open.
+    fn stream_tags_attached_while_open(&self) -> Vec<LoadedStreamTag> {
+        self.attached_streams_while_open
+            .lock()
+            .iter()
+            .flatten()
+            .map(|(_stream_name, stream_tag)| *stream_tag)
+            .collect()
+    }
+
     /// Attach the stream `run` loaded to this connection, or — when the
     /// connection closed while the load ran — unload it now, so a stream is
     /// never left attached to a connection that is gone. Blocks.
@@ -382,7 +392,7 @@ struct LogsToolArguments {
     )]
     after: Option<u64>,
     #[schemars(
-        range(min = 1, max = MAX_LOGS_RECORD_COUNT),
+        range(min = 1),
         description = "The most records to return. Defaults to 256; a larger value than 4096 is clamped to it."
     )]
     count: Option<u32>,
@@ -786,7 +796,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes. A one-shot `POST /mcp` call can only keep. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
+        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes, and an attached run of the stream this connection attached, from the same project and function, replaces it. A replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. A one-shot `POST /mcp` call can only keep. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
     )]
     async fn run_stream(
         &self,
@@ -823,6 +833,12 @@ impl LocalApiMcpServerHandler {
                     } else {
                         LoadedStreamHolding::Attached
                     },
+                    stream_tags_attached_to_the_caller: streams_attached_to_this_connection
+                        .as_deref()
+                        .map(
+                            StreamsAttachedToOneMcpStdioConnection::stream_tags_attached_while_open,
+                        )
+                        .unwrap_or_default(),
                 })?;
                 if let Some(streams_attached_to_this_connection) =
                     streams_attached_to_this_connection
@@ -941,7 +957,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Put a stream's output port at `internal`, `private` or `public`. On a loaded stream it changes live: a reader the new level no longer allows is cut off at once, and nothing restarts. On a kept stream — loaded or stopped — the level is recorded as the owner's ruling and wins over the level the stream function declares, through every restart; `recorded` says whether it was. An attached stream's level is never recorded. `not_recorded_because`, present only then, says why a kept stream's level changed live could not be recorded, so a runtime restart puts back the level it had."
+        description = "Put a stream's output port at `internal`, `private` or `public`. On a loaded stream it changes live: a reader the new level no longer allows is cut off at once, and nothing restarts. On a kept stream — loaded or stopped — the level is recorded as the owner's ruling and wins over the level the stream function declares, through every restart; `recorded` says whether it was. An attached stream's level is never recorded. On a loaded kept stream a restriction is recorded before it changes live, and refused with the live level unchanged when it cannot be recorded. `not_recorded_because`, present only when `recorded` is false on a kept stream, says why a level raised live could not be recorded, so a runtime restart puts back the level it had."
     )]
     async fn expose_port(
         &self,
@@ -3149,11 +3165,11 @@ pub(crate) mod tests {
         }
     }
 
-    /// `run_stream`'s and `expose_port`'s schemas say what each takes: a
-    /// required absolute project directory and `keep`, and one of the three
-    /// levels.
+    /// `run_stream`'s, `expose_port`'s and `logs`' schemas say what each takes: a
+    /// required absolute project directory and `keep`, one of the three
+    /// levels, and a count with no maximum, since a larger one is clamped.
     #[tokio::test]
-    async fn the_run_stream_and_expose_port_schemas_state_what_each_requires() {
+    async fn the_run_stream_expose_port_and_logs_schemas_state_what_each_takes() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
         let input_schema_of = |tool_name: &str| {
             tools
@@ -3199,6 +3215,19 @@ pub(crate) mod tests {
         assert_eq!(
             required_of(&input_schema_of("list_streams")),
             Vec::<String>::new()
+        );
+
+        let logs_count = &input_schema_of("logs")["properties"]["count"];
+        assert_eq!(logs_count["minimum"], json!(1), "{logs_count}");
+        assert!(
+            logs_count.get("maximum").is_none(),
+            "a count past the most the runtime returns is clamped, never refused: {logs_count}"
+        );
+        assert!(
+            logs_count["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("clamped")),
+            "{logs_count}"
         );
     }
 

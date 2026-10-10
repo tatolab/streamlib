@@ -221,7 +221,7 @@ fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
 }
 
 /// `count` followed by `noun`, plural unless it is one.
-fn counted(count: usize, noun: &str) -> String {
+pub(crate) fn counted(count: usize, noun: &str) -> String {
     if count == 1 {
         format!("1 {noun}")
     } else {
@@ -438,8 +438,9 @@ fn rendered_exposed_port_line(expose_port_result: &ExposePortToolResult) -> Stri
     format!("{stream}/{node}/{port} is {level} ({what_holds_it})\n")
 }
 
-/// The warning a kept stream's level changed live but not recorded earns: a restart of the
-/// runtime puts back the level it had.
+/// The warning a kept stream's level raised live but not recorded earns: a restart of the
+/// runtime puts back the level it had. A restriction that cannot be recorded is refused, and
+/// exits non-zero as every refusal does.
 fn exposure_not_recorded_warning_line(expose_port_result: &ExposePortToolResult) -> Option<String> {
     let ExposePortToolResult {
         stream,

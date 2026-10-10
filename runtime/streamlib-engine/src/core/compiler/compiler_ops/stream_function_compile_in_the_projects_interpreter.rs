@@ -388,8 +388,12 @@ mod tests {
     #[test]
     #[serial]
     fn a_compile_returns_the_graph_and_the_project_and_its_venv_interpreter() {
+        // A literal path rather than one built from the shell's `$PWD`: a shell
+        // started outside its parent's `PWD` reads `getcwd()`, which on macOS
+        // resolves the temporary directory's `/var` symlink to `/private/var`.
+        let reported_project_directory = "/srv/the-project-the-compile-entry-reported/src-anchor";
         let project = ProjectWithAStubVenvInterpreter::running(&print_the_compile_document(
-            "$PWD/src-anchor",
+            reported_project_directory,
         ));
 
         let compiled = project
@@ -400,7 +404,7 @@ mod tests {
         assert_eq!(
             compiled.stream_environment,
             StreamEnvironment {
-                project_directory: project.path().join("src-anchor"),
+                project_directory: PathBuf::from(reported_project_directory),
                 interpreter: project.path().join(".venv").join("bin").join("python"),
             },
             "the project directory is the one the compile entry reported, and the \

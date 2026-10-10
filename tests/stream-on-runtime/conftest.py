@@ -142,7 +142,7 @@ STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN = re.compile(
 
 #: What an attached `tatolab run` (or `dev`) notes on standard error once its stream loaded and started.
 ATTACHED_STREAM_LOADED_NOTE_PATTERN = re.compile(
-    r"^tatolab(?: dev)?: (?P<stream_name>\S+) loaded \((?P<node_count>\d+) nodes, "
+    r"^tatolab(?: dev)?: (?P<stream_name>\S+) loaded \((?P<node_count>\d+) nodes?, "
     r"project (?P<project_directory>.+)\); Ctrl-C stops it$"
 )
 

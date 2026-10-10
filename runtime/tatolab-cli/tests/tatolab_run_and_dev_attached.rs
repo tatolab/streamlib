@@ -485,8 +485,11 @@ fn a_stream_unloaded_elsewhere_ends_run_with_zero_saying_so() {
     );
 }
 
+/// A save runs the stream again over the same connection, never stopping it first: the runtime
+/// replaces the running stream once the save compiles, so a save it refuses leaves that stream
+/// running, and `dev` follows it on from the record it had reached.
 #[test]
-fn dev_loads_again_on_a_saved_edit_and_survives_a_refused_load() {
+fn dev_runs_again_on_a_saved_edit_without_stopping_and_follows_on_after_a_refused_save() {
     let isolated_machine_directories = IsolatedMachineDirectories::new();
     let scratch_project = ScratchProject::new();
     let stub_local_api_server = a_runtime_holding(
@@ -496,7 +499,7 @@ fn dev_loads_again_on_a_saved_edit_and_survives_a_refused_load() {
             StubToolAnswer::tool_failure("SyntaxError: invalid syntax (stream.py, line 1)"),
             loaded_answer(&scratch_project.canonical_path()),
         ],
-        Vec::new(),
+        vec![a_log_record(json!({"message": "before the bad save"}))],
     );
     let mut running_tatolab =
         RunningTatolab::spawn(isolated_machine_directories.tatolab_command(&[
@@ -505,18 +508,34 @@ fn dev_loads_again_on_a_saved_edit_and_survives_a_refused_load() {
             scratch_project.path_as_given(),
         ]));
     running_tatolab.wait_for_standard_error_line_containing("tatolab dev: cam loaded");
+    assert_eq!(
+        running_tatolab.next_standard_output_line("the record before the bad save"),
+        rendered_line("before the bad save")
+    );
 
     scratch_project.save_stream_py("this is not python (\n");
     running_tatolab.wait_for_standard_error_line_containing(
         "tatolab dev: run_stream failed: SyntaxError: invalid syntax (stream.py, line 1)",
     );
-    running_tatolab.wait_for_standard_error_line_containing("fix it and save again");
+    running_tatolab.wait_for_standard_error_line_containing(
+        "tatolab dev: cam keeps running the last save that loaded — fix it and save again",
+    );
+    stub_local_api_server
+        .append_stream_log_records(vec![a_log_record(json!({"message": "after the bad save"}))]);
+    assert_eq!(
+        running_tatolab.next_standard_output_line("the record after the bad save"),
+        rendered_line("after the bad save"),
+        "the stream running before the bad save is followed on, past the record already printed"
+    );
     assert!(
         running_tatolab.is_still_running(),
-        "a refused load ends nothing"
+        "a refused save ends nothing"
     );
 
     scratch_project.save_stream_py("# the fixed version, longer than the first\n");
+    wait_until("the run after the fixed save", || {
+        calls_to(&stub_local_api_server, "run_stream") == 3
+    });
     running_tatolab.wait_for_standard_error_line_containing("tatolab dev: cam loaded");
     running_tatolab.send_signal(libc::SIGINT);
     let (exit_status, standard_error_lines) = running_tatolab.wait_for_exit();
@@ -524,20 +543,57 @@ fn dev_loads_again_on_a_saved_edit_and_survives_a_refused_load() {
     assert_eq!(exit_status.code(), Some(0), "{standard_error_lines:?}");
     assert_eq!(
         tool_calls_besides_logs(&stub_local_api_server),
-        [
-            "run_stream",
-            "stop_stream",
-            "run_stream",
-            "run_stream",
-            "stop_stream"
-        ],
-        "the edit stops the stream and loads it again; the refused load leaves nothing to stop"
+        ["run_stream", "run_stream", "run_stream", "stop_stream"],
+        "each save runs the stream again over the connection; only Ctrl-C stops it"
+    );
+    assert!(
+        !standard_error_lines
+            .iter()
+            .any(|standard_error_line| standard_error_line.contains("no stream is loaded")),
+        "{standard_error_lines:?}"
     );
     for run_stream_arguments in stub_local_api_server.recorded_arguments_of("run_stream") {
         assert_eq!(run_stream_arguments["keep"], false);
     }
+    assert_eq!(
+        stub_local_api_server
+            .recorded_mcp_stdio_request_heads()
+            .len(),
+        1,
+        "every run rides the one connection that attached the stream"
+    );
     assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "run_stream");
     assert_every_call_rode_the_mcp_stdio_connection(&stub_local_api_server, "stop_stream");
+}
+
+/// A one-node stream's loaded note counts one node.
+#[test]
+fn the_loaded_note_counts_a_single_node_in_the_singular() {
+    let isolated_machine_directories = IsolatedMachineDirectories::new();
+    let scratch_project = ScratchProject::new();
+    let _stub_local_api_server = a_runtime_holding(
+        &isolated_machine_directories,
+        vec![StubToolAnswer::tool_result(&run_stream_tool_result_text(
+            ATTACHED_STREAM_NAME,
+            false,
+            &scratch_project.canonical_path(),
+            1,
+            &[],
+        ))],
+        Vec::new(),
+    );
+    let mut running_tatolab =
+        RunningTatolab::spawn(isolated_machine_directories.tatolab_command(&[
+            "run",
+            "--dir",
+            scratch_project.path_as_given(),
+        ]));
+
+    running_tatolab.wait_for_standard_error_line_containing(&format!(
+        "tatolab: cam loaded (1 node, project {})",
+        scratch_project.canonical_path().display()
+    ));
+    drop(running_tatolab);
 }
 
 #[test]
