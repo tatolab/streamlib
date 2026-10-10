@@ -29,6 +29,7 @@ path = "src/bin/generate_openapi.rs"
 # under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
 machine-directories-under-a-test-root = [
     "streamlib-runtime-client-contract/machine-directories-under-a-test-root",
+    "streamlib/machine-directories-under-a-test-root",
 ]
 
 [dependencies]

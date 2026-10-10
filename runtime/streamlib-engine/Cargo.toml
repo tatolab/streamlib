@@ -37,6 +37,11 @@ audible-hardware-tests = ["hardware-tests"]
 # a consumer's `[dev-dependencies]`, so it is physically excluded from a
 # production build's dependency graph.
 test-support = []
+# Test builds only, never a release: the runtime directory the engine resolves moves under the
+# absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
+machine-directories-under-a-test-root = [
+    "streamlib-runtime-client-contract/machine-directories-under-a-test-root",
+]
 
 # Codec-layer debug knob (`vulkan/video/codec_utils/vk_buffer_resource.rs`):
 # zero out bitstream buffers when (re)allocating, to make NAL-parser bugs

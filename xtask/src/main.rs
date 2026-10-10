@@ -359,6 +359,18 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             ],
         ),
         (
+            "runtime client contract tests under a test machine root (runtime directory, state directory, machine runtime lock)",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-runtime-client-contract",
+                "--features",
+                "machine-directories-under-a-test-root",
+            ],
+        ),
+        (
             "processor-macro emission locks",
             "cargo",
             &[

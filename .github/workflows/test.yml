@@ -133,6 +133,11 @@ jobs:
           # reader, the node registry, the JSONL log's paths, schema and pretty
           # rendering, and the local API's exchange route and tap result shape.
           cargo test --locked -p streamlib-runtime-client-contract
+          # The same crate as a test build sees it: the runtime directory, the
+          # state directory and the machine runtime lock moved under
+          # TATOLAB_TEST_MACHINE_ROOT, and refused when it is unset.
+          cargo test --locked -p streamlib-runtime-client-contract \
+            --features machine-directories-under-a-test-root
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # A `graph` document loads back as the same graph, and a node's name
           # is cast, suffixed when defaulted and refused when typed twice. A
@@ -897,7 +902,11 @@ jobs:
           cargo test --locked -p streamlib -p streamlib-macros \
             -p streamlib-processor-schema -p streamlib-ipc-types \
             -p streamlib-error --lib
+          # The machine runtime lock's fcntl takes, refusals and probes run here
+          # and nowhere else.
           cargo test --locked -p streamlib-runtime-client-contract
+          cargo test --locked -p streamlib-runtime-client-contract \
+            --features machine-directories-under-a-test-root
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           cargo test --locked -p streamlib-media-builtins --lib
           # Where a golden names a built-in macOS compiles out, the load is

@@ -6,7 +6,10 @@
 //!
 //! On Linux it is the abstract unix socket `@tatolab-runtime`: the name lives in
 //! the network namespace, so a container sharing the host's network is this
-//! machine to it, and the kernel frees it when the holder dies. On macOS it is
+//! machine to it, and the kernel frees it when the holder dies. A probe's
+//! connection stays in the listen queue until it is accepted, closed or not, so
+//! the holder accepts and drops every one; a full queue would leave the holder
+//! unnameable. On macOS it is
 //! an `fcntl` write lock on a root-owned 0666 file in a root-owned directory,
 //! which any user may take and none may replace.
 
@@ -103,7 +106,8 @@ pub enum MachineRuntimeLockRefusal {
 #[derive(Debug)]
 pub struct MachineRuntimeLock {
     #[cfg(target_os = "linux")]
-    _listening_abstract_socket: std::os::unix::net::UnixListener,
+    _listening_abstract_socket:
+        linux_abstract_socket_lock::ListeningAbstractSocketWithItsQueueDrained,
     #[cfg(target_os = "macos")]
     _locked_file: macos_fcntl_lock::LockedMachineRuntimeLockFile,
 }
@@ -248,6 +252,172 @@ mod linux_abstract_socket_lock {
 
     use super::{MachineRuntimeLockHolder, MachineRuntimeLockRefusal, user_name_of_uid};
 
+    /// How long the queue-draining thread waits before accepting again after
+    /// the process ran out of descriptors.
+    const QUEUE_DRAIN_BACKOFF_AFTER_RUNNING_OUT_OF_DESCRIPTORS_MILLISECONDS: libc::c_int = 100;
+
+    /// The lock's listening socket, with a thread that accepts and drops every
+    /// connection a probe or a refused take leaves in its queue.
+    #[derive(Debug)]
+    pub(super) struct ListeningAbstractSocketWithItsQueueDrained {
+        _listening_abstract_socket: UnixListener,
+        stop_draining_eventfd: OwnedFd,
+        queue_draining_thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl ListeningAbstractSocketWithItsQueueDrained {
+        fn start_draining(listening_abstract_socket: UnixListener) -> std::io::Result<Self> {
+            listening_abstract_socket.set_nonblocking(true)?;
+            // SAFETY: plain eventfd creation; the descriptor is owned below.
+            let eventfd_descriptor = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC) };
+            if eventfd_descriptor < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: `eventfd_descriptor` is a fresh eventfd nothing else owns.
+            let stop_draining_eventfd = unsafe { OwnedFd::from_raw_fd(eventfd_descriptor) };
+            // The thread owns its own descriptors, so the socket stays bound until it exits.
+            let listening_abstract_socket_for_the_drain = listening_abstract_socket.try_clone()?;
+            let stop_draining_eventfd_for_the_drain = stop_draining_eventfd.try_clone()?;
+            let queue_draining_thread = std::thread::Builder::new()
+                .name("tatolab-machine-runtime-lock-queue-drain".to_string())
+                .spawn(move || {
+                    drain_the_listen_queue_until_stopped(
+                        &listening_abstract_socket_for_the_drain,
+                        &stop_draining_eventfd_for_the_drain,
+                    )
+                })?;
+            Ok(Self {
+                _listening_abstract_socket: listening_abstract_socket,
+                stop_draining_eventfd,
+                queue_draining_thread: Some(queue_draining_thread),
+            })
+        }
+
+        /// The listening socket's descriptor, for a test that shrinks its backlog.
+        #[cfg(test)]
+        pub(super) fn listening_abstract_socket_descriptor(&self) -> std::os::fd::RawFd {
+            self._listening_abstract_socket.as_raw_fd()
+        }
+    }
+
+    impl Drop for ListeningAbstractSocketWithItsQueueDrained {
+        fn drop(&mut self) {
+            let one: u64 = 1;
+            // SAFETY: the eventfd is open, and the buffer is a live 8-byte value.
+            let written = unsafe {
+                libc::write(
+                    self.stop_draining_eventfd.as_raw_fd(),
+                    (&one as *const u64).cast::<libc::c_void>(),
+                    std::mem::size_of::<u64>(),
+                )
+            };
+            if written < 0 {
+                tracing::warn!(
+                    error = %std::io::Error::last_os_error(),
+                    "the machine runtime lock's queue-draining thread could not be told to stop; \
+                     the lock stays held until this process exits"
+                );
+                return;
+            }
+            if let Some(queue_draining_thread) = self.queue_draining_thread.take()
+                && queue_draining_thread.join().is_err()
+            {
+                tracing::warn!("the machine runtime lock's queue-draining thread panicked");
+            }
+        }
+    }
+
+    /// Accept and drop every queued connection until the stop eventfd fires.
+    fn drain_the_listen_queue_until_stopped(
+        listening_abstract_socket: &UnixListener,
+        stop_draining_eventfd: &OwnedFd,
+    ) {
+        let listening_descriptor = listening_abstract_socket.as_raw_fd();
+        let stop_draining_descriptor = stop_draining_eventfd.as_raw_fd();
+        loop {
+            let mut watched = [
+                libc::pollfd {
+                    fd: listening_descriptor,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: stop_draining_descriptor,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            // SAFETY: `watched` is a live array of exactly the length passed.
+            let ready =
+                unsafe { libc::poll(watched.as_mut_ptr(), watched.len() as libc::nfds_t, -1) };
+            if ready < 0 {
+                let failure = std::io::Error::last_os_error();
+                if failure.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                tracing::warn!(error = %failure, "the machine runtime lock stopped draining its listen queue");
+                return;
+            }
+            if watched[1].revents != 0 {
+                return;
+            }
+            if watched[0].revents & libc::POLLIN == 0 {
+                if watched[0].revents != 0 {
+                    tracing::warn!(
+                        revents = watched[0].revents,
+                        "the machine runtime lock's listening socket reported an error; it stopped \
+                         draining its listen queue"
+                    );
+                    return;
+                }
+                continue;
+            }
+            // SAFETY: the listening descriptor is open; null address pointers ask for no peer address.
+            let accepted = unsafe {
+                libc::accept4(
+                    listening_descriptor,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    libc::SOCK_CLOEXEC,
+                )
+            };
+            if accepted >= 0 {
+                // SAFETY: `accepted` is a fresh descriptor nothing else owns; dropping it closes it.
+                drop(unsafe { OwnedFd::from_raw_fd(accepted) });
+                continue;
+            }
+            let failure = std::io::Error::last_os_error();
+            match failure.raw_os_error() {
+                Some(libc::EAGAIN | libc::EINTR | libc::ECONNABORTED) => {}
+                Some(libc::EMFILE | libc::ENFILE | libc::ENOBUFS | libc::ENOMEM) => {
+                    tracing::warn!(
+                        error = %failure,
+                        "the machine runtime lock could not accept a queued connection; retrying"
+                    );
+                    let mut stop_watched = [watched[1]];
+                    // SAFETY: `stop_watched` is a live array of exactly the length passed.
+                    let stopped = unsafe {
+                        libc::poll(
+                            stop_watched.as_mut_ptr(),
+                            1,
+                            QUEUE_DRAIN_BACKOFF_AFTER_RUNNING_OUT_OF_DESCRIPTORS_MILLISECONDS,
+                        )
+                    };
+                    if stopped > 0 {
+                        return;
+                    }
+                }
+                _ => {
+                    tracing::warn!(
+                        error = %failure,
+                        "the machine runtime lock stopped draining its listen queue"
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
     /// What connecting to the abstract name found.
     pub(super) enum AbstractSocketAnswer {
         /// A listener accepted the connection into its queue; the kernel names who listened.
@@ -275,13 +445,18 @@ mod linux_abstract_socket_lock {
 
     pub(super) fn take(
         abstract_socket_name: &str,
-    ) -> Result<UnixListener, MachineRuntimeLockRefusal> {
+    ) -> Result<ListeningAbstractSocketWithItsQueueDrained, MachineRuntimeLockRefusal> {
         let address = SocketAddr::from_abstract_name(abstract_socket_name.as_bytes())
             .map_err(|source| could_not_be_taken(abstract_socket_name, source))?;
         // A second attempt covers a holder that exited between the refused bind and the connect.
         for attempt in 0..2 {
             match UnixListener::bind_addr(&address) {
-                Ok(listening_abstract_socket) => return Ok(listening_abstract_socket),
+                Ok(listening_abstract_socket) => {
+                    return ListeningAbstractSocketWithItsQueueDrained::start_draining(
+                        listening_abstract_socket,
+                    )
+                    .map_err(|source| could_not_be_taken(abstract_socket_name, source));
+                }
                 Err(failure) if failure.kind() == std::io::ErrorKind::AddrInUse => {}
                 Err(failure) => return Err(could_not_be_taken(abstract_socket_name, failure)),
             }
@@ -1168,168 +1343,490 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
-    mod linux {
-        use super::super::linux_abstract_socket_lock::abstract_socket_address;
+    /// The tests that take and probe a real lock at a location no real runtime
+    /// and no other test uses. They run one at a time because a macOS process
+    /// holds at most one machine runtime lock, wherever it lives.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    mod taken_and_probed_on_this_floor {
         use super::*;
-        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use crate::test_support::{
+            assert_the_child_process_ran_the_test, rerun_this_test_in_a_child_process,
+            spawn_this_test_from_a_test_binary,
+        };
+        use std::ffi::{OsStr, OsString};
+        use std::io::Read;
+        use std::time::{Duration, Instant};
 
-        /// Set only in the child process the cross-process refusal test re-runs itself in.
-        const HELD_LOCK_NAME_CHILD_ENVIRONMENT_VARIABLE: &str =
+        /// Set only in the child process that holds the lock while its parent is refused.
+        const HOLD_THE_LOCK_CHILD_ENVIRONMENT_VARIABLE: &str =
+            "STREAMLIB_TEST_MACHINE_RUNTIME_LOCK_TO_HOLD";
+
+        /// The file the holding child creates once it holds the lock.
+        const HOLDING_CHILD_READY_FILE_ENVIRONMENT_VARIABLE: &str =
+            "STREAMLIB_TEST_MACHINE_RUNTIME_LOCK_HOLDING_CHILD_READY_FILE";
+
+        /// Set only in the child process that probes a lock its parent holds.
+        const PROBE_THE_PARENTS_LOCK_CHILD_ENVIRONMENT_VARIABLE: &str =
             "STREAMLIB_TEST_MACHINE_RUNTIME_LOCK_HELD_BY_THE_PARENT";
 
-        /// A lock name no real runtime and no other test uses, so a `tatolabd`
-        /// running on this machine never meets these tests.
-        fn a_lock_location_only_this_test_uses() -> MachineRuntimeLockLocation {
-            static NEXT_TEST_LOCK_NUMBER: AtomicUsize = AtomicUsize::new(0);
-            MachineRuntimeLockLocation {
-                abstract_socket_name: format!(
-                    "tatolab-runtime-test-{}-{}",
-                    std::process::id(),
-                    NEXT_TEST_LOCK_NUMBER.fetch_add(1, Ordering::SeqCst)
-                ),
+        const HOLDING_CHILD_TEST_PATH: &str = "machine_runtime_lock::tests::taken_and_probed_on_this_floor::a_take_while_another_executable_holds_the_lock_is_refused_naming_its_uid_pid_and_executable";
+
+        const PROBING_CHILD_TEST_PATH: &str = "machine_runtime_lock::tests::taken_and_probed_on_this_floor::probes_and_refused_takes_by_the_holder_leave_the_lock_held";
+
+        /// A lock location only one test uses, removed with it.
+        struct LockLocationOnlyThisTestUses {
+            location: MachineRuntimeLockLocation,
+            #[cfg(target_os = "macos")]
+            _scratch_directory: tempfile::TempDir,
+        }
+
+        impl LockLocationOnlyThisTestUses {
+            /// An abstract name no real runtime and no other test binds.
+            #[cfg(target_os = "linux")]
+            fn new() -> Self {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static NEXT_TEST_LOCK_NUMBER: AtomicUsize = AtomicUsize::new(0);
+                Self {
+                    location: MachineRuntimeLockLocation {
+                        abstract_socket_name: format!(
+                            "tatolab-runtime-test-{}-{}",
+                            std::process::id(),
+                            NEXT_TEST_LOCK_NUMBER.fetch_add(1, Ordering::SeqCst)
+                        ),
+                    },
+                }
+            }
+
+            /// A `lock/` directory at 0755 holding `runtime.lock` at 0666, both
+            /// owned by this uid, as a test root's harness lays them out.
+            #[cfg(target_os = "macos")]
+            fn new() -> Self {
+                use std::os::unix::fs::PermissionsExt;
+                let scratch_directory =
+                    crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+                let lock_directory = a_lock_directory_at_0755_in(scratch_directory.path());
+                let lock_file = lock_directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS);
+                std::fs::write(&lock_file, b"").unwrap();
+                std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o666))
+                    .unwrap();
+                Self {
+                    location: lock_location_in(lock_directory),
+                    _scratch_directory: scratch_directory,
+                }
+            }
+
+            /// What a child process is handed to find this location again.
+            fn handed_to_a_child(&self) -> &OsStr {
+                #[cfg(target_os = "linux")]
+                {
+                    OsStr::new(&self.location.abstract_socket_name)
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    self.location.lock_directory.as_os_str()
+                }
             }
         }
 
-        fn this_process_as_the_holder() -> MachineRuntimeLockHolder {
+        fn the_location_a_parent_handed_this_child(handed: OsString) -> MachineRuntimeLockLocation {
+            #[cfg(target_os = "linux")]
+            {
+                MachineRuntimeLockLocation {
+                    abstract_socket_name: handed.into_string().unwrap(),
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                lock_location_in(PathBuf::from(handed))
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        fn lock_location_in(lock_directory: PathBuf) -> MachineRuntimeLockLocation {
+            MachineRuntimeLockLocation {
+                lock_file: lock_directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS),
+                lock_directory,
+                expected_owner_uid: crate::streamlib_runtime_directory::current_process_uid(),
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        fn a_lock_directory_at_0755_in(scratch_directory: &Path) -> PathBuf {
+            use std::os::unix::fs::PermissionsExt;
+            let lock_directory = scratch_directory.join("lock");
+            std::fs::create_dir(&lock_directory).unwrap();
+            std::fs::set_permissions(&lock_directory, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+            lock_directory
+        }
+
+        /// The holder with its executable canonicalized, since `/proc/<pid>/exe`
+        /// and `proc_pidpath` name the file with every symlink resolved.
+        fn with_its_executable_canonicalized(
+            holder: MachineRuntimeLockHolder,
+        ) -> MachineRuntimeLockHolder {
+            MachineRuntimeLockHolder {
+                executable: holder
+                    .executable
+                    .map(|executable| std::fs::canonicalize(executable).unwrap()),
+                ..holder
+            }
+        }
+
+        fn a_holder_running_as_this_uid(pid: i32, executable: &Path) -> MachineRuntimeLockHolder {
             let uid = crate::streamlib_runtime_directory::current_process_uid();
             MachineRuntimeLockHolder {
                 user_name: user_name_of_uid(uid),
                 uid,
-                pid: std::process::id() as i32,
-                executable: Some(std::env::current_exe().unwrap()),
+                pid,
+                executable: Some(std::fs::canonicalize(executable).unwrap()),
+            }
+        }
+
+        fn this_process_as_the_holder() -> MachineRuntimeLockHolder {
+            a_holder_running_as_this_uid(
+                std::process::id() as i32,
+                &std::env::current_exe().unwrap(),
+            )
+        }
+
+        fn parent_process_id() -> i32 {
+            // SAFETY: getppid takes no arguments and cannot fail.
+            unsafe { libc::getppid() }
+        }
+
+        #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
+        fn a_take_while_another_executable_holds_the_lock_is_refused_naming_its_uid_pid_and_executable()
+         {
+            if let Some(handed) = std::env::var_os(HOLD_THE_LOCK_CHILD_ENVIRONMENT_VARIABLE) {
+                let location = the_location_a_parent_handed_this_child(handed);
+                let _held_lock = take_the_machine_runtime_lock_at(&location).unwrap();
+                std::fs::write(
+                    std::env::var_os(HOLDING_CHILD_READY_FILE_ENVIRONMENT_VARIABLE).unwrap(),
+                    b"",
+                )
+                .unwrap();
+                let mut until_the_parent_closes_standard_input = Vec::new();
+                std::io::stdin()
+                    .read_to_end(&mut until_the_parent_closes_standard_input)
+                    .unwrap();
+                return;
+            }
+
+            let lock = LockLocationOnlyThisTestUses::new();
+            // A copy of this test binary under another name holds the lock, so
+            // the executable named is the holder's, never the prober's own.
+            let holder_binary_directory =
+                crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+            let holder_binary = holder_binary_directory
+                .path()
+                .join("machine-runtime-lock-holder");
+            std::fs::copy(std::env::current_exe().unwrap(), &holder_binary).unwrap();
+            let ready_file = holder_binary_directory.path().join("holding-the-lock");
+            let mut holding_child = spawn_the_holding_child(&holder_binary, |child_command| {
+                child_command
+                    .env(
+                        HOLD_THE_LOCK_CHILD_ENVIRONMENT_VARIABLE,
+                        lock.handed_to_a_child(),
+                    )
+                    .env(HOLDING_CHILD_READY_FILE_ENVIRONMENT_VARIABLE, &ready_file);
+            });
+            wait_until_the_holding_child_holds_the_lock(&mut holding_child, &ready_file);
+            let expected_holder =
+                a_holder_running_as_this_uid(holding_child.id() as i32, &holder_binary);
+
+            let refusal = take_the_machine_runtime_lock_at(&lock.location).unwrap_err();
+            let probed_holder = holder_of_the_machine_runtime_lock_at(&lock.location).unwrap();
+
+            drop(holding_child.stdin.take());
+            let holding_child_output = holding_child.wait_with_output().unwrap();
+            assert_the_child_process_ran_the_test(HOLDING_CHILD_TEST_PATH, &holding_child_output);
+            assert!(
+                holding_child_output.status.success(),
+                "the holding child failed: {}{}",
+                String::from_utf8_lossy(&holding_child_output.stdout),
+                String::from_utf8_lossy(&holding_child_output.stderr),
+            );
+            assert_ne!(
+                expected_holder.executable,
+                this_process_as_the_holder().executable
+            );
+            let refusal_text = refusal.to_string();
+            let MachineRuntimeLockRefusal::HeldByAnotherRuntime { holder } = refusal else {
+                panic!("the refusal must name the holder: {refusal}");
+            };
+            assert_eq!(with_its_executable_canonicalized(holder), expected_holder);
+            assert_eq!(
+                probed_holder.map(with_its_executable_canonicalized),
+                Some(expected_holder.clone())
+            );
+            assert!(
+                refusal_text.starts_with("another runtime holds this machine: "),
+                "{refusal_text}"
+            );
+            assert!(
+                refusal_text.contains(&format!("uid {}", expected_holder.uid)),
+                "{refusal_text}"
+            );
+            assert!(
+                refusal_text.contains(&format!("pid {}", expected_holder.pid)),
+                "{refusal_text}"
+            );
+            assert!(
+                refusal_text.contains("machine-runtime-lock-holder"),
+                "{refusal_text}"
+            );
+        }
+
+        /// Start the holding child, retrying while a child another test forks
+        /// still holds the just-copied binary open for writing.
+        fn spawn_the_holding_child(
+            holder_binary: &Path,
+            prepare_the_child_environment: impl Fn(&mut std::process::Command),
+        ) -> std::process::Child {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match spawn_this_test_from_a_test_binary(
+                    holder_binary,
+                    HOLDING_CHILD_TEST_PATH,
+                    &prepare_the_child_environment,
+                ) {
+                    Ok(holding_child) => return holding_child,
+                    Err(failure)
+                        if failure.raw_os_error() == Some(libc::ETXTBSY)
+                            && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(failure) => panic!("the holding child did not start: {failure}"),
+                }
+            }
+        }
+
+        fn wait_until_the_holding_child_holds_the_lock(
+            holding_child: &mut std::process::Child,
+            ready_file: &Path,
+        ) {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !ready_file.exists() {
+                if let Some(status) = holding_child.try_wait().unwrap() {
+                    let mut standard_output = String::new();
+                    let mut standard_error = String::new();
+                    if let Some(mut stdout) = holding_child.stdout.take() {
+                        let _ = stdout.read_to_string(&mut standard_output);
+                    }
+                    if let Some(mut stderr) = holding_child.stderr.take() {
+                        let _ = stderr.read_to_string(&mut standard_error);
+                    }
+                    panic!(
+                        "the holding child exited ({status}) before it held the lock: \
+                         {standard_output}{standard_error}"
+                    );
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "the holding child did not hold the lock within 30 s"
+                );
+                std::thread::sleep(Duration::from_millis(5));
             }
         }
 
         #[test]
-        fn a_second_take_in_another_process_is_refused_naming_this_uid_pid_and_executable() {
-            if let Some(held_lock_name) =
-                std::env::var_os(HELD_LOCK_NAME_CHILD_ENVIRONMENT_VARIABLE)
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
+        fn a_second_take_in_this_process_is_refused_naming_this_process() {
+            let lock = LockLocationOnlyThisTestUses::new();
+            let _held_lock = take_the_machine_runtime_lock_at(&lock.location).unwrap();
+
+            let refusal = take_the_machine_runtime_lock_at(&lock.location).unwrap_err();
+
+            let MachineRuntimeLockRefusal::HeldByAnotherRuntime { holder } = refusal else {
+                panic!("the refusal must name the holder: {refusal}");
+            };
+            assert_eq!(
+                with_its_executable_canonicalized(holder),
+                this_process_as_the_holder()
+            );
+        }
+
+        #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
+        fn probes_and_refused_takes_by_the_holder_leave_the_lock_held() {
+            if let Some(handed) =
+                std::env::var_os(PROBE_THE_PARENTS_LOCK_CHILD_ENVIRONMENT_VARIABLE)
             {
-                let location = MachineRuntimeLockLocation {
-                    abstract_socket_name: held_lock_name.into_string().unwrap(),
-                };
-                let refusal = take_the_machine_runtime_lock_at(&location).unwrap_err();
-                // SAFETY: getppid takes no arguments and cannot fail.
-                let parent_pid = unsafe { libc::getppid() };
-                let MachineRuntimeLockRefusal::HeldByAnotherRuntime { holder } = &refusal else {
-                    panic!("the refusal must name the holder: {refusal}");
-                };
-                let uid = crate::streamlib_runtime_directory::current_process_uid();
-                assert_eq!(holder.pid, parent_pid);
-                assert_eq!(holder.uid, uid);
-                assert_eq!(holder.user_name, user_name_of_uid(uid));
+                let location = the_location_a_parent_handed_this_child(handed);
+                let parent_pid = parent_process_id();
                 assert_eq!(
-                    holder.executable.as_deref(),
-                    Some(std::env::current_exe().unwrap().as_path())
+                    holder_of_the_machine_runtime_lock_at(&location)
+                        .unwrap()
+                        .map(|holder| holder.pid),
+                    Some(parent_pid)
                 );
-                let refusal_text = refusal.to_string();
-                assert!(
-                    refusal_text.starts_with("another runtime holds this machine: "),
-                    "{refusal_text}"
-                );
-                assert!(
-                    refusal_text.contains(&format!("uid {uid}")),
-                    "{refusal_text}"
-                );
-                assert!(
-                    refusal_text.contains(&format!("pid {parent_pid}")),
-                    "{refusal_text}"
-                );
-                assert!(
-                    refusal_text.contains(&std::env::current_exe().unwrap().display().to_string()),
-                    "{refusal_text}"
-                );
+                match take_the_machine_runtime_lock_at(&location) {
+                    Err(MachineRuntimeLockRefusal::HeldByAnotherRuntime { holder }) => {
+                        assert_eq!(holder.pid, parent_pid);
+                    }
+                    other => panic!("the parent's lock must refuse this take: {other:?}"),
+                }
                 return;
             }
 
-            let location = a_lock_location_only_this_test_uses();
-            let _held_lock = take_the_machine_runtime_lock_at(&location).unwrap();
-            let child = crate::test_support::rerun_this_test_in_a_child_process(
-                "machine_runtime_lock::tests::linux::a_second_take_in_another_process_is_refused_naming_this_uid_pid_and_executable",
-                HELD_LOCK_NAME_CHILD_ENVIRONMENT_VARIABLE,
-                std::ffi::OsStr::new(&location.abstract_socket_name),
+            let lock = LockLocationOnlyThisTestUses::new();
+            let _held_lock = take_the_machine_runtime_lock_at(&lock.location).unwrap();
+            for _probe_round in 0..3 {
+                assert_eq!(
+                    holder_of_the_machine_runtime_lock_at(&lock.location)
+                        .unwrap()
+                        .map(with_its_executable_canonicalized),
+                    Some(this_process_as_the_holder())
+                );
+                assert!(matches!(
+                    take_the_machine_runtime_lock_at(&lock.location),
+                    Err(MachineRuntimeLockRefusal::HeldByAnotherRuntime { .. })
+                ));
+            }
+
+            let child = rerun_this_test_in_a_child_process(
+                PROBING_CHILD_TEST_PATH,
+                PROBE_THE_PARENTS_LOCK_CHILD_ENVIRONMENT_VARIABLE,
+                lock.handed_to_a_child(),
             );
             assert!(
                 child.status.success(),
-                "the second take in the child was not refused as it must be: {}{}",
+                "the probing child did not find the lock held by this process: {}{}",
                 String::from_utf8_lossy(&child.stdout),
                 String::from_utf8_lossy(&child.stderr),
             );
         }
 
         #[test]
-        fn a_second_take_in_this_process_is_refused_naming_this_process() {
-            let location = a_lock_location_only_this_test_uses();
-            let _held_lock = take_the_machine_runtime_lock_at(&location).unwrap();
-
-            let refusal = take_the_machine_runtime_lock_at(&location).unwrap_err();
-
-            let MachineRuntimeLockRefusal::HeldByAnotherRuntime { holder } = refusal else {
-                panic!("the refusal must name the holder: {refusal}");
-            };
-            assert_eq!(holder, this_process_as_the_holder());
-        }
-
-        #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
         fn the_lock_is_free_again_once_its_holder_drops_it() {
-            let location = a_lock_location_only_this_test_uses();
-            drop(take_the_machine_runtime_lock_at(&location).unwrap());
+            let lock = LockLocationOnlyThisTestUses::new();
+            drop(take_the_machine_runtime_lock_at(&lock.location).unwrap());
 
             let _taken_again = once_every_forked_copy_of_the_dropped_lock_is_gone(|| {
-                take_the_machine_runtime_lock_at(&location).ok()
+                take_the_machine_runtime_lock_at(&lock.location).ok()
             });
         }
 
         #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
         fn the_holder_probe_names_nobody_when_free_and_the_holder_when_held() {
-            let location = a_lock_location_only_this_test_uses();
+            let lock = LockLocationOnlyThisTestUses::new();
             assert_eq!(
-                holder_of_the_machine_runtime_lock_at(&location).unwrap(),
+                holder_of_the_machine_runtime_lock_at(&lock.location).unwrap(),
                 None
             );
 
-            let held_lock = take_the_machine_runtime_lock_at(&location).unwrap();
+            let held_lock = take_the_machine_runtime_lock_at(&lock.location).unwrap();
             assert_eq!(
-                holder_of_the_machine_runtime_lock_at(&location).unwrap(),
+                holder_of_the_machine_runtime_lock_at(&lock.location)
+                    .unwrap()
+                    .map(with_its_executable_canonicalized),
                 Some(this_process_as_the_holder())
             );
 
             drop(held_lock);
             once_every_forked_copy_of_the_dropped_lock_is_gone(|| {
-                holder_of_the_machine_runtime_lock_at(&location)
+                holder_of_the_machine_runtime_lock_at(&lock.location)
                     .unwrap()
                     .is_none()
                     .then_some(())
             });
-            let _taken_after_the_probes = take_the_machine_runtime_lock_at(&location).unwrap();
+            let _taken_after_the_probes = take_the_machine_runtime_lock_at(&lock.location).unwrap();
         }
 
-        /// A test beside this one that spawns a child process copies every
-        /// descriptor this process holds into it until it execs, the dropped
-        /// lock's socket included, so the name frees once that copy closes.
+        /// On Linux a test beside this one that spawns a child process copies
+        /// every descriptor this process holds into it until it execs, the
+        /// dropped lock's socket included, so the name frees once that copy closes.
         fn once_every_forked_copy_of_the_dropped_lock_is_gone<T>(
             mut attempt: impl FnMut() -> Option<T>,
         ) -> T {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 if let Some(outcome) = attempt() {
                     return outcome;
                 }
                 assert!(
-                    std::time::Instant::now() < deadline,
-                    "the dropped lock's name was still held 10 s later"
+                    Instant::now() < deadline,
+                    "the dropped lock was still held 10 s later"
                 );
-                std::thread::sleep(std::time::Duration::from_millis(1));
+                std::thread::sleep(Duration::from_millis(1));
             }
         }
 
+        #[cfg(target_os = "linux")]
         #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
+        fn probes_and_refused_takes_never_fill_the_holders_listen_queue() {
+            const SHRUNK_LISTEN_BACKLOG: libc::c_int = 1;
+            const PROBES_PAST_THE_SHRUNK_BACKLOG: usize = 64;
+            let lock = LockLocationOnlyThisTestUses::new();
+            let held_lock = take_the_machine_runtime_lock_at(&lock.location).unwrap();
+            let listening_descriptor = held_lock
+                ._listening_abstract_socket
+                .listening_abstract_socket_descriptor();
+            // A second listen on a listening unix socket changes only its backlog.
+            // SAFETY: the descriptor is the held lock's open listening socket.
+            let relistened = unsafe { libc::listen(listening_descriptor, SHRUNK_LISTEN_BACKLOG) };
+            assert_eq!(relistened, 0, "{}", std::io::Error::last_os_error());
+
+            for probe_number in 0..PROBES_PAST_THE_SHRUNK_BACKLOG {
+                let named_holder = until_the_holder_answers(|| {
+                    if probe_number % 2 == 0 {
+                        holder_of_the_machine_runtime_lock_at(&lock.location)
+                    } else {
+                        match take_the_machine_runtime_lock_at(&lock.location) {
+                            Ok(_) => panic!("a held lock was taken a second time"),
+                            Err(MachineRuntimeLockRefusal::HeldByAnotherRuntime { holder }) => {
+                                Ok(Some(holder))
+                            }
+                            Err(refusal) => Err(refusal),
+                        }
+                    }
+                });
+                assert_eq!(
+                    with_its_executable_canonicalized(named_holder),
+                    this_process_as_the_holder(),
+                    "probe {probe_number}"
+                );
+            }
+        }
+
+        /// Retry while the holder's queue is momentarily full: its draining
+        /// thread runs beside these probes, not in step with them.
+        #[cfg(target_os = "linux")]
+        fn until_the_holder_answers(
+            mut probe: impl FnMut()
+                -> Result<Option<MachineRuntimeLockHolder>, MachineRuntimeLockRefusal>,
+        ) -> MachineRuntimeLockHolder {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match probe() {
+                    Ok(Some(holder)) => return holder,
+                    Err(MachineRuntimeLockRefusal::HeldByAProcessThatDoesNotAnswer { lock }) => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "{lock} still did not answer 10 s later: its listen queue stays full"
+                        );
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    other => panic!("the probe must name the holder: {other:?}"),
+                }
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
         fn a_squatter_that_binds_the_name_without_listening_is_refused() {
-            let location = a_lock_location_only_this_test_uses();
+            use super::super::linux_abstract_socket_lock::abstract_socket_address;
+            use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+            let lock = LockLocationOnlyThisTestUses::new();
             let (address, address_length) =
-                abstract_socket_address(&location.abstract_socket_name).unwrap();
+                abstract_socket_address(&lock.location.abstract_socket_name).unwrap();
             // SAFETY: plain socket creation; the descriptor is owned below.
             let descriptor =
                 unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
@@ -1346,7 +1843,7 @@ mod tests {
             };
             assert_eq!(bound, 0, "{}", std::io::Error::last_os_error());
 
-            let refusal = take_the_machine_runtime_lock_at(&location)
+            let refusal = take_the_machine_runtime_lock_at(&lock.location)
                 .unwrap_err()
                 .to_string();
 
@@ -1355,9 +1852,126 @@ mod tests {
                 format!(
                     "another runtime holds this machine: the abstract socket @{} is held by a \
                      process that does not answer",
-                    location.abstract_socket_name
+                    lock.location.abstract_socket_name
                 )
             );
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
+        fn a_symlinked_lock_file_is_refused_as_a_symlink_by_the_take_and_the_probe() {
+            use std::os::unix::fs::PermissionsExt;
+            let scratch_directory =
+                crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+            let lock_directory = a_lock_directory_at_0755_in(scratch_directory.path());
+            let a_file_elsewhere = scratch_directory.path().join("a-file-elsewhere");
+            std::fs::write(&a_file_elsewhere, b"").unwrap();
+            std::fs::set_permissions(&a_file_elsewhere, std::fs::Permissions::from_mode(0o666))
+                .unwrap();
+            std::os::unix::fs::symlink(
+                &a_file_elsewhere,
+                lock_directory.join(MACHINE_RUNTIME_LOCK_FILE_NAME_ON_MACOS),
+            )
+            .unwrap();
+            let location = lock_location_in(lock_directory);
+
+            let refusals = [
+                take_the_machine_runtime_lock_at(&location).unwrap_err(),
+                holder_of_the_machine_runtime_lock_at(&location).unwrap_err(),
+            ];
+
+            for refusal in refusals {
+                let MachineRuntimeLockRefusal::LockLocationCannotBeTrusted {
+                    path,
+                    property,
+                    found,
+                    ..
+                } = &refusal
+                else {
+                    panic!("a symlinked lock file must be refused as untrusted: {refusal}");
+                };
+                assert_eq!(path, &location.lock_file);
+                assert_eq!(*property, "type");
+                assert_eq!(found, "a symlink");
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
+        fn a_missing_lock_location_is_refused_naming_the_commands_that_create_it_and_probes_as_free()
+         {
+            let scratch_directory =
+                crate::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+            let without_its_file =
+                lock_location_in(a_lock_directory_at_0755_in(scratch_directory.path()));
+            let without_its_directory =
+                lock_location_in(scratch_directory.path().join("never-made"));
+
+            for (location, missing_path) in [
+                (&without_its_file, &without_its_file.lock_file),
+                (
+                    &without_its_directory,
+                    &without_its_directory.lock_directory,
+                ),
+            ] {
+                let refusal = take_the_machine_runtime_lock_at(location).unwrap_err();
+                let MachineRuntimeLockRefusal::LockLocationIsMissing {
+                    missing_path: refused_missing_path,
+                    creation_commands,
+                } = &refusal
+                else {
+                    panic!("a missing lock location must be refused as missing: {refusal}");
+                };
+                assert_eq!(refused_missing_path, missing_path);
+                assert!(
+                    creation_commands.contains(&format!(
+                        "mkdir -p \"{}\"",
+                        location.lock_directory.display()
+                    )),
+                    "{creation_commands}"
+                );
+                assert!(
+                    creation_commands
+                        .contains(&format!("chmod 0666 \"{}\"", location.lock_file.display())),
+                    "{creation_commands}"
+                );
+                assert_eq!(
+                    holder_of_the_machine_runtime_lock_at(location).unwrap(),
+                    None
+                );
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        #[test]
+        #[serial_test::serial(machine_runtime_lock_taken_in_this_process)]
+        fn a_lock_file_at_any_mode_but_0666_is_refused_naming_its_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            let lock = LockLocationOnlyThisTestUses::new();
+            for mode in [0o644, 0o600, 0o777] {
+                std::fs::set_permissions(
+                    &lock.location.lock_file,
+                    std::fs::Permissions::from_mode(mode),
+                )
+                .unwrap();
+
+                let refusal = take_the_machine_runtime_lock_at(&lock.location).unwrap_err();
+
+                let MachineRuntimeLockRefusal::LockLocationCannotBeTrusted {
+                    path,
+                    property,
+                    found,
+                    ..
+                } = &refusal
+                else {
+                    panic!("a lock file at mode {mode:04o} must be refused: {refusal}");
+                };
+                assert_eq!(path, &lock.location.lock_file);
+                assert_eq!(*property, "mode");
+                assert_eq!(found, &format!("{mode:04o}"));
+            }
         }
     }
 

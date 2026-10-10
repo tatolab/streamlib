@@ -24,6 +24,7 @@ strip_debug_logging = ["streamlib-engine/strip_debug_logging"]
 hardware-tests = ["streamlib-engine/hardware-tests"]
 audible-hardware-tests = ["streamlib-engine/audible-hardware-tests"]
 test-support = ["streamlib-engine/test-support"]
+machine-directories-under-a-test-root = ["streamlib-engine/machine-directories-under-a-test-root"]
 
 [dependencies]
 streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.43.1" }
