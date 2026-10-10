@@ -3,7 +3,7 @@
 
 [package]
 name = "tatolab-cli"
-description = "The `tatolab` CLI: `new` writes a stream project; `run` and `dev` compile a stream in its project's venv and start `tatolabd` attached; `nodes` lists the runtimes running on this machine, and `graph`, `tap`, `exchange`, `logs` and `mcp` reach one through its local API socket — `logs` also reads a runtime's JSONL log files; `enable-virtual-camera` grants this machine's users the virtual camera's loopback device, once."
+description = "The `tatolab` CLI: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `streams` and `expose` load and manage the streams the machine's runtime holds, and `graph`, `tap`, `logs`, `exchange` and `mcp` observe them, each through the runtime's local API socket at its fixed path — `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this machine's users the virtual camera's loopback device, once. No verb starts a runtime."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -24,23 +24,24 @@ machine-directories-under-a-test-root = [
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-# The compile entry's JSON document in; its stream graph copied byte-for-byte to the graph file.
+# The local API tools' JSON results, read into the shapes each verb prints.
 serde = { workspace = true }
-serde_json = { workspace = true, features = ["raw_value"] }
-# The stream graph file `tatolabd` reads, deleted when it exits.
-tempfile = { workspace = true }
-# Signal mask, sigwait, kill and the parent-death signal: the attached `tatolabd`'s lifecycle.
+serde_json = { workspace = true }
+# Signal mask and sigwait: the signals that stop an attached stream, and Ctrl-C ending a read.
 libc = { workspace = true }
 # The CLI's failure types, each carrying the failure it came from as its source.
 thiserror = { workspace = true }
-# The contract a running runtime offers its clients: the runtime directory and the node registry
-# it is found in, its log files, and the wire names and tap result shape its local API speaks.
+# The contract a running runtime offers its clients: the runtime directory its local API socket
+# sits in, the machine runtime lock's holder, the state directory its own log sits in, a stream's
+# log files, and the wire names and tap result shape its local API speaks.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.43.1" }
-# The MCP client of a runtime's local API: the official SDK's, over the local API socket.
-rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket"] }
+# The MCP client of a runtime's local API: the official SDK's, over the local API socket — one
+# request per call over `POST /mcp`, or a connection of its own over the `/mcp/stdio` upgrade.
+rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket", "transport-async-rw"] }
 # One current-thread runtime per local API connection, driving its MCP client and its HTTP
-# connection; `mcp` copies its stdio to and from the local API socket on one.
-tokio = { version = "1.48.0", features = ["rt", "time", "net", "io-std", "io-util", "macros"] }
+# connection; `mcp` copies its stdio to and from the local API socket on one, and an attached
+# stream's session hears its stop signals and saves on one.
+tokio = { version = "1.48.0", features = ["rt", "time", "net", "io-std", "io-util", "macros", "sync"] }
 # Plain HTTP/1.1 over the local API socket, for the routes reached without MCP.
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
@@ -61,3 +62,5 @@ chrono = { version = "0.4.45", default-features = false, features = ["alloc"] }
 rmcp = { version = "3.5.1", features = ["server", "transport-streamable-http-server", "transport-async-rw", "transport-child-process"] }
 axum = { workspace = true }
 tokio = { version = "1.48.0", features = ["rt", "time", "net", "sync", "process"] }
+# Each test's socket directory, machine root and scratch files, removed when it ends.
+tempfile = { workspace = true }

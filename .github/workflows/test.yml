@@ -838,9 +838,15 @@ jobs:
           # its own short root. GPU-free; its started-stream and signal-ladder
           # tests sit behind `hardware-tests` and run on the rig.
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
-          # The CLI: `new`'s rendered files, and `run`/`dev` supervising a stand-in
-          # tatolabd — signals forwarded one for one, exit codes passed through.
+          # The CLI: `new`'s rendered files, and every verb against a stub local
+          # API served at the machine's fixed socket. Built as users run it, the
+          # socket resolves through XDG_RUNTIME_DIR, which each test isolates;
+          # the test feature moves the runtime directory, the state directory
+          # and the machine runtime lock under each test's own
+          # TATOLAB_TEST_MACHINE_ROOT instead.
           cargo test --locked -p tatolab-cli
+          cargo test --locked -p tatolab-cli \
+            --features machine-directories-under-a-test-root
 
   # The lane whose absence is why the Apple tree rotted: every one of the other
   # jobs in this repo is `ubuntu-latest`, so `aarch64-apple-darwin` went roughly
@@ -931,7 +937,10 @@ jobs:
             cargo test --locked -p streamlib-api-server --lib \
             --features machine-directories-under-a-test-root
           cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
-          cargo test --locked -p tatolab-cli
+          # The runtime directory is fixed under /tmp on macOS, so the CLI's
+          # tests need the feature to isolate each test's machine.
+          cargo test --locked -p tatolab-cli \
+            --features machine-directories-under-a-test-root
           # `--test-threads=1` because two of these open iceoryx2 nodes in child
           # processes of this same binary and race each other when run in
           # parallel; serialised they pass, and the whole suite is about ninety

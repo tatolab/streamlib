@@ -112,7 +112,10 @@ impl RuntimeLogReadFailure {
 
 /// One JSONL line as a record, or `None` — with a warning on `warning_output` — when it is not
 /// one. A truncated or foreign line is skipped rather than ending the read.
-fn decode_runtime_log_line(line: &[u8], warning_output: &mut dyn Write) -> Option<RuntimeLogEvent> {
+pub(crate) fn decode_runtime_log_line(
+    line: &[u8],
+    warning_output: &mut dyn Write,
+) -> Option<RuntimeLogEvent> {
     let line_text = String::from_utf8_lossy(line);
     let trimmed_line = line_text.trim();
     if trimmed_line.is_empty() {

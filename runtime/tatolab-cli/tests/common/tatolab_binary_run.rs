@@ -6,23 +6,7 @@
 
 #![allow(dead_code)]
 
-use std::path::Path;
 use std::process::{Command, Output, Stdio};
-
-/// Run `tatolab` with `tatolab_arguments`, reading the runtime directory under
-/// `xdg_runtime_dir` — which only Linux honours, so a test isolating the registry this way is
-/// Linux-only.
-pub fn run_tatolab_with_xdg_runtime_dir(
-    xdg_runtime_dir: &Path,
-    tatolab_arguments: &[&str],
-) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_tatolab"))
-        .args(tatolab_arguments)
-        .env("XDG_RUNTIME_DIR", xdg_runtime_dir)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
-}
 
 /// Run `tatolab` with `tatolab_arguments` for a verb that reads no runtime directory, such as a
 /// `--help` or a usage error.

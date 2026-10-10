@@ -81,12 +81,16 @@ fn help_lists_exactly_the_served_verbs() {
             "new",
             "run",
             "dev",
-            "nodes",
+            "stop",
+            "start",
+            "rm",
+            "streams",
+            "expose",
             "graph",
             "tap",
+            "logs",
             "exchange",
             "mcp",
-            "logs",
             "enable-virtual-camera"
         ],
         "help was:\n{help_text}"

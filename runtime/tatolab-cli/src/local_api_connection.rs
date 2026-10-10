@@ -69,17 +69,6 @@ impl LocalApiConnection {
         })
     }
 
-    /// Connect the MCP client through `server/discover`, unless it already is.
-    pub(crate) fn connect_mcp_client(&mut self) -> Result<(), LocalApiMcpToolClientFailure> {
-        local_api_mcp_tool_client_connected_on_first_use(
-            &self.local_api_tokio_runtime,
-            &mut self.connected_mcp_client,
-            &self.local_api_socket_path,
-            self.request_timeout,
-        )?;
-        Ok(())
-    }
-
     /// Call `tool_name` with `tool_arguments` through the MCP client, connecting it first when it
     /// is not yet, and answer the first text block of the result.
     pub(crate) fn call_tool(

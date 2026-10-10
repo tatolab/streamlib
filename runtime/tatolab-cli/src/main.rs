@@ -1,27 +1,29 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolab`: `new` writes a stream project; `run` and `dev` compile a stream in its project's
-//! venv and start `tatolabd` attached; `nodes` lists the runtimes running on this machine, and
-//! `graph`, `tap`, `exchange`, `logs` and `mcp` reach one through its local API socket — `logs`
-//! also reads a runtime's JSONL log files; `enable-virtual-camera` grants this machine's users the
-//! virtual camera's loopback device, once.
+//! `tatolab`: `new` writes a stream project; `run`, `dev`, `stop`, `start`, `rm`, `streams` and
+//! `expose` load and manage the streams the machine's runtime holds, and `graph`, `tap`, `logs`,
+//! `exchange` and `mcp` observe them — each through the runtime's local API socket, at its fixed
+//! path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
+//! machine's users the virtual camera's loopback device, once. No verb starts a runtime.
 
 // stdout and stderr are this binary's output channel to the user, as they are xtask's.
 #![allow(clippy::disallowed_macros)]
 
-mod attached_tatolabd_supervisor;
+mod attached_stream_on_the_runtime;
 mod local_api_connection;
 mod local_api_mcp_stdio_pipe;
 mod local_api_mcp_tool_client;
-mod local_api_runtime_selection;
 mod local_api_unix_socket_http_client;
+mod machine_runtime_local_api_socket;
 mod process_signal_handling;
 mod project_source_change_watcher;
 mod runtime_log_files_reader;
 mod runtime_logs_verb;
 mod runtime_observation_verbs;
 mod scaffold_new_stream_project;
+mod stream_actions_on_the_runtime;
+mod stream_log_records_from_the_runtime;
 mod surface_image_exchange;
 mod verb_standard_output;
 mod virtual_camera_loopback_permission_grant;
@@ -31,10 +33,6 @@ mod virtual_camera_loopback_permission_grant;
 mod stub_local_api_server;
 
 #[cfg(test)]
-#[path = "../tests/common/isolated_node_registry.rs"]
-mod isolated_node_registry;
-
-#[cfg(test)]
 #[path = "../tests/common/tapped_channel_bag_fixtures.rs"]
 mod tapped_channel_bag_fixtures;
 
@@ -42,12 +40,13 @@ mod tapped_channel_bag_fixtures;
 #[path = "../tests/common/runtime_log_line_fixtures.rs"]
 mod runtime_log_line_fixtures;
 
-use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 
+use crate::attached_stream_on_the_runtime::AttachedStreamVerb;
+use crate::stream_actions_on_the_runtime::{RequestedPortExposureLevel, StreamLoadArguments};
 use crate::virtual_camera_loopback_permission_grant::VirtualCameraGrantTargetMachine;
 
 /// A command that ends `tatolab` with a message on stderr and an exit code.
@@ -65,14 +64,6 @@ impl TatolabCommandFailure {
         Self {
             message_for_the_user: Some(message_for_the_user),
             exit_code: 1,
-        }
-    }
-
-    /// An exit whose reason a child process already reported.
-    pub(crate) fn already_reported(exit_code: u8) -> Self {
-        Self {
-            message_for_the_user: None,
-            exit_code,
         }
     }
 }
@@ -95,8 +86,8 @@ impl TatolabCommandFailure {
 #[command(
     name = "tatolab",
     version,
-    about = "Tatolab — write a stream project, run it on tatolabd, and observe the runtimes \
-             running on this machine.",
+    about = "Tatolab — write a stream project, run it on this machine's runtime, and manage and \
+             observe the streams the runtime holds.",
     disable_help_subcommand = true
 )]
 struct TatolabCommandLine {
@@ -120,23 +111,80 @@ enum TatolabVerb {
         #[arg(long)]
         test_pattern: bool,
     },
-    /// Compile this stream in the project's venv and run it on tatolabd.
-    Run(StreamLaunchArguments),
-    /// Run this stream on tatolabd and restart it on every saved edit.
-    Dev(StreamLaunchArguments),
-    /// List the runtimes running on this machine.
+    /// Load this project's stream into the runtime and follow its records.
     #[command(
-        long_about = "Scans the node registry, liveness-checks every entry, prunes the ones that \
-                      are gone, and prints runtime_name, runtime_id, local_api_socket, pid, alive? \
-                      and hint. Only runtimes hosting a control plane register."
+        long_about = "The runtime compiles the stream in the project's own .venv and loads it. \
+                      Attached, the stream lives as long as this command: Ctrl-C, a closed \
+                      terminal or a killed tatolab unloads it. With -d, the runtime keeps it, \
+                      across its own restarts, until `tatolab stop` or `tatolab rm`."
     )]
-    Nodes,
-    /// Export a running runtime's live graph as JSON.
+    Run {
+        #[command(flatten)]
+        stream_load_arguments: StreamLoadArguments,
+        /// Hand the stream to the runtime to keep, print one line, and return.
+        #[arg(short = 'd', long = "detach")]
+        detach: bool,
+    },
+    /// Run this project's stream attached and load it again on every saved edit.
+    #[command(
+        long_about = "`run` attached, plus a watch on the project's .py files: each settled save \
+                      stops the stream and loads it again. A load the runtime refuses waits for \
+                      the next save; when the runtime goes away, dev waits for it and loads again."
+    )]
+    Dev {
+        #[command(flatten)]
+        stream_load_arguments: StreamLoadArguments,
+    },
+    /// Stop a stream: unload it, and keep a kept one stopped across restarts.
+    Stop {
+        /// The stream to stop, as `tatolab streams` names it.
+        stream: String,
+    },
+    /// Load a stopped kept stream again.
+    Start {
+        /// The stream to start, as `tatolab streams` names it.
+        stream: String,
+    },
+    /// Remove a stream: unload it and forget it.
+    Rm {
+        /// The stream to remove, as `tatolab streams` names it.
+        stream: String,
+    },
+    /// List the streams the runtime holds: attached, kept or stopped.
+    Streams,
+    /// Set how far one output port of a stream is readable.
+    #[command(
+        long_about = "Private (the default here) lets this machine's other streams and agents read \
+                      the port; --public lets readers off the machine read it too; --remove makes \
+                      it internal to its stream. The change is live — a reader the new level no \
+                      longer allows is cut at once — and a kept stream records it, over what its \
+                      function exposes, across restarts."
+    )]
+    Expose {
+        /// The stream the port belongs to.
+        stream: String,
+        /// The node, by its name in the stream's graph.
+        node: String,
+        /// The output port, by its name on the node.
+        port: String,
+        /// Make the port public instead of private.
+        #[arg(long = "public", conflicts_with = "remove")]
+        public: bool,
+        /// Make the port internal to its stream instead of private.
+        #[arg(long = "remove")]
+        remove: bool,
+    },
+    /// Export the runtime's live graph as JSON: every stream's, or one's.
     #[command(
         long_about = "Nodes, ports, links, channel names, states and metrics, as the runtime \
-                      reports them right now."
+                      reports them right now: every loaded stream under the runtime's name, or with \
+                      --stream that stream's graph alone, in the shape a load takes."
     )]
-    Graph(RuntimeTargetArguments),
+    Graph {
+        /// Only this loaded stream's graph.
+        #[arg(long = "stream", value_name = "STREAM")]
+        requested_stream: Option<String>,
+    },
     /// Collect a bounded sample of raw bags from one channel.
     #[command(
         long_about = "Attaches a read-only tap to CHANNEL and collects a bounded sample. The tap \
@@ -150,6 +198,9 @@ enum TatolabVerb {
                     its top-level runtime_name and a node's name"
         )]
         channel: String,
+        /// The loaded stream the channel belongs to.
+        #[arg(long = "stream", value_name = "STREAM", required = true)]
+        stream: String,
         /// Bags to collect before returning (default: a small sample).
         #[arg(long = "count", value_name = "N", allow_negative_numbers = true)]
         requested_bag_count: Option<i64>,
@@ -162,34 +213,33 @@ enum TatolabVerb {
             allow_negative_numbers = true
         )]
         requested_max_bag_bytes: Option<i64>,
-        #[command(flatten)]
-        runtime_target: RuntimeTargetArguments,
     },
-    /// Exchange published surface ids for PNG files on disk.
+    /// Read a loaded stream's records from the runtime, or its JSONL log file.
     #[command(
-        long_about = "With SURFACE_ID, exchanges that one id. With --channel, taps the channel, \
-                      reads a surface id out of each sampled bag, and exchanges it — one warm \
-                      process, no window in the graph and no display server in the path. Writes \
-                      exact full-resolution PNGs into --out and prints their paths on stdout, one \
-                      per line — those paths are this run's frames, and --out is not cleared, so \
-                      read them rather than listing the directory."
-    )]
-    Exchange(surface_image_exchange::SurfaceImageExchangeArguments),
-    /// Connect an MCP host to a running runtime over this command's stdin and stdout.
-    #[command(
-        long_about = "For an MCP host to launch: `claude mcp add tatolab -- tatolab mcp`, or `ssh \
-                      <machine> tatolab mcp` for a runtime on another machine. Copies bytes \
-                      between stdio and the runtime's MCP server, through its local API socket, \
-                      without reading them."
-    )]
-    Mcp(RuntimeTargetArguments),
-    /// Read a loaded stream's JSONL log file, or a running runtime's event stream.
-    #[command(
-        long_about = "With RUNTIME_ID-STREAM, renders that loaded stream's on-disk JSONL log \
-                      exactly as the runtime mirrored it. With --node, collects a bounded sample of a running \
-                      runtime's live event stream instead."
+        long_about = "With --stream, reads that loaded stream's records as the runtime holds them, \
+                      by sequence number; -f keeps following. With RUNTIME_ID-STREAM, renders that \
+                      stream's on-disk JSONL log exactly as the runtime mirrored it."
     )]
     Logs(runtime_logs_verb::RuntimeLogsVerbArguments),
+    /// Exchange published surface ids for PNG files on disk.
+    #[command(
+        long_about = "With SURFACE_ID, exchanges that one id. With --channel and --stream, taps \
+                      the channel, reads a surface id out of each sampled bag, and exchanges it — \
+                      one warm process, no window in the graph and no display server in the path. \
+                      Writes exact full-resolution PNGs into --out and prints their paths on \
+                      stdout, one per line — those paths are this run's frames, and --out is not \
+                      cleared, so read them rather than listing the directory."
+    )]
+    Exchange(surface_image_exchange::SurfaceImageExchangeArguments),
+    /// Connect an MCP host to the runtime over this command's stdin and stdout.
+    #[command(
+        long_about = "For an MCP host to launch: `claude mcp add tatolab -- tatolab mcp`, or `ssh \
+                      <machine> tatolab mcp` for the runtime on another machine. Copies bytes \
+                      between stdio and the runtime's MCP server, through its local API socket, \
+                      without reading them. A stream the host loads attached lives as long as \
+                      this connection."
+    )]
+    Mcp,
     /// Grant this machine's users the permission a VirtualCameraSink needs, once.
     #[command(
         long_about = "Install the standard grant behind the virtual camera's loopback door: load \
@@ -204,35 +254,11 @@ enum TatolabVerb {
     },
 }
 
-/// The flags `run` and `dev` share; all but `--runtime-name` go to the compile entry verbatim.
-#[derive(Args)]
-pub(crate) struct StreamLaunchArguments {
-    /// The stream to load: `<file>.py[:<function>]` or `<module>:<function>` (default: the sole
-    /// @stream in stream.py).
-    #[arg(value_name = "TARGET")]
-    pub(crate) requested_stream_target: Option<OsString>,
-    /// Entry file to launch, overriding the stream.py convention; not with TARGET.
-    #[arg(short = 'f', long = "file", value_name = "FILE")]
-    pub(crate) requested_entry_file: Option<OsString>,
-    /// Project root to resolve the entry file or TARGET against (default: CWD, no walk-up).
-    #[arg(long = "dir", value_name = "DIR")]
-    pub(crate) requested_anchor_directory: Option<OsString>,
-    /// Load the stream under this name instead of its function's.
-    #[arg(long = "name", value_name = "NAME")]
-    pub(crate) requested_stream_name: Option<OsString>,
-    /// Name this runtime's tap channels begin with (else STREAMLIB_RUNTIME_NAME, else the
-    /// engine's default).
-    #[arg(long = "runtime-name", value_name = "NAME")]
-    pub(crate) requested_runtime_name: Option<OsString>,
-}
-
-/// `--node`, which pins the runtime a verb drives; without it the verb takes the sole live one.
-#[derive(Args, Debug, Clone, Default)]
-pub(crate) struct RuntimeTargetArguments {
-    /// Registered runtime name or runtime_id to target, reached through its local API socket
-    /// (resolved via the node registry).
-    #[arg(long = "node", value_name = "RUNTIME_NAME_OR_ID")]
-    pub(crate) requested_runtime_name_or_id: Option<String>,
+/// The working directory a project defaults to.
+fn caller_working_directory() -> Result<PathBuf, TatolabCommandFailure> {
+    std::env::current_dir().map_err(|io_failure| {
+        TatolabCommandFailure::refused(format!("cannot read the working directory: {io_failure}"))
+    })
 }
 
 fn main() -> ExitCode {
@@ -253,51 +279,81 @@ fn main() -> ExitCode {
             )
             .map(|()| 0)
         }
-        TatolabVerb::Run(stream_launch_arguments) => {
-            attached_tatolabd_supervisor::launch_stream_on_attached_tatolabd(
-                attached_tatolabd_supervisor::StreamLaunchVerb::Run,
-                &stream_launch_arguments,
+        TatolabVerb::Run {
+            stream_load_arguments,
+            detach: true,
+        } => caller_working_directory().and_then(|caller_working_directory| {
+            stream_actions_on_the_runtime::run_stream_kept(
+                &stream_load_arguments,
+                &caller_working_directory,
             )
-        }
-        TatolabVerb::Dev(stream_launch_arguments) => {
-            attached_tatolabd_supervisor::launch_stream_on_attached_tatolabd(
-                attached_tatolabd_supervisor::StreamLaunchVerb::Dev,
-                &stream_launch_arguments,
+        }),
+        TatolabVerb::Run {
+            stream_load_arguments,
+            detach: false,
+        } => caller_working_directory().and_then(|caller_working_directory| {
+            attached_stream_on_the_runtime::run_stream_attached(
+                AttachedStreamVerb::Run,
+                &stream_load_arguments,
+                &caller_working_directory,
             )
-        }
-        TatolabVerb::Nodes => runtime_observation_verbs::print_node_registry_listing(),
-        TatolabVerb::Graph(runtime_target) => {
-            runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime(
-                runtime_target.requested_runtime_name_or_id.as_deref(),
+        }),
+        TatolabVerb::Dev {
+            stream_load_arguments,
+        } => caller_working_directory().and_then(|caller_working_directory| {
+            attached_stream_on_the_runtime::run_stream_attached(
+                AttachedStreamVerb::Dev,
+                &stream_load_arguments,
+                &caller_working_directory,
+            )
+        }),
+        TatolabVerb::Stop { stream } => stream_actions_on_the_runtime::stop_stream(&stream),
+        TatolabVerb::Start { stream } => stream_actions_on_the_runtime::start_stream(&stream),
+        TatolabVerb::Rm { stream } => stream_actions_on_the_runtime::remove_stream(&stream),
+        TatolabVerb::Streams => stream_actions_on_the_runtime::list_streams(),
+        TatolabVerb::Expose {
+            stream,
+            node,
+            port,
+            public,
+            remove,
+        } => stream_actions_on_the_runtime::expose_port(
+            &stream,
+            &node,
+            &port,
+            match (public, remove) {
+                (true, _) => RequestedPortExposureLevel::Public,
+                (false, true) => RequestedPortExposureLevel::Internal,
+                (false, false) => RequestedPortExposureLevel::Private,
+            },
+        ),
+        TatolabVerb::Graph { requested_stream } => {
+            runtime_observation_verbs::print_local_api_tool_result_of_the_running_runtime(
                 runtime_observation_verbs::GRAPH_TOOL_NAME,
-                serde_json::Map::new(),
+                runtime_observation_verbs::graph_tool_arguments(requested_stream.as_deref()),
             )
         }
         TatolabVerb::Tap {
             channel,
+            stream,
             requested_bag_count,
             requested_max_bag_bytes,
-            runtime_target,
-        } => runtime_observation_verbs::print_local_api_tool_result_of_selected_runtime(
-            runtime_target.requested_runtime_name_or_id.as_deref(),
+        } => runtime_observation_verbs::print_local_api_tool_result_of_the_running_runtime(
             runtime_observation_verbs::TAP_TOOL_NAME,
             runtime_observation_verbs::tap_tool_arguments(
+                &stream,
                 &channel,
                 requested_bag_count,
                 requested_max_bag_bytes,
             ),
         ),
+        TatolabVerb::Logs(logs_arguments) => runtime_logs_verb::run_runtime_logs_verb(logs_arguments),
         TatolabVerb::Exchange(surface_image_exchange_arguments) => {
             surface_image_exchange::run_surface_image_exchange_verb(
                 &surface_image_exchange_arguments,
             )
         }
-        TatolabVerb::Mcp(runtime_target) => {
-            local_api_mcp_stdio_pipe::pipe_stdio_to_the_selected_runtimes_mcp_server(
-                runtime_target.requested_runtime_name_or_id.as_deref(),
-            )
-        }
-        TatolabVerb::Logs(logs_arguments) => runtime_logs_verb::run_runtime_logs_verb(logs_arguments),
+        TatolabVerb::Mcp => local_api_mcp_stdio_pipe::pipe_stdio_to_the_running_runtimes_mcp_server(),
         TatolabVerb::EnableVirtualCamera {
             print_grant_without_installing: true,
         } => virtual_camera_loopback_permission_grant::print_virtual_camera_grant_for_hand_install(),
