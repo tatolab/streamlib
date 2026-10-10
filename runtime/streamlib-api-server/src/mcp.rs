@@ -941,7 +941,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Put a stream's output port at `internal`, `private` or `public`. On a loaded stream it changes live: a reader the new level no longer allows is cut off at once, and nothing restarts. On a kept stream — loaded or stopped — the level is recorded as the owner's ruling and wins over the level the stream function declares, through every restart; `recorded` says whether it was. An attached stream's level is never recorded. `not_recorded_because`, present only then, says why a kept stream's level changed live could not be recorded, so a runtime restart puts back the level it had."
+        description = "Put a stream's output port at `internal`, `private` or `public`. On a loaded stream it changes live: a reader the new level no longer allows is cut off at once, and nothing restarts. On a kept stream — loaded or stopped — the level is recorded as the owner's ruling and wins over the level the stream function declares, through every restart; `recorded` says whether it was. An attached stream's level is never recorded. On a loaded kept stream a restriction is recorded before it changes live, and refused with the live level unchanged when it cannot be recorded. `not_recorded_because`, present only when `recorded` is false on a kept stream, says why a level raised live could not be recorded, so a runtime restart puts back the level it had."
     )]
     async fn expose_port(
         &self,

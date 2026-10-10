@@ -405,6 +405,24 @@ fn a_kept_exposure_the_runtime_could_not_record_warns_naming_why_and_exits_zero(
 }
 
 #[test]
+fn a_kept_restriction_the_runtime_refused_for_its_record_exits_one_printing_nothing_on_stdout() {
+    let refusal = "the port `effect/video` of the kept stream `cam` was not restricted to \
+                   internal, and is still public: the owner's ruling could not be recorded";
+    let (isolated_machine_directories, _stub_local_api_server) =
+        a_runtime_answering("expose_port", StubToolAnswer::tool_failure(refusal));
+
+    let refused =
+        isolated_machine_directories.run_tatolab(&["expose", "cam", "effect", "video", "--remove"]);
+
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(
+        standard_error_text(&refused),
+        format!("error: expose_port failed: {refusal}\n")
+    );
+    assert_eq!(standard_output_text(&refused), "");
+}
+
+#[test]
 fn a_stream_the_runtime_does_not_hold_is_refused_in_its_words() {
     let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
         "stop_stream",

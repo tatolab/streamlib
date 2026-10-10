@@ -273,8 +273,9 @@ pub struct ExposePortToolResult {
     pub level: ExposePortLevel,
     /// Whether the level was recorded as the owner's ruling on a kept stream.
     pub recorded: bool,
-    /// Present only when a kept stream's level changed live and could not be recorded, so a
-    /// restart of the runtime puts back the level it had.
+    /// Present only when a kept stream's level was raised live and could not be recorded, so a
+    /// restart of the runtime puts back the level it had; a restriction that cannot be recorded
+    /// is refused instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_recorded_because: Option<String>,
 }

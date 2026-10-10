@@ -174,7 +174,7 @@ pub struct OutputPortExposureOutcome {
     pub level: OutputPortExposureLevel,
     /// Whether the level was recorded as the owner's ruling on a kept stream.
     pub recorded: bool,
-    /// Why the level, changed live on a loaded kept stream, was not recorded
+    /// Why the level, raised live on a loaded kept stream, was not recorded
     /// as the owner's ruling; `None` when it was recorded, and for an
     /// attached stream, whose level is never recorded.
     pub ruling_not_recorded_because: Option<String>,
@@ -593,11 +593,13 @@ impl Runner {
     /// Put output port `port` of node `node` in the stream `stream_name`
     /// names at `level`: live on a loaded stream, cutting off at once every
     /// reader from outside the stream the level no longer allows, and
-    /// recorded as the owner's ruling on a kept stream — only once the live
-    /// change succeeded, and on a stopped stream once the recorded graph
-    /// holds the node. An attached stream's level is never recorded. A loaded
-    /// kept stream whose record cannot be read or written keeps the live
-    /// change, and the outcome says why it was not recorded.
+    /// recorded as the owner's ruling on a kept stream. On a loaded kept
+    /// stream a restriction is recorded before it changes live, and refused
+    /// with the live level unchanged when its record cannot be written, so a
+    /// restart never re-opens a port the owner closed; a promotion changes
+    /// live first, and the outcome says why it was not recorded when it was
+    /// not. A stopped stream's ruling is recorded once the recorded graph
+    /// holds the node. An attached stream's level is never recorded.
     pub fn expose_port(
         &self,
         stream_name: &str,
@@ -612,18 +614,39 @@ impl Runner {
             port: port.to_string(),
             level,
         };
+        let set_live = |loaded: &LoadedStreamInThisRuntime| {
+            loaded
+                .log_route()
+                .run_entered(|| loaded.set_output_port_exposure_level(node, port, level))
+        };
         let (recorded, ruling_not_recorded_because) = match self
             .loaded_stream_of_the_cast_name(&stream_cast)
         {
             Some(loaded) => {
-                loaded
-                    .log_route()
-                    .run_entered(|| loaded.set_output_port_exposure_level(node, port, level))?;
+                let live_level = loaded.output_port_exposure_level(node, port)?;
                 match loaded.holding() {
-                    LoadedStreamHolding::Attached => (false, None),
+                    LoadedStreamHolding::Attached => {
+                        set_live(&loaded)?;
+                        (false, None)
+                    }
+                    LoadedStreamHolding::Kept if level.is_narrower_than(live_level) => {
+                        self.record_the_owners_ruling_on_a_kept_record(&stream_cast, ruling)
+                            .map_err(|not_recorded| {
+                                Error::Runtime(format!(
+                                    "the port `{node}/{port}` of the kept stream `{stream_cast}` \
+                                     was not restricted to {level}, and is still {live_level}: \
+                                     the owner's ruling could not be recorded, and a restriction \
+                                     not recorded would be undone at the runtime's restart: \
+                                     {not_recorded}"
+                                ))
+                            })?;
+                        set_live(&loaded)?;
+                        (true, None)
+                    }
                     LoadedStreamHolding::Kept => {
+                        set_live(&loaded)?;
                         match self.record_the_owners_ruling_on_a_kept_record(&stream_cast, ruling) {
-                            Ok(recorded) => (recorded, None),
+                            Ok(()) => (true, None),
                             Err(not_recorded) => {
                                 tracing::warn!(
                                     "the port `{node}/{port}` of the kept stream `{stream_cast}` \
@@ -780,19 +803,27 @@ impl Runner {
         }
     }
 
-    /// Record `ruling` on the kept record of `stream_cast`; `false` when the
-    /// stream has no record.
+    /// Record `ruling` on the kept record of the loaded kept stream
+    /// `stream_cast`, refused naming the record when it is gone.
     fn record_the_owners_ruling_on_a_kept_record(
         &self,
         stream_cast: &str,
         ruling: OwnerExposureRuling,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let Some(mut kept_record) = self.kept_record_of_the_cast_name(stream_cast)? else {
-            return Ok(false);
+            let record_path = self
+                .kept_stream_records()
+                .map(|kept_stream_records| kept_stream_records.record_path_of(stream_cast))
+                .transpose()?
+                .map(|record_path| record_path.display().to_string())
+                .unwrap_or_else(|| "in this runtime's state directory".to_string());
+            return Err(Error::Runtime(format!(
+                "the kept stream `{stream_cast}` is loaded and its record {record_path} is gone, \
+                 so the runtime's restart does not load it; `run -d` keeps it again"
+            )));
         };
         kept_record.record_the_owners_exposure_ruling(ruling);
-        self.write_a_kept_record(&kept_record)?;
-        Ok(true)
+        self.write_a_kept_record(&kept_record)
     }
 
     fn write_a_kept_record(&self, kept_record: &KeptStreamRecord) -> Result<()> {
@@ -1659,7 +1690,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn exposing_a_port_of_a_loaded_kept_stream_whose_record_is_unreadable_changes_it_live() {
+    fn raising_a_port_of_a_loaded_kept_stream_whose_record_is_unreadable_changes_it_live() {
         let state_directory = tempfile::tempdir().unwrap();
         let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
         let project = ProjectWithAStubCompile::with_no_venv();
@@ -1705,7 +1736,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn exposing_a_port_of_a_loaded_kept_stream_whose_record_cannot_be_written_changes_it_live() {
+    fn raising_a_port_of_a_loaded_kept_stream_whose_record_cannot_be_written_changes_it_live() {
         let state_directory = tempfile::tempdir().unwrap();
         let kept_streams_directory = state_directory.path().join("streams");
         let runner = a_runner_keeping_its_streams_in(Some(&kept_streams_directory));
@@ -1742,6 +1773,135 @@ mod tests {
                 .is_empty(),
             "the record holds no ruling"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn restricting_a_port_of_a_loaded_kept_stream_whose_record_cannot_be_written_is_refused() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let kept_streams_directory = state_directory.path().join("streams");
+        let runner = a_runner_keeping_its_streams_in(Some(&kept_streams_directory));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let record = a_kept_record_of(
+            &project,
+            "camera",
+            serde_json::json!([{"node": "source", "port": "out1", "level": "public"}]),
+        );
+        let kept =
+            a_kept_stream_loaded_without_its_start(&runner, &kept_streams_directory, &record);
+
+        for restricted_level in [
+            OutputPortExposureLevel::Private,
+            OutputPortExposureLevel::Internal,
+        ] {
+            let refusal = {
+                let _refusing_writes =
+                    KeptStreamsDirectoryRefusingWrites::from_now_on(&kept_streams_directory);
+                refusal_of(runner.expose_port("camera", "source", "out1", restricted_level))
+            };
+
+            assert!(refusal.contains("not restricted"), "{refusal}");
+            assert!(refusal.contains("still public"), "{refusal}");
+            assert!(refusal.contains("was not written"), "{refusal}");
+            assert_eq!(
+                the_exposures_graph_renders_for(&kept),
+                serde_json::json!([{"node": "source", "port": "out1", "level": "public"}]),
+                "the live level is unchanged"
+            );
+            assert_eq!(
+                records_in(&kept_streams_directory).read("camera").unwrap(),
+                Some(record.clone())
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn restricting_a_port_of_a_loaded_kept_stream_whose_record_is_unreadable_is_refused() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let kept = a_kept_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_kept_record_of(
+                &project,
+                "camera",
+                serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
+            ),
+        );
+
+        for_each_unreadable_record_of(
+            state_directory.path(),
+            "camera",
+            |record_path, unreadable_bytes| {
+                let refusal = refusal_of(runner.expose_port(
+                    "camera",
+                    "source",
+                    "out1",
+                    OutputPortExposureLevel::Internal,
+                ));
+
+                assert!(
+                    refusal.contains(&record_path.display().to_string()),
+                    "{refusal}"
+                );
+                assert_eq!(
+                    the_exposures_graph_renders_for(&kept),
+                    serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
+                    "the live level is unchanged"
+                );
+                assert_eq!(std::fs::read(record_path).unwrap(), unreadable_bytes);
+            },
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_loaded_kept_stream_whose_record_is_gone_raises_live_naming_the_record_and_never_restricts()
+    {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let kept = a_kept_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_kept_record_of(&project, "camera", serde_json::json!([])),
+        );
+        let record_path = records_in(state_directory.path())
+            .record_path_of("camera")
+            .unwrap();
+        std::fs::remove_file(&record_path).unwrap();
+
+        let raised = runner
+            .expose_port("camera", "source", "out1", OutputPortExposureLevel::Private)
+            .expect("the port is raised live");
+        let refusal = refusal_of(runner.expose_port(
+            "camera",
+            "source",
+            "out1",
+            OutputPortExposureLevel::Internal,
+        ));
+
+        assert!(!raised.recorded);
+        let not_recorded = raised
+            .ruling_not_recorded_because
+            .expect("the outcome names the missing record");
+        assert!(
+            not_recorded.contains(&record_path.display().to_string()),
+            "{not_recorded}"
+        );
+        assert!(not_recorded.contains("gone"), "{not_recorded}");
+        assert!(
+            refusal.contains(&record_path.display().to_string()),
+            "{refusal}"
+        );
+        assert_eq!(
+            the_exposures_graph_renders_for(&kept),
+            serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
+            "the raise held live and the refused restriction changed nothing"
+        );
+        assert!(!record_path.exists());
     }
 
     #[test]

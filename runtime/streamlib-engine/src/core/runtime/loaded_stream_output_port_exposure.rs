@@ -93,6 +93,23 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
+    /// The level output port `port_name` of node `node_name` is at now, each
+    /// refused by name when it is not there.
+    pub fn output_port_exposure_level(
+        &self,
+        node_name: &str,
+        port_name: &str,
+    ) -> Result<OutputPortExposureLevel> {
+        self.compiler.scope(|graph, _tx| {
+            let (node, port_cast) = self.the_output_port_named(graph, node_name, port_name)?;
+            Ok(node
+                .get::<ExposedOutputPortsComponent>()
+                .map_or(OutputPortExposureLevel::Internal, |exposed_ports| {
+                    exposed_ports.level_of(&port_cast)
+                }))
+        })
+    }
+
     /// Register a reader from `location` against output port `port_name` of
     /// node `node_name`, refused naming the port and its level when that level
     /// does not allow a reader there. `cut_off` runs at most once, outside
