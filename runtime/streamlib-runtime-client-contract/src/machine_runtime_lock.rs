@@ -603,6 +603,10 @@ mod lock_location_trust_check {
     /// take the lock, so whoever starts first is the machine's runtime.
     const MACHINE_RUNTIME_LOCK_FILE_MODE: u32 = 0o666;
 
+    /// The mode the creation commands give the lock's directory: every user
+    /// must traverse it to open the lock file.
+    const MACHINE_RUNTIME_LOCK_DIRECTORY_MODE: u32 = 0o755;
+
     /// The permission bits that let a group or other replace an entry in a directory.
     const GROUP_AND_OTHER_WRITE_BITS: u32 = 0o022;
 
@@ -763,7 +767,9 @@ mod lock_location_trust_check {
     ) -> String {
         let administrator = if expected_owner_uid == 0 { "sudo " } else { "" };
         format!(
-            "{administrator}mkdir -p \"{directory}\" && {administrator}touch \"{file}\" && \
+            "{administrator}mkdir -p \"{directory}\" && \
+             {administrator}chmod {MACHINE_RUNTIME_LOCK_DIRECTORY_MODE:04o} \"{directory}\" && \
+             {administrator}touch \"{file}\" && \
              {administrator}chmod {MACHINE_RUNTIME_LOCK_FILE_MODE:04o} \"{file}\"",
             directory = lock_directory.display(),
             file = lock_file.display(),
@@ -1337,7 +1343,8 @@ mod tests {
         .to_string();
         assert!(
             refusal.contains(
-                "sudo mkdir -p \"/Library/Application Support/Tatolab\" && sudo touch \
+                "sudo mkdir -p \"/Library/Application Support/Tatolab\" && sudo chmod 0755 \
+                 \"/Library/Application Support/Tatolab\" && sudo touch \
                  \"/Library/Application Support/Tatolab/runtime.lock\" && sudo chmod 0666 \
                  \"/Library/Application Support/Tatolab/runtime.lock\""
             ),
@@ -1938,6 +1945,13 @@ mod tests {
                 assert!(
                     creation_commands.contains(&format!(
                         "mkdir -p \"{}\"",
+                        location.lock_directory.display()
+                    )),
+                    "{creation_commands}"
+                );
+                assert!(
+                    creation_commands.contains(&format!(
+                        "chmod 0755 \"{}\"",
                         location.lock_directory.display()
                     )),
                     "{creation_commands}"
