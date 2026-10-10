@@ -36,11 +36,11 @@ machine-directories-under-a-test-root = [
 ]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.43.1" }
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.43.1" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.44.0" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.44.0" }
 # The runtime directory the local API's socket is bound in, and the wire names and tap result
 # shape it serves.
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.43.1" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.44.0" }
 
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"
@@ -73,7 +73,7 @@ base64 = "0.22"
 # Enables the engine's `test-support` in-memory `TapSubscription` constructor
 # for the MCP/REST tap-tool tests. A dev-dep feature: active for tests, absent
 # from the production `cargo build` dependency graph.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.43.1", features = ["test-support"] }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.44.0", features = ["test-support"] }
 # The MCP wire tests drive the real router over its socket with rmcp's own client.
 rmcp = { version = "3.5.1", features = ["client", "transport-streamable-http-client-unix-socket"] }
 tempfile = "3"
