@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRuntimeDirectory;
 
-use super::RuntimeName;
+use super::MachineName;
 use super::RuntimeUniqueId;
 use super::loaded_stream::LoadedStreamInThisRuntime;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
@@ -92,8 +92,8 @@ impl Drop for TokioRuntimeShutDownWithinItsBudget {
 pub(crate) struct EngineResourcesSharedByEveryStream {
     /// Unique identifier for this runtime instance.
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
-    /// The name this runtime's tap channels carry.
-    pub(crate) runtime_name: Arc<RuntimeName>,
+    /// The name this machine is addressed by, read once as the runtime starts.
+    pub(crate) machine_name: Arc<MachineName>,
     /// The streams loaded in this runtime, keyed by their URL-safe cast name.
     pub(crate) streams_loaded_in_this_runtime:
         Mutex<BTreeMap<String, Arc<LoadedStreamInThisRuntime>>>,
@@ -320,9 +320,6 @@ pub struct Runner {
 /// What a host chooses as it constructs a [`Runner`].
 #[derive(Debug, Clone, Default)]
 pub struct RunnerConstructionOptions {
-    /// The runtime's name; else `STREAMLIB_RUNTIME_NAME`, else
-    /// `<host name>-<app directory name>-<id>`.
-    pub runtime_name: Option<String>,
     /// The standard stream the pretty log mirror writes to, when this runtime
     /// is the first in its process to install the process's logging pathway.
     pub pretty_log_mirror_stream: crate::core::logging::PrettyLogMirrorStandardStream,
@@ -415,7 +412,7 @@ pub struct EveryStreamEndedDuringTheWait {
 }
 
 impl Runner {
-    /// Build a runtime named from `STREAMLIB_RUNTIME_NAME` or the default.
+    /// Build a runtime with the default construction options.
     pub fn new() -> Result<Arc<Self>> {
         Self::new_with_construction_options(RunnerConstructionOptions::default())
     }
@@ -425,7 +422,6 @@ impl Runner {
         construction_options: RunnerConstructionOptions,
     ) -> Result<Arc<Self>> {
         let RunnerConstructionOptions {
-            runtime_name,
             pretty_log_mirror_stream,
             runtime_own_log_directory,
         } = construction_options;
@@ -466,11 +462,6 @@ impl Runner {
         // before the runtime writes anything.
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
-        // A name the caller cannot use in a port address is a wiring error,
-        // and refusing it here costs nothing that has to be undone.
-        let resolved_runtime_name =
-            RuntimeName::from_configuration_environment_or_default(runtime_name)?;
-
         // See `docs/logging-schema.md` for the schema.
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         let process_logging_pathway_hold = crate::core::logging::hold_the_process_logging_pathway(
@@ -486,11 +477,8 @@ impl Runner {
                 directory,
             )
         });
-        let runtime_name = Arc::new(
-            resolved_runtime_name
-                .take_the_runtime_name_warning_when_the_default_carries_the_stand_in_host_name(),
-        );
-        tracing::info!("Creating Runner named {runtime_name} with ID: {runtime_id}");
+        tracing::info!("Creating Runner with ID: {runtime_id}");
+        let machine_name = Arc::new(MachineName::of_this_machine());
 
         let runtime_directory = StreamlibRuntimeDirectory::resolve()
             .map_err(|refusal| Error::Runtime(refusal.to_string()))?;
@@ -539,7 +527,7 @@ impl Runner {
         Ok(Arc::new(Self {
             engine_resources_shared_by_every_stream: Arc::new(EngineResourcesSharedByEveryStream {
                 runtime_id,
-                runtime_name,
+                machine_name,
                 streams_loaded_in_this_runtime: Mutex::new(BTreeMap::new()),
                 gpu_context_created_by_the_first_stream_start: Mutex::new(None),
                 setup_hooks: Mutex::new(SetupHooksOfTheEngine::WaitingForTheGpuContext(Vec::new())),
@@ -623,9 +611,10 @@ impl Runner {
         &self.engine_resources_shared_by_every_stream.runtime_id
     }
 
-    /// The name this runtime's tap channels carry.
-    pub fn runtime_name(&self) -> &RuntimeName {
-        &self.engine_resources_shared_by_every_stream.runtime_name
+    /// The name this machine is addressed by, the first part of
+    /// `<machine>/<stream>/<node>/<port>`.
+    pub fn machine_name(&self) -> &MachineName {
+        &self.engine_resources_shared_by_every_stream.machine_name
     }
 
     /// The active segment of the runtime's own log, `None` when it keeps none.
@@ -1602,39 +1591,23 @@ mod tests {
         );
     }
 
-    /// Nothing refuses a runtime name another live runtime already carries:
-    /// two runners named alike both construct, both stay up together, and each
-    /// reports the name it was given wherever the name is read.
+    /// Nothing is claimed for a machine's name: two runners on one machine
+    /// both construct, both stay up together, and each names the machine the
+    /// same way wherever the name is read.
     #[test]
     #[serial]
-    fn two_runners_given_one_runtime_name_both_construct() {
-        let shared_runtime_name = "one-name-two-runners";
-
+    fn two_runners_on_one_machine_both_construct_and_name_it_alike() {
         let project_directory = a_project_directory_this_test_owns();
-        let first = Runner::new_with_construction_options(RunnerConstructionOptions {
-            runtime_name: Some(shared_runtime_name.to_string()),
-            ..RunnerConstructionOptions::default()
-        })
-        .expect("the first runner constructs");
-        let second = Runner::new_with_construction_options(RunnerConstructionOptions {
-            runtime_name: Some(shared_runtime_name.to_string()),
-            ..RunnerConstructionOptions::default()
-        })
-        .expect("a second runner given the same name constructs beside the first");
+        let first = Runner::new().expect("the first runner constructs");
+        let second = Runner::new().expect("a second runner on the same machine constructs");
 
         assert_ne!(first.runtime_id(), second.runtime_id());
+        assert_eq!(first.machine_name(), second.machine_name());
         for runner in [&first, &second] {
-            assert_eq!(runner.runtime_name().as_str(), shared_runtime_name);
             let stream = an_empty_stream_loaded_into(runner, project_directory.path(), "main");
             assert_eq!(
-                <LoadedStreamInThisRuntime as crate::core::runtime::RuntimeOperations>::this_runtimes_name(
-                    &stream
-                ),
-                shared_runtime_name
-            );
-            assert_eq!(
-                stream.to_json().expect("the graph serializes")["runtime_name"],
-                shared_runtime_name
+                stream.to_json().expect("the graph serializes")["machine"],
+                runner.machine_name().name()
             );
         }
     }

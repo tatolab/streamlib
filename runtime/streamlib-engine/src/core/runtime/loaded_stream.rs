@@ -403,7 +403,6 @@ impl LoadedStreamInThisRuntime {
             gpu,
             time,
             Arc::clone(&engine.runtime_id),
-            Arc::clone(&engine.runtime_name),
             this_stream_as_its_runtime_operations,
             engine.tokio_runtime_variant.handle(),
             engine.iceoryx2_node.clone(),
@@ -812,13 +811,13 @@ impl LoadedStreamInThisRuntime {
     /// Export this stream's graph as JSON: topology, processor states,
     /// metrics and buffer levels.
     pub fn to_json(&self) -> Result<serde_json::Value> {
-        let runtime_name = self
+        let machine_name = self
             .engine_resources_shared_by_every_stream
-            .runtime_name
-            .as_str()
+            .machine_name
+            .name()
             .to_string();
         self.compiler.scope(|graph, _tx| {
-            serde_json::to_value(graph.to_graph_response(runtime_name))
+            serde_json::to_value(graph.to_graph_response(machine_name))
                 .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
         })
     }

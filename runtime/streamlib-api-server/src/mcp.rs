@@ -90,7 +90,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `tap`, `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `runtime_name`. `exchange` names no stream: a surface id is unique on the machine. Observe a stream with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on) and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.";
+const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `tap` reads it from its channel's address, or from `stream` when the address names none; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name. `exchange` names no stream: a surface id is unique on the machine. Observe a stream with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<stream>/<node>/<port>` right-anchored: `<node>/<port>` beside a `stream`, or `<machine>/<stream>/<node>/<port>` naming this machine, since an address naming another machine is refused until the sharing step), `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on) and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.";
 
 /// Bounded sample size for `tap` when the caller does not pin its own `count`.
 const DEFAULT_TAP_SAMPLE_COUNT: usize = 8;
@@ -151,7 +151,7 @@ const TAP_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream this call is about, by the name `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
 
 /// What `graph`'s optional `stream` argument says.
-const GRAPH_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream whose graph to export, by the name `list_streams` reports. Omit it for every loaded stream's graph under the runtime's name.";
+const GRAPH_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream whose graph to export, by the name `list_streams` reports. Omit it for every loaded stream's graph under the machine's name.";
 
 /// What a stream action's `stream` argument says.
 const STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION: &str =
@@ -310,6 +310,18 @@ impl LocalApiMcpServerHandler {
             .map_err(|refusal| format!("{tool} failed: {refusal}"))
     }
 
+    /// The operations on the loaded stream a `tap` of `channel` reads, or the
+    /// error the call fails with.
+    fn the_stream_a_tap_channel_names(
+        &self,
+        channel: &str,
+        stream: Option<&str>,
+    ) -> Result<Arc<dyn RuntimeOperations>, String> {
+        self.operations_on_the_loaded_streams
+            .runtime_operations_of_the_stream_a_tap_channel_names(channel, stream)
+            .map_err(|refusal| format!("tap failed: {refusal}"))
+    }
+
     /// Run the blocking stream action `action` over the runtime's streams on a
     /// blocking task; a refusal is the engine's own words.
     async fn a_stream_action_off_the_async_runtime<StreamActionOutcome: Send + 'static>(
@@ -363,10 +375,12 @@ struct GraphToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct TapToolArguments {
-    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
-    stream: String,
     #[schemars(
-        description = "The output port's address, `<runtime_name>/<node>/<port>`, under this runtime's name (the `runtime_name` in `graph`). A port is tappable once a link carries from it."
+        description = "The loaded stream the channel is in, when the channel's address names none. A stream other than the one the address names is refused, naming both."
+    )]
+    stream: Option<String>,
+    #[schemars(
+        description = "The output port's address, right-anchored: `<stream>/<node>/<port>`; `<node>/<port>` in the stream `stream` names; or `<machine>/<stream>/<node>/<port>` naming this machine by the `machine` in `graph` or its full tailnet name — an address naming another machine is refused until the sharing step. A port is tappable once a link carries from it."
     )]
     channel: String,
     #[schemars(
@@ -554,7 +568,7 @@ type ToolCallAnswer = Result<CallToolResult, String>;
 #[tool_router]
 impl LocalApiMcpServerHandler {
     #[tool(
-        description = "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, and this runtime's name (`runtime_name`), the first part of every tap channel. Without `stream`, `{runtime_name, streams}` holds every loaded stream's graph."
+        description = "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, the ports it exposes, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream>/<node>/<port>`. Without `stream`, `{machine, streams}` holds every loaded stream's graph."
     )]
     async fn graph(
         &self,
@@ -591,7 +605,7 @@ impl LocalApiMcpServerHandler {
         let max_bag_bytes = bounded_tap_bag_bytes(max_bag_bytes);
 
         let mut subscription = self
-            .the_stream_a_tool_call_names("tap", &stream)?
+            .the_stream_a_tap_channel_names(&channel, stream.as_deref())?
             .tap_async(channel.clone(), Some(sample))
             .await
             .map_err(|e| format!("tap attach failed: {e}"))?;
@@ -1235,7 +1249,7 @@ pub(crate) mod tests {
     use crate::control_plane_stub_support::{
         LocalApiServedOnAFreshSocket, STUB_EXCHANGED_FRAME_SURFACE_ID,
         STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED, STUB_EXCHANGED_IMAGE_BYTES,
-        STUB_RUNTIME_NAME, STUB_SOURCE_SURFACE_EXTENT, STUB_STREAM_NAME, StubSurfaceExchange,
+        STUB_MACHINE_NAME, STUB_SOURCE_SURFACE_EXTENT, STUB_STREAM_NAME, StubSurfaceExchange,
     };
     use base64::Engine as _;
     use rmcp::RoleClient;
@@ -1396,7 +1410,6 @@ pub(crate) mod tests {
     /// The tools that act on one stream, each naming it with a required
     /// `stream`.
     const TOOLS_THAT_REQUIRE_A_STREAM: &[&str] = &[
-        "tap",
         "logs",
         "add_node",
         "remove_node",
@@ -2189,9 +2202,9 @@ pub(crate) mod tests {
                 json!({
                     "stream": STUB_STREAM_NAME,
                     "link_id": "link-9",
-                    "runtime_name": "studio-display-9f3c",
+                    "machine": "studio-display",
                 }),
-                "runtime_name",
+                "machine",
             ),
         ] {
             let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
@@ -2214,7 +2227,7 @@ pub(crate) mod tests {
     async fn tools_call_connect_states_the_link_id_and_the_links_state() {
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         *runtime.exported_graph.lock() = json!({
-            "runtime_name": crate::control_plane_stub_support::STUB_RUNTIME_NAME,
+            "machine": crate::control_plane_stub_support::STUB_MACHINE_NAME,
             "links": [
                 { "id": "some-other-link", "state": "wired" },
                 { "id": crate::control_plane_stub_support::STUB_CREATED_LINK_ID,
@@ -2335,9 +2348,9 @@ pub(crate) mod tests {
     }
 
     /// Without `stream`, `graph` is every loaded stream's graph under the
-    /// runtime's name — what an agent reads first to learn what is loaded.
+    /// machine's name — what an agent reads first to learn what is loaded.
     #[tokio::test]
-    async fn tools_call_graph_without_a_stream_renders_every_loaded_stream_under_the_runtimes_name()
+    async fn tools_call_graph_without_a_stream_renders_every_loaded_stream_under_the_machines_name()
     {
         let runtime = ControlPlaneMcpDispatchStubRuntime::new();
         *runtime.exported_graph.lock() = two_linked_nodes_graph();
@@ -2347,7 +2360,7 @@ pub(crate) mod tests {
         assert_eq!(
             first_text_block_json(&body),
             json!({
-                "runtime_name": STUB_RUNTIME_NAME,
+                "machine": STUB_MACHINE_NAME,
                 "streams": [two_linked_nodes_graph()],
             })
         );
@@ -3111,10 +3124,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// Tap's arguments are its whole contract with a caller: the stream and
-    /// the channel, and nothing else required.
+    /// Tap's arguments are its whole contract with a caller: the channel, and
+    /// nothing else required, since the channel's address can name its stream.
     #[tokio::test]
-    async fn the_tap_tool_schema_requires_the_stream_and_the_channel_alone() {
+    async fn the_tap_tool_schema_requires_the_channel_alone() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
         let tap = tools
             .iter()
@@ -3140,16 +3153,17 @@ pub(crate) mod tests {
         required.sort_unstable();
         assert_eq!(
             required,
-            ["channel", "stream"],
-            "every argument beyond the stream and the channel stays optional"
+            ["channel"],
+            "every argument beyond the channel stays optional"
         );
     }
 
     /// The `stream` argument each tool advertises: required on every tool
-    /// that acts on one stream, optional on `graph`, absent from the tools
-    /// that name none.
+    /// that acts on one stream, optional on `graph` and on `tap`, whose channel
+    /// can name it, and absent from the tools that name none.
     #[tokio::test]
-    async fn every_tool_acting_on_one_stream_requires_its_stream_and_graph_takes_it_optionally() {
+    async fn every_tool_acting_on_one_stream_requires_its_stream_and_graph_and_tap_take_it_optionally()
+     {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
         for tool in &tools {
             let tool_name = tool["name"].as_str().expect("a named tool");
@@ -3160,7 +3174,7 @@ pub(crate) mod tests {
             let (must_advertise, must_require) = if TOOLS_THAT_REQUIRE_A_STREAM.contains(&tool_name)
             {
                 (true, true)
-            } else if tool_name == "graph" {
+            } else if ["graph", "tap"].contains(&tool_name) {
                 (true, false)
             } else {
                 (false, false)
@@ -3290,7 +3304,7 @@ pub(crate) mod tests {
                 "components": {}
             }],
             "exposed": [],
-            "runtime_name": "rig-desk-a1b2"
+            "machine": "desk"
         })
     }
 
@@ -3601,7 +3615,7 @@ pub(crate) mod tests {
         assert_eq!(
             before,
             json!({
-                "runtime_name": STUB_RUNTIME_NAME,
+                "machine": STUB_MACHINE_NAME,
                 "streams": [{ "nodes": [], "links": [] }],
             })
         );
@@ -3610,7 +3624,7 @@ pub(crate) mod tests {
         let after = resource_document(runtime, "streamlib://graph").await;
         assert_eq!(
             after,
-            json!({ "runtime_name": STUB_RUNTIME_NAME, "streams": [two_linked_nodes_graph()] })
+            json!({ "machine": STUB_MACHINE_NAME, "streams": [two_linked_nodes_graph()] })
         );
     }
 
@@ -3847,8 +3861,8 @@ pub(crate) mod tests {
             ["tap", "exchange"]
         );
         assert!(
-            text.contains("`channel`: `rig-desk-a1b2/pattern/video`"),
-            "the channel is the runtime's name, the node's name, then the port:\n{text}"
+            text.contains(&format!("`channel`: `{STUB_STREAM_NAME}/pattern/video`")),
+            "the channel is the stream's name, the node's name, then the port:\n{text}"
         );
         assert!(
             text.contains(&format!(

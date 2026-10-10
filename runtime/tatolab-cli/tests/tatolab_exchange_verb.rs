@@ -23,7 +23,7 @@ fn the_exchange_help_names_both_forms_and_every_flag() {
         "[SURFACE_ID]",
         "--out <DIR>",
         "--channel <CHANNEL>",
-        "<runtime_name>/<node>/<port>",
+        "<stream>/<node>/<port>",
         "--count <N>",
         "--every <N>",
         "--field <NAME>",

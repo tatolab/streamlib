@@ -319,8 +319,8 @@ impl AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt {
 impl OperationsOnTheStreamsLoadedInThisRuntime
     for AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt
 {
-    fn this_runtimes_name(&self) -> &str {
-        self.engine.this_runtimes_name()
+    fn this_machines_name(&self) -> &streamlib::sdk::runtime::MachineName {
+        self.engine.this_machines_name()
     }
     fn runtime_operations_of_the_stream_a_call_names(
         &self,

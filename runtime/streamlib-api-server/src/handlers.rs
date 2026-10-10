@@ -138,11 +138,14 @@ pub(crate) async fn health() -> &'static str {
 }
 
 /// What a route answers when the stream it was asked about cannot be named:
-/// `404` for one not loaded — the refusal names the loaded streams — and `500`
-/// for anything else.
+/// `404` for one not loaded — the refusal names the loaded streams — `400` for
+/// an address that names no stream here, and `500` for anything else.
 fn stream_resolution_refusal_response(refusal: &Error) -> Response {
     let status = match refusal {
         Error::NotFound(_) => StatusCode::NOT_FOUND,
+        Error::InvalidPortAddress(_)
+        | Error::PortAddressNamesAnotherMachine { .. }
+        | Error::ExposedNameCastsToNothing(_) => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error_response(status, refusal)
@@ -161,7 +164,7 @@ fn stream_operations_or_refusal(
 }
 
 /// What `GET /api/graph` answers: one stream's graph, or every loaded
-/// stream's under the runtime's name.
+/// stream's under the machine's name.
 #[derive(Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
 #[expect(
@@ -188,7 +191,7 @@ pub(crate) enum NodeTypesOfOneStreamOrOfEveryStream {
     EveryStream(MachineWideRegistryResponse),
 }
 
-/// Every loaded stream's graph under the runtime's name: what `/api/graph`,
+/// Every loaded stream's graph under the machine's name: what `/api/graph`,
 /// the `graph` tool and the `streamlib://graph` resource answer when no
 /// stream is named. A stream unloaded while this renders is left out.
 pub(crate) async fn machine_wide_graph_json(
@@ -206,7 +209,7 @@ pub(crate) async fn machine_wide_graph_json(
         stream_graphs.push(stream_operations.to_json_async().await?);
     }
     Ok(json!({
-        "runtime_name": operations_on_the_loaded_streams.this_runtimes_name(),
+        "machine": operations_on_the_loaded_streams.this_machines_name().name(),
         "streams": stream_graphs,
     }))
 }
@@ -254,10 +257,10 @@ fn error_response(status: StatusCode, error: &impl std::fmt::Display) -> Respons
     path = "/api/graph",
     tag = "graph",
     params(
-        ("stream" = Option<String>, Query, description = "The loaded stream whose graph to export; absent exports every loaded stream's under the runtime's name")
+        ("stream" = Option<String>, Query, description = "The loaded stream whose graph to export; absent exports every loaded stream's under the machine's name")
     ),
     responses(
-        (status = 200, description = "With `stream`, that stream's current graph; without, `{runtime_name, streams}` holding every loaded stream's", body = GraphOfOneStreamOrOfEveryStream),
+        (status = 200, description = "With `stream`, that stream's current graph; without, `{machine, streams}` holding every loaded stream's", body = GraphOfOneStreamOrOfEveryStream),
         (status = 404, description = "The named stream is not loaded; the error names the loaded streams", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
@@ -513,12 +516,12 @@ impl EventListener for WebSocketEventForwarder {
 // Channel Tap WebSocket (read-only channel observer)
 // ============================================================================
 
-/// Query parameters for the tap WebSocket: the stream the channel is in and
-/// an optional bounded sample count.
+/// Query parameters for the tap WebSocket: the stream the channel is in, when
+/// the channel names none, and an optional bounded sample count.
 #[derive(Deserialize)]
 pub(crate) struct TapQuery {
-    /// The loaded stream the channel is in.
-    stream: String,
+    /// The loaded stream the channel is in, when the channel names none.
+    stream: Option<String>,
     /// Stream exactly `count` bags then close; absent streams live until the
     /// client disconnects.
     count: Option<usize>,
@@ -536,12 +539,12 @@ pub(crate) struct TapQuery {
     path = "/ws/tap/{channel}",
     tag = "events",
     params(
-        ("channel" = String, Path, description = "The output port's address, `<runtime_name>/<node>/<port>`, percent-encoded as one path segment"),
-        ("stream" = String, Query, description = "The loaded stream the channel is in"),
+        ("channel" = String, Path, description = "The output port's address, `[<machine>/][<stream>/]<node>/<port>` right-anchored — leading parts omitted meaning here — percent-encoded as one path segment"),
+        ("stream" = Option<String>, Query, description = "The loaded stream the channel is in, when the channel names none; one that differs from the channel's is refused"),
         ("count" = Option<usize>, Query, description = "Stream exactly this many bags then close; absent streams live until the client disconnects")
     ),
     responses(
-        (status = 400, description = "No `stream` was named; the plain-text body says which query parameter is missing"),
+        (status = 400, description = "The channel is no address, names another machine, names a stream other than `stream`, or names no stream and `stream` is absent; the error says which", body = ErrorResponse),
         (status = 404, description = "The named stream is not loaded; the error names the loaded streams", body = ErrorResponse),
         (status = 101, description = "WebSocket upgraded. Read-only observability tap: each channel bag is forwarded verbatim (FrameHeader-framed) as a binary WS frame with no encode, containerize, or transcode — decoding is the client's concern. To observe a viewable video feed, tap an encoded (h264/h265/jpeg) or container (CMAF/fMP4) channel; a raw video channel carries zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels, and this is not a realtime-video transport (use the WebRTC/display processors).")
     )
@@ -552,9 +555,12 @@ pub(crate) async fn tap_websocket_handler(
     Path(channel): Path<String>,
     Query(query): Query<TapQuery>,
 ) -> Response {
-    let stream_operations = match stream_operations_or_refusal(&state, &query.stream) {
+    let stream_operations = match state
+        .operations_on_the_loaded_streams
+        .runtime_operations_of_the_stream_a_tap_channel_names(&channel, query.stream.as_deref())
+    {
         Ok(stream_operations) => stream_operations,
-        Err(refusal) => return *refusal,
+        Err(refusal) => return stream_resolution_refusal_response(&refusal),
     };
     ws.on_upgrade(move |socket| {
         handle_tap_websocket(socket, stream_operations, channel, query.count)
@@ -818,10 +824,10 @@ pub(crate) mod router_surface_tests {
     }
 
     /// A generated client names a stream through the `stream` query parameter:
-    /// optional where its absence reads every loaded stream, required on the
-    /// tap, whose channel lives in one.
+    /// optional where its absence reads every loaded stream, and on the tap,
+    /// whose channel's address can name its stream.
     #[tokio::test]
-    async fn the_openapi_spec_declares_the_stream_query_optional_on_reads_of_every_stream_and_required_on_the_tap()
+    async fn the_openapi_spec_declares_the_stream_query_optional_on_reads_of_every_stream_and_on_the_tap()
      {
         let request = Request::builder()
             .method("GET")
@@ -833,7 +839,7 @@ pub(crate) mod router_surface_tests {
         for (path, stream_is_required) in [
             ("/api/graph", false),
             ("/api/registry", false),
-            ("/ws/tap/{channel}", true),
+            ("/ws/tap/{channel}", false),
         ] {
             let parameters = spec["paths"][path]["get"]["parameters"]
                 .as_array()
@@ -882,9 +888,9 @@ pub(crate) mod router_surface_tests {
     }
 
     /// Without `stream`, `/api/graph` renders every loaded stream under the
-    /// runtime's name, in the shape the schema generator documents.
+    /// machine's name, in the shape the schema generator documents.
     #[tokio::test]
-    async fn the_graph_route_without_a_stream_renders_every_loaded_stream_under_the_runtimes_name()
+    async fn the_graph_route_without_a_stream_renders_every_loaded_stream_under_the_machines_name()
     {
         let request = Request::builder()
             .method("GET")
@@ -894,8 +900,8 @@ pub(crate) mod router_surface_tests {
         let every_stream = json_body_of(request).await;
 
         assert_eq!(
-            every_stream["runtime_name"],
-            crate::control_plane_stub_support::STUB_RUNTIME_NAME
+            every_stream["machine"],
+            crate::control_plane_stub_support::STUB_MACHINE_NAME
         );
         assert_eq!(
             every_stream["streams"].as_array().map(Vec::len),
@@ -1047,7 +1053,7 @@ pub(crate) mod router_surface_tests {
             .unwrap();
         let head = crate::control_plane_stub_support::response_head_over_the_socket(
             &mut connection,
-            "GET /ws/tap/stub-runtime%2Fnode%2Fport?stream=elsewhere HTTP/1.1\r\n\
+            "GET /ws/tap/node%2Fport?stream=elsewhere HTTP/1.1\r\n\
              Host: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
              Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
         )
@@ -1056,10 +1062,9 @@ pub(crate) mod router_surface_tests {
         assert!(head.starts_with("HTTP/1.1 404 "), "{head}");
     }
 
-    /// A tap names the stream its channel is in; one naming none is refused
-    /// before the upgrade, naming the parameter.
-    #[tokio::test]
-    async fn a_tap_naming_no_stream_is_refused_before_the_upgrade_naming_the_parameter() {
+    /// The refusal a tap meets before the upgrade: the head, and the error its
+    /// JSON body carries.
+    async fn tap_refused_before_the_upgrade(path_and_query: &str) -> (String, String) {
         let served = crate::control_plane_stub_support::LocalApiServedOnAFreshSocket::over(
             a_control_plane_router_stub_runtime(),
         );
@@ -1068,13 +1073,13 @@ pub(crate) mod router_surface_tests {
             .unwrap();
         let head = crate::control_plane_stub_support::response_head_over_the_socket(
             &mut connection,
-            "GET /ws/tap/stub-runtime%2Fnode%2Fport HTTP/1.1\r\n\
-             Host: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
-             Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+            &format!(
+                "GET {path_and_query} HTTP/1.1\r\n\
+                 Host: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+                 Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+            ),
         )
         .await;
-        assert!(head.starts_with("HTTP/1.1 400 "), "{head}");
-
         let body_length: usize = head
             .lines()
             .find_map(|line| {
@@ -1087,8 +1092,64 @@ pub(crate) mod router_surface_tests {
         tokio::io::AsyncReadExt::read_exact(&mut connection, &mut body)
             .await
             .unwrap();
-        let refusal = String::from_utf8_lossy(&body);
-        assert!(refusal.contains("`stream`"), "{refusal}");
+        let refusal: serde_json::Value =
+            serde_json::from_slice(&body).expect("the refusal is an error response");
+        (
+            head,
+            refusal["error"].as_str().unwrap_or_default().to_string(),
+        )
+    }
+
+    /// A tap's channel is an address: one naming no stream with no `stream`
+    /// beside it, one naming a stream other than `stream`, and one naming
+    /// another machine are each refused before the upgrade, by name.
+    #[tokio::test]
+    async fn a_tap_whose_channel_names_no_stream_here_is_refused_before_the_upgrade_by_name() {
+        let stub_stream = crate::control_plane_stub_support::STUB_STREAM_NAME;
+        for (path_and_query, named) in [
+            (
+                "/ws/tap/node%2Fport".to_string(),
+                "names no stream".to_string(),
+            ),
+            (
+                format!("/ws/tap/{stub_stream}%2Fnode%2Fport?stream=elsewhere"),
+                format!("`{stub_stream}`"),
+            ),
+            (
+                format!("/ws/tap/rig%2F{stub_stream}%2Fnode%2Fport"),
+                "`rig`".to_string(),
+            ),
+        ] {
+            let (head, refusal) = tap_refused_before_the_upgrade(&path_and_query).await;
+            assert!(
+                head.starts_with("HTTP/1.1 400 "),
+                "{path_and_query}: {head}"
+            );
+            assert!(
+                refusal.contains(&named),
+                "{path_and_query}: {named} not in {refusal}"
+            );
+        }
+    }
+
+    /// A channel naming a stream the runtime does not load is refused as one
+    /// not loaded, whether the stream is in the channel or beside it.
+    #[tokio::test]
+    async fn a_tap_whose_channel_names_a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
+        for path_and_query in [
+            "/ws/tap/elsewhere%2Fnode%2Fport",
+            "/ws/tap/stub-machine%2Felsewhere%2Fnode%2Fport",
+        ] {
+            let (head, refusal) = tap_refused_before_the_upgrade(path_and_query).await;
+            assert!(
+                head.starts_with("HTTP/1.1 404 "),
+                "{path_and_query}: {head}"
+            );
+            assert!(
+                refusal.contains(crate::control_plane_stub_support::STUB_STREAM_NAME),
+                "{path_and_query}: {refusal}"
+            );
+        }
     }
 
     /// File permission on the local API socket is the whole gate, so a request
@@ -1105,7 +1166,7 @@ pub(crate) mod router_surface_tests {
             (
                 "GET",
                 format!(
-                    "/ws/tap/some-channel?stream={}",
+                    "/ws/tap/some-node%2Fsome-port?stream={}",
                     crate::control_plane_stub_support::STUB_STREAM_NAME
                 ),
                 "",

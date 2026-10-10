@@ -520,31 +520,36 @@ fn subscriber_ring_depth_of_input_port(
     }
 }
 
-/// Resolve the address a caller names a port by — `<runtime name>/<node>/<port>`
-/// — to the port on this runtime a link carries from.
+/// Resolve the address a caller names a port by — `[<machine>/][<stream>/]<node>/<port>`
+/// — to the port in the stream `this_stream` on `this_machine` that a link
+/// carries from.
 ///
-/// An address naming another runtime is refused naming that runtime: a channel
-/// is tapped on the runtime that publishes it. A channel's iceoryx2 data service
-/// only exists once a `connect()` has wired its source, so an address no link
-/// carries from is genuinely untappable and answers
-/// [`Error::TapChannelNotFound`], as does an address that does not parse.
+/// An address that does not parse is refused as [`Error::InvalidPortAddress`];
+/// one naming another machine as [`Error::PortAddressNamesAnotherMachine`];
+/// one naming another stream as [`Error::InvalidPortAddress`] naming both, since
+/// a stream taps its own ports. A channel's iceoryx2 data service only exists
+/// once a `connect()` has wired its source, so an address no link carries from
+/// is genuinely untappable and answers [`Error::TapChannelNotFound`].
 pub(crate) fn find_the_source_a_caller_named(
     graph: &Graph,
-    this_runtimes_name: &str,
+    this_machine: &crate::core::runtime::MachineName,
+    this_stream: &str,
     port_address: &str,
 ) -> Result<OutputLinkPortRef> {
     let not_found = || Error::TapChannelNotFound(port_address.to_string());
-    let address = crate::core::graph::PortAddress::parse(port_address).map_err(|_| not_found())?;
-    if !address.names_the_runtime(this_runtimes_name) {
+    let address = crate::core::graph::PortAddress::parse(port_address)?;
+    address.refuse_when_it_names_another_machine(this_machine)?;
+    if let Some(stream) = address.stream()
+        && stream != this_stream
+    {
         return Err(Error::InvalidPortAddress(format!(
-            "'{port_address}' names the runtime `{}`, and a tap reads a channel on this \
-             runtime, `{this_runtimes_name}`",
-            address.runtime_name()
+            "`{port_address}` names a port in the stream `{stream}`, and this tap reads the \
+             stream `{this_stream}`; tap `{stream}` to read its ports"
         )));
     }
     let processor_id = graph
         .traversal()
-        .v_with_node_name(address.processor_display_name())
+        .v_with_node_name(address.node_name())
         .first()
         .ok_or_else(not_found)?
         .id
@@ -4035,12 +4040,17 @@ mod tests {
         );
     }
 
-    /// A port on this runtime is named by `<this runtime>/<node>/<port>` and
-    /// resolves to the exact source a link carries from; its iceoryx2 channel
-    /// name, an address naming no node, and a port no link carries from all
-    /// answer `TapChannelNotFound`.
+    fn the_machine_these_tests_run_on() -> crate::core::runtime::MachineName {
+        crate::core::runtime::MachineName::from_a_tailnet_dns_name("desk.tail2950db.ts.net.")
+            .expect("a tailnet name names a machine")
+    }
+
+    /// A port in this stream is named by its address with or without this
+    /// stream and this machine in front, and resolves to the exact source a
+    /// link carries from; its iceoryx2 channel name, an address naming no
+    /// node, and a port no link carries from all answer `TapChannelNotFound`.
     #[test]
-    fn a_port_on_this_runtime_is_named_by_its_address_and_not_by_its_channel() {
+    fn a_port_in_this_stream_is_named_by_its_address_and_not_by_its_channel() {
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
         let dest_id = add_mock_input_only(&mut graph);
@@ -4055,26 +4065,30 @@ mod tests {
             .expect("the source node is in the graph")
             .display_name
             .clone();
+        let this_machine = the_machine_these_tests_run_on();
 
-        let resolved = find_the_source_a_caller_named(
-            &graph,
-            "bench-cam-a1b2",
-            &format!("bench-cam-a1b2/{source_node_name}/out1"),
-        )
-        .expect("a wired port on this runtime resolves by its address");
-        assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
-        assert_eq!(resolved.port_name(), "out1");
+        for address in [
+            format!("{source_node_name}/out1"),
+            format!("main/{source_node_name}/out1"),
+            format!("desk/main/{source_node_name}/out1"),
+            format!("desk.tail2950db.ts.net/main/{source_node_name}/out1"),
+        ] {
+            let resolved = find_the_source_a_caller_named(&graph, &this_machine, "main", &address)
+                .unwrap_or_else(|refusal| panic!("{address}: {refusal}"));
+            assert_eq!(resolved.processor_id().as_str(), src_id.as_str());
+            assert_eq!(resolved.port_name(), "out1");
+        }
 
         let its_channel = crate::iceoryx2::source_channel_name(&src_id, "out1")
             .expect("source port derives a channel name");
         for unresolvable in [
             its_channel.as_str().to_string(),
-            "bench-cam-a1b2/nosuchnode/out1".to_string(),
-            format!("bench-cam-a1b2/{source_node_name}/out2"),
+            "main/nosuchnode/out1".to_string(),
+            format!("main/{source_node_name}/out2"),
         ] {
             assert!(
                 matches!(
-                    find_the_source_a_caller_named(&graph, "bench-cam-a1b2", &unresolvable),
+                    find_the_source_a_caller_named(&graph, &this_machine, "main", &unresolvable),
                     Err(Error::TapChannelNotFound(_))
                 ),
                 "{unresolvable:?} must not resolve to any source port",
@@ -4082,27 +4096,58 @@ mod tests {
         }
     }
 
-    /// A tap reads a channel on this runtime, so an address naming another
-    /// runtime is refused naming that runtime rather than reported as a channel
-    /// nobody publishes.
+    /// A tap reads a port on this machine, so an address naming another
+    /// machine is refused naming it rather than reported as a channel nobody
+    /// publishes.
     #[test]
-    fn a_tap_naming_another_runtime_is_refused_naming_that_runtime() {
-        let graph = Graph::new();
-
+    fn a_tap_naming_another_machine_is_refused_naming_that_machine() {
         let refused = find_the_source_a_caller_named(
-            &graph,
-            "studio-display",
-            "bench-cam-a1b2/camera-source/video",
+            &Graph::new(),
+            &the_machine_these_tests_run_on(),
+            "main",
+            "rig/main/camera-source/video",
         )
-        .expect_err("a channel on another runtime is nothing this runtime taps");
+        .expect_err("a channel on another machine is nothing this machine taps");
 
+        assert!(
+            matches!(refused, Error::PortAddressNamesAnotherMachine { ref machine, .. } if machine == "rig"),
+            "refused as an address naming another machine, got {refused:?}"
+        );
+        assert!(refused.to_string().contains("`rig`"), "{refused}");
+    }
+
+    /// A stream taps its own ports, so an address naming another stream is
+    /// refused naming both streams, and one that does not parse is refused as
+    /// an address.
+    #[test]
+    fn a_tap_naming_another_stream_or_no_address_is_refused_by_name() {
+        let refused = find_the_source_a_caller_named(
+            &Graph::new(),
+            &the_machine_these_tests_run_on(),
+            "main",
+            "studio/camera-source/video",
+        )
+        .expect_err("a port in another stream is not this stream's to tap");
         assert!(
             matches!(refused, Error::InvalidPortAddress(_)),
-            "refused as an address this runtime cannot tap, got {refused:?}"
+            "{refused:?}"
         );
+        let refused = refused.to_string();
         assert!(
-            refused.to_string().contains("`bench-cam-a1b2`"),
-            "the refusal names the runtime: {refused}"
+            refused.contains("`studio`") && refused.contains("`main`"),
+            "{refused}"
+        );
+
+        let refused = find_the_source_a_caller_named(
+            &Graph::new(),
+            &the_machine_these_tests_run_on(),
+            "main",
+            "video",
+        )
+        .expect_err("one part is no address");
+        assert!(
+            matches!(refused, Error::InvalidPortAddress(_)),
+            "{refused:?}"
         );
     }
 

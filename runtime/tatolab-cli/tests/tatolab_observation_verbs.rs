@@ -19,7 +19,7 @@ fn the_tap_help_names_the_channel_its_stream_and_its_bounds() {
 
     for named in [
         "<CHANNEL>",
-        "<runtime_name>/<node>/<port>",
+        "<stream>/<node>/<port>",
         "--stream <STREAM>",
         "--count <N>",
         "--max-bag-bytes <BYTES>",
@@ -30,19 +30,6 @@ fn the_tap_help_names_the_channel_its_stream_and_its_bounds() {
     assert!(
         !help_text.contains('`'),
         "help reads plainly, with no markdown:\n{help_text}"
-    );
-}
-
-/// A tap names the stream its channel belongs to: the runtime holds many.
-#[test]
-fn tap_without_a_stream_is_a_usage_error() {
-    let refused = run_tatolab_reading_no_runtime_directory(&["tap", "rig/pattern/video"]);
-
-    assert_eq!(refused.status.code(), Some(2));
-    assert!(
-        standard_error_text(&refused).contains("--stream <STREAM>"),
-        "{}",
-        standard_error_text(&refused)
     );
 }
 
@@ -80,7 +67,7 @@ mod against_an_isolated_machine {
         let isolated_machine_directories = IsolatedMachineDirectories::new();
         let stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
             StubLocalApiScript::answering_every_tool_call_with(StubToolAnswer::tool_result(
-                r#"{"runtime_name":"desk","streams":[]}"#,
+                r#"{"machine":"desk","streams":[]}"#,
             )),
         );
 
@@ -93,7 +80,7 @@ mod against_an_isolated_machine {
         );
         assert_eq!(
             standard_output_text(&graphed),
-            "{\"runtime_name\":\"desk\",\"streams\":[]}\n"
+            "{\"machine\":\"desk\",\"streams\":[]}\n"
         );
         assert_eq!(standard_error_text(&graphed), "");
         assert_eq!(
@@ -168,6 +155,23 @@ mod against_an_isolated_machine {
                 tool_arguments: json!({"stream": "camera", "channel": "cam/video", "count": 3}),
                 tool_call_transport: StubToolCallTransport::StreamableHttpPost,
             }]
+        );
+    }
+
+    /// A channel's address can name its stream, so a tap naming no `--stream` sends the channel
+    /// alone, and the runtime reads the stream from it.
+    #[test]
+    fn tap_without_a_stream_sends_the_channel_alone() {
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let stub_local_api_server =
+            isolated_machine_directories.serve_stub_local_api(StubLocalApiScript::default());
+
+        let tapped = isolated_machine_directories.run_tatolab(&["tap", "camera/cam/video"]);
+
+        assert!(tapped.status.success(), "{}", standard_error_text(&tapped));
+        assert_eq!(
+            stub_local_api_server.recorded_arguments_of("tap"),
+            [json!({"channel": "camera/cam/video"})]
         );
     }
 

@@ -369,8 +369,6 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         .env(TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE, &test_machine_root)
         .env("STREAMLIB_HOME", &streamlib_home)
         .env("STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET", &socket_path)
-        .env_remove("STREAMLIB_RUNTIME_NAME")
-        .env_remove("STREAMLIB_APP_DIRECTORY")
         .env_remove("STREAMLIB_QUIET")
         .env_remove("STREAMLIB_ICEORYX2_DOMAIN_ROOT")
         .env_remove("PYTHONPATH")

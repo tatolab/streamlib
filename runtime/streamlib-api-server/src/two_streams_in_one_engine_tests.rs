@@ -202,7 +202,7 @@ async fn a_stream_not_loaded_is_refused_naming_the_loaded_ones() {
     );
 }
 
-/// `graph` naming no stream renders both under the runtime's name; a tool
+/// `graph` naming no stream renders both under the machine's name; a tool
 /// acting on one stream that names none is refused naming the argument,
 /// however many streams are loaded.
 #[tokio::test(flavor = "multi_thread")]
@@ -217,10 +217,7 @@ async fn graph_without_a_stream_renders_both_and_a_one_stream_tool_naming_none_i
         )
         .await,
     );
-    assert_eq!(
-        machine_wide["runtime_name"],
-        loaded.engine.runtime_name().as_str()
-    );
+    assert_eq!(machine_wide["machine"], loaded.engine.machine_name().name());
     let streams = machine_wide["streams"].as_array().expect("a streams array");
     assert_eq!(
         streams
@@ -249,6 +246,43 @@ async fn graph_without_a_stream_renders_both_and_a_one_stream_tool_naming_none_i
     assert!(
         node_names_in(&loaded.first.to_json().unwrap()).contains(&"idle-in-first".to_string()),
         "a call naming no stream reaches none, even with one loaded"
+    );
+}
+
+/// A tap reads the stream its channel's address names, with no `stream`
+/// beside it; an address naming a stream not loaded, or a stream other than
+/// the one beside it, is refused naming the streams.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tap_reads_the_stream_its_channel_names() {
+    let loaded = AnEngineLoadingTwoStreams::load();
+    let tap_refusal = |arguments: Value| {
+        let operations = loaded.operations_on_the_loaded_streams();
+        async move { tool_error_text(&tool_call_result(operations, "tap", arguments).await) }
+    };
+
+    let in_the_second = tap_refusal(json!({ "channel": "second/idle-in-second/video" })).await;
+    assert!(
+        in_the_second.contains("no tappable channel"),
+        "the second stream was reached and has no link out of that port: {in_the_second}"
+    );
+    let machine = loaded.engine.machine_name().name().to_string();
+    let with_this_machine =
+        tap_refusal(json!({ "channel": format!("{machine}/second/idle-in-second/video") })).await;
+    assert!(
+        with_this_machine.contains("no tappable channel"),
+        "{with_this_machine}"
+    );
+
+    let not_loaded = tap_refusal(json!({ "channel": "third/idle/video" })).await;
+    assert!(
+        not_loaded.contains("`third`") && not_loaded.contains("first, second"),
+        "{not_loaded}"
+    );
+    let two_streams =
+        tap_refusal(json!({ "channel": "first/idle-in-first/video", "stream": "second" })).await;
+    assert!(
+        two_streams.contains("`first`") && two_streams.contains("`second`"),
+        "{two_streams}"
     );
 }
 

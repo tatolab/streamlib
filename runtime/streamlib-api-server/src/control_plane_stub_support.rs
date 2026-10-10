@@ -94,9 +94,6 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
         }
-        fn this_runtimes_name(&self) -> &str {
-            $crate::control_plane_stub_support::STUB_RUNTIME_NAME
-        }
         fn request_this_streams_shutdown(
             &self,
             _reason: &str,
@@ -142,10 +139,20 @@ pub(crate) const STUB_NODE_ID_SUFFIX: &str = "-id";
 /// The id the stub answers every `connect` with.
 pub(crate) const STUB_CREATED_LINK_ID: &str = "stub-created-link";
 
-/// The name the stub runtime answers `this_runtimes_name` with, and the
-/// top-level `runtime_name` a test arms its graph with — the first part of a
-/// tap's channel.
-pub(crate) const STUB_RUNTIME_NAME: &str = "stub-runtime";
+/// The name of the machine the stub runtime runs on, and the top-level
+/// `machine` a test arms its graph with — the first part of an address.
+pub(crate) const STUB_MACHINE_NAME: &str = "stub-machine";
+
+/// The machine the stub runtime answers `this_machines_name` with, named
+/// [`STUB_MACHINE_NAME`] off a tailnet.
+pub(crate) fn the_stub_machine() -> &'static ::streamlib::sdk::runtime::MachineName {
+    static STUB_MACHINE: ::std::sync::OnceLock<::streamlib::sdk::runtime::MachineName> =
+        ::std::sync::OnceLock::new();
+    STUB_MACHINE.get_or_init(|| {
+        ::streamlib::sdk::runtime::MachineName::from_a_hostname(STUB_MACHINE_NAME)
+            .expect("the stub machine's name names something")
+    })
+}
 
 /// The one stream a stub runtime loads: the stub itself.
 pub(crate) const STUB_STREAM_NAME: &str = "stub-stream";
@@ -196,8 +203,8 @@ pub(crate) fn the_stub_runtime_takes_no_stream_action(
 macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
     ($stub_type:ty) => {
         impl ::streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime for $stub_type {
-            fn this_runtimes_name(&self) -> &str {
-                $crate::control_plane_stub_support::STUB_RUNTIME_NAME
+            fn this_machines_name(&self) -> &::streamlib::sdk::runtime::MachineName {
+                $crate::control_plane_stub_support::the_stub_machine()
             }
             fn runtime_operations_of_the_stream_a_call_names(
                 &self,
@@ -461,9 +468,6 @@ macro_rules! graph_mutation_ops_record_the_call {
             _link_id: &::streamlib::sdk::graph::LinkUniqueId,
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!("the MCP front end awaits the async op, never the blocking wrapper")
-        }
-        fn this_runtimes_name(&self) -> &str {
-            $crate::control_plane_stub_support::STUB_RUNTIME_NAME
         }
         fn request_this_streams_shutdown(
             &self,

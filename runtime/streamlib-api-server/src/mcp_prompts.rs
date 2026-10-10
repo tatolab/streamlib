@@ -660,7 +660,8 @@ fn look_at_what_a_channel_carries_recipe(
 ) -> Result<GraphRecipe, McpError> {
     let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
     let from_port = arguments.from_port.as_str();
-    let channel = format!("{}/{}/{from_port}", graph.runtime_name, source.name);
+    let stream = graph.stream.as_deref().unwrap_or(&arguments.stream);
+    let channel = format!("{stream}/{}/{from_port}", source.name);
 
     Ok(GraphRecipe {
         introduction_text: format!(

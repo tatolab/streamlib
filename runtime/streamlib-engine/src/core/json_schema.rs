@@ -41,18 +41,19 @@ pub struct GraphResponse {
     /// exposes none.
     #[serde(default)]
     pub exposed: Vec<ExposedOutputPortOutput>,
-    /// This runtime's name, the first chunk of a tap channel
-    /// `<runtime_name>/<node>/<port>`.
-    pub runtime_name: String,
+    /// The name of the machine the stream runs on, the first part of
+    /// `<machine>/<stream>/<node>/<port>`.
+    pub machine: String,
 }
 
 /// Response from `/api/graph` and the `graph` tool when no stream is named:
-/// every loaded stream's graph under the runtime's name.
+/// every loaded stream's graph under the machine's name.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MachineWideGraphResponse {
-    /// This runtime's name, the first chunk of every tap channel.
-    pub runtime_name: String,
+    /// The machine's name, the first part of
+    /// `<machine>/<stream>/<node>/<port>`.
+    pub machine: String,
     /// Each loaded stream's graph, as a call naming that stream returns it.
     pub streams: Vec<GraphResponse>,
 }
@@ -1045,16 +1046,16 @@ mod graph_response_top_level_key_rendering_tests {
     use super::*;
     use crate::core::graph::Graph;
 
-    const RUNTIME_NAME: &str = "rig-desk-a1b2";
+    const MACHINE_NAME: &str = "desk";
 
     /// No package extends the engine, so nothing a package registered renders.
     #[test]
     fn a_graph_renders_no_extensions_key_and_its_schema_declares_none() {
         let rendered =
-            serde_json::to_value(Graph::new().to_graph_response(RUNTIME_NAME.to_string())).unwrap();
+            serde_json::to_value(Graph::new().to_graph_response(MACHINE_NAME.to_string())).unwrap();
 
         let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["nodes", "links", "exposed", "runtime_name"]);
+        assert_eq!(keys, ["nodes", "links", "exposed", "machine"]);
 
         let schema = serde_json::to_value(schemars::schema_for!(GraphResponse)).unwrap();
         let mut declared: Vec<&String> = schema["properties"]
@@ -1063,20 +1064,17 @@ mod graph_response_top_level_key_rendering_tests {
             .keys()
             .collect();
         declared.sort();
-        assert_eq!(
-            declared,
-            ["exposed", "links", "nodes", "runtime_name", "stream"]
-        );
+        assert_eq!(declared, ["exposed", "links", "machine", "nodes", "stream"]);
     }
 
-    /// `tap` spells its channel from the top-level `runtime_name`, so it is the
-    /// name the runtime was given, verbatim, and it reads back.
+    /// An address begins with the machine, so `graph` carries the machine's
+    /// name as a top-level key, verbatim, and it reads back.
     #[test]
-    fn the_runtime_name_is_a_top_level_key_and_no_mesh_key_renders() {
+    fn the_machine_is_a_top_level_key_and_no_mesh_key_renders() {
         let rendered =
-            serde_json::to_value(Graph::new().to_graph_response(RUNTIME_NAME.to_string())).unwrap();
+            serde_json::to_value(Graph::new().to_graph_response(MACHINE_NAME.to_string())).unwrap();
 
-        assert_eq!(rendered["runtime_name"], RUNTIME_NAME);
+        assert_eq!(rendered["machine"], MACHINE_NAME);
         assert!(
             rendered.get("mesh").is_none(),
             "no mesh key renders: {rendered}"
@@ -1084,7 +1082,21 @@ mod graph_response_top_level_key_rendering_tests {
 
         let read_back: GraphResponse =
             serde_json::from_value(rendered).expect("a rendered graph deserializes");
-        assert_eq!(read_back.runtime_name, RUNTIME_NAME);
+        assert_eq!(read_back.machine, MACHINE_NAME);
+    }
+
+    /// The graph of every stream carries the machine at its top level beside
+    /// the streams, and nothing else.
+    #[test]
+    fn the_machine_wide_graph_is_the_machine_and_its_streams() {
+        let machine_wide = MachineWideGraphResponse {
+            machine: MACHINE_NAME.to_string(),
+            streams: vec![Graph::new().to_graph_response(MACHINE_NAME.to_string())],
+        };
+        let rendered = serde_json::to_value(&machine_wide).unwrap();
+        let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["machine", "streams"]);
+        assert_eq!(rendered["machine"], MACHINE_NAME);
     }
 }
 

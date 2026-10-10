@@ -76,7 +76,8 @@ struct GraphDocumentObjectKeys {
 const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
     object_kind: "a graph",
     spec_keys: &["stream", "nodes", "links", "exposed"],
-    live_keys: &["extensions", "runtime_name"],
+    // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
+    live_keys: &["extensions", "machine", "runtime_name"],
 };
 
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
@@ -315,15 +316,6 @@ fn refuse_a_key_this_runtime_does_not_read(graph_document: &serde_json::Value) -
             let Some(link_end) = link.get(end_key).and_then(serde_json::Value::as_object) else {
                 continue;
             };
-            if let Some(runtime_name) = link_end.get("runtime_name") {
-                return Err(Error::GraphError(format!(
-                    "the link end `{}` names the runtime `{}`, and a link end on another \
-                     runtime is not something a graph holds: both ends of a link are \
-                     `{{node, port}}` on the runtime that loads it",
-                    port_address_of(link_end),
-                    runtime_name.as_str().unwrap_or("?")
-                )));
-            }
             refuse_a_key_no_such_object_holds(link_end, &GRAPH_LINK_END_KEYS, || {
                 format!("the {end_key} end of {}", link_named())
             })?;
@@ -498,7 +490,7 @@ mod tests {
             ],
             "exposed": [{"node": "camera", "port": "video"}],
             "extensions": [],
-            "runtime_name": "rig-desk-a1b2"
+            "machine": "desk"
         });
 
         let graph = GraphSnapshot::from_graph_document(graph_document).unwrap();
@@ -689,36 +681,6 @@ mod tests {
 
         assert!(refusal.contains("no output port `frames_in`"), "{refusal}");
         assert!(refusal.contains("video"), "{refusal}");
-    }
-
-    /// An end spelled `{runtime_name, node, port}` names a port on a runtime,
-    /// and a graph holds no link with an end anywhere but on the runtime that
-    /// loads it. Read as `{node, port}` with the runtime dropped, it would load
-    /// as a local end on whichever node happens to share the name.
-    #[test]
-    fn a_link_end_naming_a_runtime_is_refused_naming_that_runtime() {
-        let camera_class = a_registered_camera_class();
-        for (source, target) in [
-            (
-                serde_json::json!({"runtime_name": "studio-cam-9f3c", "node": "front", "port": "video"}),
-                serde_json::json!({"node": "back", "port": "frames_in"}),
-            ),
-            (
-                serde_json::json!({"node": "front", "port": "video"}),
-                serde_json::json!({"runtime_name": "studio-cam-9f3c", "node": "back", "port": "frames_in"}),
-            ),
-        ] {
-            let refusal = GraphSnapshot::from_graph_document(serde_json::json!({
-                "nodes": [{"name": "front", "type": camera_class},
-                          {"name": "back", "type": camera_class}],
-                "links": [{"source": source, "target": target}]
-            }))
-            .expect_err("a link end on another runtime is not something a graph holds")
-            .to_string();
-
-            assert!(refusal.contains("`studio-cam-9f3c`"), "{refusal}");
-            assert!(refusal.contains("another runtime"), "{refusal}");
-        }
     }
 
     #[test]

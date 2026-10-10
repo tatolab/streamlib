@@ -39,16 +39,18 @@ pub(crate) fn graph_tool_arguments(
     graph_arguments
 }
 
-/// `tap`'s tool arguments: the stream, the channel, and each bound only when the caller named it,
-/// so the tool's own default applies otherwise.
+/// `tap`'s tool arguments: the channel, and the stream and each bound only when the caller named
+/// it, so the channel's own stream and the tool's own defaults apply otherwise.
 pub(crate) fn tap_tool_arguments(
-    stream: &str,
+    stream: Option<&str>,
     channel: &str,
     requested_bag_count: Option<i64>,
     requested_max_bag_bytes: Option<i64>,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut tap_arguments = serde_json::Map::new();
-    tap_arguments.insert("stream".to_owned(), stream.into());
+    if let Some(stream) = stream.filter(|stream| !stream.is_empty()) {
+        tap_arguments.insert("stream".to_owned(), stream.into());
+    }
     tap_arguments.insert("channel".to_owned(), channel.into());
     if let Some(requested_bag_count) = requested_bag_count {
         tap_arguments.insert("count".to_owned(), requested_bag_count.into());
@@ -81,18 +83,36 @@ mod tests {
     }
 
     #[test]
-    fn tap_sends_the_stream_the_channel_and_only_the_bounds_the_caller_named() {
+    fn tap_sends_the_channel_and_only_the_stream_and_bounds_the_caller_named() {
         assert_eq!(
-            serde_json::Value::Object(tap_tool_arguments("camera", "cam/video", Some(3), None)),
+            serde_json::Value::Object(tap_tool_arguments(
+                Some("camera"),
+                "cam/video",
+                Some(3),
+                None
+            )),
             json!({"stream": "camera", "channel": "cam/video", "count": 3})
         );
         assert_eq!(
-            serde_json::Value::Object(tap_tool_arguments("camera", "cam/video", None, Some(4096))),
+            serde_json::Value::Object(tap_tool_arguments(
+                Some("camera"),
+                "cam/video",
+                None,
+                Some(4096)
+            )),
             json!({"stream": "camera", "channel": "cam/video", "max_bag_bytes": 4096})
         );
-        assert_eq!(
-            serde_json::Value::Object(tap_tool_arguments("camera", "cam/video", None, None)),
-            json!({"stream": "camera", "channel": "cam/video"})
-        );
+        for no_stream in [None, Some("")] {
+            assert_eq!(
+                serde_json::Value::Object(tap_tool_arguments(
+                    no_stream,
+                    "camera/cam/video",
+                    None,
+                    None
+                )),
+                json!({"channel": "camera/cam/video"}),
+                "{no_stream:?}"
+            );
+        }
     }
 }

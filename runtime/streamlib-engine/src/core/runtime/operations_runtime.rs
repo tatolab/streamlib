@@ -581,7 +581,8 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             |graph, _tx| -> Result<(String, crate::iceoryx2::ChannelSizing)> {
                 let source = crate::core::compiler::compiler_ops::find_the_source_a_caller_named(
                     graph,
-                    self.this_runtimes_name(),
+                    &self.engine_resources_shared_by_every_stream().machine_name,
+                    self.stream_name(),
                     &channel,
                 )?;
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
@@ -627,12 +628,6 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
 
     fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
         self.block_on_the_engines_tokio_runtime(connect_impl(self.live_graph_change(), from, to))
-    }
-
-    fn this_runtimes_name(&self) -> &str {
-        self.engine_resources_shared_by_every_stream()
-            .runtime_name
-            .as_str()
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {

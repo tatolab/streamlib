@@ -8,13 +8,13 @@ use tracing::Instrument as _;
 use super::operations::{BoxFuture, RuntimeOperations};
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
 use super::{
-    ExchangedPublishedSurfaceFramePngImage, LoadedStreamTag, OutputPortExposureOutcome,
-    RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome, StreamRunOutcome,
-    StreamStartOutcome, StreamStopOutcome,
+    ExchangedPublishedSurfaceFramePngImage, LoadedStreamTag, MachineName,
+    OutputPortExposureOutcome, RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome,
+    StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::{Error, Result};
-use crate::core::graph::OutputPortExposureLevel;
+use crate::core::graph::{OutputPortExposureLevel, PortAddress, cast_exposed_name_to_url_safe};
 use crate::core::logging::LoadedStreamLogRecordsPage;
 
 /// One page of a loaded stream's log records, and the tag of the load that
@@ -37,8 +37,8 @@ pub struct LogRecordsPageOfOneLoadedStream {
 ///
 /// Implemented by [`Runner`], and by the control plane's test stubs.
 pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
-    /// This runtime's name, the first chunk of every tap channel.
-    fn this_runtimes_name(&self) -> &str;
+    /// This machine's name, the first part of every address.
+    fn this_machines_name(&self) -> &MachineName;
 
     /// The operations on the loaded stream `stream_name` names. Refused with
     /// [`Error::NotFound`] naming the loaded streams when it is not loaded.
@@ -46,6 +46,42 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         &self,
         stream_name: &str,
     ) -> Result<Arc<dyn RuntimeOperations>>;
+
+    /// The operations on the loaded stream a tap of `channel` reads: the stream
+    /// its address names, else `stream_named_beside_it`.
+    ///
+    /// Refused with [`Error::InvalidPortAddress`] when the address does not
+    /// parse, when it and `stream_named_beside_it` name two streams (naming
+    /// both), or when neither names one; with
+    /// [`Error::PortAddressNamesAnotherMachine`] when it names another machine;
+    /// and as [`Self::runtime_operations_of_the_stream_a_call_names`] refuses.
+    fn runtime_operations_of_the_stream_a_tap_channel_names(
+        &self,
+        channel: &str,
+        stream_named_beside_it: Option<&str>,
+    ) -> Result<Arc<dyn RuntimeOperations>> {
+        let address = PortAddress::parse(channel)?;
+        address.refuse_when_it_names_another_machine(self.this_machines_name())?;
+        let stream_named_beside_it_cast = stream_named_beside_it
+            .map(cast_exposed_name_to_url_safe)
+            .transpose()?;
+        let stream = match (address.stream(), stream_named_beside_it_cast.as_deref()) {
+            (Some(in_the_address), Some(beside_it)) if in_the_address != beside_it => {
+                return Err(Error::InvalidPortAddress(format!(
+                    "the channel `{channel}` names the stream `{in_the_address}`, and the call \
+                     names the stream `{beside_it}`; name one stream, or the same one twice"
+                )));
+            }
+            (Some(stream), _) | (None, Some(stream)) => stream,
+            (None, None) => {
+                return Err(Error::InvalidPortAddress(format!(
+                    "the channel `{channel}` names no stream, and the call names none: write \
+                     the channel `<stream>/<node>/<port>`, or name the stream beside it"
+                )));
+            }
+        };
+        self.runtime_operations_of_the_stream_a_call_names(stream)
+    }
 
     /// The node types the loaded stream `stream_name` names resolves — the
     /// native ones, then the ones described in its own interpreter — with the
@@ -126,8 +162,8 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 }
 
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
-    fn this_runtimes_name(&self) -> &str {
-        self.runtime_name().as_str()
+    fn this_machines_name(&self) -> &MachineName {
+        self.machine_name()
     }
 
     fn runtime_operations_of_the_stream_a_call_names(

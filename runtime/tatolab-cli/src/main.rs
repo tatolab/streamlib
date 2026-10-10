@@ -178,7 +178,7 @@ enum TatolabVerb {
     /// Export the runtime's live graph as JSON: every stream's, or one's.
     #[command(
         long_about = "Nodes, ports, links, channel names, states and metrics, as the runtime \
-                      reports them right now: every loaded stream under the runtime's name, or with \
+                      reports them right now: every loaded stream under the machine's name, or with \
                       --stream that stream's graph alone, in the shape a load takes."
     )]
     Graph {
@@ -195,13 +195,14 @@ enum TatolabVerb {
     Tap {
         /// The channel tapped, addressed as its output port.
         #[arg(
-            help = "The output port's address, <runtime_name>/<node>/<port>, as graph names them: \
-                    its top-level runtime_name and a node's name"
+            help = "The output port's address as graph names its parts: <stream>/<node>/<port>, \
+                    <node>/<port> with --stream, or <machine>/<stream>/<node>/<port> naming this \
+                    machine"
         )]
         channel: String,
-        /// The loaded stream the channel belongs to.
-        #[arg(long = "stream", value_name = "STREAM", required = true)]
-        stream: String,
+        /// The loaded stream the channel belongs to, when the channel names none.
+        #[arg(long = "stream", value_name = "STREAM")]
+        stream: Option<String>,
         /// Bags to collect before returning (default: a small sample).
         #[arg(long = "count", value_name = "N", allow_negative_numbers = true)]
         requested_bag_count: Option<i64>,
@@ -342,7 +343,7 @@ fn main() -> ExitCode {
         } => runtime_observation_verbs::print_local_api_tool_result_of_the_running_runtime(
             runtime_observation_verbs::TAP_TOOL_NAME,
             runtime_observation_verbs::tap_tool_arguments(
-                &stream,
+                stream.as_deref(),
                 &channel,
                 requested_bag_count,
                 requested_max_bag_bytes,

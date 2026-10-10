@@ -19,29 +19,110 @@ use common::{
     call_a_tool_over_the_local_api, the_local_apis_answer_to_get, the_mode_of,
 };
 
-/// `STREAMLIB_RUNTIME_NAME` names the runtime until the machine is named, and
-/// `graph` with no stream renders it over every loaded stream — none here.
+/// A `tailscale` standing in for the Tailscale CLI, alone in a directory a
+/// test puts on `PATH`, writing `status_json` for any arguments with the
+/// shell's own `printf`, since nothing else is on that `PATH`.
+fn a_directory_holding_a_tailscale_cli_writing(
+    machine_root: &TatolabTestMachineRoot,
+    status_json: &serde_json::Value,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let status_json = status_json.to_string();
+    assert!(
+        !status_json.contains('\''),
+        "the stub quotes the status in single quotes"
+    );
+    let directory = machine_root.path().join("path-with-a-stub-tailscale");
+    std::fs::create_dir_all(&directory).unwrap();
+    let tailscale_cli = directory.join("tailscale");
+    std::fs::write(
+        &tailscale_cli,
+        format!("#!/bin/sh\nprintf '%s' '{status_json}'\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&tailscale_cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+    directory
+}
+
+/// This machine's hostname, read the way the runtime reads it.
+fn this_hosts_name() -> String {
+    let mut buffer = [0u8; 256];
+    // SAFETY: the buffer is 256 bytes and that is the length passed.
+    let reported =
+        unsafe { libc::gethostname(buffer.as_mut_ptr() as *mut libc::c_char, buffer.len()) };
+    assert_eq!(reported, 0, "the test host reports a hostname");
+    let end = buffer
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf8_lossy(&buffer[..end]).into_owned()
+}
+
+/// What `/api/graph` answers a `tatolabd` started with `path` as its `PATH`.
+fn the_machine_wide_graph_with_path(
+    machine_root: &TatolabTestMachineRoot,
+    runtime_unit: &TemporaryRuntimeUnit,
+    path: &std::path::Path,
+) -> serde_json::Value {
+    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
+    tatolabd_command.env("PATH", path);
+    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command);
+    let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
+    runtime.interrupt_and_expect_a_clean_exit();
+    graph
+}
+
+/// On a tailnet the machine is named by its tailnet name, and `graph` with no
+/// stream renders it over every loaded stream — none here.
 #[test]
-fn the_local_api_at_the_fixed_socket_answers_graph_with_the_runtime_name_and_no_streams() {
+fn on_a_tailnet_graph_answers_the_machine_by_its_tailnet_name_and_no_streams() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
-    let mut tatolabd_command = machine_root.tatolabd_command(&runtime_unit.tatolabd);
-    tatolabd_command.env(
-        "STREAMLIB_RUNTIME_NAME",
-        "tatolabd-named-from-the-environment",
+    let path = a_directory_holding_a_tailscale_cli_writing(
+        &machine_root,
+        &serde_json::json!({
+            "BackendState": "Running",
+            "Self": { "HostName": "Desk", "DNSName": "desk.tail2950db.ts.net." },
+        }),
     );
-    let mut runtime = SpawnedTatolabd::spawn_and_wait_until_serving(tatolabd_command);
-
-    let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
 
     assert_eq!(
-        graph,
-        serde_json::json!({
-            "runtime_name": "tatolabd-named-from-the-environment",
-            "streams": [],
-        })
+        the_machine_wide_graph_with_path(&machine_root, &runtime_unit, &path),
+        serde_json::json!({ "machine": "desk", "streams": [] })
     );
-    runtime.interrupt_and_expect_a_clean_exit();
+}
+
+/// With Tailscale stopped, or with no Tailscale at all, the machine is named
+/// by its hostname, cast.
+///
+/// Linux only: on macOS the runtime also reads the Tailscale app's own CLI,
+/// which is found whatever `PATH` says.
+#[cfg(target_os = "linux")]
+#[test]
+fn with_tailscale_stopped_or_absent_graph_answers_the_machine_by_its_hostname_cast() {
+    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
+    let machine_root = TatolabTestMachineRoot::new();
+    let the_hostname_cast =
+        streamlib::sdk::graph::cast_exposed_name_to_url_safe(&this_hosts_name())
+            .expect("the test host's hostname names something")
+            .into_owned();
+    let stopped = a_directory_holding_a_tailscale_cli_writing(
+        &machine_root,
+        &serde_json::json!({
+            "BackendState": "Stopped",
+            "Self": { "DNSName": "desk.tail2950db.ts.net." },
+        }),
+    );
+    let holding_no_tailscale = machine_root.path().join("path-with-no-tailscale");
+    std::fs::create_dir_all(&holding_no_tailscale).unwrap();
+
+    for path in [stopped, holding_no_tailscale] {
+        assert_eq!(
+            the_machine_wide_graph_with_path(&machine_root, &runtime_unit, &path),
+            serde_json::json!({ "machine": the_hostname_cast, "streams": [] }),
+            "PATH {path:?}"
+        );
+    }
 }
 
 #[test]

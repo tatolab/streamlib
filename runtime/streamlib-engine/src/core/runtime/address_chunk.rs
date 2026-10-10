@@ -1,52 +1,39 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The grammar every part of a port's address obeys.
+//! The grammar every chunk of an address obeys.
 //!
-//! A port is addressed `<runtime name>/<display name>/<port>`, so each part has
-//! to be one chunk on its own.
+//! An address is `<machine>/<stream>/<node>/<port>`, and a chunk is a name the
+//! exposed-name cast leaves as it is and does not refuse. Every other grammar
+//! that holds a chunk — a channel name's — defers here.
 
-/// The characters an address chunk may not contain.
-pub(crate) const CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] = ['/', '*', '$', '#', '?'];
+use crate::core::graph::{
+    EXPOSED_NAME_MAXIMUM_LENGTH, cast_exposed_name_to_url_safe, is_in_exposed_name_cast_form,
+};
 
-/// The character an address chunk may not begin with.
-pub(crate) const CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH: char = '@';
-
-/// Why `candidate` is not one legal chunk of a port's address — `None` when it
-/// is one, and otherwise the reason, named for a refusal.
-///
-/// One chunk is non-empty, free of [`CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN`],
-/// and does not begin with [`CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH`].
-/// Spaces and unicode are legal, as they are in a display name today.
+/// Why `candidate` is not one chunk of an address — `None` when it is one, and
+/// otherwise the reason, named for a refusal.
 pub(crate) fn first_reason_this_is_not_one_address_chunk(candidate: &str) -> Option<String> {
+    if is_in_exposed_name_cast_form(candidate) {
+        return None;
+    }
     if candidate.is_empty() {
         return Some("it is empty".to_string());
     }
-    if let Some(refused_character) = candidate
-        .chars()
-        .find(|character| CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN.contains(character))
-    {
-        return Some(format!("it contains {refused_character:?}"));
-    }
-    if candidate.starts_with(CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH) {
-        return Some(format!(
-            "it begins with {CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH:?}"
-        ));
-    }
-    None
+    Some(match cast_exposed_name_to_url_safe(candidate) {
+        Ok(cast) => format!("it is not in cast form, which would make it `{cast}`"),
+        Err(casts_to_nothing) => casts_to_nothing.to_string(),
+    })
 }
 
-/// The sentence every refusal ends with, so both callers state the same rule.
+/// The sentence every refusal of a chunk ends with, so every caller states the
+/// same rule.
 pub fn what_one_address_chunk_may_be() -> String {
-    let listed = CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN
-        .iter()
-        .map(|character| format!("'{character}'"))
-        .collect::<Vec<_>>()
-        .join(", ");
     format!(
-        "A port is addressed <runtime name>/<display name>/<port>, so each part is one \
-         address chunk: non-empty, containing none of {listed}, and not beginning with \
-         '{CHARACTER_NO_ADDRESS_CHUNK_MAY_BEGIN_WITH}'"
+        "An address is <machine>/<stream>/<node>/<port>, leading parts omitted meaning here, \
+         and each part is one address chunk: a name already in the form every exposed name is \
+         cast to — lowercase a-z 0-9 - . _ ~, no leading, trailing or doubled '-', at most \
+         {EXPOSED_NAME_MAXIMUM_LENGTH} characters, and neither '.' nor '..'"
     )
 }
 
@@ -69,63 +56,87 @@ mod tests {
         }
     }
 
-    /// Each refused shape reads back with the reason the rule gives it, the
-    /// forbidden characters checked before the leading `@`.
+    /// Every character the cast keeps is legal in a chunk, a leading digit, `.`,
+    /// `_` and `~` among them, so a chunk is never narrower than the cast.
     #[test]
-    fn every_refused_shape_in_the_table_reads_back_with_its_reason() {
-        let refused_with_the_reason = [
-            ("", "it is empty"),
-            ("@", "it begins with '@'"),
-            ("@runtime", "it begins with '@'"),
-            ("/", "it contains '/'"),
-            ("desk/rig", "it contains '/'"),
-            ("*", "it contains '*'"),
-            ("desk*rig", "it contains '*'"),
-            ("$", "it contains '$'"),
-            ("desk$rig", "it contains '$'"),
-            ("#", "it contains '#'"),
-            ("desk#rig", "it contains '#'"),
-            ("?", "it contains '?'"),
-            ("desk?rig", "it contains '?'"),
-            ("@desk/rig", "it contains '/'"),
-        ];
-        for (candidate, expected_reason) in refused_with_the_reason {
-            assert_eq!(
-                first_reason_this_is_not_one_address_chunk(candidate).as_deref(),
-                Some(expected_reason),
-                "{candidate:?}"
-            );
-        }
-        for forbidden in CHARACTERS_NO_ADDRESS_CHUNK_MAY_CONTAIN {
-            assert_eq!(
-                first_reason_this_is_not_one_address_chunk(&format!("desk{forbidden}rig")),
-                Some(format!("it contains {forbidden:?}")),
-            );
-        }
-    }
-
-    /// Everything outside the table passes: punctuation the rule does not
-    /// name, an inner `@`, spaces and unicode.
-    #[test]
-    fn names_with_unlisted_punctuation_an_inner_at_sign_spaces_and_unicode_pass() {
+    fn every_name_in_cast_form_is_one_chunk() {
         for legal in [
             "desk",
+            "desk.tail2950db.ts.net",
             "rig-desk-a1b2",
-            "slow sink",
-            "こんにちは",
-            "カメラ 2",
-            "cam@home",
-            "CameraSource 2",
             "camera-1_a.b",
-            "desk:rig",
-            "desk%rig",
             "desk.rig~1",
-            "desk+rig=1",
+            "1st_pass",
+            "_private",
+            "v1.2",
+            "~",
         ] {
             assert!(
                 is_one_legal_address_chunk(legal),
                 "{legal:?} must be one legal address chunk"
             );
         }
+    }
+
+    /// Every case of the shared cast fixture that the cast keeps is one chunk,
+    /// and every name it would still change or refuses is not.
+    #[test]
+    fn a_chunk_is_exactly_what_the_cast_leaves_as_it_is() {
+        #[derive(serde::Deserialize)]
+        struct ExposedNameCastCase {
+            name: String,
+            #[serde(default)]
+            cast: Option<String>,
+        }
+        let cases: Vec<ExposedNameCastCase> = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/exposed_name_cast_cases.json"
+        ))
+        .expect("the shared cast fixture parses");
+        for case in cases {
+            match case.cast {
+                Some(cast) => {
+                    assert!(is_one_legal_address_chunk(&cast), "{cast:?}");
+                    assert_eq!(
+                        is_one_legal_address_chunk(&case.name),
+                        case.name == cast,
+                        "{:?} is a chunk exactly when the cast leaves it as it is",
+                        case.name
+                    );
+                }
+                None => assert!(!is_one_legal_address_chunk(&case.name), "{:?}", case.name),
+            }
+        }
+    }
+
+    /// Each refused shape reads back with the reason the rule gives it.
+    #[test]
+    fn every_refused_shape_reads_back_with_its_reason() {
+        assert_eq!(
+            first_reason_this_is_not_one_address_chunk("").as_deref(),
+            Some("it is empty")
+        );
+        for (candidate, its_cast) in [
+            ("Camera", "camera"),
+            ("desk/rig", "desk-rig"),
+            ("slow sink", "slow-sink"),
+            ("@runtime", "runtime"),
+            ("a--b", "a-b"),
+            ("trailing-", "trailing"),
+        ] {
+            let reason = first_reason_this_is_not_one_address_chunk(candidate)
+                .unwrap_or_else(|| panic!("{candidate:?} is not one chunk"));
+            assert!(reason.contains(&format!("`{its_cast}`")), "{reason}");
+        }
+        for names_nothing in [".", "..", "!!!"] {
+            let reason = first_reason_this_is_not_one_address_chunk(names_nothing)
+                .unwrap_or_else(|| panic!("{names_nothing:?} is not one chunk"));
+            assert!(reason.contains("cannot name anything"), "{reason}");
+        }
+    }
+
+    /// The rule a refusal ends with spells the four-part address.
+    #[test]
+    fn the_rule_spells_the_four_part_address() {
+        assert!(what_one_address_chunk_may_be().contains("<machine>/<stream>/<node>/<port>"));
     }
 }

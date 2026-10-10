@@ -81,16 +81,33 @@ pub enum Error {
     #[error("Invalid port address: {0}")]
     InvalidPortAddress(String),
 
-    #[error("channel name is empty")]
-    EmptyChannelName,
-
+    /// An address names a machine other than this one.
     #[error(
-        "channel `{name}` contains invalid character `{character}` (allowed: a-z, 0-9, hyphen, underscore, must start with a-z)"
+        "the address `{address}` names the machine `{machine}`, and this machine is \
+         `{this_machine}`: an address names a port on this machine until the sharing step, \
+         which is where links between machines arrive"
     )]
-    InvalidChannelNameCharacter { name: String, character: char },
+    PortAddressNamesAnotherMachine {
+        /// The address as it was written.
+        address: String,
+        /// The machine its machine part names, cast.
+        machine: String,
+        /// This machine's name.
+        this_machine: String,
+    },
 
-    #[error("channel `{0}` must start with a-z")]
-    ChannelNameMustStartWithLowercase(String),
+    /// A chunk of a channel name is not one address chunk.
+    #[error(
+        "channel `{channel}` has the chunk `{chunk}`, which is not one address chunk: {reason}"
+    )]
+    ChannelNameChunkIsNotOneAddressChunk {
+        /// The channel name as it was given.
+        channel: String,
+        /// The chunk the address grammar refuses.
+        chunk: String,
+        /// Why it is not one, with the grammar it breaks.
+        reason: String,
+    },
 
     #[error("channel `{name}` is {len} bytes, exceeding the {max}-byte wire capacity")]
     ChannelNameTooLong {

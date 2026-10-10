@@ -2260,7 +2260,7 @@ sys.exit(0)
             [
                 "PYTHONHOME",
                 "PYTHONDONTWRITEBYTECODE",
-                "STREAMLIB_RUNTIME_NAME",
+                "STREAMLIB_RUNTIME_ID",
                 "HOME",
                 "MY_PYTHONPATH",
             ]

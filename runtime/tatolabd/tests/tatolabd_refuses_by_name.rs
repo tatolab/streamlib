@@ -200,21 +200,6 @@ fn a_kept_streams_path_that_is_not_a_directory_is_refused_naming_it() {
     );
 }
 
-#[test]
-fn a_runtime_name_that_is_not_one_address_chunk_is_refused_naming_the_character() {
-    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
-    let machine_root = TatolabTestMachineRoot::new();
-
-    let refusal = run_tatolabd_to_its_refusal(
-        &runtime_unit,
-        &machine_root,
-        &[("STREAMLIB_RUNTIME_NAME", "a/b")],
-    );
-
-    assert!(refusal.contains("STREAMLIB_RUNTIME_NAME"), "{refusal}");
-    assert!(refusal.contains("'/'"), "{refusal}");
-}
-
 /// A listener bound at the machine's local API socket, in a runtime directory
 /// created owner-only as the runtime creates it.
 fn a_live_process_holding_the_local_api_socket(

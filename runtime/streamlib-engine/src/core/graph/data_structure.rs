@@ -160,8 +160,9 @@ impl std::fmt::Display for Graph {
 }
 
 impl Graph {
-    /// Render this graph as the `/api/graph` payload.
-    pub(crate) fn to_graph_response(&self, runtime_name: String) -> GraphResponse {
+    /// Render this graph as the `/api/graph` payload, on the machine named
+    /// `machine`.
+    pub(crate) fn to_graph_response(&self, machine: String) -> GraphResponse {
         let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
         GraphResponse {
             stream: self.loaded_stream_name.clone(),
@@ -190,7 +191,7 @@ impl Graph {
                         })
                 })
                 .collect(),
-            runtime_name,
+            machine,
         }
     }
 }

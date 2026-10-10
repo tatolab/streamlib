@@ -60,7 +60,7 @@ pub(crate) struct SurfaceImageExchangeArguments {
         long = "channel",
         value_name = "CHANNEL",
         help = "Sample this channel instead of naming one id: an output port's address, \
-                <runtime_name>/<node>/<port>"
+                <stream>/<node>/<port>, or <node>/<port> with --stream"
     )]
     pub(crate) channel: Option<String>,
     /// (--channel only) Frames to exchange before returning. Default 1.
@@ -72,7 +72,7 @@ pub(crate) struct SurfaceImageExchangeArguments {
     /// (--channel only) Bag field carrying the surface id (default: surface_id).
     #[arg(long = "field", value_name = "NAME")]
     pub(crate) requested_surface_id_bag_field_name: Option<String>,
-    /// (--channel only) The loaded stream whose channel is sampled.
+    /// (--channel only) The loaded stream whose channel is sampled, when the channel names none.
     #[arg(long = "stream", value_name = "STREAM")]
     pub(crate) requested_stream: Option<String>,
 }
@@ -84,7 +84,7 @@ pub(crate) enum SurfaceImageExchangeForm {
     OnePublishedSurfaceId { published_surface_id: String },
     /// Surface ids read out of the sampled bags of one loaded stream's channel.
     SampledChannel {
-        stream: String,
+        stream: Option<String>,
         channel: String,
         sampled_channel_exchange_bounds: SampledChannelExchangeBounds,
     },
@@ -280,7 +280,7 @@ pub(crate) fn run_surface_image_exchange_verb(
         } => {
             let sampled_channel_exchange_report = sample_channel_into_exchanged_surface_images(
                 &mut local_api_connection,
-                &stream,
+                stream.as_deref(),
                 &channel,
                 &output_directory,
                 &sampled_channel_exchange_bounds,
@@ -365,17 +365,10 @@ pub(crate) fn surface_image_exchange_form(
             })
         }
         (None, Some(channel)) => {
-            let Some(stream) = exchange_arguments
+            let stream = exchange_arguments
                 .requested_stream
                 .as_deref()
-                .filter(|stream| !stream.is_empty())
-            else {
-                return Err(TatolabCommandFailure::refused(
-                    "`--channel` samples a channel of one loaded stream; name the stream with \
-                     `--stream`."
-                        .to_owned(),
-                ));
-            };
+                .filter(|stream| !stream.is_empty());
             let wanted_image_count =
                 sample_bound_at_least_one("--count", exchange_arguments.requested_frame_count)?;
             let every_nth_bag =
@@ -386,7 +379,7 @@ pub(crate) fn surface_image_exchange_form(
                 .filter(|surface_id_bag_field_name| !surface_id_bag_field_name.is_empty())
                 .unwrap_or(DEFAULT_SURFACE_ID_BAG_FIELD_NAME);
             Ok(SurfaceImageExchangeForm::SampledChannel {
-                stream: stream.to_owned(),
+                stream: stream.map(str::to_owned),
                 channel: channel.to_owned(),
                 sampled_channel_exchange_bounds: SampledChannelExchangeBounds {
                     wanted_image_count,
@@ -548,7 +541,8 @@ fn write_exchanged_surface_image(
     Ok(written_image_path)
 }
 
-/// Tap `stream`'s `channel` through `local_api_connection`, exchange the surface ids its sampled
+/// Tap `channel` — in `stream` when its address names none — through `local_api_connection`,
+/// exchange the surface ids its sampled
 /// bags carry
 /// over the same connection, and write the PNGs into `output_directory` as
 /// `<0000>-<sanitized id>.png`.
@@ -557,7 +551,7 @@ fn write_exchanged_surface_image(
 /// restarting per round. Each round is a fresh attach, so it is not a stride over the channel.
 pub(crate) fn sample_channel_into_exchanged_surface_images(
     local_api_connection: &mut LocalApiConnection,
-    stream: &str,
+    stream: Option<&str>,
     channel: &str,
     output_directory: &Path,
     sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
@@ -580,7 +574,7 @@ pub(crate) fn sample_channel_into_exchanged_surface_images(
 /// is why the run stopped early, and the report keeps everything gathered before it.
 fn exchange_sampled_bags_across_tap_rounds(
     local_api_connection: &mut LocalApiConnection,
-    stream: &str,
+    stream: Option<&str>,
     channel: &str,
     output_directory: &Path,
     sampled_channel_exchange_bounds: &SampledChannelExchangeBounds,
@@ -659,11 +653,12 @@ fn exchange_sampled_bags_across_tap_rounds(
     Ok(())
 }
 
-/// Call `tap` for `requested_bag_count` bags on `stream`'s `channel` through the MCP client
+/// Call `tap` for `requested_bag_count` bags on `channel`, in `stream` when its address names
+/// none, through the MCP client
 /// `local_api_connection` keeps across the run's rounds.
 fn call_tap_on_the_local_api_connection(
     local_api_connection: &mut LocalApiConnection,
-    stream: &str,
+    stream: Option<&str>,
     channel: &str,
     requested_bag_count: usize,
 ) -> Result<String, LocalApiMcpToolClientFailure> {
@@ -859,7 +854,7 @@ mod tests {
     ) -> SampledChannelExchangeReport {
         sample_channel_into_exchanged_surface_images(
             &mut local_api_connection_to(local_api_socket_path),
-            FIXTURE_STREAM,
+            Some(FIXTURE_STREAM),
             FIXTURE_CHANNEL,
             output_directory,
             sampled_channel_exchange_bounds,
@@ -1195,7 +1190,7 @@ mod tests {
         assert_eq!(
             surface_image_exchange_form(&exchange_arguments(None, Some("cam/frame"))).unwrap(),
             SurfaceImageExchangeForm::SampledChannel {
-                stream: FIXTURE_STREAM.to_owned(),
+                stream: Some(FIXTURE_STREAM.to_owned()),
                 channel: "cam/frame".to_owned(),
                 sampled_channel_exchange_bounds: sampling_bounds(1, 1),
             }
@@ -1207,7 +1202,7 @@ mod tests {
         assert_eq!(
             surface_image_exchange_form(&every_bound_named).unwrap(),
             SurfaceImageExchangeForm::SampledChannel {
-                stream: FIXTURE_STREAM.to_owned(),
+                stream: Some(FIXTURE_STREAM.to_owned()),
                 channel: "cam/frame".to_owned(),
                 sampled_channel_exchange_bounds: SampledChannelExchangeBounds {
                     wanted_image_count: 3,
@@ -1250,7 +1245,7 @@ mod tests {
         assert_eq!(
             surface_image_exchange_form(&empty_field).unwrap(),
             SurfaceImageExchangeForm::SampledChannel {
-                stream: FIXTURE_STREAM.to_owned(),
+                stream: Some(FIXTURE_STREAM.to_owned()),
                 channel: "cam/frame".to_owned(),
                 sampled_channel_exchange_bounds: sampling_bounds(1, 1),
             }
@@ -1292,16 +1287,21 @@ mod tests {
         }
     }
 
+    /// A channel's address can name its stream, so `--stream` is not required
+    /// beside it; the runtime refuses a channel naming no stream with none beside it.
     #[test]
-    fn a_channel_without_its_stream_is_refused_naming_stream() {
+    fn a_channel_without_a_stream_beside_it_leaves_the_channel_to_name_it() {
         for no_stream in [None, Some(String::new())] {
-            let mut without_a_stream = exchange_arguments(None, Some("cam/frame"));
+            let mut without_a_stream = exchange_arguments(None, Some("main/cam/frame"));
             without_a_stream.requested_stream = no_stream;
 
             assert_eq!(
-                usage_refusal(&without_a_stream),
-                "`--channel` samples a channel of one loaded stream; name the stream with \
-                 `--stream`."
+                surface_image_exchange_form(&without_a_stream).unwrap(),
+                SurfaceImageExchangeForm::SampledChannel {
+                    stream: None,
+                    channel: "main/cam/frame".to_owned(),
+                    sampled_channel_exchange_bounds: sampling_bounds(1, 1),
+                }
             );
         }
     }
