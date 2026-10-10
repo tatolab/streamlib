@@ -978,6 +978,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::runtime::tests::a_streams_records_are_read_by_sequence_number_and_its_jsonl_file_carries_none",
                 "core::runtime::runtime::tests::the_records_no_stream_emitted_land_in_the_runtimes_own_log_and_a_streams_do_not",
                 "core::runtime::runtime::tests::the_wait_for_a_machine_shutdown_returns_once_one_is_requested_and_ends_every_stream",
+                "core::runtime::runtime::tests::a_forced_machine_shutdown_forces_a_stream_an_unload_is_waiting_on",
                 "core::logging::loaded_stream_log_record_history",
                 "core::logging::tests::a_closed_stream_log_holds_every_record_queued_before_the_close_and_none_after",
                 "core::runtime::processor_interpreter_launch_record::tests::a_load_refused_at_a_link_after_a_describe_adds_no_stream_and_leaves_nothing_running",
