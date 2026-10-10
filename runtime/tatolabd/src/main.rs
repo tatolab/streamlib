@@ -1,26 +1,28 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolabd`: the runtime process. Hosts one stream in the foreground — the
-//! engine, its built-ins, the local API and the engine's signal ladder — with
-//! no Python in its process.
+//! `tatolabd`: the machine's runtime. Holds the machine runtime lock, serves
+//! the local API at its fixed socket, hosts every stream loaded into it and
+//! re-loads the kept ones at its start, in the foreground and with no Python
+//! in its process.
 
 mod bundled_vulkan_driver_environment;
+mod machine_stream_hosting;
 mod refusal_on_standard_error;
 mod runtime_unit_lend;
-mod stream_hosting;
-mod stream_launch_inputs;
 mod tatolabd_command_line;
 
 use std::process::ExitCode;
 
 use clap::Parser;
+use streamlib_runtime_client_contract::machine_runtime_lock::MachineRuntimeLock;
+use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
 
 use crate::refusal_on_standard_error::write_refusal_to_standard_error;
 use crate::tatolabd_command_line::TatolabdCommandLine;
 
 fn main() -> ExitCode {
-    let command_line = TatolabdCommandLine::parse();
+    let TatolabdCommandLine {} = TatolabdCommandLine::parse();
 
     let processor_interpreter_lend_directory =
         match runtime_unit_lend::the_lend_beside_this_executable() {
@@ -46,14 +48,19 @@ fn main() -> ExitCode {
         };
     }
 
-    let stream_launch_inputs =
-        match stream_launch_inputs::StreamLaunchInputs::read_from(&command_line) {
-            Ok(stream_launch_inputs) => stream_launch_inputs,
-            Err(refusal) => return write_refusal_to_standard_error(&refusal),
-        };
+    // Held until the process exits: the kernel frees it with the process,
+    // whichever way the process ends.
+    let _machine_runtime_lock = match MachineRuntimeLock::take() {
+        Ok(machine_runtime_lock) => machine_runtime_lock,
+        Err(refusal) => return write_refusal_to_standard_error(&refusal.to_string()),
+    };
+    let tatolab_state_directory = match TatolabStateDirectory::resolve() {
+        Ok(tatolab_state_directory) => tatolab_state_directory,
+        Err(refusal) => return write_refusal_to_standard_error(&refusal.to_string()),
+    };
 
-    stream_hosting::host_the_stream_until_shutdown(
-        stream_launch_inputs,
+    machine_stream_hosting::host_the_machines_streams_until_a_machine_shutdown(
+        &tatolab_state_directory,
         processor_interpreter_lend_directory,
     )
 }

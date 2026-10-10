@@ -3,7 +3,7 @@
 
 [package]
 name = "tatolabd"
-description = "The runtime process: hosts one stream in the foreground — the engine, its built-ins and the local API — with no Python in its process."
+description = "The machine's runtime: hosts every stream loaded into it over its local API, and re-loads the kept ones at its start, in the foreground and with no Python in its process."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -40,6 +40,9 @@ tracing = { workspace = true }
 tempfile = { workspace = true }
 serde_json = { workspace = true }
 libc = { workspace = true }
+# The tests call the runtime's stream tools over its local API with rmcp's own client.
+rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-unix-socket"] }
+tokio = { version = "1.48.0", features = ["rt"] }
 
 [lints]
 workspace = true

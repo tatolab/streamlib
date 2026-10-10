@@ -467,9 +467,16 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             &["test", "--locked", "-p", "streamlib-api-server", "--lib"],
         ),
         (
-            "runtime-process tests (tatolabd's flags and refusals)",
+            "machine runtime tests (tatolabd's refusals, lock, socket and kept streams)",
             "cargo",
-            &["test", "--locked", "-p", "tatolabd"],
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "tatolabd",
+                "--features",
+                "machine-directories-under-a-test-root",
+            ],
         ),
         (
             "CLI tests (tatolab new, and run/dev supervising tatolabd)",
