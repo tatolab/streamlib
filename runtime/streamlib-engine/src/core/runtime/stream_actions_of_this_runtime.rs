@@ -16,8 +16,8 @@ use super::runtime::{
     the_cast_name_of_the_stream_a_load_names,
 };
 use super::{
-    KeptStreamRecord, KeptStreamRecordsInTheStateDirectory, LoadedStreamInThisRuntime,
-    LoadedStreamTag, OptionsForLoadingOneStream, OwnerExposureRuling,
+    KeptStreamRecord, KeptStreamRecordReadFailure, KeptStreamRecordsInTheStateDirectory,
+    LoadedStreamInThisRuntime, LoadedStreamTag, OptionsForLoadingOneStream, OwnerExposureRuling,
     OwnerExposureRulingsSplitAroundTheLoad, Runner, StreamEnvironment,
     StreamLoadObservingMachineShutdownRequests,
     compile_the_stream_function_in_the_projects_interpreter,
@@ -149,6 +149,27 @@ pub struct OutputPortExposureOutcome {
     /// as the owner's ruling; `None` when it was recorded, and for an
     /// attached stream, whose level is never recorded.
     pub ruling_not_recorded_because: Option<String>,
+}
+
+/// What [`Runner::reload_every_kept_stream_not_stopped`] did with one kept
+/// stream's record; a stream it left unloaded because it is stopped, removed
+/// or already loaded is not reported.
+#[derive(Debug)]
+pub enum KeptStreamReloadAtTheStart {
+    /// The kept stream loaded and started.
+    Reloaded {
+        /// The stream's URL-safe cast name.
+        stream_name: String,
+    },
+    /// The kept stream did not re-load, and its record is kept.
+    NotReloaded {
+        /// The stream's URL-safe cast name.
+        stream_name: String,
+        /// Why it did not re-load.
+        refusal: Error,
+    },
+    /// A record that could not be read, left in place.
+    RecordUnreadable(KeptStreamRecordReadFailure),
 }
 
 /// Where a runtime keeps its streams, and the lock that lets one stream action
@@ -309,7 +330,7 @@ impl Runner {
                     }
                 }
                 Ok(StreamRunOutcome {
-                    node_count: node_count_of(&stream),
+                    node_count: stream.node_count(),
                     stream_tag: stream.stream_tag(),
                     stream_name,
                     project_directory: stream_environment.project_directory,
@@ -433,7 +454,7 @@ impl Runner {
             }
         }
         Ok(StreamStartOutcome {
-            node_count: node_count_of(&stream),
+            node_count: stream.node_count(),
             stream_name: stream_cast,
         })
     }
@@ -476,7 +497,7 @@ impl Runner {
                     LoadedStreamHolding::Attached => StreamListingState::Attached,
                 },
                 project_directory: stream.project_directory().to_path_buf(),
-                node_count: Some(node_count_of(stream)),
+                node_count: Some(stream.node_count()),
             })
             .collect();
         if let Some(kept_stream_records) = self.kept_stream_records() {
@@ -577,60 +598,90 @@ impl Runner {
     }
 
     /// Load and start every kept stream not stopped, as a runtime does at its
-    /// start, reporting each by name. A stream that does not re-load — and a
-    /// record that cannot be read, by its path — is logged with the reason
-    /// and skipped, its record kept.
-    pub fn reload_every_kept_stream_not_stopped(&self) -> Vec<(String, Result<()>)> {
+    /// start, reporting each record it tried in file-name order. A stream that
+    /// does not re-load, and a record that cannot be read, is logged with the
+    /// reason and skipped, its record kept.
+    pub fn reload_every_kept_stream_not_stopped(&self) -> Vec<KeptStreamReloadAtTheStart> {
         let Some(kept_stream_records) = self.kept_stream_records() else {
             return Vec::new();
         };
+        self.reload_each_kept_stream_listed(kept_stream_records, kept_stream_records.read_every())
+    }
+
+    /// Re-load each record of `listed`. The local API serves while this runs,
+    /// so each record is read again under the one-action lock and loaded from
+    /// that read: a stream stopped or removed since the listing stays
+    /// unloaded, one loaded since is left as it is, and the owner's rulings
+    /// recorded since hold from its load.
+    fn reload_each_kept_stream_listed(
+        &self,
+        kept_stream_records: &KeptStreamRecordsInTheStateDirectory,
+        listed: Vec<std::result::Result<KeptStreamRecord, KeptStreamRecordReadFailure>>,
+    ) -> Vec<KeptStreamReloadAtTheStart> {
         let mut reloads = Vec::new();
-        for read in kept_stream_records.read_every() {
-            let kept_record = match read {
-                Ok(kept_record) => kept_record,
+        for listed_record in listed {
+            let listed_record = match listed_record {
+                Ok(listed_record) => listed_record,
                 Err(unreadable) => {
                     tracing::error!("{unreadable}; it is skipped and left in place");
-                    reloads.push((
-                        unreadable.path.display().to_string(),
-                        Err(Error::Runtime(unreadable.to_string())),
-                    ));
+                    reloads.push(KeptStreamReloadAtTheStart::RecordUnreadable(unreadable));
+                    continue;
+                }
+            };
+            let stream_name = listed_record.stream_name;
+            let _one_stream_action_at_a_time =
+                self.stream_actions.one_stream_action_at_a_time.lock();
+            let kept_record = match kept_stream_records.read(&stream_name) {
+                Ok(Some(kept_record)) => kept_record,
+                Ok(None) => {
+                    tracing::info!(
+                        "the kept stream `{stream_name}` was removed before its re-load, so it \
+                         is not re-loaded"
+                    );
+                    continue;
+                }
+                Err(unreadable) => {
+                    tracing::error!("{unreadable}; it is skipped and left in place");
+                    reloads.push(KeptStreamReloadAtTheStart::NotReloaded {
+                        stream_name,
+                        refusal: unreadable,
+                    });
                     continue;
                 }
             };
             if kept_record.stopped {
                 tracing::info!(
-                    "the kept stream `{}` is stopped, so it is not re-loaded",
-                    kept_record.stream_name
+                    "the kept stream `{stream_name}` is stopped, so it is not re-loaded"
                 );
                 continue;
             }
-            let _one_stream_action_at_a_time =
-                self.stream_actions.one_stream_action_at_a_time.lock();
-            let reload = match self.loaded_stream_of_the_cast_name(&kept_record.stream_name) {
-                Some(loaded) => Err(Error::GraphError(format!(
-                    "a stream named `{}` is already loaded in this runtime, from {}",
-                    kept_record.stream_name,
-                    loaded.project_directory().display()
-                ))),
-                None => self
-                    .load_a_kept_stream_from_its_record(&kept_record)
-                    .map(|stream| {
-                        tracing::info!(
-                            "the kept stream `{}` re-loaded from {} with {} nodes",
-                            kept_record.stream_name,
-                            kept_record.project_directory.display(),
-                            node_count_of(&stream)
-                        );
-                    }),
-            };
-            if let Err(reload_refusal) = &reload {
-                tracing::error!(
-                    "the kept stream `{}` did not re-load, and is skipped with its record kept: \
-                     {reload_refusal}",
-                    kept_record.stream_name
+            if self.loaded_stream_of_the_cast_name(&stream_name).is_some() {
+                tracing::info!(
+                    "the kept stream `{stream_name}` was loaded before its re-load reached it, \
+                     so it is left as it is"
                 );
+                continue;
             }
-            reloads.push((kept_record.stream_name, reload));
+            match self.load_a_kept_stream_from_its_record(&kept_record) {
+                Ok(stream) => {
+                    tracing::info!(
+                        "the kept stream `{stream_name}` re-loaded from {} with {} nodes",
+                        kept_record.project_directory.display(),
+                        stream.node_count()
+                    );
+                    reloads.push(KeptStreamReloadAtTheStart::Reloaded { stream_name });
+                }
+                Err(reload_refusal) => {
+                    tracing::error!(
+                        "the kept stream `{stream_name}` did not re-load, and is skipped with its \
+                         record kept: {reload_refusal}"
+                    );
+                    reloads.push(KeptStreamReloadAtTheStart::NotReloaded {
+                        stream_name,
+                        refusal: reload_refusal,
+                    });
+                }
+            }
         }
         reloads
     }
@@ -787,7 +838,7 @@ impl Runner {
             });
         match replaced {
             Ok(stream) => Ok(StreamRunOutcome {
-                node_count: node_count_of(&stream),
+                node_count: stream.node_count(),
                 stream_tag: stream.stream_tag(),
                 stream_name: replacement.stream_name,
                 project_directory: replacement.project_directory,
@@ -935,15 +986,6 @@ fn a_kept_stream_unloaded_and_not_recorded_stopped(
         kept: true,
         stop_not_recorded_because: Some(not_recorded.to_string()),
     }
-}
-
-/// How many nodes `stream`'s live graph holds.
-fn node_count_of(stream: &LoadedStreamInThisRuntime) -> usize {
-    stream
-        .to_json()
-        .ok()
-        .and_then(|graph| graph.get("nodes")?.as_array().map(Vec::len))
-        .unwrap_or(0)
 }
 
 /// Refuse `node` when the graph `kept_record` holds has no node of that name
@@ -1998,22 +2040,95 @@ mod tests {
 
         let reloads = runner.reload_every_kept_stream_not_stopped();
 
-        let reloaded_names: Vec<&str> = reloads.iter().map(|(name, _)| name.as_str()).collect();
-        assert_eq!(
-            reloaded_names,
-            ["a-camera", malformed.to_str().unwrap(), "c-microphone"]
-        );
-        for (stream_name, reload) in [&reloads[0], &reloads[2]] {
-            let refusal = reload.as_ref().unwrap_err().to_string();
-            assert!(refusal.contains(stream_name.as_str()), "{refusal}");
+        assert_eq!(reloads.len(), 3, "{reloads:?}");
+        for (reload, expected_stream_name) in
+            [(&reloads[0], "a-camera"), (&reloads[2], "c-microphone")]
+        {
+            let KeptStreamReloadAtTheStart::NotReloaded {
+                stream_name,
+                refusal,
+            } = reload
+            else {
+                panic!("`{expected_stream_name}` is reported not re-loaded: {reload:?}");
+            };
+            assert_eq!(stream_name, expected_stream_name);
+            let refusal = refusal.to_string();
+            assert!(refusal.contains(expected_stream_name), "{refusal}");
             assert!(
                 refusal.contains(&project.interpreter().display().to_string()),
                 "{refusal}"
             );
             assert!(refusal.contains("uv sync"), "{refusal}");
         }
+        let KeptStreamReloadAtTheStart::RecordUnreadable(unreadable) = &reloads[1] else {
+            panic!(
+                "the malformed record is reported by its path: {:?}",
+                reloads[1]
+            );
+        };
+        assert_eq!(unreadable.path, malformed);
         assert!(runner.names_of_the_loaded_streams().is_empty());
         assert_eq!(records.read_every().len(), 4, "every record is kept");
+    }
+
+    #[test]
+    #[serial]
+    fn a_kept_stream_stopped_or_removed_between_the_listing_and_its_reload_stays_unloaded() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let records = records_in(state_directory.path());
+        records
+            .write(&a_kept_record_of(
+                &project,
+                "a-stopped",
+                serde_json::json!([]),
+            ))
+            .unwrap();
+        records
+            .write(&a_kept_record_of(
+                &project,
+                "b-removed",
+                serde_json::json!([]),
+            ))
+            .unwrap();
+        let listed = records.read_every();
+        let mut stopped_since = records.read("a-stopped").unwrap().unwrap();
+        stopped_since.stopped = true;
+        records.write(&stopped_since).unwrap();
+        assert!(records.remove("b-removed").unwrap());
+
+        let reloads = runner.reload_each_kept_stream_listed(&records, listed);
+
+        assert!(reloads.is_empty(), "neither is reported: {reloads:?}");
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert_eq!(records.read_every(), vec![Ok(stopped_since)]);
+    }
+
+    #[test]
+    #[serial]
+    fn a_kept_stream_loaded_between_the_listing_and_its_reload_is_left_as_it_is() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let record = a_kept_record_of(&project, "camera", serde_json::json!([]));
+        records_in(state_directory.path()).write(&record).unwrap();
+        let listed = records_in(state_directory.path()).read_every();
+        let loaded_since =
+            a_kept_stream_loaded_without_its_start(&runner, state_directory.path(), &record);
+
+        let reloads =
+            runner.reload_each_kept_stream_listed(&records_in(state_directory.path()), listed);
+
+        assert!(reloads.is_empty(), "nothing is reported: {reloads:?}");
+        assert_eq!(
+            runner.loaded_stream_named("camera").unwrap().stream_tag(),
+            loaded_since.stream_tag()
+        );
+        assert!(!loaded_since.has_ended());
     }
 
     #[test]
@@ -2217,13 +2332,64 @@ mod tests {
         let restarted = a_runner_keeping_its_streams_in(Some(state_directory.path()));
         let reloads = restarted.reload_every_kept_stream_not_stopped();
 
-        assert_eq!(reloads.len(), 1);
-        assert_eq!(reloads[0].0, "camera");
-        assert!(reloads[0].1.is_ok(), "{:?}", reloads[0].1);
+        assert!(
+            matches!(
+                reloads.as_slice(),
+                [KeptStreamReloadAtTheStart::Reloaded { stream_name }] if stream_name == "camera"
+            ),
+            "{reloads:?}"
+        );
         assert_eq!(
             the_exposures_graph_renders_for(&restarted.loaded_stream_named("camera").unwrap()),
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}])
         );
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn an_owners_restriction_recorded_between_the_listing_and_the_reload_holds_at_the_load() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+        let records = records_in(state_directory.path());
+        records
+            .write(&a_kept_record_of(
+                &project,
+                "camera",
+                serde_json::json!([{"node": "source", "port": "out1", "level": "public"}]),
+            ))
+            .unwrap();
+        let listed = records.read_every();
+        let mut restricted_since = records.read("camera").unwrap().unwrap();
+        restricted_since.record_the_owners_exposure_ruling(OwnerExposureRuling {
+            node: "source".to_string(),
+            port: "out1".to_string(),
+            level: OutputPortExposureLevel::Internal,
+        });
+        records.write(&restricted_since).unwrap();
+
+        let reloads = runner.reload_each_kept_stream_listed(&records, listed);
+
+        assert!(
+            matches!(
+                reloads.as_slice(),
+                [KeptStreamReloadAtTheStart::Reloaded { stream_name }] if stream_name == "camera"
+            ),
+            "{reloads:?}"
+        );
+        assert_eq!(
+            the_exposures_graph_renders_for(&runner.loaded_stream_named("camera").unwrap()),
+            serde_json::json!([]),
+            "the restriction recorded after the listing holds"
+        );
+        assert_eq!(records.read("camera").unwrap(), Some(restricted_since));
     }
 
     #[cfg_attr(

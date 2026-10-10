@@ -775,6 +775,12 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
+    /// How many nodes this stream's live graph holds.
+    pub fn node_count(&self) -> usize {
+        self.compiler
+            .scope(|graph, _tx| graph.traversal().v(()).iter().count())
+    }
+
     /// Export this stream's graph as JSON: topology, processor states,
     /// metrics and buffer levels.
     pub fn to_json(&self) -> Result<serde_json::Value> {

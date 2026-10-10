@@ -850,7 +850,7 @@ impl Runner {
     }
 
     /// Every loaded stream, read under one lock of the stream table.
-    pub(crate) fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
+    pub fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
         self.engine_resources_shared_by_every_stream
             .every_loaded_stream()
     }

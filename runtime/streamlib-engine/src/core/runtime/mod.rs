@@ -81,7 +81,7 @@ pub use crate::core::compiler::compiler_ops::stream_function_compile_in_the_proj
     compile_the_stream_function_in_the_projects_interpreter, the_projects_venv_interpreter,
 };
 pub use stream_actions_of_this_runtime::{
-    LoadedStreamHolding, OutputPortExposureOutcome, RunStreamRequest, StreamListing,
+    KeptStreamReloadAtTheStart, LoadedStreamHolding, OutputPortExposureOutcome, RunStreamRequest, StreamListing,
     StreamListingState, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome,
     StreamStopOutcome,
 };
