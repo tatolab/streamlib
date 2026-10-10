@@ -382,7 +382,7 @@ struct LogsToolArguments {
     )]
     after: Option<u64>,
     #[schemars(
-        range(min = 1, max = MAX_LOGS_RECORD_COUNT),
+        range(min = 1),
         description = "The most records to return. Defaults to 256; a larger value than 4096 is clamped to it."
     )]
     count: Option<u32>,
@@ -3149,11 +3149,11 @@ pub(crate) mod tests {
         }
     }
 
-    /// `run_stream`'s and `expose_port`'s schemas say what each takes: a
-    /// required absolute project directory and `keep`, and one of the three
-    /// levels.
+    /// `run_stream`'s, `expose_port`'s and `logs`' schemas say what each takes: a
+    /// required absolute project directory and `keep`, one of the three
+    /// levels, and a count with no maximum, since a larger one is clamped.
     #[tokio::test]
-    async fn the_run_stream_and_expose_port_schemas_state_what_each_requires() {
+    async fn the_run_stream_expose_port_and_logs_schemas_state_what_each_takes() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
         let input_schema_of = |tool_name: &str| {
             tools
@@ -3199,6 +3199,19 @@ pub(crate) mod tests {
         assert_eq!(
             required_of(&input_schema_of("list_streams")),
             Vec::<String>::new()
+        );
+
+        let logs_count = &input_schema_of("logs")["properties"]["count"];
+        assert_eq!(logs_count["minimum"], json!(1), "{logs_count}");
+        assert!(
+            logs_count.get("maximum").is_none(),
+            "a count past the most the runtime returns is clamped, never refused: {logs_count}"
+        );
+        assert!(
+            logs_count["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("clamped")),
+            "{logs_count}"
         );
     }
 
