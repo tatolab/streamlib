@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.44.0](https://github.com/tatolab/streamlib/compare/v0.43.1...v0.44.0) (2026-10-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** tatolabd hosts the machine's streams — run, run -d, stop, start, rm, streams, expose, dev ([#2711](https://github.com/tatolab/streamlib/issues/2711))
+
+### Features
+
+* **runtime:** tatolabd hosts the machine's streams — run, run -d, stop, start, rm, streams, expose, dev ([#2711](https://github.com/tatolab/streamlib/issues/2711)) ([f9af361](https://github.com/tatolab/streamlib/commit/f9af361426bc8074399257b43bbfbd39d6a80c4a))
+
 ## [0.43.1](https://github.com/tatolab/streamlib/compare/v0.43.0...v0.43.1) (2026-10-09)
 
 
