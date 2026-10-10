@@ -127,10 +127,15 @@ fn a_local_api_socket_a_live_process_holds_is_refused_naming_it() {
     let last_line = refusal.lines().last().unwrap_or_default();
     assert!(
         last_line.contains(&format!(
-            "{} is already bound by a live process",
+            "{} is already bound by a live process: another runtime serves this machine's local \
+             API there, or a stale process still holds the path",
             machine_root.local_api_socket_path().display()
         )),
         "{refusal}"
+    );
+    assert!(
+        !last_line.contains("STREAMLIB_RUNTIME_ID"),
+        "one socket per machine leaves no runtime id to duplicate: {refusal}"
     );
     assert!(machine_root.local_api_socket_path().exists());
 }
