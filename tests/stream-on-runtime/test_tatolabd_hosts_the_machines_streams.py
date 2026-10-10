@@ -194,6 +194,17 @@ def assert_frames_flow_out_of_the_pattern(
     assert tapped["received"] > 0, f"no bag reached the tap on {channel} of `{stream_name}`: {tapped}"
 
 
+def assert_the_pattern_is_wired_to_the_window_inside_the_stream(
+    local_api: LocalApiClient, stream_name: str
+) -> None:
+    """The stream's one link, the pattern into the window, reaches `wired`: proof it runs,
+    read from inside the stream, never by reading a port across its edge."""
+    stream_links = local_api.graph(stream_name)["links"]
+    assert len(stream_links) == 1, stream_links
+    link_state = local_api.await_link_state(stream_links[0]["id"], "wired", stream=stream_name)
+    assert link_state == "wired", f"the pattern-to-window link of `{stream_name}` is {link_state}"
+
+
 def stream_names_in_the_machine_graph(local_api: LocalApiClient) -> "list[str]":
     """Each loaded stream's name, from `graph` with no stream named."""
     return sorted(stream_graph["stream"] for stream_graph in local_api.graph()["streams"])
@@ -852,6 +863,7 @@ def test_the_owners_restriction_holds_through_a_restart_and_a_crashs_restart_bef
         stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )["exposed"] == exposure_at("private")
     assert "kept and not applied" not in tatolabd.stderr_text, tatolabd.recent_stderr()
+    assert_frames_flow_out_of_the_pattern(local_api, run_tatolab, ALPHA_STREAM, alpha_project)
 
     assert_tatolab_succeeded(
         run_tatolab(
@@ -870,14 +882,15 @@ def test_the_owners_restriction_holds_through_a_restart_and_a_crashs_restart_bef
     )
     assert_the_first_rendering_carries(first_rendering, renderings_before_it, "internal")
     local_api = tatolabd.local_api_client()
-    assert local_api.await_every_node_running(
+    graph_running_after_the_crash = local_api.await_every_node_running(
         stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS
-    )["exposed"] == exposure_at("internal")
+    )
+    assert graph_running_after_the_crash["exposed"] == exposure_at("internal")
+    assert_the_pattern_is_wired_to_the_window_inside_the_stream(local_api, ALPHA_STREAM)
     assert listed_streams_by_name(local_api) == {
         ALPHA_STREAM: listing_of(ALPHA_STREAM, "kept", alpha_project, PROJECT_STREAM_NODE_COUNT)
     }
     assert read_kept_stream_record(tatolabd, ALPHA_STREAM)["graph"]["exposed"] == exposure_at("public")
-    assert_frames_flow_out_of_the_pattern(local_api, run_tatolab, ALPHA_STREAM, alpha_project)
     stop_tatolabd_cleanly(tatolabd)
 
 
@@ -904,7 +917,8 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
             "run_stream", {"project_directory": str(project_directory), "keep": keep}
         )
 
-    # Two projects kept, both running; the owner restricts one port live.
+    # Two projects kept, both running; the owner sets one port at each level
+    # live, ending on private, and nothing restarts.
     agent = start_mcp_session_over_the_verb()
     for stream_name, project_directory in ((ALPHA_STREAM, alpha_project), (BRAVO_STREAM, bravo_project)):
         assert run_stream(agent, project_directory, keep=True) == {
@@ -919,17 +933,38 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     assert sorted(
         stream_graph["stream"] for stream_graph in agent.call_tool("graph")["streams"]
     ) == [ALPHA_STREAM, BRAVO_STREAM]
-    assert agent.call_tool(
-        "expose_port",
-        {"stream": ALPHA_STREAM, "node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": "private"},
-    ) == {
-        "stream": ALPHA_STREAM,
-        "node": EXPOSED_NODE,
-        "port": EXPOSED_PORT,
-        "level": "private",
-        "recorded": True,
-    }
-    assert agent.call_tool("graph", {"stream": ALPHA_STREAM})["exposed"] == exposure_at("private")
+    alpha_graph_while_running = agent.call_tool("graph", {"stream": ALPHA_STREAM})
+    assert alpha_graph_while_running["exposed"] == exposure_at("public")
+    alpha_node_ids_while_running = sorted(node["id"] for node in alpha_graph_while_running["nodes"])
+    alpha_start_line = f"[start] Starting the stream `{ALPHA_STREAM}`"
+    assert tatolabd.stderr_text.count(alpha_start_line) == 1, tatolabd.recent_stderr()
+    for level in ("internal", "public", "private"):
+        assert agent.call_tool(
+            "expose_port",
+            {"stream": ALPHA_STREAM, "node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": level},
+        ) == {
+            "stream": ALPHA_STREAM,
+            "node": EXPOSED_NODE,
+            "port": EXPOSED_PORT,
+            "level": level,
+            "recorded": True,
+        }
+        alpha_graph_right_after = agent.call_tool("graph", {"stream": ALPHA_STREAM})
+        assert alpha_graph_right_after["exposed"] == exposure_at(level), (
+            level,
+            alpha_graph_right_after["exposed"],
+        )
+        assert sorted(
+            node["id"] for node in alpha_graph_right_after["nodes"]
+        ) == alpha_node_ids_while_running, "expose_port must change the level live, never reload"
+        assert read_kept_stream_record(tatolabd, ALPHA_STREAM)["exposure_rulings"] == [
+            {"node": EXPOSED_NODE, "port": EXPOSED_PORT, "level": level}
+        ]
+    local_api.await_every_node_running(stream=ALPHA_STREAM, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
+    assert tatolabd.stderr_text.count(alpha_start_line) == 1, (
+        f"expose_port restarted the stream:\n{tatolabd.recent_stderr()}"
+    )
+    assert stream_stopped_log_line(ALPHA_STREAM) not in tatolabd.stderr_text
     assert agent.call_tool("stop_stream", {"stream": BRAVO_STREAM}) == {
         "stream": BRAVO_STREAM,
         "stopped": True,
@@ -941,9 +976,17 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
         BRAVO_STREAM: listing_of(BRAVO_STREAM, "stopped", bravo_project, None),
     }, "a kept stream outlives the connection that ran it"
 
-    # Across a restart: the kept stream comes back with the owner's level over
-    # the function's public, the stopped one stays stopped.
-    tatolabd = restart_tatolabd(tatolabd, start_tatolabd)
+    # Across a crash's restart: the kept stream's first rendering already
+    # carries the owner's private over the function's public, and the stopped
+    # one stays stopped.
+    crash_tatolabd(tatolabd)
+    tatolabd, first_rendering, renderings_before_it = first_rendering_of_the_stream_once_tatolabd_serves(
+        start_tatolabd, ALPHA_STREAM
+    )
+    assert first_rendering["exposed"] == exposure_at("private"), (
+        f"the first rendering after the crash's re-load carried {first_rendering['exposed']} "
+        f"after {renderings_before_it} renderings without the stream"
+    )
     tatolabd.await_stderr_containing(
         runtime_serving_log_line(1, 0), timeout=STREAM_RUNNING_TIMEOUT_SECONDS
     )
