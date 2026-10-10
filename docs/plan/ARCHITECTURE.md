@@ -143,7 +143,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   test doubles of their Protocols; never a GPU, never the runtime. The runtime suite is Rust —
   the engine crates, `tatolabd` and `tatolab` — fed graph data and native built-ins only, with
   no Python node. The integration suite (`tests/stream-on-runtime/`) runs both on purpose: it
-  compiles a fixture stream, starts `tatolabd` and drives it over the local API — processor
+  starts `tatolabd`, loads each fixture stream with `tatolab run` (the runtime compiling it in
+  the suite project's venv) and drives it over the local API — processor
   interpreters, the lend, describe, escalate ops, pixel and device exchange, the CLI end to
   end. The division is structural, not a lint: each CI job installs only what its suite may
   touch, so a stream test reaching for the runtime fails to import. `requires_gpu` halves
