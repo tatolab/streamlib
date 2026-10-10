@@ -38,8 +38,9 @@
 # attended, because making the tap raises the prompt. A preflight that cannot
 # be asked at all is an error, before anything starts.
 #
-# The stream runs on the runtime unit with `tatolab run` (see
-# fixture_runtime_unit.sh).
+# The fixture starts the runtime unit's `tatolabd` and loads the stream into it
+# with `tatolab run` (see fixture_runtime_unit.sh), so it refuses to run while
+# another runtime holds the machine.
 #
 # Usage:
 #   ./verify_audio_loopback.sh [--count N]
@@ -101,7 +102,12 @@ if [ "$PLATFORM" != Darwin ] && ! "$HERE/virtual_audio_device.sh" check >&2; the
     exit 77
 fi
 
-NODE_PID=""
+STREAM_NAME="audio_loopback_fixture"
+# The runtime's output — the engine's log mirror, the stream's records among
+# it — with `tatolab run`'s beside it.
+NODE_LOG="$OUTPUT_DIR/node.log"
+STREAM_RUN_LOG="$OUTPUT_DIR/stream_run.log"
+STREAM_RUN_PID=""
 SHARED_TAP_HOLDER_PID=""
 # Bounded, so a stop that hangs still lets the next cleanup step run.
 stop_and_wait_for() {
@@ -114,14 +120,15 @@ stop_and_wait_for() {
     done
     wait "$started_pid" 2>/dev/null
 }
-# The stream first, so the microphone has let go of the shared aggregate before
-# it is destroyed.
+# The stream and its runtime first, so the microphone has let go of the shared
+# aggregate before it is destroyed.
 stop_everything_this_run_started() {
-    stop_and_wait_for "$NODE_PID"
+    stop_and_wait_for "$STREAM_RUN_PID"
+    stop_the_fixture_runtime 30
     stop_and_wait_for "$SHARED_TAP_HOLDER_PID"
     "$HERE/virtual_audio_device.sh" stop >&2
 }
-# Installed BEFORE the sink or tap is created and before the node starts, and
+# Installed BEFORE the sink or tap is created and before the runtime starts, and
 # idempotent — `stop` handles "not running", and a pid never set is skipped.
 # Installing it after would leave a window in which a failure strands an
 # Audio/Sink in the user's live session, and `object.linger` means it outlives
@@ -210,63 +217,55 @@ if [ -n "$INJECT_BUG" ]; then
 fi
 
 CAPTURED_WAVEFORM="$OUTPUT_DIR/captured.wav"
+# A stream takes no argv, so the devices, the fault and where the capture goes
+# travel in the runtime's environment, which every processor interpreter
+# inherits.
 if [ "$PLATFORM" = Darwin ]; then
-    echo "starting the loopback stream ($LOOPBACK_PATH): speaker $SPEAKER_DEVICE_ID," \
+    echo "starting the runtime ($LOOPBACK_PATH): speaker $SPEAKER_DEVICE_ID," \
         "microphone $CAPTURE_DEVICE_ID" >&2
     STREAMLIB_AUDIO_SINK="$SPEAKER_DEVICE_ID" \
         STREAMLIB_AUDIO_CAPTURE_DEVICE_ID="$CAPTURE_DEVICE_ID" \
         STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
         STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
-        "$TATOLAB_EXECUTABLE" run --dir "$HERE" audio_loopback_stream.py \
-        >"$OUTPUT_DIR/node.log" 2>&1 &
+        start_the_fixture_runtime "$NODE_LOG" "$OUTPUT_DIR/runtime_state"
 else
-    echo "starting the loopback stream against $SINK" >&2
+    echo "starting the runtime against $SINK" >&2
     STREAMLIB_AUDIO_SINK="$SINK" \
         STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
         STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
-        "$TATOLAB_EXECUTABLE" run --dir "$HERE" audio_loopback_stream.py \
-        >"$OUTPUT_DIR/node.log" 2>&1 &
+        start_the_fixture_runtime "$NODE_LOG" "$OUTPUT_DIR/runtime_state"
 fi
-NODE_PID=$!
+RUNTIME_START_STATUS=$?
+if [ "$RUNTIME_START_STATUS" -ne 0 ]; then
+    echo "ERROR: the fixture could not start its runtime" >&2
+    exit 1
+fi
+echo "loading the loopback stream as $STREAM_NAME" >&2
+"$TATOLAB_EXECUTABLE" run --dir "$HERE" --name "$STREAM_NAME" audio_loopback_stream.py \
+    >"$STREAM_RUN_LOG" 2>&1 &
+STREAM_RUN_PID=$!
 
-# Polled rather than slept: the node has a GPU context and an iceoryx2 node to
-# bring up, and a fixed sleep is either flaky or slow.
-RUNTIME_ID=""
-NODE_ANSWERED=0
-for _ in $(seq 60); do
-    if ! kill -0 "$NODE_PID" 2>/dev/null; then
-        echo "ERROR: the loopback node exited before serving its local API" >&2
-        cat "$OUTPUT_DIR/node.log" >&2
-        exit 1
-    fi
-    if [ -z "$RUNTIME_ID" ]; then
-        RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$NODE_PID")" || RUNTIME_ID=""
-    fi
-    if [ -n "$RUNTIME_ID" ] \
-        && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
-        NODE_ANSWERED=1
-        break
-    fi
-    sleep 0.5
-done
-if [ "$NODE_ANSWERED" -ne 1 ]; then
-    echo "ERROR: the loopback node never answered over its local API socket" >&2
-    tail -40 "$OUTPUT_DIR/node.log" >&2
+# Polled rather than slept: the stream compiles and the engine brings up a GPU
+# context and an iceoryx2 node, and a fixed sleep is either flaky or slow.
+if ! wait_until_the_stream_is_running "$STREAM_NAME" "$STREAM_RUN_PID" 60; then
+    echo "ERROR: the loopback stream never ran — it never answered over the local API socket with every node Running" >&2
+    tail -40 "$STREAM_RUN_LOG" >&2
+    tail -40 "$NODE_LOG" >&2
     exit 1
 fi
 
-# The first line in node.log matching `pattern`, polled for while the node is
-# up: the audio built-ins probe and open their devices in setup, which can land
-# after the control plane is already answering.
+# The first line in node.log matching `pattern`, polled for while the stream is
+# loaded: the audio built-ins probe and open their devices in setup, which can
+# land after the control plane is already answering.
 first_node_log_line_matching() {
     local pattern="$1" line
     for _ in $(seq 60); do
-        line="$(grep -m1 -e "$pattern" "$OUTPUT_DIR/node.log")"
+        line="$(grep -m1 -e "$pattern" "$NODE_LOG")"
         if [ -n "$line" ]; then
             printf '%s\n' "$line"
             return 0
         fi
-        kill -0 "$NODE_PID" 2>/dev/null || return 1
+        kill -0 "$STREAM_RUN_PID" 2>/dev/null || return 1
         sleep 0.5
     done
     return 1
@@ -280,13 +279,13 @@ if [ "$PLATFORM" = Darwin ]; then
     COREAUDIO_ARM='audio_backend="?coreaudio("|[[:space:]]|$)'
     if ! PROBE_LINE="$(first_node_log_line_matching "audio device backend chain probed")"; then
         echo "ERROR: the node never probed an audio backend" >&2
-        tail -40 "$OUTPUT_DIR/node.log" >&2
+        tail -40 "$NODE_LOG" >&2
         exit 1
     fi
     if ! printf '%s' "$PROBE_LINE" | grep -Eq "$COREAUDIO_ARM"; then
-        if grep "demoting to the next arm" "$OUTPUT_DIR/node.log" | grep -Eq "$COREAUDIO_ARM"; then
+        if grep "demoting to the next arm" "$NODE_LOG" | grep -Eq "$COREAUDIO_ARM"; then
             echo "ERROR: this runtime unit carries the CoreAudio arm and it did not open:" >&2
-            grep "demoting to the next arm" "$OUTPUT_DIR/node.log" >&2
+            grep "demoting to the next arm" "$NODE_LOG" >&2
             exit 1
         fi
         echo "SKIP: refusing to score — the engine probed another audio arm than coreaudio," >&2
@@ -302,7 +301,7 @@ if [ "$PLATFORM" = Darwin ]; then
     # would still close a loop and could pass.
     if ! MICROPHONE_OPENED="$(first_node_log_line_matching "MicrophoneSource: capture stream opened")"; then
         echo "ERROR: MicrophoneSource never opened $CAPTURE_DEVICE_ID" >&2
-        tail -40 "$OUTPUT_DIR/node.log" >&2
+        tail -40 "$NODE_LOG" >&2
         exit 1
     fi
     if ! printf '%s' "$MICROPHONE_OPENED" | grep -qF "$CAPTURE_DEVICE_ID"; then
@@ -314,7 +313,7 @@ if [ "$PLATFORM" = Darwin ]; then
         if ! SPEAKER_OPENED="$(first_node_log_line_matching "SpeakerSink: playback stream opened")" \
             || ! printf '%s' "$SPEAKER_OPENED" | grep -qF "$SPEAKER_DEVICE_ID"; then
             echo "ERROR: SpeakerSink did not open $SPEAKER_DEVICE_ID" >&2
-            tail -40 "$OUTPUT_DIR/node.log" >&2
+            tail -40 "$NODE_LOG" >&2
             exit 1
         fi
     fi
@@ -325,16 +324,16 @@ fi
 # different fixes. The speaker no longer refuses a format it cannot play: its
 # port declares `audio_window = match_device`, so the stage converts. What it
 # still refuses is a bag it cannot decode as an audio block at all.
-if grep -q "cannot be read as an audio block" "$OUTPUT_DIR/node.log"; then
+if grep -q "cannot be read as an audio block" "$NODE_LOG"; then
     echo "ERROR: the speaker's port refused the signal's bags — see the reason below" >&2
-    grep "cannot be read as an audio block" "$OUTPUT_DIR/node.log" >&2
+    grep "cannot be read as an audio block" "$NODE_LOG" >&2
     exit 1
 fi
 
 # First verdict: the block-level contract on the microphone's own port —
 # cadence, timestamp continuity, and a frame the engine did not re-stamp.
 if ! "$HERE/verify_audio_channel.sh" microphonesource \
-    --node "$RUNTIME_ID" --count "$BAG_COUNT" --port audio \
+    --stream "$STREAM_NAME" --count "$BAG_COUNT" --port audio \
     --expect-frame-not-restamped >&2; then
     echo "ERROR: the microphone's channel failed its block-level contract" >&2
     exit 1
@@ -344,19 +343,19 @@ fi
 # node writes what it captured once it has the whole thing.
 echo "waiting for the node to write what it captured" >&2
 for _ in $(seq 120); do
-    if grep -q "MARKER:WAVEFORM_WRITTEN" "$OUTPUT_DIR/node.log"; then
+    if grep -q "MARKER:WAVEFORM_WRITTEN" "$NODE_LOG"; then
         break
     fi
-    if ! kill -0 "$NODE_PID" 2>/dev/null; then
-        echo "ERROR: the loopback node exited before writing its capture" >&2
-        tail -40 "$OUTPUT_DIR/node.log" >&2
+    if ! kill -0 "$STREAM_RUN_PID" 2>/dev/null; then
+        echo "ERROR: the loopback stream was unloaded before writing its capture" >&2
+        tail -40 "$NODE_LOG" >&2
         exit 1
     fi
     sleep 0.5
 done
 if ! [ -s "$CAPTURED_WAVEFORM" ]; then
     echo "ERROR: the node never wrote a capture to measure" >&2
-    tail -40 "$OUTPUT_DIR/node.log" >&2
+    tail -40 "$NODE_LOG" >&2
     exit 1
 fi
 

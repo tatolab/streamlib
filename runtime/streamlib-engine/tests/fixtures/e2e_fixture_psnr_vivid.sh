@@ -45,14 +45,17 @@
 #   PIPELINE           — which authoring surface builds the graph: `rust`
 #                         (default) runs the `codec_roundtrip_rig` example,
 #                         `python` runs `codec_roundtrip_stream.py` through
-#                         `tatolab.stream`'s built-in classes with `tatolab
-#                         run`. Only the launch differs; both arms lock to the
+#                         `tatolab.stream`'s built-in classes, loaded with
+#                         `tatolab run` into a `tatolabd` the fixture starts
+#                         itself. Only the launch differs; both arms lock to the
 #                         same baseline at the same tolerance, so a python-arm
 #                         mismatch is a finding, and the arm is refused
 #                         BASELINE_CAPTURE outright. It scores whatever engine
 #                         the runtime unit's `tatolabd` carries — rebuild it
 #                         before running it: `cargo xtask build-runtime
-#                         --release` (see fixture_runtime_unit.sh).
+#                         --release` (see fixture_runtime_unit.sh). Either arm
+#                         refuses to run while another runtime holds the
+#                         machine or answers at this user's local API socket.
 #   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 = "100% Red";
 #                         8=Green, 9=Blue work the same shape if a future
 #                         regression-classifier wants per-primary sensitivity)
@@ -180,7 +183,12 @@ fi
 
 mkdir -p "$OUTPUT_DIR"
 EXCHANGED_DIR="$OUTPUT_DIR/exchanged"
+# The rig's output for the rust arm; for the python arm the runtime's — the
+# engine's log mirror, the stream's records among it — with `tatolab run`'s
+# beside it.
 LOG_FILE="$OUTPUT_DIR/pipeline.log"
+STREAM_RUN_LOG_FILE="$OUTPUT_DIR/stream_run.log"
+PYTHON_ARM_STREAM_NAME="codec_roundtrip_fixture"
 
 # Force vivid into the requested pattern; restore on exit. Captured value
 # covers the case where another rig left vivid in a non-default state — we
@@ -200,7 +208,8 @@ stop_rig() {
     if [ -n "$RIG_PID" ] && kill -0 "$RIG_PID" 2>/dev/null; then
         # SIGTERM so the graph tears down the way a real stop does — a killed
         # rig would hide exactly the shutdown race #335 is about. `timeout`
-        # passes it on, and `tatolab run` forwards it to `tatolabd`.
+        # passes it on; `tatolab run` stops its stream, which the runtime
+        # unloads before the run exits.
         kill -TERM "$RIG_PID" 2>/dev/null || true
         for _ in $(seq 1 50); do
             kill -0 "$RIG_PID" 2>/dev/null || break
@@ -219,6 +228,7 @@ stop_rig() {
 }
 restore_pattern_and_stop_rig() {
     stop_rig
+    stop_the_fixture_runtime
     v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$ORIGINAL_PATTERN" >/dev/null 2>&1 || true
 }
 trap restore_pattern_and_stop_rig EXIT
@@ -261,59 +271,60 @@ fi
 echo "[vivid-color] Running the round trip against $VIVID_DEVICE..."
 # The arms differ in their launch and nowhere else: same environment, same
 # budget, same log, and everything downstream reads the same control plane.
-# `tatolab run` hands a stream no argv, so the python arm's codec and camera
-# travel in the environment; naming the camera keeps a rig carrying both a
-# virtual and a real one from handing it the first-enumerated node.
+# A stream takes no argv, so the python arm's codec and camera travel in the
+# runtime's environment, which the stream's compile and its processor
+# interpreters inherit; naming the camera keeps a rig carrying both a virtual
+# and a real one from handing it the first-enumerated node.
+export DISPLAY="${DISPLAY:-:0}"
+export RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}"
 if [ "$PIPELINE" = "python" ]; then
-    export STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC"
-    export STREAMLIB_CAMERA_DEVICE="$VIVID_DEVICE"
-    PIPELINE_LAUNCH_COMMAND=(
-        "$TATOLAB_EXECUTABLE" run
-        --dir "$SCRIPT_DIR"
-        --runtime-name codec-roundtrip-node
-        codec_roundtrip_stream.py
-    )
-else
-    PIPELINE_LAUNCH_COMMAND=(
-        "$REPO_ROOT/target/release/examples/codec_roundtrip_rig"
-        --source camera
-        --codec "$CODEC"
-        --camera "$VIVID_DEVICE"
-    )
-fi
-DISPLAY="${DISPLAY:-:0}" \
-RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
+    if ! STREAMLIB_FIXTURE_VIDEO_CODEC="$CODEC" \
+        STREAMLIB_CAMERA_DEVICE="$VIVID_DEVICE" \
+            start_the_fixture_runtime "$LOG_FILE" "$OUTPUT_DIR/runtime_state"; then
+        echo "[vivid-color] FAIL: the fixture could not start its runtime" >&2
+        exit 1
+    fi
     timeout --kill-after=5 "$RUN_SECONDS" \
-        "${PIPELINE_LAUNCH_COMMAND[@]}" \
+        "$TATOLAB_EXECUTABLE" run \
+            --dir "$SCRIPT_DIR" \
+            --name "$PYTHON_ARM_STREAM_NAME" \
+            codec_roundtrip_stream.py \
+        > "$STREAM_RUN_LOG_FILE" 2>&1 &
+    RIG_PID=$!
+else
+    # The rig serves this user's local API socket itself.
+    refuse_while_a_runtime_answers_at_the_local_api_socket || exit 1
+    timeout --kill-after=5 "$RUN_SECONDS" \
+        "$REPO_ROOT/target/release/examples/codec_roundtrip_rig" \
+            --source camera \
+            --codec "$CODEC" \
+            --camera "$VIVID_DEVICE" \
         > "$LOG_FILE" 2>&1 &
-RIG_PID=$!
+    RIG_PID=$!
+fi
 
-# `timeout` wraps either arm, so the runtime is the launched pid's child — or,
-# for the python arm, the `tatolabd` beneath `tatolab run` — rather than the
-# pid itself; `runtime_id_of_the_node_launched_as` walks that chain.
-RUNTIME_ID=""
-NODE_ANSWERED=0
-for _ in $(seq 1 60); do
-    kill -0 "$RIG_PID" 2>/dev/null || break
-    if [ -z "$RUNTIME_ID" ]; then
-        RUNTIME_ID="$(runtime_id_of_the_node_launched_as "$RIG_PID")" || RUNTIME_ID=""
-    fi
-    if [ -n "$RUNTIME_ID" ] && tatolab_observation_verb graph --node "$RUNTIME_ID" >/dev/null 2>&1; then
-        NODE_ANSWERED=1
-        break
-    fi
-    sleep 0.5
-done
-if [ "$NODE_ANSWERED" -ne 1 ]; then
-    echo "[vivid-color] FAIL: the rig never answered over its local API socket" >&2
+# Waits for the stream to run — every node `Running` in its graph over the
+# local API socket — before a tap attaches: the python arm's under the name it
+# was loaded as, the rust arm's under whatever name the rig gave it.
+STREAM_NAME=""
+if [ "$PIPELINE" = "python" ]; then
+    wait_until_the_stream_is_running "$PYTHON_ARM_STREAM_NAME" "$RIG_PID" 60 \
+        && STREAM_NAME="$PYTHON_ARM_STREAM_NAME"
+else
+    STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_runs "$RIG_PID" 30)" || STREAM_NAME=""
+fi
+if [ -z "$STREAM_NAME" ]; then
+    echo "[vivid-color] FAIL: the stream never ran — it never answered over the local API socket with every node Running" >&2
+    [ "$PIPELINE" = "python" ] && tail -30 "$STREAM_RUN_LOG_FILE" >&2
     tail -30 "$LOG_FILE" >&2
     exit 1
 fi
+echo "[vivid-color] Stream:            $STREAM_NAME"
 
 # A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
 # runtime's own top-level `runtime_name`. Read off the live graph rather than
 # guessed.
-DECODED_CHANNEL="$(tatolab_observation_verb graph --node "$RUNTIME_ID" 2>/dev/null | python3 -c '
+DECODED_CHANNEL="$(tatolab_observation_verb graph --stream "$STREAM_NAME" 2>/dev/null | python3 -c '
 import json, sys
 graph = json.load(sys.stdin)
 decoder = next(
@@ -334,7 +345,7 @@ if ! tatolab_observation_verb exchange \
         --out "$EXCHANGED_DIR" \
         --count "$SAMPLE_COUNT" \
         --every "$SAMPLE_EVERY" \
-        --node "$RUNTIME_ID" \
+        --stream "$STREAM_NAME" \
         > "$OUTPUT_DIR/exchanged_paths.txt" 2> "$OUTPUT_DIR/exchange.log"; then
     echo "[vivid-color] FAIL: exchanged fewer frames than asked for" >&2
     cat "$OUTPUT_DIR/exchange.log" >&2
@@ -368,6 +379,15 @@ if [ "$RIG_NEEDED_SIGKILL" -eq 1 ]; then
          "A teardown that hangs is the #335 race class, not a slow exit." >&2
     tail -30 "$LOG_FILE" >&2
     exit 1
+fi
+if [ "$PIPELINE" = "python" ]; then
+    stop_the_fixture_runtime 15
+    if ! the_fixture_runtime_stopped_cleanly; then
+        echo "[vivid-color] FAIL: the runtime did not stop cleanly once its stream was" \
+             "unloaded — the #335 race class again, one level up." >&2
+        tail -30 "$LOG_FILE" >&2
+        exit 1
+    fi
 fi
 
 # ── Measure ──────────────────────────────────────────────────────────
