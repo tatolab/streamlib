@@ -326,8 +326,8 @@ $ claude mcp add tatolab -- tatolab mcp
 The host launches `tatolab mcp`, which sends one upgrade request on the runtime's local socket and
 then copies bytes between its own stdin and stdout and the runtime's MCP server, reading none of
 them. To reach a runtime on another machine, launch it over ssh instead, with `tatolab` on that
-machine's `PATH`: `claude mcp add tatolab -- ssh <machine> tatolab mcp`. `--node` picks one when a
-machine runs more than one. The server belongs to the runtime and comes and goes with it.
+machine's `PATH`: `claude mcp add tatolab -- ssh <machine> tatolab mcp`. The server belongs to the
+runtime and comes and goes with it.
 
 The tools are `graph`, `tap`, `logs` and `exchange` to observe; `add_node`, `connect`, `disconnect`
 and `remove_node` to change a running graph; and `run_stream`, `stop_stream`, `start_stream`,

@@ -17,7 +17,7 @@ path = "src/main.rs"
 
 [features]
 # The tests that start the engine on a GPU, gated the engine's way:
-# `cargo test -p tatolabd --features hardware-tests` on the rig.
+# `cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root` on the rig.
 hardware-tests = ["streamlib/hardware-tests"]
 # Test builds only, never a release: the machine runtime lock, the state directory and the runtime
 # directory all move under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
