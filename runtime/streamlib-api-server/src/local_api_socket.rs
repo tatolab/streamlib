@@ -351,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn a_stale_socket_file_is_replaced_and_served() {
         let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rstale.sock");
+        let local_api_socket_path = directory.path().join("local-api.sock");
         drop(std::os::unix::net::UnixListener::bind(&local_api_socket_path).unwrap());
         assert!(local_api_socket_path.exists());
 
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn dropping_a_socket_bound_and_never_served_removes_its_file() {
         let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rneverserved.sock");
+        let local_api_socket_path = directory.path().join("local-api.sock");
         let bound = bind_local_api_socket(&local_api_socket_path).unwrap();
         assert!(local_api_socket_path.exists());
 
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn removing_the_socket_file_is_idempotent() {
         let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rgone.sock");
+        let local_api_socket_path = directory.path().join("local-api.sock");
         drop(std::os::unix::net::UnixListener::bind(&local_api_socket_path).unwrap());
 
         remove_local_api_socket_file(&local_api_socket_path).unwrap();
@@ -486,7 +486,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_the_running_server_stops_serving_and_removes_its_socket_file() {
         let directory = tempfile::tempdir().unwrap();
-        let local_api_socket_path = directory.path().join("local-api-Rdrop.sock");
+        let local_api_socket_path = directory.path().join("local-api.sock");
         let running_server = serve_the_stub_router_at(&local_api_socket_path);
         let mut held_connection = tokio::net::UnixStream::connect(&local_api_socket_path)
             .await

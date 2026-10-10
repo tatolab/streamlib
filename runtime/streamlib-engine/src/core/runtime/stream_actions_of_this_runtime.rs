@@ -468,7 +468,9 @@ impl Runner {
         let kept_record = self.kept_record_of_the_cast_name(&stream_cast)?;
         match (&loaded, &kept_record) {
             (None, None) => return Err(self.a_stream_this_runtime_does_not_hold(stream_name)),
-            (Some(loaded), _) => loaded.set_output_port_exposure_level(node, port, level)?,
+            (Some(loaded), _) => loaded
+                .log_route()
+                .run_entered(|| loaded.set_output_port_exposure_level(node, port, level))?,
             (None, Some(kept_record)) => {
                 refuse_a_node_the_recorded_graph_does_not_hold(kept_record, node)?
             }

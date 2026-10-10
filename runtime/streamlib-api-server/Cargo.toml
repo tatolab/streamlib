@@ -25,6 +25,9 @@ name = "generate_openapi"
 path = "src/bin/generate_openapi.rs"
 
 [features]
+# The tests that start a stream, whose start creates the engine's GPU context, gated the engine's
+# way: `cargo test -p streamlib-api-server --features hardware-tests` on the rig.
+hardware-tests = ["streamlib/hardware-tests"]
 # Test builds only, never a release: the runtime directory the local API socket is bound in moves
 # under the absolute path TATOLAB_TEST_MACHINE_ROOT, which must be set.
 machine-directories-under-a-test-root = [
@@ -35,8 +38,8 @@ machine-directories-under-a-test-root = [
 [dependencies]
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.43.1" }
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.43.1" }
-# The node registry the local API publishes its endpoint into, and the wire names and tap
-# result shape it serves.
+# The runtime directory the local API's socket is bound in, and the wire names and tap result
+# shape it serves.
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.43.1" }
 
 tower-http = { version = "0.6", features = ["trace"] }
