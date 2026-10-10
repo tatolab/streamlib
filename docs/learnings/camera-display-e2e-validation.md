@@ -44,12 +44,13 @@ runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e
 
 The script:
 1. Loads vivid and finds its capture node
-2. Starts the runtime unit's own `tatolabd` (`cargo xtask build-runtime`), which
-   takes the machine's runtime lock — so it refuses while another runtime holds
-   the machine — then loads `camera_display_stream.py`, the fixture stream
-   beside the script, into it with `tatolab run --name`, compiled in the fixture
-   venv. The stream is Python, so there is no build step between an edit and the
-   run
+2. Starts the runtime unit's own `tatolabd` (`cargo xtask build-runtime`) with a
+   state directory under the output directory, and waits until its local API
+   answers. It takes the machine's runtime lock, so it refuses while another
+   runtime holds the machine. It then loads `camera_display_stream.py`, the
+   fixture stream beside the script, with `tatolab run --dir <fixtures> --name`,
+   so the runtime compiles it in the fixture venv. The stream is Python, so there
+   is no build step between an edit and the run
 3. Waits until every node of the stream reads `Running` in
    `tatolab graph --stream <name>`, then asserts against that graph: both native
    built-ins present, linked camera `video` → window `video`

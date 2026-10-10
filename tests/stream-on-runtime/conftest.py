@@ -44,9 +44,8 @@ Fixtures, each documented where it is defined:
 `TatolabdUnderTest` is the started `tatolabd`: every wait of a
 `RuntimeProcessUnderTest` (marker lines of every loaded stream land on its
 standard error), plus `local_api_socket_path`, `await_serving()`,
-`local_api_client()`, `run_stream_attached(stream_or_graph, ...)` →
-`AttachedTatolabRun` and `run_stream_kept(stream_or_graph, ...)` →
-the completed `tatolab run -d`. `tatolabd.interrupt()` is a machine shutdown:
+`local_api_client()` and `run_stream_attached(stream_or_graph, ...)` →
+`AttachedTatolabRun`. `tatolabd.interrupt()` is a machine shutdown:
 every loaded stream is unloaded and `tatolabd` exits; `AttachedTatolabRun.interrupt()`
 is a user's Ctrl-C to `tatolab run`, which stops that one stream, and
 `AttachedTatolabRun.await_loaded()` waits for its note naming the stream it
@@ -510,36 +509,6 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         )
         self.attached_stream_runs.append(attached_run)
         return attached_run
-
-    def run_stream_kept(
-        self,
-        stream_or_graph: StreamOrGraph,
-        *,
-        stream_name: "str | None" = None,
-        project_directory: "Path | None" = None,
-        processor_interpreter: "Path | None" = None,
-        timeout: float = TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS,
-    ) -> "subprocess.CompletedProcess[str]":
-        """`tatolab run -d` on `stream_or_graph`, to completion: the runtime keeps the stream."""
-        tatolab_run = self._tatolab_commands.tatolab_run_of(
-            stream_or_graph,
-            stream_name=stream_name,
-            project_directory=project_directory,
-            processor_interpreter=processor_interpreter,
-        )
-        started_tatolab = self._tatolab_commands.start_tatolab(
-            "run",
-            "-d",
-            *tatolab_run.tatolab_run_arguments,
-            working_directory=tatolab_run.working_directory,
-        )
-        exit_status = started_tatolab.await_exit(timeout=timeout)
-        return subprocess.CompletedProcess(
-            args=started_tatolab.process.args,
-            returncode=exit_status,
-            stdout=started_tatolab.stdout_text,
-            stderr=started_tatolab.stderr_text,
-        )
 
 
 @pytest.fixture
