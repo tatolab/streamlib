@@ -662,8 +662,9 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
 
     The finding sits in a function nothing calls, so the app needs neither
     cupy nor CUDA to run: the check reads source, and this proves a finding in
-    it reaches the runtime's log — the compile's standard error — without
-    costing the start.
+    it reaches the terminal of the user who ran `tatolab run` — ahead of the
+    note that the stream loaded — without costing the start. The runtime's log
+    carries the same block.
     """
     app_directory = make_scaffolded_test_pattern_project(make_tatolab_project, run_tatolab)
     effect_module = app_directory / SCAFFOLDED_EFFECT_MODULE_PATH
@@ -676,22 +677,28 @@ def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
     )
     tatolabd = start_tatolabd()
 
-    dev = attach_the_projects_stream(tatolabd, app_directory, "dev")
-    dev.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
+    tatolab_run = attach_the_projects_stream(tatolabd, app_directory)
+    tatolab_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
     tatolabd.await_stderr_containing(ENGINE_STARTED_LOG_LINE, timeout=NODE_READY_TIMEOUT_SECONDS)
-    dev.interrupt()
-    dev.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
+    tatolab_run.interrupt()
+    assert tatolab_run.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, tatolab_run.recent_stderr()
 
-    output = tatolabd.stderr_text
+    output = tatolab_run.stderr_text
     assert f"{SCAFFOLDED_EFFECT_MODULE_PATH}:" in output and "imports `cupy`" in output, (
-        f"the warning block must name the cupy import; standard error ended:\n"
-        f"{tatolabd.recent_stderr()}"
+        f"the warning block on `tatolab run`'s standard error must name the cupy import; it "
+        f"ended:\n{tatolab_run.recent_stderr()}"
     )
     assert "names the device 'cuda'" in output, (
-        f"the warning block must name the device literal; standard error ended:\n"
+        f"the warning block on `tatolab run`'s standard error must name the device literal; it "
+        f"ended:\n{tatolab_run.recent_stderr()}"
+    )
+    assert output.index("cross-floor check") < output.index(f"tatolab: {STREAM_NAME} loaded"), (
+        f"the warning block must come ahead of the loaded note:\n{output}"
+    )
+    assert "imports `cupy`" in tatolabd.stderr_text, (
+        f"the runtime's log must carry the compile's warning block too; it ended:\n"
         f"{tatolabd.recent_stderr()}"
     )
-    assert output.index("cross-floor check") < output.index(ENGINE_STARTED_LOG_LINE)
 
 
 def assert_the_window_showed_live_video(

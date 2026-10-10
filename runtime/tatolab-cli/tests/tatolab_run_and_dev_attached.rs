@@ -67,13 +67,26 @@ impl ScratchProject {
 }
 
 fn loaded_answer(project_directory: &Path) -> StubToolAnswer {
+    loaded_answer_warning(project_directory, &[])
+}
+
+/// The load's answer, its compile having written `compile_warnings` to its standard error.
+fn loaded_answer_warning(project_directory: &Path, compile_warnings: &[&str]) -> StubToolAnswer {
     StubToolAnswer::tool_result(&run_stream_tool_result_text(
         ATTACHED_STREAM_NAME,
         false,
         project_directory,
         3,
+        compile_warnings,
     ))
 }
+
+/// A cross-floor warning block, as a compile writes it to its standard error.
+const CROSS_FLOOR_WARNING_LINES: [&str; 3] = [
+    "tatolab: the cross-floor check found 1 thing binding this app to one floor (Linux or macOS). The app starts anyway.",
+    "  processors/effect.py:4: imports `cupy`",
+    "      portable: tatolab.stream's GPU context",
+];
 
 fn stopped_answer() -> StubToolAnswer {
     StubToolAnswer::tool_result(&stop_stream_tool_result_text(ATTACHED_STREAM_NAME, false))
@@ -215,6 +228,48 @@ fn run_loads_the_stream_attached_and_prints_each_record_as_the_runtime_mirrors_i
         "each record is asked for after the last one read"
     );
     drop(running_tatolab);
+}
+
+/// The compile's standard error reaches the user's terminal, not only the runtime's log: each
+/// line on `tatolab`'s own stderr, ahead of the note that the stream loaded and of its records.
+#[test]
+fn run_and_dev_print_each_line_the_compile_wrote_before_the_loaded_note() {
+    for verb in ["run", "dev"] {
+        let isolated_machine_directories = IsolatedMachineDirectories::new();
+        let scratch_project = ScratchProject::new();
+        let _stub_local_api_server = a_runtime_holding(
+            &isolated_machine_directories,
+            vec![loaded_answer_warning(
+                &scratch_project.canonical_path(),
+                &CROSS_FLOOR_WARNING_LINES,
+            )],
+            vec![a_log_record(json!({"message": "first"}))],
+        );
+        let running_tatolab =
+            RunningTatolab::spawn(isolated_machine_directories.tatolab_command(&[
+                verb,
+                "--dir",
+                scratch_project.path_as_given(),
+            ]));
+        running_tatolab.next_standard_output_line("the first record");
+        running_tatolab.send_signal(libc::SIGINT);
+        let (exit_status, standard_error_lines) = running_tatolab.wait_for_exit();
+
+        assert_eq!(
+            exit_status.code(),
+            Some(0),
+            "{verb}: {standard_error_lines:?}"
+        );
+        let loaded_note_index = standard_error_lines
+            .iter()
+            .position(|standard_error_line| standard_error_line.contains("cam loaded (3 nodes"))
+            .unwrap_or_else(|| panic!("{verb} noted no load: {standard_error_lines:?}"));
+        assert_eq!(
+            standard_error_lines[..loaded_note_index],
+            CROSS_FLOOR_WARNING_LINES,
+            "{verb}: the compile's lines, verbatim and in order, ahead of the loaded note"
+        );
+    }
 }
 
 #[test]

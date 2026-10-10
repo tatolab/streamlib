@@ -99,6 +99,12 @@ struct ProjectWhosePythonPrintsAGraph {
 
 impl ProjectWhosePythonPrintsAGraph {
     fn compiling(graph: Value) -> Self {
+        Self::compiling_warning(graph, &[])
+    }
+
+    /// A project whose compile writes each of `warnings` on a line of its
+    /// standard error, then prints `graph`.
+    fn compiling_warning(graph: Value, warnings: &[&str]) -> Self {
         let project = Self {
             project_directory: tempfile::tempdir().expect("a project directory"),
         };
@@ -108,9 +114,15 @@ impl ProjectWhosePythonPrintsAGraph {
             "stream_graph": graph,
             "project_directory": project.path(),
         });
+        let warnings_written: String = warnings
+            .iter()
+            .map(|warning| format!("echo '{warning}' >&2\n"))
+            .collect();
         write_an_executable_script_from_a_child_process(
             &project.interpreter(),
-            &format!("#!/bin/sh\ncat <<'COMPILED'\n{compile_document}\nCOMPILED\n"),
+            &format!(
+                "#!/bin/sh\n{warnings_written}cat <<'COMPILED'\n{compile_document}\nCOMPILED\n"
+            ),
         );
         project
     }
@@ -258,9 +270,14 @@ async fn wait_until_the_loaded_streams_are(engine: &Runner, expected: &[&str]) {
 // An attached stream ends with its connection
 // ============================================================================
 
+/// A cross-floor warning, as a test's compile writes it on its standard error.
+const CROSS_FLOOR_WARNING_A_COMPILE_WROTE: &str =
+    "tatolab: the cross-floor check found 1 thing binding this app to one floor.";
+
 /// A runtime whose `run_stream` loads an empty stream under the requested
 /// name without compiling or starting it — a GPU-free stand-in for the
-/// engine's own run — and hands every other call to the engine.
+/// engine's own run, answering [`CROSS_FLOOR_WARNING_A_COMPILE_WROTE`] as its compile's —
+/// and hands every other call to the engine.
 struct AnEngineWhoseRunLoadsAnEmptyStreamWithoutStartingIt {
     engine: Arc<Runner>,
     project_directory: tempfile::TempDir,
@@ -328,6 +345,7 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory: request.project_directory,
             node_count: 0,
             replaced_the_kept_record: false,
+            compile_warnings: vec![CROSS_FLOOR_WARNING_A_COMPILE_WROTE.to_string()],
         })
     }
     fn stop_stream(&self, stream_name: &str) -> Result<StreamStopOutcome> {
@@ -410,6 +428,11 @@ async fn an_attached_stream_unloads_when_its_connection_drops_and_a_kept_one_sta
     .expect("the attached run is answered");
     assert_eq!(attached["stream"], "attached-one");
     assert_eq!(attached["kept"], false);
+    assert_eq!(
+        attached["compile_warnings"],
+        json!([CROSS_FLOOR_WARNING_A_COMPILE_WROTE]),
+        "the run's result carries what its compile wrote to its standard error"
+    );
     tool_answer(
         &tool_call_over_the_connection(
             &client,
@@ -845,8 +868,10 @@ async fn a_start_or_run_without_the_projects_interpreter_is_refused_pointing_at_
 )]
 async fn a_run_stream_end_to_end_attached_and_kept_through_stop_start_and_remove() {
     let engine = AnEngineKeepingItsStreamsInATemporaryStateDirectory::new();
-    let attached_project =
-        ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("attached"));
+    let attached_project = ProjectWhosePythonPrintsAGraph::compiling_warning(
+        the_graph_of_a_function_named("attached"),
+        &[CROSS_FLOOR_WARNING_A_COMPILE_WROTE],
+    );
     let kept_project =
         ProjectWhosePythonPrintsAGraph::compiling(the_graph_of_a_function_named("kept"));
     let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
@@ -869,6 +894,7 @@ async fn a_run_stream_end_to_end_attached_and_kept_through_stop_start_and_remove
             "project_directory": attached_project.path(),
             "node_count": 1,
             "replaced_the_kept_record": false,
+            "compile_warnings": [CROSS_FLOOR_WARNING_A_COMPILE_WROTE],
         })
     );
     let kept = tool_answer(
@@ -881,6 +907,11 @@ async fn a_run_stream_end_to_end_attached_and_kept_through_stop_start_and_remove
     )
     .expect("the kept stream runs");
     assert_eq!(kept["kept"], true);
+    assert_eq!(
+        kept["compile_warnings"],
+        json!([]),
+        "a compile that wrote nothing to its standard error answers no warning"
+    );
     wait_until_the_loaded_streams_are(&engine.engine, &["attached", "kept"]).await;
 
     drop(client);

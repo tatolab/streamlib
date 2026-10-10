@@ -69,6 +69,9 @@ pub struct StreamRunOutcome {
     /// Whether the load replaced the kept stream of the same project and
     /// function.
     pub replaced_the_kept_record: bool,
+    /// What the compile wrote to its standard error, line by line — the
+    /// cross-floor check's warnings among it.
+    pub compile_warnings: Vec<String>,
 }
 
 /// A stream [`Runner::stop_stream`] unloaded.
@@ -236,6 +239,7 @@ impl Runner {
         )?;
         let stream_environment = compiled.stream_environment;
         let graph_json = compiled.graph_json;
+        let compile_warnings = compiled.compile_warnings;
 
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let loaded = self.loaded_stream_of_the_cast_name(&stream_name);
@@ -262,6 +266,7 @@ impl Runner {
                         stream_function,
                         graph_json,
                     ),
+                    compile_warnings,
                 )
             }
             (Some(kept_record), _) => Err(Error::GraphError(format!(
@@ -309,6 +314,7 @@ impl Runner {
                     stream_name,
                     project_directory: stream_environment.project_directory,
                     replaced_the_kept_record: false,
+                    compile_warnings,
                 })
             }
         }
@@ -748,15 +754,16 @@ impl Runner {
     }
 
     /// Replace `previous_record` by `replacement`, whose compile already
-    /// succeeded: unload the running stream, load and start the new graph
-    /// with the previous rulings, and record it. A refused load re-loads the
-    /// previous record when its stream was running.
+    /// succeeded writing `compile_warnings`: unload the running stream, load
+    /// and start the new graph with the previous rulings, and record it. A
+    /// refused load re-loads the previous record when its stream was running.
     fn replace_a_kept_stream(
         &self,
         kept_stream_records: &KeptStreamRecordsInTheStateDirectory,
         previous_record: KeptStreamRecord,
         previously_loaded: Option<Arc<LoadedStreamInThisRuntime>>,
         mut replacement: KeptStreamRecord,
+        compile_warnings: Vec<String>,
     ) -> Result<StreamRunOutcome> {
         replacement.exposure_rulings = previous_record.exposure_rulings.clone();
         let was_running = previously_loaded.is_some();
@@ -785,6 +792,7 @@ impl Runner {
                 stream_name: replacement.stream_name,
                 project_directory: replacement.project_directory,
                 replaced_the_kept_record: true,
+                compile_warnings,
             }),
             Err(replace_refusal) if was_running => {
                 match self.load_a_kept_stream_from_its_record(&previous_record) {
@@ -1026,10 +1034,14 @@ mod tests {
 
     impl ProjectWithAStubCompile {
         fn compiling(graph: serde_json::Value) -> Self {
+            Self::compiling_warning(graph, &[])
+        }
+
+        fn compiling_warning(graph: serde_json::Value, warnings: &[&str]) -> Self {
             let project = Self::with_no_venv();
             std::fs::create_dir_all(project.path().join(".venv").join("bin"))
                 .expect("the venv's bin directory");
-            project.compile_to(graph);
+            project.compile_to_warning(graph, warnings);
             project
         }
 
@@ -1057,13 +1069,25 @@ mod tests {
 
         /// From now on, the compile prints `graph` and this project.
         fn compile_to(&self, graph: serde_json::Value) {
+            self.compile_to_warning(graph, &[]);
+        }
+
+        /// From now on, the compile writes each of `warnings` on a line of its
+        /// standard error, then prints `graph` and this project.
+        fn compile_to_warning(&self, graph: serde_json::Value, warnings: &[&str]) {
             let compile_document = serde_json::json!({
                 "stream_graph": graph,
                 "project_directory": self.path(),
             });
+            let warnings_written: String = warnings
+                .iter()
+                .map(|warning| format!("echo '{warning}' >&2\n"))
+                .collect();
             write_an_executable_script_from_a_child_process(
                 &self.interpreter(),
-                &format!("#!/bin/sh\ncat <<'COMPILED'\n{compile_document}\nCOMPILED\n"),
+                &format!(
+                    "#!/bin/sh\n{warnings_written}cat <<'COMPILED'\n{compile_document}\nCOMPILED\n"
+                ),
             );
         }
 
@@ -2029,10 +2053,10 @@ mod tests {
             "camera",
             serde_json::json!([]),
         ));
-        let attached_project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
-            "preview",
-            serde_json::json!([]),
-        ));
+        let attached_project = ProjectWithAStubCompile::compiling_warning(
+            the_graph_of_a_function_named("preview", serde_json::json!([])),
+            &["tatolab: the cross-floor check found 1 thing binding this app to one floor."],
+        );
 
         let kept = runner
             .run_stream(kept_project.run_request(true))
@@ -2045,7 +2069,12 @@ mod tests {
         assert_eq!(kept.project_directory, kept_project.path());
         assert_eq!(kept.node_count, 1);
         assert!(!kept.replaced_the_kept_record);
+        assert_eq!(kept.compile_warnings, Vec::<String>::new());
         assert_eq!(attached.stream_name, "preview");
+        assert_eq!(
+            attached.compile_warnings,
+            ["tatolab: the cross-floor check found 1 thing binding this app to one floor."]
+        );
         let recorded = records_in(state_directory.path())
             .read("camera")
             .unwrap()
@@ -2102,13 +2131,20 @@ mod tests {
                 {"node": "source", "port": "out2", "level": "private"}
             ]),
         );
-        project.compile_to(changed_source.clone());
+        project.compile_to_warning(
+            changed_source.clone(),
+            &["a warning of the replacing compile"],
+        );
 
         let replaced = runner
             .run_stream(project.run_request(true))
             .expect("the kept stream is replaced");
 
         assert!(replaced.replaced_the_kept_record);
+        assert_eq!(
+            replaced.compile_warnings,
+            ["a warning of the replacing compile"]
+        );
         assert_ne!(replaced.stream_tag, first.stream_tag);
         let running = runner.loaded_stream_named("camera").unwrap();
         assert_eq!(running.stream_tag(), replaced.stream_tag);

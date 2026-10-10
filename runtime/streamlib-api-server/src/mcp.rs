@@ -775,7 +775,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes. A one-shot `POST /mcp` call can only keep."
+        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes. A one-shot `POST /mcp` call can only keep. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
     )]
     async fn run_stream(
         &self,
@@ -824,6 +824,7 @@ impl LocalApiMcpServerHandler {
             "project_directory": run.project_directory,
             "node_count": run.node_count,
             "replaced_the_kept_record": run.replaced_the_kept_record,
+            "compile_warnings": run.compile_warnings,
         })))
     }
 

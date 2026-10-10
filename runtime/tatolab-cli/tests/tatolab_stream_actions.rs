@@ -61,6 +61,7 @@ fn run_detached_hands_the_stream_to_the_runtime_to_keep_and_prints_one_line() {
             true,
             &canonical_project_directory,
             3,
+            &[],
         )),
     );
 
@@ -104,6 +105,53 @@ fn run_detached_hands_the_stream_to_the_runtime_to_keep_and_prints_one_line() {
     );
 }
 
+/// The compile's standard error reaches the user's terminal: each line on `tatolab`'s stderr,
+/// and the kept line alone on its stdout.
+#[test]
+fn run_detached_prints_each_line_the_compile_wrote_on_its_standard_error() {
+    let project_directory = tempfile::tempdir().unwrap();
+    let canonical_project_directory = project_directory.path().canonicalize().unwrap();
+    let compile_warnings = [
+        "tatolab: the cross-floor check found 1 thing binding this app to one floor (Linux or macOS). The app starts anyway.",
+        "  processors/effect.py:4: imports `cupy`",
+    ];
+    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
+        "run_stream",
+        StubToolAnswer::tool_result(&run_stream_tool_result_text(
+            "cam",
+            true,
+            &canonical_project_directory,
+            3,
+            &compile_warnings,
+        )),
+    );
+
+    let finished = isolated_machine_directories.run_tatolab(&[
+        "run",
+        "-d",
+        "--dir",
+        project_directory.path().to_str().unwrap(),
+    ]);
+
+    assert_eq!(
+        finished.status.code(),
+        Some(0),
+        "{}",
+        standard_error_text(&finished)
+    );
+    assert_eq!(
+        standard_error_text(&finished),
+        format!("{}\n{}\n", compile_warnings[0], compile_warnings[1])
+    );
+    assert_eq!(
+        standard_output_text(&finished),
+        format!(
+            "cam kept (project {})\n",
+            canonical_project_directory.display()
+        )
+    );
+}
+
 #[test]
 fn run_detached_sends_a_file_as_the_stream_function() {
     let project_directory = tempfile::tempdir().unwrap();
@@ -115,6 +163,7 @@ fn run_detached_sends_a_file_as_the_stream_function() {
             true,
             &canonical_project_directory,
             1,
+            &[],
         )),
     );
 

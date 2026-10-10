@@ -158,6 +158,19 @@ pub(crate) struct RunStreamToolResult {
     pub(crate) project_directory: PathBuf,
     /// How many nodes it loaded with.
     pub(crate) node_count: usize,
+    /// Each line the compile wrote to its standard error: the cross-floor check's warnings among
+    /// them.
+    pub(crate) compile_warnings: Vec<String>,
+}
+
+/// What `run`, `run -d` and `dev` write to their standard error before anything else a load
+/// says: each line its compile wrote to its own.
+pub(crate) fn rendered_compile_warning_lines(run_stream_result: &RunStreamToolResult) -> String {
+    run_stream_result
+        .compile_warnings
+        .iter()
+        .map(|compile_warning| format!("{compile_warning}\n"))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -262,6 +275,7 @@ pub(crate) fn run_stream_kept(
             stream_load_request.run_stream_tool_arguments(true),
         )?,
     )?;
+    write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
     write_verb_standard_output(&rendered_kept_stream_line(&run_stream_result))
 }
 
@@ -587,8 +601,46 @@ mod tests {
                 stream: "camera".to_owned(),
                 project_directory: PathBuf::from("/srv/project"),
                 node_count: 3,
+                compile_warnings: Vec::new(),
             }),
             "camera kept (project /srv/project)\n"
+        );
+    }
+
+    #[test]
+    fn each_compile_warning_is_a_line_of_its_own_and_none_writes_nothing() {
+        let run_stream_result_warning = |compile_warnings: &[&str]| RunStreamToolResult {
+            stream: "camera".to_owned(),
+            project_directory: PathBuf::from("/srv/project"),
+            node_count: 3,
+            compile_warnings: compile_warnings
+                .iter()
+                .map(|compile_warning| compile_warning.to_string())
+                .collect(),
+        };
+
+        assert_eq!(
+            rendered_compile_warning_lines(&run_stream_result_warning(&[
+                "tatolab: the cross-floor check found 1 thing binding this app to one floor.",
+                "  processors/effect.py:4: imports `cupy`",
+            ])),
+            "tatolab: the cross-floor check found 1 thing binding this app to one floor.\n  \
+             processors/effect.py:4: imports `cupy`\n"
+        );
+        assert_eq!(
+            rendered_compile_warning_lines(&run_stream_result_warning(&[])),
+            ""
+        );
+    }
+
+    #[test]
+    fn a_run_stream_result_without_compile_warnings_is_not_a_run_stream_result() {
+        assert!(
+            serde_json::from_str::<RunStreamToolResult>(
+                r#"{"stream": "camera", "project_directory": "/srv/project", "node_count": 3}"#
+            )
+            .is_err(),
+            "the runtime always answers `compile_warnings`, empty when the compile wrote nothing"
         );
     }
 

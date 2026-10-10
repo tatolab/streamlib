@@ -891,12 +891,14 @@ impl Drop for StubLocalApiServer {
     }
 }
 
-/// The text a runtime's `run_stream` answers with.
+/// The text a runtime's `run_stream` answers with, its compile having written
+/// `compile_warnings` to its standard error.
 pub fn run_stream_tool_result_text(
     stream: &str,
     kept: bool,
     project_directory: &Path,
     node_count: usize,
+    compile_warnings: &[&str],
 ) -> String {
     serde_json::json!({
         "stream": stream,
@@ -904,6 +906,7 @@ pub fn run_stream_tool_result_text(
         "project_directory": project_directory,
         "node_count": node_count,
         "replaced_the_kept_record": false,
+        "compile_warnings": compile_warnings,
     })
     .to_string()
 }

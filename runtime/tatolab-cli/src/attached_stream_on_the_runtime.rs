@@ -27,7 +27,7 @@ use crate::project_source_change_watcher::watch_project_sources;
 use crate::runtime_log_files_reader::RuntimeLogRecordFilters;
 use crate::stream_actions_on_the_runtime::{
     RUN_STREAM_TOOL_NAME, RunStreamToolResult, STOP_STREAM_TOOL_NAME, StreamLoadArguments,
-    StreamLoadRequest, stop_stream_tool_arguments,
+    StreamLoadRequest, rendered_compile_warning_lines, stop_stream_tool_arguments,
 };
 use crate::stream_log_records_from_the_runtime::{
     LOGS_TOOL_NAME, STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
@@ -296,6 +296,7 @@ impl AttachedStreamSession {
             Ok(run_stream_result) => run_stream_result,
             Err(load_failure) => return self.after_a_failed_load(load_failure),
         };
+        write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
         self.note(&format!(
             "{} loaded ({} nodes, project {}); Ctrl-C stops it",
             run_stream_result.stream,

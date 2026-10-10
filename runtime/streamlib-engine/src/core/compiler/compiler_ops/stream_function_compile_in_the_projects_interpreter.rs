@@ -63,6 +63,10 @@ pub struct StreamFunctionCompiledInTheProjectsInterpreter {
     /// The project directory the compile entry reported, and the project's
     /// venv interpreter.
     pub stream_environment: StreamEnvironment,
+    /// What the compile wrote to its standard error, line by line — the
+    /// cross-floor check's warnings among it — for the caller to show its
+    /// user; the runtime's log carries the same lines.
+    pub compile_warnings: Vec<String>,
 }
 
 /// The document the compile entry prints on its standard output.
@@ -201,9 +205,12 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
     // Killed whether or not the leader already exited: nothing a compile
     // starts outlives it.
     let exit_status = kill_the_process_group_and_reap_its_leader(&mut child, "the compile");
-    let standard_error_text = standard_error_tail
-        .map(|tail| tail.text_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE))
+    let standard_error_bytes = standard_error_tail
+        .map(|tail| tail.bytes_once_closed_or_after(HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE))
         .unwrap_or_default();
+    let standard_error_text = String::from_utf8_lossy(&standard_error_bytes)
+        .trim()
+        .to_string();
     let quoted_standard_error = standard_error_tail_as_a_refusal_quotes_it(&standard_error_text);
 
     match compile_exit {
@@ -276,6 +283,12 @@ pub(crate) fn compile_the_stream_function_in_the_projects_interpreter_within(
             project_directory: compile_document.project_directory,
             interpreter,
         },
+        compile_warnings: String::from_utf8_lossy(&standard_error_bytes)
+            .lines()
+            .map(str::trim_end)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect(),
     })
 }
 
@@ -438,6 +451,42 @@ mod tests {
             "the project directory is the one the compile entry reported, and the \
              interpreter the venv's as spelled"
         );
+    }
+
+    #[test]
+    #[serial]
+    fn a_compile_returns_every_line_it_wrote_to_its_standard_error_as_its_warnings() {
+        let project = ProjectWithAStubVenvInterpreter::running(&format!(
+            "echo '' >&2\n\
+             echo 'tatolab: the cross-floor check found 1 thing binding this app to one floor.' >&2\n\
+             echo '  processors/effect.py:4: imports `cupy`' >&2\n\
+             echo '' >&2\n{}",
+            print_the_compile_document("$PWD")
+        ));
+
+        let compiled = project
+            .compile(None, None)
+            .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
+
+        assert_eq!(
+            compiled.compile_warnings,
+            [
+                "tatolab: the cross-floor check found 1 thing binding this app to one floor.",
+                "  processors/effect.py:4: imports `cupy`",
+            ]
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_compile_that_writes_nothing_to_its_standard_error_returns_no_warnings() {
+        let project = ProjectWithAStubVenvInterpreter::running(&print_the_compile_document("$PWD"));
+
+        let compiled = project
+            .compile(None, None)
+            .unwrap_or_else(|refusal| panic!("the stream function compiles: {refusal}"));
+
+        assert_eq!(compiled.compile_warnings, Vec::<String>::new());
     }
 
     #[test]
