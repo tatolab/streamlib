@@ -18,7 +18,7 @@ use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirector
 use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
 use super::{RuntimeShutdownEscalation, StreamEnvironment};
 use crate::core::context::GpuContext;
-use crate::core::graph::cast_exposed_name_to_url_safe;
+use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::graph_snapshot::GraphSnapshot;
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, Result};
@@ -682,7 +682,11 @@ impl Runner {
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        let stream = self.build_the_stream_a_graph_load_names(graph, load_options)?;
+        let stream = self.build_the_stream_a_graph_load_names(
+            graph,
+            load_options,
+            LoadedStreamHolding::Attached,
+        )?;
         self.load_the_graph_into_the_stream(&stream, graph)?;
         self.insert_a_complete_stream(stream)
     }
@@ -718,7 +722,7 @@ impl Runner {
             RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, is_the_machines_shutdown_requested,
         };
 
-        let stream = match self.build_the_stream_a_graph_load_names(graph, load_options) {
+        let stream = match self.build_the_stream_a_graph_load_names(graph, load_options, holding) {
             Ok(stream) => stream,
             // Read after the build, so a request landing during it abandons
             // the load rather than refusing it.
@@ -733,7 +737,6 @@ impl Runner {
             }
             Err(build_refusal) => return Err(build_refusal),
         };
-        stream.hold_as(holding);
         let load_outcome = std::thread::scope(|scope| {
             // Never sent on: the loading thread's end drops it, a panic included.
             let (load_ended_sender, load_ended_receiver) = std::sync::mpsc::channel::<()>();
@@ -819,7 +822,12 @@ impl Runner {
             load_options.stream_name.as_deref(),
             "an empty stream",
         )?;
-        let stream = self.build_a_stream(stream_name, load_options, teardown_watchdog_budget)?;
+        let stream = self.build_a_stream(
+            stream_name,
+            load_options,
+            teardown_watchdog_budget,
+            LoadedStreamHolding::Attached,
+        )?;
         self.insert_a_complete_stream(stream)
     }
 
@@ -833,15 +841,7 @@ impl Runner {
                 self.loaded_stream_names_listed_for_a_refusal()
             ))
         })?;
-        // Read under its own statement: the refusal lists the table, and the
-        // table's lock is not reentrant.
-        let loaded = self
-            .engine_resources_shared_by_every_stream
-            .streams_loaded_in_this_runtime
-            .lock()
-            .get(cast.as_ref())
-            .cloned();
-        loaded.ok_or_else(|| {
+        self.loaded_stream_of_the_cast_name(&cast).ok_or_else(|| {
             Error::NotFound(format!(
                 "no stream named `{stream_name}` is loaded in this runtime. Loaded: {}",
                 self.loaded_stream_names_listed_for_a_refusal()
@@ -849,8 +849,20 @@ impl Runner {
         })
     }
 
+    /// The loaded stream `stream_cast`, already cast, names.
+    pub(super) fn loaded_stream_of_the_cast_name(
+        &self,
+        stream_cast: &str,
+    ) -> Option<Arc<LoadedStreamInThisRuntime>> {
+        self.engine_resources_shared_by_every_stream
+            .streams_loaded_in_this_runtime
+            .lock()
+            .get(stream_cast)
+            .cloned()
+    }
+
     /// Every loaded stream, read under one lock of the stream table.
-    pub(crate) fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
+    pub fn every_loaded_stream(&self) -> Vec<Arc<LoadedStreamInThisRuntime>> {
         self.engine_resources_shared_by_every_stream
             .every_loaded_stream()
     }
@@ -1122,6 +1134,7 @@ impl Runner {
         &self,
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
+        holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         let requested_stream_name = load_options
             .stream_name
@@ -1141,6 +1154,7 @@ impl Runner {
             stream_name,
             load_options,
             super::ENGINE_TEARDOWN_WATCHDOG_BUDGET,
+            holding,
         )
     }
 
@@ -1149,6 +1163,7 @@ impl Runner {
         stream_name: String,
         load_options: OptionsForLoadingOneStream,
         teardown_watchdog_budget: Duration,
+        holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
         self.refuse_a_load_once_the_engine_is_shut_down(&stream_name)?;
         self.refuse_a_stream_name_already_loaded(&stream_name)?;
@@ -1159,6 +1174,7 @@ impl Runner {
             project_directory,
             load_options.stream_environment,
             teardown_watchdog_budget,
+            holding,
         )
     }
 
@@ -1197,7 +1213,10 @@ impl Runner {
             return Err(refusal);
         }
         if let Some(first) = streams.get(stream.stream_name()) {
-            let refusal = a_stream_name_already_loaded_refusal(first);
+            let refusal = a_stream_name_already_loaded_refusal(
+                first,
+                LOAD_UNDER_ANOTHER_NAME_IN_CODE_OR_ON_THE_COMMAND_LINE,
+            );
             drop(streams);
             tear_down_a_stream_that_never_entered_the_table(&stream);
             return Err(refusal);
@@ -1213,7 +1232,10 @@ impl Runner {
             .lock()
             .get(stream_name)
         {
-            Some(first) => Err(a_stream_name_already_loaded_refusal(first)),
+            Some(first) => Err(a_stream_name_already_loaded_refusal(
+                first,
+                LOAD_UNDER_ANOTHER_NAME_IN_CODE_OR_ON_THE_COMMAND_LINE,
+            )),
             None => Ok(()),
         }
     }
@@ -1246,12 +1268,7 @@ impl Runner {
     }
 
     pub(super) fn loaded_stream_names_listed_for_a_refusal(&self) -> String {
-        let names = self.names_of_the_loaded_streams();
-        if names.is_empty() {
-            "none".to_string()
-        } else {
-            names.join(", ")
-        }
+        names_listed_for_a_refusal(self.names_of_the_loaded_streams(), "none")
     }
 }
 
@@ -1284,11 +1301,19 @@ pub(super) fn the_cast_name_of_the_stream_a_load_names(
         })
 }
 
-fn a_stream_name_already_loaded_refusal(first: &LoadedStreamInThisRuntime) -> Error {
+/// How a load refused for a name already loaded is told to go on, in code or
+/// on the command line.
+const LOAD_UNDER_ANOTHER_NAME_IN_CODE_OR_ON_THE_COMMAND_LINE: &str = "load this one under another \
+     name — `OptionsForLoadingOneStream::named`, or `--name` on the `tatolab` command line";
+
+/// The refusal of a load under the name `first` is loaded as, naming its
+/// project and ending with `how_to_load_this_one`.
+pub(super) fn a_stream_name_already_loaded_refusal(
+    first: &LoadedStreamInThisRuntime,
+    how_to_load_this_one: &str,
+) -> Error {
     Error::GraphError(format!(
-        "a stream named `{}` is already loaded in this runtime, from `{}`; load this one under \
-         another name — `OptionsForLoadingOneStream::named`, or `--name` on the `tatolab` \
-         command line",
+        "a stream named `{}` is already loaded in this runtime, from `{}`; {how_to_load_this_one}",
         first.stream_name(),
         first.project_directory().display()
     ))

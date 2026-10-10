@@ -981,6 +981,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::runtime::tests::the_wait_for_the_last_other_reference",
                 "core::runtime::runtime::tests::a_forced_machine_shutdown_forces_a_stream_an_unload_is_waiting_on",
                 "core::logging::loaded_stream_log_record_history",
+                "core::logging::loaded_stream_log_route::tests::the_runtimes_own_log_holds_no_record_in_memory_and_a_streams_does",
                 "core::logging::tests::a_closed_stream_log_holds_every_record_queued_before_the_close_and_none_after",
                 "core::runtime::processor_interpreter_launch_record::tests::a_load_refused_at_a_link_after_a_describe_adds_no_stream_and_leaves_nothing_running",
                 "core::logging::tests::a_closed_stream_log_holds_every_line_its_helpers_wrote_before_their_pipes_ended",

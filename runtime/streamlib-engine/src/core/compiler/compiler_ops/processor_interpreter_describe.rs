@@ -8,22 +8,21 @@
 //! and reads the one JSON document the bootstrap prints on its standard output.
 
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use super::processor_interpreter_shutdown_ladder::{
-    kill_the_process_group_and_reap_its_leader, wait_for_a_child_to_become_collectable_within,
-};
+use super::processor_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
 use super::processor_interpreter_spawn_host::{
     HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE, LoadedStreamAHelperProcessBelongsTo,
     PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE,
     PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
-    SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
+    SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE, StreamInterpreterExitAwaited,
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio, processor_interpreter_bootstrap_command,
     spawn_host_for_processor_node, spawn_standard_error_reader_keeping_its_tail,
     spawn_standard_output_reader_keeping_its_head, standard_error_tail_as_a_refusal_quotes_it,
+    standard_output_head_as_a_refusal_quotes_it, wait_for_a_stream_interpreter_to_exit,
 };
 use super::python_processor_declaration::PythonProcessorDeclaration;
 use super::subprocess_bridge::ESCALATE_FD_ENV;
@@ -53,10 +52,6 @@ const PER_PROCESSOR_ENVIRONMENT_VARIABLES: [&str; 6] = [
     ESCALATE_FD_ENV,
 ];
 
-/// How long the wait for a describe parks before it re-reads whether shutdown
-/// has begun.
-const DESCRIBE_SHUTDOWN_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
-
 /// What a describe's standard-error lines are logged under, in place of the
 /// processor id a processor interpreter's are.
 const DESCRIBE_STANDARD_ERROR_LOG_LABEL: &str = "processor-interpreter-describe";
@@ -68,10 +63,6 @@ const DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL: &str =
 /// How much of a describe's standard output is kept; the rest is read and
 /// dropped, so the describe never blocks on a full pipe.
 const DESCRIBE_STANDARD_OUTPUT_KEPT_BYTES: usize = 16 * 1024 * 1024;
-
-/// How much of a standard output that is not a describe document a refusal
-/// quotes.
-const DESCRIBE_STANDARD_OUTPUT_QUOTED_BYTES: usize = 512;
 
 /// The document a describe prints on its standard output.
 #[derive(serde::Deserialize)]
@@ -261,7 +252,7 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
         )
     });
 
-    let describe_exit = wait_for_the_describe_to_exit(
+    let describe_exit = wait_for_a_stream_interpreter_to_exit(
         &child,
         describe_bound,
         &|| {
@@ -284,8 +275,8 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
     );
 
     match describe_exit {
-        DescribeExitAwaited::Exited => {}
-        DescribeExitAwaited::BoundElapsed => {
+        StreamInterpreterExitAwaited::Exited => {}
+        StreamInterpreterExitAwaited::BoundElapsed => {
             return Err(refuse_every_requested_type(format!(
                 "the stream's interpreter `{interpreter}` did not finish describing them within \
                  {}s and was killed. Work a module does at import time runs here — a module that \
@@ -293,13 +284,13 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
                 describe_bound.as_secs_f64()
             )));
         }
-        DescribeExitAwaited::ShutdownRequested => {
+        StreamInterpreterExitAwaited::ItsStreamsShutdownRequested => {
             return Err(refuse_every_requested_type(format!(
                 "the stream's shutdown began while its interpreter `{interpreter}` was still \
                  describing them, and it was killed. {quoted_standard_error}"
             )));
         }
-        DescribeExitAwaited::InterruptedByTheHost => {
+        StreamInterpreterExitAwaited::InterruptedByTheHost => {
             return Err(refuse_every_requested_type(format!(
                 "{DESCRIBE_INTERRUPTED_BY_THE_HOST_REFUSAL}: the stream's interpreter \
                  `{interpreter}` was killed. {quoted_standard_error}"
@@ -399,62 +390,13 @@ pub(crate) fn describe_node_types_in_a_processor_interpreter_within(
         .collect()
 }
 
-/// How the wait for a describe to exit ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DescribeExitAwaited {
-    Exited,
-    BoundElapsed,
-    ShutdownRequested,
-    InterruptedByTheHost,
-}
-
-/// Wait up to `describe_bound` for the describe to exit, leaving it unreaped,
-/// cut short whenever its stream's shutdown or a host interrupt is read.
-fn wait_for_the_describe_to_exit(
-    child: &Child,
-    describe_bound: Duration,
-    is_its_streams_shutdown_requested: &dyn Fn() -> bool,
-    is_interrupted_by_the_host: &dyn Fn() -> bool,
-) -> DescribeExitAwaited {
-    let deadline = Instant::now() + describe_bound;
-    loop {
-        let observation_slice = deadline
-            .saturating_duration_since(Instant::now())
-            .min(DESCRIBE_SHUTDOWN_OBSERVATION_INTERVAL);
-        if wait_for_a_child_to_become_collectable_within(child, observation_slice) {
-            return DescribeExitAwaited::Exited;
-        }
-        if is_its_streams_shutdown_requested() {
-            return DescribeExitAwaited::ShutdownRequested;
-        }
-        if is_interrupted_by_the_host() {
-            return DescribeExitAwaited::InterruptedByTheHost;
-        }
-        if Instant::now() >= deadline {
-            return DescribeExitAwaited::BoundElapsed;
-        }
-    }
-}
-
-/// The first [`DESCRIBE_STANDARD_OUTPUT_QUOTED_BYTES`] of a standard output, quoted.
-fn standard_output_head_as_a_refusal_quotes_it(standard_output_bytes: &[u8]) -> String {
-    let head = &standard_output_bytes[..standard_output_bytes
-        .len()
-        .min(DESCRIBE_STANDARD_OUTPUT_QUOTED_BYTES)];
-    let ellipsis = if head.len() < standard_output_bytes.len() {
-        "…"
-    } else {
-        ""
-    };
-    format!("{:?}{ellipsis}", String::from_utf8_lossy(head))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serial_test::serial;
     use std::ffi::OsStr;
     use std::path::PathBuf;
+    use std::time::Instant;
 
     const GOOD_TYPE: &str = "my_app.filters:BlurProcessor";
 

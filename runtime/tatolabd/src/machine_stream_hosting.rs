@@ -15,8 +15,9 @@ use std::time::Duration;
 use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
-    EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, HowALoadedStreamEnded, LoadedStreamInThisRuntime,
-    Runner, RunnerConstructionOptions, note_what_the_engine_teardown_is_waiting_on,
+    EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, HowALoadedStreamEnded,
+    KeptStreamReloadAtTheStart, LoadedStreamInThisRuntime, Runner, RunnerConstructionOptions,
+    note_what_the_engine_teardown_is_waiting_on,
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
 use streamlib_runtime_client_contract::tatolab_state_directory::TatolabStateDirectory;
@@ -77,7 +78,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             );
             engine.wait_until_a_machine_shutdown_is_requested();
 
-            streams_loaded_when_the_machine_shutdown_was_requested = every_loaded_stream(&engine);
+            streams_loaded_when_the_machine_shutdown_was_requested = engine.every_loaded_stream();
             // First, so no call reaches a stream as it ends, and every stream a
             // connection attached unloads with its connection.
             drop(local_api_served_for_the_engine.take());
@@ -123,21 +124,13 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     ExitCode::from(exit_status)
 }
 
-/// Every stream loaded in `engine` now.
-fn every_loaded_stream(engine: &Runner) -> Vec<Arc<LoadedStreamInThisRuntime>> {
-    engine
-        .names_of_the_loaded_streams()
-        .iter()
-        .filter_map(|stream_name| engine.loaded_stream_named(stream_name).ok())
-        .collect()
-}
-
 /// One line once the start's re-loads are over, counting them; the engine has
 /// already logged each by name, and the reason for each it skipped.
-fn log_the_kept_streams_reloaded_at_the_start(
-    reloads: &[(String, streamlib::sdk::error::Result<()>)],
-) {
-    let reloaded_count = reloads.iter().filter(|(_, reload)| reload.is_ok()).count();
+fn log_the_kept_streams_reloaded_at_the_start(reloads: &[KeptStreamReloadAtTheStart]) {
+    let reloaded_count = reloads
+        .iter()
+        .filter(|reload| matches!(reload, KeptStreamReloadAtTheStart::Reloaded { .. }))
+        .count();
     tracing::info!(
         "the runtime is serving: {reloaded_count} kept streams re-loaded, {} skipped; it runs \
          until a signal stops it",

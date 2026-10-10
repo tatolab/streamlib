@@ -53,8 +53,10 @@ pub(crate) use helper_process_group_registry::{
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use loaded_stream_output_port_exposure::ExposedOutputPortReaderRegistration;
 pub use machine_state_directory::{
-    KEPT_STREAM_RECORD_FILE_MODE, KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord,
-    KeptStreamRecordReadFailure, KeptStreamRecordsInTheStateDirectory, OwnerExposureRuling,
+    KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord, KeptStreamRecordReadFailure,
+    KeptStreamRecordsInTheStateDirectory, OwnerExposureRuling,
+};
+pub(crate) use machine_state_directory::{
     OwnerExposureRulingsSplitAroundTheLoad, the_owners_exposure_rulings_split_around_the_load,
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
@@ -75,13 +77,9 @@ pub use runtime_shutdown_request::{
 };
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
-pub use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects_interpreter::{
-    PROJECT_STREAM_COMPILE_ENTRY_MODULE, STREAM_FUNCTION_COMPILE_BOUND,
-    StreamFunctionCompiledInTheProjectsInterpreter,
-    compile_the_stream_function_in_the_projects_interpreter, the_projects_venv_interpreter,
-};
+pub(crate) use crate::core::compiler::compiler_ops::stream_function_compile_in_the_projects_interpreter::compile_the_stream_function_in_the_projects_interpreter;
 pub use stream_actions_of_this_runtime::{
-    LoadedStreamHolding, OutputPortExposureOutcome, RunStreamRequest, StreamListing,
+    KeptStreamReloadAtTheStart, LoadedStreamHolding, OutputPortExposureOutcome, RunStreamRequest, StreamListing,
     StreamListingState, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome,
     StreamStopOutcome,
 };
