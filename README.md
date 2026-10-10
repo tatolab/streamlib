@@ -305,9 +305,9 @@ tatolab enable-virtual-camera [--print]
   (`sudo` in a headless shell), Linux only; `--print` writes the files and commands for a hand
   install and changes nothing.
 
-Every verb but `new` and `enable-virtual-camera` talks to the runtime through its local socket, at
-one fixed path per user. With no runtime running, each refuses at once, naming the socket and
-`tatolabd` as the way to start one.
+Every verb but `new`, `enable-virtual-camera` and `logs` without `--stream` (which reads the JSONL
+on disk) talks to the runtime through its local socket, at one fixed path per user. With no runtime
+running, each refuses at once, naming the socket and `tatolabd` as the way to start one.
 
 ## Inspect a running stream
 
