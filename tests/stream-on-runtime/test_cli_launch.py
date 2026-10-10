@@ -375,7 +375,11 @@ def assert_the_scan_sees_the_unix_socket_listener_held_by(pid: int, unix_socket_
         )
         return
     unix_socket_names = socket_names_lsof_reports_held_by(pid, "-U")
-    assert unix_socket_path in unix_socket_names, (
+    # Some lsof builds follow the path with the socket's type: `<path> type=STREAM`.
+    assert any(
+        unix_socket_name == unix_socket_path or unix_socket_name.startswith(f"{unix_socket_path} ")
+        for unix_socket_name in unix_socket_names
+    ), (
         f"lsof must see pid {pid}'s listener at {unix_socket_path}; it saw {sorted(unix_socket_names)}"
     )
 
