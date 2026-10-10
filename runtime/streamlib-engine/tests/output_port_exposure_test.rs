@@ -553,8 +553,13 @@ fn a_recorded_restriction_is_the_level_a_loaded_stream_holds_before_it_starts() 
         level: OutputPortExposureLevel::Public,
     });
 
+    let split = record.the_owners_exposure_rulings_split_around_its_load();
+    assert!(
+        split.rulings_applied_once_loaded.is_empty(),
+        "both rulings are on ports the function exposes, so both hold before the load"
+    );
     let graph =
-        GraphSnapshot::from_graph_document(record.graph_with_the_owners_exposure_rulings_applied())
+        GraphSnapshot::from_graph_document(split.graph_with_the_rulings_that_hold_before_the_load)
             .expect("the ruled graph is a graph");
     let stream = runner
         .load_stream_from_graph_snapshot(

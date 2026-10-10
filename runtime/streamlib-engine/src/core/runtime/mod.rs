@@ -55,7 +55,7 @@ pub use loaded_stream_output_port_exposure::ExposedOutputPortReaderRegistration;
 pub use machine_state_directory::{
     KEPT_STREAM_RECORD_FILE_MODE, KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord,
     KeptStreamRecordReadFailure, KeptStreamRecordsInTheStateDirectory, OwnerExposureRuling,
-    graph_with_the_owners_exposure_rulings_applied,
+    OwnerExposureRulingsSplitAroundTheLoad, the_owners_exposure_rulings_split_around_the_load,
 };
 pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use operations_on_the_streams_loaded_in_this_runtime::OperationsOnTheStreamsLoadedInThisRuntime;

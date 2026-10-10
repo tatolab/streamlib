@@ -17,10 +17,11 @@ use super::runtime::{
 };
 use super::{
     KeptStreamRecord, KeptStreamRecordsInTheStateDirectory, LoadedStreamInThisRuntime,
-    LoadedStreamTag, OptionsForLoadingOneStream, OwnerExposureRuling, Runner, StreamEnvironment,
+    LoadedStreamTag, OptionsForLoadingOneStream, OwnerExposureRuling,
+    OwnerExposureRulingsSplitAroundTheLoad, Runner, StreamEnvironment,
     StreamLoadObservingMachineShutdownRequests,
     compile_the_stream_function_in_the_projects_interpreter,
-    graph_with_the_owners_exposure_rulings_applied,
+    the_owners_exposure_rulings_split_around_the_load,
 };
 use crate::core::graph::{OutputPortExposureLevel, cast_exposed_name_to_url_safe};
 use crate::core::graph_snapshot::GraphSnapshot;
@@ -757,13 +758,9 @@ impl Runner {
     }
 
     /// Load `graph_json` as the stream `stream_name` held as `holding`, the
-    /// owner's `rulings` applied, without starting it.
-    ///
-    /// A ruling that restricts a port, or rules on one the function exposes,
-    /// is applied to the graph before the load, so it holds before the stream
-    /// admits any reader. A ruling that opens a port the function left
-    /// internal is applied once the load has the node's ports, and skipped
-    /// with a warning when the port is not there.
+    /// owner's `rulings` split around the load, without starting it: a ruling
+    /// that waits for the load is skipped with a warning when its port is not
+    /// there.
     fn load_a_stream_with_the_owners_rulings(
         &self,
         stream_name: &str,
@@ -772,14 +769,12 @@ impl Runner {
         stream_environment: StreamEnvironment,
         holding: LoadedStreamHolding,
     ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        let (rulings_before_the_load, rulings_once_loaded): (Vec<_>, Vec<_>) =
-            rulings.iter().cloned().partition(|ruling| {
-                ruling.level == OutputPortExposureLevel::Internal
-                    || the_function_exposes_the_port_of(graph_json, ruling)
-            });
-        let graph = GraphSnapshot::from_graph_document(
-            graph_with_the_owners_exposure_rulings_applied(graph_json, &rulings_before_the_load),
-        )?;
+        let OwnerExposureRulingsSplitAroundTheLoad {
+            graph_with_the_rulings_that_hold_before_the_load,
+            rulings_applied_once_loaded,
+        } = the_owners_exposure_rulings_split_around_the_load(graph_json, rulings);
+        let graph =
+            GraphSnapshot::from_graph_document(graph_with_the_rulings_that_hold_before_the_load)?;
         let stream = match self.load_stream_held_as_unless_a_machine_shutdown_is_requested(
             &graph,
             OptionsForLoadingOneStream::in_stream_environment(stream_environment)
@@ -794,7 +789,7 @@ impl Runner {
                 )));
             }
         };
-        for ruling in rulings_once_loaded {
+        for ruling in rulings_applied_once_loaded {
             if let Err(not_applied) =
                 stream.set_output_port_exposure_level(&ruling.node, &ruling.port, ruling.level)
             {
@@ -834,33 +829,6 @@ fn node_count_of(stream: &LoadedStreamInThisRuntime) -> usize {
         .ok()
         .and_then(|graph| graph.get("nodes")?.as_array().map(Vec::len))
         .unwrap_or(0)
-}
-
-/// Whether the function's own `exposed` in `graph_json` names the port
-/// `ruling` rules on, the names compared cast.
-fn the_function_exposes_the_port_of(
-    graph_json: &serde_json::Value,
-    ruling: &OwnerExposureRuling,
-) -> bool {
-    graph_json
-        .get("exposed")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|exposed| {
-            exposed.iter().any(|entry| {
-                let named = |key: &str| {
-                    entry
-                        .get(key)
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_string()
-                };
-                ruling.names_the_same_port_as(&OwnerExposureRuling {
-                    node: named("node"),
-                    port: named("port"),
-                    level: ruling.level,
-                })
-            })
-        })
 }
 
 /// Refuse `node` when the graph `kept_record` holds has no node of that name

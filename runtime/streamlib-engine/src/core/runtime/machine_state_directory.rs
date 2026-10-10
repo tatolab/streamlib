@@ -3,7 +3,7 @@
 
 //! The kept streams a runtime holds in its state directory: one record per
 //! stream, written whole or not at all, and the owner's exposure rulings each
-//! record carries, applied to the stream's graph before it loads.
+//! record carries, split around the stream's load.
 
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
@@ -83,9 +83,12 @@ impl KeptStreamRecord {
         }
     }
 
-    /// The recorded graph with the owner's rulings applied, as it loads.
-    pub fn graph_with_the_owners_exposure_rulings_applied(&self) -> serde_json::Value {
-        graph_with_the_owners_exposure_rulings_applied(&self.graph, &self.exposure_rulings)
+    /// The owner's rulings split around the recorded graph's load, as
+    /// [`the_owners_exposure_rulings_split_around_the_load`] splits them.
+    pub fn the_owners_exposure_rulings_split_around_its_load(
+        &self,
+    ) -> OwnerExposureRulingsSplitAroundTheLoad {
+        the_owners_exposure_rulings_split_around_the_load(&self.graph, &self.exposure_rulings)
     }
 
     /// Record `ruling`, replacing an earlier ruling on the same port.
@@ -126,81 +129,107 @@ impl OwnerExposureRuling {
     }
 }
 
-/// `graph_json` with each of `rulings` applied to its `exposed`: a `private`
-/// or `public` ruling replaces the port's entry or adds one, an `internal`
-/// ruling removes it. A ruling naming a node the graph does not hold is
-/// skipped.
-///
-/// The graph's nodes carry no port list, so a ruling on a port its node does
-/// not have is applied as written and refused by the load naming the port.
-pub fn graph_with_the_owners_exposure_rulings_applied(
+/// The owner's rulings on one stream, split around its load: the graph the
+/// stream loads from, and the rulings its load applies once it has the nodes'
+/// ports.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnerExposureRulingsSplitAroundTheLoad {
+    /// The graph with every ruling applied that makes a port internal or rules
+    /// on a port the stream function exposes, so a restriction holds before
+    /// the stream admits any reader.
+    pub graph_with_the_rulings_that_hold_before_the_load: serde_json::Value,
+    /// The `private` and `public` rulings on ports the stream function left
+    /// internal, which the graph cannot show exist; each is applied to the
+    /// loaded stream, and skipped when its port is not there.
+    pub rulings_applied_once_loaded: Vec<OwnerExposureRuling>,
+}
+
+/// Split `rulings` around the load of `graph_json`: an `internal` ruling, and
+/// one on a port the function's own `exposed` names, is applied to the graph;
+/// a ruling that opens a port the function left internal waits for the load.
+pub fn the_owners_exposure_rulings_split_around_the_load(
+    graph_json: &serde_json::Value,
+    rulings: &[OwnerExposureRuling],
+) -> OwnerExposureRulingsSplitAroundTheLoad {
+    let (rulings_before_the_load, rulings_applied_once_loaded): (Vec<_>, Vec<_>) =
+        rulings.iter().cloned().partition(|ruling| {
+            ruling.level == OutputPortExposureLevel::Internal
+                || the_function_exposes_the_port_of(graph_json, ruling)
+        });
+    OwnerExposureRulingsSplitAroundTheLoad {
+        graph_with_the_rulings_that_hold_before_the_load:
+            graph_with_the_owners_exposure_rulings_applied(graph_json, &rulings_before_the_load),
+        rulings_applied_once_loaded,
+    }
+}
+
+/// Whether the function's own `exposed` in `graph_json` names the port
+/// `ruling` rules on.
+fn the_function_exposes_the_port_of(
+    graph_json: &serde_json::Value,
+    ruling: &OwnerExposureRuling,
+) -> bool {
+    graph_json
+        .get("exposed")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|exposed| {
+            exposed
+                .iter()
+                .any(|entry| the_exposed_entry_names_the_port_of(entry, ruling))
+        })
+}
+
+/// Whether one entry of a graph's `exposed` names the port `ruling` rules on,
+/// the names compared cast.
+fn the_exposed_entry_names_the_port_of(
+    exposed_entry: &serde_json::Value,
+    ruling: &OwnerExposureRuling,
+) -> bool {
+    let named = |key: &str| {
+        exposed_entry
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    ruling.names_the_same_port_as(&OwnerExposureRuling {
+        node: named("node"),
+        port: named("port"),
+        level: ruling.level,
+    })
+}
+
+/// `graph_json` with each of `rulings` applied to the entries of its
+/// `exposed` that name the ruling's port: an `internal` ruling removes them, a
+/// `private` or `public` one takes the place of the first. A ruling on a port
+/// `exposed` does not name changes nothing.
+fn graph_with_the_owners_exposure_rulings_applied(
     graph_json: &serde_json::Value,
     rulings: &[OwnerExposureRuling],
 ) -> serde_json::Value {
     let mut ruled_graph = graph_json.clone();
-    let Some(graph_object) = ruled_graph.as_object_mut() else {
+    let Some(exposed) = ruled_graph
+        .get_mut("exposed")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
         return ruled_graph;
     };
-    let node_casts_the_graph_holds: Vec<String> = graph_object
-        .get("nodes")
-        .and_then(serde_json::Value::as_array)
-        .map(|nodes| {
-            nodes
-                .iter()
-                .filter_map(|node| node.get("name")?.as_str())
-                .filter_map(|name| Some(cast_exposed_name_to_url_safe(name).ok()?.into_owned()))
-                .collect()
-        })
-        .unwrap_or_default();
-
     for ruling in rulings {
-        let Some((node_cast, port_cast)) = ruling.cast_node_and_port() else {
-            tracing::warn!(
-                "the owner's exposure ruling on `{}/{}` names a node or port that casts to \
-                 nothing, so it is not applied",
-                ruling.node,
-                ruling.port
+        let first_entry_of_the_port = exposed
+            .iter()
+            .position(|entry| the_exposed_entry_names_the_port_of(entry, ruling));
+        exposed.retain(|entry| !the_exposed_entry_names_the_port_of(entry, ruling));
+        if let Some(position) = first_entry_of_the_port
+            && ruling.level != OutputPortExposureLevel::Internal
+        {
+            exposed.insert(
+                position,
+                serde_json::json!({
+                    "node": ruling.node,
+                    "port": ruling.port,
+                    "level": ruling.level,
+                }),
             );
-            continue;
-        };
-        if !node_casts_the_graph_holds.contains(&node_cast) {
-            tracing::info!(
-                "the owner's exposure ruling on `{}/{}` is kept and not applied: the graph \
-                 holds no node `{}`",
-                ruling.node,
-                ruling.port,
-                ruling.node
-            );
-            continue;
-        }
-        let exposed = graph_object
-            .entry("exposed")
-            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-        let Some(exposed) = exposed.as_array_mut() else {
-            continue;
-        };
-        let entry_names_the_ruled_port = |entry: &serde_json::Value| {
-            let cast_of = |key: &str| {
-                entry
-                    .get(key)
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|name| Some(cast_exposed_name_to_url_safe(name).ok()?.into_owned()))
-            };
-            cast_of("node").as_deref() == Some(node_cast.as_str())
-                && cast_of("port").as_deref() == Some(port_cast.as_str())
-        };
-        let first_entry_of_the_port = exposed.iter().position(entry_names_the_ruled_port);
-        exposed.retain(|entry| !entry_names_the_ruled_port(entry));
-        if ruling.level != OutputPortExposureLevel::Internal {
-            let ruled_entry = serde_json::json!({
-                "node": ruling.node,
-                "port": ruling.port,
-                "level": ruling.level,
-            });
-            match first_entry_of_the_port {
-                Some(position) => exposed.insert(position.min(exposed.len()), ruled_entry),
-                None => exposed.push(ruled_entry),
-            }
         }
     }
     ruled_graph
@@ -622,88 +651,78 @@ mod tests {
     }
 
     #[test]
-    fn a_private_or_public_ruling_replaces_the_ports_entry_in_place_or_adds_one() {
+    fn a_ruling_on_a_port_the_function_exposes_takes_its_entrys_place_before_the_load() {
         let graph = a_graph_exposing(serde_json::json!([
             {"node": "camera", "port": "video", "level": "private"},
             {"node": "display", "port": "frames", "level": "private"}
         ]));
 
-        let ruled = graph_with_the_owners_exposure_rulings_applied(
+        let split = the_owners_exposure_rulings_split_around_the_load(
             &graph,
-            &[
-                a_ruling("Camera", "Video", OutputPortExposureLevel::Public),
-                a_ruling("camera", "preview", OutputPortExposureLevel::Private),
-            ],
+            &[a_ruling("Camera", "Video", OutputPortExposureLevel::Public)],
         );
 
         assert_eq!(
-            ruled["exposed"],
+            split.graph_with_the_rulings_that_hold_before_the_load["exposed"],
             serde_json::json!([
                 {"node": "Camera", "port": "Video", "level": "public"},
-                {"node": "display", "port": "frames", "level": "private"},
-                {"node": "camera", "port": "preview", "level": "private"}
+                {"node": "display", "port": "frames", "level": "private"}
             ])
         );
         assert_eq!(
-            ruled["nodes"], graph["nodes"],
+            split.graph_with_the_rulings_that_hold_before_the_load["nodes"], graph["nodes"],
             "nothing but `exposed` moves"
         );
+        assert!(split.rulings_applied_once_loaded.is_empty());
     }
 
     #[test]
-    fn an_internal_ruling_removes_the_ports_entry() {
+    fn a_ruling_opening_a_port_the_function_left_internal_waits_for_the_load() {
+        let graph = a_graph_exposing(serde_json::json!([
+            {"node": "camera", "port": "video", "level": "private"}
+        ]));
+        let mut graph_with_no_exposed_key = graph.clone();
+        graph_with_no_exposed_key
+            .as_object_mut()
+            .unwrap()
+            .remove("exposed");
+        let rulings = [
+            a_ruling("camera", "preview", OutputPortExposureLevel::Private),
+            a_ruling("camera", "renamed-port", OutputPortExposureLevel::Public),
+            a_ruling("microphone", "audio", OutputPortExposureLevel::Public),
+        ];
+
+        for graph in [graph, graph_with_no_exposed_key] {
+            let split = the_owners_exposure_rulings_split_around_the_load(&graph, &rulings);
+
+            assert_eq!(
+                split.graph_with_the_rulings_that_hold_before_the_load, graph,
+                "no port the graph cannot show exists is written into the graph that loads"
+            );
+            assert_eq!(split.rulings_applied_once_loaded, rulings);
+        }
+    }
+
+    #[test]
+    fn an_internal_ruling_removes_the_ports_entry_before_the_load_and_changes_nothing_else() {
         let graph = a_graph_exposing(serde_json::json!([
             {"node": "camera", "port": "video", "level": "public"}
         ]));
 
-        let ruled = graph_with_the_owners_exposure_rulings_applied(
+        let split = the_owners_exposure_rulings_split_around_the_load(
             &graph,
-            &[a_ruling(
-                "camera",
-                "video",
-                OutputPortExposureLevel::Internal,
-            )],
-        );
-
-        assert_eq!(ruled["exposed"], serde_json::json!([]));
-    }
-
-    #[test]
-    fn a_ruling_naming_a_node_the_graph_does_not_hold_is_skipped() {
-        let graph = a_graph_exposing(serde_json::json!([
-            {"node": "camera", "port": "video", "level": "private"}
-        ]));
-
-        let ruled = graph_with_the_owners_exposure_rulings_applied(
-            &graph,
-            &[a_ruling(
-                "microphone",
-                "audio",
-                OutputPortExposureLevel::Public,
-            )],
-        );
-
-        assert_eq!(ruled, graph);
-    }
-
-    #[test]
-    fn a_graph_written_with_no_exposed_key_takes_a_ruling_that_exposes() {
-        let mut graph = a_graph_exposing(serde_json::json!([]));
-        graph.as_object_mut().unwrap().remove("exposed");
-
-        let ruled = graph_with_the_owners_exposure_rulings_applied(
-            &graph,
-            &[a_ruling(
-                "camera",
-                "video",
-                OutputPortExposureLevel::Private,
-            )],
+            &[
+                a_ruling("camera", "video", OutputPortExposureLevel::Internal),
+                a_ruling("camera", "preview", OutputPortExposureLevel::Internal),
+                a_ruling("microphone", "audio", OutputPortExposureLevel::Internal),
+            ],
         );
 
         assert_eq!(
-            ruled["exposed"],
-            serde_json::json!([{"node": "camera", "port": "video", "level": "private"}])
+            split.graph_with_the_rulings_that_hold_before_the_load,
+            a_graph_exposing(serde_json::json!([]))
         );
+        assert!(split.rulings_applied_once_loaded.is_empty());
     }
 
     #[test]
@@ -732,9 +751,18 @@ mod tests {
                 a_ruling("Camera", "Video", OutputPortExposureLevel::Internal),
             ]
         );
+        let split = record.the_owners_exposure_rulings_split_around_its_load();
         assert_eq!(
-            record.graph_with_the_owners_exposure_rulings_applied()["exposed"],
-            serde_json::json!([{"node": "camera", "port": "preview", "level": "private"}])
+            split.graph_with_the_rulings_that_hold_before_the_load["exposed"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            split.rulings_applied_once_loaded,
+            [a_ruling(
+                "camera",
+                "preview",
+                OutputPortExposureLevel::Private
+            )]
         );
     }
 }
