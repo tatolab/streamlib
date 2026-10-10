@@ -1068,7 +1068,7 @@ mod tests {
         ensure_test_mocks_registered, write_an_executable_script_from_a_child_process,
     };
     use serial_test::serial;
-    use streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode;
+    use streamlib_runtime_client_contract::directory_at_an_explicit_mode;
 
     const LEND_DIRECTORY_FOR_TEST: &str = "/opt/tatolab/lib/tatolab/lend";
 
@@ -1119,7 +1119,7 @@ mod tests {
 
         fn compiling_warning(graph: serde_json::Value, warnings: &[&str]) -> Self {
             let project = Self::with_no_venv();
-            create_directory_and_its_missing_parents_at_mode(
+            directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
                 &project.path().join(".venv").join("bin"),
                 0o755,
             )
@@ -2208,17 +2208,20 @@ mod tests {
             .write(&a_kept_record_of(&project, "camera", serde_json::json!([])))
             .unwrap();
         let listed = records.read_every();
-        let malformed_since = records.record_path_of("camera").unwrap();
-        std::fs::write(&malformed_since, b"{").unwrap();
+        let record_path_malformed_since_the_listing = records.record_path_of("camera").unwrap();
+        std::fs::write(&record_path_malformed_since_the_listing, b"{").unwrap();
 
         let reloads = runner.reload_each_kept_stream_listed(&records, listed);
 
         let [KeptStreamReloadAtTheStart::RecordUnreadable(unreadable)] = reloads.as_slice() else {
             panic!("the record is reported unreadable: {reloads:?}");
         };
-        assert_eq!(unreadable.path, malformed_since);
+        assert_eq!(unreadable.path, record_path_malformed_since_the_listing);
         assert!(runner.names_of_the_loaded_streams().is_empty());
-        assert!(malformed_since.is_file(), "the record is left in place");
+        assert!(
+            record_path_malformed_since_the_listing.is_file(),
+            "the record is left in place"
+        );
     }
 
     #[test]

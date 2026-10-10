@@ -280,7 +280,7 @@ fn graph_with_the_owners_exposure_rulings_applied(
 /// A kept-stream record that could not be read, by the path it sits at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeptStreamRecordReadFailure {
-    /// The record's file.
+    /// The record's file, or the kept-streams directory when no record file is reached.
     pub path: PathBuf,
     /// Why it could not be read.
     pub reason: String,
@@ -342,8 +342,8 @@ impl KeptStreamRecordsInTheStateDirectory {
             .join(format!("{stream_cast}.{KEPT_STREAM_RECORD_FILE_EXTENSION}")))
     }
 
-    /// Write `record` whole or not at all: to a temporary file beside it at
-    /// [`KEPT_STREAM_RECORD_FILE_MODE`], synced, then renamed over the record.
+    /// Write `record` whole or not at all: to an owner-only temporary file
+    /// beside it, synced, then renamed over the record.
     pub fn write(&self, record: &KeptStreamRecord) -> Result<()> {
         let record_path = self.record_path_of(&record.stream_name)?;
         let refuse = |what_failed: String| {
