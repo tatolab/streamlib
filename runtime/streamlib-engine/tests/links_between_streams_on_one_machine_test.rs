@@ -613,6 +613,149 @@ fn unloading_the_source_stream_puts_the_link_back_to_awaiting_and_its_reload_rew
     );
 }
 
+/// The streams `a`, whose `camera` publishes `video` at `private`, and `b`,
+/// whose `display` reads it over a link carrying bags, both started.
+struct ACameraStreamReadByADisplayStream {
+    a: Arc<LoadedStreamInThisRuntime>,
+    b: Arc<LoadedStreamInThisRuntime>,
+    link_id: LinkUniqueId,
+    display_tally: String,
+}
+
+impl ACameraStreamReadByADisplayStream {
+    fn start(machine: &OneMachine) -> Self {
+        let display_tally = a_name_for_this_test("display");
+        let a = machine.load_a_camera_stream(
+            "a",
+            &a_name_for_this_test("camera"),
+            &[("video", OutputPortExposureLevel::Private)],
+        );
+        let b = machine.load("b");
+        let display = add_a_bag_sink(&b, "display", &display_tally);
+        start(&a);
+        start(&b);
+        let link_id = b
+            .connect_from_an_output_port_in_another_stream(
+                port_of_another_stream("a", "camera", "video"),
+                display,
+            )
+            .expect("a private port is read by another stream");
+        assert!(wait_until_tallied(
+            &display_tally,
+            ENOUGH_BAGS_TO_SAY_A_LINK_CARRIES
+        ));
+        Self {
+            a,
+            b,
+            link_id,
+            display_tally,
+        }
+    }
+
+    /// Remove `a`'s camera and wait until `b`'s link awaits a node named
+    /// `camera`.
+    fn remove_the_camera(&self, events_of_b: &EveryEventOfOneStream) {
+        let camera = self.a.the_node_named("camera").unwrap();
+        self.a
+            .remove_processor(&camera.processor_id)
+            .expect("the camera is removed");
+        let rendered = events_of_b.until_the_link(
+            &self.b,
+            &self.link_id,
+            reads_awaiting_remote_because("\"camera\""),
+        );
+        assert!(
+            reads_awaiting_remote_because("\"camera\"")(&rendered),
+            "{rendered}"
+        );
+    }
+
+    /// Add a camera back to `a`, its `video` at `internal` as every added
+    /// node's port starts; the name its output writer registers as.
+    fn add_the_camera_back(&self) -> String {
+        let re_added_camera = a_name_for_this_test("camera");
+        add_a_bag_source(&self.a, "camera", &re_added_camera);
+        re_added_camera
+    }
+
+    /// Wait until the link is wired and carries bags from the camera whose
+    /// output writer registered as `camera`, publishing to it alone.
+    fn assert_the_link_carries_from(&self, events_of_b: &EveryEventOfOneStream, camera: &str) {
+        let rendered = events_of_b.until_the_link(&self.b, &self.link_id, reads_wired);
+        assert!(reads_wired(&rendered), "{rendered}");
+        let tallied_before_the_re_add_carried = bags_tallied_as(&self.display_tally);
+        assert!(
+            wait_until_tallied(
+                &self.display_tally,
+                tallied_before_the_re_add_carried + ENOUGH_BAGS_TO_SAY_A_LINK_CARRIES
+            ),
+            "the display counted no bags from the re-added camera"
+        );
+        assert_eq!(
+            the_output_writer_registered_as(camera).channel_notifier_count("video"),
+            1,
+            "the re-added camera publishes to the rewired link"
+        );
+    }
+}
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib-engine/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[serial]
+fn removing_the_source_node_awaits_naming_it_and_adding_it_back_rewires_it() {
+    let machine = OneMachine::new();
+    let streams = ACameraStreamReadByADisplayStream::start(&machine);
+    let events_of_b = EveryEventOfOneStream::listen_to(&streams.b);
+    streams.remove_the_camera(&events_of_b);
+
+    let re_added_camera = streams.add_the_camera_back();
+    streams
+        .a
+        .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+
+    streams.assert_the_link_carries_from(&events_of_b, &re_added_camera);
+}
+
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib-engine/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+#[serial]
+fn a_re_added_source_node_still_internal_holds_the_link_awaiting_its_port_and_opening_it_rewires_it()
+ {
+    let machine = OneMachine::new();
+    let streams = ACameraStreamReadByADisplayStream::start(&machine);
+    let events_of_b = EveryEventOfOneStream::listen_to(&streams.b);
+    streams.remove_the_camera(&events_of_b);
+
+    let re_added_camera = streams.add_the_camera_back();
+    let rendered = events_of_b.until_the_link(
+        &streams.b,
+        &streams.link_id,
+        reads_awaiting_remote_because("is internal"),
+    );
+    assert!(
+        reads_awaiting_remote_because("is internal")(&rendered),
+        "the re-added camera's link does not await its port: {rendered}"
+    );
+    let reason = rendered["awaiting_remote_reason"].as_str().unwrap();
+    for named in ["`a`", "`camera`", "`video`"] {
+        assert!(reason.contains(named), "{named:?} not in: {reason}");
+    }
+
+    streams
+        .a
+        .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
+        .unwrap();
+
+    streams.assert_the_link_carries_from(&events_of_b, &re_added_camera);
+}
+
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — set --features streamlib-engine/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"

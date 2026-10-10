@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Links between started streams where a test has to reach inside the engine:
-//! holding a stream's commits so a re-added source node is exposed before the
-//! reading stream hears of it, a compile that fails after it created a
-//! source, and a source stream abandoned by its teardown watchdog. Starts real
-//! streams, so these run on the rig only.
+//! a compile that fails after it created a source, and a source stream
+//! abandoned by its teardown watchdog. Starts real streams, so these run on
+//! the rig only.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
@@ -13,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serial_test::serial;
 
-use super::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, RuntimeOperations};
+use super::{LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner};
 use crate::core::graph::{
     InputLinkPortRef, LinkUniqueId, OutputPortExposureLevel, OutputPortInAnotherStreamOnThisMachine,
 };
@@ -233,7 +232,6 @@ struct ACameraStreamReadByADisplayStream {
     a: Arc<LoadedStreamInThisRuntime>,
     b: Arc<LoadedStreamInThisRuntime>,
     link_id: LinkUniqueId,
-    display_tally: String,
     _project_directory: tempfile::TempDir,
 }
 
@@ -270,7 +268,6 @@ impl ACameraStreamReadByADisplayStream {
             a,
             b,
             link_id,
-            display_tally: display_tally.to_string(),
             _project_directory: project_directory,
         }
     }
@@ -287,62 +284,6 @@ impl ACameraStreamReadByADisplayStream {
                 .expect("the camera runs with an output writer")
         })
     }
-}
-
-#[cfg_attr(
-    not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
-)]
-#[test]
-#[serial]
-fn removing_the_source_node_awaits_naming_it_and_adding_it_back_rewires_it() {
-    let streams = ACameraStreamReadByADisplayStream::start(
-        "node-removed-and-re-added",
-        Duration::from_secs(15),
-    );
-    let events_of_b = EveryEventOfOneStream::listen_to(&streams.b);
-
-    let camera = streams.a.the_node_named("camera").unwrap();
-    streams
-        .a
-        .remove_processor(&camera.processor_id)
-        .expect("the camera is removed");
-
-    let rendered = events_of_b.until_the_link(
-        &streams.b,
-        &streams.link_id,
-        reads_awaiting_remote_because("\"camera\""),
-    );
-    assert!(
-        reads_awaiting_remote_because("\"camera\"")(&rendered),
-        "{rendered}"
-    );
-
-    // A re-added node starts internal; it is exposed before `b` reconciles,
-    // because `b`'s re-plan commits only once this lets go of its commits.
-    {
-        let _b_holds_its_commits = streams.b.compiler.hold_every_commit_for_a_test();
-        add_a_camera(&streams.a);
-        streams
-            .a
-            .set_output_port_exposure_level("camera", "video", OutputPortExposureLevel::Private)
-            .unwrap();
-    }
-
-    let rendered = events_of_b.until_the_link(&streams.b, &streams.link_id, reads_wired);
-    assert!(reads_wired(&rendered), "{rendered}");
-    let tallied_before_the_re_add_carried = bags_tallied_as(&streams.display_tally);
-    assert!(wait_until_tallied(
-        &streams.display_tally,
-        tallied_before_the_re_add_carried + 5
-    ));
-    assert_eq!(
-        streams
-            .the_cameras_output_writer()
-            .channel_notifier_count("video"),
-        1,
-        "the re-added camera publishes to the rewired link"
-    );
 }
 
 #[cfg_attr(

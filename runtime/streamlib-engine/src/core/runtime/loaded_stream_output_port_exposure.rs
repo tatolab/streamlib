@@ -12,11 +12,11 @@ use super::LoadedStreamInThisRuntime;
 use crate::core::error::OutputPortNotExposedToTheReader;
 use crate::core::graph::{
     CutOffAReaderOfAnExposedOutputPort, ExposedOutputPortsComponent, Graph,
-    GraphNodeWithComponents, OutputPortExposureLevel, OutputPortReaderOutsideItsStream,
-    ProcessorNode, ProcessorUniqueId, ReaderOfAnExposedOutputPort,
-    WhyAReaderOfAnExposedOutputPortIsCutOff, cast_exposed_name_to_url_safe,
-    node_names_listed_for_a_refusal, output_port_exposure_allows_the_reader,
-    port_names_listed_for_a_refusal,
+    GraphNodeWithComponents, OutputPortExposureLevel, OutputPortReaderLocation,
+    OutputPortReaderOutsideItsStream, ProcessorNode, ProcessorUniqueId,
+    ReaderOfAnExposedOutputPort, WhyAReaderOfAnExposedOutputPortIsCutOff,
+    cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal,
+    output_port_exposure_allows_the_reader, port_names_listed_for_a_refusal,
 };
 use crate::core::{Error, Result};
 
@@ -39,17 +39,24 @@ impl Drop for ExposedOutputPortReaderRegistration {
 impl LoadedStreamInThisRuntime {
     /// Put output port `port_name` of node `node_name` at `level` while the
     /// stream runs, cutting off at once every reader from outside the stream
-    /// the new level no longer allows. Nothing restarts.
+    /// the new level no longer allows, and re-planning every link in another
+    /// stream reading this one when the port is newly open to them. Nothing
+    /// restarts.
     pub fn set_output_port_exposure_level(
         &self,
         node_name: &str,
         port_name: &str,
         level: OutputPortExposureLevel,
     ) -> Result<()> {
-        let (port_address, readers_leaving_the_port) =
+        let (port_address, level_before, readers_leaving_the_port) =
             self.compiler.scope(|graph, _tx| -> Result<_> {
                 let (node, port_cast) = self.the_output_port_named(graph, node_name, port_name)?;
                 let port_address = format!("{}/{port_cast}", node.display_name);
+                let level_before = node
+                    .get::<ExposedOutputPortsComponent>()
+                    .map_or(OutputPortExposureLevel::Internal, |exposed_ports| {
+                        exposed_ports.level_of(&port_cast)
+                    });
                 if level != OutputPortExposureLevel::Internal
                     && !node.has::<ExposedOutputPortsComponent>()
                 {
@@ -61,7 +68,7 @@ impl LoadedStreamInThisRuntime {
                     .get_mut::<ExposedOutputPortsComponent>()
                     .map(|exposed_ports| exposed_ports.set_level(&port_cast, level))
                     .unwrap_or_default();
-                Ok((port_address, readers_leaving_the_port))
+                Ok((port_address, level_before, readers_leaving_the_port))
             })?;
         tracing::debug!(
             stream = %self.stream_name(),
@@ -93,6 +100,13 @@ impl LoadedStreamInThisRuntime {
                      it are still cut off"
                 );
             }
+        }
+        let another_stream_on_this_machine = OutputPortReaderLocation::ElsewhereOnThisMachine;
+        if !output_port_exposure_allows_the_reader(level_before, another_stream_on_this_machine)
+            && output_port_exposure_allows_the_reader(level, another_stream_on_this_machine)
+        {
+            self.engine_resources_shared_by_every_stream()
+                .re_plan_every_link_reading_the_stream(self.stream_name());
         }
         Ok(())
     }

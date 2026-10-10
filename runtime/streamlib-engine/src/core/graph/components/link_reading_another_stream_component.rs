@@ -11,7 +11,8 @@ use crate::iceoryx2::OutputWriterInner;
 /// What a link reading another stream on this machine holds beside its state:
 /// why it carries nothing, read by `graph` as the link's
 /// `awaiting_remote_reason` or `error_reason`, which wiring attempt is the
-/// latest, and the wiring that attempt left on the source's stream.
+/// latest, the wiring that attempt left on the source's stream, and whether
+/// the link was ever wired to its source.
 ///
 /// Stored but never rendered under the link's `components`: `graph` renders
 /// its reason at the top level of the link.
@@ -20,6 +21,7 @@ pub struct LinkReadingAnotherStreamComponent {
     why_it_carries_nothing: Option<String>,
     wiring_generation: u64,
     wiring: Option<WiringOfALinkReadingAnotherStream>,
+    wired_to_its_source_before: bool,
 }
 
 impl LinkReadingAnotherStreamComponent {
@@ -79,7 +81,15 @@ impl LinkReadingAnotherStreamComponent {
         &mut self,
         wiring: WiringOfALinkReadingAnotherStream,
     ) -> Option<WiringOfALinkReadingAnotherStream> {
+        self.wired_to_its_source_before = true;
         self.wiring.replace(wiring)
+    }
+
+    /// Whether the link was wired to its source at some point, so a source
+    /// port found closed to it later is one that has not been opened again
+    /// yet rather than one that refused it.
+    pub(crate) fn was_wired_to_its_source_before(&self) -> bool {
+        self.wired_to_its_source_before
     }
 
     /// Take the link's wiring off it, for the caller to drop once it has let

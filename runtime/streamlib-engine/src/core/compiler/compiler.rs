@@ -104,12 +104,6 @@ impl Compiler {
         Some(f(&mut graph, &tx))
     }
 
-    /// Hold off every commit of this compiler until the guard drops.
-    #[cfg(test)]
-    pub(crate) fn hold_every_commit_for_a_test(&self) -> parking_lot::MutexGuard<'_, ()> {
-        self.one_commit_at_a_time.lock()
-    }
-
     /// Run a commit's WIRE phase over `links_to_add` of this compiler's graph
     /// as `reading_stream`, without the processors a start leaves running;
     /// how many it wired.
