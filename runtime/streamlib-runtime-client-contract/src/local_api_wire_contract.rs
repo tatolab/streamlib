@@ -436,16 +436,25 @@ mod tests {
                         state: ListedStreamState::Attached,
                         project_directory: PathBuf::from("/srv/cam"),
                         node_count: Some(4),
+                        failed_because: None,
                     },
                     ListStreamsToolResultStream {
                         name: "parked".to_owned(),
                         state: ListedStreamState::Stopped,
                         project_directory: PathBuf::from("/srv/parked"),
                         node_count: None,
+                        failed_because: None,
+                    },
+                    ListStreamsToolResultStream {
+                        name: "crasher".to_owned(),
+                        state: ListedStreamState::Failed,
+                        project_directory: PathBuf::from("/srv/crasher"),
+                        node_count: None,
+                        failed_because: Some("it crashed the runtime".to_owned()),
                     },
                 ],
             }),
-            r#"{"streams":[{"name":"camera","state":"attached","project_directory":"/srv/cam","node_count":4},{"name":"parked","state":"stopped","project_directory":"/srv/parked","node_count":null}]}"#
+            r#"{"streams":[{"name":"camera","state":"attached","project_directory":"/srv/cam","node_count":4,"failed_because":null},{"name":"parked","state":"stopped","project_directory":"/srv/parked","node_count":null,"failed_because":null},{"name":"crasher","state":"failed","project_directory":"/srv/crasher","node_count":null,"failed_because":"it crashed the runtime"}]}"#
         );
         assert_eq!(
             wire_text(&LogsToolResult {

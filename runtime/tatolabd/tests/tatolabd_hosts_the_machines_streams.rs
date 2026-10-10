@@ -96,12 +96,12 @@ fn the_runtime_keeps_its_state_owner_only_and_writes_its_own_log_beneath_it() {
     );
 }
 
-/// At its start the runtime re-loads every kept stream that is not stopped,
-/// reporting each by name: a stopped one is left unloaded, and one whose
-/// interpreter is gone is skipped with its record kept, the runtime still up.
+/// At its start the runtime re-loads every kept stream neither stopped nor
+/// failed, reporting each by name: a stopped one is left unloaded, and one
+/// that cannot re-load — its interpreter gone, or its start refused — is
+/// recorded failed for the reason, the runtime still up.
 #[test]
-fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_is_skipped_by_name()
-{
+fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_is_failed_by_name() {
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
     let machine_root = TatolabTestMachineRoot::new();
     let kept_stream_records = machine_root.kept_stream_records();
@@ -141,7 +141,7 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
         "the kept stream `front` was loaded and its start begun:\n{standard_error}"
     );
     assert!(
-        standard_error.contains("the kept stream `front` did not re-load"),
+        standard_error.contains("the kept stream `front` did not re-load, and is failed"),
         "{standard_error}"
     );
     assert!(
@@ -153,7 +153,7 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
         "{standard_error}"
     );
     assert!(
-        standard_error.contains("the kept stream `orphan` did not re-load"),
+        standard_error.contains("the kept stream `orphan` did not re-load, and is failed"),
         "{standard_error}"
     );
     assert!(
@@ -182,12 +182,35 @@ fn every_kept_stream_not_stopped_is_re_loaded_at_the_start_and_one_that_cannot_i
     let project_directory = machine_root.project_directory().display().to_string();
     let mut listed_streams = listed["streams"].as_array().unwrap().clone();
     listed_streams.sort_by_key(|listing| listing["name"].as_str().unwrap().to_owned());
+    let failed_because: Vec<String> = listed_streams[..2]
+        .iter()
+        .map(|listing| {
+            listing["failed_because"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert!(
+        failed_because[0].starts_with("it did not re-load at the runtime's start"),
+        "{listed}"
+    );
+    assert!(
+        failed_because[1].contains(&format!(
+            "its interpreter {} is gone",
+            machine_root
+                .project_directory()
+                .join(".venv/bin/python")
+                .display()
+        )),
+        "{listed}"
+    );
     assert_eq!(
         listed_streams,
         [
-            serde_json::json!({"name": "front", "state": "kept", "project_directory": project_directory, "node_count": null}),
-            serde_json::json!({"name": "orphan", "state": "kept", "project_directory": project_directory, "node_count": null}),
-            serde_json::json!({"name": "parked", "state": "stopped", "project_directory": project_directory, "node_count": null}),
+            serde_json::json!({"name": "front", "state": "failed", "project_directory": project_directory, "node_count": null, "failed_because": failed_because[0]}),
+            serde_json::json!({"name": "orphan", "state": "failed", "project_directory": project_directory, "node_count": null, "failed_because": failed_because[1]}),
+            serde_json::json!({"name": "parked", "state": "stopped", "project_directory": project_directory, "node_count": null, "failed_because": null}),
         ]
     );
     for stream_name in ["front", "parked", "orphan"] {
