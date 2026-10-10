@@ -144,12 +144,43 @@ jobs:
 
       # The MVP sentence on a clean machine, minus the camera no runner has:
       # `tatolab new`'s test-pattern variant through the Python effect into a
-      # window, hosted by `tatolabd` on the Vulkan driver the lend carries. The
-      # project's venv holds what a user's `uv sync` gives it — `tatolab-stream`
-      # and the numpy the scaffold declares — and no runtime.
+      # window, run attached on the machine's `tatolabd` on the Vulkan driver
+      # the lend carries. The project's venv holds what a user's `uv sync`
+      # gives it — `tatolab-stream`, from the wheel built above because no
+      # index carries this version yet, and the numpy the scaffold declares —
+      # and no runtime. The machine lock is the root-owned file Tatolab.app
+      # creates at first launch; a runner has no app, so this step creates it.
+      # `tatolabd` mirrors every record a stream emits on its standard error,
+      # so the evidence is read from its log.
       - name: The scaffolded stream runs on the driver the lend carries
         run: |
+          tatolabd_executable="$GITHUB_WORKSPACE/target/tatolab-runtime/bin/tatolabd"
           tatolab_executable="$GITHUB_WORKSPACE/target/tatolab-runtime/bin/tatolab"
+          machine_runtime_lock_directory="/Library/Application Support/Tatolab"
+          sudo mkdir -p "$machine_runtime_lock_directory"
+          sudo touch "$machine_runtime_lock_directory/runtime.lock"
+          sudo chown root "$machine_runtime_lock_directory" "$machine_runtime_lock_directory/runtime.lock"
+          sudo chmod 0755 "$machine_runtime_lock_directory"
+          sudo chmod 0666 "$machine_runtime_lock_directory/runtime.lock"
+
+          "$tatolabd_executable" > /tmp/tatolabd.log 2>&1 &
+          tatolabd_pid=$!
+          trap 'kill -KILL "$tatolabd_pid" 2>/dev/null || true' EXIT
+          local_api_deadline=$((SECONDS + 60))
+          until "$tatolab_executable" streams > /dev/null 2>&1; do
+            if ! kill -0 "$tatolabd_pid" 2>/dev/null; then
+              cat /tmp/tatolabd.log
+              echo "::error::tatolabd exited before its local API socket answered"
+              exit 1
+            fi
+            if [ "$SECONDS" -ge "$local_api_deadline" ]; then
+              cat /tmp/tatolabd.log
+              echo "::error::tatolabd's local API socket did not answer within 60s"
+              exit 1
+            fi
+            sleep 1
+          done
+
           "$tatolab_executable" new /tmp/scaffold-check --test-pattern
           python3 -m venv /tmp/scaffold-check/.venv
           /tmp/scaffold-check/.venv/bin/pip install --no-index --find-links sdk/tatolab-stream/dist tatolab-stream
@@ -162,34 +193,55 @@ jobs:
             exit 1
           fi
 
+          # SIGINT a process, failing the step unless it exits 0 within 30s.
+          interrupt_and_expect_a_clean_exit() {
+            process_name="$1"
+            process_pid="$2"
+            process_log="$3"
+            kill -INT "$process_pid" 2>/dev/null || true
+            stop_deadline=$((SECONDS + 30))
+            while kill -0 "$process_pid" 2>/dev/null && [ "$SECONDS" -lt "$stop_deadline" ]; do
+              sleep 1
+            done
+            if kill -0 "$process_pid" 2>/dev/null; then
+              pkill -KILL -P "$process_pid" || true
+              kill -KILL "$process_pid" || true
+              cat "$process_log"
+              echo "::error::$process_name did not stop within 30s of SIGINT"
+              exit 1
+            fi
+            process_exit_status=0
+            wait "$process_pid" || process_exit_status=$?
+            if [ "$process_exit_status" -ne 0 ]; then
+              cat "$process_log"
+              echo "::error::$process_name exited $process_exit_status after SIGINT, not 0"
+              exit 1
+            fi
+          }
+
           cd /tmp/scaffold-check
           "$tatolab_executable" run > /tmp/scaffold-run.log 2>&1 &
           tatolab_pid=$!
           sleep 20
-          kill -INT "$tatolab_pid"
-          stop_deadline=$((SECONDS + 30))
-          while kill -0 "$tatolab_pid" 2>/dev/null && [ "$SECONDS" -lt "$stop_deadline" ]; do
-            sleep 1
-          done
-          if kill -0 "$tatolab_pid" 2>/dev/null; then
-            pkill -KILL -P "$tatolab_pid" || true
-            kill -KILL "$tatolab_pid" || true
-            cat /tmp/scaffold-run.log
-            echo "::error::tatolab run did not stop within 30s of SIGINT"
-            exit 1
-          fi
-          wait "$tatolab_pid" || true
+          interrupt_and_expect_a_clean_exit "tatolab run" "$tatolab_pid" /tmp/scaffold-run.log
+          interrupt_and_expect_a_clean_exit tatolabd "$tatolabd_pid" /tmp/tatolabd.log
+          trap - EXIT
+          echo "::group::tatolab run"
           cat /tmp/scaffold-run.log
+          echo "::endgroup::"
+          echo "::group::tatolabd"
+          cat /tmp/tatolabd.log
+          echo "::endgroup::"
 
-          if ! grep -q 'Vulkan loader library opened.*_vulkan_driver/libvulkan.1.dylib' /tmp/scaffold-run.log; then
+          if ! grep -q 'Vulkan loader library opened.*_vulkan_driver/libvulkan.1.dylib' /tmp/tatolabd.log; then
             echo "::error::tatolabd did not open the Vulkan loader the lend carries"
             exit 1
           fi
-          if grep -q 'process() failed' /tmp/scaffold-run.log; then
+          if grep -q 'process() failed' /tmp/tatolabd.log; then
             echo "::error::the scaffolded effect raised on a live frame"
             exit 1
           fi
-          frames_shown="$(sed -n 's/.*DisplayWindow: stopped (\([0-9]*\) frames).*/\1/p' /tmp/scaffold-run.log | tail -1)"
+          frames_shown="$(sed -n 's/.*DisplayWindow: stopped (\([0-9]*\) frames).*/\1/p' /tmp/tatolabd.log | tail -1)"
           # Far enough to prove the graph runs end to end, not a frame-rate bar:
           # the runner's GPU is a paravirtual device.
           if [ -z "$frames_shown" ] || [ "$frames_shown" -lt 60 ]; then

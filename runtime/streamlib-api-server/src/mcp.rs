@@ -69,8 +69,8 @@ use streamlib::sdk::graph::{
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     ExchangedPublishedSurfaceFramePngImage, LoadedStreamTag,
-    OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest, RuntimeOperations,
-    StreamListingState, StreamRunOutcome,
+    OperationsOnTheStreamsLoadedInThisRuntime, OutputPortExposureOutcome, RunStreamRequest,
+    RuntimeOperations, StreamListingState, StreamRunOutcome, StreamStopOutcome,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     TapToolResult, TapToolResultBag, surface_image_exchange_route_path_for_surface_id,
@@ -828,7 +828,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Unload a stream. A kept stream is recorded stopped, so it stays unloaded across a runtime restart until `start_stream`; an attached stream is gone. A kept stream already stopped is refused."
+        description = "Unload a stream. A kept stream is recorded stopped, so it stays unloaded across a runtime restart until `start_stream`; an attached stream is gone. A kept stream already stopped is refused. `not_recorded_because`, present only then, says why a kept stream unloaded here could not be recorded stopped, so a runtime restart loads it again."
     )]
     async fn stop_stream(
         &self,
@@ -839,11 +839,7 @@ impl LocalApiMcpServerHandler {
                 operations_on_the_loaded_streams.stop_stream(&stream)
             })
             .await?;
-        Ok(json_text_tool_result(&json!({
-            "stream": stopped.stream_name,
-            "stopped": true,
-            "kept": stopped.kept,
-        })))
+        Ok(json_text_tool_result(&stop_stream_tool_result(stopped)))
     }
 
     #[tool(
@@ -914,7 +910,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Put a stream's output port at `internal`, `private` or `public`. On a loaded stream it changes live: a reader the new level no longer allows is cut off at once, and nothing restarts. On a kept stream — loaded or stopped — the level is recorded as the owner's ruling and wins over the level the stream function declares, through every restart; `recorded` says whether it was. An attached stream's level is never recorded."
+        description = "Put a stream's output port at `internal`, `private` or `public`. On a loaded stream it changes live: a reader the new level no longer allows is cut off at once, and nothing restarts. On a kept stream — loaded or stopped — the level is recorded as the owner's ruling and wins over the level the stream function declares, through every restart; `recorded` says whether it was. An attached stream's level is never recorded. `not_recorded_because`, present only then, says why a kept stream's level changed live could not be recorded, so a runtime restart puts back the level it had."
     )]
     async fn expose_port(
         &self,
@@ -930,13 +926,7 @@ impl LocalApiMcpServerHandler {
                 operations_on_the_loaded_streams.expose_port(&stream, &node, &port, level.into())
             })
             .await?;
-        Ok(json_text_tool_result(&json!({
-            "stream": exposed.stream_name,
-            "node": exposed.node,
-            "port": exposed.port,
-            "level": exposed.level,
-            "recorded": exposed.recorded,
-        })))
+        Ok(json_text_tool_result(&expose_port_tool_result(exposed)))
     }
 }
 
@@ -1048,6 +1038,36 @@ async fn how_the_graph_reads_one_link(
 // ============================================================================
 // Result content
 // ============================================================================
+
+/// `stop_stream`'s result: `not_recorded_because` is present only when a kept
+/// stream unloaded but could not be recorded stopped.
+fn stop_stream_tool_result(stopped: StreamStopOutcome) -> Value {
+    let mut stop_stream_result = json!({
+        "stream": stopped.stream_name,
+        "stopped": true,
+        "kept": stopped.kept,
+    });
+    if let Some(not_recorded_because) = stopped.stop_not_recorded_because {
+        stop_stream_result["not_recorded_because"] = Value::String(not_recorded_because);
+    }
+    stop_stream_result
+}
+
+/// `expose_port`'s result: `not_recorded_because` is present only when a kept
+/// stream's level changed live but could not be recorded as the owner's ruling.
+fn expose_port_tool_result(exposed: OutputPortExposureOutcome) -> Value {
+    let mut expose_port_result = json!({
+        "stream": exposed.stream_name,
+        "node": exposed.node,
+        "port": exposed.port,
+        "level": exposed.level,
+        "recorded": exposed.recorded,
+    });
+    if let Some(not_recorded_because) = exposed.ruling_not_recorded_because {
+        expose_port_result["not_recorded_because"] = Value::String(not_recorded_because);
+    }
+    expose_port_result
+}
 
 /// A successful tool result: the value as one pretty-JSON text block, the form
 /// every tool here states a result a caller parses in.
@@ -4032,5 +4052,66 @@ pub(crate) mod tests {
             ]
         );
         assert!(text.contains("audio window contract"), "{text}");
+    }
+
+    #[test]
+    fn stop_stream_carries_not_recorded_because_only_when_the_stop_was_not_recorded() {
+        let recorded = stop_stream_tool_result(StreamStopOutcome {
+            stream_name: "camera".to_string(),
+            kept: true,
+            stop_not_recorded_because: None,
+        });
+        assert_eq!(
+            recorded,
+            json!({ "stream": "camera", "stopped": true, "kept": true })
+        );
+
+        let not_recorded = stop_stream_tool_result(StreamStopOutcome {
+            stream_name: "camera".to_string(),
+            kept: true,
+            stop_not_recorded_because: Some(
+                "the record /state/streams/camera.json cannot be read".to_string(),
+            ),
+        });
+        assert_eq!(
+            not_recorded,
+            json!({
+                "stream": "camera",
+                "stopped": true,
+                "kept": true,
+                "not_recorded_because": "the record /state/streams/camera.json cannot be read",
+            })
+        );
+    }
+
+    #[test]
+    fn expose_port_carries_not_recorded_because_only_when_the_ruling_was_not_recorded() {
+        let exposure_outcome =
+            |ruling_not_recorded_because: Option<&str>| OutputPortExposureOutcome {
+                stream_name: "camera".to_string(),
+                node: "source".to_string(),
+                port: "video".to_string(),
+                level: OutputPortExposureLevel::Public,
+                recorded: ruling_not_recorded_because.is_none(),
+                ruling_not_recorded_because: ruling_not_recorded_because.map(str::to_string),
+            };
+
+        assert_eq!(
+            expose_port_tool_result(exposure_outcome(None)),
+            json!({ "stream": "camera", "node": "source", "port": "video", "level": "public", "recorded": true })
+        );
+        assert_eq!(
+            expose_port_tool_result(exposure_outcome(Some(
+                "the record /state/streams/camera.json cannot be written"
+            ))),
+            json!({
+                "stream": "camera",
+                "node": "source",
+                "port": "video",
+                "level": "public",
+                "recorded": false,
+                "not_recorded_because": "the record /state/streams/camera.json cannot be written",
+            })
+        );
     }
 }

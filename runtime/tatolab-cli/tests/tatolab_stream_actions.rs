@@ -187,6 +187,32 @@ fn stop_unloads_the_stream_and_says_a_kept_one_stays_stopped() {
 }
 
 #[test]
+fn a_kept_stop_the_runtime_could_not_record_warns_naming_why_and_exits_zero() {
+    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
+        "stop_stream",
+        StubToolAnswer::tool_result(
+            &json!({
+                "stream": "cam",
+                "stopped": true,
+                "kept": true,
+                "not_recorded_because": "the record /state/streams/cam.json cannot be read",
+            })
+            .to_string(),
+        ),
+    );
+
+    let finished = isolated_machine_directories.run_tatolab(&["stop", "cam"]);
+
+    assert_eq!(finished.status.code(), Some(0), "the stop took effect");
+    assert_eq!(standard_output_text(&finished), "cam stopped\n");
+    assert_eq!(
+        standard_error_text(&finished),
+        "warning: cam was not recorded stopped, so a restart of the runtime loads it again: the \
+         record /state/streams/cam.json cannot be read\n"
+    );
+}
+
+#[test]
 fn start_loads_a_stopped_stream_and_names_its_node_count() {
     let (isolated_machine_directories, stub_local_api_server) = a_runtime_answering(
         "start_stream",
@@ -294,6 +320,39 @@ fn expose_sends_private_public_or_internal_by_its_flag() {
             "{level_flags:?}"
         );
     }
+}
+
+#[test]
+fn a_kept_exposure_the_runtime_could_not_record_warns_naming_why_and_exits_zero() {
+    let (isolated_machine_directories, _stub_local_api_server) = a_runtime_answering(
+        "expose_port",
+        StubToolAnswer::tool_result(
+            &json!({
+                "stream": "cam",
+                "node": "effect",
+                "port": "video",
+                "level": "public",
+                "recorded": false,
+                "not_recorded_because": "the record /state/streams/cam.json cannot be written",
+            })
+            .to_string(),
+        ),
+    );
+
+    let finished =
+        isolated_machine_directories.run_tatolab(&["expose", "cam", "effect", "video", "--public"]);
+
+    assert_eq!(finished.status.code(), Some(0), "the level changed live");
+    assert_eq!(
+        standard_output_text(&finished),
+        "cam/effect/video is public (live only: not recorded)\n"
+    );
+    assert_eq!(
+        standard_error_text(&finished),
+        "warning: cam/effect/video changed live but was not recorded as the owner's ruling, so a \
+         restart of the runtime puts back the level it had: the record \
+         /state/streams/cam.json cannot be written\n"
+    );
 }
 
 #[test]

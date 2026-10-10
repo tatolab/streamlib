@@ -33,7 +33,7 @@ use crate::stream_log_records_from_the_runtime::{
     LOGS_TOOL_NAME, STREAM_LOG_RECORDS_FOLLOW_POLL_INTERVAL, logs_tool_arguments_after,
     render_stream_log_records_page, stream_log_records_page_from,
 };
-use crate::verb_standard_output::standard_output_closed_or_failed;
+use crate::verb_standard_output::{standard_output_closed_or_failed, write_verb_standard_error};
 
 /// Bounds a load: the compile in the project's interpreter, the description of its Python types
 /// and the load itself, each bounded runtime-side well within it.
@@ -224,7 +224,10 @@ impl AttachedStreamSession {
     }
 
     fn note(&self, note_text: &str) {
-        eprintln!("{}: {note_text}", self.attached_stream_verb.note_prefix());
+        write_verb_standard_error(&format!(
+            "{}: {note_text}\n",
+            self.attached_stream_verb.note_prefix()
+        ));
     }
 
     /// The next event, or `None` once nothing can send one.

@@ -1,11 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
-# streamlib:lint-logging:allow-file — stdout carries the one JSON document `tatolab`
+# streamlib:lint-logging:allow-file — stdout carries the one JSON document the runtime
 # parses and stderr what it shows the user; neither is a log event.
 
-"""The compile entry `tatolab run` and `tatolab dev` run in the project's own interpreter.
+"""The compile entry the runtime runs in the project's own interpreter for `tatolab run`
+and `tatolab dev`.
 
-`tatolab` starts it as `<venv python> -I -m tatolab.stream._project_stream_compile_entry
+The runtime starts it as `<venv python> -I -m tatolab.stream._project_stream_compile_entry
 --verb {run,dev} [TARGET] [-f FILE] [--dir DIR] [--name NAME]`, with the anchor
 directory as the working directory; `--dir` is only how the caller's command spelled
 it. On success stdout carries exactly one JSON object,

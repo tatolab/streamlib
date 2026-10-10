@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The one directory a runtime keeps what means nothing once its processes are
-//! gone: the iceoryx2 domain, the surface-sharing socket, the local API socket and the node
-//! registry.
+//! gone: the iceoryx2 domain, the surface-sharing socket and the local API socket.
 
 // A test build resolves under its machine root; the real resolvers stay compiled for their tests.
 #![cfg_attr(feature = "machine-directories-under-a-test-root", allow(dead_code))]
@@ -110,11 +109,6 @@ impl StreamlibRuntimeDirectory {
     /// The root every engine-owned iceoryx2 node in this runtime is configured with.
     pub fn iceoryx2_domain_root(&self) -> PathBuf {
         self.path.join("iox2")
-    }
-
-    /// The folder control-plane-hosting runtimes publish their discovery entries into.
-    pub fn node_registry_directory(&self) -> PathBuf {
-        self.path.join("nodes")
     }
 
     /// The Unix socket the runtime with `runtime_id` serves its surface-sharing service on.
@@ -518,8 +512,11 @@ mod tests {
         assert_eq!(directory.path(), xdg_runtime_dir.path().join("streamlib"));
         assert!(!directory.path().exists());
         assert_eq!(
-            directory.node_registry_directory(),
-            xdg_runtime_dir.path().join("streamlib").join("nodes")
+            directory.local_api_socket_path(),
+            xdg_runtime_dir
+                .path()
+                .join("streamlib")
+                .join("local-api.sock")
         );
         assert!(!fallback_path_for(shared_temporary_directory.path()).exists());
     }
@@ -588,10 +585,6 @@ mod tests {
         assert_eq!(
             directory.iceoryx2_domain_root(),
             PathBuf::from("/tmp/streamlib-1000/iox2")
-        );
-        assert_eq!(
-            directory.node_registry_directory(),
-            PathBuf::from("/tmp/streamlib-1000/nodes")
         );
         assert_eq!(
             directory.surface_share_socket_path("Rabc"),

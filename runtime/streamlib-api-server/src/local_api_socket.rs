@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::unix_socket_path_cleared_for_bind::{
-    UnixSocketPathClearedForBind, clear_unix_socket_path_for_bind,
+    UnixSocketPathClearedForBind, UnixSocketPathRefusedForBind, clear_unix_socket_path_for_bind,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -50,8 +50,17 @@ pub(crate) struct LocalApiSocketBoundAndNotYetServed {
 pub(crate) fn bind_local_api_socket(
     local_api_socket_path: &Path,
 ) -> Result<LocalApiSocketBoundAndNotYetServed> {
-    let cleared = clear_unix_socket_path_for_bind(local_api_socket_path)
-        .map_err(|refusal| Error::Runtime(format!("Local API socket: {refusal}")))?;
+    let cleared =
+        clear_unix_socket_path_for_bind(local_api_socket_path).map_err(
+            |refusal| match refusal {
+                UnixSocketPathRefusedForBind::HeldByALiveProcess { .. } => Error::Runtime(format!(
+                    "Local API socket: {refusal}: another runtime serves this machine's local API \
+                 there, or a stale process still holds the path. Stop that process, then start \
+                 this runtime again"
+                )),
+                _ => Error::Runtime(format!("Local API socket: {refusal}")),
+            },
+        )?;
     if cleared == UnixSocketPathClearedForBind::StaleSocketFileRemoved {
         tracing::warn!(
             "Removed a stale local API socket left by a prior runtime: {}",
@@ -342,9 +351,13 @@ mod tests {
             "{refusal}"
         );
         assert!(
-            refusal.contains("already bound by a live process"),
+            refusal.contains(
+                "already bound by a live process: another runtime serves this \
+                 machine's local API there, or a stale process still holds the path"
+            ),
             "{refusal}"
         );
+        assert!(!refusal.contains("runtime_id"), "{refusal}");
         assert_the_local_api_socket_answers_health(local_api_socket_path).await;
     }
 

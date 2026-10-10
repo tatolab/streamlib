@@ -92,7 +92,7 @@ impl Drop for TokioRuntimeShutDownWithinItsBudget {
 pub(crate) struct EngineResourcesSharedByEveryStream {
     /// Unique identifier for this runtime instance.
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
-    /// The name this runtime's tap channels and node-registry row carry.
+    /// The name this runtime's tap channels carry.
     pub(crate) runtime_name: Arc<RuntimeName>,
     /// The streams loaded in this runtime, keyed by their URL-safe cast name.
     pub(crate) streams_loaded_in_this_runtime:
@@ -613,7 +613,7 @@ impl Runner {
         &self.engine_resources_shared_by_every_stream.runtime_id
     }
 
-    /// The name this runtime's tap channels and node-registry row carry.
+    /// The name this runtime's tap channels carry.
     pub fn runtime_name(&self) -> &RuntimeName {
         &self.engine_resources_shared_by_every_stream.runtime_name
     }
@@ -1387,13 +1387,18 @@ fn bring_up_surface_service(
     use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
     use crate::core::unix_socket_path_cleared_for_bind::{
-        UnixSocketPathClearedForBind, clear_unix_socket_path_for_bind,
+        UnixSocketPathClearedForBind, UnixSocketPathRefusedForBind, clear_unix_socket_path_for_bind,
     };
 
     let socket_path = runtime_directory.surface_share_socket_path(runtime_id);
 
-    let cleared = clear_unix_socket_path_for_bind(&socket_path)
-        .map_err(|refusal| Error::Runtime(format!("Surface-sharing socket: {refusal}")))?;
+    let cleared = clear_unix_socket_path_for_bind(&socket_path).map_err(|refusal| match refusal {
+        UnixSocketPathRefusedForBind::HeldByALiveProcess { .. } => Error::Runtime(format!(
+            "Surface-sharing socket: {refusal}; each runtime needs a unique runtime_id, so check \
+             for a duplicate STREAMLIB_RUNTIME_ID or another runtime in the same session"
+        )),
+        _ => Error::Runtime(format!("Surface-sharing socket: {refusal}")),
+    })?;
     if cleared == UnixSocketPathClearedForBind::StaleSocketFileRemoved {
         tracing::warn!(
             "[new] Removed stale surface-sharing socket left by prior runtime: {}",
@@ -2065,6 +2070,10 @@ mod tests {
             assert!(
                 refusal.contains("already bound by a live process"),
                 "the refusal must name the live runtime, not a node failure: {refusal}"
+            );
+            assert!(
+                refusal.contains("duplicate STREAMLIB_RUNTIME_ID"),
+                "the surface-sharing socket is keyed by runtime id: {refusal}"
             );
             drop(live_runtimes_socket);
         }

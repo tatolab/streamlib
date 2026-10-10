@@ -9,7 +9,7 @@ use std::process::Command;
 #[test]
 fn any_argument_is_a_usage_error_naming_it() {
     for (arguments, named_argument) in [
-        (&["--stream-graph", "graph.json"][..], "--stream-graph"),
+        (&["--graph", "graph.json"][..], "--graph"),
         (&["--project", "."][..], "--project"),
         (&["--interpreter", "/bin/sh"][..], "--interpreter"),
         (&["stream.py"][..], "stream.py"),

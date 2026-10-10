@@ -1132,27 +1132,116 @@ pub(crate) mod router_surface_tests {
     }
 
     /// The runtime stops as a service does, or by a signal in its terminal:
-    /// no route asks it to, and the spec documents none.
-    #[tokio::test]
-    async fn no_route_shuts_the_runtime_down() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/runtime/shutdown")
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from("{}"))
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::NOT_FOUND);
-
+    /// the spec documents reads alone, every operation a `GET`, and names no
+    /// type that stops it.
+    #[test]
+    fn no_documented_route_shuts_the_runtime_down() {
         let spec = serde_json::to_value(control_plane_openapi_spec()).unwrap();
-        assert!(
-            spec["paths"]["/api/runtime/shutdown"].is_null(),
-            "{}",
-            spec["paths"]
+        let mut documented_operations: Vec<(String, String)> = spec["paths"]
+            .as_object()
+            .expect("the spec documents its paths")
+            .iter()
+            .flat_map(|(path, path_item)| {
+                path_item
+                    .as_object()
+                    .expect("each path documents its operations")
+                    .keys()
+                    .filter(|key| {
+                        [
+                            "get", "put", "post", "delete", "patch", "options", "head", "trace",
+                        ]
+                        .contains(&key.as_str())
+                    })
+                    .map(move |method| (path.clone(), method.clone()))
+            })
+            .collect();
+        documented_operations.sort_unstable();
+
+        assert_eq!(
+            documented_operations,
+            [
+                ("/api/graph", "get"),
+                ("/api/registry", "get"),
+                ("/api/surfaces/{surface_id}/image", "get"),
+                ("/health", "get"),
+                ("/ws/tap/{channel}", "get"),
+            ]
+            .map(|(path, method)| (path.to_owned(), method.to_owned()))
         );
         assert!(
-            !spec.to_string().contains("RuntimeShutdown"),
+            !spec.to_string().contains("Shutdown"),
             "the spec names no shutdown type"
         );
+    }
+
+    /// The router itself, not only its spec, serves nothing that changes the
+    /// runtime: every path it serves outside `/mcp` (whose tools
+    /// `tools_list_advertises_exactly_the_control_vocabulary` holds) answers
+    /// no mutating method with success, and nothing at all is served under
+    /// `/api/runtime`.
+    #[tokio::test]
+    async fn the_router_serves_no_mutating_method_and_nothing_under_api_runtime() {
+        let spec = serde_json::to_value(control_plane_openapi_spec()).unwrap();
+        let documented_paths = spec["paths"]
+            .as_object()
+            .expect("the spec documents its paths")
+            .keys()
+            .map(|path| {
+                format!(
+                    "{}?stream={}",
+                    path.replace(
+                        "{surface_id}",
+                        STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED
+                    )
+                    .replace("{channel}", "some-channel"),
+                    crate::control_plane_stub_support::STUB_STREAM_NAME
+                )
+            });
+        let routes_outside_the_spec = [
+            "/ws/events",
+            "/api/openapi.json",
+            MCP_STDIO_UPGRADE_REQUEST_TARGET,
+        ]
+        .map(str::to_owned);
+        let served_paths: Vec<String> = documented_paths.chain(routes_outside_the_spec).collect();
+        for path in &served_paths {
+            for method in ["POST", "PUT", "PATCH", "DELETE"] {
+                let request = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap();
+                let status = status_of(request).await;
+                assert!(
+                    !status.is_success(),
+                    "{method} {path} must not be served; got {status}"
+                );
+            }
+        }
+
+        for path in [
+            "/api/runtime",
+            "/api/runtime/",
+            "/api/runtime/stop",
+            "/api/runtime/quit",
+            "/api/runtime/exit",
+            "/api/runtime/terminate",
+        ] {
+            for method in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
+                let request = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap();
+                assert_eq!(
+                    status_of(request).await,
+                    StatusCode::NOT_FOUND,
+                    "{method} {path} must not be served"
+                );
+            }
+        }
     }
 
     // ------------------------------------------------------------------
