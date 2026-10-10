@@ -272,10 +272,14 @@ tatolab enable-virtual-camera [--print]
 - **`dev`** is `run` attached, run again on every saved edit to a `.py` file or `pyproject.toml`
   in the project; the runtime replaces the running stream only once the edit compiles.
   When the runtime goes away, `dev` waits for it and loads the stream again.
-- **`streams`** lists the streams the runtime holds: each one's name, whether it is attached, kept
-  or stopped, its node count and its project.
+- **`streams`** lists the streams the runtime holds: each one's name, whether it is attached, kept,
+  stopped or failed, its node count and its project, and why each failed one failed. A kept
+  stream implicated in the runtime's last two crashes in a row, or one that cannot re-load at the
+  runtime's start (its venv deleted, say), is failed: the runtime skips it at its starts and
+  brings every other stream back.
 - **`stop`** unloads a stream; a kept one stays stopped across the runtime's restarts until
-  **`start`** loads it again. **`rm`** unloads a stream and forgets it.
+  **`start`** loads it again. `start` also retries a failed stream. **`rm`** unloads a stream and
+  forgets it.
 - **`expose`** sets how far one output port is readable, live: private (readable by this machine's
   other streams and agents), `--public` (readable off the machine too) or `--remove` (internal to
   its stream). A reader the new level no longer allows is cut at once. On a kept stream the level

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Hosting the machine's streams: the engine built over the state directory,
-//! the local API served at its fixed socket, every kept stream not stopped
+//! the previous run's crash counted against the kept streams, the local API
+//! served at its fixed socket, every kept stream neither stopped nor failed
 //! re-loaded, the run until a machine shutdown is requested and every stream
 //! has ended, and a teardown that drops the engine — or leaves it beneath the
 //! threads a stream abandoned.
@@ -16,7 +17,8 @@ use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
     EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, HowALoadedStreamEnded,
-    KeptStreamReloadAtTheStart, LoadedStreamInThisRuntime, Runner, RunnerConstructionOptions,
+    HowThePreviousRuntimeRunEnded, KeptStreamReloadAtTheStart, LoadedStreamInThisRuntime, Runner,
+    RunnerConstructionOptions, RuntimeRunInProgressRecord,
     note_what_the_engine_teardown_is_waiting_on,
 };
 use streamlib_api_server::{LocalApiServedForAnEngine, serve_the_local_api_for_an_engine};
@@ -31,14 +33,18 @@ use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_t
 const STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET: Duration = Duration::from_secs(10);
 
 /// Host the machine's streams until a machine shutdown is requested and every
-/// stream has ended, tear the engine down, and return the status `tatolabd`
-/// exits with.
+/// stream has ended, tear the engine down, end `runtime_run_in_progress_record`
+/// cleanly, and return the status `tatolabd` exits with. A start refused
+/// before it counts `how_the_previous_run_ended` drops the record, which puts
+/// that crash back for the next start.
 ///
 /// Called on the process's first thread: on macOS the engine drives the window
 /// event pump on it while it waits.
 pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     tatolab_state_directory: &TatolabStateDirectory,
     processor_interpreter_lend_directory: PathBuf,
+    mut runtime_run_in_progress_record: RuntimeRunInProgressRecord,
+    how_the_previous_run_ended: &HowThePreviousRuntimeRunEnded,
 ) -> ExitCode {
     let engine = match Runner::new_with_construction_options(RunnerConstructionOptions {
         runtime_name: None,
@@ -60,6 +66,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         ));
     }
     streamlib_media_builtins::register_media_builtin_processor_types();
+    #[cfg(feature = "machine-directories-under-a-test-root")]
+    crate::crash_on_demand_test_node::register_the_crash_on_demand_test_node();
     if let Err(kept_streams_refusal) = engine
         .keep_streams_in_the_state_directory(&tatolab_state_directory.kept_streams_directory())
     {
@@ -67,6 +75,8 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
             "the runtime cannot keep streams: {kept_streams_refusal}"
         ));
     }
+    engine.count_the_previous_runtime_runs_end_against_the_kept_streams(how_the_previous_run_ended);
+    runtime_run_in_progress_record.mark_the_previous_runs_end_counted();
 
     let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
     let mut local_api_served_for_the_engine = None;
@@ -74,7 +84,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         .run_owning_the_machine_shutdown_signals(|| {
             local_api_served_for_the_engine = Some(serve_the_local_api_for_an_engine(&engine)?);
             log_the_kept_streams_reloaded_at_the_start(
-                &engine.reload_every_kept_stream_not_stopped(),
+                &engine.reload_every_kept_stream_neither_stopped_nor_failed(),
             );
             engine.wait_until_a_machine_shutdown_is_requested();
 
@@ -122,6 +132,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     );
     let exit_status =
         exit_status_once_the_engine_is_torn_down(&run_outcome, &engine_teardown_outcome);
+    runtime_run_in_progress_record.end_this_run_cleanly();
     for refusal in
         refusals_written_once_the_engine_is_torn_down(run_outcome, &engine_teardown_outcome)
     {

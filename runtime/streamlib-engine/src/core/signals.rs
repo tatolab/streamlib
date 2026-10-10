@@ -404,6 +404,7 @@ fn escalate_the_runtime_shutdown_one_step_for_a_delivered_signal(signal_name: &s
     if escalate_the_machines_shutdown_for_a_delivered_signal(&format!("posix signal {signal_name}"))
         == RuntimeShutdownEscalation::ExitAtOnce
     {
+        crate::core::runtime::end_the_run_in_progress_record_as_the_owner_ends_the_process();
         crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
             EXIT_STATUS_OF_A_THIRD_INTERRUPT,
         );

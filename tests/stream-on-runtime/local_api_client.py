@@ -111,7 +111,7 @@ class LocalApiClient:
         return self.get_json(f"/api/graph?stream={urllib.parse.quote(stream, safe='')}")
 
     def list_streams(self) -> "list[dict[str, Any]]":
-        """MCP `list_streams`: each stream the runtime holds, `{name, state, project_directory, node_count}`."""
+        """MCP `list_streams`: each stream the runtime holds, `{name, state, project_directory, node_count, failed_because}`."""
         return self.call_tool("list_streams")["streams"]
 
     def registry(self, stream: "str | None" = None) -> Any:

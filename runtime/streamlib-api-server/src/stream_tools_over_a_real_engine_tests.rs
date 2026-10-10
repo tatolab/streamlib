@@ -801,9 +801,9 @@ async fn list_streams_names_each_stream_attached_kept_or_stopped() {
         listed,
         json!({
             "streams": [
-                { "name": "live", "state": "attached", "project_directory": project_directory, "node_count": 1 },
-                { "name": "parked", "state": "stopped", "project_directory": project_directory, "node_count": null },
-                { "name": "waiting", "state": "kept", "project_directory": project_directory, "node_count": null },
+                { "name": "live", "state": "attached", "project_directory": project_directory, "node_count": 1, "failed_because": null },
+                { "name": "parked", "state": "stopped", "project_directory": project_directory, "node_count": null, "failed_because": null },
+                { "name": "waiting", "state": "kept", "project_directory": project_directory, "node_count": null, "failed_because": null },
             ]
         })
     );

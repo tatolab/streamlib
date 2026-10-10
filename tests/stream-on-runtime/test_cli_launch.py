@@ -249,6 +249,7 @@ def test_an_attached_stream_loads_into_the_runtime_and_a_ctrl_c_unloads_it(
             "state": "attached",
             "project_directory": str(app_directory.resolve()),
             "node_count": 1,
+            "failed_because": None,
         }
     ]
     assert running_graph["stream"] == STREAM_NAME

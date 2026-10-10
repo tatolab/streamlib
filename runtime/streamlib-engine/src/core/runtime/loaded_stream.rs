@@ -384,9 +384,13 @@ impl LoadedStreamInThisRuntime {
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStarting);
 
         let engine = &self.engine_resources_shared_by_every_stream;
-        let gpu = engine.gpu_context_view_for_a_starting_stream(|engine_gpu_context| {
-            self.this_streams_view_of_the_engines_gpu_context(engine_gpu_context)
-        })?;
+        let gpu = engine
+            .gpu_context_view_for_a_starting_stream(|engine_gpu_context| {
+                self.this_streams_view_of_the_engines_gpu_context(engine_gpu_context)
+            })
+            .map_err(|engine_refusal| {
+                Error::EngineResourceRefusedAtAStreamsStart(engine_refusal.to_string())
+            })?;
 
         let time = Arc::new(TimeContext::new());
         let audio_clock = an_audio_clock_for_one_stream();
@@ -658,6 +662,7 @@ impl LoadedStreamInThisRuntime {
         crate::core::runtime::count_threads_abandoned_in_this_process(
             1,
             &format!("the teardown of the stream `{}`", self.stream_name()),
+            self.stream_name(),
         );
         self.let_go_of_this_stream_then_mark_it_ended(
             HowALoadedStreamEnded::AbandonedByItsTeardownWatchdog {
@@ -1065,7 +1070,7 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// The message a caught panic carried, when it carried one as text.
-fn what_a_panic_said(panic_payload: &(dyn std::any::Any + Send)) -> &str {
+pub(crate) fn what_a_panic_said(panic_payload: &(dyn std::any::Any + Send)) -> &str {
     panic_payload
         .downcast_ref::<&str>()
         .copied()

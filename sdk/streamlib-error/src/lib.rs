@@ -40,6 +40,11 @@ pub enum Error {
     #[error("GPU operation failed: {0}")]
     GpuError(String),
 
+    /// The engine could not give a starting stream what every stream's start
+    /// needs — the GPU context — a refusal no stream owns.
+    #[error("the engine could not give the stream its GPU context: {0}")]
+    EngineResourceRefusedAtAStreamsStart(String),
+
     #[error("No display surface available: {0}")]
     DisplaySurfaceUnavailable(String),
 

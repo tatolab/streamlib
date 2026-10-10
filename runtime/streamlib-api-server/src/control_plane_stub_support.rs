@@ -293,6 +293,7 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     state: ::streamlib::sdk::runtime::StreamListingState::Attached,
                     project_directory: ::std::path::PathBuf::new(),
                     node_count: None,
+                    failed_because: None,
                 }]
             }
             fn expose_port(

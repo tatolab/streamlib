@@ -196,6 +196,7 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
             "removing processors from the stream `{}`",
             the_stream_the_processors_belong_to.stream_name
         ),
+        &the_stream_the_processors_belong_to.stream_name,
     );
 
     let mut first_node_left_behind = None;

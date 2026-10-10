@@ -869,6 +869,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::graph_snapshot",
                 "core::runtime::machine_state_directory",
                 "core::runtime::stream_actions_of_this_runtime",
+                "core::runtime::runtime_crash_pinned_on_a_stream",
                 "core::graph::output_port_exposure",
                 "core::graph::components::exposed_output_ports_component",
                 "core::graph::graph_tests::mutation_persistence::a_dropped_node_takes_its_exposures_and_their_readers_with_it",

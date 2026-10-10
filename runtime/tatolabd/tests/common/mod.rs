@@ -8,6 +8,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex};
@@ -134,6 +135,11 @@ impl TatolabTestMachineRoot {
         self.state_directory().join("streams")
     }
 
+    /// `<state>/runtime-run-in-progress`, which a crash leaves behind.
+    pub fn runtime_run_in_progress_record_path(&self) -> PathBuf {
+        self.state_directory().join("runtime-run-in-progress")
+    }
+
     /// `<state>/logs/`, the runtime's own log.
     pub fn runtime_log_directory(&self) -> PathBuf {
         self.state_directory().join("logs")
@@ -207,6 +213,35 @@ pub fn a_native_only_stream_graph(stream_name: &str) -> serde_json::Value {
     })
 }
 
+/// The class import path the crash-on-demand test node registers under.
+pub const CRASH_ON_DEMAND_TEST_NODE_TYPE: &str =
+    "tatolabd::crash_on_demand_test_node::CrashOnDemandTestNode";
+
+/// A stream of one crash-on-demand node, which crashes the runtime on
+/// `SIGSEGV` at the stream's load while `trigger` exists.
+pub fn a_stream_graph_crashing_while(stream_name: &str, trigger: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "stream": stream_name,
+        "nodes": [{
+            "name": "crasher",
+            "type": CRASH_ON_DEMAND_TEST_NODE_TYPE,
+            "config": {"crash_while_this_file_exists": trigger, "crash_with": "SIGSEGV"},
+        }],
+    })
+}
+
+/// Start `tatolabd_command` and expect it to crash on `SIGSEGV` at its start.
+pub fn expect_the_runtime_to_crash_on_segv(tatolabd_command: Command) {
+    let crashed = run_to_exit_within(tatolabd_command, A_RUNTIME_STARTS_SERVING_WITHIN);
+    assert_eq!(
+        crashed.status.signal(),
+        Some(libc::SIGSEGV),
+        "the runtime did not crash on SIGSEGV: {}\n{}",
+        crashed.status,
+        String::from_utf8_lossy(&crashed.stderr)
+    );
+}
+
 /// The record of a kept stream `stream_name` running `graph` from
 /// `project_directory` under `interpreter`.
 pub fn a_kept_stream_record(
@@ -224,6 +259,8 @@ pub fn a_kept_stream_record(
         stream_function: None,
         graph,
         stopped,
+        failed_because: None,
+        runtime_crashes_in_a_row_implicating_it: 0,
         exposure_rulings: Vec::new(),
     }
 }

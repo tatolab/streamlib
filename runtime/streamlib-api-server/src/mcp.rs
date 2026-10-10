@@ -90,7 +90,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept or stopped. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `tap`, `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `runtime_name`. `exchange` names no stream: a surface id is unique on the machine. Observe a stream with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on) and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.";
+const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a project's stream function compiled in that project's own interpreter. `list_streams` names them, each attached, kept, stopped or failed — a kept stream implicated in the runtime's last two crashes in a row, or one that could not re-load at its start, is failed, carries why in `failed_because`, and is skipped at the start. `run_stream` compiles and loads one from an absolute `project_directory` — `stream_function` as `tatolab run` takes it (`stream.py:main`, or none for the sole `@stream` in `stream.py`), `name` to load it under another name. With `keep: true` the runtime keeps it, re-loading it whenever the runtime starts; with `keep: false` it is attached to the `/mcp/stdio` connection that carried the call and unloads when that connection closes — a one-shot `POST /mcp` call can only keep. `stop_stream` unloads a stream and records a kept one stopped, `start_stream` loads a stopped one again and retries a failed one, `remove_stream` unloads and forgets one, and `expose_port` puts an output port at `internal`, `private` or `public` live, cutting off at once every reader the level no longer allows, and records the level for a kept stream. Every tool about one stream — `tap`, `logs`, `add_node`, `remove_node`, `connect`, `disconnect` and the stream actions — names it with a required `stream`; `graph` names one optionally, and without it returns every loaded stream's graph under `runtime_name`. `exchange` names no stream: a surface id is unique on the machine. Observe a stream with `graph` (nodes by name, their types and port names, and links), `tap` (raw bags on an output port, addressed `<runtime_name>/<node>/<port>`), `logs` (its log records after a sequence number: pass the result's `next_after` back as `after` to read on) and `exchange` (a published frame's pixels). Change its live graph with `add_node`, `connect`, `disconnect` and `remove_node`, each naming a node by its name: a Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for names and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. Both ends of a `connect` are ports in the one stream it names. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.";
 
 /// Bounded sample size for `tap` when the caller does not pin its own `count`.
 const DEFAULT_TAP_SAMPLE_COUNT: usize = 8;
@@ -800,7 +800,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes, and an attached run of the stream this connection attached, from the same project and function, replaces it — under the name the function compiles to now when neither run passed `name`. A replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. A one-shot `POST /mcp` call can only keep. `stream_instance` names this load, as its `logs` pages do. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
+        description = "Compile a project's stream function in the project's own `.venv/bin/python`, describe its Python types, then load and start the stream. A name already loaded or kept — stopped or failed included — is refused naming the project that holds it; pass `name` to load under another. `keep: true` keeps it in the runtime, re-loaded whenever the runtime starts, and a kept run of the kept stream's own project and function replaces it; `keep: false` attaches it to this `/mcp/stdio` connection, which unloads it when it closes, and an attached run of the stream this connection attached, from the same project and function, replaces it — under the name the function compiles to now when neither run passed `name`. A replace unloads the running stream only once the compile succeeded, and a refused load re-loads it. A one-shot `POST /mcp` call can only keep. `stream_instance` names this load, as its `logs` pages do. `compile_warnings` holds each line the compile wrote to its standard error — the cross-floor check's warnings among them — for the caller to show its user."
     )]
     async fn run_stream(
         &self,
@@ -868,7 +868,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Unload a stream. A kept stream is recorded stopped, so it stays unloaded across a runtime restart until `start_stream`; an attached stream is gone. A kept stream already stopped is refused. `not_recorded_because`, present only then, says why a kept stream unloaded here could not be recorded stopped, so a runtime restart loads it again."
+        description = "Unload a stream. A kept stream is recorded stopped, so it stays unloaded across a runtime restart until `start_stream`; an attached stream is gone. A kept stream already stopped, or failed, is refused. `not_recorded_because`, present only then, says why a kept stream unloaded here could not be recorded stopped, so a runtime restart loads it again."
     )]
     async fn stop_stream(
         &self,
@@ -891,7 +891,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "Load and start a kept stream that is not loaded — one `stop_stream` stopped, or one that did not re-load — from the graph recorded when it was run, with the owner's exposure levels applied. An attached stream is loaded again with `run_stream`."
+        description = "Load and start a kept stream that is not loaded — one `stop_stream` stopped, or a failed one, which this retries — from the graph recorded when it was run, with the owner's exposure levels applied; once it starts it is neither stopped nor failed and its count of the runtime's crashes is reset. A failed stream whose retry is refused stays failed, for the retry's reason. An attached stream is loaded again with `run_stream`."
     )]
     async fn start_stream(
         &self,
@@ -934,7 +934,7 @@ impl LocalApiMcpServerHandler {
     }
 
     #[tool(
-        description = "List every stream the runtime holds by name: `attached` (lives as long as the connection that ran it), `kept`, or `stopped`, with its project directory and the node count of its loaded graph — `null` when it is not loaded."
+        description = "List every stream the runtime holds by name: `attached` (lives as long as the connection that ran it), `kept`, `stopped`, or `failed` (implicated in the runtime's last two crashes in a row, or could not re-load at its start; skipped at the start until `start_stream` retries it), with its project directory, the node count of its loaded graph — `null` when it is not loaded — and `failed_because`, why a failed stream failed — `null` otherwise."
     )]
     async fn list_streams(
         &self,
@@ -955,6 +955,7 @@ impl LocalApiMcpServerHandler {
                         state: listed_stream_state_on_the_wire(listing.state),
                         project_directory: listing.project_directory,
                         node_count: listing.node_count,
+                        failed_because: listing.failed_because,
                     })
                     .collect(),
             },
@@ -997,6 +998,7 @@ fn listed_stream_state_on_the_wire(state: StreamListingState) -> ListedStreamSta
         StreamListingState::Attached => ListedStreamState::Attached,
         StreamListingState::Kept => ListedStreamState::Kept,
         StreamListingState::Stopped => ListedStreamState::Stopped,
+        StreamListingState::Failed => ListedStreamState::Failed,
     }
 }
 
@@ -2837,7 +2839,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn list_streams_answers_each_stream_by_name_state_project_and_node_count() {
+    async fn list_streams_answers_each_stream_by_name_state_project_node_count_and_failure() {
         for arguments in [json!({}), json!(null)] {
             let (_served, client) =
                 connected_mcp_client(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
@@ -2855,6 +2857,7 @@ pub(crate) mod tests {
                         "state": "attached",
                         "project_directory": "",
                         "node_count": null,
+                        "failed_because": null,
                     }]
                 }),
                 "arguments {arguments}"
@@ -4149,6 +4152,7 @@ pub(crate) mod tests {
             (StreamListingState::Attached, "attached"),
             (StreamListingState::Kept, "kept"),
             (StreamListingState::Stopped, "stopped"),
+            (StreamListingState::Failed, "failed"),
         ] {
             assert_eq!(
                 serde_json::to_value(listed_stream_state_on_the_wire(engine_state)).unwrap(),

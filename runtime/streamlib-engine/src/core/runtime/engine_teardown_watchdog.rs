@@ -40,6 +40,11 @@ const PROGRESS_NOTE_READ_BUDGET: Duration = Duration::from_millis(100);
 /// Every thread this process has abandoned, counted as each is abandoned.
 static THREADS_ABANDONED_IN_THIS_PROCESS: AtomicUsize = AtomicUsize::new(0);
 
+/// Each stream a thread was abandoned for, by its cast name, which the end
+/// past the bound pins the runtime's crash on.
+static STREAMS_WHOSE_THREADS_WERE_ABANDONED: parking_lot::Mutex<Vec<String>> =
+    parking_lot::Mutex::new(Vec::new());
+
 /// What the engine's own teardown is waiting on, in words, for its watchdog to
 /// report if it fires.
 static WHAT_THE_ENGINE_TEARDOWN_IS_WAITING_ON: parking_lot::Mutex<String> =
@@ -50,12 +55,26 @@ pub fn note_what_the_engine_teardown_is_waiting_on(what: impl Into<String>) {
     *WHAT_THE_ENGINE_TEARDOWN_IS_WAITING_ON.lock() = what.into();
 }
 
-/// Count `abandoned_thread_count` threads `whose` teardown abandoned into the
-/// process-wide total, ending the runtime with status 124 once it passes the
-/// engine's bound.
-pub(crate) fn count_threads_abandoned_in_this_process(abandoned_thread_count: usize, whose: &str) {
+/// Count `abandoned_thread_count` threads `whose` teardown abandoned for the
+/// stream `stream_name` into the process-wide total, ending the runtime with
+/// status 124 once it passes the engine's bound — a crash pinned on every
+/// stream a thread was abandoned for.
+pub(crate) fn count_threads_abandoned_in_this_process(
+    abandoned_thread_count: usize,
+    whose: &str,
+    stream_name: &str,
+) {
     if abandoned_thread_count == 0 {
         return;
+    }
+    {
+        let mut streams_whose_threads_were_abandoned = STREAMS_WHOSE_THREADS_WERE_ABANDONED.lock();
+        if !streams_whose_threads_were_abandoned
+            .iter()
+            .any(|abandoned_for| abandoned_for == stream_name)
+        {
+            streams_whose_threads_were_abandoned.push(stream_name.to_string());
+        }
     }
     let abandoned_so_far = THREADS_ABANDONED_IN_THIS_PROCESS
         .fetch_add(abandoned_thread_count, Ordering::SeqCst)
@@ -66,6 +85,14 @@ pub(crate) fn count_threads_abandoned_in_this_process(abandoned_thread_count: us
              abandoned {abandoned_so_far}, past the engine's bound of \
              {THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS}. Ending the process with \
              status {EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED}."
+        );
+        crate::core::runtime::pin_the_runtimes_crash_on_each_stream(
+            &STREAMS_WHOSE_THREADS_WERE_ABANDONED.lock(),
+            &format!(
+                "exit {EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED}: past the engine's bound of \
+                 {THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS} abandoned threads, \
+                 its threads among them"
+            ),
         );
         crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
             EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
@@ -130,6 +157,10 @@ impl ArmedEngineTeardownWatchdog {
                         "{}",
                         the_watchdogs_expiry_message(&teardown_name, budget, &waiting_on)
                     );
+                    crate::core::runtime::pin_the_runtimes_crash_on_no_stream(&format!(
+                        "exit {EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED}: {teardown_name} \
+                         outlived its watchdog, waiting on {waiting_on}"
+                    ));
                     crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
                         EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
                     );
@@ -213,6 +244,7 @@ fn the_watchdogs_expiry_message(teardown_name: &str, budget: Duration, waiting_o
 mod tests {
     use super::*;
     use crate::core::test_support::rerun_this_test_in_a_child_process;
+    use std::path::Path;
 
     /// Set in the child process a watchdog test re-runs itself in, naming the
     /// file the child records what it needs the parent to check.
@@ -240,6 +272,11 @@ mod tests {
         if let Some(record_path) = std::env::var_os(WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE)
         {
             log_straight_to_standard_error();
+            let (_this_run_until_the_process_ends, _) =
+                crate::core::runtime::RuntimeRunInProgressRecord::begin_this_run_reading_the_previous(
+                    &the_run_in_progress_record_beside(Path::new(&record_path)),
+                )
+                .expect("the run's record begins");
             let stand_in_helper =
                 crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
             std::fs::write(&record_path, stand_in_helper.id().to_string())
@@ -296,6 +333,21 @@ mod tests {
             ),
             "a helper's process group outlived the watchdog's exit"
         );
+        let run_in_progress_record =
+            std::fs::read_to_string(the_run_in_progress_record_beside(&record_path))
+                .expect("the run's record is left behind");
+        assert!(
+            run_in_progress_record.starts_with(
+                "\texit 124: the test's teardown outlived its watchdog, waiting on the processor \
+                 thread of HungProbe"
+            ),
+            "the watchdog's end was not pinned on no stream: {run_in_progress_record:?}"
+        );
+        assert_eq!(
+            run_in_progress_record.lines().count(),
+            1,
+            "{run_in_progress_record:?}"
+        );
     }
 
     #[test]
@@ -340,12 +392,18 @@ mod tests {
     }
 
     /// Crossing the process-wide bound of abandoned threads ends the runtime
-    /// with 124 and takes every helper's process group with it.
+    /// with 124, takes every helper's process group with it, and pins the
+    /// crash on every stream a thread was abandoned for.
     #[test]
     fn abandoning_threads_past_the_engines_bound_ends_the_process() {
         if let Some(record_path) = std::env::var_os(WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE)
         {
             log_straight_to_standard_error();
+            let (_this_run_until_the_process_ends, _) =
+                crate::core::runtime::RuntimeRunInProgressRecord::begin_this_run_reading_the_previous(
+                &the_run_in_progress_record_beside(Path::new(&record_path)),
+            )
+            .expect("the run's record begins");
             let stand_in_helper =
                 crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
             std::fs::write(&record_path, stand_in_helper.id().to_string())
@@ -358,8 +416,13 @@ mod tests {
             count_threads_abandoned_in_this_process(
                 THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS,
                 "the stream `at-the-bound`",
+                "at-the-bound",
             );
-            count_threads_abandoned_in_this_process(1, "the stream `past-the-bound`");
+            count_threads_abandoned_in_this_process(
+                1,
+                "the stream `past-the-bound`",
+                "past-the-bound",
+            );
             std::thread::sleep(Duration::from_secs(30));
             panic!("abandoning threads past the engine's bound did not end the process");
         }
@@ -400,5 +463,29 @@ mod tests {
             ),
             "a helper's process group outlived the end past the abandoned-thread bound"
         );
+        let run_in_progress_record =
+            std::fs::read_to_string(the_run_in_progress_record_beside(&record_path))
+                .expect("the run's record is left behind");
+        let pinned_streams: Vec<&str> = run_in_progress_record
+            .lines()
+            .map(|line| line.split('\t').next().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            pinned_streams,
+            ["at-the-bound", "past-the-bound"],
+            "{run_in_progress_record}"
+        );
+        assert!(
+            run_in_progress_record.contains("exit 124"),
+            "{run_in_progress_record}"
+        );
+    }
+
+    /// The run-in-progress record a watchdog child writes beside its record.
+    fn the_run_in_progress_record_beside(record_path: &Path) -> std::path::PathBuf {
+        record_path
+            .parent()
+            .expect("the record sits in a directory")
+            .join("runtime-run-in-progress")
     }
 }

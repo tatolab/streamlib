@@ -212,12 +212,14 @@ pub struct ListStreamsToolResult {
 pub struct ListStreamsToolResultStream {
     /// The stream's cast name.
     pub name: String,
-    /// Whether it is attached, kept or stopped.
+    /// Whether it is attached, kept, stopped or failed.
     pub state: ListedStreamState,
     /// The stream's project directory.
     pub project_directory: PathBuf,
     /// How many nodes its loaded graph holds; `null` when it is not loaded.
     pub node_count: Option<usize>,
+    /// Why it is failed; `null` when it is not.
+    pub failed_because: Option<String>,
 }
 
 /// The state of one stream `list_streams` lists.
@@ -230,6 +232,9 @@ pub enum ListedStreamState {
     Kept,
     /// Kept, and stopped by its owner.
     Stopped,
+    /// Kept, and failed: skipped at the runtime's start until `start_stream`
+    /// retries it.
+    Failed,
 }
 
 impl ListedStreamState {
@@ -239,6 +244,7 @@ impl ListedStreamState {
             ListedStreamState::Attached => "attached",
             ListedStreamState::Kept => "kept",
             ListedStreamState::Stopped => "stopped",
+            ListedStreamState::Failed => "failed",
         }
     }
 }
@@ -430,16 +436,25 @@ mod tests {
                         state: ListedStreamState::Attached,
                         project_directory: PathBuf::from("/srv/cam"),
                         node_count: Some(4),
+                        failed_because: None,
                     },
                     ListStreamsToolResultStream {
                         name: "parked".to_owned(),
                         state: ListedStreamState::Stopped,
                         project_directory: PathBuf::from("/srv/parked"),
                         node_count: None,
+                        failed_because: None,
+                    },
+                    ListStreamsToolResultStream {
+                        name: "crasher".to_owned(),
+                        state: ListedStreamState::Failed,
+                        project_directory: PathBuf::from("/srv/crasher"),
+                        node_count: None,
+                        failed_because: Some("it crashed the runtime".to_owned()),
                     },
                 ],
             }),
-            r#"{"streams":[{"name":"camera","state":"attached","project_directory":"/srv/cam","node_count":4},{"name":"parked","state":"stopped","project_directory":"/srv/parked","node_count":null}]}"#
+            r#"{"streams":[{"name":"camera","state":"attached","project_directory":"/srv/cam","node_count":4,"failed_because":null},{"name":"parked","state":"stopped","project_directory":"/srv/parked","node_count":null,"failed_because":null},{"name":"crasher","state":"failed","project_directory":"/srv/crasher","node_count":null,"failed_because":"it crashed the runtime"}]}"#
         );
         assert_eq!(
             wire_text(&LogsToolResult {
@@ -506,6 +521,7 @@ mod tests {
             ListedStreamState::Attached,
             ListedStreamState::Kept,
             ListedStreamState::Stopped,
+            ListedStreamState::Failed,
         ] {
             assert_eq!(
                 serde_json::to_value(state).unwrap(),

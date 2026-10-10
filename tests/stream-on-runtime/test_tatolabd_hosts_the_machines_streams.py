@@ -108,7 +108,7 @@ NO_RUNTIME_REFUSAL_PREFIX = "no runtime is running on this machine: nothing answ
 NO_RUNTIME_REFUSAL_REMEDY = "Start one by running `tatolabd` in a terminal."
 
 KEPT_STREAM_RECORD_FILE_MODE = 0o600
-KEPT_STREAM_RECORD_SCHEMA_VERSION = 1
+KEPT_STREAM_RECORD_SCHEMA_VERSION = 2
 
 
 def runtime_serving_log_line(reloaded_count: int, skipped_count: int) -> str:
@@ -144,12 +144,13 @@ def listed_streams_by_name(local_api: LocalApiClient) -> "dict[str, dict[str, An
 
 
 def listing_of(stream_name: str, state: str, project_directory: Path, node_count: "int | None") -> "dict[str, Any]":
-    """One `list_streams` entry."""
+    """One `list_streams` entry of a stream that is not failed."""
     return {
         "name": stream_name,
         "state": state,
         "project_directory": str(project_directory),
         "node_count": node_count,
+        "failed_because": None,
     }
 
 
@@ -527,6 +528,8 @@ def write_the_kept_record_run_d_leaves(
         "stream_function": None,
         "graph": compile_document["stream_graph"],
         "stopped": stopped,
+        "failed_because": None,
+        "runtime_crashes_in_a_row_implicating_it": 0,
         "exposure_rulings": [],
     }
     record_path = kept_stream_record_path(private_machine_directories.machine_directories, stream_name)
