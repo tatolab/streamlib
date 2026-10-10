@@ -6,32 +6,73 @@
 //! one line or table each prints. `run` attached and `dev` share the load request.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::time::Duration;
 
 use clap::Args;
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
+    RemoveStreamToolResult, RunStreamToolResult, StartStreamToolResult, StopStreamToolResult,
+};
 
 use crate::TatolabCommandFailure;
+use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
 use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
 use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard_output};
 
-/// The local API tool that compiles a project's stream in its own interpreter and loads it.
-pub(crate) const RUN_STREAM_TOOL_NAME: &str = "run_stream";
+/// Bounds a tool call that loads a stream. The runtime bounds the compile in the project's
+/// interpreter at 60 s and the description of its Python types at 60 s more, then loads the
+/// graph; the call may also wait behind another stream action, which runs one at a time.
+const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// The local API tool that unloads a stream, recording a kept one as stopped.
-pub(crate) const STOP_STREAM_TOOL_NAME: &str = "stop_stream";
+/// Bounds a stream action that loads nothing. The runtime's watchdog ends a stream's teardown
+/// at 15 s; the call may also wait behind another stream action, a load among them.
+const STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The local API tool that loads a stopped kept stream again.
-pub(crate) const START_STREAM_TOOL_NAME: &str = "start_stream";
+/// A local API tool that runs, stops or reads the streams the runtime holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamActionTool {
+    /// Compiles a project's stream in its own interpreter and loads it.
+    RunStream,
+    /// Unloads a stream, recording a kept one as stopped.
+    StopStream,
+    /// Loads a stopped kept stream again.
+    StartStream,
+    /// Unloads a stream and forgets its record.
+    RemoveStream,
+    /// Lists the streams the runtime holds.
+    ListStreams,
+    /// Sets one output port's exposure level.
+    ExposePort,
+}
 
-/// The local API tool that unloads a stream and forgets its record.
-pub(crate) const REMOVE_STREAM_TOOL_NAME: &str = "remove_stream";
+impl StreamActionTool {
+    /// The tool's name on the local API.
+    pub(crate) fn tool_name(self) -> &'static str {
+        match self {
+            StreamActionTool::RunStream => "run_stream",
+            StreamActionTool::StopStream => "stop_stream",
+            StreamActionTool::StartStream => "start_stream",
+            StreamActionTool::RemoveStream => "remove_stream",
+            StreamActionTool::ListStreams => "list_streams",
+            StreamActionTool::ExposePort => "expose_port",
+        }
+    }
 
-/// The local API tool that lists the streams the runtime holds.
-pub(crate) const LIST_STREAMS_TOOL_NAME: &str = "list_streams";
-
-/// The local API tool that sets one output port's exposure level.
-pub(crate) const EXPOSE_PORT_TOOL_NAME: &str = "expose_port";
+    /// How long a caller waits for the tool's result: as long as the runtime may take to answer.
+    pub(crate) fn tool_call_timeout(self) -> Duration {
+        match self {
+            StreamActionTool::RunStream | StreamActionTool::StartStream => {
+                STREAM_LOAD_TOOL_CALL_TIMEOUT
+            }
+            StreamActionTool::StopStream
+            | StreamActionTool::RemoveStream
+            | StreamActionTool::ExposePort => STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
+            StreamActionTool::ListStreams => OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
+        }
+    }
+}
 
 /// What `streams` prints when the runtime holds none.
 const NO_STREAMS_IN_THIS_RUNTIME_LINE: &str = "No streams in this runtime.\n";
@@ -149,20 +190,6 @@ fn utf8_text_of(
     })
 }
 
-/// `run_stream`'s answer.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct RunStreamToolResult {
-    /// The name the stream was loaded under.
-    pub(crate) stream: String,
-    /// The project it was compiled in.
-    pub(crate) project_directory: PathBuf,
-    /// How many nodes it loaded with.
-    pub(crate) node_count: usize,
-    /// Each line the compile wrote to its standard error: the cross-floor check's warnings among
-    /// them.
-    pub(crate) compile_warnings: Vec<String>,
-}
-
 /// What `run`, `run -d` and `dev` write to their standard error before anything else a load
 /// says: each line its compile wrote to its own.
 pub(crate) fn rendered_compile_warning_lines(run_stream_result: &RunStreamToolResult) -> String {
@@ -173,83 +200,32 @@ pub(crate) fn rendered_compile_warning_lines(run_stream_result: &RunStreamToolRe
         .collect()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct StopStreamToolResult {
-    stream: String,
-    kept: bool,
-    #[serde(default)]
-    not_recorded_because: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct StartStreamToolResult {
-    stream: String,
-    node_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct RemoveStreamToolResult {
-    stream: String,
-    unloaded: bool,
-    forgotten: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct ListStreamsToolResult {
-    streams: Vec<ListedStream>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct ListedStream {
-    name: String,
-    state: String,
-    project_directory: PathBuf,
-    node_count: Option<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct ExposePortToolResult {
-    stream: String,
-    node: String,
-    port: String,
-    level: String,
-    recorded: bool,
-    #[serde(default)]
-    not_recorded_because: Option<String>,
-}
-
-/// The exposure level `expose` asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RequestedPortExposureLevel {
-    /// `expose`: readable by this machine's other streams and agents.
-    Private,
-    /// `expose --public`: readable from off the machine too.
-    Public,
-    /// `expose --remove`: readable inside its own stream only.
-    Internal,
-}
-
-impl RequestedPortExposureLevel {
-    fn wire_spelling(self) -> &'static str {
-        match self {
-            RequestedPortExposureLevel::Private => "private",
-            RequestedPortExposureLevel::Public => "public",
-            RequestedPortExposureLevel::Internal => "internal",
-        }
-    }
-}
-
-/// The answer `tool_name` gave, read as `ToolResult`, or the refusal naming what it was instead.
-fn tool_result_from<ToolResult: serde::de::DeserializeOwned>(
-    tool_name: &str,
+/// The answer `tool` gave, read as `ToolResult`, or the refusal naming what it was instead, for
+/// each caller to wrap in its own failure.
+pub(crate) fn tool_result_from<ToolResult: DeserializeOwned>(
+    tool: StreamActionTool,
     tool_result_text: &str,
-) -> Result<ToolResult, TatolabCommandFailure> {
+) -> Result<ToolResult, String> {
     serde_json::from_str(tool_result_text).map_err(|parse_failure| {
-        TatolabCommandFailure::refused(format!(
-            "{tool_name} answered something other than its result ({parse_failure}): \
-             {tool_result_text}"
-        ))
+        format!(
+            "{} answered something other than its result ({parse_failure}): {tool_result_text}",
+            tool.tool_name()
+        )
     })
+}
+
+/// Call `tool` once on the machine's running runtime, bounded by its own timeout, and read its
+/// result as `ToolResult`.
+fn call_one_stream_action_tool<ToolResult: DeserializeOwned>(
+    tool: StreamActionTool,
+    tool_arguments: serde_json::Map<String, serde_json::Value>,
+) -> Result<ToolResult, TatolabCommandFailure> {
+    let tool_result_text = call_one_tool_of_the_running_runtime(
+        tool.tool_name(),
+        tool_arguments,
+        tool.tool_call_timeout(),
+    )?;
+    tool_result_from(tool, &tool_result_text).map_err(TatolabCommandFailure::refused)
 }
 
 /// `count` followed by `noun`, plural unless it is one.
@@ -268,12 +244,9 @@ pub(crate) fn run_stream_kept(
 ) -> Result<u8, TatolabCommandFailure> {
     let stream_load_request =
         StreamLoadRequest::from_arguments(stream_load_arguments, caller_working_directory)?;
-    let run_stream_result: RunStreamToolResult = tool_result_from(
-        RUN_STREAM_TOOL_NAME,
-        &call_one_tool_of_the_running_runtime(
-            RUN_STREAM_TOOL_NAME,
-            stream_load_request.run_stream_tool_arguments(true),
-        )?,
+    let run_stream_result: RunStreamToolResult = call_one_stream_action_tool(
+        StreamActionTool::RunStream,
+        stream_load_request.run_stream_tool_arguments(true),
     )?;
     write_verb_standard_error(&rendered_compile_warning_lines(&run_stream_result));
     write_verb_standard_output(&rendered_kept_stream_line(&run_stream_result))
@@ -303,12 +276,9 @@ pub(crate) fn stop_stream_tool_arguments(
 
 /// `tatolab stop STREAM`.
 pub(crate) fn stop_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
-    let stop_stream_result: StopStreamToolResult = tool_result_from(
-        STOP_STREAM_TOOL_NAME,
-        &call_one_tool_of_the_running_runtime(
-            STOP_STREAM_TOOL_NAME,
-            stop_stream_tool_arguments(stream),
-        )?,
+    let stop_stream_result: StopStreamToolResult = call_one_stream_action_tool(
+        StreamActionTool::StopStream,
+        stop_stream_tool_arguments(stream),
     )?;
     if let Some(not_recorded_warning) = stop_not_recorded_warning_line(&stop_stream_result) {
         write_verb_standard_error(&not_recorded_warning);
@@ -344,13 +314,8 @@ fn stop_not_recorded_warning_line(stop_stream_result: &StopStreamToolResult) -> 
 
 /// `tatolab start STREAM`.
 pub(crate) fn start_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
-    let start_stream_result: StartStreamToolResult = tool_result_from(
-        START_STREAM_TOOL_NAME,
-        &call_one_tool_of_the_running_runtime(
-            START_STREAM_TOOL_NAME,
-            stream_tool_arguments(stream),
-        )?,
-    )?;
+    let start_stream_result: StartStreamToolResult =
+        call_one_stream_action_tool(StreamActionTool::StartStream, stream_tool_arguments(stream))?;
     write_verb_standard_output(&format!(
         "{} started ({})\n",
         start_stream_result.stream,
@@ -360,12 +325,9 @@ pub(crate) fn start_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
 
 /// `tatolab rm STREAM`.
 pub(crate) fn remove_stream(stream: &str) -> Result<u8, TatolabCommandFailure> {
-    let remove_stream_result: RemoveStreamToolResult = tool_result_from(
-        REMOVE_STREAM_TOOL_NAME,
-        &call_one_tool_of_the_running_runtime(
-            REMOVE_STREAM_TOOL_NAME,
-            stream_tool_arguments(stream),
-        )?,
+    let remove_stream_result: RemoveStreamToolResult = call_one_stream_action_tool(
+        StreamActionTool::RemoveStream,
+        stream_tool_arguments(stream),
     )?;
     write_verb_standard_output(&rendered_removed_stream_line(&remove_stream_result))
 }
@@ -388,16 +350,14 @@ fn rendered_removed_stream_line(remove_stream_result: &RemoveStreamToolResult) -
 
 /// `tatolab streams`.
 pub(crate) fn list_streams() -> Result<u8, TatolabCommandFailure> {
-    let list_streams_result: ListStreamsToolResult = tool_result_from(
-        LIST_STREAMS_TOOL_NAME,
-        &call_one_tool_of_the_running_runtime(LIST_STREAMS_TOOL_NAME, serde_json::Map::new())?,
-    )?;
+    let list_streams_result: ListStreamsToolResult =
+        call_one_stream_action_tool(StreamActionTool::ListStreams, serde_json::Map::new())?;
     write_verb_standard_output(&rendered_streams_table(&list_streams_result.streams))
 }
 
 /// The `NAME  STATE  NODES  PROJECT` table, each column as wide as its widest cell; one line when
 /// there is no stream.
-fn rendered_streams_table(listed_streams: &[ListedStream]) -> String {
+fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> String {
     if listed_streams.is_empty() {
         return NO_STREAMS_IN_THIS_RUNTIME_LINE.to_owned();
     }
@@ -410,7 +370,7 @@ fn rendered_streams_table(listed_streams: &[ListedStream]) -> String {
     let stream_rows = listed_streams.iter().map(|listed_stream| {
         [
             listed_stream.name.clone(),
-            listed_stream.state.clone(),
+            listed_stream.state.to_string(),
             listed_stream.node_count.map_or_else(
                 || NOT_LOADED_NODE_COUNT_CELL.to_owned(),
                 |node_count| node_count.to_string(),
@@ -443,7 +403,7 @@ fn expose_port_tool_arguments(
     stream: &str,
     node: &str,
     port: &str,
-    requested_level: RequestedPortExposureLevel,
+    requested_level: ExposePortLevel,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut expose_port_arguments = stream_tool_arguments(stream);
     expose_port_arguments.insert("node".to_owned(), node.into());
@@ -452,19 +412,16 @@ fn expose_port_tool_arguments(
     expose_port_arguments
 }
 
-/// `tatolab expose STREAM NODE PORT [--public | --remove]`.
+/// `tatolab expose STREAM NODE PORT [--public | --remove]`: `private`, `public` or `internal`.
 pub(crate) fn expose_port(
     stream: &str,
     node: &str,
     port: &str,
-    requested_level: RequestedPortExposureLevel,
+    requested_level: ExposePortLevel,
 ) -> Result<u8, TatolabCommandFailure> {
-    let expose_port_result: ExposePortToolResult = tool_result_from(
-        EXPOSE_PORT_TOOL_NAME,
-        &call_one_tool_of_the_running_runtime(
-            EXPOSE_PORT_TOOL_NAME,
-            expose_port_tool_arguments(stream, node, port, requested_level),
-        )?,
+    let expose_port_result: ExposePortToolResult = call_one_stream_action_tool(
+        StreamActionTool::ExposePort,
+        expose_port_tool_arguments(stream, node, port, requested_level),
     )?;
     if let Some(not_recorded_warning) = exposure_not_recorded_warning_line(&expose_port_result) {
         write_verb_standard_error(&not_recorded_warning);
@@ -510,6 +467,8 @@ fn exposure_not_recorded_warning_line(expose_port_result: &ExposePortToolResult)
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use serde_json::json;
 
     use super::*;
@@ -594,31 +553,65 @@ mod tests {
         );
     }
 
+    fn run_stream_result_warning(compile_warnings: &[&str]) -> RunStreamToolResult {
+        RunStreamToolResult {
+            stream: "camera".to_owned(),
+            kept: true,
+            project_directory: PathBuf::from("/srv/project"),
+            node_count: 3,
+            replaced_the_kept_record: false,
+            compile_warnings: compile_warnings
+                .iter()
+                .map(|compile_warning| compile_warning.to_string())
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_load_waits_past_the_runtimes_compile_and_describe_bounds_and_an_unload_past_its_watchdog()
+    {
+        let the_runtimes_compile_and_describe_bounds = Duration::from_secs(60 + 60);
+        let the_runtimes_stream_teardown_watchdog = Duration::from_secs(15);
+
+        for loading_tool in [StreamActionTool::RunStream, StreamActionTool::StartStream] {
+            assert_eq!(
+                loading_tool.tool_call_timeout(),
+                STREAM_LOAD_TOOL_CALL_TIMEOUT,
+                "{loading_tool:?}"
+            );
+        }
+        for tool_that_loads_nothing in [
+            StreamActionTool::StopStream,
+            StreamActionTool::RemoveStream,
+            StreamActionTool::ExposePort,
+        ] {
+            assert_eq!(
+                tool_that_loads_nothing.tool_call_timeout(),
+                STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
+                "{tool_that_loads_nothing:?}"
+            );
+        }
+        assert_eq!(
+            StreamActionTool::ListStreams.tool_call_timeout(),
+            OBSERVATION_VERB_TOOL_CALL_TIMEOUT
+        );
+        assert!(STREAM_LOAD_TOOL_CALL_TIMEOUT > the_runtimes_compile_and_describe_bounds);
+        assert!(
+            STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT
+                > the_runtimes_stream_teardown_watchdog + OBSERVATION_VERB_TOOL_CALL_TIMEOUT
+        );
+    }
+
     #[test]
     fn the_kept_line_names_the_stream_and_its_project() {
         assert_eq!(
-            rendered_kept_stream_line(&RunStreamToolResult {
-                stream: "camera".to_owned(),
-                project_directory: PathBuf::from("/srv/project"),
-                node_count: 3,
-                compile_warnings: Vec::new(),
-            }),
+            rendered_kept_stream_line(&run_stream_result_warning(&[])),
             "camera kept (project /srv/project)\n"
         );
     }
 
     #[test]
     fn each_compile_warning_is_a_line_of_its_own_and_none_writes_nothing() {
-        let run_stream_result_warning = |compile_warnings: &[&str]| RunStreamToolResult {
-            stream: "camera".to_owned(),
-            project_directory: PathBuf::from("/srv/project"),
-            node_count: 3,
-            compile_warnings: compile_warnings
-                .iter()
-                .map(|compile_warning| compile_warning.to_string())
-                .collect(),
-        };
-
         assert_eq!(
             rendered_compile_warning_lines(&run_stream_result_warning(&[
                 "tatolab: the cross-floor check found 1 thing binding this app to one floor.",
@@ -637,7 +630,7 @@ mod tests {
     fn a_run_stream_result_without_compile_warnings_is_not_a_run_stream_result() {
         assert!(
             serde_json::from_str::<RunStreamToolResult>(
-                r#"{"stream": "camera", "project_directory": "/srv/project", "node_count": 3}"#
+                r#"{"stream": "camera", "kept": true, "project_directory": "/srv/project", "node_count": 3, "replaced_the_kept_record": false}"#
             )
             .is_err(),
             "the runtime always answers `compile_warnings`, empty when the compile wrote nothing"
@@ -649,6 +642,7 @@ mod tests {
         assert_eq!(
             rendered_stopped_stream_line(&StopStreamToolResult {
                 stream: "camera".to_owned(),
+                stopped: true,
                 kept: true,
                 not_recorded_because: None,
             }),
@@ -657,6 +651,7 @@ mod tests {
         assert_eq!(
             rendered_stopped_stream_line(&StopStreamToolResult {
                 stream: "camera".to_owned(),
+                stopped: true,
                 kept: false,
                 not_recorded_because: None,
             }),
@@ -728,9 +723,9 @@ mod tests {
     #[test]
     fn expose_sends_the_level_each_flag_names() {
         for (requested_level, wire_level) in [
-            (RequestedPortExposureLevel::Private, "private"),
-            (RequestedPortExposureLevel::Public, "public"),
-            (RequestedPortExposureLevel::Internal, "internal"),
+            (ExposePortLevel::Private, "private"),
+            (ExposePortLevel::Public, "public"),
+            (ExposePortLevel::Internal, "internal"),
         ] {
             assert_eq!(
                 serde_json::Value::Object(expose_port_tool_arguments(
@@ -750,7 +745,7 @@ mod tests {
             stream: "camera".to_owned(),
             node: "effect".to_owned(),
             port: "video".to_owned(),
-            level: "public".to_owned(),
+            level: ExposePortLevel::Public,
             recorded,
             not_recorded_because: None,
         };
@@ -794,9 +789,9 @@ mod tests {
 
     #[test]
     fn an_answer_that_is_not_the_tools_result_is_refused_naming_the_tool() {
-        let refusal = TatolabCommandFailure::refusal_message_of(tool_result_from::<
-            StartStreamToolResult,
-        >("start_stream", "{}"));
+        let refusal =
+            tool_result_from::<StartStreamToolResult>(StreamActionTool::StartStream, "{}")
+                .unwrap_err();
 
         assert!(
             refusal.starts_with("start_stream answered something other than its result ("),

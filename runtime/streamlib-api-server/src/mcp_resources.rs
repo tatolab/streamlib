@@ -12,9 +12,8 @@ use std::sync::Arc;
 
 use rmcp::ErrorData as McpError;
 use rmcp::model::{ListResourcesResult, ReadResourceResult, Resource, ResourceContents};
-use serde_json::{Value, json};
-use streamlib::sdk::error::Error;
-use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
+use serde_json::json;
+use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 
 use crate::handlers::{machine_wide_graph_json, machine_wide_registry_response};
 
@@ -78,34 +77,4 @@ fn json_resource_contents(
     Ok(ReadResourceResult::new(vec![
         ResourceContents::text(text, uri).with_mime_type(JSON_RESOURCE_MIME_TYPE),
     ]))
-}
-
-/// The operations on the loaded stream a prompt names, or the refusal — naming
-/// the loaded streams — as invalid params.
-pub(crate) fn the_stream_a_prompt_names(
-    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
-    stream_name: &str,
-) -> Result<Arc<dyn RuntimeOperations>, McpError> {
-    operations_on_the_loaded_streams
-        .runtime_operations_of_the_stream_a_call_names(stream_name)
-        .map_err(|refusal| prompt_stream_refusal(&refusal))
-}
-
-/// A refused stream lookup as a prompt's invalid params; any other failure as
-/// an internal error.
-pub(crate) fn prompt_stream_refusal(refusal: &Error) -> McpError {
-    match refusal {
-        Error::NotFound(_) => McpError::invalid_params(refusal.to_string(), None),
-        other => McpError::internal_error(other.to_string(), None),
-    }
-}
-
-/// One stream's graph export — the document the prompts render against.
-pub(crate) async fn exported_live_graph_json(
-    stream_operations: &Arc<dyn RuntimeOperations>,
-) -> Result<Value, McpError> {
-    stream_operations
-        .to_json_async()
-        .await
-        .map_err(|e| McpError::internal_error(format!("graph export failed: {e}"), None))
 }

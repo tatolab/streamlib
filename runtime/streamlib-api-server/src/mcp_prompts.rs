@@ -10,6 +10,7 @@
 //! a served tool, so the tool set stays the whole of the control vocabulary.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::wrapper::Parameters;
@@ -19,6 +20,7 @@ use rmcp::{prompt, prompt_router};
 use serde::Deserialize;
 use serde_json::json;
 use streamlib::sdk::descriptors::{ProcessorClassImportPath, ProcessorDescriptor};
+use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::iceoryx2::{
     FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE,
@@ -28,11 +30,9 @@ use streamlib::sdk::json_schema::{
     GraphResponse, PortDescriptorOutput, PortInfoOutput, ProcessorDescriptorOutput,
     ProcessorNodeOutput,
 };
+use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
 
 use crate::mcp::LocalApiMcpServerHandler;
-use crate::mcp_resources::{
-    exported_live_graph_json, prompt_stream_refusal, the_stream_a_prompt_names,
-};
 
 /// The import path `VirtualCameraSink` registers under, which the virtual
 /// camera recipe looks up in the catalog. This crate does not link the media
@@ -212,6 +212,36 @@ impl LocalApiMcpServerHandler {
         Ok(recipe_for(&live_graph, &node_catalog)?
             .prompt_result(&stream_name_as_graph_reports_it, description))
     }
+}
+
+/// The operations on the loaded stream a prompt names, or the refusal — naming
+/// the loaded streams — as invalid params.
+fn the_stream_a_prompt_names(
+    operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    stream_name: &str,
+) -> Result<Arc<dyn RuntimeOperations>, McpError> {
+    operations_on_the_loaded_streams
+        .runtime_operations_of_the_stream_a_call_names(stream_name)
+        .map_err(|refusal| prompt_stream_refusal(&refusal))
+}
+
+/// A refused stream lookup as a prompt's invalid params; any other failure as
+/// an internal error.
+fn prompt_stream_refusal(refusal: &Error) -> McpError {
+    match refusal {
+        Error::NotFound(_) => McpError::invalid_params(refusal.to_string(), None),
+        other => McpError::internal_error(other.to_string(), None),
+    }
+}
+
+/// One stream's graph export — the document the prompts render against.
+async fn exported_live_graph_json(
+    stream_operations: &Arc<dyn RuntimeOperations>,
+) -> Result<serde_json::Value, McpError> {
+    stream_operations
+        .to_json_async()
+        .await
+        .map_err(|e| McpError::internal_error(format!("graph export failed: {e}"), None))
 }
 
 /// One numbered step of a recipe: the served tool it calls, whether that tool

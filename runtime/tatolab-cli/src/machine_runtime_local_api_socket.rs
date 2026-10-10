@@ -6,6 +6,7 @@
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use streamlib_runtime_client_contract::machine_runtime_lock::{
     MachineRuntimeLockHolder, holder_of_the_machine_runtime_lock,
@@ -36,17 +37,19 @@ pub(crate) fn local_api_socket_of_the_running_runtime() -> Result<PathBuf, Tatol
     })
 }
 
-/// Call `tool_name` once with `tool_arguments` on the machine's running runtime, answering the
-/// tool's text: a one-shot verb's whole round trip.
+/// Call `tool_name` once with `tool_arguments` on the machine's running runtime, waiting at most
+/// `call_timeout` for its result, and answer the tool's text: a one-shot verb's whole round trip.
 pub(crate) fn call_one_tool_of_the_running_runtime(
     tool_name: &str,
     tool_arguments: serde_json::Map<String, serde_json::Value>,
+    call_timeout: Duration,
 ) -> Result<String, TatolabCommandFailure> {
     let local_api_socket_path = local_api_socket_of_the_running_runtime()?;
     Ok(call_one_local_api_tool(
         &local_api_socket_path,
         tool_name,
         tool_arguments,
+        call_timeout,
     )?)
 }
 

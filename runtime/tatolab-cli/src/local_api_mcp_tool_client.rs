@@ -28,8 +28,8 @@ use crate::local_api_unix_socket_http_client::{
 /// address.
 const LOCAL_API_MCP_URI_AUTHORITY: &str = "localhost";
 
-/// Bounds an observation verb's tool call: `tap` and `logs` fill a bounded sample runtime-side
-/// and can take a moment to.
+/// Bounds an observation verb's tool call, and every one-shot verb's connect: `tap` and `logs`
+/// fill a bounded sample runtime-side and can take a moment to.
 pub(crate) const OBSERVATION_VERB_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What an MCP request to a runtime's local API came back with instead of a result.
@@ -357,17 +357,18 @@ fn first_text_block_of_tool_result(
     }
 }
 
-/// Connect, call `tool_name` once with `tool_arguments`, and close: an observation verb's one
-/// round trip, each failure worded as the verb reports it.
+/// Connect, call `tool_name` once with `tool_arguments` waiting at most `call_timeout` for its
+/// result, and close: a one-shot verb's round trip, each failure worded as the verb reports it.
 pub(crate) fn call_one_local_api_tool(
     local_api_socket_path: &Path,
     tool_name: &str,
     tool_arguments: serde_json::Map<String, serde_json::Value>,
+    call_timeout: Duration,
 ) -> Result<String, LocalApiMcpToolClientFailure> {
     let mut local_api_connection =
         LocalApiConnection::open(local_api_socket_path, OBSERVATION_VERB_TOOL_CALL_TIMEOUT)?;
     local_api_connection
-        .call_tool(tool_name, tool_arguments)
+        .call_tool_bounded_by(tool_name, tool_arguments, call_timeout)
         .map_err(|call_failure| {
             tool_call_failure_worded_as_an_observation_verb_reports_it(tool_name, call_failure)
         })
@@ -431,6 +432,7 @@ mod tests {
                 Path::new(undialable_socket_path),
                 "graph",
                 serde_json::Map::new(),
+                OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
             )
             .unwrap_err();
             assert_eq!(
@@ -569,6 +571,7 @@ mod tests {
             &stub_local_api_server.local_api_socket_path,
             "tap",
             json_object(json!({"channel": "cam/video", "count": 4})),
+            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap();
 
@@ -622,6 +625,7 @@ mod tests {
             &stub_local_api_server.local_api_socket_path,
             "tap",
             json_object(json!({"channel": "nope"})),
+            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap_err();
 
@@ -644,6 +648,7 @@ mod tests {
             &stub_local_api_server.local_api_socket_path,
             "nope",
             serde_json::Map::new(),
+            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap_err();
 
@@ -661,6 +666,7 @@ mod tests {
             Path::new(NOTHING_LISTENS_LOCAL_API_SOCKET_PATH),
             "graph",
             serde_json::Map::new(),
+            OBSERVATION_VERB_TOOL_CALL_TIMEOUT,
         )
         .unwrap_err();
 

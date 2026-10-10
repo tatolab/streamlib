@@ -58,7 +58,7 @@ use rmcp::transport::streamable_http_server::session::never::NeverSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use rmcp::{prompt_handler, tool, tool_handler, tool_router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::{Error, Result as StreamlibResult};
@@ -69,11 +69,14 @@ use streamlib::sdk::graph::{
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     ExchangedPublishedSurfaceFramePngImage, LoadedStreamTag,
-    OperationsOnTheStreamsLoadedInThisRuntime, OutputPortExposureOutcome, RunStreamRequest,
-    RuntimeOperations, StreamListingState, StreamRunOutcome, StreamStopOutcome,
+    OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest, RuntimeOperations,
+    StreamListingState, StreamRunOutcome,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    TapToolResult, TapToolResultBag, surface_image_exchange_route_path_for_surface_id,
+    ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
+    ListedStreamState, LogsToolResult, LogsToolResultRecord, RemoveStreamToolResult,
+    RunStreamToolResult, StartStreamToolResult, StopStreamToolResult, TapToolResult,
+    TapToolResultBag, surface_image_exchange_route_path_for_surface_id,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -624,9 +627,7 @@ impl LocalApiMcpServerHandler {
             bags_withheld_at_byte_budget,
             bags,
         };
-        let tap_tool_result_json = serde_json::to_value(&tap_tool_result)
-            .map_err(|e| format!("tap result serialization failed: {e}"))?;
-        Ok(json_text_tool_result(&tap_tool_result_json))
+        serialized_tool_result("tap", &tap_tool_result)
     }
 
     #[tool(
@@ -647,12 +648,22 @@ impl LocalApiMcpServerHandler {
             .operations_on_the_loaded_streams
             .log_records_of_the_stream_a_call_names(&stream, after.unwrap_or(0), max_count)
             .map_err(|refusal| format!("logs failed: {refusal}"))?;
-        Ok(json_text_tool_result(&json!({
-            "stream": the_cast_name_of_a_stream_a_call_named(&stream),
-            "records": page.records,
-            "next_after": page.next_after,
-            "records_no_longer_held": page.records_no_longer_held,
-        })))
+        serialized_tool_result(
+            "logs",
+            &LogsToolResult {
+                stream: the_cast_name_of_a_stream_a_call_named(&stream),
+                records: page
+                    .records
+                    .into_iter()
+                    .map(|numbered_record| LogsToolResultRecord {
+                        sequence: numbered_record.sequence,
+                        record: numbered_record.record,
+                    })
+                    .collect(),
+                next_after: page.next_after,
+                records_no_longer_held: page.records_no_longer_held,
+            },
+        )
     }
 
     /// The cap defaults to [`EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP`] and is clamped
@@ -822,14 +833,17 @@ impl LocalApiMcpServerHandler {
                 Ok(run)
             })
             .await?;
-        Ok(json_text_tool_result(&json!({
-            "stream": run.stream_name,
-            "kept": keep,
-            "project_directory": run.project_directory,
-            "node_count": run.node_count,
-            "replaced_the_kept_record": run.replaced_the_kept_record,
-            "compile_warnings": run.compile_warnings,
-        })))
+        serialized_tool_result(
+            "run_stream",
+            &RunStreamToolResult {
+                stream: run.stream_name,
+                kept: keep,
+                project_directory: run.project_directory,
+                node_count: run.node_count,
+                replaced_the_kept_record: run.replaced_the_kept_record,
+                compile_warnings: run.compile_warnings,
+            },
+        )
     }
 
     #[tool(
@@ -844,7 +858,15 @@ impl LocalApiMcpServerHandler {
                 operations_on_the_loaded_streams.stop_stream(&stream)
             })
             .await?;
-        Ok(json_text_tool_result(&stop_stream_tool_result(stopped)))
+        serialized_tool_result(
+            "stop_stream",
+            &StopStreamToolResult {
+                stream: stopped.stream_name,
+                stopped: true,
+                kept: stopped.kept,
+                not_recorded_because: stopped.stop_not_recorded_because,
+            },
+        )
     }
 
     #[tool(
@@ -859,10 +881,13 @@ impl LocalApiMcpServerHandler {
                 operations_on_the_loaded_streams.start_stream(&stream)
             })
             .await?;
-        Ok(json_text_tool_result(&json!({
-            "stream": started.stream_name,
-            "node_count": started.node_count,
-        })))
+        serialized_tool_result(
+            "start_stream",
+            &StartStreamToolResult {
+                stream: started.stream_name,
+                node_count: started.node_count,
+            },
+        )
     }
 
     #[tool(
@@ -877,11 +902,14 @@ impl LocalApiMcpServerHandler {
                 operations_on_the_loaded_streams.remove_stream(&stream)
             })
             .await?;
-        Ok(json_text_tool_result(&json!({
-            "stream": removed.stream_name,
-            "unloaded": removed.unloaded,
-            "forgotten": removed.forgotten,
-        })))
+        serialized_tool_result(
+            "remove_stream",
+            &RemoveStreamToolResult {
+                stream: removed.stream_name,
+                unloaded: removed.unloaded,
+                forgotten: removed.forgotten,
+            },
+        )
     }
 
     #[tool(
@@ -896,22 +924,20 @@ impl LocalApiMcpServerHandler {
                 Ok(operations_on_the_loaded_streams.list_streams())
             })
             .await?;
-        let streams: Vec<Value> = listings
-            .into_iter()
-            .map(|listing| {
-                json!({
-                    "name": listing.name,
-                    "state": match listing.state {
-                        StreamListingState::Attached => "attached",
-                        StreamListingState::Kept => "kept",
-                        StreamListingState::Stopped => "stopped",
-                    },
-                    "project_directory": listing.project_directory,
-                    "node_count": listing.node_count,
-                })
-            })
-            .collect();
-        Ok(json_text_tool_result(&json!({ "streams": streams })))
+        serialized_tool_result(
+            "list_streams",
+            &ListStreamsToolResult {
+                streams: listings
+                    .into_iter()
+                    .map(|listing| ListStreamsToolResultStream {
+                        name: listing.name,
+                        state: listed_stream_state_on_the_wire(listing.state),
+                        project_directory: listing.project_directory,
+                        node_count: listing.node_count,
+                    })
+                    .collect(),
+            },
+        )
     }
 
     #[tool(
@@ -931,7 +957,33 @@ impl LocalApiMcpServerHandler {
                 operations_on_the_loaded_streams.expose_port(&stream, &node, &port, level.into())
             })
             .await?;
-        Ok(json_text_tool_result(&expose_port_tool_result(exposed)))
+        serialized_tool_result(
+            "expose_port",
+            &ExposePortToolResult {
+                stream: exposed.stream_name,
+                node: exposed.node,
+                port: exposed.port,
+                level: expose_port_level_on_the_wire(exposed.level),
+                recorded: exposed.recorded,
+                not_recorded_because: exposed.ruling_not_recorded_because,
+            },
+        )
+    }
+}
+
+fn listed_stream_state_on_the_wire(state: StreamListingState) -> ListedStreamState {
+    match state {
+        StreamListingState::Attached => ListedStreamState::Attached,
+        StreamListingState::Kept => ListedStreamState::Kept,
+        StreamListingState::Stopped => ListedStreamState::Stopped,
+    }
+}
+
+fn expose_port_level_on_the_wire(level: OutputPortExposureLevel) -> ExposePortLevel {
+    match level {
+        OutputPortExposureLevel::Internal => ExposePortLevel::Internal,
+        OutputPortExposureLevel::Private => ExposePortLevel::Private,
+        OutputPortExposureLevel::Public => ExposePortLevel::Public,
     }
 }
 
@@ -1044,34 +1096,11 @@ async fn how_the_graph_reads_one_link(
 // Result content
 // ============================================================================
 
-/// `stop_stream`'s result: `not_recorded_because` is present only when a kept
-/// stream unloaded but could not be recorded stopped.
-fn stop_stream_tool_result(stopped: StreamStopOutcome) -> Value {
-    let mut stop_stream_result = json!({
-        "stream": stopped.stream_name,
-        "stopped": true,
-        "kept": stopped.kept,
-    });
-    if let Some(not_recorded_because) = stopped.stop_not_recorded_because {
-        stop_stream_result["not_recorded_because"] = Value::String(not_recorded_because);
-    }
-    stop_stream_result
-}
-
-/// `expose_port`'s result: `not_recorded_because` is present only when a kept
-/// stream's level changed live but could not be recorded as the owner's ruling.
-fn expose_port_tool_result(exposed: OutputPortExposureOutcome) -> Value {
-    let mut expose_port_result = json!({
-        "stream": exposed.stream_name,
-        "node": exposed.node,
-        "port": exposed.port,
-        "level": exposed.level,
-        "recorded": exposed.recorded,
-    });
-    if let Some(not_recorded_because) = exposed.ruling_not_recorded_because {
-        expose_port_result["not_recorded_because"] = Value::String(not_recorded_because);
-    }
-    expose_port_result
+/// `tool_result` as `tool_name`'s successful result.
+fn serialized_tool_result(tool_name: &str, tool_result: &impl Serialize) -> ToolCallAnswer {
+    let tool_result_json = serde_json::to_value(tool_result)
+        .map_err(|e| format!("{tool_name} result serialization failed: {e}"))?;
+    Ok(json_text_tool_result(&tool_result_json))
 }
 
 /// A successful tool result: the value as one pretty-JSON text block, the form
@@ -4060,63 +4089,30 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn stop_stream_carries_not_recorded_because_only_when_the_stop_was_not_recorded() {
-        let recorded = stop_stream_tool_result(StreamStopOutcome {
-            stream_name: "camera".to_string(),
-            kept: true,
-            stop_not_recorded_because: None,
-        });
-        assert_eq!(
-            recorded,
-            json!({ "stream": "camera", "stopped": true, "kept": true })
-        );
-
-        let not_recorded = stop_stream_tool_result(StreamStopOutcome {
-            stream_name: "camera".to_string(),
-            kept: true,
-            stop_not_recorded_because: Some(
-                "the record /state/streams/camera.json cannot be read".to_string(),
-            ),
-        });
-        assert_eq!(
-            not_recorded,
-            json!({
-                "stream": "camera",
-                "stopped": true,
-                "kept": true,
-                "not_recorded_because": "the record /state/streams/camera.json cannot be read",
-            })
-        );
+    fn each_exposure_level_reaches_the_wire_as_the_engine_spells_it() {
+        for engine_level in [
+            OutputPortExposureLevel::Internal,
+            OutputPortExposureLevel::Private,
+            OutputPortExposureLevel::Public,
+        ] {
+            assert_eq!(
+                serde_json::to_value(expose_port_level_on_the_wire(engine_level)).unwrap(),
+                serde_json::to_value(engine_level).unwrap()
+            );
+        }
     }
 
     #[test]
-    fn expose_port_carries_not_recorded_because_only_when_the_ruling_was_not_recorded() {
-        let exposure_outcome =
-            |ruling_not_recorded_because: Option<&str>| OutputPortExposureOutcome {
-                stream_name: "camera".to_string(),
-                node: "source".to_string(),
-                port: "video".to_string(),
-                level: OutputPortExposureLevel::Public,
-                recorded: ruling_not_recorded_because.is_none(),
-                ruling_not_recorded_because: ruling_not_recorded_because.map(str::to_string),
-            };
-
-        assert_eq!(
-            expose_port_tool_result(exposure_outcome(None)),
-            json!({ "stream": "camera", "node": "source", "port": "video", "level": "public", "recorded": true })
-        );
-        assert_eq!(
-            expose_port_tool_result(exposure_outcome(Some(
-                "the record /state/streams/camera.json cannot be written"
-            ))),
-            json!({
-                "stream": "camera",
-                "node": "source",
-                "port": "video",
-                "level": "public",
-                "recorded": false,
-                "not_recorded_because": "the record /state/streams/camera.json cannot be written",
-            })
-        );
+    fn each_listing_state_reaches_the_wire_under_its_own_name() {
+        for (engine_state, wire_spelling) in [
+            (StreamListingState::Attached, "attached"),
+            (StreamListingState::Kept, "kept"),
+            (StreamListingState::Stopped, "stopped"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(listed_stream_state_on_the_wire(engine_state)).unwrap(),
+                json!(wire_spelling)
+            );
+        }
     }
 }

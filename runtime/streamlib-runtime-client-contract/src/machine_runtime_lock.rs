@@ -677,19 +677,21 @@ mod lock_location_trust_check {
         }
     }
 
-    /// The lock's directory must be a real directory the expected owner owns,
-    /// which no group or other can write into.
-    pub(super) fn refuse_a_lock_directory_that_cannot_be_trusted(
+    /// Refuse a lock path that is not of `expected_kind`, or that `expected_owner_uid` does not
+    /// own.
+    fn refuse_unless_kind_and_owner(
         path: &Path,
         metadata: LockPathMetadata,
+        expected_kind: LockPathEntryKind,
+        required_kind_text: &str,
         expected_owner_uid: u32,
     ) -> Result<(), MachineRuntimeLockRefusal> {
-        if metadata.kind != LockPathEntryKind::Directory {
+        if metadata.kind != expected_kind {
             return Err(cannot_be_trusted(
                 path,
                 "type",
                 metadata.kind.described().to_string(),
-                "a real directory, not a symlink".to_string(),
+                required_kind_text.to_string(),
             ));
         }
         if metadata.owner_uid != expected_owner_uid {
@@ -700,6 +702,23 @@ mod lock_location_trust_check {
                 described_uid(expected_owner_uid),
             ));
         }
+        Ok(())
+    }
+
+    /// The lock's directory must be a real directory the expected owner owns,
+    /// which no group or other can write into.
+    pub(super) fn refuse_a_lock_directory_that_cannot_be_trusted(
+        path: &Path,
+        metadata: LockPathMetadata,
+        expected_owner_uid: u32,
+    ) -> Result<(), MachineRuntimeLockRefusal> {
+        refuse_unless_kind_and_owner(
+            path,
+            metadata,
+            LockPathEntryKind::Directory,
+            "a real directory, not a symlink",
+            expected_owner_uid,
+        )?;
         if metadata.mode & GROUP_AND_OTHER_WRITE_BITS != 0 {
             return Err(cannot_be_trusted(
                 path,
@@ -717,22 +736,13 @@ mod lock_location_trust_check {
         metadata: LockPathMetadata,
         expected_owner_uid: u32,
     ) -> Result<(), MachineRuntimeLockRefusal> {
-        if metadata.kind != LockPathEntryKind::RegularFile {
-            return Err(cannot_be_trusted(
-                path,
-                "type",
-                metadata.kind.described().to_string(),
-                "a regular file, not a symlink".to_string(),
-            ));
-        }
-        if metadata.owner_uid != expected_owner_uid {
-            return Err(cannot_be_trusted(
-                path,
-                "owner",
-                described_uid(metadata.owner_uid),
-                described_uid(expected_owner_uid),
-            ));
-        }
+        refuse_unless_kind_and_owner(
+            path,
+            metadata,
+            LockPathEntryKind::RegularFile,
+            "a regular file, not a symlink",
+            expected_owner_uid,
+        )?;
         if metadata.mode != MACHINE_RUNTIME_LOCK_FILE_MODE {
             return Err(cannot_be_trusted(
                 path,
@@ -2086,6 +2096,9 @@ mod tests {
                         .unwrap_err()
                         .to_string(),
                     TatolabStateDirectory::resolve().unwrap_err().to_string(),
+                    TatolabStateDirectory::resolve_for_a_reader_without_creating()
+                        .unwrap_err()
+                        .to_string(),
                     MachineRuntimeLock::take().unwrap_err().to_string(),
                     holder_of_the_machine_runtime_lock()
                         .unwrap_err()
