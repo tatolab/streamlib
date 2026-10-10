@@ -76,7 +76,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         ));
     }
     engine.count_the_previous_runtime_runs_end_against_the_kept_streams(how_the_previous_run_ended);
-    runtime_run_in_progress_record.the_previous_runs_end_is_counted();
+    runtime_run_in_progress_record.mark_the_previous_runs_end_counted();
 
     let mut streams_loaded_at_or_after_the_machine_shutdown_request = Vec::new();
     let mut local_api_served_for_the_engine = None;
@@ -132,8 +132,6 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     );
     let exit_status =
         exit_status_once_the_engine_is_torn_down(&run_outcome, &engine_teardown_outcome);
-    // A stream teardown its watchdog abandoned as the runtime stopped is a
-    // clean stop too: the watchdog never records a stream failed.
     runtime_run_in_progress_record.end_this_run_cleanly();
     for refusal in
         refusals_written_once_the_engine_is_torn_down(run_outcome, &engine_teardown_outcome)

@@ -250,7 +250,7 @@ impl LoadedStreamLogRoute {
             .ok()
             .flatten();
         let stream_worked_for_before =
-            mark_this_thread_as_working_for(&self.stream_a_thread_carrying_it_works_for);
+            mark_this_thread_as_working_for(self.stream_a_thread_carrying_it_works_for);
         LoadedStreamLogRouteEnteredOnThisThread {
             route_carried_before,
             stream_worked_for_before,
@@ -447,13 +447,12 @@ impl Drop for LoadedStreamLogRoute {
 /// route the thread carried before.
 pub struct LoadedStreamLogRouteEnteredOnThisThread {
     route_carried_before: Option<Arc<LoadedStreamLogRoute>>,
-    stream_worked_for_before: *const StreamThisThreadWorksFor,
+    stream_worked_for_before: StreamThisThreadWorksFor,
     entered_on_this_thread_only: PhantomData<*const ()>,
 }
 
 impl Drop for LoadedStreamLogRouteEnteredOnThisThread {
     fn drop(&mut self) {
-        // First, while the route it points into is still carried.
         mark_this_thread_as_working_for(self.stream_worked_for_before);
         let route_carried_before = self.route_carried_before.take();
         let _ = LOADED_STREAM_LOG_ROUTE_OF_THIS_THREAD

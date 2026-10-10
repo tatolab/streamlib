@@ -91,17 +91,30 @@ impl StreamThisThreadWorksFor {
     }
 }
 
-/// The key whose per-thread value points at the stream the thread works for.
+/// The key whose per-thread value is the thread's own slot holding the stream
+/// it works for, allocated at the thread's first mark and freed at its exit.
 /// A key, not a thread-local: a handler reading a thread-local on a thread
 /// that never touched it allocates on Apple's floors, and a key's read never
 /// does.
 static STREAM_THIS_THREAD_WORKS_FOR_KEY: OnceLock<Option<libc::pthread_key_t>> = OnceLock::new();
 
+/// One thread's slot, as its key's value points at it.
+type StreamSlotOfOneThread = Cell<StreamThisThreadWorksFor>;
+
+extern "C" fn free_the_stream_slot_of_an_exiting_thread(stream_slot: *mut libc::c_void) {
+    // SAFETY: the key's only values are boxes `this_threads_stream_slot`
+    // leaked, and the key's value is cleared before this runs.
+    drop(unsafe { Box::from_raw(stream_slot.cast::<StreamSlotOfOneThread>()) });
+}
+
 fn the_stream_this_thread_works_for_key() -> Option<libc::pthread_key_t> {
     *STREAM_THIS_THREAD_WORKS_FOR_KEY.get_or_init(|| {
         let mut key: libc::pthread_key_t = 0;
-        // SAFETY: `key` is a valid out-parameter, and no destructor is named.
-        match unsafe { libc::pthread_key_create(&mut key, None) } {
+        // SAFETY: `key` is a valid out-parameter, and the destructor frees
+        // the boxes the key's values are.
+        match unsafe {
+            libc::pthread_key_create(&mut key, Some(free_the_stream_slot_of_an_exiting_thread))
+        } {
             0 => Some(key),
             _ => {
                 tracing::warn!(
@@ -115,22 +128,26 @@ fn the_stream_this_thread_works_for_key() -> Option<libc::pthread_key_t> {
     })
 }
 
-/// Mark the calling thread as working for the stream `stream` points at —
-/// null for none — until it is marked again, returning what it carried
-/// before. `stream` must outlive its mark.
+/// Mark the calling thread as working for `stream` until it is marked again,
+/// returning what it worked for before.
 pub(crate) fn mark_this_thread_as_working_for(
-    stream: *const StreamThisThreadWorksFor,
-) -> *const StreamThisThreadWorksFor {
+    stream: StreamThisThreadWorksFor,
+) -> StreamThisThreadWorksFor {
     let Some(key) = the_stream_this_thread_works_for_key() else {
-        return std::ptr::null();
+        return StreamThisThreadWorksFor::NONE;
     };
-    // SAFETY: the key was made by `pthread_key_create`; the value is only
-    // read back as a pointer to a `StreamThisThreadWorksFor` that outlives
-    // its mark.
+    // SAFETY: the key's values are boxes this thread leaked into it, freed
+    // only by the key's destructor at the thread's exit.
     unsafe {
-        let carried_before = libc::pthread_getspecific(key) as *const StreamThisThreadWorksFor;
-        libc::pthread_setspecific(key, stream.cast());
-        carried_before
+        let mut stream_slot = libc::pthread_getspecific(key).cast::<StreamSlotOfOneThread>();
+        if stream_slot.is_null() {
+            stream_slot = Box::into_raw(Box::new(Cell::new(StreamThisThreadWorksFor::NONE)));
+            if libc::pthread_setspecific(key, stream_slot.cast()) != 0 {
+                drop(Box::from_raw(stream_slot));
+                return StreamThisThreadWorksFor::NONE;
+            }
+        }
+        (*stream_slot).replace(stream)
     }
 }
 
@@ -139,13 +156,12 @@ fn the_stream_this_thread_works_for() -> StreamThisThreadWorksFor {
     let Some(Some(key)) = STREAM_THIS_THREAD_WORKS_FOR_KEY.get() else {
         return StreamThisThreadWorksFor::NONE;
     };
-    // SAFETY: a non-null value is a pointer the thread marked, live while
-    // marked.
+    // SAFETY: a non-null value is this thread's own slot, live until its exit.
     unsafe {
-        (libc::pthread_getspecific(*key) as *const StreamThisThreadWorksFor)
+        libc::pthread_getspecific(*key)
+            .cast::<StreamSlotOfOneThread>()
             .as_ref()
-            .copied()
-            .unwrap_or(StreamThisThreadWorksFor::NONE)
+            .map_or(StreamThisThreadWorksFor::NONE, Cell::get)
     }
 }
 
@@ -170,6 +186,7 @@ static LATEST_PANICS: parking_lot::Mutex<VecDeque<PanicOfAThread>> =
 /// One panic as the hook saw it.
 #[derive(Debug, Clone)]
 struct PanicOfAThread {
+    thread: std::thread::ThreadId,
     stream: StreamThisThreadWorksFor,
     what_it_said: String,
     location: String,
@@ -309,7 +326,7 @@ impl RuntimeRunInProgressRecord {
 
     /// Say the previous run's end is counted against the kept streams, so
     /// this run's end no longer puts it back.
-    pub fn the_previous_runs_end_is_counted(&mut self) {
+    pub fn mark_the_previous_runs_end_counted(&mut self) {
         self.previous_runs_record_until_it_is_counted = None;
     }
 
@@ -408,17 +425,27 @@ pub(crate) fn pin_the_runtimes_crash_on_no_stream(cause: &str) {
 
 /// Pin the runtime's crash on the stream whose thread raised the panic that
 /// escaped the main thread with `escaped_panic_payload` — the latest panic
-/// the hook saw that said the same — or on no stream when the hook saw none.
+/// the hook saw that said the same, on the calling thread first, then on any
+/// thread for a panic resumed from another — or on no stream when the hook
+/// saw none.
 pub fn pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread(
     escaped_panic_payload: &(dyn std::any::Any + Send),
 ) {
     let what_it_said = what_a_panic_said(escaped_panic_payload);
-    let the_hooks_panic = LATEST_PANICS
-        .lock()
-        .iter()
-        .rev()
-        .find(|panic| panic.what_it_said == what_it_said)
-        .cloned();
+    let this_thread = std::thread::current().id();
+    let the_hooks_panic = {
+        let latest_panics = LATEST_PANICS.lock();
+        let saying_the_same = || {
+            latest_panics
+                .iter()
+                .rev()
+                .filter(|panic| panic.what_it_said == what_it_said)
+        };
+        saying_the_same()
+            .find(|panic| panic.thread == this_thread)
+            .or_else(|| saying_the_same().next())
+            .cloned()
+    };
     let (stream, location) = the_hooks_panic
         .map_or((StreamThisThreadWorksFor::NONE, String::new()), |panic| {
             (panic.stream, panic.location)
@@ -647,6 +674,7 @@ fn install_the_panic_hook() {
         let _ = STREAM_THIS_THREAD_WORKED_FOR_AT_ITS_LAST_PANIC
             .try_with(|at_the_last_panic| at_the_last_panic.set(stream));
         let panic_of_this_thread = PanicOfAThread {
+            thread: std::thread::current().id(),
             stream,
             what_it_said: what_a_panic_said(panic_information.payload()).to_string(),
             location: panic_information
@@ -897,7 +925,7 @@ mod tests {
                     causes_on_threads_no_stream_owns: Vec::new(),
                 })
             );
-            third_run.the_previous_runs_end_is_counted();
+            third_run.mark_the_previous_runs_end_counted();
             end_the_run_in_progress_record_as_the_owner_ends_the_process();
             assert!(!record_path.exists());
             end_as_the_process_does_on_a_crash(third_run);
@@ -961,7 +989,7 @@ mod tests {
                 )])),
                 "the refused start did not put the crash back"
             );
-            counted_start.the_previous_runs_end_is_counted();
+            counted_start.mark_the_previous_runs_end_counted();
             drop(counted_start);
             assert!(!record_path.exists());
             std::process::exit(0);

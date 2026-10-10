@@ -272,6 +272,11 @@ mod tests {
         if let Some(record_path) = std::env::var_os(WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE)
         {
             log_straight_to_standard_error();
+            let (_this_run_until_the_process_ends, _) =
+                crate::core::runtime::RuntimeRunInProgressRecord::begin_this_run_reading_the_previous(
+                    &the_run_in_progress_record_beside(Path::new(&record_path)),
+                )
+                .expect("the run's record begins");
             let stand_in_helper =
                 crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
             std::fs::write(&record_path, stand_in_helper.id().to_string())
@@ -327,6 +332,21 @@ mod tests {
                 Duration::from_secs(5)
             ),
             "a helper's process group outlived the watchdog's exit"
+        );
+        let run_in_progress_record =
+            std::fs::read_to_string(the_run_in_progress_record_beside(&record_path))
+                .expect("the run's record is left behind");
+        assert!(
+            run_in_progress_record.starts_with(
+                "\texit 124: the test's teardown outlived its watchdog, waiting on the processor \
+                 thread of HungProbe"
+            ),
+            "the watchdog's end was not pinned on no stream: {run_in_progress_record:?}"
+        );
+        assert_eq!(
+            run_in_progress_record.lines().count(),
+            1,
+            "{run_in_progress_record:?}"
         );
     }
 
