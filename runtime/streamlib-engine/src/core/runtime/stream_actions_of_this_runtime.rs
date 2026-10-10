@@ -307,25 +307,60 @@ impl Runner {
     }
 
     /// Unload the stream `stream_name` names; a kept one is recorded stopped
-    /// first, so a restart leaves it unloaded. Refused naming the streams the
-    /// runtime holds when it holds none of that name, and for a kept stream
-    /// already stopped.
+    /// first, so a restart leaves it unloaded. A loaded stream is unloaded
+    /// even when its record cannot be read or written, and the failure is
+    /// reported after the unload. Refused naming the streams the runtime holds
+    /// when it holds none of that name, and for a kept stream already stopped.
     pub fn stop_stream(&self, stream_name: &str) -> Result<StreamStopOutcome> {
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let stream_cast = self.the_cast_name_of_a_stream_an_action_names(stream_name)?;
         let loaded = self.loaded_stream_of_the_cast_name(&stream_cast);
-        let kept_record = self.kept_record_of_the_cast_name(&stream_cast)?;
+        if let Some(attached) = loaded
+            .as_ref()
+            .filter(|loaded| loaded.holding() == LoadedStreamHolding::Attached)
+        {
+            unload_a_stream_an_action_took_back(attached, "its owner stopped it");
+            return Ok(StreamStopOutcome {
+                stream_name: stream_cast,
+                kept: false,
+            });
+        }
+        let kept_record = match self.kept_record_of_the_cast_name(&stream_cast) {
+            Ok(kept_record) => kept_record,
+            Err(unreadable) => {
+                let Some(loaded) = loaded else {
+                    return Err(unreadable);
+                };
+                unload_a_stream_an_action_took_back(&loaded, "its owner stopped it");
+                return Err(Error::Runtime(format!(
+                    "the kept stream `{stream_cast}` was unloaded, and is not recorded stopped: \
+                     {unreadable}"
+                )));
+            }
+        };
         match (loaded, kept_record) {
             (None, None) => Err(self.a_stream_this_runtime_does_not_hold(stream_name)),
             (None, Some(kept_record)) if kept_record.stopped => Err(Error::Runtime(format!(
                 "the kept stream `{stream_cast}` is already stopped; `start` loads it again"
             ))),
-            (loaded, Some(mut kept_record)) => {
+            (None, Some(mut kept_record)) => {
                 kept_record.stopped = true;
                 self.write_a_kept_record(&kept_record)?;
-                if let Some(loaded) = loaded {
-                    unload_a_stream_an_action_took_back(&loaded, "its owner stopped it");
-                }
+                Ok(StreamStopOutcome {
+                    stream_name: stream_cast,
+                    kept: true,
+                })
+            }
+            (Some(loaded), Some(mut kept_record)) => {
+                kept_record.stopped = true;
+                let recorded_stopped = self.write_a_kept_record(&kept_record);
+                unload_a_stream_an_action_took_back(&loaded, "its owner stopped it");
+                recorded_stopped.map_err(|not_written| {
+                    Error::Runtime(format!(
+                        "the kept stream `{stream_cast}` was unloaded, and is not recorded \
+                         stopped, so a restart of this runtime loads it again: {not_written}"
+                    ))
+                })?;
                 Ok(StreamStopOutcome {
                     stream_name: stream_cast,
                     kept: true,
@@ -357,7 +392,14 @@ impl Runner {
                 }
             )));
         }
-        let Some(mut kept_record) = self.kept_record_of_the_cast_name(&stream_cast)? else {
+        let kept_record =
+            self.kept_record_of_the_cast_name(&stream_cast)
+                .map_err(|unreadable| {
+                    Error::Runtime(format!(
+                        "the kept stream `{stream_cast}` was not started: {unreadable}"
+                    ))
+                })?;
+        let Some(mut kept_record) = kept_record else {
             return Err(Error::NotFound(format!(
                 "no kept stream named `{stream_name}` is in this runtime, so there is none to \
                  start; an attached stream is loaded again with `run`. Kept: {}",
@@ -455,7 +497,9 @@ impl Runner {
     /// reader from outside the stream the level no longer allows, and
     /// recorded as the owner's ruling on a kept stream — only once the live
     /// change succeeded, and on a stopped stream once the recorded graph
-    /// holds the node. An attached stream's level is never recorded.
+    /// holds the node. An attached stream's level is never recorded. A loaded
+    /// kept stream whose record cannot be read or written keeps the live
+    /// change, and the failure to record it is reported.
     pub fn expose_port(
         &self,
         stream_name: &str,
@@ -465,26 +509,36 @@ impl Runner {
     ) -> Result<OutputPortExposureOutcome> {
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let stream_cast = self.the_cast_name_of_a_stream_an_action_names(stream_name)?;
-        let loaded = self.loaded_stream_of_the_cast_name(&stream_cast);
-        let kept_record = self.kept_record_of_the_cast_name(&stream_cast)?;
-        match (&loaded, &kept_record) {
-            (None, None) => return Err(self.a_stream_this_runtime_does_not_hold(stream_name)),
-            (Some(loaded), _) => loaded.set_output_port_exposure_level(node, port, level)?,
-            (None, Some(kept_record)) => {
-                refuse_a_node_the_recorded_graph_does_not_hold(kept_record, node)?
+        let ruling = OwnerExposureRuling {
+            node: node.to_string(),
+            port: port.to_string(),
+            level,
+        };
+        let recorded = match self.loaded_stream_of_the_cast_name(&stream_cast) {
+            Some(loaded) => {
+                loaded.set_output_port_exposure_level(node, port, level)?;
+                match loaded.holding() {
+                    LoadedStreamHolding::Attached => false,
+                    LoadedStreamHolding::Kept => self
+                        .record_the_owners_ruling_on_a_kept_record(&stream_cast, ruling)
+                        .map_err(|not_recorded| {
+                            Error::Runtime(format!(
+                                "the port `{node}/{port}` of the kept stream `{stream_cast}` is \
+                                 {level} now, live, and the owner's ruling was not recorded: \
+                                 {not_recorded}"
+                            ))
+                        })?,
+                }
             }
-        }
-        let recorded = match kept_record {
-            Some(mut kept_record) => {
-                kept_record.record_the_owners_exposure_ruling(OwnerExposureRuling {
-                    node: node.to_string(),
-                    port: port.to_string(),
-                    level,
-                });
+            None => {
+                let Some(mut kept_record) = self.kept_record_of_the_cast_name(&stream_cast)? else {
+                    return Err(self.a_stream_this_runtime_does_not_hold(stream_name));
+                };
+                refuse_a_node_the_recorded_graph_does_not_hold(&kept_record, node)?;
+                kept_record.record_the_owners_exposure_ruling(ruling);
                 self.write_a_kept_record(&kept_record)?;
                 true
             }
-            None => false,
         };
         Ok(OutputPortExposureOutcome {
             stream_name: stream_cast,
@@ -590,6 +644,21 @@ impl Runner {
             Some(kept_stream_records) => kept_stream_records.read(stream_cast),
             None => Ok(None),
         }
+    }
+
+    /// Record `ruling` on the kept record of `stream_cast`; `false` when the
+    /// stream has no record.
+    fn record_the_owners_ruling_on_a_kept_record(
+        &self,
+        stream_cast: &str,
+        ruling: OwnerExposureRuling,
+    ) -> Result<bool> {
+        let Some(mut kept_record) = self.kept_record_of_the_cast_name(stream_cast)? else {
+            return Ok(false);
+        };
+        kept_record.record_the_owners_exposure_ruling(ruling);
+        self.write_a_kept_record(&kept_record)?;
+        Ok(true)
     }
 
     fn write_a_kept_record(&self, kept_record: &KeptStreamRecord) -> Result<()> {
@@ -1244,6 +1313,183 @@ mod tests {
                 .unwrap()
                 .stopped
         );
+    }
+
+    /// Overwrite the record of `stream_name` in `kept_streams_directory` with
+    /// a file of each unreadable kind in turn — not JSON, then a record of
+    /// another schema version — handing each one's bytes to `observe`.
+    fn for_each_unreadable_record_of(
+        kept_streams_directory: &Path,
+        stream_name: &str,
+        mut observe: impl FnMut(&Path, &[u8]),
+    ) {
+        let record_path = records_in(kept_streams_directory)
+            .record_path_of(stream_name)
+            .unwrap();
+        let mut later_schema = serde_json::to_value(
+            records_in(kept_streams_directory)
+                .read(stream_name)
+                .unwrap()
+                .expect("a readable record to make unreadable"),
+        )
+        .unwrap();
+        later_schema["schema_version"] = serde_json::json!(2);
+        for unreadable_bytes in [
+            b"{ not json".to_vec(),
+            serde_json::to_vec(&later_schema).unwrap(),
+        ] {
+            std::fs::write(&record_path, &unreadable_bytes).unwrap();
+            observe(&record_path, &unreadable_bytes);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn stopping_a_loaded_kept_stream_whose_record_is_unreadable_unloads_it_naming_the_record() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let record = a_kept_record_of(&project, "camera", serde_json::json!([]));
+        records_in(state_directory.path()).write(&record).unwrap();
+
+        for_each_unreadable_record_of(
+            state_directory.path(),
+            "camera",
+            |record_path, unreadable_bytes| {
+                let running = runner
+                    .load_a_stream_with_the_owners_rulings(
+                        "camera",
+                        &record.graph,
+                        &[],
+                        record.stream_environment(),
+                        LoadedStreamHolding::Kept,
+                    )
+                    .expect("the kept stream loads");
+
+                let refusal = refusal_of(runner.stop_stream("camera"));
+
+                assert!(
+                    refusal.contains(&record_path.display().to_string()),
+                    "{refusal}"
+                );
+                assert!(refusal.contains("unloaded"), "{refusal}");
+                assert!(running.has_ended());
+                assert!(runner.names_of_the_loaded_streams().is_empty());
+                assert_eq!(
+                    std::fs::read(record_path).unwrap(),
+                    unreadable_bytes,
+                    "the unreadable record is left as it was"
+                );
+
+                let refusal = refusal_of(runner.stop_stream("camera"));
+                assert!(
+                    refusal.contains(&record_path.display().to_string()),
+                    "with nothing loaded, the refusal names the record: {refusal}"
+                );
+            },
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn stopping_a_loaded_kept_stream_whose_record_cannot_be_written_still_unloads_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let state_directory = tempfile::tempdir().unwrap();
+        let kept_streams_directory = state_directory.path().join("streams");
+        let runner = a_runner_keeping_its_streams_in(Some(&kept_streams_directory));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let running = a_kept_stream_loaded_without_its_start(
+            &runner,
+            &kept_streams_directory,
+            &a_kept_record_of(&project, "camera", serde_json::json!([])),
+        );
+        std::fs::set_permissions(
+            &kept_streams_directory,
+            std::fs::Permissions::from_mode(0o500),
+        )
+        .unwrap();
+
+        let refusal = refusal_of(runner.stop_stream("camera"));
+
+        std::fs::set_permissions(
+            &kept_streams_directory,
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        assert!(refusal.contains("unloaded"), "{refusal}");
+        assert!(refusal.contains("not recorded stopped"), "{refusal}");
+        assert!(running.has_ended());
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert!(
+            !records_in(&kept_streams_directory)
+                .read("camera")
+                .unwrap()
+                .unwrap()
+                .stopped
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn exposing_a_port_of_a_loaded_kept_stream_whose_record_is_unreadable_changes_it_live() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let kept = a_kept_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &a_kept_record_of(&project, "camera", serde_json::json!([])),
+        );
+
+        let mut levels = [
+            OutputPortExposureLevel::Private,
+            OutputPortExposureLevel::Public,
+        ]
+        .into_iter();
+        for_each_unreadable_record_of(
+            state_directory.path(),
+            "camera",
+            |record_path, unreadable_bytes| {
+                let level = levels.next().unwrap();
+
+                let refusal = refusal_of(runner.expose_port("camera", "source", "out1", level));
+
+                assert!(
+                    refusal.contains(&record_path.display().to_string()),
+                    "{refusal}"
+                );
+                assert!(refusal.contains("not recorded"), "{refusal}");
+                assert_eq!(
+                    the_exposures_graph_renders_for(&kept),
+                    serde_json::json!([{"node": "source", "port": "out1", "level": level}]),
+                    "the level changed live"
+                );
+                assert_eq!(std::fs::read(record_path).unwrap(), unreadable_bytes);
+            },
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn starting_a_kept_stream_whose_record_is_unreadable_is_refused_naming_the_record() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let mut stopped = a_kept_record_of(&project, "camera", serde_json::json!([]));
+        stopped.stopped = true;
+        records_in(state_directory.path()).write(&stopped).unwrap();
+
+        for_each_unreadable_record_of(state_directory.path(), "camera", |record_path, _| {
+            let refusal = refusal_of(runner.start_stream("camera"));
+
+            assert!(refusal.contains("`camera`"), "{refusal}");
+            assert!(refusal.contains("not started"), "{refusal}");
+            assert!(
+                refusal.contains(&record_path.display().to_string()),
+                "{refusal}"
+            );
+            assert!(runner.names_of_the_loaded_streams().is_empty());
+        });
     }
 
     #[test]
