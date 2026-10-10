@@ -22,6 +22,7 @@ mod runtime_shutdown_request;
 mod runtime_unique_id;
 mod stated_configuration_value;
 mod status;
+mod stream_actions_of_this_runtime;
 mod stream_environment;
 mod surface_image_exchange;
 mod tap;
@@ -78,6 +79,11 @@ pub use crate::core::compiler::compiler_ops::stream_function_compile_in_the_proj
     PROJECT_STREAM_COMPILE_ENTRY_MODULE, STREAM_FUNCTION_COMPILE_BOUND,
     StreamFunctionCompiledInTheProjectsInterpreter,
     compile_the_stream_function_in_the_projects_interpreter, the_projects_venv_interpreter,
+};
+pub use stream_actions_of_this_runtime::{
+    LoadedStreamHolding, OutputPortExposureOutcome, RunStreamRequest, StreamListing,
+    StreamListingState, StreamRemoveOutcome, StreamRunOutcome, StreamStartOutcome,
+    StreamStopOutcome,
 };
 pub use stream_environment::StreamEnvironment;
 pub use surface_image_exchange::ExchangedPublishedSurfaceFramePngImage;

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use super::graph_change_listener::GraphChangeListener;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::EngineResourcesSharedByEveryStream;
+use super::stream_actions_of_this_runtime::LoadedStreamHolding;
 use super::{
     ArmedTeardownWatchdogOfOneStream, RuntimeOperations, RuntimeStatus,
     ShutdownEscalationOfOneStream, StreamEnvironment, TeardownProgressNoteOfOneStream,
@@ -117,6 +118,9 @@ pub struct LoadedStreamInThisRuntime {
     the_end_of_this_stream: Arc<TheEndOfOneLoadedStream>,
     /// This stream, for the shutdown thread a `&self` request starts.
     this_stream: Weak<Self>,
+    /// Whether the runtime keeps this stream or it lives as long as what
+    /// loaded it.
+    holding: Mutex<LoadedStreamHolding>,
 }
 
 /// How a loaded stream ended, and the wait for it. Held apart from the stream
@@ -229,6 +233,7 @@ impl LoadedStreamInThisRuntime {
             end_claimed: AtomicBool::new(false),
             the_end_of_this_stream: Arc::default(),
             this_stream: this_stream.clone(),
+            holding: Mutex::new(LoadedStreamHolding::Attached),
         }))
     }
 
@@ -255,6 +260,18 @@ impl LoadedStreamInThisRuntime {
     /// The stream's process-unique tag.
     pub fn stream_tag(&self) -> LoadedStreamTag {
         self.this_streams_identity_and_handles.identity.stream_tag
+    }
+
+    /// Whether the runtime keeps this stream or it lives as long as what
+    /// loaded it.
+    pub fn holding(&self) -> LoadedStreamHolding {
+        *self.holding.lock()
+    }
+
+    /// Hold this stream as `holding`, set by the load before the stream
+    /// enters the table.
+    pub(crate) fn hold_as(&self, holding: LoadedStreamHolding) {
+        *self.holding.lock() = holding;
     }
 
     /// The stream's active JSONL log segment, `None` when it writes none.

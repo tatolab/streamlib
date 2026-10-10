@@ -15,6 +15,7 @@ use super::RuntimeName;
 use super::RuntimeUniqueId;
 use super::loaded_stream::LoadedStreamInThisRuntime;
 use super::processor_interpreter_launch_record::ProcessorInterpreterLendDirectoryOfTheEngine;
+use super::stream_actions_of_this_runtime::{LoadedStreamHolding, StreamActionsOfTheEngine};
 use super::{RuntimeShutdownEscalation, StreamEnvironment};
 use crate::core::context::GpuContext;
 use crate::core::graph::cast_exposed_name_to_url_safe;
@@ -310,7 +311,10 @@ enum SetupHooksOfTheEngine {
 /// Every graph operation is a stream's: load a stream, then use the
 /// [`LoadedStreamInThisRuntime`] it hands back.
 pub struct Runner {
-    engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
+    pub(super) engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
+    /// Where this runtime keeps its streams, and the lock its stream actions
+    /// take one at a time.
+    pub(super) stream_actions: StreamActionsOfTheEngine,
 }
 
 /// What a host chooses as it constructs a [`Runner`].
@@ -554,6 +558,7 @@ impl Runner {
                 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
                 process_logging_pathway_hold,
             }),
+            stream_actions: StreamActionsOfTheEngine::default(),
         }))
     }
 
@@ -692,6 +697,21 @@ impl Runner {
         graph: &GraphSnapshot,
         load_options: OptionsForLoadingOneStream,
     ) -> Result<StreamLoadObservingMachineShutdownRequests> {
+        self.load_stream_held_as_unless_a_machine_shutdown_is_requested(
+            graph,
+            load_options,
+            LoadedStreamHolding::Attached,
+        )
+    }
+
+    /// [`Self::load_stream_from_graph_snapshot_unless_a_machine_shutdown_is_requested`],
+    /// the stream held as `holding` from the moment it enters the table.
+    pub(super) fn load_stream_held_as_unless_a_machine_shutdown_is_requested(
+        &self,
+        graph: &GraphSnapshot,
+        load_options: OptionsForLoadingOneStream,
+        holding: LoadedStreamHolding,
+    ) -> Result<StreamLoadObservingMachineShutdownRequests> {
         use std::sync::mpsc::RecvTimeoutError;
 
         use crate::core::runtime::{
@@ -713,6 +733,7 @@ impl Runner {
             }
             Err(build_refusal) => return Err(build_refusal),
         };
+        stream.hold_as(holding);
         let load_outcome = std::thread::scope(|scope| {
             // Never sent on: the loading thread's end drops it, a panic included.
             let (load_ended_sender, load_ended_receiver) = std::sync::mpsc::channel::<()>();
@@ -919,6 +940,12 @@ impl Runner {
             .map(|stream| stream.how_this_stream_ended_as_a_waiter_reports_it())
             .find(Result::is_err)
             .unwrap_or(Ok(()))
+    }
+
+    /// Block until the machine's shutdown is requested — a signal, or the
+    /// request the Rust SDK makes — with zero, one or many streams loaded.
+    pub fn wait_until_a_machine_shutdown_is_requested(&self) {
+        self.block_until(&crate::core::runtime::is_the_machines_shutdown_requested);
     }
 
     /// Poll until `has_ended` holds — driving the window event pump where the
@@ -1207,7 +1234,7 @@ impl Runner {
         )))
     }
 
-    fn loaded_stream_names_listed_for_a_refusal(&self) -> String {
+    pub(super) fn loaded_stream_names_listed_for_a_refusal(&self) -> String {
         let names = self.names_of_the_loaded_streams();
         if names.is_empty() {
             "none".to_string()
@@ -1227,7 +1254,7 @@ impl Drop for Runner {
 
 /// The URL-safe cast of the stream name a load names, refused when it casts
 /// to nothing and when there is none.
-fn the_cast_name_of_the_stream_a_load_names(
+pub(super) fn the_cast_name_of_the_stream_a_load_names(
     requested_stream_name: Option<&str>,
     what_is_loaded: &str,
 ) -> Result<String> {
@@ -1272,7 +1299,7 @@ fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStre
 /// Ask `stream` for its shutdown and block until it has ended. Once its
 /// shutdown thread has started, the stream's watchdog bounds the wait; until
 /// then each poll asks again, retrying the thread's spawn.
-fn request_a_streams_shutdown_and_wait_until_it_has_ended(
+pub(super) fn request_a_streams_shutdown_and_wait_until_it_has_ended(
     stream: &LoadedStreamInThisRuntime,
     reason: &str,
 ) {
@@ -2599,6 +2626,47 @@ mod tests {
             );
         }
         assert!(runner.names_of_the_loaded_streams().is_empty());
+    }
+
+    /// The wait `tatolabd` blocks on returns only once the machine's shutdown
+    /// is requested, and walks every loaded stream to it on the way.
+    #[test]
+    #[serial]
+    fn the_wait_for_a_machine_shutdown_returns_once_one_is_requested_and_ends_every_stream() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+
+        let (wait_returned, the_wait_has_returned) = std::sync::mpsc::channel();
+        let waiting_runner = Arc::clone(&runner);
+        std::thread::spawn(move || {
+            let outcome = waiting_runner.run_owning_the_machine_shutdown_signals(|| {
+                waiting_runner.wait_until_a_machine_shutdown_is_requested();
+                Ok(())
+            });
+            let _ = wait_returned.send(outcome);
+        });
+        assert!(
+            the_wait_has_returned
+                .recv_timeout(Duration::from_millis(300))
+                .is_err(),
+            "the wait returned before any machine shutdown was requested"
+        );
+        assert!(!stream.has_ended());
+
+        crate::core::runtime::request_the_shutdown_of_every_loaded_stream(
+            "the test shuts the machine down",
+        )
+        .unwrap();
+
+        the_wait_has_returned
+            .recv_timeout(A_STREAM_ENDS_WITHIN)
+            .expect("the wait never saw the machine's shutdown request")
+            .expect("the wait owned the machine's shutdown signals");
+        assert!(stream.wait_for_this_streams_end_within(A_STREAM_ENDS_WITHIN));
     }
 
     /// A stream loaded while the machine is shutting every stream down is

@@ -7,14 +7,23 @@ use tracing::Instrument as _;
 
 use super::operations::{BoxFuture, RuntimeOperations};
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
-use super::{ExchangedPublishedSurfaceFramePngImage, LoadedStreamInThisRuntime, Runner};
+use super::{
+    ExchangedPublishedSurfaceFramePngImage, LoadedStreamInThisRuntime, LoadedStreamTag,
+    OutputPortExposureOutcome, RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome,
+    StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
+};
 use crate::core::ProcessorDescriptor;
 use crate::core::error::{Error, Result};
+use crate::core::graph::OutputPortExposureLevel;
+use crate::core::logging::LoadedStreamLogRecordsPage;
 use crate::core::pubsub::topics;
 
 /// What the local API reaches a runtime through: the stream a call names, a
-/// stream's node catalog, the machine's shutdown request and the surface
-/// exchange.
+/// stream's node catalog and log records, the stream actions, the machine's
+/// shutdown request and the surface exchange.
+///
+/// Every stream action blocks — a load runs a compile and describes — so the
+/// local API calls each from a blocking task.
 ///
 /// Implemented by [`Runner`], and by the control plane's test stubs.
 pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
@@ -41,6 +50,47 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
 
     /// The cast names of the loaded streams, in order.
     fn names_of_the_loaded_streams(&self) -> Vec<String>;
+
+    /// The log records of the loaded stream `stream_name` names, numbered
+    /// after `after`, at most `max_count` of them; refused naming the loaded
+    /// streams when it is not loaded.
+    fn log_records_of_the_stream_a_call_names(
+        &self,
+        stream_name: &str,
+        after: u64,
+        max_count: usize,
+    ) -> Result<LoadedStreamLogRecordsPage>;
+
+    /// [`Runner::run_stream`].
+    fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome>;
+
+    /// [`Runner::stop_stream`].
+    fn stop_stream(&self, stream_name: &str) -> Result<StreamStopOutcome>;
+
+    /// [`Runner::start_stream`].
+    fn start_stream(&self, stream_name: &str) -> Result<StreamStartOutcome>;
+
+    /// [`Runner::remove_stream`].
+    fn remove_stream(&self, stream_name: &str) -> Result<StreamRemoveOutcome>;
+
+    /// [`Runner::list_streams`].
+    fn list_streams(&self) -> Vec<StreamListing>;
+
+    /// [`Runner::expose_port`].
+    fn expose_port(
+        &self,
+        stream_name: &str,
+        node: &str,
+        port: &str,
+        level: OutputPortExposureLevel,
+    ) -> Result<OutputPortExposureOutcome>;
+
+    /// [`Runner::unload_the_attached_stream_if_still_the_same`].
+    fn unload_the_attached_stream_if_still_the_same(
+        &self,
+        stream_name: &str,
+        stream_tag: LoadedStreamTag,
+    ) -> bool;
 
     /// Ask for the shutdown of every loaded stream, with a human-readable
     /// `reason` logged for attribution. Fire-and-forget; never blocks.
@@ -116,6 +166,54 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn names_of_the_loaded_streams(&self) -> Vec<String> {
         Runner::names_of_the_loaded_streams(self)
+    }
+
+    fn log_records_of_the_stream_a_call_names(
+        &self,
+        stream_name: &str,
+        after: u64,
+        max_count: usize,
+    ) -> Result<LoadedStreamLogRecordsPage> {
+        self.loaded_stream_named(stream_name)
+            .map(|stream| stream.log_records_after(after, max_count))
+    }
+
+    fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
+        Runner::run_stream(self, request)
+    }
+
+    fn stop_stream(&self, stream_name: &str) -> Result<StreamStopOutcome> {
+        Runner::stop_stream(self, stream_name)
+    }
+
+    fn start_stream(&self, stream_name: &str) -> Result<StreamStartOutcome> {
+        Runner::start_stream(self, stream_name)
+    }
+
+    fn remove_stream(&self, stream_name: &str) -> Result<StreamRemoveOutcome> {
+        Runner::remove_stream(self, stream_name)
+    }
+
+    fn list_streams(&self) -> Vec<StreamListing> {
+        Runner::list_streams(self)
+    }
+
+    fn expose_port(
+        &self,
+        stream_name: &str,
+        node: &str,
+        port: &str,
+        level: OutputPortExposureLevel,
+    ) -> Result<OutputPortExposureOutcome> {
+        Runner::expose_port(self, stream_name, node, port, level)
+    }
+
+    fn unload_the_attached_stream_if_still_the_same(
+        &self,
+        stream_name: &str,
+        stream_tag: LoadedStreamTag,
+    ) -> bool {
+        Runner::unload_the_attached_stream_if_still_the_same(self, stream_name, stream_tag)
     }
 
     fn request_the_shutdown_of_every_loaded_stream(&self, reason: &str) -> Result<()> {
