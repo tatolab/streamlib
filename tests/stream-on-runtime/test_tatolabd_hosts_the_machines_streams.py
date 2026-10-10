@@ -927,6 +927,7 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
             "project_directory": str(project_directory),
             "node_count": PROJECT_STREAM_NODE_COUNT,
             "replaced_the_kept_record": False,
+            "compile_warnings": [],
         }
         local_api.await_every_node_running(stream=stream_name, timeout=STREAM_RUNNING_TIMEOUT_SECONDS)
     assert listed_through(agent) == {ALPHA_STREAM: alpha_kept, BRAVO_STREAM: bravo_kept}
