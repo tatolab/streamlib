@@ -225,8 +225,9 @@ enum TatolabVerb {
     Logs(runtime_logs_verb::RuntimeLogsVerbArguments),
     /// Exchange published surface ids for PNG files on disk.
     #[command(
-        long_about = "With SURFACE_ID, exchanges that one id. With --channel and --stream, taps \
-                      the channel, reads a surface id out of each sampled bag, and exchanges it — \
+        long_about = "With SURFACE_ID, exchanges that one id. With --channel, taps that output \
+                      port in the stream its address names, or in --stream when it names none, \
+                      reads a surface id out of each sampled bag, and exchanges it — \
                       one warm process, no window in the graph and no display server in the path. \
                       Writes exact full-resolution PNGs into --out and prints their paths on \
                       stdout, one per line — those paths are this run's frames, and --out is not \

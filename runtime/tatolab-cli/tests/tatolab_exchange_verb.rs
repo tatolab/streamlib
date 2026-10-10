@@ -28,6 +28,7 @@ fn the_exchange_help_names_both_forms_and_every_flag() {
         "--every <N>",
         "--field <NAME>",
         "--stream <STREAM>",
+        "in the stream its address names, or in --stream when it names none",
         "--out is not cleared",
     ] {
         assert!(help_text.contains(named), "{named}:\n{help_text}");

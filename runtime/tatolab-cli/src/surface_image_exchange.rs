@@ -60,7 +60,8 @@ pub(crate) struct SurfaceImageExchangeArguments {
         long = "channel",
         value_name = "CHANNEL",
         help = "Sample this channel instead of naming one id: an output port's address, \
-                <stream>/<node>/<port>, or <node>/<port> with --stream"
+                <stream>/<node>/<port>, <node>/<port> with --stream, or \
+                <machine>/<stream>/<node>/<port> naming this machine"
     )]
     pub(crate) channel: Option<String>,
     /// (--channel only) Frames to exchange before returning. Default 1.
