@@ -1298,13 +1298,20 @@ fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStre
 
 /// Ask `stream` for its shutdown and block until it has ended. Once its
 /// shutdown thread has started, the stream's watchdog bounds the wait; until
-/// then each poll asks again, retrying the thread's spawn.
+/// then each poll asks again, retrying the thread's spawn. A machine shutdown
+/// forced meanwhile forces this stream too, whichever thread is waiting on the
+/// machine.
 pub(super) fn request_a_streams_shutdown_and_wait_until_it_has_ended(
     stream: &LoadedStreamInThisRuntime,
     reason: &str,
 ) {
     loop {
         stream.ask_for_this_streams_shutdown(reason);
+        if crate::core::runtime::the_machines_shutdown_escalation()
+            >= RuntimeShutdownEscalation::Forced
+        {
+            stream.force_this_streams_shutdown("the machine's shutdown was forced");
+        }
         if stream.wait_for_this_streams_end_within(
             crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
         ) {
