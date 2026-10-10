@@ -16,6 +16,9 @@ use streamlib::sdk::runtime::{
     LoadedStreamInThisRuntime, OperationsOnTheStreamsLoadedInThisRuntime,
     OptionsForLoadingOneStream, Runner,
 };
+#[cfg(feature = "machine-directories-under-a-test-root")]
+use streamlib_runtime_client_contract::machine_directories_test_root::TestMachineRoot;
+#[cfg(feature = "machine-directories-under-a-test-root")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::mcp::tests::{first_text_block_json, prompt_text, resource_document, tool_call_result};
@@ -312,6 +315,7 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
 
 /// One HTTP/1.1 GET over the socket at `local_api_socket_path`: its status
 /// line and body.
+#[cfg(feature = "machine-directories-under-a-test-root")]
 async fn http_get_over_the_local_api_socket(
     local_api_socket_path: &std::path::Path,
     request_target: &str,
@@ -341,43 +345,28 @@ async fn http_get_over_the_local_api_socket(
 }
 
 /// The engine's local API is served at `local-api.sock`, the one fixed path
-/// in the runtime directory, and nothing is written under the old node
-/// registry's `nodes/`.
+/// in the runtime directory under this run's test machine root, and the socket
+/// is gone once the served API drops.
 ///
-/// The path is the real runtime directory's: where a runtime already answers
-/// there — one running on this machine — the bind is refused naming that very
-/// path, which proves the path as well.
+/// A test build only: binding `local-api.sock` at the real machine's runtime
+/// directory would replace the socket of the runtime running there.
+#[cfg(feature = "machine-directories-under-a-test-root")]
 #[tokio::test(flavor = "multi_thread")]
-async fn the_engines_local_api_is_served_at_the_fixed_socket_path_and_registers_nothing() {
+async fn the_engines_local_api_is_served_at_the_fixed_socket_path_under_the_test_machine_root() {
+    let test_machine_root = TestMachineRoot::from_the_environment()
+        .expect("a test build runs under TATOLAB_TEST_MACHINE_ROOT");
     let loaded = AnEngineLoadingTwoStreams::load();
     let runtime_directory = loaded.engine.runtime_directory().path().to_path_buf();
+    assert_eq!(runtime_directory, test_machine_root.runtime_directory());
     let local_api_socket_path = runtime_directory.join("local-api.sock");
     assert_eq!(
         loaded.engine.runtime_directory().local_api_socket_path(),
         local_api_socket_path
     );
-    let node_registry_entry_path = runtime_directory
-        .join("nodes")
-        .join(format!("{}.json", loaded.engine.runtime_id()));
 
-    let served = match crate::serve_the_local_api_for_an_engine(&loaded.engine) {
-        Ok(served) => served,
-        Err(refusal) => {
-            let refusal = refusal.to_string();
-            assert!(
-                refusal.contains(&local_api_socket_path.display().to_string())
-                    && refusal.contains("already bound by a live process"),
-                "{refusal}"
-            );
-            return;
-        }
-    };
+    let served = crate::serve_the_local_api_for_an_engine(&loaded.engine)
+        .expect("the local API binds the fixed socket under this run's test machine root");
 
-    assert!(
-        !node_registry_entry_path.exists(),
-        "no registry entry is written: {}",
-        node_registry_entry_path.display()
-    );
     let (status_line, body) =
         http_get_over_the_local_api_socket(&local_api_socket_path, "/api/graph?stream=second")
             .await;
