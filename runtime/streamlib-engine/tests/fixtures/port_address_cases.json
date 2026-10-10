@@ -1,0 +1,82 @@
+[
+  {
+    "address": "camera/video",
+    "node": "camera",
+    "port": "video"
+  },
+  {
+    "address": "main/camera/video",
+    "stream": "main",
+    "node": "camera",
+    "port": "video"
+  },
+  {
+    "address": "desk/main/camera/video",
+    "machine": "desk",
+    "stream": "main",
+    "node": "camera",
+    "port": "video"
+  },
+  {
+    "address": "desk.tail2950db.ts.net/main/camera/video",
+    "machine": "desk.tail2950db.ts.net",
+    "stream": "main",
+    "node": "camera",
+    "port": "video"
+  },
+  {
+    "address": "Jonathans-MacBook/Main Stream/Camera Source 2/Video",
+    "machine": "jonathans-macbook",
+    "stream": "main-stream",
+    "node": "camera-source-2",
+    "port": "video"
+  },
+  {
+    "address": "Café/Vidéo",
+    "node": "cafe",
+    "port": "video"
+  },
+  {
+    "address": "rig/camera_rig/camerasource-2/video_from_upstream",
+    "machine": "rig",
+    "stream": "camera_rig",
+    "node": "camerasource-2",
+    "port": "video_from_upstream"
+  },
+  {
+    "address": "video",
+    "refused": true
+  },
+  {
+    "address": "",
+    "refused": true
+  },
+  {
+    "address": "a/b/c/d/e",
+    "refused": true
+  },
+  {
+    "address": "main//video",
+    "refused": true
+  },
+  {
+    "address": "main/camera/video/",
+    "refused": true
+  },
+  {
+    "address": "/camera/video",
+    "refused": true
+  },
+  {
+    "address": "main/../video",
+    "refused": true
+  },
+  {
+    "address": "main/./video",
+    "refused": true
+  },
+  {
+    "address": "main/!!!/video",
+    "refused": true
+  }
+]
