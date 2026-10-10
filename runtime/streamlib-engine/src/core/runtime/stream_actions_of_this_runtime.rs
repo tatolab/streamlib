@@ -1258,6 +1258,53 @@ mod tests {
         );
     }
 
+    /// The graph of a function named `stream_name` whose `exposed` names a
+    /// port its one node lacks, which its load refuses.
+    fn the_graph_of_a_function_exposing_a_port_its_node_lacks(
+        stream_name: &str,
+    ) -> serde_json::Value {
+        the_graph_of_a_function_named(
+            stream_name,
+            serde_json::json!([{"node": "source", "port": "absent-port", "level": "private"}]),
+        )
+    }
+
+    #[test]
+    #[serial]
+    fn a_replace_whose_load_is_refused_and_whose_previous_stream_cannot_re_load_reports_both() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(
+            the_graph_of_a_function_exposing_a_port_its_node_lacks("camera"),
+        );
+        let gone_interpreter = project.path().join("relocated-venv").join("python");
+        let previous_record = KeptStreamRecord {
+            interpreter: gone_interpreter.clone(),
+            ..a_kept_record_of(&project, "camera", serde_json::json!([]))
+        };
+        let previous = a_kept_stream_loaded_without_its_start(
+            &runner,
+            state_directory.path(),
+            &previous_record,
+        );
+
+        let refusal = refusal_of(runner.run_stream(project.run_request(true)));
+
+        assert!(refusal.contains("absent-port"), "{refusal}");
+        assert!(refusal.contains("did not re-load"), "{refusal}");
+        assert!(
+            refusal.contains(&gone_interpreter.display().to_string()),
+            "{refusal}"
+        );
+        assert!(previous.has_ended(), "the replace unloaded it first");
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert_eq!(
+            records_in(state_directory.path()).read("camera").unwrap(),
+            Some(previous_record),
+            "a refused replace leaves the record as it was"
+        );
+    }
+
     #[test]
     #[serial]
     fn a_stopped_kept_stream_is_recorded_stopped_and_a_fresh_runtime_leaves_it_unloaded() {
@@ -1313,6 +1360,36 @@ mod tests {
                 .unwrap()
                 .stopped
         );
+    }
+
+    /// Makes `kept_streams_directory` refuse every new file until it drops, so
+    /// a record write fails.
+    struct KeptStreamsDirectoryRefusingWrites<'a> {
+        kept_streams_directory: &'a Path,
+    }
+
+    impl<'a> KeptStreamsDirectoryRefusingWrites<'a> {
+        fn from_now_on(kept_streams_directory: &'a Path) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                kept_streams_directory,
+                std::fs::Permissions::from_mode(0o500),
+            )
+            .expect("the kept-streams directory is made read-only");
+            Self {
+                kept_streams_directory,
+            }
+        }
+    }
+
+    impl Drop for KeptStreamsDirectoryRefusingWrites<'_> {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                self.kept_streams_directory,
+                std::fs::Permissions::from_mode(0o700),
+            );
+        }
     }
 
     /// Overwrite the record of `stream_name` in `kept_streams_directory` with
@@ -1393,7 +1470,6 @@ mod tests {
     #[test]
     #[serial]
     fn stopping_a_loaded_kept_stream_whose_record_cannot_be_written_still_unloads_it() {
-        use std::os::unix::fs::PermissionsExt;
         let state_directory = tempfile::tempdir().unwrap();
         let kept_streams_directory = state_directory.path().join("streams");
         let runner = a_runner_keeping_its_streams_in(Some(&kept_streams_directory));
@@ -1403,19 +1479,13 @@ mod tests {
             &kept_streams_directory,
             &a_kept_record_of(&project, "camera", serde_json::json!([])),
         );
-        std::fs::set_permissions(
-            &kept_streams_directory,
-            std::fs::Permissions::from_mode(0o500),
-        )
-        .unwrap();
 
-        let refusal = refusal_of(runner.stop_stream("camera"));
+        let refusal = {
+            let _refusing_writes =
+                KeptStreamsDirectoryRefusingWrites::from_now_on(&kept_streams_directory);
+            refusal_of(runner.stop_stream("camera"))
+        };
 
-        std::fs::set_permissions(
-            &kept_streams_directory,
-            std::fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
         assert!(refusal.contains("unloaded"), "{refusal}");
         assert!(refusal.contains("not recorded stopped"), "{refusal}");
         assert!(running.has_ended());
@@ -2015,6 +2085,148 @@ mod tests {
         assert_eq!(
             the_exposures_graph_renders_for(&restarted.loaded_stream_named("camera").unwrap()),
             serde_json::json!([{"node": "source", "port": "out1", "level": "private"}])
+        );
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn a_run_whose_start_is_refused_unloads_the_stream_it_loaded_and_records_nothing() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        runner
+            .install_setup_hook(|_| Err(Error::Configuration("the setup hook refuses".into())))
+            .unwrap();
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+
+        let refusal = refusal_of(runner.run_stream(project.run_request(true)));
+
+        assert!(refusal.contains("the setup hook refuses"), "{refusal}");
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert!(records_in(state_directory.path()).read_every().is_empty());
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn a_kept_run_whose_record_is_not_written_unloads_the_stream_it_started() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let kept_streams_directory = state_directory.path().join("streams");
+        let runner = a_runner_keeping_its_streams_in(Some(&kept_streams_directory));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([]),
+        ));
+
+        let refusal = {
+            let _refusing_writes =
+                KeptStreamsDirectoryRefusingWrites::from_now_on(&kept_streams_directory);
+            refusal_of(runner.run_stream(project.run_request(true)))
+        };
+
+        assert!(refusal.contains("was not written"), "{refusal}");
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert!(records_in(&kept_streams_directory).read_every().is_empty());
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn a_replace_whose_load_is_refused_after_the_unload_re_loads_the_previous_record() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
+        ));
+        let first = runner.run_stream(project.run_request(true)).unwrap();
+        let previous_record = records_in(state_directory.path())
+            .read("camera")
+            .unwrap()
+            .unwrap();
+        project.compile_to(the_graph_of_a_function_exposing_a_port_its_node_lacks(
+            "camera",
+        ));
+
+        let refusal = refusal_of(runner.run_stream(project.run_request(true)));
+
+        assert!(refusal.contains("absent-port"), "{refusal}");
+        assert!(!refusal.contains("did not re-load"), "{refusal}");
+        let restored = runner
+            .loaded_stream_named("camera")
+            .expect("the previous record is loaded again");
+        assert_ne!(restored.stream_tag(), first.stream_tag);
+        assert_eq!(
+            restored.status(),
+            crate::core::runtime::RuntimeStatus::Started
+        );
+        assert_eq!(restored.holding(), LoadedStreamHolding::Kept);
+        assert_eq!(
+            the_exposures_graph_renders_for(&restored),
+            serde_json::json!([{"node": "source", "port": "out1", "level": "private"}])
+        );
+        assert_eq!(
+            records_in(state_directory.path()).read("camera").unwrap(),
+            Some(previous_record)
+        );
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn a_replace_whose_record_is_not_written_unloads_the_new_stream_and_re_loads_the_previous() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let kept_streams_directory = state_directory.path().join("streams");
+        let runner = a_runner_keeping_its_streams_in(Some(&kept_streams_directory));
+        let project = ProjectWithAStubCompile::compiling(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
+        ));
+        let first = runner.run_stream(project.run_request(true)).unwrap();
+        let previous_record = records_in(&kept_streams_directory)
+            .read("camera")
+            .unwrap()
+            .unwrap();
+        project.compile_to(the_graph_of_a_function_named(
+            "camera",
+            serde_json::json!([{"node": "source", "port": "out2", "level": "public"}]),
+        ));
+
+        let refusal = {
+            let _refusing_writes =
+                KeptStreamsDirectoryRefusingWrites::from_now_on(&kept_streams_directory);
+            refusal_of(runner.run_stream(project.run_request(true)))
+        };
+
+        assert!(refusal.contains("was not written"), "{refusal}");
+        assert!(!refusal.contains("did not re-load"), "{refusal}");
+        let restored = runner
+            .loaded_stream_named("camera")
+            .expect("the previous record is loaded again");
+        assert_ne!(restored.stream_tag(), first.stream_tag);
+        assert_eq!(
+            the_exposures_graph_renders_for(&restored),
+            serde_json::json!([{"node": "source", "port": "out1", "level": "private"}]),
+            "the stream loaded is the previous record's, not the one whose record was refused"
+        );
+        assert_eq!(
+            records_in(&kept_streams_directory).read("camera").unwrap(),
+            Some(previous_record)
         );
     }
 }
