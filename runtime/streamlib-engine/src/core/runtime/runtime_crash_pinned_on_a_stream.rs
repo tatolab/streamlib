@@ -609,9 +609,10 @@ extern "C" fn pin_the_crash_on_the_threads_stream_then_hand_the_signal_on(
     hand_the_signal_on(signal, signal_information, signal_context);
 }
 
-/// Hand a fault the kernel raised to the disposition displaced — Rust's own
-/// handler reports a stack overflow — and anything else to the default, so
-/// the process ends on the signal it took.
+/// Hand a fault-class signal to the disposition displaced first — Rust's own
+/// handler reports a stack overflow — then end the process on the signal it
+/// took under the default disposition, whether the displaced handler returned
+/// or the signal was never a fault.
 fn hand_the_signal_on(
     signal: libc::c_int,
     signal_information: *mut libc::siginfo_t,
@@ -628,6 +629,8 @@ fn hand_the_signal_on(
     // SAFETY: the kernel hands a valid `siginfo_t` to an `SA_SIGINFO` handler.
     let si_code =
         unsafe { signal_information.as_ref() }.map_or(0, |information| information.si_code);
+    // Apple's kernel reports a raised SIGSEGV with a fault's code, so this
+    // only chooses whether the displaced handler sees the signal first.
     let raised_by_a_fault = signal != libc::SIGABRT
         && si_code > 0
         && si_code < LOWEST_SI_CODE_OF_A_SIGNAL_SENT_RATHER_THAN_RAISED_BY_A_FAULT;
@@ -652,14 +655,12 @@ fn hand_the_signal_on(
                     std::mem::transmute(displaced.sa_sigaction);
                 displaced_handler(signal);
             }
-            return;
         }
         let mut default_disposition: libc::sigaction = std::mem::zeroed();
         default_disposition.sa_sigaction = libc::SIG_DFL;
         libc::sigemptyset(&mut default_disposition.sa_mask);
         libc::sigaction(signal, &default_disposition, std::ptr::null_mut());
-        // Blocked while this handler runs, so delivered on its return; a
-        // fault that returns instead faults again under the default.
+        // Blocked while this handler runs, so delivered on its return.
         libc::raise(signal);
     }
 }
