@@ -5,6 +5,7 @@
 //! client parses, written once for the runtime that serves them and every client that calls them.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +59,18 @@ pub fn surface_image_exchange_route_path_for_surface_id(published_surface_id: &s
         &percent_encoded_surface_id,
     )
 }
+
+/// How long a client waits for `run_stream` or `start_stream`. The engine asserts at build time
+/// that its `STREAM_FUNCTION_COMPILE_BOUND`, `PROCESSOR_INTERPRETER_DESCRIBE_BOUND` and
+/// `ENGINE_TEARDOWN_WATCHDOG_BUDGET` fit within it for this load and one stream action queued
+/// ahead of it; more actions queued ahead can outlast it, and the runtime still takes the action.
+pub const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(360);
+
+/// How long a client waits for `stop_stream`, `remove_stream` or `expose_port`. The engine
+/// asserts at build time that its `PROCESSOR_INTERPRETER_DESCRIBE_BOUND` and
+/// `ENGINE_TEARDOWN_WATCHDOG_BUDGET` fit within it for this action and one stream action queued
+/// ahead of it; more actions queued ahead can outlast it, and the runtime still takes the action.
+pub const STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// The `tap` tool's result: a bounded sample of the bags one channel carried.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

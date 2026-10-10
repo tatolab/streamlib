@@ -10,18 +10,26 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT, STREAM_LOAD_TOOL_CALL_TIMEOUT,
+};
 
 use super::runtime::{
     a_stream_name_already_loaded_refusal, request_a_streams_shutdown_and_wait_until_it_has_ended,
     the_cast_name_of_the_stream_a_load_names,
 };
 use super::{
-    KeptStreamRecord, KeptStreamRecordReadFailure, KeptStreamRecordsInTheStateDirectory,
-    LoadedStreamInThisRuntime, LoadedStreamTag, OptionsForLoadingOneStream, OwnerExposureRuling,
-    OwnerExposureRulingsSplitAroundTheLoad, Runner, StreamEnvironment,
-    StreamLoadObservingMachineShutdownRequests,
-    compile_the_stream_function_in_the_projects_interpreter,
+    ENGINE_TEARDOWN_WATCHDOG_BUDGET, KeptStreamRecord, KeptStreamRecordReadFailure,
+    KeptStreamRecordsInTheStateDirectory, LoadedStreamInThisRuntime, LoadedStreamTag,
+    OptionsForLoadingOneStream, OwnerExposureRuling, OwnerExposureRulingsSplitAroundTheLoad,
+    Runner, StreamEnvironment, StreamLoadObservingMachineShutdownRequests,
     the_owners_exposure_rulings_split_around_the_load,
+};
+use crate::core::compiler::compiler_ops::{
+    processor_interpreter_describe::PROCESSOR_INTERPRETER_DESCRIBE_BOUND,
+    stream_function_compile_in_the_projects_interpreter::{
+        STREAM_FUNCTION_COMPILE_BOUND, compile_the_stream_function_in_the_projects_interpreter,
+    },
 };
 use crate::core::graph::{
     OutputPortExposureLevel, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
@@ -32,8 +40,7 @@ use crate::core::{Error, Result};
 
 /// How a loaded stream is held: kept by the runtime, or attached to what
 /// loaded it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LoadedStreamHolding {
     /// Recorded in the runtime's state directory and re-loaded at its start.
     Kept,
@@ -121,8 +128,7 @@ pub struct StreamRemoveOutcome {
 }
 
 /// The state one stream of [`Runner::list_streams`] is in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StreamListingState {
     /// Loaded, and lives as long as what loaded it.
     Attached,
@@ -139,16 +145,6 @@ impl From<LoadedStreamHolding> for StreamListingState {
             LoadedStreamHolding::Kept => Self::Kept,
             LoadedStreamHolding::Attached => Self::Attached,
         }
-    }
-}
-
-impl std::fmt::Display for StreamListingState {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Attached => "attached",
-            Self::Kept => "kept",
-            Self::Stopped => "stopped",
-        })
     }
 }
 
@@ -218,6 +214,47 @@ pub(crate) struct StreamActionsOfTheEngine {
     one_stream_action_at_a_time: Mutex<()>,
 }
 
+/// The longest one stream action holds the one-action lock, in milliseconds: a
+/// kept stream's replace whose load and restore are both refused — the running
+/// stream's teardown, then for each load a describe and a refused start's
+/// teardown.
+const LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS: u128 =
+    ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis()
+        + 2 * (PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
+            + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis());
+
+/// The longest a load waits for its answer with one stream action queued ahead
+/// of it, in milliseconds: its compile runs outside the lock while the action
+/// ahead holds it, then it holds the lock itself.
+const LONGEST_LOAD_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS: u128 = {
+    let compile = STREAM_FUNCTION_COMPILE_BOUND.as_millis();
+    let compile_or_the_action_ahead =
+        if compile > LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS {
+            compile
+        } else {
+            LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
+        };
+    compile_or_the_action_ahead + LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
+};
+
+const _: () = assert!(
+    STREAM_FUNCTION_COMPILE_BOUND.as_millis() + PROCESSOR_INTERPRETER_DESCRIBE_BOUND.as_millis()
+        < STREAM_LOAD_TOOL_CALL_TIMEOUT.as_millis(),
+    "a client gives up on a load before the runtime's compile and describe bounds end"
+);
+const _: () = assert!(
+    LONGEST_LOAD_BEHIND_ONE_QUEUED_STREAM_ACTION_IN_MILLISECONDS
+        < STREAM_LOAD_TOOL_CALL_TIMEOUT.as_millis(),
+    "a client gives up on a load queued behind one stream action before the runtime answers"
+);
+const _: () = assert!(
+    LONGEST_HOLD_OF_THE_ONE_STREAM_ACTION_LOCK_IN_MILLISECONDS
+        + ENGINE_TEARDOWN_WATCHDOG_BUDGET.as_millis()
+        < STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT.as_millis(),
+    "a client gives up on a stop, remove or expose queued behind one stream action before the \
+     runtime answers"
+);
+
 impl Runner {
     /// Keep this runtime's streams as records in `kept_streams_directory`,
     /// created owner-only when absent. Refused a second time; a runtime never
@@ -260,8 +297,7 @@ impl Runner {
             stream_name,
             holding,
         } = request;
-        let kept_stream_records = self.kept_stream_records();
-        let records_to_keep_it_in = match (holding, kept_stream_records) {
+        let records_to_keep_it_in = match (holding, self.kept_stream_records()) {
             (LoadedStreamHolding::Attached, _) => None,
             (LoadedStreamHolding::Kept, Some(kept_stream_records)) => Some(kept_stream_records),
             (LoadedStreamHolding::Kept, None) => {
@@ -304,10 +340,7 @@ impl Runner {
 
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
         let loaded = self.loaded_stream_of_the_cast_name(&stream_name);
-        let kept_record = match kept_stream_records {
-            Some(kept_stream_records) => kept_stream_records.read(&stream_name)?,
-            None => None,
-        };
+        let kept_record = self.kept_record_of_the_cast_name(&stream_name)?;
         match (kept_record, loaded) {
             (Some(kept_record), loaded) => match records_to_keep_it_in {
                 Some(records_to_keep_it_in)
@@ -668,10 +701,7 @@ impl Runner {
                 }
                 Err(unreadable) => {
                     tracing::error!("{unreadable}; it is skipped and left in place");
-                    reloads.push(KeptStreamReloadAtTheStart::NotReloaded {
-                        stream_name,
-                        refusal: unreadable,
-                    });
+                    reloads.push(KeptStreamReloadAtTheStart::RecordUnreadable(unreadable));
                     continue;
                 }
             };
@@ -745,7 +775,7 @@ impl Runner {
 
     fn kept_record_of_the_cast_name(&self, stream_cast: &str) -> Result<Option<KeptStreamRecord>> {
         match self.kept_stream_records() {
-            Some(kept_stream_records) => kept_stream_records.read(stream_cast),
+            Some(kept_stream_records) => Ok(kept_stream_records.read(stream_cast)?),
             None => Ok(None),
         }
     }
@@ -2165,6 +2195,30 @@ mod tests {
         assert!(reloads.is_empty(), "neither is reported: {reloads:?}");
         assert!(runner.names_of_the_loaded_streams().is_empty());
         assert_eq!(records.read_every(), vec![Ok(stopped_since)]);
+    }
+
+    #[test]
+    #[serial]
+    fn a_kept_record_unreadable_by_its_reload_is_reported_unreadable_by_its_path() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_keeping_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithAStubCompile::with_no_venv();
+        let records = records_in(state_directory.path());
+        records
+            .write(&a_kept_record_of(&project, "camera", serde_json::json!([])))
+            .unwrap();
+        let listed = records.read_every();
+        let malformed_since = records.record_path_of("camera").unwrap();
+        std::fs::write(&malformed_since, b"{").unwrap();
+
+        let reloads = runner.reload_each_kept_stream_listed(&records, listed);
+
+        let [KeptStreamReloadAtTheStart::RecordUnreadable(unreadable)] = reloads.as_slice() else {
+            panic!("the record is reported unreadable: {reloads:?}");
+        };
+        assert_eq!(unreadable.path, malformed_since);
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+        assert!(malformed_since.is_file(), "the record is left in place");
     }
 
     #[test]

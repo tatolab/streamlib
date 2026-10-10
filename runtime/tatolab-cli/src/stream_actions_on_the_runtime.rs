@@ -13,22 +13,14 @@ use clap::Args;
 use serde::de::DeserializeOwned;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ExposePortLevel, ExposePortToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    RemoveStreamToolResult, RunStreamToolResult, StartStreamToolResult, StopStreamToolResult,
+    RemoveStreamToolResult, RunStreamToolResult, STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT,
+    STREAM_LOAD_TOOL_CALL_TIMEOUT, StartStreamToolResult, StopStreamToolResult,
 };
 
 use crate::TatolabCommandFailure;
 use crate::local_api_mcp_tool_client::OBSERVATION_VERB_TOOL_CALL_TIMEOUT;
 use crate::machine_runtime_local_api_socket::call_one_tool_of_the_running_runtime;
 use crate::verb_standard_output::{write_verb_standard_error, write_verb_standard_output};
-
-/// Bounds a tool call that loads a stream. The runtime bounds the compile in the project's
-/// interpreter at 60 s and the description of its Python types at 60 s more, then loads the
-/// graph; the call may also wait behind another stream action, which runs one at a time.
-const STREAM_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(300);
-
-/// Bounds a stream action that loads nothing. The runtime's watchdog ends a stream's teardown
-/// at 15 s; the call may also wait behind another stream action, a load among them.
-const STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A local API tool that runs, stops or reads the streams the runtime holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,11 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn a_load_waits_past_the_runtimes_compile_and_describe_bounds_and_an_unload_past_its_watchdog()
-    {
-        let the_runtimes_compile_and_describe_bounds = Duration::from_secs(60 + 60);
-        let the_runtimes_stream_teardown_watchdog = Duration::from_secs(15);
-
+    fn each_stream_action_tool_waits_for_the_bound_of_its_kind() {
         for loading_tool in [StreamActionTool::RunStream, StreamActionTool::StartStream] {
             assert_eq!(
                 loading_tool.tool_call_timeout(),
@@ -594,11 +582,6 @@ mod tests {
         assert_eq!(
             StreamActionTool::ListStreams.tool_call_timeout(),
             OBSERVATION_VERB_TOOL_CALL_TIMEOUT
-        );
-        assert!(STREAM_LOAD_TOOL_CALL_TIMEOUT > the_runtimes_compile_and_describe_bounds);
-        assert!(
-            STREAM_ACTION_WITHOUT_A_LOAD_TOOL_CALL_TIMEOUT
-                > the_runtimes_stream_teardown_watchdog + OBSERVATION_VERB_TOOL_CALL_TIMEOUT
         );
     }
 

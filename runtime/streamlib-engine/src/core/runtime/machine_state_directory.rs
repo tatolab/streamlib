@@ -297,6 +297,12 @@ impl std::fmt::Display for KeptStreamRecordReadFailure {
     }
 }
 
+impl From<KeptStreamRecordReadFailure> for Error {
+    fn from(unreadable: KeptStreamRecordReadFailure) -> Self {
+        Error::Runtime(unreadable.to_string())
+    }
+}
+
 /// The kept-stream records in a state directory's `streams/`, one
 /// `<stream>.json` per kept stream.
 #[derive(Debug, Clone)]
@@ -372,20 +378,23 @@ impl KeptStreamRecordsInTheStateDirectory {
 
     /// The record of `stream_name`, `None` when there is none; a record that
     /// cannot be read is refused naming its path.
-    pub fn read(&self, stream_name: &str) -> Result<Option<KeptStreamRecord>> {
-        let record_path = self.record_path_of(stream_name)?;
+    pub fn read(
+        &self,
+        stream_name: &str,
+    ) -> std::result::Result<Option<KeptStreamRecord>, KeptStreamRecordReadFailure> {
+        let record_path = self
+            .record_path_of(stream_name)
+            .map_err(|names_no_record| KeptStreamRecordReadFailure {
+                path: self.kept_streams_directory.clone(),
+                reason: format!("no record can be named `{stream_name}`: {names_no_record}"),
+            })?;
         match std::fs::read(&record_path) {
-            Ok(record_bytes) => read_a_kept_stream_record(&record_path, &record_bytes)
-                .map(Some)
-                .map_err(|failure| Error::Runtime(failure.to_string())),
+            Ok(record_bytes) => read_a_kept_stream_record(&record_path, &record_bytes).map(Some),
             Err(not_read) if not_read.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(not_read) => Err(Error::Runtime(
-                KeptStreamRecordReadFailure {
-                    path: record_path,
-                    reason: not_read.to_string(),
-                }
-                .to_string(),
-            )),
+            Err(not_read) => Err(KeptStreamRecordReadFailure {
+                path: record_path,
+                reason: not_read.to_string(),
+            }),
         }
     }
 

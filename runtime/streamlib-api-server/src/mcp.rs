@@ -68,7 +68,7 @@ use streamlib::sdk::graph::{
 };
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
-    ExchangedPublishedSurfaceFramePngImage, LoadedStreamTag,
+    ExchangedPublishedSurfaceFramePngImage, LoadedStreamHolding, LoadedStreamTag,
     OperationsOnTheStreamsLoadedInThisRuntime, RunStreamRequest, RuntimeOperations,
     StreamListingState, StreamRunOutcome,
 };
@@ -819,9 +819,9 @@ impl LocalApiMcpServerHandler {
                     stream_function,
                     stream_name: name,
                     holding: if keep {
-                        streamlib::sdk::runtime::LoadedStreamHolding::Kept
+                        LoadedStreamHolding::Kept
                     } else {
-                        streamlib::sdk::runtime::LoadedStreamHolding::Attached
+                        LoadedStreamHolding::Attached
                     },
                 })?;
                 if let Some(streams_attached_to_this_connection) =
