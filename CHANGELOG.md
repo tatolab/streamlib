@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.44.1](https://github.com/tatolab/streamlib/compare/v0.44.0...v0.44.1) (2026-10-10)
+
+
+### Features
+
+* **runtime:** a stream that keeps crashing the runtime is failed ([#2713](https://github.com/tatolab/streamlib/issues/2713)) ([a1ca841](https://github.com/tatolab/streamlib/commit/a1ca84149c553dc385c7dda105f10d6e7679744d))
+
 ## [0.44.0](https://github.com/tatolab/streamlib/compare/v0.43.1...v0.44.0) (2026-10-10)
 
 
