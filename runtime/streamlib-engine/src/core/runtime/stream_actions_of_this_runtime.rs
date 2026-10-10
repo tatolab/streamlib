@@ -313,9 +313,9 @@ impl Runner {
     /// replaces the record, and an attached load of the stream the caller
     /// attached from the same project and function replaces that stream —
     /// under the name the function compiles to now, when the run asks for no
-    /// name and neither did the run that loaded it. The running stream is unloaded only once the compile succeeded, so a
-    /// compile that fails leaves it running; a refused load re-loads the
-    /// previous one. A load refused only because the holder ran the same
+    /// name and neither did the run that loaded it. The running stream is
+    /// unloaded only once the compile succeeded, so a compile that fails
+    /// leaves it running; a refused load re-loads the previous one. A load refused only because the holder ran the same
     /// project's function under another spelling is refused naming it.
     pub fn run_stream(&self, request: RunStreamRequest) -> Result<StreamRunOutcome> {
         let RunStreamRequest {

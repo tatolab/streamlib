@@ -1030,7 +1030,10 @@ def test_an_agent_does_all_of_it_over_tatolab_mcp(
     # live, ending on private, and nothing restarts.
     agent = start_mcp_session_over_the_verb()
     for stream_name, project_directory in ((ALPHA_STREAM, alpha_project), (BRAVO_STREAM, bravo_project)):
-        assert run_stream(agent, project_directory, keep=True) == {
+        kept_run = run_stream(agent, project_directory, keep=True)
+        stream_instance = kept_run.pop("stream_instance")
+        assert isinstance(stream_instance, str) and stream_instance, kept_run
+        assert kept_run == {
             "stream": stream_name,
             "kept": True,
             "project_directory": str(project_directory),
