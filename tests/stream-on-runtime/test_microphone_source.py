@@ -3,8 +3,8 @@
 
 """`tatolab.stream.MicrophoneSource` — the audio built-in, built-in class to numpy view.
 
-The load test needs no device: `tatolabd` loads the graph and is then refused
-at the GPU. The graph tests start the engine, which initializes a GPU context,
+The load test needs no device: `tatolabd` loads the graph and its start is
+then refused at the GPU. The graph tests start the engine, which initializes a GPU context,
 so they carry `requires_gpu` like every other graph test here.
 
 Deliberately arm-agnostic: the backend chain picks whichever arm the machine
@@ -21,13 +21,15 @@ from collections.abc import Callable
 
 import pytest
 
-import tatolab.stream
-from conftest import StreamRunWithNoVulkanDriverOutcome
-from microphone_source_probes import AudioBlockProbe
-from runtime_process_under_test import RuntimeProcessUnderTest
-from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
+from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
+from microphone_source_streams import (
+    UNOPENABLE_DEVICE_ID,
+    microphone_into_an_audio_block_probe,
+    microphone_source_naming_an_unopenable_device,
+    one_microphone_source_left_unnamed,
+)
+from tatolab.stream import compile_stream_to_graph
 
-UNOPENABLE_DEVICE_ID = "not-a-real-audio-device"
 READINESS_TIMEOUT_SECONDS = 10.0
 MICROPHONE_NODE_NAME = "microphonesource"
 
@@ -36,25 +38,6 @@ MICROPHONE_NODE_NAME = "microphonesource"
 # nanoseconds a block is the device rather than a defect; a lost block is a
 # whole quantum, which this is nowhere near.
 DEVICE_CLOCK_TOLERANCE_NS_PER_BLOCK = 100_000
-
-
-@stream
-def one_microphone_source_left_unnamed(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.MicrophoneSource)
-
-
-@stream
-def microphone_into_an_audio_block_probe(stream_builder: StreamBuilder) -> None:
-    """Added with no `config` at all — the spelling for a block that needs no
-    configuration, and the one that reaches the backend's default device."""
-    microphone = stream_builder.add(tatolab.stream.MicrophoneSource)
-    probe = stream_builder.add(AudioBlockProbe)
-    stream_builder.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
-
-
-@stream
-def microphone_source_naming_an_unopenable_device(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(tatolab.stream.MicrophoneSource, config={"device_id": UNOPENABLE_DEVICE_ID})
 
 
 # ---- built-in class semantics (no GPU) -------------------------------------
@@ -75,7 +58,7 @@ def test_node_name_defaults_to_the_type_name(
 
 @pytest.mark.requires_gpu
 def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The whole audio path, end to end: built-in class → native registration →
     the probed backend capturing in `tatolabd` → an `AudioBlock` bag read as a
@@ -85,7 +68,7 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
     added-without-config proof: every field of a built-in's config struct
     carries a serde default, so `{}` deserializes.
     """
-    tatolabd = start_tatolabd(microphone_into_an_audio_block_probe)
+    tatolabd = start_tatolabd_running_stream(microphone_into_an_audio_block_probe)
     readings = tatolabd.await_marker("BLOCKS_SEEN")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -151,14 +134,15 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
 
 @pytest.mark.requires_gpu
 def test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """A machine with no audio is a supported environment; a wrong device id is
     a wiring error. Landing on a different device would be worse than failing,
     so the source refuses and the processor never reaches Running."""
-    tatolabd = start_tatolabd(microphone_source_naming_an_unopenable_device)
+    tatolabd = start_tatolabd_running_stream(microphone_source_naming_an_unopenable_device)
+    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
     node_states = tatolabd.local_api_client().await_every_node_past_setup(
-        timeout=READINESS_TIMEOUT_SECONDS
+        stream=stream_name, timeout=READINESS_TIMEOUT_SECONDS
     )
     tatolabd.interrupt()
     tatolabd.await_clean_exit()

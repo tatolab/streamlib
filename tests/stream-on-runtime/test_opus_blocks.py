@@ -3,8 +3,8 @@
 
 """The Opus codec pair, built-in class to decoded audio block.
 
-The load tests need no device: `tatolabd` loads the graph and is then refused
-at the GPU, which is why they run in CI. The graph tests start the engine, so
+The load tests need no device: `tatolabd` loads the graph and its start is
+then refused at the GPU, which is why they run in CI. The graph tests start the engine, so
 they carry `requires_gpu` like every other graph test here and run nowhere in
 CI: libopus needs no device, but a running processor does.
 
@@ -23,23 +23,19 @@ from collections.abc import Callable
 import pytest
 
 from block_wiring_streams import microphone_through_the_opus_round_trip_into_a_speaker
-from conftest import StreamRunWithNoVulkanDriverOutcome
-from runtime_process_under_test import RuntimeProcessUnderTest
-from tatolab.stream import (
-    OpusDecoder,
-    OpusEncoder,
-    StreamBuilder,
-    compile_stream_to_graph,
-    stream,
-)
+from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from opus_blocks_probes import (
     DECODED_BLOCKS_REPORTED,
     ENCODED_PACKETS_REPORTED,
     SOURCE_CHANNELS,
-    DecodedAudioBlockProbe,
-    EncodedAudioPacketProbe,
-    StereoToneSource,
 )
+from opus_blocks_streams import (
+    an_opus_decoder_alone,
+    an_opus_encoder_alone,
+    stereo_tone_through_the_opus_pair_probed_on_both_links,
+)
+from runtime_process_under_test import RuntimeProcessUnderTest
+from tatolab.stream import OpusDecoder, OpusEncoder, compile_stream_to_graph
 
 TWO_OPUS_MARKERS = [OpusEncoder, OpusDecoder]
 
@@ -67,16 +63,6 @@ READINESS_TIMEOUT_SECONDS = 20.0
 
 
 # ---- built-in class semantics (no GPU) -------------------------------------
-
-
-@stream
-def an_opus_encoder_alone(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(OpusEncoder)
-
-
-@stream
-def an_opus_decoder_alone(stream_builder: StreamBuilder) -> None:
-    stream_builder.add(OpusDecoder)
 
 
 ONE_OPUS_MARKER_ALONE_BY_MARKER_CLASS = {
@@ -115,47 +101,15 @@ def test_the_round_trip_wires_without_an_adapter(
 # ---- the round trip in a real graph (GPU) ----------------------------------
 
 
-@stream
-def stereo_tone_through_the_opus_pair_probed_on_both_links(stream_builder: StreamBuilder) -> None:
-    """A stereo tone encoded and decoded back, with no Python in the codec path.
-
-    `StereoToneSource → OpusEncoder → OpusDecoder`, a probe fanned off each of
-    the two links. The source states 48 kHz stereo `f32`, which is what the
-    encoder's window contract asks the stage to resample to — so nothing
-    between the source and the measurement is a resampler, and the channel
-    count the encoder follows is this stream's own fact.
-
-    Two probes off one run rather than two runs is what makes the trim
-    assertion possible: a decoded block's stamp is paired against the stamp of
-    the encoded packet a lookahead later, and two runs would have two anchors
-    and nothing to pair across.
-
-    The source publishes 480-sample blocks and the encoder's port declares
-    960/960, so the window stage frames two source blocks into each Opus
-    packet — there is no rechunker between them and no configuration that
-    could add one.
-    """
-    source = stream_builder.add(StereoToneSource)
-    encoder = stream_builder.add(OpusEncoder)
-    decoder = stream_builder.add(OpusDecoder)
-    encoded_probe = stream_builder.add(EncodedAudioPacketProbe)
-    decoded_probe = stream_builder.add(DecodedAudioBlockProbe)
-
-    stream_builder.connect(source.output("audio"), encoder.input("audio"))
-    stream_builder.connect(encoder.output("encoded_audio"), decoder.input("encoded_audio"))
-    stream_builder.connect(
-        encoder.output("encoded_audio"),
-        encoded_probe.input("encoded_audio_from_upstream"),
-    )
-    stream_builder.connect(decoder.output("audio"), decoded_probe.input("audio_from_upstream"))
-
-
 def start_the_opus_round_trip(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
-) -> RuntimeProcessUnderTest:
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+) -> TatolabdUnderTest:
     """The round trip started on `tatolabd`, once every node is Running."""
-    tatolabd = start_tatolabd(stereo_tone_through_the_opus_pair_probed_on_both_links)
-    tatolabd.local_api_client().await_every_node_running(timeout=READINESS_TIMEOUT_SECONDS)
+    tatolabd = start_tatolabd_running_stream(stereo_tone_through_the_opus_pair_probed_on_both_links)
+    stream_name = tatolabd.await_the_latest_attached_stream_loaded()
+    tatolabd.local_api_client().await_every_node_running(
+        stream=stream_name, timeout=READINESS_TIMEOUT_SECONDS
+    )
     return tatolabd
 
 
@@ -166,7 +120,7 @@ def _reported(tatolabd: RuntimeProcessUnderTest, marker_name: str) -> "list[dict
 
 @pytest.mark.requires_gpu
 def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The encoded-domain link, read from Python: every bag libopus produced
     casts to an `EncodedAudioPacket`, and what the cast then reports is the
@@ -177,7 +131,7 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
     of the doctrine: a `sequence_index` step other than exactly one is loss,
     and each packet is its own group.
     """
-    tatolabd = start_the_opus_round_trip(start_tatolabd)
+    tatolabd = start_the_opus_round_trip(start_tatolabd_running_stream)
     tatolabd.await_marker("ENCODED_PACKETS_COMPLETE")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -227,7 +181,7 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
 
 @pytest.mark.requires_gpu
 def test_the_decoded_blocks_are_one_per_packet_and_stamped_a_lookahead_earlier(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The far side of the pair: what libopus reconstructed, read back as
     ordinary audio blocks.
@@ -248,7 +202,7 @@ def test_the_decoded_blocks_are_one_per_packet_and_stamped_a_lookahead_earlier(
     `Runtime` at all:
     `encoded_packet_to_audio_block_decoder.rs::a_later_blocks_derived_stamp_lands_on_the_stamp_of_the_packet_whose_input_it_carries`.
     """
-    tatolabd = start_the_opus_round_trip(start_tatolabd)
+    tatolabd = start_the_opus_round_trip(start_tatolabd_running_stream)
     tatolabd.await_every_marker("ENCODED_PACKETS_COMPLETE", "DECODED_BLOCKS_COMPLETE")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()

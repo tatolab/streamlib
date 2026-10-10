@@ -22,32 +22,13 @@ from typing import Any
 
 import pytest
 
-from inbound_link_naming_processors import (
-    FeedsOneValueSource,
-    ReportsEachAttributionSink,
-    ReportsWhichLinkEachBagCameFrom,
-)
+from conftest import TatolabdUnderTest
+from inbound_link_naming_streams import FEEDER_VALUES, two_feeders_into_one_port
 from runtime_process_under_test import RuntimeProcessUnderTest
-from tatolab.stream import StreamBuilder, stream
 
 pytestmark = [pytest.mark.requires_gpu]
 
 BAG_TIMEOUT_SECONDS = 30.0
-
-FEEDER_VALUES = {"firstfeeder": "from-the-first", "secondfeeder": "from-the-second"}
-
-
-@stream
-def two_feeders_into_one_port(stream_builder: StreamBuilder) -> None:
-    """Both feeders linked into the one `tracks` port, a reporter on its output."""
-    sink = stream_builder.add(ReportsWhichLinkEachBagCameFrom)
-    for feeder_name, value in FEEDER_VALUES.items():
-        feeder = stream_builder.add(FeedsOneValueSource, name=feeder_name, config={"value": value})
-        stream_builder.connect(feeder.output("bags_to_downstream"), sink.input("tracks"))
-    reporter = stream_builder.add(ReportsEachAttributionSink)
-    stream_builder.connect(
-        sink.output("attributions_to_downstream"), reporter.input("attributions_from_upstream")
-    )
 
 
 def first_attribution_of_each_value(
@@ -66,14 +47,14 @@ def first_attribution_of_each_value(
 
 
 def test_a_helper_placed_processor_tells_two_producers_apart_on_one_port(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The read a many-track sink is built on, over real links.
 
     Each feeder's bags come back named by that feeder's own channel, so a bag
     carries no identity of its own and the sink still knows who sent it.
     """
-    tatolabd = start_tatolabd(two_feeders_into_one_port)
+    tatolabd = start_tatolabd_running_stream(two_feeders_into_one_port)
     attributed = {
         value: attribution["arrived_on"]
         for value, attribution in first_attribution_of_each_value(
@@ -96,11 +77,11 @@ def test_a_helper_placed_processor_tells_two_producers_apart_on_one_port(
 
 
 def test_a_sink_learns_its_producers_in_setup_before_any_bag_arrives(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """Links are wired before `setup()` runs, which is how a many-track sink
     knows how many tracks it owes without waiting for a bag on each."""
-    tatolabd = start_tatolabd(two_feeders_into_one_port)
+    tatolabd = start_tatolabd_running_stream(two_feeders_into_one_port)
     attribution = tatolabd.await_marker("ATTRIBUTION", timeout=BAG_TIMEOUT_SECONDS)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()

@@ -74,10 +74,13 @@ STREAM_BY_SCENARIO = {
 }
 
 
-def run_probe(start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario: str) -> dict:
+def run_probe(
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
+    scenario: str,
+) -> dict:
     """One scenario, one observation dict — or a failure carrying the probe's
     own traceback, which names the cause better than a missing marker."""
-    tatolabd = start_tatolabd(STREAM_BY_SCENARIO[scenario])
+    tatolabd = start_tatolabd_running_stream(STREAM_BY_SCENARIO[scenario])
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -98,7 +101,7 @@ def skip_without_the_device(observation: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_a_graph_frame_reaches_torch_as_a_device_tensor(start_tatolabd):
+def test_a_graph_frame_reaches_torch_as_a_device_tensor(start_tatolabd_running_stream):
     """The ticket's headline, in the user's own spelling.
 
     `torch.from_dlpack(resolved_frame)` yields a GPU-resident tensor whose
@@ -106,7 +109,7 @@ def test_a_graph_frame_reaches_torch_as_a_device_tensor(start_tatolabd):
     user-facing buffer flavour to pick — from a processor that does not share
     the engine's address space.
     """
-    observation = run_probe(start_tatolabd, "GraphFrameToTorchProbe")
+    observation = run_probe(start_tatolabd_running_stream, "GraphFrameToTorchProbe")
     skip_without_the_device(observation)
     assert observation["reported_device"][0] == NATURAL_DLPACK_DEVICE
     assert observation["tensor_device"].startswith(NATURAL_TORCH_DEVICE_TYPE)
@@ -123,7 +126,7 @@ def test_a_graph_frame_reaches_torch_as_a_device_tensor(start_tatolabd):
 
 
 def test_a_device_side_edit_publishes_back_to_the_surface_at_unlock(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The mutate-in-place demo, on the GPU.
 
@@ -132,19 +135,19 @@ def test_a_device_side_edit_publishes_back_to_the_surface_at_unlock(
     the edit. Mental-revert: drop the copy-back from unlock and this reads the
     original pattern.
     """
-    observation = run_probe(start_tatolabd, "DeviceEditProbe")
+    observation = run_probe(start_tatolabd_running_stream, "DeviceEditProbe")
     skip_without_the_device(observation)
     assert observation["pixel_after_publish"] == [17, 34, 51, 68]
     assert observation["cleared_pixel"] == [0, 0, 0, 0]
 
 
-def test_a_device_edit_survives_the_with_block_spelling(start_tatolabd):
+def test_a_device_edit_survives_the_with_block_spelling(start_tatolabd_running_stream):
     """close() publishes pending device writes too.
 
     A `with` block that never calls unlock reaches close() directly; an edit
     silently discarded there is data loss in the API's own idiomatic spelling.
     """
-    observation = run_probe(start_tatolabd, "WithBlockEditProbe")
+    observation = run_probe(start_tatolabd_running_stream, "WithBlockEditProbe")
     skip_without_the_device(observation)
     assert observation["pixel_after_with_block"] == [99, 88, 77, 66]
 
@@ -155,10 +158,10 @@ def test_a_device_edit_survives_the_with_block_spelling(start_tatolabd):
 
 
 def test_a_device_tensor_outliving_its_handle_keeps_a_live_mapping(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """Use-after-free across the engine allocation and the device import — closing the handle frees none of them while a tensor lives."""
-    observation = run_probe(start_tatolabd, "TensorOutlivesHandleProbe")
+    observation = run_probe(start_tatolabd_running_stream, "TensorOutlivesHandleProbe")
     skip_without_the_device(observation)
     assert observation["checksum_after"] == observation["checksum_before"]
 
@@ -168,21 +171,21 @@ def test_a_device_tensor_outliving_its_handle_keeps_a_live_mapping(
 # ---------------------------------------------------------------------------
 
 
-def test_the_host_side_stays_reachable_on_explicit_request(start_tatolabd):
+def test_the_host_side_stays_reachable_on_explicit_request(start_tatolabd_running_stream):
     """`dl_device=(1, 0)` — numpy's `device="cpu"` — still yields the host
     mapping when a device side exists, on both floors; `as_numpy` rides the
     same request, so the two are one mapping, not two copies."""
-    observation = run_probe(start_tatolabd, "HostSideProbe")
+    observation = run_probe(start_tatolabd_running_stream, "HostSideProbe")
     assert observation["host_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
     assert observation["as_numpy_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
     assert observation["same_pixels"]
     assert observation["same_host_memory"]
 
 
-def test_a_copy_request_is_refused_at_both_doors(start_tatolabd):
+def test_a_copy_request_is_refused_at_both_doors(start_tatolabd_running_stream):
     """Both doors export in place, so `copy=True` — a request for memory the
     consumer owns — is refused by name rather than answered with an alias."""
-    observation = run_probe(start_tatolabd, "CopyRequestRefusedAtBothDoorsProbe")
+    observation = run_probe(start_tatolabd_running_stream, "CopyRequestRefusedAtBothDoorsProbe")
     assert "exports in place" in observation["handle_refusal"], observation
     if observation.get("scope_device_unavailable"):
         pytest.skip(
@@ -197,7 +200,7 @@ def test_a_copy_request_is_refused_at_both_doors(start_tatolabd):
 # ---------------------------------------------------------------------------
 
 
-def test_the_device_tensor_strides_follow_the_surfaces_row_pitch(start_tatolabd):
+def test_the_device_tensor_strides_follow_the_surfaces_row_pitch(start_tatolabd_running_stream):
     """A width whose GPU-image rows pad, over both backings: the last pixel of
     a row lands where the host finds it and never shears into the next row.
 
@@ -206,7 +209,7 @@ def test_the_device_tensor_strides_follow_the_surfaces_row_pitch(start_tatolabd)
     proves nothing about padding. On Linux the device view is a staging whose
     pitch is its own, so only the landing is asserted there.
     """
-    observation = run_probe(start_tatolabd, "DeviceTensorStridesFollowTheRowPitchProbe")
+    observation = run_probe(start_tatolabd_running_stream, "DeviceTensorStridesFollowTheRowPitchProbe")
     skip_without_the_device(observation)
     for backing in ("pixel_buffer", "texture"):
         stored = observation[backing]
@@ -232,11 +235,14 @@ def skip_without_mlx(observation: dict) -> None:
 @pytest.mark.parametrize(
     "probe", ["TorchDeviceWriteThenEngineGpuReadProbe", "MlxDeviceWriteThenEngineGpuReadProbe"]
 )
-def test_a_device_write_is_ordered_ahead_of_the_engines_next_gpu_read(start_tatolabd, probe):
+def test_a_device_write_is_ordered_ahead_of_the_engines_next_gpu_read(
+    start_tatolabd_running_stream,
+    probe,
+):
     """A framework's write through the scope, with no synchronize in user
     code, is what a kernel dispatched right after the scope reads — the scope's
     exit drains the framework's queue before anything downstream can run."""
-    observation = run_probe(start_tatolabd, probe)
+    observation = run_probe(start_tatolabd_running_stream, probe)
     skip_without_mlx(observation)
     skip_without_the_device(observation)
     assert observation["every_pixel_the_engine_read_is_the_write"], (
@@ -249,8 +255,8 @@ def test_a_device_write_is_ordered_ahead_of_the_engines_next_gpu_read(start_tato
 # ---------------------------------------------------------------------------
 
 
-def test_mlx_reads_a_graph_frame_over_its_own_bytes(start_tatolabd):
-    observation = run_probe(start_tatolabd, "MlxReadsTheFrameProbe")
+def test_mlx_reads_a_graph_frame_over_its_own_bytes(start_tatolabd_running_stream):
+    observation = run_probe(start_tatolabd_running_stream, "MlxReadsTheFrameProbe")
     skip_without_mlx(observation)
     assert observation["array_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
     assert observation["array_dtype"] == "mlx.core.uint8"
@@ -259,9 +265,9 @@ def test_mlx_reads_a_graph_frame_over_its_own_bytes(start_tatolabd):
 
 
 def test_an_evaluated_mlx_write_through_the_write_door_reaches_the_frame(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observation = run_probe(start_tatolabd, "MlxWritesTheFrameThroughTheWriteDoorProbe")
+    observation = run_probe(start_tatolabd_running_stream, "MlxWritesTheFrameThroughTheWriteDoorProbe")
     skip_without_mlx(observation)
     assert observation["the_frame_did_not_already_carry_the_edit"]
     assert observation["the_edited_rows_carry_the_edit"]
@@ -269,12 +275,12 @@ def test_an_evaluated_mlx_write_through_the_write_door_reaches_the_frame(
 
 
 def test_torch_and_mlx_scopes_alternate_in_one_helper_without_wedging_it(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The shape that deadlocked when the scope's exit called
     `mx.synchronize()`: many scopes in one helper, MLX's arrays freed as they
     go. Every scope completes and every write lands."""
-    observation = run_probe(start_tatolabd, "TorchAndMlxScopesAlternateInOneHelperProbe")
+    observation = run_probe(start_tatolabd_running_stream, "TorchAndMlxScopesAlternateInOneHelperProbe")
     skip_without_mlx(observation)
     skip_without_the_device(observation)
     assert observation["scopes_completed"] == 12, observation
@@ -284,11 +290,14 @@ def test_torch_and_mlx_scopes_alternate_in_one_helper_without_wedging_it(
 @pytest.mark.parametrize(
     "probe", ["TorchTensorOutlivesTextureHandleProbe", "MlxArrayOutlivesTextureHandleProbe"]
 )
-def test_a_device_array_outliving_its_texture_handle_keeps_a_live_mapping(start_tatolabd, probe):
+def test_a_device_array_outliving_its_texture_handle_keeps_a_live_mapping(
+    start_tatolabd_running_stream,
+    probe,
+):
     """Closing a texture's handle frees nothing a device array still
     addresses, and dropping the array later releases the texture from the
     capsule's deleter without wedging the helper."""
-    observation = run_probe(start_tatolabd, probe)
+    observation = run_probe(start_tatolabd_running_stream, probe)
     skip_without_mlx(observation)
     skip_without_the_device(observation)
     assert observation["checksum_before"] == observation["expected_checksum"], observation
@@ -296,19 +305,19 @@ def test_a_device_array_outliving_its_texture_handle_keeps_a_live_mapping(start_
     assert observation["helper_still_answers"]
 
 
-def test_an_mlx_whole_array_assignment_misses_the_frame(start_tatolabd):
+def test_an_mlx_whole_array_assignment_misses_the_frame(start_tatolabd_running_stream):
     """The partial-slice rule the stub states: MLX makes `a[:] = ...` a new
     array, so the frame keeps its pixels while the array shows the edit."""
-    observation = run_probe(start_tatolabd, "MlxWholeArrayAssignmentMissesTheFrameProbe")
+    observation = run_probe(start_tatolabd_running_stream, "MlxWholeArrayAssignmentMissesTheFrameProbe")
     skip_without_mlx(observation)
     assert observation["the_array_carries_the_edit"]
     assert observation["the_frame_is_unchanged"]
 
 
-def test_an_mlx_write_with_a_view_alive_misses_the_frame(start_tatolabd):
+def test_an_mlx_write_with_a_view_alive_misses_the_frame(start_tatolabd_running_stream):
     """The negative control the stub's MLX contract rests on: the array shows
     the edit, the frame does not — MLX wrote a buffer of its own."""
-    observation = run_probe(start_tatolabd, "MlxWriteWithAViewAliveMissesTheFrameProbe")
+    observation = run_probe(start_tatolabd_running_stream, "MlxWriteWithAViewAliveMissesTheFrameProbe")
     skip_without_mlx(observation)
     assert observation["the_array_carries_the_edit"]
     assert observation["the_frame_is_unchanged"]
@@ -319,7 +328,7 @@ def test_an_mlx_write_with_a_view_alive_misses_the_frame(start_tatolabd):
 # ---------------------------------------------------------------------------
 
 
-def test_camera_device_pixels_match_host_across_ring_cycles(start_tatolabd):
+def test_camera_device_pixels_match_host_across_ring_cycles(start_tatolabd_running_stream):
     """Regression lock on the stale-blit-source bug, and on the frame itself.
 
     Two claims. The camera registers its transient ring texture under each
@@ -345,7 +354,7 @@ def test_camera_device_pixels_match_host_across_ring_cycles(start_tatolabd):
     no_camera = reason_this_rig_has_no_camera()
     if no_camera:
         pytest.skip(no_camera)
-    observation = run_probe(start_tatolabd, "camera")
+    observation = run_probe(start_tatolabd_running_stream, "camera")
     skip_without_the_device(observation)
 
     # A later frame can recycle before this slow consumer reads it, which is
@@ -384,7 +393,7 @@ def test_camera_device_pixels_match_host_across_ring_cycles(start_tatolabd):
 
 @pytest.mark.linux_only_capability(reason="DMA-BUF and OPAQUE_FD are Linux file-descriptor handles")
 def test_a_dma_buf_fd_round_trips_out_of_and_back_into_the_graph(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The shape third-party native code gets: an fd it can hand to EGL, a V4L2
     output device, or another process — and the way one comes back.
@@ -394,7 +403,7 @@ def test_a_dma_buf_fd_round_trips_out_of_and_back_into_the_graph(
     adopted mapping reads the very pixels the exporter wrote, so the handle is
     genuinely the same memory, not a copy.
     """
-    observation = run_probe(start_tatolabd, "DmaBufExportProbe")
+    observation = run_probe(start_tatolabd_running_stream, "DmaBufExportProbe")
     assert observation["fd_is_real"]
     assert observation["byte_size"] == observation["expected_byte_size"]
     assert observation["fd_closes_cleanly"]
@@ -408,7 +417,7 @@ def test_a_dma_buf_fd_round_trips_out_of_and_back_into_the_graph(
 
 @pytest.mark.linux_only_capability(reason="DMA-BUF and OPAQUE_FD are Linux file-descriptor handles")
 def test_a_texture_handle_round_trips_across_the_process_boundary(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """A kernel output reaches a consumer as the texture itself, both handle
     flavours where the format allows.
@@ -423,7 +432,7 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
     code imports — the demo shape. A second resolve after release proves the
     round trip left the frame usable.
     """
-    observation = run_probe(start_tatolabd, "TextureHandleRoundTripProbe")
+    observation = run_probe(start_tatolabd_running_stream, "TextureHandleRoundTripProbe")
     assert observation["limited_surface_mints_no_raw_handle"], (
         "raw handles mint only via the Full surface, on every path"
     )
@@ -502,13 +511,13 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
 @pytest.mark.skipif(sys.platform != "darwin", reason="an IOSurface Mach port is a macOS handle")
 @pytest.mark.parametrize("backing", ["pixel_buffer", "texture"])
 def test_an_iosurface_port_is_looked_up_and_read_by_native_code_in_the_helper(
-    start_tatolabd, backing
+    start_tatolabd_running_stream, backing
 ):
     """The macOS raw handle, as a C consumer spells it: the helper exports a
     send right to the surface's IOSurface, a ctypes shim in the same helper
     looks the surface up from the port and reads the very pixels the CPU door
     stored — on a texture whose rows pad, at the surface's own pitch."""
-    observation = run_probe(start_tatolabd, "IOSurfaceExportProbe")[backing]
+    observation = run_probe(start_tatolabd_running_stream, "IOSurfaceExportProbe")[backing]
     export = observation["export"]
     assert observation["ports_are_real"]
     assert observation["looked_up"], "the exported port named no IOSurface"
@@ -548,13 +557,13 @@ def test_an_iosurface_port_is_looked_up_and_read_by_native_code_in_the_helper(
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="an IOSurface Mach port is a macOS handle")
 def test_each_iosurface_export_is_a_fresh_send_right_the_caller_owns_and_gives_back(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """Every export mints its own send right, and each names the same
     surface. The caller's `mach_port_deallocate` of each succeeds and leaves
     the task holding nothing under that name — the right was the caller's
     alone, with no reference the engine keeps or expects back."""
-    observations = run_probe(start_tatolabd, "IOSurfaceExportProbe")
+    observations = run_probe(start_tatolabd_running_stream, "IOSurfaceExportProbe")
     for backing in ("pixel_buffer", "texture"):
         observation = observations[backing]
         assert observation["ports_are_real"], (backing, observation)
@@ -573,11 +582,11 @@ def test_each_iosurface_export_is_a_fresh_send_right_the_caller_owns_and_gives_b
         )
 
 
-def test_each_raw_handle_flavour_refuses_by_name_off_its_platform(start_tatolabd):
+def test_each_raw_handle_flavour_refuses_by_name_off_its_platform(start_tatolabd_running_stream):
     """All three raw-handle methods exist on both binaries. Off its platform
     each refuses, naming the flavour this platform does mint instead of
     leaving the caller an `AttributeError`."""
-    observation = run_probe(start_tatolabd, "RawHandleOffItsPlatformRefusesProbe")
+    observation = run_probe(start_tatolabd_running_stream, "RawHandleOffItsPlatformRefusesProbe")
     if sys.platform == "darwin":
         for fd_flavour in ("export_dma_buf", "export_opaque_fd"):
             refusal = observation[fd_flavour]
@@ -596,7 +605,7 @@ def test_each_raw_handle_flavour_refuses_by_name_off_its_platform(start_tatolabd
 # ---------------------------------------------------------------------------
 
 
-def test_the_privileged_capability_works_from_a_helper_process(start_tatolabd):
+def test_the_privileged_capability_works_from_a_helper_process(start_tatolabd_running_stream):
     """`ctx.gpu_full_access` is reachable from a `setup` hook running in a
     child: each method is its own escalate round trip to the parent, which runs
     the privileged work against the engine and answers with a real surface.
@@ -605,7 +614,7 @@ def test_the_privileged_capability_works_from_a_helper_process(start_tatolabd):
     message has to carry: what cannot cross the boundary is the callback's
     atomic scope, not the privileged operations — those are all still here.
     """
-    observation = run_probe(start_tatolabd, "PrivilegedCapabilityProbe")
+    observation = run_probe(start_tatolabd_running_stream, "PrivilegedCapabilityProbe")
     assert observation["privileged_acquire_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
     assert observation["privileged_surface_id"]
     assert observation["waited_for_device_idle"]
@@ -626,7 +635,7 @@ def test_the_privileged_capability_works_from_a_helper_process(start_tatolabd):
 
 
 def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The demo, in the user's own spelling: `with output.as_device_tensor()
     as tensor: torch.from_dlpack(tensor).mul_(2.0)`.
@@ -636,7 +645,7 @@ def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
     scope entry, whose blit re-reads the engine's texture: the write-back
     landed in the texture, not just the staging.
     """
-    observation = run_probe(start_tatolabd, "DeviceTensorScopeDoublesAKernelOutputProbe")
+    observation = run_probe(start_tatolabd_running_stream, "DeviceTensorScopeDoublesAKernelOutputProbe")
     skip_without_the_device(observation)
     assert observation["tensor_dtype"] == "torch.float16"
     assert observation["tensor_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
@@ -648,7 +657,7 @@ def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
 
 
 def test_a_raise_inside_the_device_tensor_scope_follows_its_floors_publication_rule(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """Owner decision 2026-08-07, per floor. On Linux the scope edits a
     staging, so leaving by a propagating exception discards the write and the
@@ -658,7 +667,7 @@ def test_a_raise_inside_the_device_tensor_scope_follows_its_floors_publication_r
     suppressed, and the surface — and the kernel writing it — keep working on
     the next frame.
     """
-    observation = run_probe(start_tatolabd, "DeviceTensorScopeDiscardsOnRaiseProbe")
+    observation = run_probe(start_tatolabd_running_stream, "DeviceTensorScopeDiscardsOnRaiseProbe")
     skip_without_the_device(observation)
     assert observation["exception_propagated"] == "deliberate mid-scope failure"
     if sys.platform == "darwin":
@@ -675,14 +684,14 @@ def test_a_raise_inside_the_device_tensor_scope_follows_its_floors_publication_r
 
 
 def test_a_raise_inside_the_pixel_buffer_scope_follows_its_floors_publication_rule(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """One rule for both scopes (owner, 2026-08-07), per floor: on Linux the
     handle stops publishing a pending device write when the block is left by a
     raise; on macOS the device tensor is the IOSurface itself, so the stores
     that landed before the raise are the frame.
     """
-    observation = run_probe(start_tatolabd, "PixelBufferScopeDiscardsOnRaiseProbe")
+    observation = run_probe(start_tatolabd_running_stream, "PixelBufferScopeDiscardsOnRaiseProbe")
     skip_without_the_device(observation)
     assert observation["exception_propagated"] == "deliberate mid-scope failure"
     if sys.platform == "darwin":
@@ -696,12 +705,12 @@ def test_a_raise_inside_the_pixel_buffer_scope_follows_its_floors_publication_ru
         )
 
 
-def test_a_pooled_texture_exports_a_device_tensor(start_tatolabd):
+def test_a_pooled_texture_exports_a_device_tensor(start_tatolabd_running_stream):
     """Resurrected from #1737 (removed by #1754, carried by #1757): the
     texture-first blit arm serves an acquired pooled texture through the
     handle itself — registration at acquire keys the export, and the tensor
     is device memory of the texture's extent."""
-    observation = run_probe(start_tatolabd, "PooledTextureExportProbe")
+    observation = run_probe(start_tatolabd_running_stream, "PooledTextureExportProbe")
     skip_without_the_device(observation)
     assert observation["texture_surface_id"]
     if observation["texture_device"][0] != NATURAL_DLPACK_DEVICE:
@@ -711,7 +720,7 @@ def test_a_pooled_texture_exports_a_device_tensor(start_tatolabd):
 
 
 def test_no_acquire_texture_usage_can_close_the_device_tensor_scope(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """`acquire_texture` implies `copy_src | copy_dst`, so the usage tokens an
     author spells cannot leave a texture unable to blit out or take the blit
@@ -721,7 +730,10 @@ def test_no_acquire_texture_usage_can_close_the_device_tensor_scope(
     genuinely lacks the usage, which Python cannot mint — and keeps its
     coverage engine-side, over images built without the bits.
     """
-    observation = run_probe(start_tatolabd, "DeviceTensorScopeTakesEveryAcquiredTextureProbe")
+    observation = run_probe(
+        start_tatolabd_running_stream,
+        "DeviceTensorScopeTakesEveryAcquiredTextureProbe",
+    )
     skip_without_the_device(observation)
     assert observation["scope_over_one_token"] == "entered", (
         f"one usage token is enough — the copy bits ride every acquire: "

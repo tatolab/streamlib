@@ -46,11 +46,11 @@ PROBE_STREAMS = {
 
 
 def run_probe(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", probe_class_name: str
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]", probe_class_name: str
 ) -> dict:
     """One probe, one observation dict — or a failure carrying the probe's own
     traceback, which names the cause better than a missing marker."""
-    tatolabd = start_tatolabd(PROBE_STREAMS[probe_class_name])
+    tatolabd = start_tatolabd_running_stream(PROBE_STREAMS[probe_class_name])
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -67,10 +67,10 @@ def spelled_the_same_way(message: str) -> str:
 
 
 @pytest.mark.requires_gpu
-def test_a_python_processor_draws_through_a_graphics_kernel(start_tatolabd):
+def test_a_python_processor_draws_through_a_graphics_kernel(start_tatolabd_running_stream):
     """The demo: a pass rendered from a processor interpreter, with named bindings and
     no application-supplied bridge."""
-    observed = run_probe(start_tatolabd, "FullscreenTriangleDrawProbe")
+    observed = run_probe(start_tatolabd_running_stream, "FullscreenTriangleDrawProbe")
 
     assert observed["drew"] is True
     assert observed["surfaces_are_distinct"], (
@@ -85,7 +85,7 @@ def test_a_python_processor_draws_through_a_graphics_kernel(start_tatolabd):
 
 @pytest.mark.requires_gpu
 def test_a_binding_declared_for_a_stage_that_does_not_read_it_is_refused_at_construction(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The ticket's named validation case.
 
@@ -95,7 +95,7 @@ def test_a_binding_declared_for_a_stage_that_does_not_read_it_is_refused_at_cons
     "at construction" means the `create_graphics_kernel` line raised and no
     kernel object was ever handed back to draw with.
     """
-    observed = run_probe(start_tatolabd, "GraphicsStageMismatchProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsStageMismatchProbe")
 
     stage_mismatch = observed["stage_mismatch"]
     assert SOURCE_BINDING in stage_mismatch, stage_mismatch
@@ -119,11 +119,11 @@ def test_a_binding_declared_for_a_stage_that_does_not_read_it_is_refused_at_cons
 
 @pytest.mark.requires_gpu
 def test_a_binding_the_shaders_do_not_declare_is_refused_at_construction(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """`bindings={name: (kind, stages)}` asserts against reflection: a name the
     shaders lack refuses before a kernel exists, naming what they have."""
-    observed = run_probe(start_tatolabd, "GraphicsBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsBindingRefusalProbe")
 
     unknown = observed["unknown_at_construction"]
     assert "tint_amount" in unknown, f"must name the unknown binding: {unknown}"
@@ -134,9 +134,9 @@ def test_a_binding_the_shaders_do_not_declare_is_refused_at_construction(
 
 @pytest.mark.requires_gpu
 def test_a_binding_declared_as_the_wrong_kind_is_refused_at_construction(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observed = run_probe(start_tatolabd, "GraphicsBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsBindingRefusalProbe")
 
     mismatch = observed["kind_mismatch_at_construction"]
     assert SOURCE_BINDING in mismatch, mismatch
@@ -150,11 +150,11 @@ def test_a_binding_declared_as_the_wrong_kind_is_refused_at_construction(
 
 @pytest.mark.requires_gpu
 def test_leaving_one_of_the_shaders_bindings_undeclared_is_refused(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """A declaration is total: an unmentioned binding is how a draw silently
     binds nothing."""
-    observed = run_probe(start_tatolabd, "GraphicsBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsBindingRefusalProbe")
 
     undeclared = observed["undeclared_at_construction"]
     assert "undeclared" in undeclared, undeclared
@@ -163,9 +163,9 @@ def test_leaving_one_of_the_shaders_bindings_undeclared_is_refused(
 
 @pytest.mark.requires_gpu
 def test_a_binding_the_shaders_do_not_declare_is_refused_at_the_draw(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observed = run_probe(start_tatolabd, "GraphicsBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsBindingRefusalProbe")
 
     unknown = observed["unknown_at_draw"]
     assert "tint_amount" in unknown, f"must name the unknown binding: {unknown}"
@@ -176,11 +176,11 @@ def test_a_binding_the_shaders_do_not_declare_is_refused_at_the_draw(
 
 @pytest.mark.requires_gpu
 def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """No implicit default and no carried-over value: the kernel holds no
     binding state between draws to fall back on."""
-    observed = run_probe(start_tatolabd, "GraphicsBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsBindingRefusalProbe")
 
     missing = observed["missing_at_draw"]
     assert SOURCE_BINDING in missing, f"must name the missing binding: {missing}"
@@ -191,8 +191,8 @@ def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
 
 
 @pytest.mark.requires_gpu
-def test_a_binding_naming_an_unknown_surface_is_refused(start_tatolabd):
-    observed = run_probe(start_tatolabd, "GraphicsBindingRefusalProbe")
+def test_a_binding_naming_an_unknown_surface_is_refused(start_tatolabd_running_stream):
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsBindingRefusalProbe")
 
     unresolvable = observed["unregistered_surface_at_draw"]
     assert "no-such-surface" in unresolvable, (
@@ -204,20 +204,20 @@ def test_a_binding_naming_an_unknown_surface_is_refused(start_tatolabd):
 
 
 @pytest.mark.requires_gpu
-def test_a_refused_draw_leaves_the_kernel_drawable(start_tatolabd):
+def test_a_refused_draw_leaves_the_kernel_drawable(start_tatolabd_running_stream):
     """Every refusal above raises before anything is submitted, so none of them
     strands the kernel holding half a draw's bindings."""
-    observed = run_probe(start_tatolabd, "GraphicsBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsBindingRefusalProbe")
     assert observed["drew_after_the_refusals"] is True
 
 
 @pytest.mark.requires_gpu
 def test_a_uniform_buffer_binding_is_refused_naming_its_kind(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """No escalate op mints a uniform buffer, so a uniform-buffer binding is
     refused by name rather than pointed at whatever the descriptor last held."""
-    observed = run_probe(start_tatolabd, "GraphicsBufferBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsBufferBindingRefusalProbe")
 
     refusal = observed["buffer_kind_binding"]
     assert observed["buffer_binding"] in refusal, (
@@ -230,9 +230,9 @@ def test_a_uniform_buffer_binding_is_refused_naming_its_kind(
 
 @pytest.mark.requires_gpu
 def test_a_draw_naming_anything_but_one_colour_target_is_refused(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observed = run_probe(start_tatolabd, "GraphicsPassShapeRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsPassShapeRefusalProbe")
 
     for observation_key in ("two_color_targets", "no_color_target"):
         refusal = observed[observation_key]
@@ -245,11 +245,11 @@ def test_a_draw_naming_anything_but_one_colour_target_is_refused(
 
 @pytest.mark.requires_gpu
 def test_a_draw_offers_no_argument_for_the_shapes_the_host_cannot_honour(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The signature test's runtime twin: passing one anyway is a `TypeError`
     naming the keyword, not a silently dropped argument."""
-    observed = run_probe(start_tatolabd, "GraphicsPassShapeRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "GraphicsPassShapeRefusalProbe")
 
     for keyword in ("vertex_buffers", "index_buffer", "depth_target"):
         refusal = observed[keyword]

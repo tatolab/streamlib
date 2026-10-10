@@ -56,7 +56,7 @@ PROBE_STREAMS = {
 
 
 def run_probe(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", probe_class_name: str
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]", probe_class_name: str
 ) -> dict:
     """One probe, one observation dict — or a failure carrying the probe's own
     traceback, which names the cause better than a missing marker.
@@ -64,7 +64,7 @@ def run_probe(
     A device with no ray-tracing chain skips: the probe reports the engine's
     own refusal, which is a capability statement rather than a defect.
     """
-    tatolabd = start_tatolabd(PROBE_STREAMS[probe_class_name])
+    tatolabd = start_tatolabd_running_stream(PROBE_STREAMS[probe_class_name])
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -82,10 +82,10 @@ def spelled_the_same_way(message: str) -> str:
     return message.lower().replace("_", "")
 
 
-def test_a_python_processor_builds_a_scene_and_traces_it(start_tatolabd):
+def test_a_python_processor_builds_a_scene_and_traces_it(start_tatolabd_running_stream):
     """The demo: a BLAS, a TLAS placing it, and a trace into a storage image,
     all from a processor interpreter with no application-supplied bridge."""
-    observed = run_probe(start_tatolabd, "TracedTriangleProbe")
+    observed = run_probe(start_tatolabd_running_stream, "TracedTriangleProbe")
 
     assert observed["traced"] is True
     assert observed["binding_names"] == [SCENE_BINDING, TRACED_OUTPUT_BINDING], (
@@ -102,7 +102,7 @@ def test_a_python_processor_builds_a_scene_and_traces_it(start_tatolabd):
 
 
 def test_a_binding_declared_for_a_stage_this_kernel_has_no_module_for_is_refused_at_construction(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The ticket's named validation case.
 
@@ -112,7 +112,7 @@ def test_a_binding_declared_for_a_stage_this_kernel_has_no_module_for_is_refused
     "at construction" means the `create_ray_tracing_kernel` line raised and no
     kernel object was ever handed back to trace with.
     """
-    observed = run_probe(start_tatolabd, "RayTracingStageMismatchProbe")
+    observed = run_probe(start_tatolabd_running_stream, "RayTracingStageMismatchProbe")
 
     stage_mismatch = observed["stage_mismatch"]
     assert SCENE_BINDING in stage_mismatch, stage_mismatch
@@ -140,9 +140,9 @@ def test_a_binding_declared_for_a_stage_this_kernel_has_no_module_for_is_refused
 
 
 def test_a_binding_the_shaders_do_not_declare_is_refused_at_construction(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observed = run_probe(start_tatolabd, "RayTracingBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "RayTracingBindingRefusalProbe")
 
     unknown = observed["unknown_at_construction"]
     assert "ambient_occlusion_radius" in unknown, (
@@ -154,9 +154,9 @@ def test_a_binding_the_shaders_do_not_declare_is_refused_at_construction(
 
 
 def test_a_binding_declared_as_the_wrong_kind_is_refused_at_construction(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observed = run_probe(start_tatolabd, "RayTracingBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "RayTracingBindingRefusalProbe")
 
     mismatch = observed["kind_mismatch_at_construction"]
     assert SCENE_BINDING in mismatch, mismatch
@@ -169,9 +169,9 @@ def test_a_binding_declared_as_the_wrong_kind_is_refused_at_construction(
 
 
 def test_a_binding_the_shaders_do_not_declare_is_refused_at_the_trace(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
-    observed = run_probe(start_tatolabd, "RayTracingBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "RayTracingBindingRefusalProbe")
 
     unknown = observed["unknown_at_trace"]
     assert "ambient_occlusion_radius" in unknown, (
@@ -183,12 +183,12 @@ def test_a_binding_the_shaders_do_not_declare_is_refused_at_the_trace(
 
 
 def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """No implicit default and no carried-over value — for the surface-bound
     binding and for the acceleration structure alike, which resolve through
     different registries and so are two separate refusals."""
-    observed = run_probe(start_tatolabd, "RayTracingBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "RayTracingBindingRefusalProbe")
 
     missing_output = observed["missing_output_at_trace"]
     assert TRACED_OUTPUT_BINDING in missing_output, missing_output
@@ -202,19 +202,19 @@ def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
     assert "not supplied" in missing_scene, missing_scene
 
 
-def test_a_refused_trace_leaves_the_kernel_traceable(start_tatolabd):
+def test_a_refused_trace_leaves_the_kernel_traceable(start_tatolabd_running_stream):
     """Every refusal above raises before anything is submitted, so none of them
     strands the kernel holding half a trace's bindings."""
-    observed = run_probe(start_tatolabd, "RayTracingBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "RayTracingBindingRefusalProbe")
     assert observed["traced_after_the_refusals"] is True
 
 
 def test_a_uniform_buffer_binding_is_refused_naming_its_kind(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """No escalate op mints a uniform buffer, so a uniform-buffer binding is
     refused by name rather than pointed at whatever the descriptor last held."""
-    observed = run_probe(start_tatolabd, "RayTracingBufferBindingRefusalProbe")
+    observed = run_probe(start_tatolabd_running_stream, "RayTracingBufferBindingRefusalProbe")
 
     refusal = observed["buffer_kind_binding"]
     assert observed["buffer_binding"] in refusal, (
@@ -226,13 +226,13 @@ def test_a_uniform_buffer_binding_is_refused_naming_its_kind(
 
 
 def test_an_acceleration_structure_binding_takes_a_handle_not_a_surface(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """It is the one binding kind that cannot be spelled as an id string:
     nothing publishes an acceleration structure for another processor to
     resolve."""
     observed = run_probe(
-        start_tatolabd, "AccelerationStructureHandleRefusalProbe"
+        start_tatolabd_running_stream, "AccelerationStructureHandleRefusalProbe"
     )
 
     refusal = observed["a_surface_where_a_structure_belongs"]
@@ -243,12 +243,12 @@ def test_an_acceleration_structure_binding_takes_a_handle_not_a_surface(
 
 
 def test_a_trace_binds_the_top_level_structure_not_a_bottom_level_one(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The top-level structure is what holds the instances, so binding the
     bottom-level one traces an empty scene — refused instead."""
     observed = run_probe(
-        start_tatolabd, "AccelerationStructureHandleRefusalProbe"
+        start_tatolabd_running_stream, "AccelerationStructureHandleRefusalProbe"
     )
 
     refusal = observed["a_bottom_level_structure_at_the_trace"]
@@ -256,11 +256,11 @@ def test_a_trace_binds_the_top_level_structure_not_a_bottom_level_one(
     assert "bottom-level" in refusal and "top-level" in refusal, refusal
 
 
-def test_an_instance_places_a_bottom_level_structure(start_tatolabd):
+def test_an_instance_places_a_bottom_level_structure(start_tatolabd_running_stream):
     """The other direction of the same discipline: a scene is built out of
     bottom-level structures, so a top-level one is not an instance."""
     observed = run_probe(
-        start_tatolabd, "AccelerationStructureHandleRefusalProbe"
+        start_tatolabd_running_stream, "AccelerationStructureHandleRefusalProbe"
     )
 
     refusal = observed["a_top_level_structure_as_an_instance"]
@@ -270,11 +270,11 @@ def test_an_instance_places_a_bottom_level_structure(start_tatolabd):
     )
 
 
-def test_geometry_that_is_not_whole_triangles_is_refused(start_tatolabd):
+def test_geometry_that_is_not_whole_triangles_is_refused(start_tatolabd_running_stream):
     """A vertex is three floats and a triangle is three indices; a blob that is
     neither would build a structure over misread memory."""
     observed = run_probe(
-        start_tatolabd, "AccelerationStructureHandleRefusalProbe"
+        start_tatolabd_running_stream, "AccelerationStructureHandleRefusalProbe"
     )
 
     vertices = observed["vertices_that_are_not_triangles"]
@@ -284,13 +284,13 @@ def test_geometry_that_is_not_whole_triangles_is_refused(start_tatolabd):
     assert "triangle" in indices and "three" in indices, indices
 
 
-def test_an_index_past_the_last_vertex_is_refused(start_tatolabd):
+def test_an_index_past_the_last_vertex_is_refused(start_tatolabd_running_stream):
     """The build reads the vertex buffer through a device address no robustness
     guarantee bounds, so an index naming a vertex the caller did not supply
     reads out of bounds — and no validation layer can see it, because the index
     values live in device memory."""
     observed = run_probe(
-        start_tatolabd, "AccelerationStructureHandleRefusalProbe"
+        start_tatolabd_running_stream, "AccelerationStructureHandleRefusalProbe"
     )
 
     refusal = observed["an_index_past_the_last_vertex"]

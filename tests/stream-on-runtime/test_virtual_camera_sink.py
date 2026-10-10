@@ -3,8 +3,8 @@
 
 """`VirtualCameraSink` from Python: built-in class to a camera other programs see.
 
-The load test needs no device and runs in CI: `tatolabd` loads the graph and is
-then refused at the GPU. The camera tests start a graph on `tatolabd`, so they
+The load test needs no device and runs in CI: `tatolabd` loads the graph and
+its start is then refused at the GPU. The camera tests start a graph on `tatolabd`, so they
 carry `requires_gpu` like every other graph test here — and they need
 the one-time permission the sink itself never takes: the v4l2loopback module
 loaded with its control node writable, which `tatolab enable-virtual-camera`
@@ -40,7 +40,7 @@ from typing import Literal
 import pytest
 
 import tatolab.stream
-from conftest import StreamRunWithNoVulkanDriverOutcome
+from conftest import StreamRunWithNoVulkanDriverOutcome, TatolabdUnderTest
 from runtime_process_under_test import RuntimeProcessUnderTest
 from tatolab.stream import StreamBuilder, compile_stream_to_graph, stream
 
@@ -88,6 +88,8 @@ FRAMES_TO_READ = 5
 READ_TIMEOUT_SECONDS = 10.0
 READINESS_TIMEOUT_SECONDS = 20.0
 
+# The camera names carry this test's pid, so each stream is compiled in this
+# process rather than run from a `*_streams.py` module, whose compile has its own.
 REFUSED_CAMERA_NAME = "Refused cam"
 PIPEWIRE_CAMERA_NAME = f"StreamLib pipewire {os.getpid()}"
 FIRST_LOOPBACK_CAMERA_NAME = f"StreamLib test {os.getpid()}"
@@ -436,16 +438,19 @@ def test_node_name_defaults_to_the_type_name(
     reason=f"{CONTROL_NODE} is writable here, so the loopback door opens rather than refusing",
 )
 def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime_keeps_running(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The complement of the camera tests: on a machine that has not run the
     verb, a sink forced onto the loopback door never reaches Running, its setup
     fails with the sink's own text naming the verb, and the engine — still
     hosting the source — shuts down cleanly rather than dying."""
-    tatolabd = start_tatolabd(a_test_pattern_into_a_loopback_camera_this_machine_may_refuse)
+    tatolabd = start_tatolabd_running_stream(
+        compile_stream_to_graph(a_test_pattern_into_a_loopback_camera_this_machine_may_refuse)
+    )
 
     node_states = tatolabd.local_api_client().await_every_node_past_setup(
-        timeout=READINESS_TIMEOUT_SECONDS
+        stream=tatolabd.await_the_latest_attached_stream_loaded(),
+        timeout=READINESS_TIMEOUT_SECONDS,
     )
     refusal = tatolabd.await_stderr_containing("Setup failed:")
     assert node_states["virtualcamerasink"] == "Error", node_states
@@ -468,7 +473,7 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
 @pytest.mark.requires_gpu
 @needs_a_pipewire_session
 def test_without_the_control_node_a_pipewire_camera_node_appears(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The second door, proven the way the first one is: a camera named in the
     config is in the session graph while the graph runs and gone after it.
@@ -480,8 +485,13 @@ def test_without_the_control_node_a_pipewire_camera_node_appears(
     camera_name = PIPEWIRE_CAMERA_NAME
     assert not pipewire_camera_nodes_named(camera_name), "a stale node carries this run's name"
 
-    tatolabd = start_tatolabd(a_test_pattern_into_a_pipewire_camera)
-    tatolabd.local_api_client().await_every_node_running(timeout=READINESS_TIMEOUT_SECONDS)
+    tatolabd = start_tatolabd_running_stream(
+        compile_stream_to_graph(a_test_pattern_into_a_pipewire_camera)
+    )
+    tatolabd.local_api_client().await_every_node_running(
+        stream=tatolabd.await_the_latest_attached_stream_loaded(),
+        timeout=READINESS_TIMEOUT_SECONDS,
+    )
     (node,) = await_pipewire_camera(camera_name, present=True, tatolabd=tatolabd)
     assert node.get("media.class") == "Video/Source", node
     assert node.get("media.role") == "Camera", node
@@ -499,14 +509,19 @@ def test_without_the_control_node_a_pipewire_camera_node_appears(
 @pytest.mark.requires_gpu
 @needs_the_loopback_permission
 def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     camera_name = FIRST_LOOPBACK_CAMERA_NAME
     second_name = SECOND_LOOPBACK_CAMERA_NAME
     assert not video_nodes_named(camera_name), "a stale camera carries this run's name"
 
-    tatolabd = start_tatolabd(a_test_pattern_into_two_loopback_cameras)
-    tatolabd.local_api_client().await_every_node_running(timeout=READINESS_TIMEOUT_SECONDS)
+    tatolabd = start_tatolabd_running_stream(
+        compile_stream_to_graph(a_test_pattern_into_two_loopback_cameras)
+    )
+    tatolabd.local_api_client().await_every_node_running(
+        stream=tatolabd.await_the_latest_attached_stream_loaded(),
+        timeout=READINESS_TIMEOUT_SECONDS,
+    )
     first = await_camera(camera_name, present=True, tatolabd=tatolabd)
     second = await_camera(second_name, present=True, tatolabd=tatolabd)
     assert len(first) == 1 and len(second) == 1, "two sinks are exactly two cameras"
@@ -532,12 +547,17 @@ def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
 @pytest.mark.requires_gpu
 @needs_the_loopback_permission
 def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     camera_name = FRAMES_CAMERA_NAME
     width, height = FRAMES_CAMERA_WIDTH, FRAMES_CAMERA_HEIGHT
-    tatolabd = start_tatolabd(a_test_pattern_into_a_loopback_camera_read_back_as_yuyv)
-    tatolabd.local_api_client().await_every_node_running(timeout=READINESS_TIMEOUT_SECONDS)
+    tatolabd = start_tatolabd_running_stream(
+        compile_stream_to_graph(a_test_pattern_into_a_loopback_camera_read_back_as_yuyv)
+    )
+    tatolabd.local_api_client().await_every_node_running(
+        stream=tatolabd.await_the_latest_attached_stream_loaded(),
+        timeout=READINESS_TIMEOUT_SECONDS,
+    )
     (node,) = await_camera(camera_name, present=True, tatolabd=tatolabd)
     await_capture_capability(node, tatolabd)
 

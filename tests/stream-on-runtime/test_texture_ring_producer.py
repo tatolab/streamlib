@@ -33,10 +33,12 @@ pytestmark = pytest.mark.requires_gpu
 
 
 def run_scenario(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]", scenario: str, awaited_reports: int
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
+    scenario: str,
+    awaited_reports: int,
 ) -> dict:
     """Run one scenario to completion, and return its reports by probe name."""
-    tatolabd = start_tatolabd(texture_ring_producer_streams.STREAM_BY_SCENARIO[scenario])
+    tatolabd = start_tatolabd_running_stream(texture_ring_producer_streams.STREAM_BY_SCENARIO[scenario])
     for report_number in range(awaited_reports):
         report = tatolabd.await_marker("PROBE_RESULT", occurrence=report_number + 1)
         if isinstance(report, dict) and "failure" in report:
@@ -61,7 +63,7 @@ def slot_of(surface_id: str) -> str:
 
 
 def test_a_python_source_publishes_frames_from_the_slots_its_ring_rotates(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """Depth-many distinct slots, and the frame past the end reuses the first
     slot under a new frame id.
@@ -71,7 +73,7 @@ def test_a_python_source_publishes_frames_from_the_slots_its_ring_rotates(
     publish from three distinct slots here.
     """
     # The sink reports once per frame it reads; the producer once at its quota.
-    reports = run_scenario(start_tatolabd, "ring_rotation", (RING_DEPTH + 1) + 1)
+    reports = run_scenario(start_tatolabd_running_stream, "ring_rotation", (RING_DEPTH + 1) + 1)
     published = reports["TextureRingPublishingVideoSource"][0][
         "surface_ids_published"
     ]
@@ -92,14 +94,14 @@ def test_a_python_source_publishes_frames_from_the_slots_its_ring_rotates(
 
 
 def test_a_frame_a_consumer_holds_keeps_its_pixels_while_the_producer_produces(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The consumer claims the first frame with a typed read and re-reads it as
     the producer publishes several ring depths past it: the pixels are still
     frame 0's, and the held slot is never published from again."""
     later_frames = FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD
     reports = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "a_claimed_frame_holds_still",
         later_frames + 1,  # one report per later frame, plus the producer's
     )
@@ -121,14 +123,14 @@ def test_a_frame_a_consumer_holds_keeps_its_pixels_while_the_producer_produces(
 
 
 def test_the_same_schedule_with_no_claim_recycles_the_first_frame(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The negative control: nothing holds the first frame, so the producer
     republishes its slot, and the old id is refused as recycled — never read
     back as a newer frame's pixels."""
     later_frames = FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD
     reports = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "an_unclaimed_frame_is_recycled",
         later_frames + 1,
     )
@@ -149,7 +151,7 @@ def test_the_same_schedule_with_no_claim_recycles_the_first_frame(
 
 
 def test_the_pixels_a_python_source_writes_are_read_by_another_process(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The producer writes in a processor interpreter of its own; the consumer resolves
     the published id in a second one and sees those bytes.
@@ -161,7 +163,7 @@ def test_the_pixels_a_python_source_writes_are_read_by_another_process(
     the pixels.
     """
     reports = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "published_frames_reach_a_downstream_consumer",
         RING_DEPTH + 1,  # one report per frame read, plus the producer's
     )
@@ -182,12 +184,12 @@ def test_the_pixels_a_python_source_writes_are_read_by_another_process(
 
 
 def test_the_producer_and_its_consumer_run_in_different_processes(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The premise the two assertions above rest on — one Python processor per
     processor interpreter, so the surface id really did cross a boundary."""
     reports = run_scenario(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "published_frames_reach_a_downstream_consumer",
         RING_DEPTH + 1,  # one report per frame read, plus the producer's
     )

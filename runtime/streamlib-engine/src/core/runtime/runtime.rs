@@ -1309,13 +1309,20 @@ fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStre
 
 /// Ask `stream` for its shutdown and block until it has ended. Once its
 /// shutdown thread has started, the stream's watchdog bounds the wait; until
-/// then each poll asks again, retrying the thread's spawn.
+/// then each poll asks again, retrying the thread's spawn. A machine shutdown
+/// forced meanwhile forces this stream too, whichever thread is waiting on the
+/// machine.
 pub(super) fn request_a_streams_shutdown_and_wait_until_it_has_ended(
     stream: &LoadedStreamInThisRuntime,
     reason: &str,
 ) {
     loop {
         stream.ask_for_this_streams_shutdown(reason);
+        if crate::core::runtime::the_machines_shutdown_escalation()
+            >= RuntimeShutdownEscalation::Forced
+        {
+            stream.force_this_streams_shutdown("the machine's shutdown was forced");
+        }
         if stream.wait_for_this_streams_end_within(
             crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
         ) {
@@ -2744,6 +2751,192 @@ mod tests {
             stream_ended_during_the_wait,
             "the wait never walked the loaded stream to the machine's shutdown"
         );
+    }
+
+    /// Poll `escalation_of` until it reports `wanted` or `within` passes,
+    /// returning the last level it reported.
+    fn the_escalation_once_it_reaches(
+        wanted: RuntimeShutdownEscalation,
+        within: Duration,
+        escalation_of: impl Fn() -> RuntimeShutdownEscalation,
+    ) -> RuntimeShutdownEscalation {
+        let deadline = std::time::Instant::now() + within;
+        loop {
+            let reached = escalation_of();
+            if reached >= wanted || std::time::Instant::now() >= deadline {
+                return reached;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// A machine shutdown forced while an unload waits on a stream forces
+    /// that stream, though no thread owns the machine's shutdown signals to
+    /// walk it there.
+    ///
+    /// Fail-without-fix: the unload's wait only ever asks for the graceful
+    /// step, so the stream stays `Graceful` and a native callback it holds
+    /// keeps its whole graceful join budget.
+    #[test]
+    #[serial]
+    fn a_forced_machine_shutdown_forces_a_stream_an_unload_is_waiting_on() {
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let unloading = an_empty_stream_loaded_into(&runner, project_directory.path(), "unloading");
+
+        // The stop takes this lock after it marks the stream stopping, so
+        // holding it keeps the unload waiting until the test lets go.
+        let the_held_teardown_waits_on = unloading.runtime_context.lock();
+        let (unload_returned, the_unload_has_returned) = std::sync::mpsc::channel();
+        let unloading_runner = Arc::clone(&runner);
+        std::thread::spawn(move || {
+            let _ = unload_returned.send(unloading_runner.unload_stream("unloading"));
+        });
+        let asked_for = the_escalation_once_it_reaches(
+            RuntimeShutdownEscalation::Graceful,
+            A_STREAM_ENDS_WITHIN,
+            || unloading.this_streams_shutdown_escalation().escalation(),
+        );
+
+        crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
+        crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
+        let forced_to = the_escalation_once_it_reaches(
+            RuntimeShutdownEscalation::Forced,
+            Duration::from_secs(2),
+            || unloading.this_streams_shutdown_escalation().escalation(),
+        );
+        let returned_while_held = the_unload_has_returned.try_recv().is_ok();
+        drop(the_held_teardown_waits_on);
+        let unload_outcome = the_unload_has_returned.recv_timeout(A_STREAM_ENDS_WITHIN);
+
+        assert_eq!(asked_for, RuntimeShutdownEscalation::Graceful);
+        assert_eq!(
+            forced_to,
+            RuntimeShutdownEscalation::Forced,
+            "the unload's wait left the stream at its graceful step after the machine's \
+             shutdown was forced"
+        );
+        assert!(
+            !returned_while_held,
+            "the unload returned while the stream's teardown was still held"
+        );
+        unload_outcome
+            .expect("the unload never returned once its teardown was let go")
+            .expect("the stream unloads cleanly");
+        assert_eq!(
+            unloading.how_this_stream_ended(),
+            Some(HowALoadedStreamEnded::Stopped)
+        );
+        assert!(runner.names_of_the_loaded_streams().is_empty());
+    }
+
+    /// Set once [`CallbackHeldUntilTheTestLetsGo`] is inside its callback.
+    static THE_HELD_CALLBACK_HAS_BEGUN: AtomicBool = AtomicBool::new(false);
+
+    /// Set by the test to let [`CallbackHeldUntilTheTestLetsGo`] return.
+    static THE_HELD_CALLBACK_MAY_RETURN: AtomicBool = AtomicBool::new(false);
+
+    /// A source whose first callback does not return until the test lets it,
+    /// or for a minute.
+    #[crate::processor(execution = continuous(interval_ms = 5))]
+    pub(crate) struct CallbackHeldUntilTheTestLetsGo;
+
+    impl crate::core::ContinuousProcessor for CallbackHeldUntilTheTestLetsGo::Processor {
+        fn process(
+            &mut self,
+            _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+        ) -> Result<()> {
+            THE_HELD_CALLBACK_HAS_BEGUN.store(true, Ordering::SeqCst);
+            let held_until = std::time::Instant::now() + Duration::from_secs(60);
+            while !THE_HELD_CALLBACK_MAY_RETURN.load(Ordering::SeqCst)
+                && std::time::Instant::now() < held_until
+            {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Ok(())
+        }
+    }
+
+    /// An unload of a stream whose native processor holds its callback returns
+    /// well inside the graceful join budget once the machine's shutdown is
+    /// forced, the thread abandoned rather than waited out.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    #[serial]
+    fn a_forced_machine_shutdown_abandons_a_held_native_callback_an_unload_is_waiting_on() {
+        use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+
+        /// The engine-chosen join budget of a native processor thread under a
+        /// graceful shutdown.
+        const NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET: Duration = Duration::from_secs(5);
+
+        let _machine_level_cleared =
+            crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop(
+            );
+        THE_HELD_CALLBACK_HAS_BEGUN.store(false, Ordering::SeqCst);
+        THE_HELD_CALLBACK_MAY_RETURN.store(false, Ordering::SeqCst);
+        PROCESSOR_REGISTRY.register::<CallbackHeldUntilTheTestLetsGo::Processor>();
+        let project_directory = a_project_directory_this_test_owns();
+        let runner = Runner::new().expect("Runner::new");
+        let holding = an_empty_stream_loaded_into(&runner, project_directory.path(), "holding");
+        holding
+            .add_processor(ProcessorSpec::new(
+                CallbackHeldUntilTheTestLetsGo::processor_class_import_path(),
+                serde_json::json!({}),
+            ))
+            .expect("the holding source is added");
+        holding.start().expect("the stream starts");
+        let callback_begun_by = std::time::Instant::now() + Duration::from_secs(30);
+        while !THE_HELD_CALLBACK_HAS_BEGUN.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < callback_begun_by,
+                "the holding source never entered its callback"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let (unload_returned, the_unload_has_returned) = std::sync::mpsc::channel();
+        let unloading_runner = Arc::clone(&runner);
+        let unload_began = std::time::Instant::now();
+        std::thread::spawn(move || {
+            let outcome = unloading_runner.unload_stream("holding");
+            let _ = unload_returned.send((outcome, unload_began.elapsed()));
+        });
+        the_escalation_once_it_reaches(
+            RuntimeShutdownEscalation::Graceful,
+            A_STREAM_ENDS_WITHIN,
+            || holding.this_streams_shutdown_escalation().escalation(),
+        );
+        crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
+        crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
+        let unload_outcome = the_unload_has_returned.recv_timeout(A_STREAM_ENDS_WITHIN);
+        let abandoned_threads = holding
+            .processor_threads_abandoned_and_still_running()
+            .len();
+        THE_HELD_CALLBACK_MAY_RETURN.store(true, Ordering::SeqCst);
+
+        let (_ended_reporting, unloaded_in) = unload_outcome
+            .expect("the unload never returned after the machine's shutdown was forced");
+        assert_eq!(
+            holding.this_streams_shutdown_escalation().escalation(),
+            RuntimeShutdownEscalation::Forced
+        );
+        assert!(
+            unloaded_in < NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET / 2,
+            "the unload took {unloaded_in:?}; a forced shutdown abandons a held native callback \
+             well inside the {NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET:?} graceful budget"
+        );
+        assert_eq!(
+            abandoned_threads, 1,
+            "the held callback's thread is abandoned, not joined"
+        );
+        assert!(runner.names_of_the_loaded_streams().is_empty());
     }
 
     /// A stream loaded while the machine is shutting every stream down is

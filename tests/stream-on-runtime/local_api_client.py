@@ -114,9 +114,13 @@ class LocalApiClient:
         """MCP `list_streams`: each stream the runtime holds, `{name, state, project_directory, node_count}`."""
         return self.call_tool("list_streams")["streams"]
 
-    def registry(self) -> Any:
-        """`GET /api/registry`: the node catalog this runtime can add."""
-        return self.get_json("/api/registry")
+    def registry(self, stream: "str | None" = None) -> Any:
+        """`GET /api/registry`: the node types the stream can add — the native
+        ones, then those described in its own interpreter — or, with no stream,
+        `{"nodes", "streams"}`: the native types, then each loaded stream's own."""
+        if stream is None:
+            return self.get_json("/api/registry")
+        return self.get_json(f"/api/registry?stream={urllib.parse.quote(stream, safe='')}")
 
     def answer_over_mcp(
         self,

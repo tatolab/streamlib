@@ -107,7 +107,7 @@ STREAM_BY_PROBE_AND_SOURCE = {
 
 
 def run_claim_probe(
-    start_tatolabd: "Callable[..., RuntimeProcessUnderTest]",
+    start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
     probe_class_name: str,
     source: str = "camera",
 ) -> dict:
@@ -117,7 +117,7 @@ def run_claim_probe(
         no_camera = reason_this_rig_has_no_camera()
         if no_camera:
             pytest.skip(no_camera)
-    tatolabd = start_tatolabd(STREAM_BY_PROBE_AND_SOURCE[(probe_class_name, source)])
+    tatolabd = start_tatolabd_running_stream(STREAM_BY_PROBE_AND_SOURCE[(probe_class_name, source)])
     observation = tatolabd.await_marker("PROBE_RESULT")
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -139,7 +139,7 @@ def _require_a_moving_scene(observation: dict) -> None:
 
 
 def test_a_typed_cast_claims_its_frame_and_outlives_the_producers_ring(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """`read(port, into=VideoFrame)` takes the claim, and holding the object is
     what keeps the producer off that slot.
@@ -148,7 +148,7 @@ def test_a_typed_cast_claims_its_frame_and_outlives_the_producers_ring(
     any of those instead would release at `close()` and let the camera recycle
     the slot underneath a consumer that is still holding the frame.
     """
-    observation = run_claim_probe(start_tatolabd, "TypedCastHoldsItsFrameProbe")
+    observation = run_claim_probe(start_tatolabd_running_stream, "TypedCastHoldsItsFrameProbe")
     _require_a_moving_scene(observation)
 
     assert observation["claim_taken"] is True, (
@@ -168,7 +168,7 @@ def test_a_typed_cast_claims_its_frame_and_outlives_the_producers_ring(
 
 
 def test_an_untyped_read_claims_nothing_and_is_refused_once_the_slot_cycles(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The control, and the half that keeps the dial optional.
 
@@ -177,7 +177,7 @@ def test_an_untyped_read_claims_nothing_and_is_refused_once_the_slot_cycles(
     it did not ask for, but a *loud* failure: outwaiting pool depth is an
     error naming the recycling, never somebody else's pixels served silently.
     """
-    observation = run_claim_probe(start_tatolabd, "UntypedReadHoldsNothingProbe")
+    observation = run_claim_probe(start_tatolabd_running_stream, "UntypedReadHoldsNothingProbe")
     _require_a_moving_scene(observation)
 
     assert observation["claim_taken"] is False, (
@@ -222,7 +222,7 @@ def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
 
 
 def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The no-privilege claim, against a real surface: a type the wheel never
     heard of composes the shipped piece and hands its pixels to a DLPack
@@ -232,7 +232,7 @@ def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
     probe — the object the read handed back is the tensor-protocol producer.
     """
     observation = run_claim_probe(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "AUserAuthoredCastReachesItsPixelsBareProbe",
         source="test_pattern",
     )
@@ -241,13 +241,13 @@ def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
 
 
 def test_the_shipped_video_frame_reaches_its_pixels_the_same_way(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The parity half: `VideoFrame` is built from the same composable, so it
     must reach its pixels through the same path with the same result. A
     difference here is a privilege the plan does not grant it."""
     observation = run_claim_probe(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "TheShippedVideoFrameReachesItsPixelsBareProbe",
         source="test_pattern",
     )
@@ -284,25 +284,25 @@ def _require_a_device_consumer() -> None:
 
 
 def test_a_user_authored_cast_type_reaches_torch_as_a_device_tensor(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """`torch.from_dlpack(frame)` off a live camera frame, in a real helper
     placement — the shortest spelling is the fast path, and it is GPU-resident.
     """
     _require_a_device_consumer()
     observation = run_claim_probe(
-        start_tatolabd, "AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe"
+        start_tatolabd_running_stream, "AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe"
     )
 
     _assert_the_bare_device_tensor_is_this_frames_pixels(observation)
 
 
 def test_the_shipped_video_frame_reaches_torch_as_a_device_tensor(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     _require_a_device_consumer()
     observation = run_claim_probe(
-        start_tatolabd, "TheShippedVideoFrameReachesItsPixelsAsADeviceTensorProbe"
+        start_tatolabd_running_stream, "TheShippedVideoFrameReachesItsPixelsAsADeviceTensorProbe"
     )
 
     _assert_the_bare_device_tensor_is_this_frames_pixels(observation)
@@ -328,7 +328,7 @@ def _assert_the_edit_reached_the_surface(observation: dict) -> None:
 
 
 def test_a_gpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """`with frame.writable() as t:` over a live frame, in a real helper placement:
     a GPU package edits in place and the surface carries the edit once the
@@ -339,7 +339,7 @@ def test_a_gpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
     door at all."""
     _require_a_device_consumer()
     observation = run_claim_probe(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "TheGpuWriteDoorEditsTheFrameProbe",
         source="test_pattern",
     )
@@ -348,7 +348,7 @@ def test_a_gpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
 
 
 def test_a_raise_inside_the_gpu_write_door_follows_its_floors_publication_rule(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The other half of the one write rule, per floor. On Linux a half-written
     view blitted back would publish a torn frame that surfaces as corruption
@@ -358,7 +358,7 @@ def test_a_raise_inside_the_gpu_write_door_follows_its_floors_publication_rule(
     changed. On both the exception still reaches the caller."""
     _require_a_device_consumer()
     observation = run_claim_probe(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe",
         source="test_pattern",
     )
@@ -374,13 +374,13 @@ def test_a_raise_inside_the_gpu_write_door_follows_its_floors_publication_rule(
 
 
 def test_a_cpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The named slow path against a real surface, with plain numpy as the
     consumer: `with frame.cpu() as img:` reaches the host mapping and the edit
     is the surface's own afterwards."""
     observation = run_claim_probe(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "TheCpuWriteDoorEditsTheFrameProbe",
         source="test_pattern",
     )
@@ -389,7 +389,7 @@ def test_a_cpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
 
 
 def test_a_raise_inside_the_cpu_write_door_propagates_and_closes_the_scope(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """What the CPU door can honestly promise on its exception path.
 
@@ -400,7 +400,7 @@ def test_a_raise_inside_the_cpu_write_door_propagates_and_closes_the_scope(
     reachable afterwards.
     """
     observation = run_claim_probe(
-        start_tatolabd,
+        start_tatolabd_running_stream,
         "ARaiseInsideTheCpuWriteDoorPropagatesProbe",
         source="test_pattern",
     )
@@ -411,7 +411,7 @@ def test_a_raise_inside_the_cpu_write_door_propagates_and_closes_the_scope(
 
 
 def test_a_gpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The same GPU door against a live camera frame.
 
@@ -424,16 +424,16 @@ def test_a_gpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
     make this refuse while the test-pattern case kept passing.
     """
     _require_a_device_consumer()
-    observation = run_claim_probe(start_tatolabd, "TheGpuWriteDoorEditsTheFrameProbe")
+    observation = run_claim_probe(start_tatolabd_running_stream, "TheGpuWriteDoorEditsTheFrameProbe")
 
     _assert_the_edit_reached_the_surface(observation)
 
 
 def test_a_cpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
-    start_tatolabd,
+    start_tatolabd_running_stream,
 ):
     """The CPU door's half of the same claim, with plain numpy as the
     consumer and no CUDA anywhere in it."""
-    observation = run_claim_probe(start_tatolabd, "TheCpuWriteDoorEditsTheFrameProbe")
+    observation = run_claim_probe(start_tatolabd_running_stream, "TheCpuWriteDoorEditsTheFrameProbe")
 
     _assert_the_edit_reached_the_surface(observation)
