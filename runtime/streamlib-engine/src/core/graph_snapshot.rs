@@ -198,8 +198,9 @@ impl GraphSnapshot {
     /// once cast, every link end on this machine, every target and every
     /// source in this stream a port of the right direction on a node the graph
     /// holds, and every exposure an output port a node has, named once, at a
-    /// level beyond internal. A source in another stream is that stream's to
-    /// hold, and is not looked up here.
+    /// level beyond internal. A target is in this stream, whether it names the
+    /// stream or not; a source in another stream is that stream's to hold, and
+    /// is not looked up here.
     pub fn validate(
         &self,
         node_types: &NodeTypesOneStreamResolves,
@@ -1133,6 +1134,42 @@ mod tests {
         let refusal = a_graph_of_one_camera_linked(serde_json::json!({
             "source": {"stream": "main", "node": "ghost", "port": "video"},
             "target": {"node": "camera", "port": "frames_in"}
+        }))
+        .validate(
+            &NodeTypesOneStreamResolves::new(),
+            "main",
+            &a_machine_named_desk(),
+        )
+        .expect_err("a node of this stream the graph does not hold is refused")
+        .to_string();
+        assert!(refusal.contains("`ghost`"), "{refusal}");
+    }
+
+    /// A target naming the stream the graph loads as — in any spelling that
+    /// casts to it, with this machine or without — is a port of this stream,
+    /// and its node is looked up here.
+    #[test]
+    fn a_target_end_naming_the_loaded_stream_validates_as_a_port_of_this_stream() {
+        for target in [
+            serde_json::json!({"stream": "Main", "node": "camera", "port": "frames_in"}),
+            serde_json::json!({"machine": "Desk", "stream": "main", "node": "camera",
+                               "port": "frames_in"}),
+        ] {
+            a_graph_of_one_camera_linked(serde_json::json!({
+                "source": {"node": "camera", "port": "video"},
+                "target": target
+            }))
+            .validate(
+                &NodeTypesOneStreamResolves::new(),
+                "main",
+                &a_machine_named_desk(),
+            )
+            .unwrap_or_else(|refusal| panic!("{target}: {refusal}"));
+        }
+
+        let refusal = a_graph_of_one_camera_linked(serde_json::json!({
+            "source": {"node": "camera", "port": "video"},
+            "target": {"stream": "main", "node": "ghost", "port": "frames_in"}
         }))
         .validate(
             &NodeTypesOneStreamResolves::new(),
