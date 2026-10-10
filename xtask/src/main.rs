@@ -1358,6 +1358,12 @@ enum Commands {
         /// Build with optimizations, as a release is built.
         #[arg(long)]
         release: bool,
+        /// Build both binaries with the `machine-directories-under-a-test-root`
+        /// feature — the machine runtime lock, the state directory and the
+        /// runtime directory under `TATOLAB_TEST_MACHINE_ROOT` — and mark the
+        /// unit so, for the integration suite. Never for a release.
+        #[arg(long)]
+        machine_directories_under_a_test_root: bool,
     },
 
     /// The codec proof's scorer: PSNR of a decoded frame set against the
@@ -1455,9 +1461,15 @@ fn main() -> Result<()> {
         }
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
-        Commands::BuildRuntime { release } => build_runtime::run(
+        Commands::BuildRuntime {
+            release,
+            machine_directories_under_a_test_root,
+        } => build_runtime::run(
             &workspace_root()?,
             build_runtime::RuntimeUnitBuildProfile::from_release_flag(release),
+            build_runtime::RuntimeUnitMachineDirectories::from_machine_directories_under_a_test_root_flag(
+                machine_directories_under_a_test_root,
+            ),
         )?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::Mp4Inspect(inspect_command) => mp4_inspect::run(inspect_command)?,

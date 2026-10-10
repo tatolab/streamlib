@@ -70,6 +70,18 @@ fn runtime_unit_wheel_directory_in_the_workspace(workspace_root: &Path) -> PathB
 const RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS: [(&str, &str); 2] =
     [("tatolabd", "tatolabd"), ("tatolab-cli", "tatolab")];
 
+/// The cargo feature that moves the machine runtime lock, the state directory
+/// and the runtime directory under `TATOLAB_TEST_MACHINE_ROOT`; each runtime-unit
+/// binary package declares it under this one name.
+pub const MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_FEATURE: &str =
+    "machine-directories-under-a-test-root";
+
+/// The file at the runtime unit's root whose presence says both binaries were
+/// built with [`MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_FEATURE`]; a harness
+/// refuses a unit without it, so a test never touches the real machine's lock.
+pub const MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_MARKER_FILE_NAME: &str =
+    "machine-directories-under-a-test-root";
+
 /// The maturin project the runtime unit is built from.
 const RUNTIME_UNIT_MATURIN_PROJECT_RELATIVE_TO_WORKSPACE: &str = "sdk/streamlib-python-wheel";
 
@@ -98,8 +110,39 @@ impl RuntimeUnitBuildProfile {
     }
 }
 
+/// Where a runtime unit's binaries keep the machine's directories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeUnitMachineDirectories {
+    /// The real machine's: what a release and a developer's runtime use.
+    TheMachines,
+    /// Under `TATOLAB_TEST_MACHINE_ROOT`, for the integration suite.
+    UnderATestRoot,
+}
+
+impl RuntimeUnitMachineDirectories {
+    /// What `cargo xtask build-runtime [--machine-directories-under-a-test-root]` asks for.
+    pub fn from_machine_directories_under_a_test_root_flag(
+        machine_directories_under_a_test_root: bool,
+    ) -> Self {
+        if machine_directories_under_a_test_root {
+            Self::UnderATestRoot
+        } else {
+            Self::TheMachines
+        }
+    }
+}
+
+/// The marker file of the runtime unit rooted at `runtime_unit_root`.
+pub fn machine_directories_under_a_test_root_marker_in(runtime_unit_root: &Path) -> PathBuf {
+    runtime_unit_root.join(MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_MARKER_FILE_NAME)
+}
+
 /// Build the runtime unit's wheel and replace the lend with its contents.
-pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Result<()> {
+pub fn run(
+    workspace_root: &Path,
+    build_profile: RuntimeUnitBuildProfile,
+    machine_directories: RuntimeUnitMachineDirectories,
+) -> Result<()> {
     let maturin_project_directory =
         workspace_root.join(RUNTIME_UNIT_MATURIN_PROJECT_RELATIVE_TO_WORKSPACE);
     let wheel_directory = runtime_unit_wheel_directory_in_the_workspace(workspace_root);
@@ -117,6 +160,13 @@ pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Res
     } else {
         None
     };
+
+    // Gone before anything is rebuilt, so a failed build never leaves a unit
+    // whose marker vouches for binaries it no longer carries.
+    let machine_directories_marker = machine_directories_under_a_test_root_marker_in(
+        &runtime_unit_root_in_the_workspace(workspace_root),
+    );
+    remove_the_machine_directories_marker(&machine_directories_marker)?;
 
     let runtime_unit_engine_build_nonce = mint_per_build_nonce()
         .context("reading /dev/urandom for the runtime unit's engine build nonce")?;
@@ -142,6 +192,7 @@ pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Res
     let built_binaries = build_runtime_unit_binaries(
         workspace_root,
         build_profile,
+        machine_directories,
         &runtime_unit_engine_build_nonce,
     )?;
     replace_runtime_unit_binaries_in(&bin_directory, &built_binaries)?;
@@ -149,7 +200,69 @@ pub fn run(workspace_root: &Path, build_profile: RuntimeUnitBuildProfile) -> Res
         "build-runtime: tatolabd and tatolab placed in {}",
         bin_directory.display()
     );
+    if machine_directories == RuntimeUnitMachineDirectories::UnderATestRoot {
+        write_the_machine_directories_marker(&machine_directories_marker)?;
+        tracing::info!(
+            "build-runtime: both binaries keep the machine's directories under \
+             TATOLAB_TEST_MACHINE_ROOT; {} says so",
+            machine_directories_marker.display()
+        );
+    }
     Ok(())
+}
+
+/// Remove `marker` when present.
+pub fn remove_the_machine_directories_marker(marker: &Path) -> Result<()> {
+    match std::fs::remove_file(marker) {
+        Ok(()) => Ok(()),
+        Err(absent) if absent.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(removal_failure) => {
+            Err(removal_failure).with_context(|| format!("removing {}", marker.display()))
+        }
+    }
+}
+
+/// Write `marker`, naming the feature and the variable it makes required.
+pub fn write_the_machine_directories_marker(marker: &Path) -> Result<()> {
+    std::fs::write(
+        marker,
+        format!(
+            "tatolabd and tatolab in bin/ were built with the \
+             {MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_FEATURE} feature: each requires \
+             TATOLAB_TEST_MACHINE_ROOT and keeps the machine runtime lock, the state directory \
+             and the runtime directory under it.\n"
+        ),
+    )
+    .with_context(|| format!("writing {}", marker.display()))
+}
+
+/// The `cargo build` arguments after `build` that select the runtime unit's
+/// binary packages, their profile and their features.
+pub fn runtime_unit_binaries_cargo_build_selection(
+    build_profile: RuntimeUnitBuildProfile,
+    machine_directories: RuntimeUnitMachineDirectories,
+) -> Vec<String> {
+    let mut selection = Vec::new();
+    for (package, _) in RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS {
+        selection.push("-p".to_owned());
+        selection.push(package.to_owned());
+    }
+    if build_profile == RuntimeUnitBuildProfile::Release {
+        selection.push("--release".to_owned());
+    }
+    if machine_directories == RuntimeUnitMachineDirectories::UnderATestRoot {
+        selection.push("--features".to_owned());
+        selection.push(
+            RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS
+                .iter()
+                .map(|(package, _)| {
+                    format!("{package}/{MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_FEATURE}")
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+    }
+    selection
 }
 
 /// One binary cargo built, and the name it takes in `bin/`.
@@ -162,30 +275,24 @@ pub struct BuiltRuntimeUnitBinary {
 fn build_runtime_unit_binaries(
     workspace_root: &Path,
     build_profile: RuntimeUnitBuildProfile,
+    machine_directories: RuntimeUnitMachineDirectories,
     runtime_unit_engine_build_nonce: &str,
 ) -> Result<Vec<BuiltRuntimeUnitBinary>> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let cargo_build_selection =
+        runtime_unit_binaries_cargo_build_selection(build_profile, machine_directories);
     let mut cargo_build = std::process::Command::new(cargo);
     cargo_build
         .args(["build", "--message-format=json-render-diagnostics"])
+        .args(&cargo_build_selection)
         .current_dir(workspace_root)
         .env(
             RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE,
             runtime_unit_engine_build_nonce,
         )
         .stderr(std::process::Stdio::inherit());
-    for (package, _) in RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS {
-        cargo_build.args(["-p", package]);
-    }
-    if build_profile == RuntimeUnitBuildProfile::Release {
-        cargo_build.arg("--release");
-    }
 
-    let cargo_build_package_flags = RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS
-        .iter()
-        .map(|(package, _)| format!("-p {package}"))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let cargo_build_package_flags = cargo_build_selection.join(" ");
     let cargo_build_output = cargo_build
         .output()
         .with_context(|| format!("failed to run `cargo build {cargo_build_package_flags}`"))?;
@@ -786,6 +893,78 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+    }
+
+    #[test]
+    fn a_unit_for_the_machine_builds_both_binary_packages_without_the_test_root_feature() {
+        assert_eq!(
+            runtime_unit_binaries_cargo_build_selection(
+                RuntimeUnitBuildProfile::Release,
+                RuntimeUnitMachineDirectories::TheMachines,
+            ),
+            ["-p", "tatolabd", "-p", "tatolab-cli", "--release"]
+        );
+    }
+
+    #[test]
+    fn a_unit_under_a_test_root_builds_both_binary_packages_with_the_feature() {
+        assert_eq!(
+            runtime_unit_binaries_cargo_build_selection(
+                RuntimeUnitBuildProfile::Debug,
+                RuntimeUnitMachineDirectories::UnderATestRoot,
+            ),
+            [
+                "-p",
+                "tatolabd",
+                "-p",
+                "tatolab-cli",
+                "--features",
+                "tatolabd/machine-directories-under-a-test-root,\
+                 tatolab-cli/machine-directories-under-a-test-root",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_runtime_unit_binary_package_declares_the_test_root_feature() {
+        for (package, _) in RUNTIME_UNIT_BINARY_PACKAGES_AND_TARGETS {
+            let package_manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../runtime")
+                .join(package)
+                .join("Cargo.toml");
+            let package_manifest: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&package_manifest_path).unwrap()).unwrap();
+            assert!(
+                package_manifest["features"]
+                    .get(MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_FEATURE)
+                    .is_some(),
+                "{} declares no `{MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_FEATURE}` feature",
+                package_manifest_path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn the_marker_is_written_at_the_unit_root_and_removed_again() {
+        let runtime_unit_root = tempfile::TempDir::new().unwrap();
+        let marker = machine_directories_under_a_test_root_marker_in(runtime_unit_root.path());
+        assert_eq!(
+            marker,
+            runtime_unit_root
+                .path()
+                .join("machine-directories-under-a-test-root")
+        );
+
+        remove_the_machine_directories_marker(&marker).unwrap();
+        write_the_machine_directories_marker(&marker).unwrap();
+        let marker_text = std::fs::read_to_string(&marker).unwrap();
+        assert!(
+            marker_text.contains("TATOLAB_TEST_MACHINE_ROOT"),
+            "{marker_text}"
+        );
+
+        remove_the_machine_directories_marker(&marker).unwrap();
+        assert!(!marker.exists());
     }
 
     #[test]
