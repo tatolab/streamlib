@@ -3342,9 +3342,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   else the default
   `<hostname>-<app directory name>-<id>`: every forbidden character replaced by `-`, the id four
   base-36 characters of an FNV-1a hash over the app directory's full path — the virtual camera's
-  own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else `tatolabd`'s `--project`, else the
-  working directory. A host that reports no name takes a
-  stand-in, said once. Each part of an address is one address chunk — non-empty, no `/`, `*`,
+  own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else the working directory. A host that
+  reports no name takes a stand-in, said once. Each part of an address is one address chunk — non-empty, no `/`, `*`,
   `$`, `#` or `?`, not beginning with `@`, spaces and unicode legal — checked against the rule's
   own table, and an explicit runtime name that breaks it is refused at construction naming the
   character. The type is `PortAddress` (`core/graph/edges/port_address.rs`, the rule in
