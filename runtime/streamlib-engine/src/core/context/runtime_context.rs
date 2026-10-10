@@ -49,7 +49,7 @@ pub struct RuntimeContext {
     pub time: Arc<TimeContext>,
     /// Unique identifier for this runtime instance.
     runtime_id: Arc<RuntimeUniqueId>,
-    /// The name this runtime's tap channels and node-registry row carry.
+    /// The name this runtime's tap channels carry.
     runtime_name: Arc<RuntimeName>,
     /// Unique identifier for this processor (None for shared/global context).
     processor_id: Option<ProcessorUniqueId>,
@@ -161,7 +161,7 @@ impl RuntimeContext {
         &self.runtime_id
     }
 
-    /// The name this runtime's tap channels and node-registry row carry.
+    /// The name this runtime's tap channels carry.
     pub fn runtime_name(&self) -> &RuntimeName {
         &self.runtime_name
     }
@@ -882,7 +882,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().runtime_directory()
     }
 
-    /// The name this runtime's tap channels and node-registry row carry — what
+    /// The name this runtime's tap channels carry — what
     /// a control plane publishes and what a port address begins with.
     pub fn runtime_name(&self) -> &RuntimeName {
         self.host_base().runtime_name()

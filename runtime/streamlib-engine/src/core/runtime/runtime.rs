@@ -92,7 +92,7 @@ impl Drop for TokioRuntimeShutDownWithinItsBudget {
 pub(crate) struct EngineResourcesSharedByEveryStream {
     /// Unique identifier for this runtime instance.
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
-    /// The name this runtime's tap channels and node-registry row carry.
+    /// The name this runtime's tap channels carry.
     pub(crate) runtime_name: Arc<RuntimeName>,
     /// The streams loaded in this runtime, keyed by their URL-safe cast name.
     pub(crate) streams_loaded_in_this_runtime:
@@ -613,7 +613,7 @@ impl Runner {
         &self.engine_resources_shared_by_every_stream.runtime_id
     }
 
-    /// The name this runtime's tap channels and node-registry row carry.
+    /// The name this runtime's tap channels carry.
     pub fn runtime_name(&self) -> &RuntimeName {
         &self.engine_resources_shared_by_every_stream.runtime_name
     }

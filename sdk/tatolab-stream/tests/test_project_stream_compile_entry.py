@@ -1,9 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The compile entry `tatolab run` and `tatolab dev` run in the project's interpreter.
+"""The compile entry the runtime runs in the project's interpreter for `tatolab run` and
+`tatolab dev`.
 
-Each test runs it as `tatolab` does: `python -I -m` in a child, with the anchor as
+Each test runs it as the runtime does: `python -I -m` in a child, with the anchor as
 the working directory, reading the one JSON document on stdout, the refusals and
 tracebacks on stderr, and the exit code. Nothing here needs a runtime.
 """

@@ -317,7 +317,7 @@ Derived 2026-10-02, milestone #58; "(ultracode)": `/implement` builds it only wi
 - REMOVED: RUNTIME_GLOBAL
 - REMOVED: APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN
 - REMOVED: STREAMLIB_APP_DIRECTORY
-- REMOVED: runtime/streamlib-api-server/src/node_registry.rs
+- REMOVED: runtime/streamlib-runtime-client-contract/src/node_registry.rs
 - REMOVED: runtime/streamlib-api-server/src/control_plane_host.rs
 - REMOVED: NODE_REGISTRY_SCHEMA_VERSION
 - REMOVED: AnnouncedRuntimeIdentity

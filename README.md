@@ -69,8 +69,9 @@ where you need one, it is a node you write against the library or binding you al
 
 There are two halves, and they install separately.
 
-**The runtime** — `tatolabd`, the native program that hosts a stream, and `tatolab`, the CLI that
-starts and inspects it — has no installer yet. Build it from a checkout of this repository:
+**The runtime** — `tatolabd`, the native program that hosts this machine's streams, and `tatolab`,
+the CLI that loads, manages and inspects them — has no installer yet. Build it from a checkout of
+this repository:
 
 ```bash
 cargo xtask build-runtime --release              # omit --release for a debug build
@@ -79,8 +80,8 @@ export PATH="$PWD/target/tatolab-runtime/bin:$PATH"
 
 That lays out `target/tatolab-runtime/` as an install prefix: `bin/tatolabd`, `bin/tatolab`, and
 `lib/tatolab/lend/`, the runtime's own Python half (`tatolab.runtime`) that each Python node's
-interpreter borrows. Keep the three together: `tatolab` starts the `tatolabd` beside it, and
-`tatolabd` finds `lib/tatolab/lend/` relative to its own executable.
+interpreter borrows. Keep `bin/tatolabd` beside `lib/`: `tatolabd` finds `lib/tatolab/lend/`
+relative to its own executable.
 
 The build needs a Rust toolchain and [uv](https://docs.astral.sh/uv/) on `PATH` (it runs the
 pinned maturin through `uvx`), plus a native toolchain. On Debian or Ubuntu that is:
@@ -106,6 +107,10 @@ uv add tatolab-stream
 ## Quickstart
 
 ```bash
+tatolabd                    # in a terminal of its own: this machine's runtime
+```
+
+```bash
 tatolab new my-stream       # camera → GPU effect → window, plus a CPU meter, wired and working
 cd my-stream
 uv sync                     # the stream's venv: tatolab-stream and numpy
@@ -115,11 +120,14 @@ tatolab dev                 # your camera, live and inverted, in a window
 No camera on this machine? `tatolab new my-stream --test-pattern` wires the built-in test pattern
 instead.
 
-`dev` reads `stream.py` from the working directory, compiles its one `@stream` function to the
-stream's graph in the project's `.venv`, and starts `tatolabd` on that graph in the foreground;
-Ctrl-C stops it. Save an edit and `dev` recompiles and restarts the stream; an edit that fails to
-compile leaves the running stream in place. `tatolab run` does the same once, without watching for
-edits.
+`tatolabd` is the one runtime on this machine, and every stream runs inside it; no `tatolab` verb
+starts one. `dev` asks it to load the project in the working directory: the runtime compiles
+`stream.py`'s one `@stream` function to the stream's graph in the project's `.venv`, loads it and
+starts it, and `dev` prints the stream's records in your terminal. The stream is attached: Ctrl-C
+unloads it. Save an edit and `dev` unloads the stream and loads it again; an edit that fails to
+compile prints the refusal and leaves no stream loaded until the next save. `tatolab run` does the
+same once, without watching for edits, and `tatolab run -d` hands the stream to the runtime to keep:
+it runs on after the command returns, and the runtime loads it again each time it starts.
 
 ## Writing a stream
 
@@ -230,60 +238,76 @@ project directory, and `--name NAME` loads the stream under a name other than it
 
 ```text
 tatolab new DIRECTORY [--test-pattern]
-tatolab run [TARGET] [-f FILE] [--dir DIR] [--name NAME] [--runtime-name NAME]
-tatolab dev [TARGET] [-f FILE] [--dir DIR] [--name NAME] [--runtime-name NAME]
+tatolab run [TARGET] [-f FILE] [--dir DIR] [--name NAME] [-d | --detach]
+tatolab dev [TARGET] [-f FILE] [--dir DIR] [--name NAME]
 
-tatolab nodes
-tatolab graph [--node RUNTIME]
-tatolab tap CHANNEL [--count N] [--max-bag-bytes BYTES] [--node RUNTIME]
-tatolab logs RUNTIME_ID-STREAM [-f | --follow] [--processor ID] [--pipeline ID] [--rhi]
-             [--level trace|debug|info|warn|error] [--source rust|python] [--intercepted-only]
+tatolab streams
+tatolab stop STREAM
+tatolab start STREAM
+tatolab rm STREAM
+tatolab expose STREAM NODE PORT [--public | --remove]
+
+tatolab graph [--stream STREAM]
+tatolab tap CHANNEL --stream STREAM [--count N] [--max-bag-bytes BYTES]
+tatolab logs (--stream STREAM | RUNTIME_ID-STREAM) [-f | --follow] [--processor ID] [--pipeline ID]
+             [--rhi] [--level trace|debug|info|warn|error] [--source rust|python] [--intercepted-only]
 tatolab logs --list
-tatolab logs --node RUNTIME [--count N]
-tatolab exchange SURFACE_ID --out DIR [--node RUNTIME]
-tatolab exchange --channel CHANNEL [--count N] [--every N] [--field NAME] --out DIR [--node RUNTIME]
-tatolab mcp [--node RUNTIME]
+tatolab exchange SURFACE_ID --out DIR
+tatolab exchange --channel CHANNEL --stream STREAM [--count N] [--every N] [--field NAME] --out DIR
+tatolab mcp
 
 tatolab enable-virtual-camera [--print]
 ```
 
 - **`new`** writes `stream.py`, `nodes/`, `pyproject.toml`, `.python-version` (3.12) and
   `.gitignore` into `DIRECTORY`, and refuses rather than overwrite a file already there.
-- **`run`** compiles the stream in the project's `.venv` and runs it on a `tatolabd` it starts,
-  attached: the runtime's logs in your terminal, Ctrl-C to stop. `TARGET` is
-  `<file>.py[:<function>]` or `<module>:<function>`. `--runtime-name` names the runtime — the first
-  part of every channel `tap` reads; the default is `<host>-<project directory>-<id>`, stable across
-  runs of one checkout.
-- **`dev`** is `run`, restarted on every saved edit to a `.py` file or `pyproject.toml` in the
-  project.
-- **`nodes`** lists the runtimes running on this machine: their name, id, local socket, pid, whether
-  they answer, and the program and directory they run in.
-- **`graph`** prints the running stream's nodes, ports, links and exposed ports as JSON, with each
-  node's and link's state and counters, and the runtime's name as `runtime_name`.
-- **`tap`** samples the raw bags one output port carries. The channel is
+- **`run`** asks the runtime to compile the project's stream in its `.venv` and load it, attached:
+  the stream's records in your terminal, and the stream lives as long as the command — Ctrl-C, a
+  closed terminal or a killed `tatolab` unloads it. `-d` hands it to the runtime to keep instead:
+  `run` prints one line and returns, and the runtime loads the stream again at each of its own
+  starts until `stop` or `rm`. `TARGET` is `<file>.py[:<function>]` or `<module>:<function>`. A
+  name already loaded or kept is refused naming the project that holds it; `--name` loads the
+  stream under another.
+- **`dev`** is `run` attached, loaded again on every saved edit to a `.py` file or `pyproject.toml`
+  in the project.
+  When the runtime goes away, `dev` waits for it and loads the stream again.
+- **`streams`** lists the streams the runtime holds: each one's name, whether it is attached, kept
+  or stopped, its node count and its project.
+- **`stop`** unloads a stream; a kept one stays stopped across the runtime's restarts until
+  **`start`** loads it again. **`rm`** unloads a stream and forgets it.
+- **`expose`** sets how far one output port is readable, live: private (readable by this machine's
+  other streams and agents), `--public` (readable off the machine too) or `--remove` (internal to
+  its stream). A reader the new level no longer allows is cut at once. On a kept stream the level
+  is recorded and wins over what the stream function exposes, across restarts.
+- **`graph`** prints every loaded stream's nodes, ports, links and exposed ports as JSON, with each
+  node's and link's state and counters, under the runtime's name as `runtime_name`; `--stream`
+  prints one stream's graph alone, in the shape a load takes. The runtime's name defaults to
+  `<host>-<the directory tatolabd started in>-<id>`; `STREAMLIB_RUNTIME_NAME` in `tatolabd`'s
+  environment sets it.
+- **`tap`** samples the raw bags one output port of `--stream` carries. The channel is
   `<runtime_name>/<node>/<port>`, spelled as `graph` names them. The sample is bounded and never
   blocks the producer: a quiet port returns a partial sample rather than hanging, and
   `--max-bag-bytes` raises the per-bag cap when a bag comes back flagged as truncated.
-- **`logs`** reads a loaded stream's JSONL log, rendered the way the runtime prints it. Run it in
-  the stream's project directory, where the runtime writes each stream's log: `--list` shows the
-  stream logs there, each named `<runtime_id>-<stream>`, `RUNTIME_ID-STREAM` renders one
-  (`--follow` keeps reading as records land, and the other flags filter what it shows), and
-  `--node` takes a bounded sample of a running runtime's live event stream instead.
+- **`logs --stream`** reads a loaded stream's records from the runtime, rendered the way the runtime
+  prints them; `--follow` keeps reading as records land. Without `--stream` it reads a stream's
+  JSONL log on disk. Run it in the stream's project directory, where the runtime writes each
+  stream's log: `--list` shows the stream logs there, each named `<runtime_id>-<stream>`, and
+  `RUNTIME_ID-STREAM` renders one. The other flags filter what either shows.
 - **`exchange`** turns a published surface id (`<slot>#<generation>`, as a bag carries it) into that
   frame's exact, full-resolution PNG in `--out`, and prints each written path on stdout. With
-  `--channel` it taps the port, reads the id from each sampled bag (the `surface_id` field unless
-  `--field` names another) and exchanges `--count` frames, every `--every`th bag — no window in the
-  graph and no display server in the path.
-- **`mcp`** connects an MCP host to a running runtime over its own stdin and stdout; see below.
+  `--channel` and `--stream` it taps the port, reads the id from each sampled bag (the `surface_id`
+  field unless `--field` names another) and exchanges `--count` frames, every `--every`th bag — no
+  window in the graph and no display server in the path.
+- **`mcp`** connects an MCP host to the runtime over its own stdin and stdout; see below.
 - **`enable-virtual-camera`** installs, once, the permission a `VirtualCameraSink` needs for its
   loopback camera: the `v4l2loopback` module loaded with no devices, and its control node handed to
   the logged-in user through udev. It is one privileged step behind your desktop's password prompt
   (`sudo` in a headless shell), Linux only; `--print` writes the files and commands for a hand
   install and changes nothing.
 
-Every verb that talks to a runtime takes `--node` with a runtime's name or id from `tatolab nodes`.
-Without it the verb takes the one runtime running, and refuses by name when there is none or more
-than one.
+Every verb but `new` and `enable-virtual-camera` talks to the runtime through its local socket, at
+one fixed path per user. With no runtime running, each refuses at once, naming the socket and
+`tatolabd` as the way to start one.
 
 ## Inspect a running stream
 
@@ -292,11 +316,11 @@ Unix socket only your user can open — so control is reachable only on that mac
 
 ```console
 $ tatolab graph | jq -r .runtime_name
-desk-my-stream-8kq3
+desk-home-8kq3
 
-$ tatolab tap desk-my-stream-8kq3/invertingeffect/video_to_downstream --count 3
+$ tatolab tap desk-home-8kq3/invertingeffect/video_to_downstream --stream main --count 3
 {
-  "channel": "desk-my-stream-8kq3/invertingeffect/video_to_downstream",
+  "channel": "desk-home-8kq3/invertingeffect/video_to_downstream",
   "requested": 3,
   "received": 3,
   "window_ms": 500,
@@ -310,7 +334,7 @@ $ tatolab tap desk-my-stream-8kq3/invertingeffect/video_to_downstream --count 3
 ```
 
 `tap` returns what the link really carried.
-`tatolab exchange --channel <that channel> --count 2 --out frames/` writes two of those frames as
+`tatolab exchange --channel <that channel> --stream main --count 2 --out frames/` writes two of those frames as
 PNGs and prints their paths, so you see the pixels of a mid-graph port without adding a window to
 the graph. `logs` reads what every node logged, Rust and Python alike.
 
@@ -327,7 +351,8 @@ The host launches `tatolab mcp`, which sends one upgrade request on the runtime'
 then copies bytes between its own stdin and stdout and the runtime's MCP server, reading none of
 them. To reach a runtime on another machine, launch it over ssh instead, with `tatolab` on that
 machine's `PATH`: `claude mcp add tatolab -- ssh <machine> tatolab mcp`. The server belongs to the
-runtime and comes and goes with it.
+runtime and comes and goes with it, and a stream the host loads attached lives as long as the
+host's connection.
 
 The tools are `graph`, `tap`, `logs` and `exchange` to observe; `add_node`, `connect`, `disconnect`
 and `remove_node` to change a running graph; and `run_stream`, `stop_stream`, `start_stream`,
@@ -351,10 +376,19 @@ open its local socket — only processes running as your user — can observe an
 
 <br>
 
-`tatolab run` does three things. It runs `tatolab.stream`'s compile entry in your project's `.venv`
-interpreter, which imports `stream.py`, calls the `@stream` function and hands back the graph it
-built. It starts `tatolabd` with that graph, the project directory and the venv's interpreter. And
-it forwards Ctrl-C to it.
+`tatolabd` is the machine's runtime, started in a terminal and never by a verb. It takes the
+machine's lock, so a second `tatolabd` is refused naming the first one's user, pid and executable,
+and serves its local socket at a fixed path. It keeps its state in
+`$XDG_STATE_HOME/tatolab/` (else `~/.local/state/tatolab/`), or `~/Library/Application
+Support/Tatolab/` on macOS: a record of each kept stream — its graph, project, interpreter, whether
+it is stopped, and the levels `expose` set — and its own log. At each start it loads every kept
+stream that is not stopped.
+
+`tatolab run` asks it to load a project's stream. The runtime runs `tatolab.stream`'s compile entry
+in the project's `.venv` interpreter, which imports `stream.py`, calls the `@stream` function and
+hands back the graph it built; the CLI compiles nothing. The runtime loads that graph and starts it.
+Attached, the stream lives as long as `tatolab run`'s connection to the runtime; with `-d`, the
+runtime keeps it.
 
 `tatolabd` is native: the engine, the built-in nodes, and the local socket the CLI and MCP hosts
 talk to. No Python runs in its process, and it never imports your code — it learns a Python node's
@@ -522,21 +556,26 @@ model-input tensor kernel, node-owned windows, and the monotonic clock every nod
 
 A stream's venv runs CPython 3.10 to 3.13, GIL-enabled builds; the scaffold pins 3.12.
 
-Not built yet: an installer, several streams in one runtime, serving an exposed port off the
-machine, and Windows.
+Not built yet: an installer, serving an exposed port off the machine, and Windows.
 
 ## Troubleshooting
 
-- **`error: no tatolabd beside …`** — `tatolab` starts the `tatolabd` in its own directory. Run the
-  `tatolab` in `target/tatolab-runtime/bin/`, not a copy of it alone.
-- **`error: no virtual environment at …/.venv`** — `run` and `dev` use the `.venv` in the project
-  directory: the working directory, or `--dir`. Create it with `uv sync`.
-- **`error: the virtual environment at … cannot import tatolab.stream`** — the project does not
-  depend on `tatolab-stream` yet: `uv add tatolab-stream`.
+- **`error: no runtime is running on this machine: nothing answers at …`** — start `tatolabd` in a
+  terminal of its own. When another user's `tatolabd` holds the machine, the refusal names it: it
+  serves that user's socket, not yours.
+- **`another runtime holds this machine: …`** — `tatolabd` is already running; the refusal names
+  its user, pid and executable.
+- **`the machine runtime lock cannot be taken: /Library/Application Support/Tatolab … does not
+  exist`** (macOS) — Tatolab.app creates the lock at first launch; without it, run the `sudo`
+  commands the refusal names, once.
+- **``… has no .venv/bin/python; run `uv sync` in …``** — the runtime compiles a stream in the
+  `.venv` of its project directory: the working directory, or `--dir`. Create it with `uv sync`.
+- **``… cannot import `tatolab.stream`: add `tatolab-stream` to the project's dependencies``** —
+  the project does not depend on `tatolab-stream` yet: `uv add tatolab-stream`.
 - **A node defined in `stream.py` is refused** — move the class into a module beside `stream.py` and
   import it from there.
-- **`tatolab dev: kept the running stream — fix the error and save again`** — the last edit failed
-  to compile; its traceback is printed just above.
+- **`tatolab dev: no stream is loaded — fix it and save again`** — the last edit failed to compile;
+  the runtime's refusal, with its traceback, is printed just above.
 - **`No usable Vulkan driver (ICD) was found` or `No Vulkan loader library could be opened`**
   (Linux) — install your GPU vendor's Vulkan driver (the proprietary NVIDIA driver, or
   `mesa-vulkan-drivers` for AMD and Intel) and the loader (`libvulkan1`), then check that
@@ -548,10 +587,9 @@ machine, and Windows.
 - **No picture on macOS** — the first run asks for camera access without waiting: the stream starts,
   and frames begin once you allow it. macOS asks on behalf of the application that started the
   runtime — your terminal — so a refusal names that application and the Camera setting to change.
-- **A verb finds no runtime, or several** — start one with `tatolab dev`, or pick one with
-  `--node`, using a name or id from `tatolab nodes`.
-- **`tatolab logs --list` shows nothing** — the runtime writes its logs under the directory it was
-  started in, the stream's project; run `tatolab logs` there.
+- **`tatolab logs --list` shows nothing** — the runtime writes each stream's log under that stream's
+  project directory; run `tatolab logs` there, or read a loaded stream's records with
+  `tatolab logs --stream`.
 - **A `VirtualCameraSink` cannot create its loopback camera** — run `tatolab enable-virtual-camera`
   once. It needs the `v4l2loopback` module for your kernel (`v4l2loopback-dkms` on Debian and
   Ubuntu). Until then the sink's default door registers a PipeWire camera instead.

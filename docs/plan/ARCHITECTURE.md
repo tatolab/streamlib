@@ -3364,9 +3364,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams the_local_api_at_the_fixed_socket_answers_graph_with_the_runtime_name_and_no_streams -->
   <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_refuses_by_name a_runtime_name_that_is_not_one_address_chunk_is_refused_naming_the_character -->
-  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_verb_targets_a_runtime_by_its_runtime_name -->
-  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_verb_given_a_name_two_live_runtimes_hold_is_refused_naming_both -->
-  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_retired_nodes_flag_is_a_usage_error -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket the_retired_verbs_and_flags_are_usage_errors -->
 - **DECIDED** — A link's ends are both on this runtime. `OutputLinkPortRef` and
   `InputLinkPortRef` name a port of this runtime's graph and nothing else, and the graph holds
   one link collection, which every traversal walks; `LinkState` has no state that waits on
@@ -3821,7 +3820,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   step]
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_states_the_link_id_and_the_links_state -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_resolves_each_ends_node_by_its_cast_name -->
-  <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_takes_a_link_id_alone -->
+  <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_takes_its_stream_and_a_link_id_alone -->
 - **DECIDED** — `graph` carries the runtime's name as a top-level key, `runtime_name`, beside
   `nodes`, `links` and `exposed` — in the OpenAPI schema, the MCP tool, the generated schema
   and the prompt fixture — because `tap`'s channel is spelled from it and `tap` stays until the
@@ -3831,7 +3830,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   #2645; package-split-and-lend — SHIPPED #2691, #2697]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::graph_response_top_level_key_rendering_tests::the_runtime_name_is_a_top_level_key_and_no_mesh_key_renders -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_the_taps_reservation_and_refuses_past_it -->
-  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs nodes_prints_the_registry_table_alone -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs graph_prints_every_streams_graph_the_runtime_reports -->
 - **DECIDED** — The api-server is engine-side infrastructure in the `runtime/` tree: it is
   hosted — statically linked, never dlopen'd — by `tatolabd` (and by the `streamlib` crate
   for Rust apps), and no wheel hosts it. [control-plane-one-surface; package-split-and-lend —
@@ -3881,7 +3880,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   package-split-and-lend — SHIPPED #2697]
   <!-- verify: cargo test -p streamlib-runtime-client-contract streamlib_runtime_directory -->
   <!-- verify: cargo test -p streamlib-runtime-client-contract a_fallback_that_does_not_exist_yet_is_resolved_for_a_reader_without_being_created -->
-  <!-- verify: cargo test -p tatolab-cli --bin tatolab a_schema_two_entry_is_refused_by_its_version_and_never_pruned -->
+  <!-- verify: cargo test -p tatolab-cli --test tatolab_machine_runtime_socket with_no_runtime_every_verb_fails_at_once_naming_the_socket_and_how_to_start_one -->
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
   bags verbatim, trading completeness for guaranteed non-interference; graph and health
   inspection ride the same control plane. [control-plane-one-surface; amended by moq-on-the-tailnet: `tap` is deleted at the sharing step; logs, `graph` and health stand]
@@ -3901,7 +3900,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   consumer sees them, because the door knows nothing about verification.
   [control-plane-surface-pixel-exchange — SHIPPED #1972; amended by moq-on-the-tailnet: `exchange` is deleted at the sharing step, the repo's
   verification reading a private port's snapshot instead]
-  <!-- verify: cargo test -p streamlib-api-server the_tap_tool_schema_is_unchanged_by_the_exchange_joining_the_catalog -->
+  <!-- verify: cargo test -p streamlib-api-server the_tap_tool_schema_requires_the_stream_and_the_channel_alone -->
   <!-- verify: cargo test -p streamlib-engine --lib a_published_pool_frame_exchanges_through_the_runtime_operation_for_its_own_pixels -->
 - **DECIDED** — The exchange is a pool claim, bounded to the copy. Inside one operation
   call: resolve the id, claim the frame through the pool's own claim seam (the refcount

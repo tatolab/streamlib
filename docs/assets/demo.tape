@@ -2,9 +2,10 @@
 #
 #   vhs docs/assets/demo.tape        # writes docs/assets/demo.gif
 #
-# Run this on the rig, with a stream already running in another shell
-# (`tatolab dev` from a scaffolded stream), so `nodes`, `graph` and `tap`
-# have something live to answer about.
+# Run this on the rig, with `tatolabd` running in one shell and a stream
+# loaded from another (`tatolab dev` from a scaffolded stream, loaded as
+# `main`), so `streams`, `graph`, `tap` and `logs` have something live to
+# answer about.
 
 Output docs/assets/demo.gif
 
@@ -16,19 +17,19 @@ Set Padding 22
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 45ms
 
-Type "tatolab nodes"
+Type "tatolab streams"
 Enter
 Sleep 2.5s
 
-Type "tatolab graph | jq '.nodes[] | {name, state: .components.state}'"
+Type "tatolab graph --stream main | jq '.nodes[] | {name, state: .components.state}'"
 Enter
 Sleep 3.5s
 
-Type "tatolab tap desk-my-rig-8kq3/camerasource/video --count 3"
+Type "tatolab tap desk-my-rig-8kq3/camerasource/video --stream main --count 3"
 Enter
 Sleep 4s
 
-Type "tatolab logs --follow --level warn"
+Type "tatolab logs --stream main --follow --level warn"
 Enter
 Sleep 4s
 Ctrl+C
