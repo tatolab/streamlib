@@ -556,9 +556,10 @@ async fn a_to_stream_other_than_the_stream_named_is_refused_naming_the_rule() {
     assert!(links_in(&loaded.first.to_json().unwrap()).is_empty());
 }
 
-/// `disconnect` in the reading stream removes a link from another stream: on
-/// a stream not started yet, the link is marked for deletion, and its start
-/// takes it out.
+/// `disconnect` by `link_id` in the reading stream removes a link from
+/// another stream: on a stream not started yet, the link is marked for
+/// deletion, and its start takes it out. The source stream holds no such
+/// link, so naming it there is refused and leaves the link as it was.
 #[tokio::test(flavor = "multi_thread")]
 async fn disconnect_removes_a_link_from_another_stream() {
     let loaded = AnEngineLoadingTwoStreams::load().with_a_reader_in_the_second_stream();
@@ -567,6 +568,22 @@ async fn disconnect_removes_a_link_from_another_stream() {
             .connect_into_the_reader_from("first", "idle-in-first", json!({}))
             .await
             .expect("the link is made"),
+    );
+
+    let refusal = tool_error_text(
+        &tool_call_result(
+            loaded.operations_on_the_loaded_streams(),
+            "disconnect",
+            json!({ "stream": "first", "link_id": connected["link_id"] }),
+        )
+        .await,
+    );
+    assert!(refusal.contains("disconnect failed"), "{refusal}");
+    let links = links_in(&loaded.second.to_json().unwrap());
+    assert_eq!(links.len(), 1, "{links:?}");
+    assert!(
+        links[0]["components"].get("pending_deletion").is_none(),
+        "{links:?}"
     );
 
     let disconnected = first_text_block_json(
