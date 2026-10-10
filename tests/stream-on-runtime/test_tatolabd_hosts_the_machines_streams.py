@@ -178,14 +178,12 @@ def assert_frames_flow_out_of_the_pattern(
     working_directory: Path,
 ) -> None:
     """`tatolab tap` on the stream's pattern output receives bags: the stream runs, not just loads."""
-    channel = f"{local_api.graph(stream_name)['runtime_name']}/{EXPOSED_NODE}/{EXPOSED_PORT}"
+    channel = f"{local_api.graph(stream_name)['stream']}/{EXPOSED_NODE}/{EXPOSED_PORT}"
     tapped = json.loads(
         assert_tatolab_succeeded(
             run_tatolab(
                 "tap",
                 channel,
-                "--stream",
-                stream_name,
                 "--count",
                 str(TAPPED_BAG_COUNT),
                 working_directory=working_directory,
@@ -456,16 +454,14 @@ def test_every_verb_that_reaches_the_runtime_fails_at_once_naming_the_socket_and
         ("expose", ALPHA_STREAM, EXPOSED_NODE, EXPOSED_PORT, "--remove"),
         ("graph",),
         ("graph", "--stream", ALPHA_STREAM),
-        ("tap", f"machine/{EXPOSED_NODE}/{EXPOSED_PORT}", "--stream", ALPHA_STREAM),
+        ("tap", f"{ALPHA_STREAM}/{EXPOSED_NODE}/{EXPOSED_PORT}"),
         ("logs", "--stream", ALPHA_STREAM),
         ("logs", "--stream", ALPHA_STREAM, "-f"),
         ("exchange", "1#1", "--out", str(exchange_output_directory)),
         (
             "exchange",
             "--channel",
-            f"machine/{EXPOSED_NODE}/{EXPOSED_PORT}",
-            "--stream",
-            ALPHA_STREAM,
+            f"{ALPHA_STREAM}/{EXPOSED_NODE}/{EXPOSED_PORT}",
             "--out",
             str(exchange_output_directory),
         ),

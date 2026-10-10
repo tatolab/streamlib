@@ -8,7 +8,7 @@ Nothing here imports `tatolab.runtime`: the plain HTTP routes (`/health`,
 socket, and MCP is the official MCP Python SDK's streamable-HTTP client over the
 same socket. One runtime holds every stream loaded into it, so a route or wait
 about one stream's graph names that stream; `/api/graph` without one answers
-`{"runtime_name", "streams": [...]}`. A graph's nodes carry their state at
+`{"machine", "streams": [...]}`. A graph's nodes carry their state at
 `components["state"]`, its links at `state`.
 """
 
@@ -105,7 +105,7 @@ class LocalApiClient:
 
     def graph(self, stream: "str | None" = None) -> "dict[str, Any]":
         """`GET /api/graph`: the stream's live graph — its nodes, links, exposures
-        and the runtime's name — or, with no stream, `{"runtime_name", "streams"}`."""
+        and the machine's name — or, with no stream, `{"machine", "streams"}`."""
         if stream is None:
             return self.get_json("/api/graph")
         return self.get_json(f"/api/graph?stream={urllib.parse.quote(stream, safe='')}")

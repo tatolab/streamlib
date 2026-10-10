@@ -207,8 +207,8 @@ def await_node_state(local_api: LocalApiClient, stream_name: str, name: str, wan
 
 
 def tap_channel_of(graph: dict, node_name: str, output_port: str) -> str:
-    """The channel `tap` takes: the port's address on this runtime."""
-    return f"{graph['runtime_name']}/{node_name}/{output_port}"
+    """The channel `tap` takes: the port's address on this machine, `<stream>/<node>/<port>`."""
+    return f"{graph['stream']}/{node_name}/{output_port}"
 
 
 @dataclass(frozen=True)

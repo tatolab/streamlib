@@ -66,8 +66,8 @@ if [ -z "$STREAM_NAME" ] && ! STREAM_NAME="$(name_of_the_sole_stream_the_runtime
     exit 1
 fi
 
-# The channel is the port's address, `<runtime_name>/<node>/<port>`, with this
-# runtime's own top-level `runtime_name`.
+# The channel is the port's address on this machine, `<stream>/<node>/<port>`,
+# with the stream's own top-level `stream`.
 # Read into a variable rather than fed to `$(...)` as a heredoc: macOS's bash
 # 3.2 parses a heredoc inside a command substitution for quotes, and the
 # apostrophes below end the script there.
@@ -102,7 +102,7 @@ for node in graph["nodes"]:
         )
     else:
         port = declared[0]
-    print(f"{graph['runtime_name']}/{node['name']}/{port}")
+    print(f"{graph['stream']}/{node['name']}/{port}")
     break
 else:
     sys.exit(f"no node named {wanted} in the running graph")

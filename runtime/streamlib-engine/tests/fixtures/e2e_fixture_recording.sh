@@ -450,8 +450,8 @@ if ! REPLAY_STREAM_NAME="$(name_of_the_stream_a_rig_serves_once_it_runs "$RUNNIN
     exit 1
 fi
 
-# A channel is the port's address, `<runtime_name>/<node>/<port>`, with this
-# runtime's own top-level `runtime_name`. Read off the live graph rather than
+# A channel is the port's address on this machine, `<stream>/<node>/<port>`,
+# with the stream's own top-level `stream`. Read off the live graph rather than
 # guessed.
 DECODED_CHANNEL="$(tatolab_observation_verb graph --stream "$REPLAY_STREAM_NAME" 2>/dev/null | python3 -c '
 import json, sys
@@ -461,7 +461,7 @@ decoder = next(
 )
 if decoder is None:
     sys.exit("the running graph has no node named `decoder`")
-print(graph["runtime_name"] + "/" + decoder["name"] + "/video")
+print(graph["stream"] + "/" + decoder["name"] + "/video")
 ')" || {
     echo "[recording] FAIL: could not read the decoder channel off the replay graph" >&2
     tail -30 "$REPLAY_LOG" >&2

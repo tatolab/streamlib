@@ -457,18 +457,17 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
     assert re.search(rf"^{STREAM_NAME}\s+attached\s+2\s+", listed, re.MULTILINE), listed
 
     graph = json.loads(succeeded(run_tatolab_observation_verb("graph", "--stream", STREAM_NAME)))
-    runtime_name = graph["runtime_name"]
     source_name = next(
         graph_node["name"]
         for graph_node in graph["nodes"]
         if graph_node["name"].startswith("testpatternsource")
     )
-    channel = f"{runtime_name}/{source_name}/video"
+    channel = f"{graph['stream']}/{source_name}/video"
 
     tapped = json.loads(
         succeeded(
             run_tatolab_observation_verb(
-                "tap", channel, "--count", "2", "--stream", STREAM_NAME,
+                "tap", channel, "--count", "2",
                 timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
             )
         )
@@ -481,7 +480,7 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
     channel_form_written = succeeded(
         run_tatolab_observation_verb(
             "exchange", "--channel", channel, "--count", "1",
-            "--out", str(channel_form_directory), "--stream", STREAM_NAME,
+            "--out", str(channel_form_directory),
             timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
         )
     ).split()  # fmt: skip
@@ -494,7 +493,7 @@ def test_every_observation_verb_reaches_an_attached_stream_through_the_local_api
         tapped_for_a_surface_id = json.loads(
             succeeded(
                 run_tatolab_observation_verb(
-                    "tap", channel, "--count", "1", "--stream", STREAM_NAME,
+                    "tap", f"{graph['machine']}/{channel}", "--count", "1",
                     timeout=OBSERVATION_VERB_TIMEOUT_SECONDS,
                 )
             )

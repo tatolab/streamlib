@@ -75,7 +75,7 @@ def test_tatolabd_serves_its_local_api_at_the_fixed_socket_in_an_owner_only_runt
     assert graph.returncode == 0, graph.stdout + graph.stderr
     machine_graph = json.loads(graph.stdout)
     assert machine_graph["streams"] == [], machine_graph
-    assert machine_graph["runtime_name"], machine_graph
+    assert machine_graph["machine"], machine_graph
     listed = run_tatolab_observation_verb("streams")
     assert listed.returncode == 0, listed.stdout + listed.stderr
     assert listed.stdout.strip() == "No streams in this runtime."

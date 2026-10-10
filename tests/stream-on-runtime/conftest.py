@@ -109,8 +109,6 @@ RUN_ATTENDED_AUDIBLE_TESTS_ENVIRONMENT_VARIABLE = "STREAMLIB_RUN_ATTENDED_AUDIBL
 #: Engine variables a test's runtime must not inherit from the shell running
 #: the suite; a test that wants one passes it in `extra_environment`.
 ENGINE_VARIABLES_NOT_INHERITED = (
-    "STREAMLIB_APP_DIRECTORY",
-    "STREAMLIB_RUNTIME_NAME",
     "STREAMLIB_QUIET",
     "STREAMLIB_HOME",
     "STREAMLIB_ICEORYX2_DOMAIN_ROOT",
