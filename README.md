@@ -285,12 +285,13 @@ tatolab enable-virtual-camera [--print]
   its stream). A reader the new level no longer allows is cut at once. On a kept stream the level
   is recorded and wins over what the stream function exposes, across restarts.
 - **`graph`** prints every loaded stream's nodes, ports, links and exposed ports as JSON, with each
-  node's and link's state and counters, under the runtime's name as `runtime_name`; `--stream`
-  prints one stream's graph alone, in the shape a load takes. The runtime's name defaults to
-  `<host>-<the directory tatolabd started in>-<id>`; `STREAMLIB_RUNTIME_NAME` in `tatolabd`'s
-  environment sets it.
-- **`tap`** samples the raw bags one output port of `--stream` carries. The channel is
-  `<runtime_name>/<node>/<port>`, spelled as `graph` names them. The sample is bounded and never
+  node's and link's state and counters, under the machine's name as `machine`; `--stream` prints
+  one stream's graph alone, in the shape a load takes. The machine's name is its tailnet name, read
+  from the local Tailscale's status when `tatolabd` starts, or its hostname when it has no tailnet,
+  cast to lowercase URL-safe.
+- **`tap`** samples the raw bags one output port carries. The channel is the port's address,
+  `<stream>/<node>/<port>` as `graph` names them — `<node>/<port>` with `--stream`, or
+  `<machine>/<stream>/<node>/<port>` naming this machine. The sample is bounded and never
   blocks the producer: a quiet port returns a partial sample rather than hanging, and
   `--max-bag-bytes` raises the per-bag cap when a bag comes back flagged as truncated.
 - **`logs --stream`** reads a loaded stream's records from the runtime, rendered the way the runtime
@@ -300,7 +301,7 @@ tatolab enable-virtual-camera [--print]
   `RUNTIME_ID-STREAM` renders one. The other flags filter what either shows.
 - **`exchange`** turns a published surface id (`<slot>#<generation>`, as a bag carries it) into that
   frame's exact, full-resolution PNG in `--out`, and prints each written path on stdout. With
-  `--channel` and `--stream` it taps the port, reads the id from each sampled bag (the `surface_id`
+  `--channel` it taps the port, reads the id from each sampled bag (the `surface_id`
   field unless `--field` names another) and exchanges `--count` frames, every `--every`th bag — no
   window in the graph and no display server in the path.
 - **`mcp`** connects an MCP host to the runtime over its own stdin and stdout; see below.
@@ -320,12 +321,12 @@ Run these on the machine the stream runs on. They reach the runtime through its 
 Unix socket only your user can open — so control is reachable only on that machine.
 
 ```console
-$ tatolab graph | jq -r .runtime_name
-desk-home-8kq3
+$ tatolab graph | jq -r .machine
+desk
 
-$ tatolab tap desk-home-8kq3/invertingeffect/video_to_downstream --stream main --count 3
+$ tatolab tap main/invertingeffect/video_to_downstream --count 3
 {
-  "channel": "desk-home-8kq3/invertingeffect/video_to_downstream",
+  "channel": "main/invertingeffect/video_to_downstream",
   "requested": 3,
   "received": 3,
   "window_ms": 500,
@@ -339,7 +340,7 @@ $ tatolab tap desk-home-8kq3/invertingeffect/video_to_downstream --stream main -
 ```
 
 `tap` returns what the link really carried.
-`tatolab exchange --channel <that channel> --stream main --count 2 --out frames/` writes two of those frames as
+`tatolab exchange --channel <that channel> --count 2 --out frames/` writes two of those frames as
 PNGs and prints their paths, so you see the pixels of a mid-graph port without adding a window to
 the graph. `logs` reads what every node logged, Rust and Python alike.
 
