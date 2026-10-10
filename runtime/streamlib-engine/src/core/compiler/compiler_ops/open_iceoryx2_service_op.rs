@@ -3194,6 +3194,97 @@ mod tests {
         );
     }
 
+    /// A link reading another stream is removed the way the compiler removes
+    /// any link: it is closed without a warning and its edge leaves the graph,
+    /// while its reader's other links — one into the same input from a source
+    /// in this stream, one out of the reader's own output — stay wired, the
+    /// reader's output keeping its publisher and that link's notifier.
+    ///
+    /// Fail-without-fix: close the edge's two graph endpoints, which for this
+    /// link are both the reader, and the reader's own links are unwired.
+    #[test]
+    fn removing_a_link_reading_another_stream_takes_its_edge_and_leaves_its_readers_other_links_wired()
+     {
+        use crate::core::compiler::compiler::unwire_and_remove_a_link;
+        use crate::core::graph::OutputPortInAnotherStreamOnThisMachine;
+        use crate::core::pubsub::LoadedStreamIdentity;
+        use crate::core::runtime::LoadedStreamTag;
+        use crate::core::test_support::{
+            MockInputOnlyProcessor, MockOutputOnlyProcessor, MockProcessor,
+        };
+
+        let node = Iceoryx2Node::for_this_test_process();
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let reader_id = graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                MockProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .expect("the node is named")
+            .first()
+            .expect("the reader is added")
+            .id
+            .to_string();
+        let (_, reader_output, reader_input) =
+            attach_mock_instance::<MockProcessor::Processor>(&mut graph, &reader_id);
+        let reader_output = reader_output.expect("the reader holds an output writer");
+        let reader_input = reader_input.expect("the reader holds input mailboxes");
+        let downstream_id = add_mock_input_only(&mut graph);
+        attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &downstream_id);
+
+        let link_into_the_reader = add_link_from_out1_to_in1(&mut graph, &source_id, &reader_id);
+        let link_out_of_the_reader =
+            add_link_from_out1_to_in1(&mut graph, &reader_id, &downstream_id);
+        for link_id in [&link_into_the_reader, &link_out_of_the_reader] {
+            open_iceoryx2_service(&mut graph, link_id, &node).expect("a link in this stream wires");
+        }
+        let link_reading_another_stream = graph
+            .traversal_mut()
+            .add_e_reading_another_stream(
+                OutputPortInAnotherStreamOnThisMachine::new("a", "camera", "out1").unwrap(),
+                InputLinkPortRef::new(reader_id.as_str(), "in1"),
+            )
+            .first()
+            .expect("the link reading another stream is added")
+            .id
+            .clone();
+
+        let graph = parking_lot::RwLock::new(graph);
+        let the_stream = LoadedStreamIdentity {
+            runtime_id: "Rremoval".to_string(),
+            stream_name: "b".to_string(),
+            stream_tag: LoadedStreamTag::numbered_for_a_test(1),
+        };
+        let (unwired, warnings) = CapturedTracingWarnings::captured_while(|| {
+            unwire_and_remove_a_link(&graph, &link_reading_another_stream, &the_stream)
+        });
+
+        assert!(unwired.expect("the link is removed"));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let graph = graph.read();
+        assert!(!graph.traversal().e(&link_reading_another_stream).exists());
+        for link_id in [&link_into_the_reader, &link_out_of_the_reader] {
+            assert!(
+                matches!(
+                    graph
+                        .traversal()
+                        .e(link_id)
+                        .first()
+                        .and_then(|link| link.get::<LinkStateComponent>())
+                        .map(|state| state.0),
+                    Some(LinkState::Wired)
+                ),
+                "{link_id} stays wired"
+            );
+        }
+        assert_eq!(reader_input.inbound_link_names("in1").len(), 1);
+        assert!(reader_output.has_channel_publisher("out1"));
+        assert_eq!(reader_output.channel_notifier_count("out1"), 1);
+    }
+
     fn add_mock_reactive_input_only(graph: &mut Graph) -> String {
         crate::core::test_support::ensure_test_mocks_registered();
         graph
