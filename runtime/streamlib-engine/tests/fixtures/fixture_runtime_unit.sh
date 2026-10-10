@@ -150,19 +150,26 @@ FIXTURE_RUNTIME_EXIT_STATUS=""
 # runtime compiles a stream and starts its processor interpreters with its own
 # environment, never `tatolab run`'s.
 #
-# Its state directory is <state home>/tatolab (XDG_STATE_HOME; macOS has no
-# such override), so it re-loads none of this user's kept streams and leaves
-# its own log beside the fixture's evidence. It takes the machine's real
-# runtime lock: when another runtime holds the machine, `tatolabd` refuses
-# naming the holder, and this returns 1 having printed that refusal.
+# Its state directory sits under <state home>: XDG_STATE_HOME names it on
+# Linux, and HOME on macOS, where the state directory is `$HOME/Library/
+# Application Support/Tatolab`. So it re-loads none of this user's kept streams
+# and leaves its own log beside the fixture's evidence. The runtime directory
+# and the lock read neither variable, so the local API socket stays where
+# `tatolab` looks. It takes the machine's real runtime lock: when another
+# runtime holds the machine, `tatolabd` refuses naming the holder, and this
+# returns 1 having printed that refusal.
 start_the_fixture_runtime() {
     local runtime_log_file="$1" runtime_state_home="$2"
     local a_runtime_answered_before_the_start=0 runtime_exit_status
+    local -a state_directory_environment=("XDG_STATE_HOME=$runtime_state_home")
+    if [ "$(uname -s)" = Darwin ]; then
+        state_directory_environment+=("HOME=$runtime_state_home")
+    fi
     if a_runtime_answers_at_the_local_api_socket; then
         a_runtime_answered_before_the_start=1
     fi
     mkdir -p "$runtime_state_home"
-    XDG_STATE_HOME="$runtime_state_home" "$TATOLABD_EXECUTABLE" >"$runtime_log_file" 2>&1 &
+    env "${state_directory_environment[@]}" "$TATOLABD_EXECUTABLE" >"$runtime_log_file" 2>&1 &
     FIXTURE_RUNTIME_PID=$!
     FIXTURE_RUNTIME_STOP_OUTCOME="never-started"
     FIXTURE_RUNTIME_EXIT_STATUS=""
