@@ -825,12 +825,19 @@ jobs:
           # same reason: the clippy step builds default targets and never its
           # test target. These are the only tests of the REST routes and the
           # MCP tool dispatch — the surface an agent and every programmatic
-          # client drive the runtime through.
-          cargo test --locked -p streamlib-api-server --lib
-          # The runtime process: its flags, each refusal by name, the lend found
-          # from its own executable. GPU-free; its signal-ladder tests sit
-          # behind `hardware-tests` and run on the rig.
-          cargo test --locked -p tatolabd
+          # client drive the runtime through. Built with the test feature, so the
+          # runtime directory the fixed-socket test binds `local-api.sock` in sits
+          # under this run's own short root, never the machine's.
+          TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)" \
+            cargo test --locked -p streamlib-api-server --lib \
+            --features machine-directories-under-a-test-root
+          # The machine's runtime: no arguments, each refusal by name, the lock
+          # naming the first runtime, the fixed socket, the kept streams it
+          # re-loads, the state directory and its own log. Built with the test
+          # feature, so each run's lock, runtime and state directories sit under
+          # its own short root. GPU-free; its started-stream and signal-ladder
+          # tests sit behind `hardware-tests` and run on the rig.
+          cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
           # The CLI: `new`'s rendered files, and `run`/`dev` supervising a stand-in
           # tatolabd — signals forwarded one for one, exit codes passed through.
           cargo test --locked -p tatolab-cli
@@ -920,8 +927,10 @@ jobs:
           # refused naming the floor and the rest of it loads.
           cargo test --locked -p streamlib-media-builtins --test every_golden_graph_loads
           cargo test --locked -p streamlib-consumer-rhi --lib
-          cargo test --locked -p streamlib-api-server --lib
-          cargo test --locked -p tatolabd
+          TATOLAB_TEST_MACHINE_ROOT="$(mktemp -d /tmp/tl-XXXXXX)" \
+            cargo test --locked -p streamlib-api-server --lib \
+            --features machine-directories-under-a-test-root
+          cargo test --locked -p tatolabd --features machine-directories-under-a-test-root
           cargo test --locked -p tatolab-cli
           # `--test-threads=1` because two of these open iceoryx2 nodes in child
           # processes of this same binary and race each other when run in

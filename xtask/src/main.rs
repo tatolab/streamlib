@@ -461,15 +461,31 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             "cargo",
             &["test", "--locked", "-p", "streamlib-python-wheel", "--lib"],
         ),
+        // A shell, for the environment: a test build of the control plane refuses
+        // to run without its machine root.
         (
             "control-plane unit tests (REST routes + MCP tool dispatch)",
-            "cargo",
-            &["test", "--locked", "-p", "streamlib-api-server", "--lib"],
+            "bash",
+            &[
+                "-c",
+                "test_machine_root=\"$(mktemp -d /tmp/tl-XXXXXX)\" \
+                 && trap 'rm -rf \"$test_machine_root\"' EXIT \
+                 && TATOLAB_TEST_MACHINE_ROOT=\"$test_machine_root\" \
+                 cargo test --locked -p streamlib-api-server --lib \
+                 --features machine-directories-under-a-test-root",
+            ],
         ),
         (
-            "runtime-process tests (tatolabd's flags and refusals)",
+            "machine runtime tests (tatolabd's refusals, lock, socket and kept streams)",
             "cargo",
-            &["test", "--locked", "-p", "tatolabd"],
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "tatolabd",
+                "--features",
+                "machine-directories-under-a-test-root",
+            ],
         ),
         (
             "CLI tests (tatolab new, and run/dev supervising tatolabd)",

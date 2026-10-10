@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The MCP prompts a node serves: recipes an agent follows with the tools the
-//! node already serves, rendered against the sole loaded stream's live graph
-//! and node catalog at the moment one is requested. With none or several
-//! streams loaded, a prompt says which are instead.
+//! The MCP prompts the runtime serves: recipes an agent follows with the tools
+//! it already serves, rendered against the live graph and node catalog of the
+//! loaded stream each names, at the moment one is requested. A stream not
+//! loaded is refused naming the loaded ones.
 //!
 //! A prompt is text, never a mutation path — every step it lists is a call to
 //! a served tool, so the tool set stays the whole of the control vocabulary.
@@ -31,10 +31,7 @@ use streamlib::sdk::json_schema::{
 
 use crate::mcp::LocalApiMcpServerHandler;
 use crate::mcp_resources::{
-    TheStreamsPartOrTheLoadedStreams, exported_live_graph_json,
-    the_node_catalog_of_the_stream_or_the_loaded_streams,
-    the_sole_loaded_streams_operations_or_the_loaded_streams,
-    which_streams_are_loaded_in_place_of_the_sole_one,
+    exported_live_graph_json, prompt_stream_refusal, the_stream_a_prompt_names,
 };
 
 /// The import path `VirtualCameraSink` registers under, which the virtual
@@ -44,6 +41,7 @@ use crate::mcp_resources::{
 pub const VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH: &str =
     "tatolab.stream:VirtualCameraSink";
 
+const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the recipe is rendered against and every step's tool call names, by the name `list_streams` and `graph` report.";
 const LINK_ID_ARGUMENT_DESCRIPTION: &str =
     "The id of the link to splice into, as `graph` lists it under `links`.";
 const TYPE_ARGUMENT_DESCRIPTION: &str = "The import path of the node class to add — a type the `streamlib://node-catalog` resource lists, or a Python class's `module:QualifiedClassName`.";
@@ -64,6 +62,8 @@ const LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION: &str = "Sample one bag 
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct InsertNodeBetweenLinkedNodesPromptArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
     #[schemars(description = LINK_ID_ARGUMENT_DESCRIPTION)]
     link_id: String,
     #[serde(rename = "type")]
@@ -75,6 +75,8 @@ struct InsertNodeBetweenLinkedNodesPromptArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct FanOutputToAnotherConsumerPromptArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
     #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
     from_node: String,
     #[schemars(description = FROM_PORT_ARGUMENT_DESCRIPTION)]
@@ -88,6 +90,8 @@ struct FanOutputToAnotherConsumerPromptArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct ShowChannelOnVirtualCameraPromptArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
     #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
     from_node: String,
     #[schemars(description = FROM_PORT_ARGUMENT_DESCRIPTION)]
@@ -100,6 +104,8 @@ struct ShowChannelOnVirtualCameraPromptArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct LookAtWhatAChannelCarriesPromptArguments {
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    stream: String,
     #[schemars(description = FROM_NODE_ARGUMENT_DESCRIPTION)]
     from_node: String,
     #[schemars(description = FROM_PORT_ARGUMENT_DESCRIPTION)]
@@ -116,7 +122,8 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(arguments): Parameters<InsertNodeBetweenLinkedNodesPromptArguments>,
     ) -> Result<GetPromptResult, McpError> {
-        self.render_a_recipe_against_the_sole_stream(
+        self.render_a_recipe_against_the_stream_it_names(
+            &arguments.stream,
             INSERT_NODE_BETWEEN_LINKED_NODES_PROMPT_DESCRIPTION,
             |live_graph, node_catalog| {
                 insert_node_between_linked_nodes_recipe(live_graph, node_catalog, &arguments)
@@ -133,7 +140,8 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(arguments): Parameters<FanOutputToAnotherConsumerPromptArguments>,
     ) -> Result<GetPromptResult, McpError> {
-        self.render_a_recipe_against_the_sole_stream(
+        self.render_a_recipe_against_the_stream_it_names(
+            &arguments.stream,
             FAN_OUTPUT_TO_ANOTHER_CONSUMER_PROMPT_DESCRIPTION,
             |live_graph, node_catalog| {
                 fan_output_to_another_consumer_recipe(live_graph, node_catalog, &arguments)
@@ -150,7 +158,8 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(arguments): Parameters<ShowChannelOnVirtualCameraPromptArguments>,
     ) -> Result<GetPromptResult, McpError> {
-        self.render_a_recipe_against_the_sole_stream(
+        self.render_a_recipe_against_the_stream_it_names(
+            &arguments.stream,
             SHOW_CHANNEL_ON_VIRTUAL_CAMERA_PROMPT_DESCRIPTION,
             |live_graph, node_catalog| {
                 show_channel_on_virtual_camera_recipe(live_graph, node_catalog, &arguments)
@@ -167,7 +176,8 @@ impl LocalApiMcpServerHandler {
         &self,
         Parameters(arguments): Parameters<LookAtWhatAChannelCarriesPromptArguments>,
     ) -> Result<GetPromptResult, McpError> {
-        self.render_a_recipe_against_the_sole_stream(
+        self.render_a_recipe_against_the_stream_it_names(
+            &arguments.stream,
             LOOK_AT_WHAT_A_CHANNEL_CARRIES_PROMPT_DESCRIPTION,
             |live_graph, _| look_at_what_a_channel_carries_recipe(live_graph, &arguments),
         )
@@ -176,70 +186,44 @@ impl LocalApiMcpServerHandler {
 }
 
 impl LocalApiMcpServerHandler {
-    /// `recipe_for` rendered against the sole loaded stream's graph and the
-    /// node catalog of that same stream as they are now — or, when the lookup
-    /// is refused, the text that says which streams are loaded — as the
-    /// prompt `description` names.
-    async fn render_a_recipe_against_the_sole_stream(
+    /// `recipe_for` rendered against the graph and node catalog of the loaded
+    /// stream `stream_name` names as they are now, as the prompt `description`
+    /// names; a stream not loaded is refused naming the loaded ones.
+    async fn render_a_recipe_against_the_stream_it_names(
         &self,
+        stream_name: &str,
         description: &str,
         recipe_for: impl FnOnce(&GraphResponse, &[ProcessorDescriptor]) -> Result<GraphRecipe, McpError>,
     ) -> Result<GetPromptResult, McpError> {
         let operations_on_the_loaded_streams = &self.operations_on_the_loaded_streams;
-        let stream_operations = match the_sole_loaded_streams_operations_or_the_loaded_streams(
-            operations_on_the_loaded_streams,
-        )? {
-            TheStreamsPartOrTheLoadedStreams::TheStreamsPart(stream_operations) => {
-                stream_operations
-            }
-            TheStreamsPartOrTheLoadedStreams::TheLoadedStreams(loaded_stream_names) => {
-                return Ok(which_streams_are_loaded_prompt_result(
-                    &loaded_stream_names,
-                    description,
-                ));
-            }
-        };
+        let stream_operations =
+            the_stream_a_prompt_names(operations_on_the_loaded_streams, stream_name)?;
         let live_graph: GraphResponse = serde_json::from_value(
             exported_live_graph_json(&stream_operations).await?,
         )
         .map_err(|e| McpError::internal_error(format!("graph export did not parse: {e}"), None))?;
-        let node_catalog = match the_node_catalog_of_the_stream_or_the_loaded_streams(
-            operations_on_the_loaded_streams,
-            live_graph.stream.as_deref(),
-        )? {
-            TheStreamsPartOrTheLoadedStreams::TheStreamsPart(node_catalog) => node_catalog,
-            TheStreamsPartOrTheLoadedStreams::TheLoadedStreams(loaded_stream_names) => {
-                return Ok(which_streams_are_loaded_prompt_result(
-                    &loaded_stream_names,
-                    description,
-                ));
-            }
-        };
-        Ok(recipe_for(&live_graph, &node_catalog)?.prompt_result(description))
+        let node_catalog = operations_on_the_loaded_streams
+            .node_catalog_of_the_stream_a_call_names(stream_name)
+            .map_err(|refusal| prompt_stream_refusal(&refusal))?;
+        let stream_name_as_graph_reports_it = live_graph
+            .stream
+            .clone()
+            .unwrap_or_else(|| stream_name.to_string());
+        Ok(recipe_for(&live_graph, &node_catalog)?
+            .prompt_result(&stream_name_as_graph_reports_it, description))
     }
 }
 
-/// The prompt that says which streams are loaded in place of a recipe.
-fn which_streams_are_loaded_prompt_result(
-    loaded_stream_names: &[String],
-    description: &str,
-) -> GetPromptResult {
-    GraphRecipe {
-        introduction_text: which_streams_are_loaded_in_place_of_the_sole_one(loaded_stream_names),
-        steps: Vec::new(),
-        closing_note: None,
-    }
-    .prompt_result(description)
-}
-
-/// One numbered step of a recipe: the served tool it calls and what to pass.
+/// One numbered step of a recipe: the served tool it calls, whether that tool
+/// names the stream, and what to pass.
 struct GraphRecipeStep {
     tool_name: &'static str,
+    names_the_stream: bool,
     instruction: String,
 }
 
-/// A recipe rendered against the node: what it is about, its steps, and what
-/// to do when a step is refused in a known way.
+/// A recipe rendered against one stream: what it is about, its steps, and
+/// what to do when a step is refused in a known way.
 struct GraphRecipe {
     introduction_text: String,
     steps: Vec<GraphRecipeStep>,
@@ -247,29 +231,32 @@ struct GraphRecipe {
 }
 
 impl GraphRecipe {
-    /// The recipe as a `prompts/get` result: one user message carrying its text.
-    fn prompt_result(&self, description: &str) -> GetPromptResult {
+    /// The recipe as a `prompts/get` result: one user message carrying its
+    /// text, every step that names a stream naming `stream_name`.
+    fn prompt_result(&self, stream_name: &str, description: &str) -> GetPromptResult {
         GetPromptResult::new(vec![PromptMessage::new_text(
             Role::User,
-            self.rendered_text(),
+            self.rendered_text(stream_name),
         )])
         .with_description(description)
     }
 
     /// The text an agent follows. Each step is its own line, `N. `tool` — …`.
-    fn rendered_text(&self) -> String {
-        if self.steps.is_empty() {
-            return self.introduction_text.clone();
-        }
+    fn rendered_text(&self, stream_name: &str) -> String {
         let mut text = format!(
-            "{}\n\nSteps — each calls one tool this node serves:\n",
+            "{}\n\nSteps — each calls one tool this runtime serves:\n",
             self.introduction_text
         );
         for (index, step) in self.steps.iter().enumerate() {
+            let stream_argument = if step.names_the_stream {
+                format!("`stream`: `{stream_name}`; ")
+            } else {
+                String::new()
+            };
             // Writing into a `String` cannot fail.
             let _ = writeln!(
                 text,
-                "{}. `{}` — {}",
+                "{}. `{}` — {stream_argument}{}",
                 index + 1,
                 step.tool_name,
                 step.instruction
@@ -282,12 +269,26 @@ impl GraphRecipe {
     }
 }
 
+/// A step calling `tool_name` on the stream the recipe is rendered against.
 fn graph_recipe_step_calling_tool(
     tool_name: &'static str,
     instruction: impl Into<String>,
 ) -> GraphRecipeStep {
     GraphRecipeStep {
         tool_name,
+        names_the_stream: true,
+        instruction: instruction.into(),
+    }
+}
+
+/// A step calling `tool_name`, which names no stream.
+fn graph_recipe_step_calling_a_tool_that_names_no_stream(
+    tool_name: &'static str,
+    instruction: impl Into<String>,
+) -> GraphRecipeStep {
+    GraphRecipeStep {
+        tool_name,
+        names_the_stream: false,
         instruction: instruction.into(),
     }
 }
@@ -650,7 +651,7 @@ fn look_at_what_a_channel_carries_recipe(
                      tap again."
                 ),
             ),
-            graph_recipe_step_calling_tool(
+            graph_recipe_step_calling_a_tool_that_names_no_stream(
                 "exchange",
                 "`surface_id`: the bag's `surface_id`, when it carries one. The result is that \
                  frame's picture. A refusal naming a recycled frame means the frame was retired \

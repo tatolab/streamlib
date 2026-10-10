@@ -134,7 +134,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   per machine hosts every stream, and `run` loads into the running one rather than starting
   its own]
   <!-- verify: cargo test -p tatolab-cli --test tatolab_run_and_dev_supervise_tatolabd -->
-  <!-- verify: cargo test -p tatolabd --test tatolabd_refuses_by_name -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_refuses_by_name -->
 - **DECIDED** — The tests divide as the code does. The stream suite
   (`sdk/tatolab-stream/tests`) is pure Python in a venv holding only `tatolab-stream` —
   declarations, the builder and its name resolution, compile, the generated built-ins, the
@@ -3361,8 +3361,8 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::edges::port_address -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime::tests::two_runners_given_one_runtime_name_both_construct -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_tap_naming_another_runtime_is_refused_naming_that_runtime -->
-  <!-- verify: cargo test -p tatolabd --test tatolabd_hosts_a_stream_on_the_gpu the_runtime_name_from_the_environment_reaches_the_local_apis_graph -->
-  <!-- verify: cargo test -p tatolabd --test tatolabd_refuses_by_name a_runtime_name_that_is_not_one_address_chunk_is_refused_naming_the_character -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_hosts_the_machines_streams the_local_api_at_the_fixed_socket_answers_graph_with_the_runtime_name_and_no_streams -->
+  <!-- verify: cargo test -p tatolabd --features machine-directories-under-a-test-root --test tatolabd_refuses_by_name a_runtime_name_that_is_not_one_address_chunk_is_refused_naming_the_character -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_verb_targets_a_runtime_by_its_runtime_name -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_verb_given_a_name_two_live_runtimes_hold_is_refused_naming_both -->
   <!-- verify: cargo test -p tatolab-cli --test tatolab_observation_verbs a_retired_nodes_flag_is_a_usage_error -->
@@ -3601,7 +3601,7 @@ direction, and nothing new is built on it. Off a machine, the direction is §Net
   [shutdown-ladder; local-transport-hardening — SHIPPED #2266; package-split-and-lend —
   SHIPPED #2693; amended by one-runtime-per-machine: an installer-registered per-user service
   starts the runtime, which never detaches itself]
-  <!-- verify: cargo test -p tatolabd --test tatolabd_hosts_a_stream_on_the_gpu an_interrupt_stops_the_stream_cleanly_and_exits_zero -->
+  <!-- verify: cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root --test tatolabd_hosts_a_stream_on_the_gpu a_kept_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_by_an_interrupt -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::engine_teardown_watchdog -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown -->
   <!-- verify: pytest tests/stream-on-runtime/test_helper_shutdown_ladder.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->

@@ -9,52 +9,32 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 /// Set by the CLI launcher to the app's anchor directory, as a full path.
 pub const APP_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_APP_DIRECTORY";
-
-/// The app directory the runtime's host was given — `tatolabd`'s `--project`.
-static APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN: OnceLock<PathBuf> = OnceLock::new();
-
-/// Record the app directory the runtime's host was given, which the engine
-/// cannot see and which outranks the directory the host was started from.
-///
-/// The first call wins and there is no way back — a host hosts one app for its
-/// whole life, which is also why no test records one: doing so would rename
-/// every runtime constructed later in the same binary.
-pub fn record_the_app_directory_the_runtime_host_was_given(app_directory: PathBuf) {
-    let _ = APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN.set(app_directory);
-}
 
 /// The directory of the app this runtime belongs to.
 pub fn resolve_the_app_directory_this_runtime_belongs_to() -> PathBuf {
     resolve_app_directory(
         std::env::var_os(APP_DIRECTORY_ENVIRONMENT_VARIABLE),
-        APP_DIRECTORY_THE_RUNTIME_HOST_WAS_GIVEN
-            .get()
-            .map(PathBuf::as_path),
         std::env::current_dir().ok(),
     )
 }
 
 /// The resolver with every input named, so each arm is testable without
-/// reaching into the process's environment or its one-shot record.
+/// reaching into the process's environment.
 ///
 /// [`APP_DIRECTORY_ENVIRONMENT_VARIABLE`] first, so a CLI-launched app is
-/// anchored where the launcher anchored it; then the app directory the
-/// runtime's host recorded, which is what a stream `tatolabd` hosts has; then
-/// the working directory, which is what a Rust app gets. An empty environment value
-/// reads as unset, the way an empty `XDG_RUNTIME_DIR` does.
+/// anchored where the launcher anchored it; then the working directory. An
+/// empty environment value reads as unset, the way an empty `XDG_RUNTIME_DIR`
+/// does.
 fn resolve_app_directory(
     app_directory_from_the_environment: Option<OsString>,
-    app_directory_the_runtime_host_was_given: Option<&Path>,
     working_directory: Option<PathBuf>,
 ) -> PathBuf {
     let chosen = app_directory_from_the_environment
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| app_directory_the_runtime_host_was_given.map(Path::to_path_buf))
         .or_else(|| working_directory.clone())
         .unwrap_or_default();
     the_one_spelling_of(chosen, working_directory.as_deref())
@@ -92,38 +72,23 @@ mod tests {
     use super::*;
 
     /// A CLI-launched app is anchored where its launcher anchored it, over
-    /// everything else.
+    /// the working directory.
     #[test]
-    fn the_environment_outranks_the_runtime_hosts_app_directory_and_the_working_directory() {
+    fn the_environment_outranks_the_working_directory() {
         assert_eq!(
             resolve_app_directory(
                 Some(OsString::from("/apps/from-the-launcher")),
-                Some(Path::new("/apps/from-the-runtime-host")),
                 Some(PathBuf::from("/apps/from-the-shell")),
             ),
             Path::new("/apps/from-the-launcher")
         );
     }
 
-    /// A stream `tatolabd` hosts is anchored at the project directory it was
-    /// given, not at the directory it was started from.
+    /// A Rust app has no launcher, and takes the working directory.
     #[test]
-    fn the_app_directory_the_runtime_host_was_given_outranks_the_working_directory() {
+    fn a_process_without_the_environment_value_takes_the_working_directory() {
         assert_eq!(
-            resolve_app_directory(
-                None,
-                Some(Path::new("/apps/from-the-runtime-host")),
-                Some(PathBuf::from("/apps/from-the-shell")),
-            ),
-            Path::new("/apps/from-the-runtime-host")
-        );
-    }
-
-    /// A Rust app has neither, and takes the working directory.
-    #[test]
-    fn a_host_that_recorded_nothing_takes_the_working_directory() {
-        assert_eq!(
-            resolve_app_directory(None, None, Some(PathBuf::from("/apps/from-the-shell"))),
+            resolve_app_directory(None, Some(PathBuf::from("/apps/from-the-shell"))),
             Path::new("/apps/from-the-shell")
         );
     }
@@ -135,7 +100,6 @@ mod tests {
         assert_eq!(
             resolve_app_directory(
                 Some(OsString::new()),
-                None,
                 Some(PathBuf::from("/apps/from-the-shell")),
             ),
             Path::new("/apps/from-the-shell")
@@ -146,7 +110,7 @@ mod tests {
     /// something, rather than failing a runtime over a name.
     #[test]
     fn a_process_with_no_working_directory_still_resolves() {
-        assert_eq!(resolve_app_directory(None, None, None), Path::new(""));
+        assert_eq!(resolve_app_directory(None, None), Path::new(""));
     }
 
     /// `--dir ./app` reaches the engine as typed, so two checkouts each
@@ -155,12 +119,10 @@ mod tests {
     fn one_relative_spelling_from_two_parents_resolves_to_two_directories() {
         let from_one_parent = resolve_app_directory(
             Some(OsString::from("./myapp")),
-            None,
             Some(PathBuf::from("/work/a")),
         );
         let from_another = resolve_app_directory(
             Some(OsString::from("./myapp")),
-            None,
             Some(PathBuf::from("/work/b")),
         );
         assert!(from_one_parent.is_absolute() && from_another.is_absolute());
@@ -186,12 +148,10 @@ mod tests {
 
         let named_relatively = resolve_app_directory(
             Some(OsString::from("./myapp")),
-            None,
             Some(parent.path().to_path_buf()),
         );
         let named_absolutely = resolve_app_directory(
             Some(OsString::from(app_directory.as_os_str())),
-            None,
             Some(PathBuf::from("/somewhere/else")),
         );
         assert_eq!(
@@ -200,8 +160,8 @@ mod tests {
         );
     }
 
-    /// The app directory the runtime's host was given takes the same spelling
-    /// as an absolute environment value naming the same place.
+    /// The working directory takes the same spelling as an absolute
+    /// environment value naming the same place.
     #[test]
     fn every_arm_that_names_a_real_directory_agrees_on_its_spelling() {
         let parent =
@@ -214,8 +174,8 @@ mod tests {
         .expect("create the app directory");
 
         assert_eq!(
-            resolve_app_directory(None, Some(&app_directory), None),
-            resolve_app_directory(Some(OsString::from(app_directory.as_os_str())), None, None),
+            resolve_app_directory(None, Some(app_directory.clone())),
+            resolve_app_directory(Some(OsString::from(app_directory.as_os_str())), None),
         );
     }
 }

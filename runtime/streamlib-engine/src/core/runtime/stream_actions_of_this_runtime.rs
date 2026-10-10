@@ -530,7 +530,9 @@ impl Runner {
             .loaded_stream_of_the_cast_name(&stream_cast)
         {
             Some(loaded) => {
-                loaded.set_output_port_exposure_level(node, port, level)?;
+                loaded
+                    .log_route()
+                    .run_entered(|| loaded.set_output_port_exposure_level(node, port, level))?;
                 match loaded.holding() {
                     LoadedStreamHolding::Attached => (false, None),
                     LoadedStreamHolding::Kept => {

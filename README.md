@@ -326,13 +326,15 @@ $ claude mcp add tatolab -- tatolab mcp
 The host launches `tatolab mcp`, which sends one upgrade request on the runtime's local socket and
 then copies bytes between its own stdin and stdout and the runtime's MCP server, reading none of
 them. To reach a runtime on another machine, launch it over ssh instead, with `tatolab` on that
-machine's `PATH`: `claude mcp add tatolab -- ssh <machine> tatolab mcp`. `--node` picks one when a
-machine runs more than one. The server belongs to the runtime and comes and goes with it.
+machine's `PATH`: `claude mcp add tatolab -- ssh <machine> tatolab mcp`. The server belongs to the
+runtime and comes and goes with it.
 
-The tools are `graph`, `tap`, `logs`, `exchange` and `shutdown` to observe, and `add_node`,
-`connect`, `disconnect` and `remove_node` to change the running graph. Beside them the runtime serves
-the node catalog — every node type it can add, with its description, config schema and ports — and
-the live graph as resources, and four prompts whose every step is a tool call. An agent can write a
+The tools are `graph`, `tap`, `logs` and `exchange` to observe; `add_node`, `connect`, `disconnect`
+and `remove_node` to change a running graph; and `run_stream`, `stop_stream`, `start_stream`,
+`remove_stream`, `list_streams` and `expose_port` to manage the streams the runtime holds. Every tool
+about one stream names it with `stream`. Beside them the runtime serves the node catalog — every
+node type it can add, with its description, config schema and ports — and the live graph as
+resources, and four prompts whose every step is a tool call. An agent can write a
 node class into a module beside `stream.py`, or `uv add` a package that ships one, then add it by
 its `module:ClassName` path and connect it into the running stream. The runtime never imports it:
 the class runs in its own process, started from the stream's venv, like every other Python node.

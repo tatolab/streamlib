@@ -2513,9 +2513,8 @@ mod tests {
         );
     }
 
-    /// A call naming a stream that is not loaded, or naming none while several
-    /// are, is refused naming the loaded streams; naming none while one is
-    /// loaded finds that one.
+    /// A call naming a stream that is not loaded is refused naming the loaded
+    /// streams; a call's name is cast before it is looked up.
     #[test]
     #[serial]
     fn a_call_naming_a_stream_not_loaded_is_refused_naming_the_loaded_streams() {
@@ -2523,40 +2522,22 @@ mod tests {
 
         let project_directory = a_project_directory_this_test_owns();
         let runner = Runner::new().expect("Runner::new");
-        let Err(none_loaded) = runner.the_stream_a_call_names(None) else {
-            panic!("a call naming no stream found one where none is loaded");
-        };
-        assert!(
-            none_loaded.to_string().contains("no stream"),
-            "{none_loaded}"
-        );
-
-        let only = an_empty_stream_loaded_into(&runner, project_directory.path(), "camera");
-        assert!(Arc::ptr_eq(
-            &runner
-                .the_stream_a_call_names(None)
-                .expect("the only stream is the one a call naming none means"),
-            &only
-        ));
+        let camera = an_empty_stream_loaded_into(&runner, project_directory.path(), "camera");
         an_empty_stream_loaded_into(&runner, project_directory.path(), "microphone");
 
         for refusal in [
             runner
-                .runtime_operations_of_the_stream_a_call_names(Some("display"))
+                .runtime_operations_of_the_stream_a_call_names("display")
                 .err()
                 .expect("a stream not loaded is refused"),
             runner
-                .runtime_operations_of_the_stream_a_call_names(Some(""))
+                .runtime_operations_of_the_stream_a_call_names("")
                 .err()
                 .expect("a name that casts to nothing names no loaded stream"),
             runner
-                .runtime_operations_of_the_stream_a_call_names(Some(".."))
+                .runtime_operations_of_the_stream_a_call_names("..")
                 .err()
                 .expect("a name that casts to nothing names no loaded stream"),
-            runner
-                .runtime_operations_of_the_stream_a_call_names(None)
-                .err()
-                .expect("naming none while several are loaded is refused"),
         ] {
             let refusal = refusal.to_string();
             assert!(
@@ -2566,7 +2547,7 @@ mod tests {
         }
         for name_that_casts_to_nothing in ["", ".."] {
             let refusal = runner
-                .runtime_operations_of_the_stream_a_call_names(Some(name_that_casts_to_nothing))
+                .runtime_operations_of_the_stream_a_call_names(name_that_casts_to_nothing)
                 .err()
                 .expect("a name that casts to nothing is refused")
                 .to_string();
@@ -2579,14 +2560,19 @@ mod tests {
         }
         assert!(
             runner
-                .node_catalog_of_the_stream_a_call_names(Some("display"))
+                .node_catalog_of_the_stream_a_call_names("display")
+                .is_err()
+        );
+        assert!(
+            runner
+                .node_types_described_in_the_interpreter_of_the_stream_a_call_names("display")
                 .is_err()
         );
         assert!(Arc::ptr_eq(
             &runner
-                .the_stream_a_call_names(Some("Camera"))
+                .loaded_stream_named("Camera")
                 .expect("a call's name is cast"),
-            &only
+            &camera
         ));
     }
 

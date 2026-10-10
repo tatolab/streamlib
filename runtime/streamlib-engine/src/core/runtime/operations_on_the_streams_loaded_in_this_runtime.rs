@@ -8,45 +8,48 @@ use tracing::Instrument as _;
 use super::operations::{BoxFuture, RuntimeOperations};
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
 use super::{
-    ExchangedPublishedSurfaceFramePngImage, LoadedStreamInThisRuntime, LoadedStreamTag,
-    OutputPortExposureOutcome, RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome,
-    StreamRunOutcome, StreamStartOutcome, StreamStopOutcome,
+    ExchangedPublishedSurfaceFramePngImage, LoadedStreamTag, OutputPortExposureOutcome,
+    RunStreamRequest, Runner, StreamListing, StreamRemoveOutcome, StreamRunOutcome,
+    StreamStartOutcome, StreamStopOutcome,
 };
 use crate::core::ProcessorDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::graph::OutputPortExposureLevel;
 use crate::core::logging::LoadedStreamLogRecordsPage;
-use crate::core::pubsub::topics;
 
 /// What the local API reaches a runtime through: the stream a call names, a
-/// stream's node catalog and log records, the stream actions, the machine's
-/// shutdown request and the surface exchange.
+/// stream's node catalog and log records, the stream actions and the surface
+/// exchange.
 ///
 /// Every stream action blocks — a load runs a compile and describes — so the
 /// local API calls each from a blocking task.
 ///
 /// Implemented by [`Runner`], and by the control plane's test stubs.
 pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
-    /// The operations on the stream `stream_name` names; `None` names the only
-    /// loaded stream. Refused with [`Error::NotFound`] naming the loaded
-    /// streams when the named one is not loaded, and when `None` meets none or
-    /// several.
+    /// This runtime's name, the first chunk of every tap channel.
+    fn this_runtimes_name(&self) -> &str;
+
+    /// The operations on the loaded stream `stream_name` names. Refused with
+    /// [`Error::NotFound`] naming the loaded streams when it is not loaded.
     fn runtime_operations_of_the_stream_a_call_names(
         &self,
-        stream_name: Option<&str>,
+        stream_name: &str,
     ) -> Result<Arc<dyn RuntimeOperations>>;
 
-    /// The node types the stream `stream_name` names resolves — the native
-    /// ones, then the ones described in its own interpreter — with the same
-    /// `None` rule and the same [`Error::NotFound`] refusal.
+    /// The node types the loaded stream `stream_name` names resolves — the
+    /// native ones, then the ones described in its own interpreter — with the
+    /// same [`Error::NotFound`] refusal.
     fn node_catalog_of_the_stream_a_call_names(
         &self,
-        stream_name: Option<&str>,
+        stream_name: &str,
     ) -> Result<Vec<ProcessorDescriptor>>;
 
-    /// The topic the events of the stream `stream_name` names publish on,
-    /// with the same `None` rule.
-    fn event_topic_of_the_stream_a_call_names(&self, stream_name: Option<&str>) -> Result<String>;
+    /// The node types described in the own interpreter of the loaded stream
+    /// `stream_name` names, with the same [`Error::NotFound`] refusal.
+    fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
+        &self,
+        stream_name: &str,
+    ) -> Result<Vec<ProcessorDescriptor>>;
 
     /// The cast names of the loaded streams, in order.
     fn names_of_the_loaded_streams(&self) -> Vec<String>;
@@ -92,10 +95,6 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         stream_tag: LoadedStreamTag,
     ) -> bool;
 
-    /// Ask for the shutdown of every loaded stream, with a human-readable
-    /// `reason` logged for attribution. Fire-and-forget; never blocks.
-    fn request_the_shutdown_of_every_loaded_stream(&self, reason: &str) -> Result<()>;
-
     /// Exchange a published surface id for that frame's pixels, encoded as a
     /// PNG.
     ///
@@ -114,54 +113,36 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>>;
 }
 
-impl Runner {
-    /// The stream `stream_name` names; `None` names the only loaded stream.
-    pub fn the_stream_a_call_names(
-        &self,
-        stream_name: Option<&str>,
-    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
-        if let Some(stream_name) = stream_name {
-            return self.loaded_stream_named(stream_name);
-        }
-        match self.every_loaded_stream().as_slice() {
-            [only] => Ok(Arc::clone(only)),
-            [] => Err(Error::NotFound(
-                "no stream is loaded in this runtime, so there is none to name".to_string(),
-            )),
-            several => Err(Error::NotFound(format!(
-                "{} streams are loaded in this runtime, so a call has to name one with `stream`. \
-                 Loaded: {}",
-                several.len(),
-                several
-                    .iter()
-                    .map(|stream| stream.stream_name())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))),
-        }
-    }
-}
-
 impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
+    fn this_runtimes_name(&self) -> &str {
+        self.runtime_name().as_str()
+    }
+
     fn runtime_operations_of_the_stream_a_call_names(
         &self,
-        stream_name: Option<&str>,
+        stream_name: &str,
     ) -> Result<Arc<dyn RuntimeOperations>> {
-        self.the_stream_a_call_names(stream_name)
+        self.loaded_stream_named(stream_name)
             .map(|stream| stream as Arc<dyn RuntimeOperations>)
     }
 
     fn node_catalog_of_the_stream_a_call_names(
         &self,
-        stream_name: Option<&str>,
+        stream_name: &str,
     ) -> Result<Vec<ProcessorDescriptor>> {
-        self.the_stream_a_call_names(stream_name)
+        self.loaded_stream_named(stream_name)
             .map(|stream| stream.node_types_this_stream_resolves().node_catalog())
     }
 
-    fn event_topic_of_the_stream_a_call_names(&self, stream_name: Option<&str>) -> Result<String> {
-        self.the_stream_a_call_names(stream_name)
-            .map(|stream| topics::loaded_stream(stream.loaded_stream_identity()))
+    fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
+        &self,
+        stream_name: &str,
+    ) -> Result<Vec<ProcessorDescriptor>> {
+        self.loaded_stream_named(stream_name).map(|stream| {
+            stream
+                .node_types_this_stream_resolves()
+                .descriptors_described_in_this_streams_processor_interpreter()
+        })
     }
 
     fn names_of_the_loaded_streams(&self) -> Vec<String> {
@@ -214,10 +195,6 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         stream_tag: LoadedStreamTag,
     ) -> bool {
         Runner::unload_the_attached_stream_if_still_the_same(self, stream_name, stream_tag)
-    }
-
-    fn request_the_shutdown_of_every_loaded_stream(&self, reason: &str) -> Result<()> {
-        Runner::request_the_shutdown_of_every_loaded_stream(self, reason)
     }
 
     fn exchange_published_surface_id_for_png_image_bytes_async(

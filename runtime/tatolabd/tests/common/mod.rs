@@ -1,20 +1,39 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Running the built `tatolabd` from a runtime unit of its own, with its state
-//! kept out of the machine's.
+//! Running the built `tatolabd` from a runtime unit of its own, with the
+//! machine's directories under a short test root of its own.
 
 #![allow(dead_code)]
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use rmcp::model::{CallToolRequestParams, ProtocolVersion};
+use rmcp::service::{ClientLifecycleMode, ClientServiceExt};
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
 use streamlib::sdk::processor_interpreter::{
     BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, lend_directory_in_the_runtime_unit,
     processor_interpreter_bootstrap_path,
 };
+use streamlib::sdk::runtime::{
+    KEPT_STREAM_RECORD_SCHEMA_VERSION, KeptStreamRecord, KeptStreamRecordsInTheStateDirectory,
+};
+
+/// The line `tatolabd` logs once its local API is served and its kept streams
+/// re-loaded.
+pub const THE_RUNTIME_IS_SERVING_LOG_LINE: &str = "the runtime is serving:";
+
+/// How long a `tatolabd` holding no started stream takes to start serving.
+pub const A_RUNTIME_STARTS_SERVING_WITHIN: Duration = Duration::from_secs(60);
+
+/// How long a `tatolabd` takes to exit once interrupted.
+pub const AN_INTERRUPTED_RUNTIME_EXITS_WITHIN: Duration = Duration::from_secs(30);
 
 /// A temporary runtime unit: `bin/tatolabd`, and the lend beside it unless the
 /// test asked for none.
@@ -66,65 +85,80 @@ impl TemporaryRuntimeUnit {
     }
 }
 
-/// Where one `tatolabd` run keeps what it writes: its working directory, its
-/// `STREAMLIB_HOME`, its `XDG_RUNTIME_DIR`, and a project directory.
+/// The machine a test's `tatolabd` runs on: `TATOLAB_TEST_MACHINE_ROOT`, under
+/// which its lock, runtime directory and state directory sit, plus its
+/// `STREAMLIB_HOME` and a project directory.
 ///
-/// Under the shared temporary directory rather than the target directory,
-/// because the runtime directory's socket paths must fit `sun_path`.
-pub struct TatolabdRunState {
-    state_root: tempfile::TempDir,
+/// Short and under `/tmp`, so the local API socket's path fits `sun_path`.
+pub struct TatolabTestMachineRoot {
+    machine_root: tempfile::TempDir,
 }
 
-impl TatolabdRunState {
+impl TatolabTestMachineRoot {
     pub fn new() -> Self {
-        let state_root = tempfile::Builder::new()
-            .prefix("tatolabd-")
-            .tempdir()
-            .expect("a temporary state directory");
-        for directory in ["home", "xdg", "project"] {
-            std::fs::create_dir_all(state_root.path().join(directory))
-                .expect("a state directory is created");
+        let machine_root = tempfile::Builder::new()
+            .prefix("tl-")
+            .tempdir_in("/tmp")
+            .expect("a temporary machine root");
+        for directory in ["home", "p"] {
+            std::fs::create_dir_all(machine_root.path().join(directory))
+                .expect("a directory under the machine root is created");
         }
-        Self { state_root }
+        if cfg!(target_os = "macos") {
+            the_macos_lock_file_a_test_build_takes(machine_root.path());
+        }
+        Self { machine_root }
     }
 
     pub fn path(&self) -> &Path {
-        self.state_root.path()
+        self.machine_root.path()
     }
 
-    pub fn project_directory(&self) -> PathBuf {
-        self.state_root.path().join("project")
-    }
-
-    /// The runtime directory a `tatolabd` run from this state resolves: inside
-    /// its `XDG_RUNTIME_DIR` on Linux, and on macOS, which reads no
-    /// `XDG_RUNTIME_DIR`, the machine's `/tmp/streamlib-<uid>/`.
+    /// The runtime directory a test build resolves: `<root>/run/`.
     pub fn runtime_directory(&self) -> PathBuf {
-        if cfg!(target_os = "linux") {
-            self.state_root.path().join("xdg/streamlib")
-        } else {
-            // SAFETY: getuid takes no arguments, cannot fail and touches no memory.
-            PathBuf::from(format!("/tmp/streamlib-{}", unsafe { libc::getuid() }))
-        }
+        self.path().join("run")
     }
 
-    /// Write `stream_graph` as a graph file and return its path.
-    pub fn write_stream_graph(&self, stream_graph: &serde_json::Value) -> PathBuf {
-        let stream_graph_file = self.state_root.path().join("stream-graph.json");
-        std::fs::write(&stream_graph_file, stream_graph.to_string())
-            .expect("the graph file is written");
-        stream_graph_file
+    /// The local API's fixed socket in the runtime directory.
+    pub fn local_api_socket_path(&self) -> PathBuf {
+        self.runtime_directory().join("local-api.sock")
     }
 
-    /// A `tatolabd` command whose state lands in this run's directories and
-    /// that inherits none of the engine's settings from the test's own
-    /// environment.
+    /// The state directory a test build resolves: `<root>/state/`.
+    pub fn state_directory(&self) -> PathBuf {
+        self.path().join("state")
+    }
+
+    /// `<state>/streams/`, one record per kept stream.
+    pub fn kept_streams_directory(&self) -> PathBuf {
+        self.state_directory().join("streams")
+    }
+
+    /// `<state>/logs/`, the runtime's own log.
+    pub fn runtime_log_directory(&self) -> PathBuf {
+        self.state_directory().join("logs")
+    }
+
+    /// A directory standing in for a stream's project.
+    pub fn project_directory(&self) -> PathBuf {
+        self.path().join("p")
+    }
+
+    /// The kept-stream records under this machine's state directory, as the
+    /// engine writes and reads them.
+    pub fn kept_stream_records(&self) -> KeptStreamRecordsInTheStateDirectory {
+        KeptStreamRecordsInTheStateDirectory::open(&self.kept_streams_directory())
+            .expect("the kept-streams directory opens")
+    }
+
+    /// A `tatolabd` command on this machine that inherits none of the
+    /// engine's settings from the test's own environment.
     pub fn tatolabd_command(&self, tatolabd: &Path) -> Command {
         let mut tatolabd_command = Command::new(tatolabd);
         tatolabd_command
-            .current_dir(self.state_root.path())
-            .env("STREAMLIB_HOME", self.state_root.path().join("home"))
-            .env("XDG_RUNTIME_DIR", self.state_root.path().join("xdg"))
+            .current_dir(self.path())
+            .env("TATOLAB_TEST_MACHINE_ROOT", self.path())
+            .env("STREAMLIB_HOME", self.path().join("home"))
             .env_remove("STREAMLIB_RUNTIME_NAME")
             .env_remove("STREAMLIB_RUNTIME_ID")
             .env_remove("STREAMLIB_APP_DIRECTORY")
@@ -133,10 +167,69 @@ impl TatolabdRunState {
             .stdin(Stdio::null());
         tatolabd_command
     }
+
+    /// A `tatolabd` command whose Vulkan loader finds no driver, so a stream
+    /// it loads is refused at its start, wherever the test runs.
+    pub fn tatolabd_command_with_no_vulkan_driver(&self, tatolabd: &Path) -> Command {
+        let no_vulkan_driver_file = self.path().join("no-vulkan-driver-here.json");
+        let mut tatolabd_command = self.tatolabd_command(tatolabd);
+        tatolabd_command
+            .env("VK_DRIVER_FILES", &no_vulkan_driver_file)
+            .env("VK_ICD_FILENAMES", &no_vulkan_driver_file);
+        tatolabd_command
+    }
 }
 
-/// An interpreter path that exists and is executable, for a run that never
-/// starts a processor interpreter.
+/// The macOS lock a test build takes: `<root>/lock/runtime.lock`, mode 0666,
+/// in a 0755 directory, both owned by the test's own user.
+fn the_macos_lock_file_a_test_build_takes(machine_root: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let lock_directory = machine_root.join("lock");
+    std::fs::create_dir_all(&lock_directory).expect("the lock directory is created");
+    std::fs::set_permissions(&lock_directory, std::fs::Permissions::from_mode(0o755))
+        .expect("the lock directory is 0755");
+    let lock_file = lock_directory.join("runtime.lock");
+    std::fs::write(&lock_file, "").expect("the lock file is created");
+    std::fs::set_permissions(&lock_file, std::fs::Permissions::from_mode(0o666))
+        .expect("the lock file is 0666");
+}
+
+/// A stream of one test pattern and nothing that needs a display.
+pub fn a_native_only_stream_graph(stream_name: &str) -> serde_json::Value {
+    serde_json::json!({
+        "stream": stream_name,
+        "nodes": [{
+            "name": "testpattern",
+            "type": "tatolab.stream:TestPatternSource",
+            "config": {"width": 320, "height": 240},
+        }],
+    })
+}
+
+/// The record of a kept stream `stream_name` running `graph` from
+/// `project_directory` under `interpreter`.
+pub fn a_kept_stream_record(
+    stream_name: &str,
+    graph: serde_json::Value,
+    project_directory: &Path,
+    interpreter: &Path,
+    stopped: bool,
+) -> KeptStreamRecord {
+    KeptStreamRecord {
+        schema_version: KEPT_STREAM_RECORD_SCHEMA_VERSION,
+        stream_name: stream_name.to_owned(),
+        project_directory: project_directory.to_path_buf(),
+        interpreter: interpreter.to_path_buf(),
+        stream_function: None,
+        graph,
+        stopped,
+        exposure_rulings: Vec::new(),
+    }
+}
+
+/// An interpreter path that exists and is executable, for a stream whose
+/// native-only graph never starts a processor interpreter.
 pub fn an_executable_standing_in_for_the_interpreter() -> PathBuf {
     PathBuf::from("/bin/sh")
 }
@@ -157,6 +250,24 @@ pub fn run_to_exit_within(mut tatolabd_command: Command, budget: Duration) -> Ou
     }
 }
 
+/// The refusal on standard error, after asserting it exited 1 with nothing on
+/// standard output.
+pub fn the_refusal_of(output: &Output) -> String {
+    let standard_error = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a refusal exits 1, got {}:\n{standard_error}",
+        output.status
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "tatolabd's standard output carries nothing, got:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    standard_error
+}
+
 /// A running `tatolabd` whose standard streams are read as it writes them.
 pub struct SpawnedTatolabd {
     child: Child,
@@ -173,6 +284,16 @@ impl SpawnedTatolabd {
             .spawn()
             .expect("tatolabd starts");
         Self::collecting_its_streams(child)
+    }
+
+    /// Spawn `tatolabd_command` and wait until it logs that it is serving.
+    pub fn spawn_and_wait_until_serving(tatolabd_command: Command) -> Self {
+        let mut spawned = Self::spawn(tatolabd_command);
+        spawned.wait_until_standard_error_carries(
+            THE_RUNTIME_IS_SERVING_LOG_LINE,
+            A_RUNTIME_STARTS_SERVING_WITHIN,
+        );
+        spawned
     }
 
     fn collecting_its_streams(mut child: Child) -> Self {
@@ -254,6 +375,24 @@ impl SpawnedTatolabd {
         assert_eq!(delivered, 0, "the signal was not delivered");
     }
 
+    /// Interrupt the process and assert it exits 0 with nothing on standard
+    /// output.
+    pub fn interrupt_and_expect_a_clean_exit(&mut self) {
+        self.deliver(libc::SIGINT);
+        let status = self.wait_for_exit_within(AN_INTERRUPTED_RUNTIME_EXITS_WITHIN);
+        assert_eq!(
+            status.code(),
+            Some(0),
+            "an interrupt exits 0, got {status}:\n{}",
+            self.standard_error()
+        );
+        assert_eq!(
+            self.standard_output(),
+            "",
+            "standard output carries nothing"
+        );
+    }
+
     /// Wait for the process to exit within `budget`, killing it and panicking
     /// if it does not; the stream readers are joined before this returns.
     pub fn wait_for_exit_within(&mut self, budget: Duration) -> ExitStatus {
@@ -298,4 +437,116 @@ impl Drop for SpawnedTatolabd {
             let _ = self.child.wait();
         }
     }
+}
+
+/// `GET <path>` over the local API socket, retried until it answers 200.
+pub fn the_local_apis_answer_to_get(local_api_socket_path: &Path, path: &str) -> serde_json::Value {
+    let deadline = Instant::now() + A_RUNTIME_STARTS_SERVING_WITHIN;
+    loop {
+        if let Some(answer) = get_once(local_api_socket_path, path) {
+            return answer;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the local API at {} did not answer `GET {path}`",
+            local_api_socket_path.display()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn get_once(local_api_socket_path: &Path, path: &str) -> Option<serde_json::Value> {
+    let mut local_api = UnixStream::connect(local_api_socket_path).ok()?;
+    local_api
+        .write_all(
+            format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .ok()?;
+    let mut response = String::new();
+    local_api.read_to_string(&mut response).ok()?;
+    let (head, body) = response.split_once("\r\n\r\n")?;
+    if !head.starts_with("HTTP/1.1 200") {
+        return None;
+    }
+    serde_json::from_str(body).ok()
+}
+
+/// What one MCP `tools/call` over the local API answered.
+#[derive(Debug)]
+pub struct LocalApiToolCallAnswer {
+    /// Whether the tool reported a failure.
+    pub is_error: bool,
+    /// The tool result's first text block.
+    pub text: String,
+}
+
+impl LocalApiToolCallAnswer {
+    /// The first text block as JSON, after asserting the tool succeeded.
+    pub fn json(&self) -> serde_json::Value {
+        assert!(!self.is_error, "the tool failed: {}", self.text);
+        serde_json::from_str(&self.text).expect("the tool's text block is JSON")
+    }
+}
+
+/// Call `tool_name` with `tool_arguments` through `rmcp`'s client over the
+/// local API socket — one connection per call, as a one-shot client makes it.
+pub fn call_a_tool_over_the_local_api(
+    local_api_socket_path: &Path,
+    tool_name: &str,
+    tool_arguments: serde_json::Value,
+) -> LocalApiToolCallAnswer {
+    let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a tokio runtime for the MCP client");
+    tokio_runtime.block_on(async {
+        let local_api_mcp_uri = "http://localhost/mcp";
+        let transport = StreamableHttpClientTransport::with_client(
+            UnixSocketHttpClient::new(
+                local_api_socket_path.to_str().expect("a UTF-8 socket path"),
+                local_api_mcp_uri,
+            ),
+            StreamableHttpClientTransportConfig::with_uri(local_api_mcp_uri),
+        );
+        let client = ()
+            .serve_with_lifecycle(
+                transport,
+                ClientLifecycleMode::Discover {
+                    preferred_versions: vec![ProtocolVersion::LATEST],
+                },
+            )
+            .await
+            .expect("the runtime answers `server/discover`");
+        let request = CallToolRequestParams::new(tool_name.to_owned()).with_arguments(
+            tool_arguments
+                .as_object()
+                .cloned()
+                .expect("the tool's arguments are an object"),
+        );
+        let tool_result = client
+            .call_tool(request)
+            .await
+            .unwrap_or_else(|refusal| panic!("`{tool_name}` was refused: {refusal}"));
+        let _ = client.cancel().await;
+        let tool_result = serde_json::to_value(tool_result).expect("a tool result serializes");
+        LocalApiToolCallAnswer {
+            is_error: tool_result["isError"].as_bool().unwrap_or(false),
+            text: tool_result["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        }
+    })
+}
+
+/// The mode bits of `path`.
+pub fn the_mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::metadata(path)
+        .unwrap_or_else(|missing| panic!("{} has no metadata: {missing}", path.display()))
+        .permissions()
+        .mode()
+        & 0o7777
 }

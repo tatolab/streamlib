@@ -12,6 +12,8 @@ mod mcp_resources;
 mod mcp_stdio_upgrade;
 mod state;
 #[cfg(test)]
+mod stream_tools_over_a_real_engine_tests;
+#[cfg(test)]
 mod two_streams_in_one_engine_tests;
 
 pub use handlers::control_plane_openapi_spec;

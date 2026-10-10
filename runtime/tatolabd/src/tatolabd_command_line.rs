@@ -1,28 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolabd`'s three flags.
+//! `tatolabd` takes no arguments: streams are loaded into it over its local
+//! API, never named at its start.
 
-use std::path::PathBuf;
-
-/// `tatolabd --stream-graph <file> --project <dir> --interpreter <path>`.
+/// `tatolabd`, with only `--help` and `--version`.
 #[derive(Debug, clap::Parser)]
 #[command(
     name = "tatolabd",
-    about = "Host one stream in the foreground: the engine, its built-ins and the local API."
+    version,
+    about = "The machine's runtime: hosts every stream loaded into it over its local API, and \
+             re-loads the kept ones at its start. Runs in the foreground until it is stopped by a \
+             signal."
 )]
-pub(crate) struct TatolabdCommandLine {
-    /// The stream's graph, as JSON: what `compile_stream_to_graph` returns.
-    #[arg(long = "stream-graph", value_name = "FILE")]
-    pub(crate) stream_graph: PathBuf,
-
-    /// The stream's project directory: its Python nodes import from here, and
-    /// every processor interpreter runs here.
-    #[arg(long = "project", value_name = "DIR")]
-    pub(crate) project: PathBuf,
-
-    /// The project's venv interpreter, which every processor interpreter is an
-    /// exec of.
-    #[arg(long = "interpreter", value_name = "PATH")]
-    pub(crate) interpreter: PathBuf,
-}
+pub(crate) struct TatolabdCommandLine {}

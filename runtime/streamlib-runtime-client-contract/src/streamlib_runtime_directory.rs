@@ -122,11 +122,6 @@ impl StreamlibRuntimeDirectory {
         self.path.join(format!("surface-share-{runtime_id}.sock"))
     }
 
-    /// The Unix socket the runtime with `runtime_id` serves its local API on.
-    pub fn local_api_socket_path_for_runtime_id(&self, runtime_id: &str) -> PathBuf {
-        self.path.join(format!("local-api-{runtime_id}.sock"))
-    }
-
     /// The Unix socket the machine's runtime serves its local API on, at a fixed path.
     pub fn local_api_socket_path(&self) -> PathBuf {
         self.path.join("local-api.sock")
@@ -601,10 +596,6 @@ mod tests {
         assert_eq!(
             directory.surface_share_socket_path("Rabc"),
             PathBuf::from("/tmp/streamlib-1000/surface-share-Rabc.sock")
-        );
-        assert_eq!(
-            directory.local_api_socket_path_for_runtime_id("Rabc"),
-            PathBuf::from("/tmp/streamlib-1000/local-api-Rabc.sock")
         );
         assert_eq!(
             directory.local_api_socket_path(),

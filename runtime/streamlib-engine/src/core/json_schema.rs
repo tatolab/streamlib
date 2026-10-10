@@ -46,6 +46,17 @@ pub struct GraphResponse {
     pub runtime_name: String,
 }
 
+/// Response from `/api/graph` and the `graph` tool when no stream is named:
+/// every loaded stream's graph under the runtime's name.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MachineWideGraphResponse {
+    /// This runtime's name, the first chunk of every tap channel.
+    pub runtime_name: String,
+    /// Each loaded stream's graph, as a call naming that stream returns it.
+    pub streams: Vec<GraphResponse>,
+}
+
 /// A node in the graph.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorNodeOutput {
@@ -239,6 +250,28 @@ pub enum LinkStateOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct RegistryResponse {
     /// Every node type this process can add, with its descriptor.
+    pub nodes: Vec<ProcessorDescriptorOutput>,
+}
+
+/// Response from `/api/registry` when no stream is named, and the MCP node
+/// catalog: the native types every stream can add, then each loaded stream's
+/// Python types under that stream.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MachineWideRegistryResponse {
+    /// The node types compiled into this runtime, which any stream can add.
+    pub nodes: Vec<ProcessorDescriptorOutput>,
+    /// Each loaded stream's types described in its own interpreter.
+    pub streams: Vec<NodeTypesDescribedInOneStreamOutput>,
+}
+
+/// The node types one loaded stream's own interpreter described.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct NodeTypesDescribedInOneStreamOutput {
+    /// The stream's name.
+    pub stream: String,
+    /// The types described in its interpreter, which only this stream adds.
     pub nodes: Vec<ProcessorDescriptorOutput>,
 }
 

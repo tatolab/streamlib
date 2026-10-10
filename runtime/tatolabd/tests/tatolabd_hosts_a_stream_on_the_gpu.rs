@@ -1,97 +1,102 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `tatolabd` hosting a native-only stream on the GPU: the engine's signal
-//! ladder, and the runtime name reaching the local API. Rig-only:
-//! `cargo test -p tatolabd --features hardware-tests`.
+//! `tatolabd` hosting a started native-only stream on the GPU: a kept stream
+//! re-loaded and started at the runtime's start, and the engine's signal
+//! ladder over it. Rig-only:
+//! `cargo test -p tatolabd --features hardware-tests,machine-directories-under-a-test-root`.
 
-#![cfg(feature = "hardware-tests")]
+#![cfg(all(
+    feature = "hardware-tests",
+    feature = "machine-directories-under-a-test-root"
+))]
 
 mod common;
 
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{
-    SpawnedTatolabd, TatolabdRunState, TemporaryRuntimeUnit,
-    an_executable_standing_in_for_the_interpreter,
+    AN_INTERRUPTED_RUNTIME_EXITS_WITHIN, SpawnedTatolabd, TatolabTestMachineRoot,
+    TemporaryRuntimeUnit, a_kept_stream_record, a_native_only_stream_graph,
+    an_executable_standing_in_for_the_interpreter, call_a_tool_over_the_local_api,
+    the_local_apis_answer_to_get,
 };
 
 /// One engine on the GPU at a time, so the tests' runs never contend for it.
 static ONE_STREAM_ON_THE_GPU_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-const THE_ENGINE_STARTED_LOG_LINE: &str = "[start] The stream `main` started";
-const THE_ENGINE_STARTS_WITHIN: Duration = Duration::from_secs(60);
-const A_STREAM_STOPS_WITHIN: Duration = Duration::from_secs(30);
+const THE_KEPT_STREAM_STARTED_LOG_LINE: &str = "[start] The stream `main` started";
+const THE_KEPT_STREAM_STARTS_WITHIN: Duration = Duration::from_secs(60);
 
-/// A stream of one test pattern and nothing that needs a display.
-fn a_native_only_stream_graph() -> serde_json::Value {
-    serde_json::json!({
-        "stream": "main",
-        "nodes": [{
-            "name": "testpattern",
-            "type": "tatolab.stream:TestPatternSource",
-            "config": {"width": 320, "height": 240},
-        }],
-    })
-}
-
-fn start_tatolabd_hosting_the_native_only_stream(
-    tatolabd: &Path,
-    run_state: &TatolabdRunState,
-    extra_environment: &[(&str, &str)],
+/// A `tatolabd` on a fresh machine whose kept stream `main` is re-loaded and
+/// started at its start.
+fn start_tatolabd_re_loading_the_kept_native_only_stream(
+    runtime_unit: &TemporaryRuntimeUnit,
+    machine_root: &TatolabTestMachineRoot,
 ) -> SpawnedTatolabd {
-    let stream_graph_file = run_state.write_stream_graph(&a_native_only_stream_graph());
-    let mut tatolabd_command = run_state.tatolabd_command(tatolabd);
-    tatolabd_command
-        .arg("--stream-graph")
-        .arg(stream_graph_file)
-        .arg("--project")
-        .arg(run_state.project_directory())
-        .arg("--interpreter")
-        .arg(an_executable_standing_in_for_the_interpreter());
-    for (name, value) in extra_environment {
-        tatolabd_command.env(name, value);
-    }
-    let mut spawned = SpawnedTatolabd::spawn(tatolabd_command);
-    spawned
-        .wait_until_standard_error_carries(THE_ENGINE_STARTED_LOG_LINE, THE_ENGINE_STARTS_WITHIN);
-    spawned
+    machine_root
+        .kept_stream_records()
+        .write(&a_kept_stream_record(
+            "main",
+            a_native_only_stream_graph("main"),
+            &machine_root.project_directory(),
+            &an_executable_standing_in_for_the_interpreter(),
+            false,
+        ))
+        .unwrap();
+    let mut runtime = SpawnedTatolabd::spawn(machine_root.tatolabd_command(&runtime_unit.tatolabd));
+    runtime.wait_until_standard_error_carries(
+        THE_KEPT_STREAM_STARTED_LOG_LINE,
+        THE_KEPT_STREAM_STARTS_WITHIN,
+    );
+    runtime
 }
 
 #[test]
-fn an_interrupt_stops_the_stream_cleanly_and_exits_zero() {
+fn a_kept_stream_is_re_loaded_and_started_at_the_start_and_stopped_cleanly_by_an_interrupt() {
     let _one_at_a_time = ONE_STREAM_ON_THE_GPU_AT_A_TIME
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
-    let run_state = TatolabdRunState::new();
-    let mut spawned =
-        start_tatolabd_hosting_the_native_only_stream(&runtime_unit.tatolabd, &run_state, &[]);
+    let machine_root = TatolabTestMachineRoot::new();
+    let mut runtime =
+        start_tatolabd_re_loading_the_kept_native_only_stream(&runtime_unit, &machine_root);
 
-    spawned.deliver(libc::SIGINT);
-    let status = spawned.wait_for_exit_within(A_STREAM_STOPS_WITHIN);
+    let graph = the_local_apis_answer_to_get(&machine_root.local_api_socket_path(), "/api/graph");
+    let listed = call_a_tool_over_the_local_api(
+        &machine_root.local_api_socket_path(),
+        "list_streams",
+        serde_json::json!({}),
+    )
+    .json();
+    runtime.interrupt_and_expect_a_clean_exit();
 
+    assert_eq!(graph["streams"][0]["stream"], "main", "{graph}");
     assert_eq!(
-        status.code(),
-        Some(0),
-        "a graceful interrupt exits 0, got {status}:\n{}",
-        spawned.standard_error()
+        listed["streams"],
+        serde_json::json!([{
+            "name": "main",
+            "state": "kept",
+            "project_directory": machine_root.project_directory().display().to_string(),
+            "node_count": 1,
+        }])
     );
     assert!(
-        spawned
+        runtime
             .standard_error()
             .contains("[stop] The stream `main` stopped"),
         "{}",
-        spawned.standard_error()
+        runtime.standard_error()
     );
-    assert_eq!(
-        spawned.standard_output(),
-        "",
-        "standard output carries nothing"
+    assert!(
+        !machine_root
+            .kept_stream_records()
+            .read("main")
+            .unwrap()
+            .unwrap()
+            .stopped,
+        "a runtime's stop leaves its kept streams to re-load at the next start"
     );
 }
 
@@ -104,90 +109,21 @@ fn a_third_interrupt_ends_the_process_with_status_130() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
-    let run_state = TatolabdRunState::new();
-    let mut spawned =
-        start_tatolabd_hosting_the_native_only_stream(&runtime_unit.tatolabd, &run_state, &[]);
+    let machine_root = TatolabTestMachineRoot::new();
+    let mut runtime =
+        start_tatolabd_re_loading_the_kept_native_only_stream(&runtime_unit, &machine_root);
 
     for _ in 0..3 {
-        spawned.deliver(libc::SIGINT);
+        runtime.deliver(libc::SIGINT);
         // Apart, so the kernel does not merge two pending interrupts into one.
         std::thread::sleep(Duration::from_millis(5));
     }
-    let status = spawned.wait_for_exit_within(A_STREAM_STOPS_WITHIN);
+    let status = runtime.wait_for_exit_within(AN_INTERRUPTED_RUNTIME_EXITS_WITHIN);
 
     assert_eq!(
         status.code(),
         Some(130),
         "a third interrupt exits 130, got {status}:\n{}",
-        spawned.standard_error()
+        runtime.standard_error()
     );
-}
-
-/// `STREAMLIB_RUNTIME_NAME` names the runtime, and the local API's `graph`
-/// renders it.
-#[test]
-fn the_runtime_name_from_the_environment_reaches_the_local_apis_graph() {
-    let _one_at_a_time = ONE_STREAM_ON_THE_GPU_AT_A_TIME
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let runtime_unit = TemporaryRuntimeUnit::with_its_lend();
-    let run_state = TatolabdRunState::new();
-    let pinned_runtime_id = "Rtatolabdruntimenametest";
-    let mut spawned = start_tatolabd_hosting_the_native_only_stream(
-        &runtime_unit.tatolabd,
-        &run_state,
-        &[
-            (
-                "STREAMLIB_RUNTIME_NAME",
-                "tatolabd-named-from-the-environment",
-            ),
-            ("STREAMLIB_RUNTIME_ID", pinned_runtime_id),
-        ],
-    );
-
-    let graph = the_local_apis_graph(
-        &run_state
-            .runtime_directory()
-            .join(format!("local-api-{pinned_runtime_id}.sock")),
-    );
-    spawned.deliver(libc::SIGINT);
-    let status = spawned.wait_for_exit_within(A_STREAM_STOPS_WITHIN);
-
-    assert_eq!(
-        graph["runtime_name"], "tatolabd-named-from-the-environment",
-        "{graph}"
-    );
-    assert_eq!(graph["stream"], "main", "{graph}");
-    assert_eq!(status.code(), Some(0), "{}", spawned.standard_error());
-}
-
-/// `GET /api/graph` over the local API socket, retried until the socket
-/// answers.
-fn the_local_apis_graph(local_api_socket_path: &Path) -> serde_json::Value {
-    let deadline = Instant::now() + THE_ENGINE_STARTS_WITHIN;
-    loop {
-        if let Some(graph) = get_the_graph_once(local_api_socket_path) {
-            return graph;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the local API at {} did not answer `GET /api/graph`",
-            local_api_socket_path.display()
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn get_the_graph_once(local_api_socket_path: &Path) -> Option<serde_json::Value> {
-    let mut local_api = UnixStream::connect(local_api_socket_path).ok()?;
-    local_api
-        .write_all(b"GET /api/graph HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .ok()?;
-    let mut response = String::new();
-    local_api.read_to_string(&mut response).ok()?;
-    let (head, body) = response.split_once("\r\n\r\n")?;
-    if !head.starts_with("HTTP/1.1 200") {
-        return None;
-    }
-    serde_json::from_str(body).ok()
 }
