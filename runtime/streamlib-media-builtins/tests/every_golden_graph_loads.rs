@@ -30,7 +30,7 @@ const GOLDEN_GRAPH_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     ),
     (
         "0003-every-key-with-a-link-from-another-stream.json",
-        "a8f882c9acfbbc18f61139ece56559f8ba9af7a11feac9d30bfa5ebfde30b75f",
+        "eb6a5c21ecfd4ee43a8914afcc852449f7c910a95e2b90b5347d0543e3ce53ec",
     ),
 ];
 
@@ -70,7 +70,8 @@ fn node_types_in(graph_document: &serde_json::Value) -> Vec<ProcessorClassImport
 }
 
 /// `graph_document` without the nodes named in `node_names`, and every link
-/// and exposure that names one of them.
+/// and exposure that names one of them; a link's source in another stream
+/// names a node of that stream, never one of these.
 fn without_the_nodes(
     graph_document: &serde_json::Value,
     node_names: &BTreeSet<String>,
@@ -88,7 +89,9 @@ fn without_the_nodes(
     };
     retain_in("nodes", &|node| !is_removed(&node["name"]));
     retain_in("links", &|link| {
-        !is_removed(&link["source"]["node"]) && !is_removed(&link["target"]["node"])
+        let source_is_removed =
+            link["source"].get("stream").is_none() && is_removed(&link["source"]["node"]);
+        !source_is_removed && !is_removed(&link["target"]["node"])
     });
     retain_in("exposed", &|exposure| !is_removed(&exposure["node"]));
     remaining
