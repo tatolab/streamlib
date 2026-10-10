@@ -304,6 +304,7 @@ mod tests {
     use serial_test::serial;
     use std::ffi::OsStr;
     use std::time::Instant;
+    use streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode;
 
     const LEND_DIRECTORY_FOR_TEST: &str = "/opt/tatolab/lib/tatolab/lend";
 
@@ -315,9 +316,12 @@ mod tests {
 
     impl ProjectWithAStubVenvInterpreter {
         fn running(body: &str) -> Self {
-            let project_directory = tempfile::tempdir().expect("a project directory");
+            let project_directory =
+                crate::core::test_support::a_temporary_directory_at_owner_only_mode()
+                    .expect("a project directory");
             let venv_bin = project_directory.path().join(".venv").join("bin");
-            std::fs::create_dir_all(&venv_bin).expect("the venv's bin directory");
+            create_directory_and_its_missing_parents_at_mode(&venv_bin, 0o755)
+                .expect("the venv's bin directory");
             crate::core::test_support::write_an_executable_script_from_a_child_process(
                 &venv_bin.join("python"),
                 &format!("#!/bin/sh\n{body}\n"),

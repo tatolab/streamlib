@@ -1038,6 +1038,7 @@ mod tests {
         ensure_test_mocks_registered, write_an_executable_script_from_a_child_process,
     };
     use serial_test::serial;
+    use streamlib_runtime_client_contract::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode;
 
     const LEND_DIRECTORY_FOR_TEST: &str = "/opt/tatolab/lib/tatolab/lend";
 
@@ -1088,8 +1089,11 @@ mod tests {
 
         fn compiling_warning(graph: serde_json::Value, warnings: &[&str]) -> Self {
             let project = Self::with_no_venv();
-            std::fs::create_dir_all(project.path().join(".venv").join("bin"))
-                .expect("the venv's bin directory");
+            create_directory_and_its_missing_parents_at_mode(
+                &project.path().join(".venv").join("bin"),
+                0o755,
+            )
+            .expect("the venv's bin directory");
             project.compile_to_warning(graph, warnings);
             project
         }
