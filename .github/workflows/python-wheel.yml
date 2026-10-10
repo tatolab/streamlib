@@ -117,10 +117,9 @@ jobs:
           VIRTUAL_ENV: ${{ github.workspace }}/sdk/streamlib-python-wheel/.venv
         run: cargo xtask build-runtime
 
-      # The unit as an install prefix, `bin/` and `lib/`, for the jobs that
-      # run streams on it — the integration suite and the extension lane — so
-      # neither builds the engine a second time. Tarred, because an artifact
-      # keeps no file modes and `bin/` must stay executable.
+      # The unit as an install prefix, `bin/` and `lib/`, for the extension
+      # lane, which runs streams on it without building the engine. Tarred,
+      # because an artifact keeps no file modes and `bin/` must stay executable.
       - name: Pack the runtime unit
         run: tar -C target/tatolab-runtime -czf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz" bin lib
 
@@ -128,6 +127,8 @@ jobs:
         with:
           name: tatolab-runtime-unit-linux
           path: ${{ runner.temp }}/tatolab-runtime-unit.tar.gz
+          retention-days: 1
+          if-no-files-found: error
 
       # The integration suite's own unit: both binaries built with the
       # `machine-directories-under-a-test-root` feature, so every `tatolabd` a

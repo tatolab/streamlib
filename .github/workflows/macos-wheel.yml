@@ -68,7 +68,9 @@ jobs:
       # deployment target the maturin project pins, lays out its lend, and
       # builds `tatolabd` and `tatolab` into `bin/`. It refuses a lend missing a
       # driver file, and a wheel carrying anything beside `tatolab/runtime/`
-      # and its `.dist-info`.
+      # and its `.dist-info`. Every step through the uploads below runs on this
+      # release unit; the integration suite's test-root unit replaces it at the
+      # same path afterwards.
       - name: Build the runtime unit
         run: cargo xtask build-runtime --release
 
@@ -139,18 +141,6 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           /tmp/wheel-check/bin/python -m pytest -v tests/test_third_party_notices.py
-
-      # The integration suite's GPU-free half on this floor, run as the Linux
-      # lane runs it: the suite's own venv, holding `tatolab-stream` and nothing
-      # of the runtime, and streams on the `tatolabd` built above.
-      - name: The suite's venv, from its lockfile
-        working-directory: tests/stream-on-runtime
-        # --frozen: registry packages stay hash-pinned; the editable tatolab-stream's locked version is never read.
-        run: uv sync --frozen
-
-      - name: Integration suite (GPU-free half)
-        working-directory: tests/stream-on-runtime
-        run: .venv/bin/pytest -v -m "not requires_gpu"
 
       # The MVP sentence on a clean machine, minus the camera no runner has:
       # `tatolab new`'s test-pattern variant through the Python effect into a
@@ -226,3 +216,24 @@ jobs:
           name: streamlib-macos-wheel
           path: target/tatolab-runtime/wheel/*.whl
           retention-days: 14
+
+      # The integration suite drives a unit whose `tatolabd` and `tatolab` keep
+      # the machine lock, the state directory and the runtime directory under a
+      # throwaway root the harness names, so no test takes this machine's real
+      # lock; the harness refuses a unit without that build's marker. Built
+      # last: it replaces the release unit at the same path, after every step
+      # above has used that one.
+      - name: Build the integration suite's test-root runtime unit
+        run: cargo xtask build-runtime --release --machine-directories-under-a-test-root
+
+      # The integration suite's GPU-free half on this floor, run as the Linux
+      # lane runs it: the suite's own venv, holding `tatolab-stream` and nothing
+      # of the runtime, and streams on the test-root `tatolabd` built above.
+      - name: The suite's venv, from its lockfile
+        working-directory: tests/stream-on-runtime
+        # --frozen: registry packages stay hash-pinned; the editable tatolab-stream's locked version is never read.
+        run: uv sync --frozen
+
+      - name: Integration suite (GPU-free half)
+        working-directory: tests/stream-on-runtime
+        run: .venv/bin/pytest -v -m "not requires_gpu"
