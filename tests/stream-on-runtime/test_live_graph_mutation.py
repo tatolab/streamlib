@@ -246,7 +246,6 @@ def start_the_pattern_stream(
 
 
 @pytest.mark.requires_gpu
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
@@ -459,7 +458,6 @@ def seconds_taken_by(call: Callable[[], Returned]) -> "tuple[float, Returned]":
 
 
 @pytest.mark.requires_gpu
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
@@ -538,7 +536,6 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
 
 
 @pytest.mark.requires_gpu
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",

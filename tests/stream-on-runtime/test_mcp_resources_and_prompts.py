@@ -210,7 +210,6 @@ def numbered_steps(prompt_text: str) -> "list[tuple[str, str]]":
 # three: the sink is only the first consumer to open the source's channel —
 # which is created deep enough for a consumer of any profile — and the effect's
 # input then joins it live, in the last pair reading deeper than the opener.
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 @pytest.mark.parametrize(
     ("sink_input_delivery_profile", "inserted_input_delivery_profile"),
     [
@@ -308,12 +307,16 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     graph_after: "dict[str, Any]" = {}
     for tool_name, instruction in steps:
         spelled = dict(EXPLICIT_ARGUMENT.findall(instruction))
+        assert spelled.get("stream") == stream_name, (
+            f"step `{tool_name}` must name the stream the graph resource reported: {instruction}"
+        )
+        stream_the_step_names = spelled["stream"]
         if tool_name == "add_node":
             added_node_name = client.call_tool(
-                "add_node", {"stream": stream_name, "type": spelled["type"]}
+                "add_node", {"stream": stream_the_step_names, "type": spelled["type"]}
             )["name"]
         elif tool_name == "graph":
-            graph_after = client.call_tool("graph", {"stream": stream_name})
+            graph_after = client.call_tool("graph", {"stream": stream_the_step_names})
             if added_node_name is not None and not added_node_ports:
                 added_node = next(n for n in graph_after["nodes"] if n["name"] == added_node_name)
                 (added_input,) = added_node["ports"]["inputs"]
@@ -321,7 +324,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
                 added_node_ports = {"to_port": added_input["name"], "from_port": added_output["name"]}
         elif tool_name == "connect":
             arguments = {
-                "stream": stream_name,
+                "stream": stream_the_step_names,
                 "from_node": spelled.get("from_node", added_node_name),
                 "from_port": spelled.get("from_port", added_node_ports["from_port"]),
                 "to_node": spelled.get("to_node", added_node_name),
@@ -329,7 +332,9 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
             }
             returned_link_ids.append(client.call_tool("connect", arguments)["link_id"])
         elif tool_name == "disconnect":
-            client.call_tool("disconnect", {"stream": stream_name, "link_id": spelled["link_id"]})
+            client.call_tool(
+                "disconnect", {"stream": stream_the_step_names, "link_id": spelled["link_id"]}
+            )
         else:
             pytest.fail(f"the recipe calls `{tool_name}`, which this client was not asked to follow")
 

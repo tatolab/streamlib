@@ -317,7 +317,6 @@ def await_metrics_satisfying(
     )
 
 
-@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_on_its_link(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
