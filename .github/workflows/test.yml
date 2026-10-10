@@ -199,6 +199,11 @@ jobs:
           # `remove_processor` needs a started stream, and so a GpuContext.
           cargo test --locked -p streamlib-engine \
             --test a_processor_thread_that_ignores_shutdown_is_abandoned_and_named --no-run
+          # Compiled but not run: links between two started streams carrying
+          # bags, cut, unloaded and reloaded need started streams, and so a
+          # GpuContext.
+          cargo test --locked -p streamlib-engine \
+            --test links_between_streams_on_one_machine_test --no-run
           # Compiled but not run: the display tier's window tests need a display
           # server and a GPU no CI runner has, and each shares a test module with
           # its macOS counterpart, so a change to that module reaches Linux here.
