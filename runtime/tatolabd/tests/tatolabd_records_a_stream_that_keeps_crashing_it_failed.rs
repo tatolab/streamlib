@@ -13,9 +13,9 @@
 mod common;
 
 use common::{
-    A_RUNTIME_STARTS_SERVING_WITHIN, SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit,
-    a_kept_stream_record, an_executable_standing_in_for_the_interpreter,
-    call_a_tool_over_the_local_api, run_to_exit_within,
+    SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, a_kept_stream_record,
+    a_stream_graph_crashing_while, an_executable_standing_in_for_the_interpreter,
+    call_a_tool_over_the_local_api, expect_the_runtime_to_crash_on_segv,
 };
 
 #[test]
@@ -34,9 +34,7 @@ fn a_kept_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_
             false,
         ))
         .unwrap();
-    let run_in_progress_record = machine_root
-        .state_directory()
-        .join("runtime-run-in-progress");
+    let run_in_progress_record = machine_root.runtime_run_in_progress_record_path();
 
     expect_the_runtime_to_crash_on_segv(
         machine_root.tatolabd_command_with_no_vulkan_driver(&runtime_unit.tatolabd),

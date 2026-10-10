@@ -15,7 +15,7 @@ use streamlib_runtime_client_contract::directory_at_an_explicit_mode::{
     OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
 };
 
-use super::StreamEnvironment;
+use super::{StreamEnvironment, StreamListingState};
 use crate::core::graph::{OutputPortExposureLevel, cast_exposed_name_to_url_safe};
 use crate::core::{Error, Result};
 
@@ -87,6 +87,29 @@ impl KeptStreamRecord {
     /// Whether the stream is failed.
     pub fn is_failed(&self) -> bool {
         self.failed_because.is_some()
+    }
+
+    /// The state the stream is listed in while it is not loaded: failed
+    /// before stopped, and kept otherwise.
+    pub fn listing_state(&self) -> StreamListingState {
+        if self.is_failed() {
+            StreamListingState::Failed
+        } else if self.stopped {
+            StreamListingState::Stopped
+        } else {
+            StreamListingState::Kept
+        }
+    }
+
+    /// Record the stream neither stopped nor failed, its crash count reset;
+    /// `false` when it already was.
+    pub fn mark_running_resetting_its_crash_count(&mut self) -> bool {
+        let changed =
+            self.stopped || self.is_failed() || self.runtime_crashes_in_a_row_implicating_it != 0;
+        self.stopped = false;
+        self.failed_because = None;
+        self.runtime_crashes_in_a_row_implicating_it = 0;
+        changed
     }
 
     /// The environment the stream's interpreters start in.

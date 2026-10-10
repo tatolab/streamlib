@@ -1066,7 +1066,7 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// The message a caught panic carried, when it carried one as text.
-fn what_a_panic_said(panic_payload: &(dyn std::any::Any + Send)) -> &str {
+pub(crate) fn what_a_panic_said(panic_payload: &(dyn std::any::Any + Send)) -> &str {
     panic_payload
         .downcast_ref::<&str>()
         .copied()

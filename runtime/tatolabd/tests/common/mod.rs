@@ -135,6 +135,11 @@ impl TatolabTestMachineRoot {
         self.state_directory().join("streams")
     }
 
+    /// `<state>/runtime-run-in-progress`, which a crash leaves behind.
+    pub fn runtime_run_in_progress_record_path(&self) -> PathBuf {
+        self.state_directory().join("runtime-run-in-progress")
+    }
+
     /// `<state>/logs/`, the runtime's own log.
     pub fn runtime_log_directory(&self) -> PathBuf {
         self.state_directory().join("logs")

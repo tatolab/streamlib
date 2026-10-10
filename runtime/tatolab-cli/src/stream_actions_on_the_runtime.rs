@@ -388,21 +388,20 @@ fn rendered_streams_table(listed_streams: &[ListStreamsToolResultStream]) -> Str
             )
         })
         .collect();
-    let failed_stream_lines: Vec<String> = listed_streams
+    if listed_streams
         .iter()
-        .filter_map(|listed_stream| {
-            listed_stream.failed_because.as_ref().map(|failed_because| {
-                format!(
-                    "{} failed: {failed_because}. `tatolab start {}` retries it, `tatolab rm {}` \
-                     forgets it.\n",
-                    listed_stream.name, listed_stream.name, listed_stream.name
-                )
-            })
-        })
-        .collect();
-    if !failed_stream_lines.is_empty() {
+        .any(|listed_stream| listed_stream.failed_because.is_some())
+    {
         rendered_table.push('\n');
-        rendered_table.extend(failed_stream_lines);
+    }
+    for listed_stream in listed_streams {
+        if let Some(failed_because) = &listed_stream.failed_because {
+            let name = &listed_stream.name;
+            rendered_table.push_str(&format!(
+                "{name} failed: {failed_because}. `tatolab start {name}` retries it, \
+                 `tatolab rm {name}` forgets it.\n"
+            ));
+        }
     }
     rendered_table
 }

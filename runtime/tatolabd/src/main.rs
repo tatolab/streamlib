@@ -82,7 +82,9 @@ fn main() -> ExitCode {
     match hosted {
         Ok(exit_code) => exit_code,
         Err(panic_that_escaped_the_main_thread) => {
-            pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread();
+            pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread(
+                &*panic_that_escaped_the_main_thread,
+            );
             std::panic::resume_unwind(panic_that_escaped_the_main_thread)
         }
     }

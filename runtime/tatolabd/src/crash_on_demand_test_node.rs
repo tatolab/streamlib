@@ -20,10 +20,10 @@ use streamlib::sdk::schemars::JsonSchema;
 pub enum CrashOnDemandSignal {
     /// `raise(SIGSEGV)`.
     #[serde(rename = "SIGSEGV")]
-    Segv,
+    RaiseSegmentationFault,
     /// `abort()`.
     #[serde(rename = "SIGABRT")]
-    Abrt,
+    Abort,
 }
 
 /// The node's config: what file arms it and how it crashes.
@@ -40,7 +40,7 @@ impl Default for CrashOnDemandTestNodeConfig {
     fn default() -> Self {
         Self {
             crash_while_this_file_exists: PathBuf::new(),
-            crash_with: CrashOnDemandSignal::Segv,
+            crash_with: CrashOnDemandSignal::RaiseSegmentationFault,
         }
     }
 }
@@ -62,10 +62,10 @@ impl<'de> Deserialize<'de> for CrashOnDemandTestNodeConfig {
             );
             match as_written.crash_with {
                 // SAFETY: `raise` takes a signal number and returns once it is handled.
-                CrashOnDemandSignal::Segv => unsafe {
+                CrashOnDemandSignal::RaiseSegmentationFault => unsafe {
                     libc::raise(libc::SIGSEGV);
                 },
-                CrashOnDemandSignal::Abrt => std::process::abort(),
+                CrashOnDemandSignal::Abort => std::process::abort(),
             }
         }
         Ok(Self {
@@ -112,6 +112,9 @@ mod tests {
         }))
         .expect("a config whose file is absent is taken");
 
-        assert_eq!(config.crash_with, CrashOnDemandSignal::Segv);
+        assert_eq!(
+            config.crash_with,
+            CrashOnDemandSignal::RaiseSegmentationFault
+        );
     }
 }

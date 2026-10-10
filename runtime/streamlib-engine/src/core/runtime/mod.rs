@@ -75,6 +75,7 @@ pub use runtime_crash_pinned_on_a_stream::{
 pub(crate) use runtime_crash_pinned_on_a_stream::{
     StreamThisThreadWorksFor, end_the_run_in_progress_record_as_the_owner_ends_the_process,
     mark_this_thread_as_working_for, pin_the_runtimes_crash_on_each_stream,
+    pin_the_runtimes_crash_on_no_stream,
 };
 pub use runtime_name::RuntimeName;
 #[cfg(test)]

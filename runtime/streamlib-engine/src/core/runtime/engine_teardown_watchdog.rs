@@ -157,6 +157,10 @@ impl ArmedEngineTeardownWatchdog {
                         "{}",
                         the_watchdogs_expiry_message(&teardown_name, budget, &waiting_on)
                     );
+                    crate::core::runtime::pin_the_runtimes_crash_on_no_stream(&format!(
+                        "exit {EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED}: {teardown_name} \
+                         outlived its watchdog, waiting on {waiting_on}"
+                    ));
                     crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
                         EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
                     );
@@ -375,7 +379,8 @@ mod tests {
         if let Some(record_path) = std::env::var_os(WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE)
         {
             log_straight_to_standard_error();
-            crate::core::runtime::RuntimeRunInProgressRecord::begin_this_run_reading_the_previous(
+            let (_this_run_until_the_process_ends, _) =
+                crate::core::runtime::RuntimeRunInProgressRecord::begin_this_run_reading_the_previous(
                 &the_run_in_progress_record_beside(Path::new(&record_path)),
             )
             .expect("the run's record begins");

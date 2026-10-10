@@ -166,6 +166,24 @@ pub enum StreamListingState {
     Failed,
 }
 
+impl StreamListingState {
+    /// The state as a listing spells it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Attached => "attached",
+            Self::Kept => "kept",
+            Self::Stopped => "stopped",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl std::fmt::Display for StreamListingState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 impl From<LoadedStreamHolding> for StreamListingState {
     fn from(holding: LoadedStreamHolding) -> Self {
         match holding {
@@ -681,17 +699,11 @@ impl Runner {
             }
             Err(start_refusal) => return Err(start_refusal),
         };
-        if kept_record.stopped
-            || kept_record.is_failed()
-            || kept_record.runtime_crashes_in_a_row_implicating_it != 0
+        if kept_record.mark_running_resetting_its_crash_count()
+            && let Err(write_refusal) = self.write_a_kept_record(&kept_record)
         {
-            kept_record.stopped = false;
-            kept_record.failed_because = None;
-            kept_record.runtime_crashes_in_a_row_implicating_it = 0;
-            if let Err(write_refusal) = self.write_a_kept_record(&kept_record) {
-                unload_a_stream_an_action_took_back(&stream, "its record was not written");
-                return Err(write_refusal);
-            }
+            unload_a_stream_an_action_took_back(&stream, "its record was not written");
+            return Err(write_refusal);
         }
         Ok(StreamStartOutcome {
             node_count: stream.node_count(),
@@ -749,13 +761,7 @@ impl Runner {
                             continue;
                         }
                         listings.push(StreamListing {
-                            state: if kept_record.is_failed() {
-                                StreamListingState::Failed
-                            } else if kept_record.stopped {
-                                StreamListingState::Stopped
-                            } else {
-                                StreamListingState::Kept
-                            },
+                            state: kept_record.listing_state(),
                             name: kept_record.stream_name,
                             project_directory: kept_record.project_directory,
                             node_count: None,
@@ -1147,11 +1153,9 @@ impl Runner {
                     .read_every()
                     .into_iter()
                     .filter_map(|read| read.ok())
-                    .map(|kept_record| {
-                        match the_state_a_refusal_names_a_kept_record_by(&kept_record) {
-                            "" => kept_record.stream_name,
-                            state => format!("{} ({})", kept_record.stream_name, state.trim()),
-                        }
+                    .map(|kept_record| match kept_record.listing_state() {
+                        StreamListingState::Kept => kept_record.stream_name,
+                        state => format!("{} ({state})", kept_record.stream_name),
                     })
                     .collect()
             })
@@ -1425,12 +1429,10 @@ fn log_the_previous_runtime_runs_crash(crash: &CrashOfThePreviousRuntimeRun) {
 /// The state a refusal names a kept record by, a leading space before it:
 /// ` stopped`, ` failed`, or nothing for one the runtime re-loads.
 fn the_state_a_refusal_names_a_kept_record_by(kept_record: &KeptStreamRecord) -> &'static str {
-    if kept_record.is_failed() {
-        " failed"
-    } else if kept_record.stopped {
-        " stopped"
-    } else {
-        ""
+    match kept_record.listing_state() {
+        StreamListingState::Failed => " failed",
+        StreamListingState::Stopped => " stopped",
+        StreamListingState::Kept | StreamListingState::Attached => "",
     }
 }
 

@@ -130,10 +130,7 @@ fn a_third_interrupt_ends_the_process_with_status_130() {
         runtime.standard_error()
     );
     assert!(
-        !machine_root
-            .state_directory()
-            .join("runtime-run-in-progress")
-            .exists(),
+        !machine_root.runtime_run_in_progress_record_path().exists(),
         "the owner's third interrupt is a stop, and left a crash for the next start to count"
     );
 }
